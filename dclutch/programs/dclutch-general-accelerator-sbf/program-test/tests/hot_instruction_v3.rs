@@ -67,6 +67,9 @@ use dclutch_general_adapter_contract::runtime_width::{
     SettlementCursorHeaderV2, SettlementCursorV2, SettlementPhaseV2, settlement_cursor_len,
 };
 use dclutch_general_adapter_contract::state_artifacts_v3::general_child_account_start_v3;
+use dclutch_general_adapter_contract::state_seeds_v3::{
+    GeneralStateAddressSeedsV3, GeneralStateRecipeV3,
+};
 use dclutch_general_codec::{
     Action,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
@@ -75,7 +78,7 @@ use dclutch_general_config_contract::root::{GeneralRootV2, general_root_creation
 use dclutch_general_config_contract::v3::GENERAL_CONFIG_SCHEMA_ID_V3;
 use dclutch_general_config_contract::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2};
 use dclutch_market_core_codec::{
-    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
 use dclutch_operator::general_hot_v3::{
     CheckedGeneralHotReleaseV3, GeneralHotArtifactDigestsV3, GeneralHotInstructionV3,
@@ -193,21 +196,15 @@ struct GeneralChainFixtureV3 {
     instruction_accounts: usize,
 }
 
-/// General's own state-seed domain, from `state_artifacts_v3.rs`.
-///
-/// These four literals are module-private constants in the adapter contract,
-/// so the test cannot borrow them and restates them instead. That restatement
-/// is self-checking: the builder refuses with `Lifecycle` unless the account
-/// this file installs is exactly the address these seeds derive under the
-/// Trading program, so a drifted literal fails the accepted test rather than
-/// passing a weakened one.
-const GENERAL_STATE_SEED_DOMAIN_V3: &[u8] = b"dclutch-general-state-v3";
-/// Selection-phase state discriminator.
-const SELECTION_STATE_SEED_V3: &[u8] = b"selection";
-/// Settlement-phase state discriminator.
-const SETTLEMENT_STATE_SEED_V3: &[u8] = b"settlement";
-/// Close-only terminal-record discriminator.
-const TERMINAL_STATE_SEED_V3: &[u8] = b"terminal";
+// The four General state-seed literals and the exact seed ORDER used to be
+// restated here, because they were module-private constants the test could not
+// borrow. The restatement argued it was self-checking -- and it was, right up
+// until a release compiler became a THIRD author of the same fact, at which
+// point "each copy checks itself" stops being a property of the system. The
+// literals and the order now live in
+// `dclutch_general_adapter_contract::state_seeds_v3`, which the policy encoder
+// and this file both consume, exactly as line 267 below already consumes
+// `RAW_RECORD_PDA_SEED_V1` instead of retyping it.
 
 /// The one finalized observation every account in the snapshot shares.
 fn observation() -> Observation {
@@ -332,44 +329,32 @@ fn placeholder_request(action: Action) -> ControllerRequestV2 {
     }
 }
 
-/// Whether the action's primary state is a selection cursor rather than settlement.
-fn is_selection(action: Action) -> bool {
-    matches!(action, Action::Consider | Action::Freeze)
+/// Exact primary-state coordinates for one action.
+///
+/// The action-to-phase mapping is the contract's, not this file's: the same
+/// call decides which seed order the published policy encodes.
+fn primary_state_seeds(action: Action, root: Pubkey) -> GeneralStateAddressSeedsV3 {
+    let coordinates = match GeneralStateRecipeV3::primary_for_action(action) {
+        GeneralStateRecipeV3::Selection => GeneralStateAddressSeedsV3::selection(root.to_bytes()),
+        _ => GeneralStateAddressSeedsV3::settlement(root.to_bytes(), CANDIDATE_ID),
+    };
+    coordinates.expect("General primary state coordinates")
 }
 
-/// Exact primary-state seed program for one action.
-fn primary_state_seeds(action: Action, root: Pubkey) -> Vec<Vec<u8>> {
-    if is_selection(action) {
-        vec![
-            GENERAL_STATE_SEED_DOMAIN_V3.to_vec(),
-            root.to_bytes().to_vec(),
-            SELECTION_STATE_SEED_V3.to_vec(),
-        ]
-    } else {
-        vec![
-            GENERAL_STATE_SEED_DOMAIN_V3.to_vec(),
-            root.to_bytes().to_vec(),
-            CANDIDATE_ID.to_vec(),
-            SETTLEMENT_STATE_SEED_V3.to_vec(),
-        ]
-    }
+/// Exact close-only terminal-record coordinates.
+fn terminal_state_seeds(root: Pubkey, terminal_coordinate: u64) -> GeneralStateAddressSeedsV3 {
+    GeneralStateAddressSeedsV3::terminal(root.to_bytes(), CANDIDATE_ID, terminal_coordinate)
+        .expect("General terminal state coordinates")
 }
 
-/// Exact close-only terminal-record seed program.
-fn terminal_state_seeds(root: Pubkey, terminal_coordinate: u64) -> Vec<Vec<u8>> {
-    vec![
-        GENERAL_STATE_SEED_DOMAIN_V3.to_vec(),
-        root.to_bytes().to_vec(),
-        CANDIDATE_ID.to_vec(),
-        terminal_coordinate.to_le_bytes().to_vec(),
-        TERMINAL_STATE_SEED_V3.to_vec(),
-    ]
-}
-
-/// Derive one canonical Trading-owned state address from its seed program.
-fn state_address(seeds: &[Vec<u8>]) -> (Pubkey, u8) {
-    let refs = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    Pubkey::find_program_address(&refs, &TRADING_PROGRAM)
+/// Derive one canonical Trading-owned state address from the contract's order.
+///
+/// The seed ORDER comes from the same table the policy is encoded from, so this
+/// derivation and the one the on-chain lifecycle adapter performs cannot
+/// disagree about anything but the register bytes.
+fn state_address(seeds: GeneralStateAddressSeedsV3) -> (Pubkey, u8) {
+    let projected = seeds.as_slices().expect("General state seed projection");
+    Pubkey::find_program_address(projected.as_slice(), &TRADING_PROGRAM)
 }
 
 /// One live General local state at the exact width the profile declares.
@@ -530,8 +515,10 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
             ..provisional
         },
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x26; 32]),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .expect("canonical Open Market state");
@@ -809,13 +796,13 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
         .physical_account_count_with_dynamic_spans(OUTCOME_COUNT, &span_counts)
         .expect("physical account count");
     let request = placeholder_request(action);
-    let (primary_state, primary_state_bump) = state_address(&primary_state_seeds(action, root));
+    let (primary_state, primary_state_bump) = state_address(primary_state_seeds(action, root));
     let (terminal_state, terminal_state_bump) = if action == Action::Close {
         let terminal_coordinate = request
             .expected_revision
             .checked_add(1)
             .expect("terminal coordinate");
-        let (key, bump) = state_address(&terminal_state_seeds(root, terminal_coordinate));
+        let (key, bump) = state_address(terminal_state_seeds(root, terminal_coordinate));
         (Some(key), Some(bump))
     } else {
         (None, None)

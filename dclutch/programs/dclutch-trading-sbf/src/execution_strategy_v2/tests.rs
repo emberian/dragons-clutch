@@ -146,14 +146,24 @@ fn fixture_account_mut(fixture: &mut Fixture, index: usize) -> &mut AccountInfo<
 
 impl Fixture {
     fn new(disposition: StrategyDispositionV2) -> Self {
-        Self::with_options(disposition, None, id(5), true)
+        Self::with_options(disposition, None, id(5), true, None)
     }
 
     fn with_upgrade_authority(
         disposition: StrategyDispositionV2,
         upgrade_authority: Option<Pubkey>,
     ) -> Self {
-        Self::with_options(disposition, upgrade_authority, id(5), true)
+        Self::with_options(disposition, upgrade_authority, id(5), true, None)
+    }
+
+    /// Same accounts, but the Certificate binds a source-derived identity.
+    ///
+    /// Everything else is byte-identical to [`Self::new`]: the same ELF, the
+    /// same finalized `ArtifactReleaseV1`, the same deployment. Only what the
+    /// Certificate names changes, so a difference in outcome is attributable to
+    /// the binding and to nothing else.
+    fn with_semantic_binding(disposition: StrategyDispositionV2, semantic: ContentId) -> Self {
+        Self::with_options(disposition, None, id(5), true, Some(semantic))
     }
 
     fn with_options(
@@ -161,6 +171,7 @@ impl Fixture {
         upgrade_authority: Option<Pubkey>,
         certificate_account_profile: ContentId,
         admission_matches_certificate: bool,
+        semantic_binding: Option<ContentId>,
     ) -> Self {
         let rent_value = Rent::default();
         let registry_key = Pubkey::new_from_array([201; 32]);
@@ -201,18 +212,32 @@ impl Fixture {
         let artifact_release_id =
             ArtifactReleaseIdV1::new(hash(&release_bytes).to_bytes()).expect("artifact release ID");
 
-        let certificate = ExecutionStrategyCertificateV2::new(
-            certificate_account_profile,
-            id(9),
-            id(10),
-            id(11),
-            id(12),
-            id(8),
-            artifact_release_id,
-            id(21),
-            id(22),
-            id(23),
-        );
+        let certificate = match semantic_binding {
+            None => ExecutionStrategyCertificateV2::new(
+                certificate_account_profile,
+                id(9),
+                id(10),
+                id(11),
+                id(12),
+                id(8),
+                artifact_release_id,
+                id(21),
+                id(22),
+                id(23),
+            ),
+            Some(semantic) => ExecutionStrategyCertificateV2::new_semantic(
+                certificate_account_profile,
+                id(9),
+                id(10),
+                id(11),
+                id(12),
+                id(8),
+                semantic,
+                id(21),
+                id(22),
+                id(23),
+            ),
+        };
         let certificate_bytes = certificate.to_bytes();
         let certificate_program_id =
             ContentId::new(hash(&certificate_bytes).to_bytes()).expect("certificate ID");
@@ -603,7 +628,7 @@ fn hostile_certificate_admission_and_artifact_substitution_refuse() {
     assert_eq!(artifact.authenticate(), Err(TradingSbfError::Content));
 
     let semantic_certificate =
-        Fixture::with_options(StrategyDispositionV2::ShadowAot, None, id(208), true);
+        Fixture::with_options(StrategyDispositionV2::ShadowAot, None, id(208), true, None);
     assert_eq!(
         semantic_certificate.authenticate(),
         Err(TradingSbfError::Content),
@@ -611,7 +636,7 @@ fn hostile_certificate_admission_and_artifact_substitution_refuse() {
     );
 
     let semantic_admission =
-        Fixture::with_options(StrategyDispositionV2::AdmittedAot, None, id(5), false);
+        Fixture::with_options(StrategyDispositionV2::AdmittedAot, None, id(5), false, None);
     assert_eq!(
         semantic_admission.authenticate(),
         Err(TradingSbfError::Content),
@@ -658,8 +683,7 @@ fn current_loader_slot_elf_owner_link_and_immutability_are_mandatory() {
     // what makes the market life fit on a substrate the project can iterate --
     // and it is refused BY NAME the instant an `Upgrade` moves the slot.
     let authority = Pubkey::new_from_array([206; 32]);
-    let pinned =
-        Fixture::with_upgrade_authority(StrategyDispositionV2::ShadowAot, Some(authority));
+    let pinned = Fixture::with_upgrade_authority(StrategyDispositionV2::ShadowAot, Some(authority));
     assert!(
         pinned.authenticate().is_ok(),
         "a slot-pinned exact-authority deployment is admissible AOT",
@@ -709,6 +733,96 @@ fn registry_rent_privileges_and_account_width_are_not_caller_trust() {
             &short.rent,
             short.accounts.get(..3).expect("short frame"),
         ),
+        Err(TradingSbfError::Content)
+    );
+}
+
+/// A semantically bound Certificate authenticates against the live deployment.
+///
+/// The on-chain half of the certificate rebind. The Certificate names the
+/// release's source-derived `semantic_release_id` and nothing about the built
+/// artifact, yet the authentication still ends at the same two facts: the
+/// finalized `ArtifactReleaseV1` selected by its own content digest, and that
+/// record's `elf_digest` hashed against the live programdata.
+///
+/// The returned release id is asserted equal to the one the exact-release
+/// fixture produces, which is the load-bearing part: the verifier DERIVED the
+/// record's identity from the account rather than being handed it, and derived
+/// the same value.
+#[test]
+fn shadow_authenticates_a_semantically_bound_certificate_against_the_live_elf() {
+    let fixture = Fixture::with_semantic_binding(StrategyDispositionV2::ShadowAot, id(20));
+    let authenticated = fixture
+        .authenticate()
+        .expect("semantically bound shadow AOT strategy");
+    assert_eq!(fixture.accounts.len(), SHADOW_AOT_STRATEGY_ACCOUNT_COUNT_V2);
+    assert_eq!(
+        authenticated.strategy().disposition(),
+        StrategyDispositionV2::ShadowAot
+    );
+    assert_eq!(
+        authenticated
+            .certificate()
+            .expect("certificate")
+            .artifact_binding(),
+        CertificateArtifactBindingV2::Semantic(id(20))
+    );
+    // Same identity the exact-release path resolves, derived rather than named.
+    let exact = Fixture::new(StrategyDispositionV2::ShadowAot);
+    assert_eq!(
+        authenticated.artifact_release_id(),
+        exact.artifact_release_id
+    );
+    // And the deployment check ran: this is the record whose elf_digest was
+    // compared against the live programdata, not merely a decodable one.
+    assert_eq!(
+        authenticated
+            .artifact_release()
+            .expect("artifact")
+            .semantic_release_id(),
+        id(20)
+    );
+    assert_eq!(
+        authenticated
+            .artifact_release()
+            .expect("artifact")
+            .elf_digest(),
+        hash(ELF).to_bytes()
+    );
+}
+
+/// A Certificate naming another source refuses, against the same accounts.
+///
+/// The negative control for the test above. Every account is identical -- same
+/// ELF, same finalized release record, same deployment -- and only the
+/// Certificate's semantic identity differs. Without the join in
+/// `authenticate_pinned_artifact` this fixture authenticates, because the
+/// record still selects itself and its ELF still hashes correctly. The refusal
+/// is therefore attributable to the join and to nothing else.
+#[test]
+fn shadow_refuses_a_semantic_certificate_naming_another_source() {
+    assert_eq!(
+        Fixture::with_semantic_binding(StrategyDispositionV2::ShadowAot, id(99)).authenticate(),
+        Err(TradingSbfError::Content)
+    );
+}
+
+/// Admitted AOT refuses a semantically bound Certificate on chain.
+///
+/// The evaluator-level weld has an on-chain twin, reached through the real
+/// account-driven authentication rather than by calling the comparator. A
+/// source-derived identity would admit every build of that source under an
+/// admission granted to one exact artifact; the accounts here are otherwise
+/// a complete, valid admitted chain.
+#[test]
+fn admitted_aot_refuses_a_semantically_bound_certificate_on_chain() {
+    assert!(
+        Fixture::new(StrategyDispositionV2::AdmittedAot)
+            .authenticate()
+            .is_ok()
+    );
+    assert_eq!(
+        Fixture::with_semantic_binding(StrategyDispositionV2::AdmittedAot, id(20)).authenticate(),
         Err(TradingSbfError::Content)
     );
 }

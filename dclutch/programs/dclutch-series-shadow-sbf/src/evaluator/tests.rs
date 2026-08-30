@@ -37,20 +37,88 @@ fn projection_root(
 ) -> [u8; 32] {
     let mut node = occurrence_id.to_bytes();
     for sibling in siblings {
-        let mut hasher = Sha256::new();
-        hasher.update(generated::SERIES_PROJECTION_NODE_DOMAIN_V3);
-        hasher.update(HASH_SEPARATOR);
-        if occurrence & 1 == 0 {
-            hasher.update(node);
-            hasher.update(sibling);
+        node = if occurrence & 1 == 0 {
+            dclutch_sha256_adapter::digestv(&[
+                &generated::SERIES_PROJECTION_NODE_DOMAIN_V3,
+                &HASH_SEPARATOR,
+                &node,
+                sibling,
+            ])
         } else {
-            hasher.update(sibling);
-            hasher.update(node);
-        }
-        node = hasher.finalize().into();
+            dclutch_sha256_adapter::digestv(&[
+                &generated::SERIES_PROJECTION_NODE_DOMAIN_V3,
+                &HASH_SEPARATOR,
+                sibling,
+                &node,
+            ])
+        };
         occurrence >>= 1;
     }
     node
+}
+
+#[test]
+fn content_adapter_is_byte_identical_to_legacy_sha256_at_hostile_boundaries() {
+    for len in [
+        0_usize, 1, 31, 32, 55, 56, 63, 64, 65, 127, 128, 129, 255, 256, 257, 4_288,
+    ] {
+        let bytes = (0..len)
+            .map(|index| {
+                let folded = index ^ (index >> 3) ^ (index >> 9);
+                u8::try_from(folded & 0xff).expect("fixture byte")
+            })
+            .collect::<Vec<_>>();
+        let legacy: [u8; 32] = Sha256::digest(&bytes).into();
+        assert_eq!(
+            content(&bytes)
+                .expect("nonzero SHA-256 content identity")
+                .to_bytes(),
+            legacy,
+            "preimage length {len}"
+        );
+
+        let mut hostile = bytes.clone();
+        if hostile.is_empty() {
+            hostile.push(1);
+        } else {
+            *hostile.last_mut().expect("hostile byte") ^= 1;
+        }
+        assert_ne!(
+            content(&hostile)
+                .expect("nonzero hostile SHA-256 content identity")
+                .to_bytes(),
+            legacy,
+            "hostile mutation at preimage length {len}"
+        );
+    }
+}
+
+#[test]
+fn digestv_preserves_the_series_projection_preimage_and_order() {
+    let node = [0x41_u8; 32];
+    let sibling = [0x73_u8; 32];
+    let slices: [&[u8]; 4] = [
+        &generated::SERIES_PROJECTION_NODE_DOMAIN_V3,
+        &HASH_SEPARATOR,
+        &node,
+        &sibling,
+    ];
+    let mut legacy = Sha256::new();
+    for slice in slices {
+        legacy.update(slice);
+    }
+    let expected: [u8; 32] = legacy.finalize().into();
+    assert_eq!(dclutch_sha256_adapter::digestv(&slices), expected);
+    assert_ne!(
+        dclutch_sha256_adapter::digestv(&[
+            &generated::SERIES_PROJECTION_NODE_DOMAIN_V3,
+            &HASH_SEPARATOR,
+            &sibling,
+            &node,
+        ]),
+        expected,
+        "reordering the Merkle children must change the committed preimage"
+    );
 }
 
 struct SemanticFixture {
@@ -182,7 +250,7 @@ impl SemanticFixture {
             },
             shape: ShadowRuntimeShapeV3 {
                 tail_count: 3,
-                account_count: 158,
+                account_count: 162,
                 scalar_count: 5,
                 identity_count: 1,
             },
@@ -197,11 +265,18 @@ impl SemanticFixture {
         ticket: &'a [u8],
         root_key: &'a [u8; 32],
     ) -> Vec<AccountObservationV1<'a>> {
-        let mut observations =
-            vec![
-                AccountObservationV1::new(&[200_u8; 32], &[201_u8; 32], 1, &[], false, false, false);
-                SERIES_CLOCK_COORDINATE_V4 + 1
-            ];
+        let mut observations = vec![
+            AccountObservationV1::new(
+                &[200_u8; 32],
+                &[201_u8; 32],
+                1,
+                &[],
+                false,
+                false,
+                false
+            );
+            SERIES_CLOCK_COORDINATE_V4 + 1
+        ];
         let mut set = |coordinate, value| {
             *observations
                 .get_mut(coordinate)
@@ -297,7 +372,15 @@ impl SemanticFixture {
         );
         set(
             SERIES_OCCURRENCE_RAW_COORDINATE_V4,
-            AccountObservationV1::new(&[73_u8; 32], &[201_u8; 32], 1, &self.occurrence, false, false, false),
+            AccountObservationV1::new(
+                &[73_u8; 32],
+                &[201_u8; 32],
+                1,
+                &self.occurrence,
+                false,
+                false,
+                false,
+            ),
         );
         set(
             SERIES_TICKET_RAW_COORDINATE_V4,
@@ -305,7 +388,15 @@ impl SemanticFixture {
         );
         set(
             SERIES_CLOCK_COORDINATE_V4,
-            AccountObservationV1::new(&[75_u8; 32], &[202_u8; 32], 1, &self.clock, false, false, false),
+            AccountObservationV1::new(
+                &[75_u8; 32],
+                &[202_u8; 32],
+                1,
+                &self.clock,
+                false,
+                false,
+                false,
+            ),
         );
         observations
     }

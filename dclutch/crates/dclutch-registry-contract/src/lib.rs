@@ -15,10 +15,12 @@
 mod activation;
 mod artifact;
 mod immutable_registry;
+mod lineage;
 
 pub use activation::*;
 pub use artifact::*;
 pub use immutable_registry::*;
+pub use lineage::*;
 
 /// Bytes in every identity and digest coordinate.
 pub const IDENTITY_BYTES: usize = 32;
@@ -95,6 +97,12 @@ pub enum Error {
     ElfDigestMismatch,
     /// Current upgrade authority differed from the immutable release policy.
     UpgradeAuthorityMismatch,
+    /// A lineage record named one release set as its own successor.
+    LineageSelfSuccession,
+    /// A lineage record's moved-role mask and consent keys disagreed.
+    NonCanonicalLineageConsent,
+    /// A lineage record declared a hop in which no role's artifact moved.
+    LineageWithoutMovedRole,
     /// The referenced execution-release-set codec refused.
     ReleaseSet(dclutch_release_set_contract::Error),
 }

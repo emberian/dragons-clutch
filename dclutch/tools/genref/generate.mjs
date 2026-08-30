@@ -401,8 +401,9 @@ codes**.
 If you'd rather start with prose, the [guides](../guides/README.md)
 explain the protocol in plain terms and link back into these tables.
 
-dClutch is not deployed yet: these tables describe the protocol as it runs
-on a local test chain.
+The seven dClutch programs are deployed on Solana devnet. These tables describe
+the checked-in protocol and its devnet and local tooling; they are not a
+mainnet release manifest, and there is no open market or value at risk today.
 `,
   );
 }

@@ -141,7 +141,7 @@ export default function ReleaseWorkspace() {
     const packet = plan.packets.find((candidate) => candidate.role === name);
     if (packet === undefined) { setWalletStatus(`Refused: the plan carries no ${name} packet.`); return; }
     try {
-      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), packet.transaction, plan.payer);
+      const next = await requestWalletTransactionSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), packet.transaction, plan.payer);
       setSigned((current) => Object.freeze({ ...current, [name]: next }));
       setWalletStatus(`${name} packet signed by the connected fee payer${next.complete ? '' : ' (signature set still incomplete)'}. Nothing has been submitted; export it for an external submitter.`);
     } catch (error) { setWalletStatus(`Refused: ${message(error)}`); }
@@ -178,7 +178,8 @@ export default function ReleaseWorkspace() {
   const gate = releaseUngateV1(activation, wallets.address);
 
   return <main className="product-shell direct-workspace release-workspace">
-    <ConsoleHeader path="/release" title="Release activation" purpose="An operator with a checked build activates it against the Registry: drop the build's evidence files, review the plan derived from chain state, sign five packets — one per role." />
+    <ConsoleHeader path="/release" title="Release activation" purpose="Activate already-installed checked artifacts against the Registry. This page does not update programs." />
+    <section className="direct-refusal"><strong>Do not use this page for the current devnet Upgrade cycle.</strong> It activates checked artifacts that are already installed; it does not update program code. The current Upgrade and opening cycle is still in progress.</section>
     <section className="market-heading"><div><h1>Release activation.</h1><p>A checked release is the evidence bundle the release pipeline produces to prove exactly which code a deployment runs. You drop that bundle&apos;s files below; the console checks them against the Registry and the code actually loaded on chain, and builds the activation packets only when every identity agrees. Every file and every chain answer is treated as hostile until it proves itself.</p></div></section>
     <section className="direct-card"><div className="direct-card-heading"><span>01</span><div><h2>The chain, the Registry, and who pays</h2><p>Everything below is checked against this chain. The console never reads a wallet on its own; the payer is a public key whose signature stays outside this page.</p></div></div><div className="direct-form-grid">
       <label><span>Finalized RPC endpoint</span><input value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /><small className="feed-forward">The chain to activate against — your local validator by default.</small></label>

@@ -17,10 +17,11 @@ use dclutch_relayer::artifacts::ArtifactWriter;
 use dclutch_relayer::config::{Config, endpoint_host_for_display};
 use dclutch_relayer::delivery::{
     DeliveryAction, DeliveryExpectation, DeliveryJournal, LaunchExpectation,
-    reconcile_finalized_record, require_live_launch_accounts,
+    reconcile_finalized_record, require_live_launch_accounts, require_live_lookup_table,
 };
 use dclutch_relayer::error::{RelayerError, Result};
-use dclutch_relayer::id32::{ID_BYTES, base58, to_hex};
+use dclutch_relayer::id32::{ID_BYTES, base58, parse_id32, to_hex};
+use dclutch_relayer::keeper::{CreateRecordKeeperRequest, run_create_record_keeper};
 use dclutch_relayer::keys::{AttestationSigner, generate_keypair_file};
 use dclutch_relayer::observe::{ObservationCycle, SetWatcher};
 use dclutch_relayer::publog::{MessageKind, PublicationLog, RpcReadLog};
@@ -75,6 +76,13 @@ enum Command {
     /// bytes.  Re-submitting the recorded observation is the §4.11 rule
     /// applied across processes: re-sign, never re-observe.
     SubmitArtifacts(SubmitArtifactsArgs),
+    /// Plan or execute creation of the slot-seeded observation record on devnet.
+    ///
+    /// The default is read-only: the command authenticates one finalized
+    /// 21-account frame and persists an unsigned plan without opening a key.
+    /// `--execute` loads only the configured fee payer after that plan exists,
+    /// then reauthenticates the unchanged prestate before signing.
+    CreateRecord(CreateRecordArgs),
     /// Push the publication log to a local public-serve directory.
     ///
     /// This is the file-target half of §4.11's publication requirement: it
@@ -139,6 +147,22 @@ struct SubmitArtifactsArgs {
     /// One dry-run slot directory: `<output_dir>/artifacts/<set>/slot-<N>/`.
     #[arg(long)]
     slot_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct CreateRecordArgs {
+    /// Path to the TOML configuration naming exact Solana devnet genesis.
+    #[arg(long)]
+    config: PathBuf,
+    /// One dry-run slot directory: `<output_dir>/artifacts/<set>/slot-<N>/`.
+    #[arg(long)]
+    slot_dir: PathBuf,
+    /// Explicit worker/fee-payer public key in base58 or 64 lowercase hex.
+    #[arg(long)]
+    worker: String,
+    /// Load the configured fee payer and submit after persisting the plan.
+    #[arg(long, default_value_t = false)]
+    execute: bool,
 }
 
 #[derive(Args)]
@@ -208,10 +232,31 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Command::ShowConfig(args) => show_config(&args),
         Command::Run(args) => run(&args).await,
         Command::SubmitArtifacts(args) => submit_artifacts(&args).await,
+        Command::CreateRecord(args) => create_record(&args).await,
         Command::PublishLog(args) => publish_log(&args),
         Command::VerifyLog(args) => verify_log(&args),
         Command::MeasureSkew(args) => skew(&args).await,
     }
+}
+
+async fn create_record(args: &CreateRecordArgs) -> Result<()> {
+    let home = home();
+    let config = Config::load(&args.config, home.as_deref())?;
+    let worker = parse_id32("--worker", &args.worker)?;
+    let report = run_create_record_keeper(CreateRecordKeeperRequest {
+        config: &config,
+        slot_dir: &args.slot_dir,
+        worker,
+        execute: args.execute,
+        home: home.as_deref(),
+    })
+    .await?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report)
+            .map_err(|error| RelayerError::Serialization(format!("keeper report: {error}")))?
+    );
+    Ok(())
 }
 
 fn home() -> Option<PathBuf> {
@@ -568,6 +613,9 @@ async fn prepare_submission(config: &Config) -> Result<Submitter> {
         base58(&submit.expected_genesis_hash)
     );
     require_live_launch_contract(&rpc, submit, capability).await?;
+    if let Some(table) = submit.address_lookup_table.as_ref() {
+        require_live_lookup_table_contract(&rpc, table).await?;
+    }
 
     Ok(Submitter {
         rpc,
@@ -639,6 +687,49 @@ async fn require_live_launch_contract(
         to_hex(&capability.accepted_caller_receipt_sha256),
         capability.relay_program_deployment_slot,
         read.slot
+    );
+    Ok(())
+}
+
+/// Read the configured lookup table live and refuse a stale or permuted one.
+///
+/// Until this check the `[submit.address_lookup_table]` list was trusted
+/// verbatim.  A v0 message compiles table *indexes*, so a configured order
+/// that differs from the stored order delivers a permuted account frame the
+/// program refuses while the table looks healthy from every other angle.  The
+/// slice width is the exact expected table width; the full-width pin inside
+/// the gate makes a longer table refuse rather than truncate into a match.
+async fn require_live_lookup_table_contract(
+    rpc: &RpcClient,
+    table: &dclutch_relayer::config::AddressLookupTableConfig,
+) -> Result<()> {
+    let expected_len = dclutch_relayer::chain::LOOKUP_TABLE_META_BYTES
+        + dclutch_relayer::id32::ID_BYTES * table.addresses.len();
+    let slice_len = u16::try_from(expected_len).map_err(|_| {
+        RelayerError::MissingCapability(format!(
+            "configured lookup table {} would be {} bytes; no loadable table is that wide",
+            base58(&table.key),
+            expected_len
+        ))
+    })?;
+    let read = rpc
+        .get_multiple_accounts(&[table.key], slice_len, None)
+        .await?;
+    let live = read
+        .accounts
+        .first()
+        .and_then(Option::as_ref)
+        .ok_or_else(|| {
+            RelayerError::MissingCapability(format!(
+                "configured lookup table {} does not exist on the submit cluster",
+                base58(&table.key)
+            ))
+        })?;
+    require_live_lookup_table(table, live, read.slot)?;
+    println!(
+        "lookup table {}: live, activated, {} addresses in the configured order",
+        base58(&table.key),
+        table.addresses.len()
     );
     Ok(())
 }

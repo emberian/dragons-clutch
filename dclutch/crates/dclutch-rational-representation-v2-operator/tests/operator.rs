@@ -18,6 +18,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase, Readiness,
+    StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -68,6 +69,7 @@ use dclutch_representation_composition_v3_kernel::{
     CompositionExposureTermV3, composition_exposure_bytes_v3,
     encode_composition_exposure_v3_atomic,
 };
+use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
 use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 use solana_program::{
     hash::{hash, hashv},
@@ -79,6 +81,14 @@ use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use spl_associated_token_account_interface::address::get_associated_token_address_with_program_id;
+use spl_token_2022_interface::{
+    extension::{
+        BaseStateWithExtensionsMut, ExtensionType, StateWithExtensionsMut,
+        mint_close_authority::MintCloseAuthority,
+        permissioned_burn::PermissionedBurnConfig,
+    },
+    state::Mint as Token2022Mint,
+};
 use spl_token_interface::state::{Account as SplAccount, AccountState, Mint as SplMint};
 
 const CLAIMS: Pubkey = Pubkey::new_from_array([0xe1; 32]);
@@ -86,6 +96,7 @@ const CUSTODY: Pubkey = Pubkey::new_from_array([0xe2; 32]);
 const REGISTRY: Pubkey = Pubkey::new_from_array([0xe3; 32]);
 const CORE: Pubkey = Pubkey::new_from_array([0xe4; 32]);
 const TRADING: Pubkey = Pubkey::new_from_array([0xe5; 32]);
+const RESOLUTION: Pubkey = Pubkey::new_from_array([0xe6; 32]);
 const TOKEN: Pubkey = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 const ACTOR: Pubkey = Pubkey::new_from_array([0x71; 32]);
 const GENERATION: u64 = 29;
@@ -170,11 +181,12 @@ fn activation_cache() -> ([u8; 32], Vec<u8>) {
     let claims = release(CLAIMS, 0x42);
     let custody = release(CUSTODY, 0x43);
     let trading = release(TRADING, 0x44);
+    let resolution = release(RESOLUTION, 0x45);
     let release_set = ExecutionReleaseSetV1::new(
         ExecutionRoleBindingV1::new(core.program(), artifact_id(core)),
         ExecutionRoleBindingV1::new(claims.program(), artifact_id(claims)),
         ExecutionRoleBindingV1::new(trading.program(), artifact_id(trading)),
-        ExecutionRoleBindingV1::new(claims.program(), artifact_id(claims)),
+        ExecutionRoleBindingV1::new(resolution.program(), artifact_id(resolution)),
         ExecutionRoleBindingV1::new(custody.program(), artifact_id(custody)),
     )
     .expect("release set");
@@ -186,7 +198,7 @@ fn activation_cache() -> ([u8; 32], Vec<u8>) {
         (ExecutionRoleV1::Core, core),
         (ExecutionRoleV1::Claims, claims),
         (ExecutionRoleV1::Trading, trading),
-        (ExecutionRoleV1::Resolution, claims),
+        (ExecutionRoleV1::Resolution, resolution),
         (ExecutionRoleV1::Custody, custody),
     ] {
         activate_execution_role_into_v1(
@@ -485,8 +497,10 @@ fn core_market(
         terminal_winner: if terminal { WINNER } else { 0 },
         identity: market_identity,
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x65; 32]),
         terminal_receipt: terminal.then(|| identity([0x66; 32])),
+        bumps: StateBumpsV1::UNRECORDED,
     };
     (market, state.encode().expect("Core state").to_vec())
 }
@@ -549,6 +563,43 @@ fn economic_data(
         .expect("custody LBV2 Position");
     }
     (aggregate, custody_positions, actor_position)
+}
+
+/// The exact bytes the Claims lifecycle writes for a receipt or shard Mint.
+///
+/// Built by the official Token-2022 library rather than assembled by hand, and
+/// sized by that library's own account-length calculation. This fixture used to
+/// be `mint_data` -- a bare 82-byte legacy-layout Mint -- which is why the
+/// wallet-side builder could parse at 82 bytes and stay green while refusing
+/// every Mint the chain actually holds. Each side had invented the bytes the
+/// other side would never send.
+fn behavior_mint_data(controller: Pubkey, supply: u64) -> Vec<u8> {
+    let width = ExtensionType::try_calculate_account_len::<Token2022Mint>(&[
+        ExtensionType::MintCloseAuthority,
+        ExtensionType::PermissionedBurn,
+    ])
+    .expect("Mint extension width");
+    let mut output = vec![0; width];
+    let mut state = StateWithExtensionsMut::<Token2022Mint>::unpack_uninitialized(&mut output)
+        .expect("official extension state");
+    state.base = Token2022Mint {
+        mint_authority: COption::Some(controller),
+        supply,
+        decimals: 0,
+        is_initialized: true,
+        freeze_authority: COption::None,
+    };
+    let close = state
+        .init_extension::<MintCloseAuthority>(false)
+        .expect("close authority");
+    close.close_authority = Some(controller).try_into().expect("nonzero controller");
+    let burn = state
+        .init_extension::<PermissionedBurnConfig>(false)
+        .expect("permissioned burn");
+    burn.authority = Some(controller).try_into().expect("nonzero controller");
+    state.init_account_type().expect("Mint account type");
+    state.pack_base();
+    output
 }
 
 fn mint_data(authority: COption<Pubkey>, supply: u64, decimals: u8) -> Vec<u8> {
@@ -617,7 +668,8 @@ impl OwnedAsset {
 
 #[derive(Clone)]
 struct OwnedTerminal {
-    terminal_coordinate: OwnedRecord,
+    terminal_certificate_key: Pubkey,
+    terminal_certificate: Vec<u8>,
     realm: OwnedRecord,
     collateral_mint_key: Pubkey,
     collateral_mint: Vec<u8>,
@@ -829,10 +881,9 @@ impl Fixture {
                 custody_position_key: value.2,
                 custody_position: positions.get(index).expect("custody Position").clone(),
                 shard_mint_key: value.3,
-                shard_mint: mint_data(
-                    COption::Some(representation_authority),
+                shard_mint: behavior_mint_data(
+                    representation_authority,
                     *SHARD_SUPPLIES.get(index).expect("shard supply"),
-                    0,
                 ),
                 actor_shard_key: value.4,
                 actor_shard: token_data(
@@ -896,7 +947,7 @@ impl Fixture {
             replay_key,
             replay,
             receipt_mint_key,
-            receipt_mint: mint_data(COption::Some(representation_authority), RECEIPT_SUPPLY, 0),
+            receipt_mint: behavior_mint_data(representation_authority, RECEIPT_SUPPLY),
             actor_receipt_key,
             actor_receipt: token_data(receipt_mint_key, ACTOR, 4),
             assets,
@@ -1020,13 +1071,33 @@ impl Fixture {
         };
         let replay_bytes = replay.to_bytes().expect("Custody replay").to_vec();
         assert_eq!(replay_bytes.len(), CUSTODY_REPLAY_BYTES_V1);
+        let terminal_certificate_key = Pubkey::new_from_array([0x66; 32]);
+        let core = CoreState::decode(&self.core).expect("terminal Core");
+        let terminal_certificate = ResolutionCertificateV2 {
+            kind: ResolutionCertificateKindV2::ResolutionFailure,
+            market: self.market.to_bytes(),
+            route: [0; 32],
+            source_material: core.identity.resolution_policy.to_bytes(),
+            product_record_digest: core.identity.product_record.to_bytes(),
+            provider_evidence: [0; 32],
+            funding_allocation: [0x67; 32],
+            receipt_account: terminal_certificate_key.to_bytes(),
+            generation: GENERATION,
+            attempt_index: 0,
+            schedule_index: 0,
+            selector: WINNER,
+            work_paid: 1,
+            funding_remaining: 0,
+            result_numerator: 0,
+            result_denominator: 0,
+            observed_at: 0,
+        }
+        .to_bytes()
+        .expect("terminal certificate")
+        .to_vec();
         OwnedTerminal {
-            terminal_coordinate: OwnedRecord {
-                schema: [0; 32],
-                raw: CORE,
-                staging: CORE,
-                bytes: Vec::new(),
-            },
+            terminal_certificate_key,
+            terminal_certificate,
             realm,
             collateral_mint_key,
             collateral_mint: mint_data(COption::None, 6, 6),
@@ -1046,7 +1117,15 @@ impl Fixture {
             outcome: WINNER,
             quantity: 1,
             realm: terminal.realm.observe(&self.rent),
-            terminal_coordinate: terminal.terminal_coordinate.observe(&self.rent),
+            terminal_certificate: ObservedAccountV2 {
+                key: terminal.terminal_certificate_key,
+                owner: RESOLUTION,
+                lamports: self
+                    .rent
+                    .minimum_balance(terminal.terminal_certificate.len()),
+                executable: false,
+                data: &terminal.terminal_certificate,
+            },
             custody_replay: observed(
                 terminal.custody_replay_key,
                 CUSTODY,
@@ -1074,6 +1153,66 @@ fn assert_meta(meta: &AccountMeta, key: Pubkey, signer: bool, writable: bool) {
     assert_eq!(meta.pubkey, key);
     assert_eq!(meta.is_signer, signer);
     assert_eq!(meta.is_writable, writable);
+}
+
+/// The wallet-side fix is load-bearing: the shape it replaced is refused.
+///
+/// Both halves run on the same fixture, because a builder that refused
+/// everything would satisfy the negative half alone. The negative bytes are the
+/// canonical Mint with its extension storage cut off, which is byte-for-byte
+/// the 82-byte legacy shape the old `Mint::parse` reader required -- so this
+/// asserts against the exact thing that used to be here rather than against a
+/// newly invented wrong Mint.
+#[test]
+fn every_builder_refuses_the_82_byte_mint_shape_the_old_reader_required() {
+    let good = Fixture::new(false);
+    let good_assets = good.asset_observations();
+    construct_issue_structured(
+        good.observation(&good_assets, Mode::Structured),
+        StructuredActionInputV2 { quantity: 2 },
+    )
+    .expect("the shape the chain actually holds builds a transaction");
+    construct_denominate(
+        good.observation(good_assets.get(1..2).expect("selected asset"), Mode::Selected),
+        SelectedActionInputV2 {
+            outcome: WINNER,
+            quantity: 2,
+        },
+    )
+    .expect("the shape the chain actually holds builds a transaction");
+
+    let mut receipt = Fixture::new(false);
+    receipt.receipt_mint.truncate(SplMint::LEN);
+    assert_eq!(receipt.receipt_mint.len(), 82);
+    let receipt_assets = receipt.asset_observations();
+    assert_eq!(
+        construct_issue_structured(
+            receipt.observation(&receipt_assets, Mode::Structured),
+            StructuredActionInputV2 { quantity: 2 },
+        )
+        .expect_err("82-byte receipt Mint"),
+        Error::InvalidToken
+    );
+
+    let mut shard = Fixture::new(false);
+    shard
+        .assets
+        .get_mut(1)
+        .expect("selected asset")
+        .shard_mint
+        .truncate(SplMint::LEN);
+    let shard_assets = shard.asset_observations();
+    assert_eq!(
+        construct_denominate(
+            shard.observation(shard_assets.get(1..2).expect("selected asset"), Mode::Selected),
+            SelectedActionInputV2 {
+                outcome: WINNER,
+                quantity: 2,
+            },
+        )
+        .expect_err("82-byte shard Mint"),
+        Error::InvalidToken
+    );
 }
 
 #[test]
@@ -1128,7 +1267,7 @@ fn all_five_requests_roundtrip_with_exact_sparse_or_full_frames() {
         (&reconstitute, RepresentationActionV2::Reconstitute, 1, 36),
         (&issue, RepresentationActionV2::IssueStructured, 2, 40),
         (&unwrap, RepresentationActionV2::UnwrapStructured, 2, 40),
-        (&redeem, RepresentationActionV2::RedeemTerminal, 1, 49),
+        (&redeem, RepresentationActionV2::RedeemTerminal, 1, 50),
     ] {
         let request = RepresentationRequestV2::decode(&built.instruction.data)
             .expect("operator request roundtrip");
@@ -1395,16 +1534,17 @@ fn account_order_signers_writability_and_sentinels_are_exact() {
         (36, derived.custody_caller_authority, false),
         (37, CUSTODY, false),
         (38, programdata(CUSTODY), false),
-        (39, terminal.terminal_coordinate.raw, false),
-        (40, terminal.terminal_coordinate.staging, false),
-        (41, terminal.realm.raw, false),
-        (42, terminal.realm.staging, false),
-        (43, terminal.custody_replay_key, true),
-        (44, terminal.collateral_mint_key, false),
-        (45, terminal.hoard_key, true),
-        (46, terminal.recipient_key, true),
-        (47, terminal.custody_authority, false),
-        (48, TOKEN, false),
+        (39, terminal.terminal_certificate_key, false),
+        (40, RESOLUTION, false),
+        (41, programdata(RESOLUTION), false),
+        (42, terminal.realm.raw, false),
+        (43, terminal.realm.staging, false),
+        (44, terminal.custody_replay_key, true),
+        (45, terminal.collateral_mint_key, false),
+        (46, terminal.hoard_key, true),
+        (47, terminal.recipient_key, true),
+        (48, terminal.custody_authority, false),
+        (49, TOKEN, false),
     ] {
         assert_meta(
             terminal_metas.get(offset).expect("terminal meta"),

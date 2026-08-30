@@ -2,7 +2,7 @@
 //!
 //! This host-only adapter joins the canonical action-selected Direct artifact
 //! bundle, expands the authenticated AccountProfile account space, and emits
-//! the adjacent native-Ed25519 plus Trading instruction pair. It never performs
+//! the mandatory compute limit plus adjacent native-Ed25519 and Trading batch. It never performs
 //! RPC, signs maker material, signs a transaction, or submits one.
 
 use crate::{
@@ -18,8 +18,10 @@ use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, Capa
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
+        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
         HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
         HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
         HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
@@ -31,7 +33,8 @@ use dclutch_capability_program_contract::{
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
         HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
-        HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+        HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
     },
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
@@ -47,7 +50,7 @@ use dclutch_direct_codec::{
     execution_v3::{
         DIRECT_REGISTRATION_REQUEST_BYTES_V3, DIRECT_SIGNED_PARTICIPANT_BYTES_V3,
         DirectExecutionActionV3, DirectExecutionRequestV3, DirectRegistrationRequestV3,
-        encode_header_v3,
+        encode_header_v3, native_signature_count_v3,
     },
     intent_v2::CompactIntentV2,
     native_evidence_v3::{
@@ -58,21 +61,62 @@ use dclutch_direct_codec::{
     },
     registered_requests_v4::encode_direct_registration_request_v3_atomic,
 };
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
+};
+use dclutch_product_runtime_v2::ResultDomainV2;
+use dclutch_registry_contract::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
+};
+use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ExecutionRoleV1;
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
 use solana_program::{
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
-use solana_sdk_ids::{ed25519_program, sysvar};
+use solana_sdk_ids::{bpf_loader_upgradeable, ed25519_program, sysvar};
 
 use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
 
 pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3;
+
+/// Direct Hot cannot execute within Solana's default transaction CU allocation.
+pub const DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
+
+/// Where the Hot instruction sits in a SIGNED top-level Direct transaction.
+///
+/// Compute limit, heap frame, native Ed25519 evidence, Trading. The native
+/// evidence names the index it expects to find the signed Hot instruction at,
+/// so this constant is what the builder encodes and what the validator
+/// re-encodes to authenticate a caller's evidence -- one name rather than the
+/// bare `3` that would have to agree in three places.
+pub const DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1: u16 = 3;
+
+/// Where the Hot instruction sits in an UNSIGNED top-level Direct transaction.
+///
+/// Compute limit, heap frame, Trading: no evidence instruction, so everything
+/// after the grant shifts down one. The grant itself is NOT optional here --
+/// the heap refusal is a property of the route, not of whether makers signed,
+/// because both arms take the same Registry reauthentication path.
+pub const DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1: usize = 2;
+
+/// Neither can the capability seal, which authenticates one finalized registry
+/// proof and hashes one record body per role before writing the closure. It
+/// took 789,336 CU on public devnet over the four-entry Direct release set, so
+/// the 200,000 default was never going to hold it, and the cost grows with the
+/// set. It declares the same ceiling as Hot rather than that reading plus a
+/// guessed margin: both are one-shot composed routes where a limit set too low
+/// is a transaction that can never be replayed.
+pub const DIRECT_SEAL_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
 
 /// One exact detached maker signature and its canonical signed intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,8 +217,18 @@ pub struct DirectInlineEconomicPreviewV3 {
 /// Complete unsigned adjacent-evidence execution material.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectInlineHotReportV3 {
-    /// Native Ed25519 verification followed immediately by Trading.
-    pub instructions: [Instruction; 2],
+    /// Compute limit, heap frame, then native Ed25519 immediately followed by
+    /// Trading.
+    ///
+    /// The heap grant sits at index 1, ahead of the evidence, and both ends of
+    /// that position are forced. It cannot be appended: the runtime clears
+    /// return data at the start of every top-level instruction, so a trailing
+    /// ComputeBudget instruction erases the commit-last ACK the Hot execution
+    /// just produced. It cannot be omitted either: this route makes two
+    /// Registry reauthentication CPIs a continuation never makes, and Trading
+    /// refuses it by name with `TradingSbfError::HeapFrame` when the grant did
+    /// not arrive.
+    pub instructions: [Instruction; 4],
     /// Complete exact HotExecutionEnvelopeV3 plus Direct request bytes.
     pub hot_instruction_data: Vec<u8>,
     /// Same finalized observation selecting every physical account.
@@ -200,7 +254,7 @@ pub struct DirectInlineHotReportV3 {
 /// Complete unsigned generic-Hot material for one selected Direct action.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectHotReportV4 {
-    /// Native Ed25519 followed by Trading for signed actions, or Trading alone.
+    /// Compute limit, then adjacent native evidence and Trading for signed actions.
     pub instructions: Vec<Instruction>,
     /// Complete exact HotExecutionEnvelopeV3 plus action request bytes.
     pub hot_instruction_data: Vec<u8>,
@@ -273,6 +327,8 @@ pub enum DirectInlineTransactionErrorV3 {
     LookupTable,
     /// Instruction signer reporting differed from the compiled message.
     Signer,
+    /// Compute limit, native evidence, or Trading adjacency was noncanonical.
+    InstructionSequence,
     /// Lookup-table activation, message compilation, or packet sizing refused.
     Routing(crate::versioned::Error),
 }
@@ -446,12 +502,17 @@ pub fn build_direct_inline_hot_v4(
     };
     let native = native_ed25519_instruction(
         DirectNativeEvidenceContainerV3::TradingHot,
-        1,
+        DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
         &hot_instruction_data,
         [seller.signature, buyer.signature],
     )?;
     Ok(DirectInlineHotReportV3 {
-        instructions: [native, trading],
+        instructions: [
+            ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1),
+            ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+            native,
+            trading,
+        ],
         hot_instruction_data,
         observation,
         selected_program_schema: CAPABILITY_PROGRAM_SCHEMA_ID_V4,
@@ -540,11 +601,21 @@ pub fn build_direct_hot_request_v4(
         accounts,
         data: hot_instruction_data.clone(),
     };
-    let mut instructions = Vec::with_capacity(usize::from(!signatures.is_empty()) + 1);
+    let mut instructions = Vec::with_capacity(usize::from(!signatures.is_empty()) + 3);
+    instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(
+        DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1,
+    ));
+    // Unconditional, and ahead of any evidence. The heap refusal is a property
+    // of the top-level ROUTE, not of whether the makers signed: both arms take
+    // the same Registry reauthentication path, so an unsigned submission needs
+    // the grant exactly as much as a signed one.
+    instructions.push(ComputeBudgetInstruction::request_heap_frame(
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+    ));
     if !signatures.is_empty() {
         instructions.push(native_ed25519_instruction_many(
             DirectNativeEvidenceContainerV3::TradingHot,
-            1,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot_instruction_data,
             decoded.action(),
             product.outcome_count,
@@ -592,6 +663,294 @@ pub fn build_direct_registration_hot_v4(
     encode_direct_registration_request_v3_atomic(action, request, &mut encoded)
         .map_err(|_| Error::EconomicMismatch)?;
     build_direct_hot_request_v4(state, &encoded, core::slice::from_ref(&signature))
+}
+
+/// Complete chain-authenticated selection needed before a Direct route may
+/// provision permanent routing infrastructure or construct Hot execution.
+///
+/// This is the one host semantic owner for the conjunction the Trading outer
+/// rechecks: canonical Core Market, activated release set, current Core and
+/// Trading Loader deployments, exact Trading artifact release and semantic
+/// release, manifest/ProgramSet/descriptor selection, every finalized
+/// selected artifact, and the finalized Product graph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedDirectHotChainV4 {
+    /// Same finalized observation shared by the complete frame.
+    pub observation: Observation,
+    /// Market-selected immutable execution release set.
+    pub release_set: [u8; 32],
+    /// Canonical Core Market address.
+    pub market: Pubkey,
+    /// Market-selected Registry program.
+    pub registry_program: Pubkey,
+    /// Exact activated Trading ArtifactRelease identity.
+    pub trading_artifact_release: [u8; 32],
+    /// Semantic release derived from that authenticated Trading release.
+    pub trading_semantic_release: [u8; 32],
+    /// Exact action-selected CapabilityProgramV4 digest.
+    pub selected_program: [u8; 32],
+    /// Product-authenticated outcome count.
+    pub outcome_count: u32,
+    /// Product graph-root content digest.
+    pub product_record: [u8; 32],
+    /// Product-stable identity joined through Product, Market, Claims, and basis.
+    pub product_id: [u8; 32],
+    /// Product-selected semantic liability-basis identity.
+    pub semantic_basis: [u8; 32],
+    /// Exact finalized linked-basis body digest.
+    pub linked_basis_record: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedDirectLinkedBasisV4 {
+    semantic_basis: [u8; 32],
+    record_digest: [u8; 32],
+}
+
+/// Authenticate the complete chain selection for one exact Direct request.
+pub fn authenticate_direct_hot_chain_v4(
+    state: &DirectHotStateV4,
+    request: &[u8],
+) -> Result<AuthenticatedDirectHotChainV4, Error> {
+    let checked = state.hot_outer.ok_or(Error::HotOuterUnavailable)?;
+    if checked.artifact_release == [0; 32]
+        || checked.checked_manifest_digest == [0; 32]
+        || state.release_set == [0; 32]
+    {
+        return Err(Error::ZeroIdentity);
+    }
+    let observation = validate_frame(state, checked)?;
+    let rent_account = &fixed_account(state, HOT_RENT_SYSVAR_ACCOUNT_V3)?.account;
+    let rent = decode_rent(rent_account).map_err(|_| Error::ArtifactMismatch)?;
+    let (market, trading_semantic_release) =
+        authenticate_direct_market_release_v4(state, checked, &rent)?;
+    let product = authenticate_product_graph(state)?;
+    let market_state =
+        CoreState::decode(&fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account.data)
+            .map_err(|_| Error::ProductGraphMismatch)?;
+    if market_state.identity.product_record.to_bytes() != product.product_record {
+        return Err(Error::ProductGraphMismatch);
+    }
+    let linked_basis = authenticate_direct_linked_basis_v4(state, &rent, product)?;
+    let decoded = DirectExecutionRequestV3::decode(request, product.outcome_count)
+        .map_err(|_| Error::EconomicMismatch)?;
+    let bundle = authenticate_chain_artifacts_v4(state, request, product.outcome_count)?;
+    if bundle.action != decoded.action() {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok(AuthenticatedDirectHotChainV4 {
+        observation,
+        release_set: state.release_set,
+        market,
+        registry_program: fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?
+            .account
+            .key,
+        trading_artifact_release: checked.artifact_release,
+        trading_semantic_release,
+        selected_program: hash(
+            &fixed_account(state, HOT_DESCRIPTOR_RAW_ACCOUNT_V3)?
+                .account
+                .data,
+        )
+        .to_bytes(),
+        outcome_count: product.outcome_count,
+        product_record: product.product_record,
+        product_id: product.product_id,
+        semantic_basis: linked_basis.semantic_basis,
+        linked_basis_record: linked_basis.record_digest,
+    })
+}
+
+fn authenticate_direct_linked_basis_v4(
+    state: &DirectHotStateV4,
+    rent: &solana_program::rent::Rent,
+    product: AuthenticatedProductGraphObservationV3,
+) -> Result<AuthenticatedDirectLinkedBasisV4, Error> {
+    let registry = fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?
+        .account
+        .key;
+    let linked = finalized_record(
+        state,
+        registry,
+        rent,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_LINKED_BASIS_RAW_ACCOUNT_V3 + 1,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        hash(
+            &fixed_account(state, HOT_LINKED_BASIS_RAW_ACCOUNT_V3)?
+                .account
+                .data,
+        )
+        .to_bytes(),
+    )?;
+    let basis = ProductBasisV3::decode(linked).map_err(|_| Error::ProductGraphMismatch)?;
+    let domain = ResultDomainV2::decode(
+        &fixed_account(state, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3)?
+            .account
+            .data,
+    )
+    .map_err(|_| Error::ProductGraphMismatch)?;
+    let semantic = semantic_basis_preimage_v3(linked).map_err(|_| Error::ProductGraphMismatch)?;
+    let semantic_id = hashv(&[
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic.prefix(),
+        semantic.suffix(),
+    ])
+    .to_bytes();
+    if semantic_id != product.liability_basis_id
+        || basis.product_id() != product.product_id
+        || basis.result_domain_id() != product.result_domain_id
+        || basis.coordinate_domain_id() != domain.coordinate_domain_id().to_bytes()
+        || basis.result_unit_id() != domain.result_unit_id().to_bytes()
+        || basis.payout_scale() == 0
+    {
+        return Err(Error::ProductGraphMismatch);
+    }
+    Ok(AuthenticatedDirectLinkedBasisV4 {
+        semantic_basis: semantic_id,
+        record_digest: hash(linked).to_bytes(),
+    })
+}
+
+fn authenticate_direct_market_release_v4(
+    state: &DirectHotStateV4,
+    checked: CheckedHotOuterReleaseV3,
+    rent: &solana_program::rent::Rent,
+) -> Result<(Pubkey, [u8; 32]), Error> {
+    let market_account = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
+    let core_program = &fixed_account(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?.account;
+    let core_programdata = &fixed_account(state, HOT_CORE_PROGRAMDATA_ACCOUNT_V3)?.account;
+    let trading_program = &fixed_account(state, HOT_TRADING_PROGRAM_ACCOUNT_V3)?.account;
+    let trading_programdata = &fixed_account(state, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3)?.account;
+    let registry_program = &fixed_account(state, HOT_REGISTRY_PROGRAM_ACCOUNT_V3)?.account;
+    let activation = &fixed_account(state, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
+    if market_account.owner != core_program.key
+        || market_account.executable
+        || market_account.data.len() != STATE_BYTES
+        || !rent.is_exempt(market_account.lamports, market_account.data.len())
+        || registry_program.owner != bpf_loader_upgradeable::ID
+        || !registry_program.executable
+        || ProgramV3View::parse(&registry_program.data).is_err()
+    {
+        return Err(Error::FixedFrameMismatch);
+    }
+    let market = CoreState::decode(&market_account.data).map_err(|_| Error::ArtifactMismatch)?;
+    let expected_market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
+        &core_program.key,
+    )
+    .0;
+    if market
+        .encode()
+        .map_err(|_| Error::ArtifactMismatch)?
+        .as_slice()
+        != market_account.data
+        || market.phase != Phase::Open
+        || market_account.key != expected_market
+        || market.identity.market_id.to_bytes() != market_account.key.to_bytes()
+        || market.identity.registry_program.to_bytes() != registry_program.key.to_bytes()
+        || market.identity.selected_release_set.to_bytes() != state.release_set
+        || market.identity.generation != state.generation
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    if activation.owner != registry_program.key
+        || activation.executable
+        || activation.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
+        || !rent.is_exempt(activation.lamports, activation.data.len())
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let expected_cache = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &state.release_set],
+        &registry_program.key,
+    )
+    .0;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&activation.data)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    if activation.key != expected_cache
+        || activated
+            .execution_release_set_id()
+            .map_err(|_| Error::ArtifactMismatch)?
+            .to_bytes()
+            != state.release_set
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let core = authenticate_direct_role_deployment_v4(
+        activated,
+        ExecutionRoleV1::Core,
+        core_program,
+        core_programdata,
+    )?;
+    let trading = authenticate_direct_role_deployment_v4(
+        activated,
+        ExecutionRoleV1::Trading,
+        trading_program,
+        trading_programdata,
+    )?;
+    if trading_program.key != checked.trading_program
+        || trading.artifact_release_id().to_bytes() != checked.artifact_release
+        || core.release().program().to_bytes() != core_program.key.to_bytes()
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    Ok((
+        market_account.key,
+        trading.release().semantic_release_id().to_bytes(),
+    ))
+}
+
+pub(crate) fn authenticate_direct_role_deployment_v4(
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
+    role: ExecutionRoleV1,
+    program: &ObservedAccount,
+    programdata: &ObservedAccount,
+) -> Result<dclutch_registry_contract::ActivatedRoleV1, Error> {
+    let selected = activated.role(role).map_err(|_| Error::ArtifactMismatch)?;
+    let observation = direct_deployment_observation_v4(program, programdata, selected.release())?;
+    selected
+        .authenticate_current_deployment(observation)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    Ok(selected)
+}
+
+pub(crate) fn direct_deployment_observation_v4(
+    program: &ObservedAccount,
+    programdata: &ObservedAccount,
+    release: ArtifactReleaseV1,
+) -> Result<DeploymentObservationV1, Error> {
+    if release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || program.key.to_bytes() != release.program().to_bytes()
+        || programdata.key.to_bytes() != release.programdata()
+        || program.owner != bpf_loader_upgradeable::ID
+        || programdata.owner != bpf_loader_upgradeable::ID
+        || !program.executable
+        || programdata.executable
+    {
+        return Err(Error::ArtifactMismatch);
+    }
+    let program_view = ProgramV3View::parse(&program.data).map_err(|_| Error::ArtifactMismatch)?;
+    let expected =
+        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
+    if program_view.programdata() != programdata.key.to_bytes() || programdata.key != expected {
+        return Err(Error::ArtifactMismatch);
+    }
+    let data = ProgramDataV3View::parse(&programdata.data).map_err(|_| Error::ArtifactMismatch)?;
+    DeploymentObservationV1::new(
+        program.key.to_bytes(),
+        program.owner.to_bytes(),
+        program.executable,
+        programdata.key.to_bytes(),
+        programdata.owner.to_bytes(),
+        programdata.executable,
+        program_view.programdata(),
+        bpf_loader_upgradeable::ID.to_bytes(),
+        data.deployment_slot(),
+        hash(data.elf()).to_bytes(),
+        data.upgrade_authority(),
+    )
+    .map_err(|_| Error::ArtifactMismatch)
 }
 
 fn authenticate_chain_artifacts_v4<'a>(
@@ -839,6 +1198,12 @@ pub fn compile_direct_hot_v0(
     {
         return Err(DirectInlineTransactionErrorV3::Snapshot);
     }
+    validate_direct_hot_instruction_sequence_v4(
+        report.action,
+        report.outcome_count,
+        &report.hot_instruction_data,
+        &report.instructions,
+    )?;
     let expected = canonical_direct_hot_lookup_addresses_v4(report, payer)?;
     let table = AddressLookupTable::deserialize(&lookup_table.data)
         .map_err(|_| DirectInlineTransactionErrorV3::LookupTable)?;
@@ -886,7 +1251,7 @@ pub fn canonical_direct_hot_lookup_addresses_v4(
     )
 }
 
-/// Compile the exact adjacent pair through one canonical finalized LUT.
+/// Compile the exact budgeted adjacent batch through one canonical finalized LUT.
 pub fn compile_direct_inline_hot_v0(
     report: &DirectInlineHotReportV3,
     payer: Pubkey,
@@ -905,6 +1270,12 @@ pub fn compile_direct_inline_hot_v0(
     {
         return Err(DirectInlineTransactionErrorV3::Snapshot);
     }
+    validate_direct_hot_instruction_sequence_v4(
+        DirectExecutionActionV3::InlineOrdinary,
+        report.outcome_count,
+        &report.hot_instruction_data,
+        &report.instructions,
+    )?;
     let expected = canonical_direct_inline_lookup_addresses_v3(report, payer)?;
     let table = AddressLookupTable::deserialize(&lookup_table.data)
         .map_err(|_| DirectInlineTransactionErrorV3::LookupTable)?;
@@ -986,6 +1357,101 @@ fn canonical_lookup_addresses(
         return Err(DirectInlineTransactionErrorV3::LookupTable);
     }
     Ok(addresses)
+}
+
+pub(crate) fn validate_direct_hot_instruction_sequence_v4(
+    action: DirectExecutionActionV3,
+    tail_count: u32,
+    hot_instruction_data: &[u8],
+    instructions: &[Instruction],
+) -> Result<(), DirectInlineTransactionErrorV3> {
+    let compute =
+        ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1);
+    if instructions.first() != Some(&compute) {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
+    // The heap grant is checked here rather than trusted, and on BOTH arms. A
+    // top-level submission that omits it is not a transaction that merely runs
+    // differently: Trading refuses it with `TradingSbfError::HeapFrame`, so
+    // emitting one is emitting a guaranteed refusal. Catching it at the
+    // operator costs one comparison and names the omission at the only place
+    // that can still fix it.
+    let heap = ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1);
+    if instructions.get(1) != Some(&heap) {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
+    let signature_count = native_signature_count_v3(action, tail_count);
+    let count = usize::try_from(signature_count)
+        .map_err(|_| DirectInlineTransactionErrorV3::InstructionSequence)?;
+    if count == 0 {
+        let trading = instructions
+            .get(DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1)
+            .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?;
+        if instructions.len() != DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1 + 1
+            || trading.data != hot_instruction_data
+        {
+            return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+        }
+        return Ok(());
+    }
+    if instructions.len() != usize::from(DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1) + 1 {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
+    let native = instructions
+        .get(2)
+        .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?;
+    let trading = instructions
+        .get(usize::from(DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1))
+        .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?;
+    if native.program_id != ed25519_program::ID
+        || !native.accounts.is_empty()
+        || trading.data != hot_instruction_data
+    {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
+    let bytes = direct_native_evidence_bytes_v3(action, tail_count)
+        .map_err(|_| DirectInlineTransactionErrorV3::InstructionSequence)?;
+    let header = 2_usize
+        .checked_add(
+            count
+                .checked_mul(14)
+                .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?,
+        )
+        .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?;
+    if native.data.len() != bytes {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
+    let mut signatures = Vec::with_capacity(count);
+    for signature in native
+        .data
+        .get(header..)
+        .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?
+        .chunks_exact(64)
+    {
+        signatures.push(
+            <[u8; 64]>::try_from(signature)
+                .map_err(|_| DirectInlineTransactionErrorV3::InstructionSequence)?,
+        );
+    }
+    if signatures.len() != count {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
+    let mut scratch = vec![0_u8; bytes];
+    let mut expected = vec![0_u8; bytes];
+    encode_direct_native_evidence_many_v3_atomic(
+        DirectNativeEvidenceContainerV3::TradingHot,
+        DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
+        hot_instruction_data,
+        tail_count,
+        &signatures,
+        &mut scratch,
+        &mut expected,
+    )
+    .map_err(|_| DirectInlineTransactionErrorV3::InstructionSequence)?;
+    if native.data != expected {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
+    Ok(())
 }
 
 fn validate_frame(
@@ -1409,24 +1875,46 @@ mod tests {
         }
     }
 
-    fn transaction_report(data_bytes: usize) -> DirectInlineHotReportV3 {
+    fn transaction_report(extra_accounts: usize) -> DirectInlineHotReportV3 {
         let actor = key(1);
         let mut accounts = vec![AccountMeta::new_readonly(actor, true)];
         accounts.extend((2_u8..92).map(|value| AccountMeta::new(key(value), false)));
+        *accounts.last_mut().expect("Trading program coordinate") =
+            AccountMeta::new_readonly(key(200), false);
+        accounts.extend((0..extra_accounts).map(|_| AccountMeta::new(Pubkey::new_unique(), false)));
+        let seller = intent(0, 1);
+        let buyer = intent(1, 2);
+        let request = compile_direct_inline_request_v3(seller, buyer, 1_000, 500_000)
+            .expect("Direct request");
+        let envelope = HotExecutionEnvelopeV3::new(
+            u32::try_from(request.len()).expect("request width"),
+            [1; 32],
+            [7; 32],
+            9,
+            [2; 32],
+        )
+        .expect("Hot envelope");
+        let mut hot_instruction_data = envelope.to_bytes().to_vec();
+        hot_instruction_data.extend_from_slice(&request);
+        let native = native_ed25519_instruction(
+            DirectNativeEvidenceContainerV3::TradingHot,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
+            &hot_instruction_data,
+            [seller.signature, buyer.signature],
+        )
+        .expect("native evidence");
         DirectInlineHotReportV3 {
             instructions: [
-                Instruction {
-                    program_id: ed25519_program::ID,
-                    accounts: Vec::new(),
-                    data: vec![3; 32],
-                },
+                ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1),
+                ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+                native,
                 Instruction {
                     program_id: key(200),
                     accounts,
-                    data: vec![7; data_bytes],
+                    data: hot_instruction_data.clone(),
                 },
             ],
-            hot_instruction_data: vec![7; data_bytes],
+            hot_instruction_data,
             observation: observation(),
             selected_program_schema: CAPABILITY_PROGRAM_SCHEMA_ID_V4,
             selected_program: [8; 32],
@@ -2074,23 +2562,29 @@ mod tests {
         hot.extend_from_slice(&request);
         let direct = native_ed25519_instruction(
             DirectNativeEvidenceContainerV3::TradingHot,
-            1,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot,
             [seller.signature, buyer.signature],
         )
         .expect("direct native evidence");
         assert_eq!(direct.program_id, ed25519_program::ID);
         assert_eq!(direct.data.first().copied(), Some(2));
-        assert_eq!(direct.data.len(), 222);
-        for (descriptor, expected_message) in [(2_usize, 192_u16), (16, 396)] {
+        assert_eq!(direct.data.len(), 158);
+        for (descriptor, expected_public_key, expected_message) in
+            [(2_usize, 160_u16, 192_u16), (16, 364, 396)]
+        {
+            assert_eq!(
+                read_test_u16(&direct.data, descriptor + 4),
+                expected_public_key
+            );
             assert_eq!(
                 read_test_u16(&direct.data, descriptor + 8),
                 expected_message
             );
             assert_eq!(read_test_u16(&direct.data, descriptor + 10), 172);
             assert_eq!(read_test_u16(&direct.data, descriptor + 2), u16::MAX);
-            assert_eq!(read_test_u16(&direct.data, descriptor + 6), u16::MAX);
-            assert_eq!(read_test_u16(&direct.data, descriptor + 12), 1);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 6), 3);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 12), 3);
         }
 
         let registry = Instruction {
@@ -2111,7 +2605,14 @@ mod tests {
         .expect("Registry evidence");
         assert_eq!(sequence.len(), 3);
         let native = sequence.get(1).expect("native evidence");
-        for (descriptor, expected_message) in [(2_usize, 192_u16), (16, 396)] {
+        for (descriptor, expected_public_key, expected_message) in
+            [(2_usize, 160_u16, 192_u16), (16, 364, 396)]
+        {
+            assert_eq!(
+                read_test_u16(&native.data, descriptor + 4),
+                expected_public_key
+            );
+            assert_eq!(read_test_u16(&native.data, descriptor + 6), 2);
             assert_eq!(
                 read_test_u16(&native.data, descriptor + 8),
                 expected_message
@@ -2164,7 +2665,9 @@ mod tests {
         .expect("registered Registry evidence");
         let registered_native = registered_sequence.first().expect("native evidence");
         assert_eq!(registered_native.data.first().copied(), Some(1));
-        assert_eq!(registered_native.data.len(), 112);
+        assert_eq!(registered_native.data.len(), 80);
+        assert_eq!(read_test_u16(&registered_native.data, 2 + 4), 160);
+        assert_eq!(read_test_u16(&registered_native.data, 2 + 6), 1);
         assert_eq!(read_test_u16(&registered_native.data, 2 + 8), 192);
         assert_eq!(read_test_u16(&registered_native.data, 2 + 10), 172);
         assert_eq!(read_test_u16(&registered_native.data, 2 + 12), 1);
@@ -2342,17 +2845,32 @@ mod tests {
     }
 
     #[test]
-    fn canonical_lut_compiles_packet_and_reports_payer_then_actor() {
-        let report = transaction_report(192);
-        let payer = key(250);
+    fn canonical_lut_compiles_exact_budgeted_packet_and_reports_sole_payer() {
+        let report = transaction_report(0);
+        let payer = key(1);
         let lookup = lookup(&report, payer);
         let plan =
             compile_direct_inline_hot_v0(&report, payer, Hash::new_from_array([16; 32]), &lookup)
                 .expect("packet-safe Direct action");
-        assert_eq!(plan.required_signers, vec![payer, key(1)]);
-        assert_eq!(plan.message.required_signatures, 2);
-        assert!(plan.message.loaded_addresses >= 90);
-        assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+        assert_eq!(plan.required_signers, vec![payer]);
+        assert_eq!(plan.message.required_signatures, 1);
+        assert_eq!(plan.message.loaded_addresses, 89);
+        assert_eq!(plan.message.wire_bytes, 1_212);
+        assert_eq!(
+            crate::versioned::PACKET_DATA_BYTES - plan.message.wire_bytes,
+            20
+        );
+        let message = match &plan.message.message {
+            solana_message::VersionedMessage::V0(message) => message,
+            _ => panic!("Direct compiler emitted a legacy message"),
+        };
+        assert_eq!(message.instructions.len(), 4);
+        assert_eq!(message.instructions[0].data, vec![2, 0xc0, 0x5c, 0x15, 0]);
+        // RequestHeapFrame(65_536): discriminant 1, then the u32 little-endian.
+        assert_eq!(message.instructions[1].data, vec![1, 0, 0, 1, 0]);
+        assert_eq!(message.instructions[2].data.len(), 158);
+        assert_eq!(message.instructions[2].data[2 + 6], 3);
+        assert_eq!(message.instructions[2].data[2 + 12], 3);
         assert_eq!(plan.outcome_count, 258);
         assert_eq!(
             plan.selected_program_schema,
@@ -2362,9 +2880,47 @@ mod tests {
     }
 
     #[test]
+    fn missing_reordered_or_substituted_budget_and_evidence_refuse() {
+        let report = transaction_report(0);
+        assert_eq!(
+            validate_direct_hot_instruction_sequence_v4(
+                DirectExecutionActionV3::InlineOrdinary,
+                report.outcome_count,
+                &report.hot_instruction_data,
+                &report.instructions[1..],
+            ),
+            Err(DirectInlineTransactionErrorV3::InstructionSequence)
+        );
+
+        for case in 0..5 {
+            let mut hostile = report.clone();
+            match case {
+                0 => {
+                    hostile.instructions[0] =
+                        ComputeBudgetInstruction::set_compute_unit_limit(1_399_999)
+                }
+                1 => hostile.instructions.swap(0, 1),
+                2 => hostile.instructions[2].data[2 + 4] ^= 1,
+                3 => hostile.instructions[2].data[2 + 6] ^= 1,
+                _ => hostile.instructions[2].data[2 + 12] ^= 1,
+            }
+            assert_eq!(
+                validate_direct_hot_instruction_sequence_v4(
+                    DirectExecutionActionV3::InlineOrdinary,
+                    hostile.outcome_count,
+                    &hostile.hot_instruction_data,
+                    &hostile.instructions,
+                ),
+                Err(DirectInlineTransactionErrorV3::InstructionSequence),
+                "hostile sequence case {case}"
+            );
+        }
+    }
+
+    #[test]
     fn stale_extra_lookup_and_oversized_packet_refuse() {
-        let payer = key(250);
-        let report = transaction_report(192);
+        let payer = key(1);
+        let report = transaction_report(0);
         let mut stale = lookup(&report, payer);
         stale.observation.slot += 1;
         assert_eq!(
@@ -2388,7 +2944,7 @@ mod tests {
             Err(DirectInlineTransactionErrorV3::LookupTable)
         );
 
-        let oversized = transaction_report(2_000);
+        let oversized = transaction_report(20);
         let oversized_lookup = lookup(&oversized, payer);
         assert_eq!(
             compile_direct_inline_hot_v0(

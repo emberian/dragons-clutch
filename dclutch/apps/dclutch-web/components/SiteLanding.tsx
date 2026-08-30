@@ -1,8 +1,23 @@
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import LandingPulse from '@/components/charts/LandingPulse';
 
+import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
 import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
+import { marketEditorialV1 } from '@/lib/marketRegistry';
+import { PUBLIC_DEVNET_CUT_V1, publicCutMarketHrefV1 } from '@/lib/publicCutStaging';
+
+/**
+ * The long-form field notes, served as a plain page beside the app.
+ *
+ * The file is a byte-identical copy of the piece written on 25 August 2026;
+ * it carries its own complete styling and loads nothing from anywhere, so the
+ * artifact serves it directly at this path instead of re-typesetting it. The
+ * trailing slash is load-bearing: the export's directory-index rule serves
+ * `<dir>/index.html` for it, and the artifact's link check resolves it.
+ */
+export const FIELD_NOTES_HREF_V1 = '/notes/plan-to-compost-at-least-three/';
 
 /**
  * The front door.
@@ -10,7 +25,7 @@ import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
  * This is `/` — the first page anyone who types the domain sees, so it owes
  * them two things before it owes them a control: what dClutch is, in words a
  * reader who has never opened the repository can follow, and the plain fact
- * that none of it is deployed. Both were already written and vetted for the
+ * that its current public deployment is a devnet preview. Both were written
  * hand-authored Pages landing (`tools/genref/render-site.mjs`); this is that
  * same copy, moved into the app because the app is what the domain root now
  * serves. The lifecycle workbench that used to sit here is unchanged and still
@@ -19,8 +34,14 @@ import { docsHrefV1, repositoryHrefV1, smokeStoryEnabledV1 } from '@/lib/flags';
  * No chain is read here and no address is asked for. Every card is a link.
  */
 export default function SiteLanding() {
+  // The featured market's editorial name, when the shipped registry has one.
+  // The cut names the address; the registry names the market. Either can be
+  // absent and the sentence below stays true without it.
+  const featuredTitle = PUBLIC_DEVNET_CUT_V1.market === null
+    ? null
+    : marketEditorialV1(PUBLIC_DEVNET_CUT_V1.market)?.title ?? null;
   return <main className="product-shell trade-v3-shell">
-    <Nav current="/" />
+    <Nav current="/" status="live devnet programs" />
 
     <section className="trade-v3-hero">
       <div>
@@ -33,33 +54,67 @@ export default function SiteLanding() {
         before the claim exists, so there is no leverage, no liquidation, and no
         way to lose more than you paid.</p>
       </div>
+      {/* This aside is the one thing on the page that dates, so it reads the
+          same public cut the launch page does rather than hard-coding a
+          moment. Opening a market is a fixture edit; the front door should not
+          need a second one to stop saying markets are still being set up. */}
       <aside>
         <span>Where this stands</span>
         <strong>On devnet — nothing for sale</strong>
         <p>dClutch runs on Solana&apos;s devnet, a public test network whose
-        tokens are worthless by construction. The programs are deployed and
-        the first markets are being set up; you can watch it all happen live
-        below. There is no token, nothing to buy, and no value at risk
-        anywhere.</p>
+        tokens are worthless by construction. The programs are deployed{' '}
+        {PUBLIC_DEVNET_CUT_V1.market === null
+          ? <>and the first markets are being set up.</>
+          : <>and the first market is <Anchor href={publicCutMarketHrefV1(PUBLIC_DEVNET_CUT_V1)}>open{featuredTitle === null ? '' : ` — ${featuredTitle}`}</Anchor>.</>} There
+        is no token, nothing to buy, and no value at risk anywhere. If you want
+        to try it, devnet SOL is free from the{' '}
+        <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.</p>
       </aside>
     </section>
 
+    {/* The key art: the one image on the site, and it is the thesis — a
+        claw holding a faceted gem the way every market holds the collateral
+        that backs its claims. Serves the webp cut (a tenth the bytes); the
+        PNG master lives beside it in public/art/ for anyone who wants it. */}
+    <figure className="landing-key-art">
+      {/* eslint-disable-next-line @next/next/no-img-element -- the static
+          export has no image optimizer; the webp IS the optimized cut. */}
+      <img
+        src="/art/dragons-clutch-key-art-v1-1672w.webp"
+        alt="A dragon's claw cradling a glowing, faceted gem against a dark field — the dClutch key art."
+        width={1672}
+        height={941}
+        loading="lazy"
+      />
+      <figcaption>The clutch: every claim fully backed by collateral the market holds like treasure, paid out on the answer.</figcaption>
+    </figure>
+
     <section className="trade-v3-card">
-      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three counts, read finalized off the active deployment — never estimated, never cached from an earlier visit. A dash is an unread value, never a zero; a read zero is shown as the zero it is.</p></div></header>
+      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it; a zero means we read a zero. Where a total would have to span two different tokens you get both of them, each in its own units, because one figure covering both would be in no unit at all.</p></div></header>
       {/* FE-CHART mount: LandingPulse reads the counts from the active
           deployment and feeds the presentational NumberStrip. */}
       <LandingPulse />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>The app</h2><p>Point it at a chain and it shows you what is actually on that chain. No sample market, no made-up price. Since nothing is deployed yet, expect it to refuse — and to tell you why.</p></div></header>
+      {/* The second dated sentence on this page, and it dated the same way the
+          aside did: it went on saying no market was open after one was. It
+          reads the same published cut, so opening a market is still one
+          fixture edit and the front door still stops claiming otherwise. */}
+      <header><span>01</span><div><h2>The app</h2><p>It opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed;{' '}
+        {PUBLIC_DEVNET_CUT_V1.market === null
+          ? <>anything that still needs an open market will tell you plainly that there is not one yet, instead of failing quietly.</>
+          : <>every surface tells you plainly what it could and could not read off the chain, instead of failing quietly.</>}</p></div></header>
       <div className="direct-actions">
+        <Anchor className="secondary-action" href="/live">Launch story →</Anchor>
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
-        <Anchor className="secondary-action" href="/create">Create a market →</Anchor>
+        <Anchor className="secondary-action" href="/create">Preview a Market design →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
         <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
       </div>
+      <p className="direct-status">You can open the human-readable deployment record or download the exact seven program addresses, ProgramData addresses, and observed deployment slots in one click.</p>
+      <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />
     </section>
 
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
@@ -85,6 +140,19 @@ export default function SiteLanding() {
       <header><span>03</span><div><h2>The code</h2><p>Building on it? The tests and run logs behind every claim on this site live in the repository, beside the programs they were run against.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={repositoryHrefV1()}>Repository →</a>
+      </div>
+    </section>
+
+    {/* The field notes. Written 25 August 2026 and committed the same day to a
+        separate posters repository, where nothing on this site linked to them
+        and no reader could find them. The copy served here is byte-identical
+        to that original (dregg-posters b15ca11) — a self-contained page with
+        no external font, script, or image, so it is served as-is rather than
+        rebuilt into this app's chrome. */}
+    <section className="trade-v3-card">
+      <header><span>04</span><div><h2>How this was built</h2><p>This protocol was built twice before the version you are reading now, and both earlier builds were retired on purpose. These notes say why that was the plan from the beginning, what each attempt made visible that no amount of planning would have, and what was kept once the code itself was thrown away. They are written for someone who has never opened the repository, and they are honest about what is proved and what is still only tested.</p></div></header>
+      <div className="direct-actions">
+        <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>
     </section>
   </main>;

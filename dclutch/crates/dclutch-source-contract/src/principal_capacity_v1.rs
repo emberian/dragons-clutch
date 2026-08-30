@@ -51,6 +51,8 @@
 //! shows the right-hand side stays below `2^96`, so a left-hand side that does
 //! not fit `u128` is genuinely larger.
 
+use core::convert::TryFrom;
+
 use super::{ContentId, Error, Result, SourceSpecV1, header, one, put, read_array, zero};
 
 pub use super::generated_principal_capacity_v1::{
@@ -60,10 +62,11 @@ pub use super::generated_principal_capacity_v1::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1, MANIPULATION_FLOOR_V1_BYTES,
     MANIPULATION_FLOOR_V1_MAGIC, MANIPULATION_FLOOR_V1_MAGIC_OFFSET,
     MANIPULATION_FLOOR_V1_SCHEMA_VERSION, MANIPULATION_FLOOR_V1_VERSION_OFFSET,
-    MARKET_PRINCIPAL_CAP_BYTES_V1, MARKET_PRINCIPAL_CAP_UNBOUNDED_V1, PRINCIPAL_ADMISSION_CASES_V1,
-    PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1,
-    PRINCIPAL_CARRIED_CAPS_V1, SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1,
-    SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
+    MARKET_PRINCIPAL_CAP_BYTES_V1, MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1,
+    MARKET_PRINCIPAL_CAP_UNBOUNDED_V1, PRINCIPAL_ADMISSION_CASES_V1,
+    PRINCIPAL_CAP_PROJECTION_CASES_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1,
+    PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1, PRINCIPAL_CARRIED_CAPS_V1,
+    SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1, SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_BYTES_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_OFFSET_V1,
 };
@@ -420,6 +423,78 @@ pub enum MarketPrincipalCapV1 {
     Bounded(u128),
 }
 
+/// One runtime principal cap after the named atom-to-complete-set projection.
+///
+/// The wire is one `u64`: zero is fail-closed absent, `u64::MAX` is explicitly
+/// unbounded, and every other value is the largest complete-set count admitted
+/// by the authenticated collateral-atom cap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarketPrincipalCapSetsV1 {
+    /// No usable cap was projected; refuses every positive complete-set count.
+    Absent,
+    /// The explicit `u64::MAX` sentinel; admits every representable count.
+    Unbounded,
+    /// The largest admitted complete-set count.
+    Bounded(u64),
+}
+
+impl MarketPrincipalCapSetsV1 {
+    /// Read one runtime cap from its `u64` wire value.
+    #[must_use]
+    pub const fn read(sets: u64) -> Self {
+        if sets == 0 {
+            Self::Absent
+        } else if sets == MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1 {
+            Self::Unbounded
+        } else {
+            Self::Bounded(sets)
+        }
+    }
+
+    /// Return the exact canonical `u64` runtime field.
+    #[must_use]
+    pub const fn to_sets(self) -> u64 {
+        match self {
+            Self::Absent => 0,
+            Self::Unbounded => MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1,
+            Self::Bounded(sets) => sets,
+        }
+    }
+
+    /// Decide one positive total complete-set count against this cap.
+    pub const fn admit(self, total_sets: u64) -> Result<()> {
+        if total_sets == 0 {
+            return Err(Error::ZeroCapacity);
+        }
+        match self {
+            Self::Absent => Err(Error::PrincipalCapacityUnstated),
+            Self::Unbounded => Ok(()),
+            Self::Bounded(cap_sets) => {
+                if total_sets > cap_sets {
+                    Err(Error::PrincipalExceedsCapacity)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    /// Decide one complete-set growth against the carried runtime cap.
+    ///
+    /// `outstanding_sets` is the Claims aggregate supply before the operation
+    /// and `added_sets` is the exact aggregate credit proposed by the
+    /// operation. The checked sum is the only total compared with the cap.
+    /// Overflow is an excess, including under the explicit unbounded sentinel:
+    /// no runtime cap admits a complete-set count the `u64` wire cannot carry.
+    pub const fn admit_growth(self, outstanding_sets: u64, added_sets: u64) -> Result<()> {
+        let total = match outstanding_sets.checked_add(added_sets) {
+            Some(total) => total,
+            None => return Err(Error::PrincipalExceedsCapacity),
+        };
+        self.admit(total)
+    }
+}
+
 impl MarketPrincipalCapV1 {
     /// Read one carried cap from its `u128` wire value.
     #[must_use]
@@ -464,6 +539,31 @@ impl MarketPrincipalCapV1 {
         Ok(Self::read(u128::from_le_bytes(read_array(bytes, 0)?)))
     }
 
+    /// Project this authenticated collateral-atom cap to complete-set units.
+    ///
+    /// This is the one named rounding boundary adopted by decision 0013:
+    /// `floor(cap_atoms / basis_scale)`. A zero basis scale refuses. A quotient
+    /// at or above `u64::MAX` saturates to the explicit unbounded sentinel,
+    /// which loses no refusal because every runtime count is then admitted.
+    pub fn in_complete_sets(self, basis_scale: u64) -> Result<MarketPrincipalCapSetsV1> {
+        if basis_scale == 0 {
+            return Err(Error::ZeroCapacity);
+        }
+        match self {
+            Self::Absent => Ok(MarketPrincipalCapSetsV1::Absent),
+            Self::Unbounded => Ok(MarketPrincipalCapSetsV1::Unbounded),
+            Self::Bounded(cap_atoms) => {
+                let projected = cap_atoms / u128::from(basis_scale);
+                if projected >= u128::from(MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1) {
+                    Ok(MarketPrincipalCapSetsV1::Unbounded)
+                } else {
+                    let sets = u64::try_from(projected).map_err(|_| Error::ArithmeticOverflow)?;
+                    Ok(MarketPrincipalCapSetsV1::read(sets))
+                }
+            }
+        }
+    }
+
     /// Decide one total principal against the carried cap.
     ///
     /// This is the whole check a route with no Source graph in scope makes, and
@@ -484,6 +584,17 @@ impl MarketPrincipalCapV1 {
             }
         }
     }
+}
+
+/// One Lean-owned atom-cap projection case used to grade the Rust boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PrincipalCapProjectionCaseV1 {
+    /// Authenticated principal cap in collateral atoms.
+    pub cap_atoms: u128,
+    /// Collateral atoms in one complete set.
+    pub basis_scale: u64,
+    /// Expected canonical runtime field, or `None` for zero-scale refusal.
+    pub projected_sets: Option<u64>,
 }
 
 /// Compute the cap a founding writes to its Market root.
@@ -632,6 +743,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_complete_set_projection_matches_every_lean_owned_boundary_case() {
+        for case in PRINCIPAL_CAP_PROJECTION_CASES_V1 {
+            let observed = MarketPrincipalCapV1::read(case.cap_atoms)
+                .in_complete_sets(case.basis_scale)
+                .map(MarketPrincipalCapSetsV1::to_sets);
+            assert_eq!(
+                observed,
+                case.projected_sets.ok_or(Error::ZeroCapacity),
+                "Lean and Rust disagreed on {case:?}"
+            );
+        }
+    }
+
     /// And the caps themselves are what the derivation produces, so the corpus
     /// above is not grading the check against a number nothing computes.
     #[test]
@@ -716,6 +841,24 @@ mod tests {
         assert_eq!(
             admit_principal_growth(MarketPrincipalCapV1::Unbounded, u128::MAX, 1),
             Err(Error::PrincipalExceedsCapacity)
+        );
+    }
+
+    /// Runtime split routes consume the projected complete-set cap, not the
+    /// atom-denominated Source graph. The boundary and overflow refusal remain
+    /// identical in those exact wire units.
+    #[test]
+    fn projected_set_growth_admits_the_boundary_and_refuses_excess_or_overflow() {
+        let cap = MarketPrincipalCapSetsV1::Bounded(10);
+        assert_eq!(cap.admit_growth(7, 3), Ok(()));
+        assert_eq!(cap.admit_growth(7, 4), Err(Error::PrincipalExceedsCapacity));
+        assert_eq!(
+            MarketPrincipalCapSetsV1::Unbounded.admit_growth(u64::MAX, 1),
+            Err(Error::PrincipalExceedsCapacity)
+        );
+        assert_eq!(
+            MarketPrincipalCapSetsV1::Absent.admit_growth(0, 1),
+            Err(Error::PrincipalCapacityUnstated)
         );
     }
 

@@ -1,0 +1,43 @@
+{
+  "schema": "dclutch-market-registry-v1",
+  "cluster": "devnet",
+  "provenance": "The names, questions, outcome labels, and stories in this registry are site-side editorial: the chain stores none of them. Every number, phase, address, and refusal shown beside them is read from the chain.",
+  "markets": {
+    "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq": {
+      "title": "SOL/USD range — the first market that can trade",
+      "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
+      "outcomes": [
+        "Below $120",
+        "Between $120 and $180",
+        "Above $180",
+        "The source failed to report"
+      ],
+      "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
+      "story": "The successor to the first public market, founded on 2026-08-30 to carry the one thing its predecessor was missing: a release that can switch trading on. Hours later it became the first market on any dClutch deployment to hold a live capability root — the account that has to exist before a single trade can be made — and the account is on devnet with the transaction that created it. The two markets founded before it stay open and readable, but they can never trade; this one can."
+    },
+    "7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC": {
+      "title": "SOL/USD range — the first public market",
+      "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
+      "outcomes": [
+        "Below $120",
+        "Between $120 and $180",
+        "Above $180",
+        "The source failed to report"
+      ],
+      "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
+      "story": "The first market founded on dClutch's public devnet deployment: five founding stages landed in one atomic transaction on 2026-08-29. Its trading window was never switched on — the release it was founded with shipped without a route to activate trading, and the activation deadline passed while that gap was being found. Nothing was lost and nothing is hidden: its claims, its collateral, and every account it owns remain on devnet, readable forever, exactly as founding left them. This page reads them live."
+    },
+    "CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM": {
+      "title": "SOL/USD range — the orphan founding",
+      "question": "Where does the SOL/USD price finish this market's window — below its range, inside it, or above it?",
+      "outcomes": [
+        "Below the range",
+        "Inside the range",
+        "Above the range",
+        "The source failed to report"
+      ],
+      "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
+      "story": "Founded shortly before the first public market, by the same tooling — and then orphaned: the driver that founded it hit a stale check and refused its own success, so the build moved on without it. It is complete and open, and its trading window, like the flagship's, was never switched on before the deadline passed. It stays in the record because devnet history is public — and so is the history of building on it."
+    }
+  }
+}

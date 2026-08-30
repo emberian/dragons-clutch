@@ -6,9 +6,9 @@ import { docsHrefV1 } from '@/lib/flags';
  * `/console` — the directory of the operator consoles.
  *
  * The product pages (Markets, Create, Portfolio, Explorer) are for anyone.
- * Everything listed here is a working tool for someone operating or building
- * on the protocol: each console reads real chain state, refuses by name, and
- * mostly hands you unsigned bytes to sign elsewhere. This page exists so those
+ * Everything listed here is an operator surface for someone operating or
+ * building on the protocol. Some entries are read-only readiness views; a
+ * route may construct bytes only when its own preflight says so. This page exists so those
  * tools stop masquerading as product pages — one entry per console, one plain
  * sentence per entry saying who it is for and what it does.
  */
@@ -20,13 +20,13 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/workbench',
     name: 'Lifecycle workbench',
     blurb:
-      'Walk a market’s whole life — author, fund, trade, resolve, claim — against whatever chain you point it at. Start here if you are new to operating dClutch.',
+      'Read a market lifecycle readiness map against the chain you choose. It does not create, trade, resolve, or redeem.',
   },
   {
     href: '/found',
     name: 'Founding',
     blurb:
-      'For market authors: derive a new market’s accounts from the Registry and download the two unsigned transactions that found it.',
+      'Inspect the older partial founding packet pair. It cannot open a current devnet market.',
   },
   {
     href: '/product-v2',
@@ -38,37 +38,37 @@ const ENTRIES: readonly ConsoleEntry[] = [
     href: '/trade',
     name: 'Direct trade',
     blurb:
-      'For traders testing routes: check one trade against live chain state and build its unsigned transaction pair.',
+      'Inspect one Direct route and preview its exact integer arithmetic. Browser signing and submission are unavailable.',
   },
   {
     href: '/liquidity',
     name: 'Liquidity',
     blurb:
-      'For dealers: contribute or redeem dealer equity through a chain-checked route, and download the unsigned transaction for it.',
+      'For dealers: build and download an unsigned transaction for adding or withdrawing dealer equity, checked against the chain first. You sign and send it yourself, elsewhere.',
   },
   {
     href: '/redeem',
-    name: 'Representation',
+    name: 'Wallet redemption (not open yet)',
     blurb:
-      'For claim holders: transfer claim tokens, and prepare the open and retirement steps of redemption from live market state.',
+      'Connect your wallet and see the claims it holds across the deployment. Paying out winning claims is not available yet; this is where it will happen, and the page tells you so rather than offering a button that cannot work.',
   },
   {
     href: '/resolution',
     name: 'Resolution',
     blurb:
-      'The lifecycle workbench opened at the resolve stage — for settling a market whose terminal window has arrived.',
+      'A read-only view of what a market still needs before its oracle answer can be accepted, and how far along the one you point it at has got. Resolution is not open yet.',
   },
   {
     href: '/general',
     name: 'General clearing',
     blurb:
-      'For operators running settlement: paste a clearing plan produced by the operator program, let the browser re-check every field, and download the unsigned packet.',
+      'For operators: paste a clearing plan produced by the operator program, have the browser re-check every field against the chain, and download the unsigned transaction. Nothing is sent from here.',
   },
   {
     href: '/release',
     name: 'Release activation',
     blurb:
-      'For operators deploying the protocol: paste a checked release — the evidence bundle the build pipeline produces to prove exactly which code a deployment runs — and activate it against a Registry.',
+      'Activate already-installed checked artifacts against a Registry. This does not update programs and is not the current devnet Upgrade workflow.',
   },
   {
     href: '/operate',
@@ -92,11 +92,12 @@ export default function ConsoleDirectory() {
       <div>
         <p className="eyebrow">The toolbox behind the product</p>
         <h1>Operator<br /><em>consoles.</em></h1>
-        <p>These are working tools for people operating or building on the
-        protocol, not product pages. Each one reads real state from the chain
-        you point it at, refuses by name when that state disagrees, and in most
-        cases hands you unsigned bytes to sign somewhere you trust. If you are
-        here to browse or trade, start at <Anchor href="/markets">Markets</Anchor> instead.</p>
+        <p>These are tools for people running or building on the protocol, not
+        product pages. Each one says plainly what it can and cannot do, and when
+        the chain disagrees with what a page was asked to do, it says so by name
+        rather than failing quietly. A page being listed here does not mean it can
+        send a transaction. If you are here to look around or trade, start at{' '}
+        <Anchor href="/markets">Markets</Anchor> instead.</p>
         <p>Every file a console asks for has exactly one producer, and the
         console says which, right on the input. The answer key is the
         README&apos;s table <a href={docsHrefV1('readme.html', 'README.md')}>“The

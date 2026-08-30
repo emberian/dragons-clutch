@@ -10,6 +10,8 @@ pub const CLOSE_ACCOUNT_TAG: u8 = 9;
 pub const REVOKE_TAG: u8 = 5;
 /// Official `TransferChecked` instruction tag.
 pub const TRANSFER_CHECKED_TAG: u8 = 12;
+/// Official `ApproveChecked` instruction tag.
+pub const APPROVE_CHECKED_TAG: u8 = 13;
 /// Official `InitializeAccount3` instruction tag.
 pub const INITIALIZE_ACCOUNT3_TAG: u8 = 18;
 
@@ -17,6 +19,8 @@ pub const INITIALIZE_ACCOUNT3_TAG: u8 = 18;
 pub const INITIALIZE_ACCOUNT3_DATA_BYTES: usize = 33;
 /// Exact `TransferChecked` instruction-data width.
 pub const TRANSFER_CHECKED_DATA_BYTES: usize = 10;
+/// Exact `ApproveChecked` instruction-data width.
+pub const APPROVE_CHECKED_DATA_BYTES: usize = 10;
 /// Exact `CloseAccount` instruction-data width.
 pub const CLOSE_ACCOUNT_DATA_BYTES: usize = 1;
 /// Exact `Revoke` instruction-data width.
@@ -84,6 +88,8 @@ impl<const ACCOUNTS: usize, const DATA: usize> InstructionSpec<ACCOUNTS, DATA> {
 pub type InitializeAccount3Instruction = InstructionSpec<2, INITIALIZE_ACCOUNT3_DATA_BYTES>;
 /// Exact single-authority `TransferChecked` specification.
 pub type TransferCheckedInstruction = InstructionSpec<4, TRANSFER_CHECKED_DATA_BYTES>;
+/// Exact single-owner `ApproveChecked` specification.
+pub type ApproveCheckedInstruction = InstructionSpec<4, APPROVE_CHECKED_DATA_BYTES>;
 /// Exact single-authority `CloseAccount` specification.
 pub type CloseAccountInstruction = InstructionSpec<3, CLOSE_ACCOUNT_DATA_BYTES>;
 /// Exact single-owner `Revoke` specification.
@@ -140,6 +146,38 @@ pub fn transfer_checked(
             AccountMeta::new(mint, false, false),
             AccountMeta::new(destination, false, true),
             AccountMeta::new(authority, true, false),
+        ],
+        data,
+    })
+}
+
+/// Build exact single-owner `ApproveChecked` data and ordered roles.
+///
+/// The roles are writable source, readonly Mint, readonly delegate, and
+/// readonly signer owner. Multisignature expansion is intentionally outside
+/// this fixed profile. `amount` is an exact raw-atom `u64`; `decimals` is only
+/// the Mint precision cross-check required by the checked Token ABI.
+pub fn approve_checked(
+    program_id: Address,
+    source: Address,
+    mint: Address,
+    delegate: Address,
+    owner: Address,
+    amount: u64,
+    decimals: u8,
+) -> Result<ApproveCheckedInstruction> {
+    TokenProgram::parse(program_id)?;
+    let mut data = [0; APPROVE_CHECKED_DATA_BYTES];
+    put(&mut data, 0, &[APPROVE_CHECKED_TAG]);
+    put(&mut data, 1, &amount.to_le_bytes());
+    put(&mut data, 9, &[decimals]);
+    Ok(InstructionSpec {
+        program_id,
+        accounts: [
+            AccountMeta::new(source, false, true),
+            AccountMeta::new(mint, false, false),
+            AccountMeta::new(delegate, false, false),
+            AccountMeta::new(owner, true, false),
         ],
         data,
     })
@@ -210,6 +248,31 @@ pub struct TransferCheckedView<'a> {
     decimals: u8,
 }
 
+/// Borrowed exact `ApproveChecked` instruction-data view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApproveCheckedView<'a> {
+    raw: &'a [u8],
+    amount: u64,
+    decimals: u8,
+}
+
+impl<'a> ApproveCheckedView<'a> {
+    /// Borrow all exact input bytes.
+    pub const fn raw(&self) -> &'a [u8] {
+        self.raw
+    }
+
+    /// Return the exact raw token amount.
+    pub const fn amount(&self) -> u64 {
+        self.amount
+    }
+
+    /// Return the Mint decimal count to be checked by the token program.
+    pub const fn decimals(&self) -> u8 {
+        self.decimals
+    }
+}
+
 impl<'a> TransferCheckedView<'a> {
     /// Borrow all exact input bytes.
     pub const fn raw(&self) -> &'a [u8] {
@@ -253,13 +316,15 @@ impl<'a> CloseAccountView<'a> {
     }
 }
 
-/// One of the three exact borrowed instruction-data shapes owned here.
+/// One exact borrowed instruction-data shape owned here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InstructionDataView<'a> {
     /// Exact `InitializeAccount3` data.
     InitializeAccount3(InitializeAccount3View<'a>),
     /// Exact `TransferChecked` data.
     TransferChecked(TransferCheckedView<'a>),
+    /// Exact `ApproveChecked` data.
+    ApproveChecked(ApproveCheckedView<'a>),
     /// Exact `CloseAccount` data.
     CloseAccount(CloseAccountView<'a>),
     /// Exact `Revoke` data.
@@ -285,6 +350,13 @@ impl<'a> InstructionDataView<'a> {
                     decimals: bytes.get(9).copied().ok_or(Error::InvalidInstruction)?,
                 }))
             }
+            APPROVE_CHECKED_TAG if bytes.len() == APPROVE_CHECKED_DATA_BYTES => {
+                Ok(Self::ApproveChecked(ApproveCheckedView {
+                    raw: bytes,
+                    amount: u64::from_le_bytes(read_array(bytes, 1)?),
+                    decimals: bytes.get(9).copied().ok_or(Error::InvalidInstruction)?,
+                }))
+            }
             CLOSE_ACCOUNT_TAG if bytes.len() == CLOSE_ACCOUNT_DATA_BYTES => {
                 Ok(Self::CloseAccount(CloseAccountView { raw: bytes }))
             }
@@ -300,6 +372,7 @@ impl<'a> InstructionDataView<'a> {
         match self {
             Self::InitializeAccount3(view) => view.raw(),
             Self::TransferChecked(view) => view.raw(),
+            Self::ApproveChecked(view) => view.raw(),
             Self::CloseAccount(view) => view.raw(),
             Self::Revoke(view) => view.raw(),
         }
@@ -323,6 +396,8 @@ fn put(output: &mut [u8], offset: usize, input: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    use solana_address::Address as SolanaAddress;
+
     use crate::{LEGACY_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID};
 
     use super::*;
@@ -367,6 +442,48 @@ mod tests {
                 ]
             );
         }
+        let approved = approve_checked(
+            LEGACY_TOKEN_PROGRAM_ID,
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            0x0807_0605_0403_0201,
+            9,
+        );
+        if let Ok(value) = approved {
+            assert_eq!(
+                InstructionDataView::parse(value.data()),
+                Ok(InstructionDataView::ApproveChecked(ApproveCheckedView {
+                    raw: value.data(),
+                    amount: 0x0807_0605_0403_0201,
+                    decimals: 9,
+                }))
+            );
+        }
+
+        let approved = approve_checked(
+            TOKEN_2022_PROGRAM_ID,
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            0x0807_0605_0403_0201,
+            9,
+        );
+        assert!(approved.is_ok());
+        if let Ok(value) = approved {
+            assert_eq!(value.data(), &[13, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            assert_eq!(
+                value.accounts(),
+                &[
+                    AccountMeta::new([1; 32], false, true),
+                    AccountMeta::new([2; 32], false, false),
+                    AccountMeta::new([3; 32], false, false),
+                    AccountMeta::new([4; 32], true, false),
+                ]
+            );
+        }
 
         let closed = close_account(LEGACY_TOKEN_PROGRAM_ID, [1; 32], [2; 32], [3; 32]);
         assert!(closed.is_ok());
@@ -393,6 +510,46 @@ mod tests {
                     AccountMeta::new([2; 32], true, false),
                 ]
             );
+        }
+    }
+
+    #[test]
+    fn approve_checked_matches_the_pinned_official_token_2022_interface() {
+        let program = SolanaAddress::from(TOKEN_2022_PROGRAM_ID);
+        let source = SolanaAddress::from([1; 32]);
+        let mint = SolanaAddress::from([2; 32]);
+        let delegate = SolanaAddress::from([3; 32]);
+        let owner = SolanaAddress::from([4; 32]);
+        let amount = 0x0807_0605_0403_0201;
+        let decimals = 9;
+        let official = spl_token_2022_interface::instruction::approve_checked(
+            &program,
+            &source,
+            &mint,
+            &delegate,
+            &owner,
+            &[],
+            amount,
+            decimals,
+        )
+        .expect("official single-owner ApproveChecked");
+        let ours = approve_checked(
+            TOKEN_2022_PROGRAM_ID,
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            amount,
+            decimals,
+        )
+        .expect("SDK-free single-owner ApproveChecked");
+        assert_eq!(official.program_id.to_bytes(), *ours.program_id());
+        assert_eq!(official.data, ours.data());
+        assert_eq!(official.accounts.len(), ours.accounts().len());
+        for (official, ours) in official.accounts.iter().zip(ours.accounts()) {
+            assert_eq!(official.pubkey.to_bytes(), *ours.address());
+            assert_eq!(official.is_signer, ours.is_signer());
+            assert_eq!(official.is_writable, ours.is_writable());
         }
     }
 
@@ -440,6 +597,7 @@ mod tests {
             &[5, 0][..],
             &[9, 0][..],
             &[12][..],
+            &[13][..],
             &[18][..],
             &[255][..],
         ] {
@@ -449,9 +607,14 @@ mod tests {
             );
         }
         let transfer_with_trailer = [12, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0];
+        let approve_with_trailer = [13, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0];
         let initialize_with_trailer = [18; INITIALIZE_ACCOUNT3_DATA_BYTES + 1];
         assert_eq!(
             InstructionDataView::parse(&transfer_with_trailer),
+            Err(Error::InvalidInstruction)
+        );
+        assert_eq!(
+            InstructionDataView::parse(&approve_with_trailer),
             Err(Error::InvalidInstruction)
         );
         assert_eq!(
@@ -469,6 +632,10 @@ mod tests {
         );
         assert_eq!(
             transfer_checked(unknown, [1; 32], [2; 32], [3; 32], [4; 32], 1, 6),
+            Err(Error::UnsupportedProgram)
+        );
+        assert_eq!(
+            approve_checked(unknown, [1; 32], [2; 32], [3; 32], [4; 32], 1, 6),
             Err(Error::UnsupportedProgram)
         );
         assert_eq!(

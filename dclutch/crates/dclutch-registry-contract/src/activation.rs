@@ -2,7 +2,8 @@
 
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    ArtifactReleaseIdV1, EXECUTION_ROLE_COUNT_V1, EXECUTION_ROLE_ORDER_V1, ExecutionReleaseSetV1,
+    ExecutionRoleBindingV1, ExecutionRoleV1,
 };
 
 use crate::{
@@ -34,20 +35,36 @@ pub const ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_ID_V1: [u8; IDENTITY_BYTES] = [
     0x4f, 0x72, 0x85, 0xdd, 0xc2, 0x0e, 0xec, 0xcc, 0xdf, 0x24, 0x51, 0x09, 0xe5, 0x7b, 0xbf, 0x66,
 ];
 
+/// Offset of the cache's own canonical PDA bump.
+///
+/// The cache address is `[ACTIVATION_PDA_DOMAIN_V1, release_set_id]` under the
+/// Registry, and SIX separate searches per top-level Direct transaction land on
+/// it -- one in Trading, two inside the Registry's own `Reauthenticate` CPIs,
+/// one from Claims and two from Custody. Every one of them already holds and
+/// decodes this account, so the cheapest carrier for the bump is the account
+/// itself: a reader reproduces the address with `create_program_address` and a
+/// wrong byte reproduces a different address and refuses.
+///
+/// It is the first of what were four canonical reserved bytes, so the width and
+/// every offset after it are unchanged.
+///
+/// **Zero means "written before this byte existed", not "invalid".**
+/// `find_program_address` walks 255 down to 1 and never returns 0, so a zero
+/// here is an older cache body, and a reader that meets one falls back to the
+/// search it used to do unconditionally. That is what makes this deployable
+/// without a migration, and it is the same rule
+/// `CAPABILITY_EXECUTION_SELECTION_RECORD_BUMPS_OFFSET` already follows in
+/// `dclutch-release-set-contract`.
+pub const ACTIVATION_CACHE_BUMP_OFFSET_V1: usize = 12;
+
 const SCHEMA_OFFSET: usize = 8;
 const PROFILE_OFFSET: usize = 10;
-const RESERVED_OFFSET: usize = 12;
-const RESERVED_BYTES: usize = 4;
+const RESERVED_OFFSET: usize = 13;
+const RESERVED_BYTES: usize = 3;
 const RELEASE_SET_ID_OFFSET: usize = 16;
 const ROLES_OFFSET: usize = 48;
 
-const ALL_ROLES: [ExecutionRoleV1; 5] = [
-    ExecutionRoleV1::Core,
-    ExecutionRoleV1::Claims,
-    ExecutionRoleV1::Trading,
-    ExecutionRoleV1::Resolution,
-    ExecutionRoleV1::Custody,
-];
+const ALL_ROLES: [ExecutionRoleV1; EXECUTION_ROLE_COUNT_V1] = EXECUTION_ROLE_ORDER_V1;
 
 /// Finalized artifact release plus its current deployment observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -155,6 +172,19 @@ impl<'a> ActivatedExecutionReleaseSetViewV1<'a> {
         let value = Self { bytes };
         value.validate_projection()?;
         Ok(value)
+    }
+
+    /// The cache address's own canonical PDA bump, if this body carries one.
+    ///
+    /// `None` for a cache written before the bump was persisted; see
+    /// [`ACTIVATION_CACHE_BUMP_OFFSET_V1`] for why that is a fallback and not a
+    /// refusal.
+    pub fn cache_bump(self) -> Result<Option<u8>> {
+        let bump = *self
+            .bytes
+            .get(ACTIVATION_CACHE_BUMP_OFFSET_V1)
+            .ok_or(Error::InvalidLength)?;
+        Ok((bump != 0).then_some(bump))
     }
 
     /// Return the exact activated release-set content identity.
@@ -316,13 +346,16 @@ impl ActivatedExecutionReleaseSetV1 {
 /// something else", which is a refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActivationCacheProgressV1 {
-    written: [bool; 5],
+    written: [bool; EXECUTION_ROLE_COUNT_V1],
 }
 
 impl ActivationCacheProgressV1 {
     /// Whether this exact role has already been admitted.
     pub fn is_written(self, role: ExecutionRoleV1) -> bool {
-        self.written.get(role_index(role)).copied().unwrap_or(false)
+        self.written
+            .get(role.role_index())
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Number of roles already admitted, from zero to five.
@@ -365,7 +398,7 @@ pub fn activation_cache_progress_v1(
         if observed_role != subslice(&complete, offset, ACTIVATED_ROLE_BYTES_V1)? {
             return Err(Error::AliasedRoleActivationMismatch);
         }
-        if let Some(slot) = written.get_mut(role_index(role)) {
+        if let Some(slot) = written.get_mut(role.role_index()) {
             *slot = true;
         }
     }
@@ -407,6 +440,29 @@ pub fn initialize_activation_cache_v1(
         RELEASE_SET_ID_OFFSET,
         finalized_release_set_id.as_bytes(),
     );
+    Ok(())
+}
+
+/// Record the cache address's own canonical PDA bump into an initialized buffer.
+///
+/// Deliberately separate from [`initialize_activation_cache_v1`] rather than a
+/// parameter of it. The bump is an OPTIMIZATION carrier, not a fact the cache
+/// needs to be valid, and every reader falls back to the search when the byte
+/// is zero. Keeping it separate means the one writer that has a bump to record
+/// -- the Registry, which had to derive it to sign the account into existence
+/// -- records it, and the couple of dozen harnesses that stage a cache by hand
+/// stay exactly as they are and simply do not get the saving.
+///
+/// Refuses zero, because a caller with no bump has not derived the address it
+/// is writing, and refuses a buffer that is not a canonical cache.
+pub fn put_activation_cache_bump_v1(output: &mut [u8], cache_bump: u8) -> Result<()> {
+    validate_activation_header(output)?;
+    if cache_bump == 0 {
+        return Err(Error::NonCanonicalReservedBytes);
+    }
+    *output
+        .get_mut(ACTIVATION_CACHE_BUMP_OFFSET_V1)
+        .ok_or(Error::InvalidLength)? = cache_bump;
     Ok(())
 }
 
@@ -518,18 +574,8 @@ fn projection_binding(activated: ActivatedRoleV1) -> ExecutionRoleBindingV1 {
     ExecutionRoleBindingV1::new(activated.release.program(), activated.artifact_release_id)
 }
 
-const fn role_index(role: ExecutionRoleV1) -> usize {
-    match role {
-        ExecutionRoleV1::Core => 0,
-        ExecutionRoleV1::Claims => 1,
-        ExecutionRoleV1::Trading => 2,
-        ExecutionRoleV1::Resolution => 3,
-        ExecutionRoleV1::Custody => 4,
-    }
-}
-
 fn role_offset(role: ExecutionRoleV1) -> usize {
-    ROLES_OFFSET + role_index(role) * ACTIVATED_ROLE_BYTES_V1
+    ROLES_OFFSET + role.role_index() * ACTIVATED_ROLE_BYTES_V1
 }
 
 fn decode_role(bytes: &[u8], role: ExecutionRoleV1) -> Result<ActivatedRoleV1> {

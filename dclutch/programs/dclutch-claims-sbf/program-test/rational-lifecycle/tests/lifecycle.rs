@@ -51,8 +51,8 @@ use dclutch_rent_contract::{
     },
 };
 use dclutch_token_svm::{
-    ACCOUNT_BYTES, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
-    Token2022CloseableMintProfileV2, TokenAccount,
+    ACCOUNT_BYTES, InertMetadataV2, TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, TOKEN_2022_PROGRAM_ID,
+    Token2022BehaviorProfileV2, Token2022CloseableMintProfileV2, TokenAccount,
 };
 use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
@@ -67,7 +67,8 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::signature::{Keypair, Signer};
+use solana_system_interface::instruction::transfer;
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::versioned::VersionedTransaction;
 
@@ -619,6 +620,21 @@ fn coordinate(f: &Fixture, vacancy: bool) -> LifecycleCoordinateV2 {
 }
 
 fn request(f: &Fixture, action: LifecycleActionV2, rent_before: u64) -> Vec<u8> {
+    request_declaring(f, action, rent_before, f.receipt_lamports)
+}
+
+/// The same request, declaring an arbitrary observed receipt-mint balance.
+///
+/// Only a hostile needs this. It exists so the over-declaration control below
+/// can be built through the real encoder rather than by patching a byte at a
+/// hardcoded offset, which would silently stop testing anything the day the
+/// layout moved.
+fn request_declaring(
+    f: &Fixture,
+    action: LifecycleActionV2,
+    rent_before: u64,
+    observed_receipt_lamports: u64,
+) -> Vec<u8> {
     let coordinate_credit = f
         .shard_lamports
         .checked_add(f.structured_lamports)
@@ -658,7 +674,7 @@ fn request(f: &Fixture, action: LifecycleActionV2, rent_before: u64) -> Vec<u8> 
         rent_program: RENT_PROGRAM.to_bytes(),
         generation: GENERATION,
         expected_claims_market_revision: 0,
-        observed_receipt_lamports: f.receipt_lamports,
+        observed_receipt_lamports,
         receipt_rent_principal: f.receipt_rent,
         expected_receipt_supply: 0,
         outcome_count: f.graph.outcome_count,
@@ -1035,6 +1051,56 @@ fn make_core_retiring(context: &mut ProgramTestContext, f: &Fixture, mut account
     context.set_account(&f.graph.core_market, &AccountSharedData::from(account));
 }
 
+/// Authenticate one Mint the lifecycle just created against BOTH readers that
+/// matter to it, at the exact width it must have allocated.
+///
+/// The lifecycle's own post-create reader is not the last word on these Mints.
+/// The representation family retires them elsewhere — `rational_representation_v2`
+/// `BurnReceipt`/`BurnShard` and `fractional_atomic_v3` `WholeUnwrap` all read
+/// these same PDAs through `Token2022BehaviorProfileV2`, which requires a
+/// `PermissionedBurn` extension because it then burns through it. Those two
+/// campaigns are disjoint, so for a long time each side's fixture invented
+/// exactly the bytes that side expected and the join was never executed: the
+/// lifecycle wrote a 202-byte close-only Mint that the terminal readers refuse,
+/// and Token-2022 extensions are init-time-only, so every such Mint was broken
+/// permanently. This assertion is that join, on bytes the real v11 Token-2022
+/// program wrote in this transaction.
+fn assert_lifecycle_mint_is_terminally_burnable(
+    mint: Pubkey,
+    data: &[u8],
+    representation_authority: Pubkey,
+    expected_supply: u64,
+) {
+    assert_eq!(
+        data.len(),
+        TOKEN_2022_CLOSEABLE_MINT_BYTES_V2,
+        "lifecycle Mint width"
+    );
+    let facts = Token2022CloseableMintProfileV2::check_mint(
+        TOKEN_2022_PROGRAM_ID,
+        data,
+        representation_authority.to_bytes(),
+        representation_authority.to_bytes(),
+        representation_authority.to_bytes(),
+        expected_supply,
+        0,
+    )
+    .expect("closeable lifecycle Mint profile");
+    assert_eq!(facts.close_authority(), representation_authority.to_bytes());
+    assert_eq!(facts.burn_authority(), representation_authority.to_bytes());
+
+    let behavior = Token2022BehaviorProfileV2::check_mint(
+        TOKEN_2022_PROGRAM_ID,
+        mint.to_bytes(),
+        data,
+        representation_authority.to_bytes(),
+        expected_supply,
+    )
+    .expect("terminal representation readers admit the Mint the lifecycle wrote");
+    assert_eq!(behavior.metadata(), InertMetadataV2::Absent);
+    assert_eq!(behavior.controller(), representation_authority.to_bytes());
+}
+
 fn assert_lifecycle_receipt(
     returned: Option<(Pubkey, Vec<u8>)>,
     request: &[u8],
@@ -1174,15 +1240,12 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
         .await
         .expect("live receipt Mint");
     assert_eq!(receipt_account.owner, TOKEN_2022);
-    Token2022CloseableMintProfileV2::check_mint(
-        TOKEN_2022_PROGRAM_ID,
+    assert_lifecycle_mint_is_terminally_burnable(
+        f.receipt_mint,
         &receipt_account.data,
-        f.representation_authority.to_bytes(),
-        f.representation_authority.to_bytes(),
+        f.representation_authority,
         0,
-        0,
-    )
-    .expect("closeable receipt Mint profile");
+    );
     let (accepted, _, _, _) = submit(
         &mut context,
         replay_receipt,
@@ -1242,15 +1305,12 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
     let shard = account(&mut context, f.shard_mint)
         .await
         .expect("shard Mint");
-    Token2022CloseableMintProfileV2::check_mint(
-        TOKEN_2022_PROGRAM_ID,
+    assert_lifecycle_mint_is_terminally_burnable(
+        f.shard_mint,
         &shard.data,
-        f.representation_authority.to_bytes(),
-        f.representation_authority.to_bytes(),
+        f.representation_authority,
         0,
-        0,
-    )
-    .expect("closeable shard Mint profile");
+    );
     let structured = account(&mut context, f.structured_custody)
         .await
         .expect("structured custody");
@@ -1448,5 +1508,158 @@ async fn real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every
     }
     println!(
         "Rational lifecycle CU: activate_receipt={activate_receipt_cu}, activate_coordinate={activate_coordinate_cu}, retire_coordinate={retire_coordinate_cu}, retire_receipt={retire_receipt_cu}"
+    );
+}
+
+/// Refusal code for `RationalLifecycleSbfErrorV2::Rent`.
+const RENT_REFUSAL: u32 = 0x5215;
+
+/// Assert a refusal carried an exact program error code.
+///
+/// Without the code a hostile passes on any failure, including one raised by a
+/// gate that never reached the check the hostile is named after.
+fn refused_with(logs: &[String], code: u32) -> bool {
+    let needle = format!("custom program error: {code:#x}");
+    logs.iter().any(|line| line.contains(&needle))
+}
+
+/// A STRANGER'S ONE LAMPORT NO LONGER BLOCKS A RECEIPT-MINT ACTIVATION.
+///
+/// The same class as census row R13, found by sweeping the tree for it after
+/// R13's admission half was welded. `authenticate_vacant_prepaid` compared a
+/// prepaid resource's LIVE balance against a caller-DECLARED snapshot by exact
+/// equality. Every caller passes a `find_program_address` PDA that the function
+/// itself requires to be system-owned and empty -- the receipt Mint, each shard
+/// Mint, each structured custody account -- so anybody may send one lamport and
+/// refuse the activation, repeatably, for about one lamport plus a fee.
+///
+/// The relaxation removes nothing, and the second half of this test is the
+/// proof rather than the claim: the underfunding guard is the line immediately
+/// below the one that changed, so a request over-declaring what the Mint holds
+/// still refuses at exactly `0x5215`. The pair now reads
+/// `live >= declared >= principal`.
+#[tokio::test]
+async fn a_strangers_lamport_cannot_block_a_prepaid_receipt_activation() {
+    let (test, f) = fixture();
+    let mut context = test.start_with_context().await;
+
+    let activate = wrapped(
+        &f,
+        request(&f, LifecycleActionV2::ActivateReceipt, f.rent_credit_initial),
+        false,
+        false,
+    );
+    // The control: claim the Mint holds more than it does. That is underfunding,
+    // which is the entire safety content of the check being relaxed.
+    let underfunded = wrapped(
+        &f,
+        request_declaring(
+            &f,
+            LifecycleActionV2::ActivateReceipt,
+            f.rent_credit_initial,
+            f.receipt_lamports
+                .checked_add(1_000)
+                .expect("over-declaration"),
+        ),
+        false,
+        false,
+    );
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        &[activate.clone(), underfunded.clone()],
+    );
+    let table = create_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-lifecycle: prepaid dust tolerance",
+    )
+    .await;
+
+    // THE ATTACK, executed rather than described. A wallet that is nobody sends
+    // one lamport to the prepaid receipt Mint PDA. It needs no permission: the
+    // address is derived, keyless and system-owned.
+    let griefer = Keypair::new();
+    let funder = context.payer.pubkey();
+    process_legacy(
+        &mut context,
+        transfer(
+            &funder,
+            &griefer.pubkey(),
+            Rent::default()
+                .minimum_balance(0)
+                .checked_mul(64)
+                .expect("griefer funding"),
+        ),
+        "claims rational-lifecycle: fund a stranger",
+    )
+    .await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[transfer(&griefer.pubkey(), &f.receipt_mint, 1)],
+            Some(&griefer.pubkey()),
+            &[&griefer],
+            blockhash,
+        ))
+        .await
+        .expect("one lamport, from anybody, needs nobody's permission");
+    assert_eq!(
+        account(&mut context, f.receipt_mint)
+            .await
+            .expect("prepaid receipt")
+            .lamports,
+        f.receipt_lamports + 1,
+        "the attack must have landed, or nothing below is a test"
+    );
+
+    // The control refuses, at the code, on the attacked state.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        underfunded,
+        table,
+        &addresses,
+        "claims rational-lifecycle: an over-declared prepayment is underfunding and still refuses",
+    )
+    .await
+    .expect("underfunded activation");
+    assert!(!accepted, "over-declaration must never be admissible");
+    assert!(
+        refused_with(&logs, RENT_REFUSAL),
+        "underfunding must refuse at {RENT_REFUSAL:#x}, not merely fail:\n{}",
+        logs.join("\n")
+    );
+
+    // THE WELD. Same request bytes as the activation that commits in
+    // `real_token_2022_lifecycle_refuses_ata_substitution_and_rolls_back_every_late_failure`,
+    // one stranger's lamport later. It is proven to reach the relaxed check
+    // rather than pass an earlier gate, because the control above -- identical
+    // in every byte but the declared lamports -- refuses at the balance check.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        activate,
+        table,
+        &addresses,
+        "claims rational-lifecycle: activation survives a one-lamport front-run",
+    )
+    .await
+    .expect("activation");
+    assert!(
+        accepted,
+        "a stranger's lamport must not be able to block this activation:\n{}",
+        logs.join("\n")
+    );
+    // The donation is not stranded and not double-counted: it stays on the Mint,
+    // which the retirement path sweeps whole.
+    assert_eq!(
+        account(&mut context, f.receipt_mint)
+            .await
+            .expect("activated receipt")
+            .lamports,
+        f.receipt_lamports + 1
     );
 }

@@ -9,9 +9,10 @@
 # chain, and the program addresses are candidate-local values derived offline
 # from a fixed domain. Nothing here signs, submits, funds, or publishes.
 #
-# The run is idempotent: every derived directory is rebuilt from scratch, while
-# the cargo target directory is reused so a re-run after one program changes
-# costs a single incremental SBF build.
+# Release admission deliberately requires a fresh top-package compilation for
+# every program under programs/. Use a new --work root for each admitted run.
+# A warm target may still be useful while developing, but cargo's silence on a
+# fresh unit is not evidence that the SBF backend re-checked that unit's frames.
 set -euo pipefail
 
 usage() {
@@ -20,19 +21,24 @@ usage: checked-release-candidate.sh [options]
 
   --repo PATH    source repository (default: this script's repository)
   --work PATH    scratch output root (default: /private/tmp/dclutch-release-candidate)
-  --tool PATH    prebuilt dclutch-release-tool binary (default: build one under --work)
+  --tool PATH    prebuilt dclutch-release-tool binary (never emits an Upgrade gate;
+                 default source-pinned build under --work is required for that gate)
   --commit REV   source revision to archive (default: HEAD)
-  --keep-elf     reuse the ELFs already under --work instead of rebuilding
+  --keep-elf     legacy option; refused because reused ELFs have no fresh-build proof
   --allow-build-diagnostics
                  admit artifacts whose SBF build emitted a stack-frame
                  diagnostic, recording the exact counts in the summary
   -h, --help     show this message
+
+On hbox, wrap this whole command once; this script never calls swarm-build:
+  SWARM_MEM_MAX=32G swarm-build tools/release/checked-release-candidate.sh ...
 USAGE
 }
 
 REPO=""
 WORK="/private/tmp/dclutch-release-candidate"
 TOOL=""
+PREBUILT_TOOL="false"
 COMMIT="HEAD"
 KEEP_ELF="false"
 ALLOW_DIAGNOSTICS="false"
@@ -40,7 +46,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
-        --tool) TOOL="${2:?--tool needs a value}"; shift 2 ;;
+        --tool) TOOL="${2:?--tool needs a value}"; PREBUILT_TOOL="true"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
         --keep-elf) KEEP_ELF="true"; shift ;;
         --allow-build-diagnostics) ALLOW_DIAGNOSTICS="true"; shift ;;
@@ -53,6 +59,18 @@ if [ -z "$REPO" ]; then
     REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
+if [ "$KEEP_ELF" = "true" ]; then
+    echo "refusing --keep-elf: a checked release requires a fresh top-package compile marker for every SBF link; use a new --work root" >&2
+    exit 2
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRESHNESS_CHECKER="$SCRIPT_DIR/check_sbf_build_freshness.py"
+PROVENANCE_TOOL="$SCRIPT_DIR/artifact_provenance.py"
+[ -x "$FRESHNESS_CHECKER" ] \
+    || { echo "build-freshness checker not executable: $FRESHNESS_CHECKER" >&2; exit 1; }
+[ -x "$PROVENANCE_TOOL" ] \
+    || { echo "artifact-provenance tool not executable: $PROVENANCE_TOOL" >&2; exit 1; }
 
 # role label : cargo package : built artifact stem
 ROLES="core:dclutch-core-sbf:dclutch_core_sbf
@@ -70,15 +88,36 @@ SOURCE="$WORK/source"
 BUILD_TARGET="$WORK/build-target"
 HOST_TARGET="$WORK/host-target"
 ELF_DIR="$WORK/elf"
+FRAME_DIR="$WORK/frame"
 EVIDENCE="$WORK/evidence"
 SET_DIR="$WORK/set"
 INFRA_DIR="$WORK/infrastructure"
 SUMMARY="$WORK/SUMMARY.txt"
 BUILD_LOG="$WORK/build.log"
+BUILD_LINKS="$WORK/build-links.tsv"
+BUILD_RUN="$WORK/build-run.txt"
+SOURCE_TREE="$WORK/source-tree.txt"
+LOCKS_BEFORE="$WORK/cargo-locks-before.tsv"
+LOCKS_AFTER="$WORK/cargo-locks-after.tsv"
+UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
+PROVENANCE_DIR="$WORK/provenance"
 
 sha256() { shasum -a 256 "$1" | cut -d' ' -f1; }
 sha256_stdin() { shasum -a 256 | cut -d' ' -f1; }
 run_tool() { "$TOOL" "$@"; }
+write_lock_manifest() {
+    local root="$1"
+    local out="$2"
+    (
+        cd "$root"
+        find . -type f -name Cargo.lock -print \
+            | sed 's#^\./##' \
+            | LC_ALL=C sort \
+            | while IFS= read -r lock; do
+                printf '%s\t%s\n' "$lock" "$(sha256 "$lock")"
+            done
+    ) > "$out"
+}
 
 # Loader V3's canonical address, decoded from its base58 spelling rather than
 # pasted as a magic constant.
@@ -96,20 +135,66 @@ echo "repo:   $REPO"
 echo "work:   $WORK"
 
 mkdir -p "$WORK"
-rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR"
-mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR"
+WORK="$(cd "$WORK" && pwd -P)"
+SOURCE="$WORK/source"
+BUILD_TARGET="$WORK/build-target"
+HOST_TARGET="$WORK/host-target"
+ELF_DIR="$WORK/elf"
+FRAME_DIR="$WORK/frame"
+EVIDENCE="$WORK/evidence"
+SET_DIR="$WORK/set"
+INFRA_DIR="$WORK/infrastructure"
+SUMMARY="$WORK/SUMMARY.txt"
+BUILD_LOG="$WORK/build.log"
+BUILD_LINKS="$WORK/build-links.tsv"
+BUILD_RUN="$WORK/build-run.txt"
+SOURCE_TREE="$WORK/source-tree.txt"
+LOCKS_BEFORE="$WORK/cargo-locks-before.tsv"
+LOCKS_AFTER="$WORK/cargo-locks-after.tsv"
+UPGRADE_GATE="$WORK/CHECKED_UPGRADE_GATE.json"
+PROVENANCE_DIR="$WORK/provenance"
+rm -f "$UPGRADE_GATE" "$SUMMARY"
+rm -rf "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR"
+mkdir -p "$EVIDENCE" "$SET_DIR" "$INFRA_DIR" "$ELF_DIR" "$FRAME_DIR" "$PROVENANCE_DIR"
 
 # ---------------------------------------------------------------- source pin
 SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
 # Every tracked path, mode, and blob identity at the pinned commit. This covers
 # the complete first-party build input set without depending on archive
 # framing, file mtimes, or checkout state.
-SOURCE_DIGEST="$(git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" | sha256_stdin)"
+git -C "$REPO" ls-tree -r --full-tree "$SOURCE_REVISION" > "$SOURCE_TREE"
+SOURCE_DIGEST="$(sha256 "$SOURCE_TREE")"
 echo "commit: $SOURCE_REVISION"
 
 rm -rf "$SOURCE"
 mkdir -p "$SOURCE"
 git -C "$REPO" archive "$SOURCE_REVISION" | tar -x -C "$SOURCE"
+
+# Cargo's `--locked` refusal is the per-invocation admission. This manifest is
+# the repository-wide complement: it proves that no build created, removed, or
+# rewrote any Cargo.lock anywhere in the archived source tree. The archive
+# contains tracked files only, so a newly created nested lock is visible too.
+write_lock_manifest "$SOURCE" "$LOCKS_BEFORE"
+LOCK_COUNT="$(wc -l < "$LOCKS_BEFORE" | tr -d ' ')"
+[ "$LOCK_COUNT" -gt 0 ] \
+    || { echo "refusing: source archive contains no Cargo.lock files" >&2; exit 1; }
+LOCK_SET_DIGEST="$(sha256 "$LOCKS_BEFORE")"
+
+# The orchestrator and its two measurement parsers are part of the admitted
+# source, not ambient host helpers. Refuse an invocation whose script bytes do
+# not equal the pinned revision; otherwise `--commit OLD` could truthfully bind
+# OLD source while CURRENT admission code decided what counted as checked.
+cmp -s "$SCRIPT_DIR/checked-release-candidate.sh" \
+    "$SOURCE/tools/release/checked-release-candidate.sh" \
+    || { echo "refusing: invoke the checked-release runner from the exact --commit source revision" >&2; exit 1; }
+cmp -s "$SCRIPT_DIR/check_sbf_build_freshness.py" \
+    "$SOURCE/tools/release/check_sbf_build_freshness.py" \
+    || { echo "refusing: build-freshness checker differs from the exact --commit source revision" >&2; exit 1; }
+cmp -s "$SCRIPT_DIR/artifact_provenance.py" \
+    "$SOURCE/tools/release/artifact_provenance.py" \
+    || { echo "refusing: artifact-provenance tool differs from the exact --commit source revision" >&2; exit 1; }
+FRESHNESS_CHECKER="$SOURCE/tools/release/check_sbf_build_freshness.py"
+PROVENANCE_TOOL="$SOURCE/tools/release/artifact_provenance.py"
 
 ROOT_LOCK_DIGEST="$(sha256 "$SOURCE/Cargo.lock")"
 
@@ -153,70 +238,107 @@ if [ -z "$WORKSPACE_MEMBERS" ]; then
     exit 1
 fi
 
-if [ "$KEEP_ELF" != "true" ]; then
-    : > "$BUILD_LOG"
-    : > "$WORK/build-diagnostics.txt"
+# The directory is the one semantic owner of the frame-gated link set. ROLES
+# maps ten of those packages into release artifacts; it does not decide which
+# packages get compiled. The other packages remain frame-gate-only.
+: > "$BUILD_LINKS"
+for manifest in "$SOURCE"/programs/*/Cargo.toml; do
+    [ -f "$manifest" ] || { echo "program manifest enumeration is empty" >&2; exit 1; }
+    package="$(basename "$(dirname "$manifest")")"
+    label="$package"
     for entry in $ROLES; do
         role="${entry%%:*}"; rest="${entry#*:}"
-        package="${rest%%:*}"; stem="${rest#*:}"
-        echo "build: $role ($package)"
-        role_log="$WORK/build-$role.log"
-        role_target="$(target_dir_for "$package")"
-        (
-            cd "$SOURCE"
-            CARGO_TARGET_DIR="$role_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
-        ) >"$role_log" 2>&1
-        cat "$role_log" >> "$BUILD_LOG"
-        count="$(grep -c "$DIAGNOSTIC_PATTERN" "$role_log" || true)"
-        printf '%s=%s\n' "$role" "$count" >> "$WORK/build-diagnostics.txt"
-        if [ "$count" != "0" ]; then
-            echo "BUILD DIAGNOSTIC: $role emitted $count SBF stack-frame overwrite reports" >&2
-            grep "$DIAGNOSTIC_PATTERN" "$role_log" | sort -u >&2
+        role_package="${rest%%:*}"
+        if [ "$package" = "$role_package" ]; then
+            label="$role"
+            break
         fi
-        cp "$role_target/deploy/$stem.so" "$ELF_DIR/$role.so"
     done
+    printf '%s\t%s\n' "$label" "$package" >> "$BUILD_LINKS"
+done
 
-    # Every OTHER program in the tree, for the frame gate and nothing else.
-    #
-    # The role list above is the release SET: what gets an ELF, an address, a
-    # capitalization row and an evidence chain. It is not the list of links this
-    # repository builds. programs/ carries three more entrypoints that no role
-    # names -- dclutch-dealer-sbf, dclutch-direct-aot-sbf and
-    # dclutch-product-runtime-v2-sbf, refusal namespaces 0x7, 0xA and 0x9 in
-    # decision 0007 -- and a link nobody builds is a link nobody is told about,
-    # because cargo build-sbf exits ZERO on a frame-overwrite diagnostic.
-    #
-    # Enumerated from the DIRECTORY on purpose, not from a second hand-kept
-    # list. The 82-diagnostic regression of 2026-08-27 survived a whole wave
-    # inside a link that four separate gates each had a list which did not name;
-    # a list is the thing that goes stale. A program added under programs/ is
-    # frame-checked here whether or not anyone remembers this loop exists.
-    #
-    # Nothing here enters the release set: no ELF is copied, no address is
-    # derived, no capitalization is computed. Only the diagnostic count joins
-    # the total, under its own package name so the summary says which link.
-    for manifest in "$SOURCE"/programs/*/Cargo.toml; do
-        package="$(basename "$(dirname "$manifest")")"
-        if printf '%s\n' "$ROLES" | grep -q ":$package:"; then
-            continue
-        fi
-        echo "build: $package (frame gate only, not a release artifact)"
-        gate_log="$WORK/build-$package.log"
-        gate_target="$(target_dir_for "$package")"
-        (
-            cd "$SOURCE"
-            CARGO_TARGET_DIR="$gate_target" \
-                cargo build-sbf --manifest-path "programs/$package/Cargo.toml"
-        ) >"$gate_log" 2>&1
-        cat "$gate_log" >> "$BUILD_LOG"
-        count="$(grep -c "$DIAGNOSTIC_PATTERN" "$gate_log" || true)"
-        printf '%s=%s\n' "$package" "$count" >> "$WORK/build-diagnostics.txt"
-        if [ "$count" != "0" ]; then
-            echo "BUILD DIAGNOSTIC: $package emitted $count SBF stack-frame overwrite reports" >&2
-            grep "$DIAGNOSTIC_PATTERN" "$gate_log" | sort -u >&2
+if ! awk -F '\t' '
+    NF != 2 || $1 !~ /^[a-z0-9][a-z0-9_-]*$/ || $2 !~ /^[a-z0-9][a-z0-9_-]*$/ { exit 1 }
+    seen_label[$1]++ || seen_package[$2]++ { exit 1 }
+    END { if (NR == 0) exit 1 }
+' "$BUILD_LINKS"; then
+    echo "program manifest enumeration is malformed or duplicated" >&2
+    exit 1
+fi
+for entry in $ROLES; do
+    role="${entry%%:*}"; rest="${entry#*:}"
+    package="${rest%%:*}"
+    expected="$(printf '%s\t%s' "$role" "$package")"
+    grep -Fqx "$expected" "$BUILD_LINKS" \
+        || { echo "release role $role does not name an enumerated program package: $package" >&2; exit 1; }
+done
+
+BUILD_RUN_ID="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+)"
+printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$BUILD_RUN"
+: > "$BUILD_LOG"
+: > "$WORK/build-diagnostics.txt"
+
+while IFS=$'\t' read -r label package; do
+    stem=""
+    for entry in $ROLES; do
+        role="${entry%%:*}"; rest="${entry#*:}"
+        role_package="${rest%%:*}"; role_stem="${rest#*:}"
+        if [ "$package" = "$role_package" ]; then
+            stem="$role_stem"
+            break
         fi
     done
+    if [ -n "$stem" ]; then
+        echo "build: $label ($package)"
+    else
+        echo "build: $package (frame gate only, not a release artifact)"
+    fi
+    link_log="$WORK/build-$label.log"
+    link_target="$(target_dir_for "$package")"
+    build_target_relative="${link_target#"$WORK"/}"
+    build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
+    printf 'dclutch-sbf-build-run-v1=%s\n' "$BUILD_RUN_ID" > "$link_log"
+    printf 'dclutch-sbf-build-invocation-v1=%s\n' "$build_invocation" >> "$link_log"
+    if [ -n "$stem" ]; then
+        rm -f "$link_target/deploy/$stem.so"
+    fi
+    (
+        cd "$SOURCE"
+        CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$link_target" \
+            cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+    ) >>"$link_log" 2>&1
+    cat "$link_log" >> "$BUILD_LOG"
+    count="$(grep -c "$DIAGNOSTIC_PATTERN" "$link_log" || true)"
+    printf '%s=%s\n' "$label" "$count" >> "$WORK/build-diagnostics.txt"
+    if [ "$count" != "0" ]; then
+        echo "BUILD DIAGNOSTIC: $label emitted $count SBF stack-frame overwrite reports" >&2
+        grep "$DIAGNOSTIC_PATTERN" "$link_log" | sort -u >&2
+    fi
+    if [ -n "$stem" ]; then
+        [ -f "$link_target/deploy/$stem.so" ] && [ ! -L "$link_target/deploy/$stem.so" ] \
+            || { echo "refusing: fresh build did not emit one regular $stem.so for $label" >&2; exit 1; }
+        cp "$link_target/deploy/$stem.so" "$ELF_DIR/$label.so"
+        [ -f "$ELF_DIR/$label.so" ] && [ ! -L "$ELF_DIR/$label.so" ] \
+            || { echo "refusing: staged named-role ELF is not regular for $label" >&2; exit 1; }
+    fi
+done < "$BUILD_LINKS"
+
+FRESHNESS_RESULT="$("$FRESHNESS_CHECKER" \
+    --work "$WORK" \
+    --expected "$BUILD_LINKS" \
+    --diagnostics "$WORK/build-diagnostics.txt" \
+    --run-id "$BUILD_RUN_ID")" \
+    || { echo "refusing: SBF build freshness gate failed" >&2; exit 1; }
+printf '%s\n' "$FRESHNESS_RESULT"
+printf '%s\n' "$FRESHNESS_RESULT" >> "$BUILD_LOG"
+BUILD_LINK_COUNT="$(wc -l < "$BUILD_LINKS" | tr -d ' ')"
+if [ "$BUILD_LINK_COUNT" != "13" ]; then
+    echo "refusing: checked Upgrade admission requires the exact 13-link shipped set; enumerated $BUILD_LINK_COUNT" >&2
+    exit 1
 fi
 
 DIAGNOSTIC_TOTAL=0
@@ -237,11 +359,113 @@ if [ -z "$TARGET_TRIPLE" ]; then
     exit 1
 fi
 
+# --------------------------------------------------------- exact frame gate
+# This is a separate measurement build. `-Zemit-stack-sizes` adds measurement
+# sections, so its linked artifact is never copied into the shipped ELF set.
+# Each link gets a new target root so the top-package compile marker is
+# load-bearing here too: a warm object cannot masquerade as a fresh report.
+if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ]; then
+    while IFS=$'\t' read -r label package; do
+        frame_target="$WORK/frame-target-$label"
+        frame_build_log="$WORK/frame-build-$label.log"
+        frame_raw="$FRAME_DIR/$label.raw.txt"
+        frame_report="$FRAME_DIR/$label.txt"
+        rm -rf "$frame_target"
+        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
+        printf 'dclutch-sbf-frame-run-v1=%s\n' "$BUILD_RUN_ID" > "$frame_build_log"
+        printf 'dclutch-sbf-frame-invocation-v1=%s\n' "$frame_invocation" >> "$frame_build_log"
+        (
+            cd "$SOURCE"
+            RUSTC_BOOTSTRAP=1 RUSTFLAGS="-Zemit-stack-sizes --emit=obj,link" \
+                CARGO_TERM_COLOR=never CARGO_TARGET_DIR="$frame_target" \
+                cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked
+        ) >> "$frame_build_log" 2>&1
+        frame_compile_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$frame_build_log" | tail -n 1 || true)"
+        if [ -z "$frame_compile_marker" ]; then
+            echo "refusing: frame build for $label has no fresh top-package compile marker for $package" >&2
+            exit 1
+        fi
+        frame_diagnostics="$(grep -c "$DIAGNOSTIC_PATTERN" "$frame_build_log" || true)"
+        if [ "$frame_diagnostics" != "0" ]; then
+            echo "refusing: frame measurement build for $label emitted $frame_diagnostics stack-frame overwrite diagnostics" >&2
+            exit 1
+        fi
+        object_stem="$(printf '%s' "$package" | tr '-' '_')"
+        frame_object="$frame_target/$TARGET_TRIPLE/release/deps/$object_stem.o"
+        [ -f "$frame_object" ] \
+            || { echo "refusing: frame measurement object is missing for $label: $frame_object" >&2; exit 1; }
+        python3 "$SOURCE/tools/sbf-frame-sizes.py" --top 8 "$frame_object" > "$frame_raw"
+        frame_count="$(sed -n 's/^  \([0-9][0-9]*\) measured frames.*/\1/p' "$frame_raw")"
+        deepest_frame="$(sed -n '2s/^ *\([0-9][0-9]*\) .*/\1/p' "$frame_raw")"
+        if [ -z "$frame_count" ] || [ -z "$deepest_frame" ]; then
+            echo "refusing: frame report for $label did not expose canonical count/deepest fields" >&2
+            exit 1
+        fi
+        {
+            printf 'dclutch-sbf-frame-report-v1\n'
+            printf 'label=%s\n' "$label"
+            printf 'package=%s\n' "$package"
+            printf 'source_tree_sha256=%s\n' "$SOURCE_DIGEST"
+            printf 'build_run_id=%s\n' "$BUILD_RUN_ID"
+            printf 'frame_count=%s\n' "$frame_count"
+            printf 'frame_bound_bytes=4096\n'
+            printf 'frames_at_or_over_bound=0\n'
+            printf 'deepest_frame_bytes=%s\n' "$deepest_frame"
+            printf 'object_sha256=%s\n' "$(sha256 "$frame_object")"
+            printf 'measurement_output:\n'
+            cat "$frame_raw"
+        } > "$frame_report"
+    done < "$BUILD_LINKS"
+
+    # One descriptor is the only supported join between the named link, the
+    # source/run, the fresh plain build, the shipped ELF, and the independent
+    # frame object/report. Downstream gates and CU selectors rehash it instead
+    # of rediscovering a same-looking file from an adjacent target directory.
+    while IFS=$'\t' read -r label package; do
+        stem=""
+        for entry in $ROLES; do
+            role="${entry%%:*}"; rest="${entry#*:}"
+            role_package="${rest%%:*}"; role_stem="${rest#*:}"
+            if [ "$package" = "$role_package" ]; then stem="$role_stem"; break; fi
+        done
+        link_target="$(target_dir_for "$package")"
+        build_target_relative="${link_target#"$WORK"/}"
+        build_invocation="CARGO_TERM_COLOR=never CARGO_TARGET_DIR=$build_target_relative cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
+        frame_invocation="RUSTC_BOOTSTRAP=1 RUSTFLAGS='-Zemit-stack-sizes --emit=obj,link' CARGO_TERM_COLOR=never CARGO_TARGET_DIR=frame-target-$label cargo build-sbf --manifest-path programs/$package/Cargo.toml -- --locked"
+        build_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/build-$label.log" | tail -n 1)"
+        frame_marker="$(grep -E "^[[:space:]]*Compiling[[:space:]]+$package[[:space:]]+v[^[:space:]]+" "$WORK/frame-build-$label.log" | tail -n 1)"
+        object_stem="$(printf '%s' "$package" | tr '-' '_')"
+        set -- emit \
+            --root "$WORK" \
+            --output "$PROVENANCE_DIR/$label.json" \
+            --label "$label" \
+            --package "$package" \
+            --source-revision "$SOURCE_REVISION" \
+            --source-tree-sha256 "$SOURCE_DIGEST" \
+            --build-run-id "$BUILD_RUN_ID" \
+            --build-invocation "$build_invocation" \
+            --build-log "build-$label.log" \
+            --build-compile-marker "$build_marker" \
+            --diagnostics-count 0 \
+            --frame-invocation "$frame_invocation" \
+            --frame-build-log "frame-build-$label.log" \
+            --frame-compile-marker "$frame_marker" \
+            --frame-object "frame-target-$label/$TARGET_TRIPLE/release/deps/$object_stem.o" \
+            --frame-report "frame/$label.txt"
+        if [ -n "$stem" ]; then
+            set -- "$@" --artifact-stem "$stem" --elf "elf/$label.so"
+        fi
+        python3 "$PROVENANCE_TOOL" "$@"
+    done < "$BUILD_LINKS"
+else
+    echo "checked Upgrade gate: not emitted because zero diagnostics in strict mode were not established" >&2
+fi
+
 # --------------------------------------------------------------- release tool
 if [ -z "$TOOL" ]; then
     TOOL="$HOST_TARGET/release/dclutch-release-tool"
-    ( cd "$REPO" && CARGO_TARGET_DIR="$HOST_TARGET" \
-        cargo build --release -p dclutch-release-tool ) >>"$BUILD_LOG" 2>&1
+    ( cd "$SOURCE" && CARGO_TARGET_DIR="$HOST_TARGET" \
+        cargo build --release --locked --offline -p dclutch-release-tool ) >>"$BUILD_LOG" 2>&1
 fi
 [ -x "$TOOL" ] || { echo "release tool not executable: $TOOL" >&2; exit 1; }
 
@@ -303,7 +527,7 @@ for entry in $ROLES; do
         printf 'solana_version=%s\n' "$SOLANA_VERSION"
         printf 'cargo_build_sbf_version=%s\n' "$BUILD_SBF_VERSION"
         printf 'target_triple=%s\n' "$TARGET_TRIPLE"
-        printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml\n' "$package"
+        printf 'build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked\n' "$package"
         # Strictly ascending, unique, and each one load-bearing.
         printf 'assumption=Loader V3 Program and ProgramData bytes were constructed offline from the exact ELF; no chain was observed\n'
         printf 'assumption=cargo_lock_digest is SHA-256 of the exact Cargo.lock that resolved this package\n'
@@ -394,6 +618,16 @@ cmp -s "$INFRA_DIR/infrastructure.txt" "$INFRA_DIR/inspect-infrastructure.txt" \
     || { echo "inspect-infrastructure projection differs" >&2; exit 1; }
 echo "checked: immutable Core/Registry/Rent infrastructure"
 
+# Do this after every source-tree Cargo invocation, including the host release
+# tool. `--locked` should make mutation impossible; byte-compare the complete
+# set anyway so the candidate carries the proof instead of relying on intent.
+write_lock_manifest "$SOURCE" "$LOCKS_AFTER"
+if ! cmp -s "$LOCKS_BEFORE" "$LOCKS_AFTER"; then
+    echo "refusing: Cargo.lock set changed while building the candidate" >&2
+    diff -u "$LOCKS_BEFORE" "$LOCKS_AFTER" >&2 || true
+    exit 1
+fi
+
 # ------------------------------------------------------------------- summary
 {
     printf 'format=dclutch-checked-release-candidate-summary-v1\n'
@@ -402,11 +636,16 @@ echo "checked: immutable Core/Registry/Rent infrastructure"
     printf 'source_revision=%s\n' "$SOURCE_REVISION"
     printf 'source_digest=%s\n' "$SOURCE_DIGEST"
     printf 'root_cargo_lock_digest=%s\n' "$ROOT_LOCK_DIGEST"
+    printf 'cargo_lock_count=%s\n' "$LOCK_COUNT"
+    printf 'cargo_lock_set_sha256=%s\n' "$LOCK_SET_DIGEST"
+    printf 'cargo_lock_immutability=passed\n'
     printf 'rustc_version=%s\n' "$RUSTC_VERSION"
     printf 'solana_version=%s\n' "$SOLANA_VERSION"
     printf 'cargo_build_sbf_version=%s\n' "$BUILD_SBF_VERSION"
     printf 'target_triple=%s\n' "$TARGET_TRIPLE"
     printf 'loader_program_id=%s\n' "$LOADER_HEX"
+    printf 'sbf_build_freshness=passed\n'
+    printf 'sbf_build_freshness_links=%s\n' "$BUILD_LINK_COUNT"
     printf 'sbf_build_diagnostics_total=%s\n' "$DIAGNOSTIC_TOTAL"
     printf 'sbf_build_diagnostics_accepted=%s\n' "$ALLOW_DIAGNOSTICS"
     if [ -f "$WORK/build-diagnostics.txt" ]; then
@@ -429,5 +668,26 @@ echo "checked: immutable Core/Registry/Rent infrastructure"
     sed -n 's/^/infrastructure./p' "$INFRA_DIR/infrastructure.txt"
 } > "$SUMMARY"
 
+# ---------------------------------------------------- checked Upgrade gate
+# The Upgrade command accepts this generated receipt, never an operator-written
+# boolean. Paths are canonical root-relative names so the complete evidence
+# directory may be transferred as a unit; the verifier resolves them, refuses
+# symlinks/escapes, and rehashes every named file.
+if [ "$DIAGNOSTIC_TOTAL" = "0" ] && [ "$ALLOW_DIAGNOSTICS" = "false" ] \
+    && [ "$PREBUILT_TOOL" = "false" ]; then
+    python3 "$PROVENANCE_TOOL" emit-gate \
+        --root "$WORK" \
+        --source-revision "$SOURCE_REVISION" \
+        --source-tree-sha256 "$SOURCE_DIGEST" \
+        --solana-cli-version "$SOLANA_VERSION" \
+        --build-run-id "$BUILD_RUN_ID"
+    printf 'checked_upgrade_gate_sha256=%s\n' "$(sha256 "$UPGRADE_GATE")" >> "$SUMMARY"
+elif [ "$PREBUILT_TOOL" = "true" ]; then
+    echo "checked Upgrade gate: not emitted because --tool is not a source-pinned host-tool build" >&2
+fi
+
 echo
 echo "summary: $SUMMARY"
+if [ -f "$UPGRADE_GATE" ]; then
+    echo "checked Upgrade gate: $UPGRADE_GATE"
+fi

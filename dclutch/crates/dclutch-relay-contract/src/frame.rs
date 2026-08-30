@@ -29,7 +29,7 @@ pub enum RelayAccountNameV1 {
     RegistryActivation,
     /// The observation record being created, appended to, sealed or retired.
     Record,
-    /// The raw immutable `SourceMaterialV2` record.
+    /// The raw immutable `SourceMaterialV3` record.
     SourceMaterial,
     /// The finalized staging vacancy proving the material record is immutable.
     SourceMaterialStagingVacancy,

@@ -2,6 +2,7 @@ import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 
 import { SMOKE_MARKETS_V1, smokeIsLiveV1 } from '@/lib/smokeMarkets';
+import { marketDetailHrefV1 } from '@/lib/marketHref';
 
 /**
  * The three-markets story, written for the reader.
@@ -16,7 +17,7 @@ export default function SmokeStory() {
   const marketLink = (market: { address: string | null; liveNote: string | null }) =>
     market.address === null ? null : (
       <div className="direct-actions">
-        <Anchor className="secondary-action" href={`/markets/${market.address}`}>Open the live market →</Anchor>
+        <Anchor className="secondary-action" href={marketDetailHrefV1(market.address)}>Open the live market →</Anchor>
         {market.liveNote === null ? null : <span className="direct-status">{market.liveNote}</span>}
       </div>
     );
@@ -34,7 +35,7 @@ export default function SmokeStory() {
         <strong>{live ? 'Live on Solana devnet' : 'Not live yet'}</strong>
         {live
           ? <p>The protocol substrate is deployed on Solana devnet at permanent addresses, and the markets below link straight to their live on-chain accounts as each one is founded. Devnet SOL is free test money — this is a public rehearsal, not an investment.</p>
-          : <p>None of these markets exist today and nothing is deployed to any network. Everything below has been run end-to-end on local test machines. When the markets go live, this page will link straight to them.</p>}
+          : <p>The seven protocol programs are deployed at permanent addresses on Solana devnet. None of these three smoke markets exists yet. Each one is rehearsed on local test machines against those same compiled programs — the graduation market below now opens there, start to finish, on a real test network. When each market is founded on devnet, this page will link straight to its account.</p>}
       </aside>
     </section>
 
@@ -52,7 +53,7 @@ export default function SmokeStory() {
 
     <section className="trade-v3-card">
       <header><span>03</span><div><h2>Adversarial truth · the abandoned market</h2><p>We will switch the messenger off on purpose. Then you finish the market and get paid for it.</p></div></header>
-      <p className="direct-status">This is the test most markets never dare to run: what happens when everyone responsible walks away? Here, the market has already set money aside for exactly this moment. Once the deadline passes, any wallet — yours — can send one ordinary transaction that closes the market to its pre-announced fallback outcome and collects the posted bounty for doing it. No permission, no account, no special software.</p>
+      <p className="direct-status">This is the test most markets never dare to run: what happens when everyone responsible walks away? Here, the market has already set money aside for exactly this moment. Once the deadline passes, any wallet — yours — can send one ordinary transaction that closes the market to its pre-announced fallback outcome and collects the posted bounty for doing it. No permission, no account, no special software. <strong>That is how it will work; none of these markets is open yet</strong>, so today this is a description rather than an invitation.</p>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/bounty">How to collect the bounty →</Anchor>
       </div>

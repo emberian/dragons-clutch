@@ -154,6 +154,58 @@ pub(crate) enum ClusterOriginV1 {
     },
 }
 
+/// Which already-admitted cluster shape one semantic executor is allowed to
+/// consume. Public commands always select `Devnet`; the release gauntlet alone
+/// selects `OwnedLoopback` after it has launched and contained the validator.
+/// This is a policy input, not evidence that an endpoint has the requested
+/// shape: [`ExpectedClusterV1::authenticate`] checks the typed origin and the
+/// RPC layer still authenticates the chain's reported genesis hash.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExpectedClusterV1 {
+    Devnet,
+    OwnedLoopback,
+}
+
+impl ExpectedClusterV1 {
+    pub(crate) fn authenticate(self, origin: &ClusterOriginV1) -> Result<()> {
+        match (self, origin) {
+            (Self::Devnet, ClusterOriginV1::AcknowledgedDevnet { .. })
+            | (Self::OwnedLoopback, ClusterOriginV1::Loopback { .. }) => Ok(()),
+            (Self::Devnet, ClusterOriginV1::Loopback { .. }) => Err(Error::new(
+                "public executor requires acknowledged Solana devnet and refuses loopback",
+            )),
+            (Self::OwnedLoopback, ClusterOriginV1::AcknowledgedDevnet { .. }) => Err(Error::new(
+                "private-validator executor requires an owned loopback validator and refuses every external origin",
+            )),
+        }
+    }
+
+    pub(crate) fn evidence_label(self) -> &'static str {
+        match self {
+            Self::Devnet => "devnet",
+            Self::OwnedLoopback => "owned-loopback",
+        }
+    }
+
+    /// Authenticate one exact finalized transaction fee after the caller has
+    /// authenticated this cluster's origin and genesis hash.
+    ///
+    /// Agave's owned local validator may finalize System transactions with a
+    /// present `fee: 0`. That is an exact observation, not an absent fee. The
+    /// public devnet path retains the stricter policy that every finalized
+    /// transaction fee is positive. Keeping this decision on the already
+    /// authenticated cluster type prevents a permissive numeric parser from
+    /// silently widening public evidence.
+    pub(crate) fn authenticate_finalized_fee(self, fee_lamports: u64, label: &str) -> Result<()> {
+        if self == Self::Devnet && fee_lamports == 0 {
+            return Err(Error::new(format!(
+                "{label} reported an exact zero fee on public devnet; zero is admitted only for an authenticated owned-loopback genesis and is never a substitute for a missing fee"
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl ClusterOriginV1 {
     /// Admit an origin, or refuse it and say exactly why.
     ///
@@ -476,6 +528,46 @@ mod tests {
         assert!(
             ClusterOriginV1::parse(&format!("http://127.0.0.1:{}/", MIN_RPC_PORT - 1), None)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn expected_cluster_policy_is_disjoint_and_cannot_widen_public_commands() {
+        let loopback =
+            ClusterOriginV1::parse("http://127.0.0.1:20890/", None).expect("loopback origin");
+        let devnet =
+            ClusterOriginV1::parse("https://api.devnet.solana.com/", ACK).expect("devnet origin");
+        assert!(
+            ExpectedClusterV1::OwnedLoopback
+                .authenticate(&loopback)
+                .is_ok()
+        );
+        assert!(ExpectedClusterV1::Devnet.authenticate(&devnet).is_ok());
+        assert!(ExpectedClusterV1::Devnet.authenticate(&loopback).is_err());
+        assert!(
+            ExpectedClusterV1::OwnedLoopback
+                .authenticate(&devnet)
+                .is_err()
+        );
+        assert_ne!(
+            ExpectedClusterV1::Devnet.evidence_label(),
+            ExpectedClusterV1::OwnedLoopback.evidence_label()
+        );
+
+        assert!(
+            ExpectedClusterV1::OwnedLoopback
+                .authenticate_finalized_fee(0, "local System transaction")
+                .is_ok()
+        );
+        assert!(
+            ExpectedClusterV1::Devnet
+                .authenticate_finalized_fee(0, "public transaction")
+                .is_err()
+        );
+        assert!(
+            ExpectedClusterV1::Devnet
+                .authenticate_finalized_fee(5_000, "public transaction")
+                .is_ok()
         );
     }
 

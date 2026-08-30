@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 
-import { ascii, fromHex, isZero, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
+import { ascii, fromHex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -16,7 +16,7 @@ import {
   authenticateFinalizedRationalHotRecordV4,
   authenticateRationalHotActivationV4,
   decodeRationalHotCapabilityV4,
-  decodeRationalHotCoreV2,
+  authenticateRationalHotCoreV3,
   decodeRationalHotLookupTableV4,
   decodeRationalHotRootV4,
   decodeRationalRepresentationDescriptorV3,
@@ -25,7 +25,7 @@ import {
   selectRationalHotManifestEntryV4,
   type RationalHotAccountMetaV4,
   type RationalHotCapabilityV4,
-  type RationalHotCoreViewV2,
+  type RationalHotCoreViewV3,
   type RationalHotRpcV4,
 } from './rationalRetireReceiptV4';
 import {
@@ -111,7 +111,7 @@ export type RationalCapabilityCommonV4 = Readonly<{
   coreProgram: string;
   trading: string;
   registry: string;
-  market: RationalHotCoreViewV2;
+  market: RationalHotCoreViewV3;
   activation: Awaited<ReturnType<typeof authenticateRationalHotActivationV4>>;
   capabilitySelection: Readonly<{ schema: Uint8Array; digest: Uint8Array }>;
   capability: RationalHotCapabilityV4;
@@ -152,10 +152,9 @@ export async function inspectRationalCapabilityCommonV4(
   const trading = fixed[Hot.HOT_TRADING_PROGRAM_ACCOUNT_V3]?.address ?? '';
   const registry = fixed[Hot.HOT_REGISTRY_PROGRAM_ACCOUNT_V3]?.address ?? '';
   const marketAccount = required(first.accounts, marketAddress, 'Core Market');
-  const market = decodeRationalHotCoreV2(marketAddress, marketAccount, coreProgram);
-  const expectedPhase = input.phase === 'open' ? 1 : 2;
-  if (market.phase !== expectedPhase || market.readiness !== 2
-      || (input.phase === 'open' ? !isZero(market.terminalReceipt) : isZero(market.terminalReceipt))) {
+  const market = authenticateRationalHotCoreV3(marketAddress, marketAccount, coreProgram);
+  const expectedPhase = input.phase === 'open' ? 'Open' : 'Terminal';
+  if (market.phase !== expectedPhase || market.readiness !== 'Consumed') {
     throw new Error(`Rational ${input.phase} requires the exact readiness-consumed ${input.phase === 'open' ? 'Open' : 'Terminal'} Core lifecycle`);
   }
   if (market.registry !== registry || fixed[Hot.HOT_RENT_SYSVAR_ACCOUNT_V3]?.address !== RENT_SYSVAR_ID

@@ -7,9 +7,10 @@
 //! pin the premises the fixes rest on.
 
 use dclutch_capability_contract::{
-    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityFundingDerivationV1,
-    CompartmentFundingV1, FundingAmountsV1, FundingQuoteV1, FundingStatus, MANIFEST_HEADER_BYTES,
-    MAX_DEPENDENCIES_PER_CAPABILITY,
+    ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
+    CapabilityFundingLedgerDerivationV2, CompartmentFundingV1, FundingAmountsV1,
+    FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
 };
 use dclutch_capability_program_contract::set_v2::{
     CapabilityDescriptorReferenceV2, CapabilityProgramSetEntryV2, SelectorWidthV2,
@@ -26,7 +27,7 @@ use dclutch_capability_program_contract::{
     CapabilityProgramV1, initialize_root_account_v1,
 };
 use dclutch_general_config_contract::v3::GeneralConfigV3Input;
-use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
+use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness, StateBumpsV1};
 
 use super::*;
 
@@ -104,6 +105,20 @@ fn config_bytes(program_set_id: [u8; 32]) -> Vec<u8> {
 }
 
 fn general_entry(config_id: ContentId, program_set_id: [u8; 32]) -> CapabilityEntryV1 {
+    general_entry_with_dependencies(
+        config_id,
+        program_set_id,
+        0,
+        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+    )
+}
+
+fn general_entry_with_dependencies(
+    config_id: ContentId,
+    program_set_id: [u8; 32],
+    dependency_count: u8,
+    dependencies: [u8; MAX_DEPENDENCIES_PER_CAPABILITY],
+) -> CapabilityEntryV1 {
     let amounts = FundingAmountsV1::new(
         CompartmentFundingV1::native_lamports(ROOT_RENT).expect("root rent quote"),
         CompartmentFundingV1::not_applicable(),
@@ -123,8 +138,8 @@ fn general_entry(config_id: ContentId, program_set_id: [u8; 32]) -> CapabilityEn
         ContentId::new([0x82; 32]).expect("derivation"),
         ActivationPolicy::PrepaidLazy,
         1_000_000,
-        0,
-        [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+        dependency_count,
+        dependencies,
         FundingQuoteV1::new(amounts, None).expect("quote"),
     )
     .expect("entry")
@@ -175,8 +190,10 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
             generation: GENERATION,
         },
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x28; 32]),
         terminal_receipt,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     let market_key = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
@@ -188,22 +205,36 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
 
     let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest decode");
     let entry_index = manifest_general_entry_index(manifest, config_id);
-    let quoted = manifest
-        .entry(entry_index)
-        .expect("quoted entry")
-        .funding_quote()
-        .native_lamports_total();
-    let custody = FundingCustodyObservationV1::native_only(FUNDING_RENT + quoted, FUNDING_RENT)
-        .expect("custody");
-    let funding =
-        FundingStateV1::new(manifest_id, manifest, entry_index, custody).expect("funding");
+    let selected_mask = fixture_dependency_closure(manifest, entry_index);
+    let mut quoted = 0_u64;
+    let mut index = 0_u16;
+    while index < manifest.entry_count() {
+        let bit = 1_u16.checked_shl(u32::from(index)).expect("entry bit");
+        if selected_mask & bit != 0 {
+            quoted = quoted
+                .checked_add(
+                    manifest
+                        .entry(index)
+                        .expect("quoted entry")
+                        .funding_quote()
+                        .native_lamports_total(),
+                )
+                .expect("aggregate quote");
+        }
+        index += 1;
+    }
+    let ledger_slots = u16::try_from(selected_mask.count_ones()).expect("ledger slots");
+    let mut funding = vec![0_u8; funding_ledger_bytes_v2(ledger_slots).expect("ledger width")];
+    FundingLedgerV2::initialize(&mut funding, manifest_id, manifest, selected_mask)
+        .expect("funding ledger");
+    let decoded = FundingLedgerV2::decode(&funding).expect("funding decode");
     let funding_key = Pubkey::find_program_address(
-        &CapabilityFundingDerivationV1::new(
+        &CapabilityFundingLedgerDerivationV2::new(
+            TRADING_PROGRAM.to_bytes(),
             market_key.to_bytes(),
             GENERATION,
             manifest_id,
-            manifest,
-            funding,
+            decoded,
         )
         .expect("derivation")
         .seed_components(),
@@ -245,17 +276,14 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
                 1,
                 config,
             ),
-            funding_state: account(
-                funding_key,
-                TRADING_PROGRAM,
-                FUNDING_RENT + quoted,
-                funding.to_bytes().to_vec(),
-            ),
+            funding_ledgers: vec![GeneralFundingLedgerInputV2 {
+                account: account(funding_key, TRADING_PROGRAM, FUNDING_RENT + quoted, funding),
+                exact_rent_lamports: FUNDING_RENT,
+            }],
             capability_root: account(root_key, system_program::ID, 0, Vec::new()),
             core_program: CORE_PROGRAM,
             trading_program: TRADING_PROGRAM,
             exact_root_rent_lamports: ROOT_RENT,
-            exact_funding_rent_lamports: FUNDING_RENT,
             current_slot: SLOT,
             minimum_finalized_slot: SLOT,
         },
@@ -266,7 +294,7 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
 }
 
 /// Fixture-side index lookup; zero when the manifest selects no General entry,
-/// so the no-General case still builds a coherent FundingState to refuse on.
+/// so the no-General case still builds a coherent FundingLedger to refuse on.
 fn manifest_general_entry_index(manifest: CapabilityManifestV1<'_>, config_id: ContentId) -> u16 {
     let kind = ContentId::new(GENERAL_CAPABILITY_KIND_ID_V1).expect("kind");
     let mut index = 0_u16;
@@ -278,6 +306,36 @@ fn manifest_general_entry_index(manifest: CapabilityManifestV1<'_>, config_id: C
         index += 1;
     }
     0
+}
+
+fn fixture_dependency_closure(manifest: CapabilityManifestV1<'_>, selected: u16) -> u16 {
+    let mut closure = 1_u16
+        .checked_shl(u32::from(selected))
+        .expect("selected bit");
+    loop {
+        let before = closure;
+        let mut entry_index = 0_u16;
+        while entry_index < manifest.entry_count() {
+            let entry_bit = 1_u16
+                .checked_shl(u32::from(entry_index))
+                .expect("entry bit");
+            if closure & entry_bit != 0 {
+                let entry = manifest.entry(entry_index).expect("entry");
+                let mut position = 0_usize;
+                while position < usize::from(entry.dependency_count()) {
+                    let dependency = entry.dependency(position).expect("dependency");
+                    closure |= 1_u16
+                        .checked_shl(u32::from(dependency))
+                        .expect("dependency bit");
+                    position += 1;
+                }
+            }
+            entry_index += 1;
+        }
+        if closure == before {
+            return closure;
+        }
+    }
 }
 
 /// Three entries in the manifest's canonical ascending kind order.
@@ -375,9 +433,19 @@ fn an_open_market_plans_an_exact_composite_general_root() {
         hash(&fixture.program_set).to_bytes()
     );
 
-    assert_eq!(plan.funding_after.status(), FundingStatus::Active);
-    assert_eq!(plan.funding_after.activation_slot(), SLOT);
-    assert_eq!(plan.funding_after.remaining().rent().amount(), 0);
+    assert_eq!(plan.funding_header.physical_count(), 1);
+    assert_eq!(plan.funding_header.logical_count(), 1);
+    assert_eq!(plan.funding_header.selected_mask(), 0b10);
+    let manifest =
+        CapabilityManifestV1::decode(&fixture.state.manifest_record.data).expect("manifest");
+    let funding = FundingLedgerV2::decode(&plan.funding_after[0])
+        .expect("funding poststate")
+        .authenticate(fixture.manifest_id, manifest)
+        .expect("authenticated funding");
+    let slot = funding.slot(plan.entry_index).expect("selected slot");
+    assert_eq!(slot.status(), FundingLedgerStatusV2::Active);
+    assert_eq!(slot.activation_slot(), SLOT);
+    assert_eq!(slot.remaining().rent().amount(), 0);
 }
 
 /// A minimal decodable `CapabilityProgramV1` carrying one root-state width.
@@ -528,18 +596,20 @@ fn an_exact_prior_activation_replays_idempotently_and_a_moved_one_refuses() {
         ROOT_RENT,
         plan.composite_root.clone(),
     );
-    replay.funding_state = account(
-        fixture.state.funding_state.key,
+    replay.funding_ledgers[0].account = account(
+        fixture.state.funding_ledgers[0].account.key,
         TRADING_PROGRAM,
         FUNDING_RENT,
-        plan.funding_after.to_bytes().to_vec(),
+        plan.funding_after[0].clone(),
     );
+    replay.current_slot = SLOT + 100;
     let replayed = plan_general_capability_activation_v3(&replay).expect("idempotent replay");
     assert_eq!(
         replayed.disposition,
         GeneralActivationDispositionV2::Idempotent
     );
     assert_eq!(replayed.composite_root, plan.composite_root);
+    assert_eq!(replayed.funding_after, plan.funding_after);
 
     // A root whose tail advanced is not the exact activation result.
     let mut advanced_state = plan.root_state;
@@ -557,6 +627,25 @@ fn an_exact_prior_activation_replays_idempotently_and_a_moved_one_refuses() {
         compose_general_root_v3(plan.root_header, advanced_state),
     );
     assert!(plan_general_capability_activation_v3(&advanced).is_err());
+}
+
+#[test]
+fn manifest_v1_dependency_rows_fail_closed_without_controller_authentication() {
+    let program_set = program_set();
+    let program_set_id = hash(&program_set).to_bytes();
+    let config_id = ContentId::new(hash(&config_bytes(program_set_id)).to_bytes()).expect("config");
+    let mut dependencies = [0_u8; MAX_DEPENDENCIES_PER_CAPABILITY];
+    dependencies[0] = 0;
+    let entries = [
+        other_entry(0x51),
+        general_entry_with_dependencies(config_id, program_set_id, 1, dependencies),
+        other_entry(0xf1),
+    ];
+    let fixture = fixture(Phase::Open, &entries);
+    assert_eq!(
+        plan_general_capability_activation_v3(&fixture.state),
+        Err(GeneralActivationErrorV3::Funding)
+    );
 }
 
 #[test]
@@ -603,7 +692,7 @@ fn substituted_coordinates_refuse_without_producing_a_plan() {
     );
 
     let mut moved_funding = base.state.clone();
-    moved_funding.funding_state.key = Pubkey::new_from_array([0xb2; 32]);
+    moved_funding.funding_ledgers[0].account.key = Pubkey::new_from_array([0xb2; 32]);
     assert_eq!(
         plan_general_capability_activation_v3(&moved_funding),
         Err(GeneralActivationErrorV3::Funding)
@@ -625,7 +714,7 @@ fn substituted_coordinates_refuse_without_producing_a_plan() {
     assert!(plan_general_capability_activation_v3(&substituted_config).is_err());
 
     let mut foreign_owner = base.state.clone();
-    foreign_owner.funding_state.owner = Pubkey::new_from_array([0xb3; 32]);
+    foreign_owner.funding_ledgers[0].account.owner = Pubkey::new_from_array([0xb3; 32]);
     assert_eq!(
         plan_general_capability_activation_v3(&foreign_owner),
         Err(GeneralActivationErrorV3::Funding)

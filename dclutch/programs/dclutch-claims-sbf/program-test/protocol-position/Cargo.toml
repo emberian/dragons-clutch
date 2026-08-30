@@ -10,10 +10,14 @@ dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-tes
 dclutch-claims-affine-batch-program-test = { path = "../affine-batch" }
 dclutch-claims-sbf = { path = "../.." }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
+dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
+dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
+dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }
+dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
 solana-account = "=4.3.2"
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
 solana-message = "=4.4.1"
@@ -21,7 +25,9 @@ solana-program = { version = "=3.0.0" }
 solana-program-test = { version = "=4.2.1", features = ["agave-unstable-api"] }
 solana-sdk = "=3.0.0"
 solana-sdk-ids = "=3.1.0"
+solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 solana-transaction = "=4.1.6"
+dclutch-record-contract = { path = "../../../../crates/dclutch-record-contract" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [workspace]

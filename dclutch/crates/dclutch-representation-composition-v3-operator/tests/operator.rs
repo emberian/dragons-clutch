@@ -57,11 +57,13 @@ use dclutch_representation_composition_v3_kernel::{
     encode_composition_exposure_v3_atomic, encode_composition_graph_v3_atomic,
 };
 use dclutch_representation_composition_v3_operator::{
-    ClaimsLifecyclePlanV3, CompositionChainObservationV3, Error, FinalizedRecordObservationV3,
+    ClaimsLifecyclePlanV3, CompositionChainObservationV3, CompositionOnlyChainObservationV3,
+    CompositionOnlyObservationV3, Error, FinalizedRecordObservationV3,
     ProductCompositionObservationV3, PublicationContextV3, PublicationTargetV3,
-    RepresentationCompositionObservationV3, authenticate_composition_v3,
-    build_claims_lifecycle_plan_v3, build_composition_admission_plan_v3, build_publication_plan_v3,
-    compile_unsigned_packet_v0, hot_v3::build_composition_lifecycle_hot_plan_v3,
+    RepresentationCompositionObservationV3, authenticate_composition_only_v3,
+    authenticate_composition_v3, build_claims_lifecycle_plan_v3,
+    build_composition_admission_plan_v3, build_publication_plan_v3, compile_unsigned_packet_v0,
+    hot_v3::build_composition_lifecycle_hot_plan_v3,
     hot_v6::build_composition_lifecycle_hot_plan_v6, validate_publication_candidates_v3,
 };
 use dclutch_token_svm::{
@@ -87,6 +89,32 @@ const RENT: u64 = 1_000_000;
 
 fn id(value: u8) -> [u8; 32] {
     [value; 32]
+}
+
+#[test]
+fn native_four_record_admission_does_not_weaken_rational_five_record_admission() {
+    let mut fixture = ChainFixture::n258();
+    fixture.execution_descriptor.raw.data[0] ^= 1;
+    authenticate_composition_only_v3(CompositionOnlyChainObservationV3 {
+        registry_program: &fixture.registry,
+        product: ProductCompositionObservationV3 {
+            product: fixture.product.observed(),
+            result_domain: fixture.domain.observed(),
+            portfolio: fixture.portfolio.observed(),
+            product_basis: fixture.basis.observed(),
+        },
+        composition: CompositionOnlyObservationV3 {
+            descriptor: fixture.descriptor.observed(),
+            graph: fixture.graph.observed(),
+            translation: fixture.translation.observed(),
+            exposure: fixture.exposure.observed(),
+        },
+    })
+    .expect("native composition-only admission ignores no rational record");
+    assert_eq!(
+        authenticate_composition_v3(fixture.observed()).err(),
+        Some(Error::FinalizedRecord)
+    );
 }
 
 fn content(value: u8) -> ContentId {

@@ -13,13 +13,14 @@ mod relayed;
 use dclutch_relay_contract::release::AccountSetEntryV1;
 use solana_sdk::pubkey::Pubkey;
 
+use relayed::RelayedVenueFactsV1;
 pub(crate) use relayed::{
     DISCLOSED_FAILURE_CONFLATION, RelayedMarketFactsV1, WALK_BOUNTY_LAMPORTS, WindowChoiceV1,
     window_choice,
 };
-use relayed::RelayedVenueFactsV1;
 
 use crate::Result;
+use crate::direct_market::DirectMarketCompilerInputV1;
 use crate::twin;
 
 /// The twin's venue facts, exactly as `twin.rs` states them.
@@ -42,6 +43,13 @@ pub(crate) fn relayed_market_input(
     registry: Pubkey,
     relayer_pubkey: [u8; 32],
     window_choice: &WindowChoiceV1,
+    direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<RelayedMarketFactsV1> {
-    relayed::relayed_market_input(registry, relayer_pubkey, window_choice, &twin_venue_facts())
+    relayed::relayed_market_input(
+        registry,
+        relayer_pubkey,
+        window_choice,
+        &twin_venue_facts(),
+        direct,
+    )
 }

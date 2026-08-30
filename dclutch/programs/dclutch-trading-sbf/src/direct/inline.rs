@@ -18,45 +18,34 @@ use dclutch_account_profile_contract::lifecycle_v3::{
     AuthenticateStatePlanV3, CreateStatePlanV3, StateLifecyclePlanV3,
 };
 use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
-use dclutch_claims_svm::{
-    CallerRole as ClaimsCallerRole,
-    sparse_native_transfer_v1::{
-        SPARSE_NATIVE_TRANSFER_BYTES_V1, SparseNativeTransferInputV1,
-        SparseNativeTransferReceiptV1, SparseNativeTransferV1,
-    },
-};
+use dclutch_claims_svm::sparse_native_transfer_v1::SparseNativeTransferV1;
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, ContextV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyRequestV1, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
-    OperationV1,
+    CustodyReplayV1, CustodyRequestV1, OperationV1,
 };
-use dclutch_direct_codec::successor::{
-    DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_STATE_BYTES_V1, DirectCoordinatesV1,
-    InlineOrdinaryInputV2, InlineOrdinarySettlementV2, MakerReplaySeedsV1,
-    settle_inline_ordinary_v2,
+use dclutch_direct_codec::{
+    inline_candidate_v2::{
+        DirectInlineCandidateContextV2, encode_inline_claims_request_v2,
+        prepare_inline_ordinary_candidate_v2, project_inline_custody_effect_v2,
+        verify_inline_claims_receipt_v2 as verify_candidate_claims_receipt_v2,
+        verify_inline_custody_receipt_v2 as verify_candidate_custody_receipt_v2,
+        verify_inline_effect_partition_v2 as verify_candidate_effect_partition_v2,
+    },
+    successor::{
+        DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_ROOT_STATE_BYTES_V1, DirectCoordinatesV1,
+        InlineOrdinaryInputV2, InlineOrdinarySettlementV2, MakerReplaySeedsV1,
+    },
 };
 use dclutch_market_core_codec::{CoreMarketViewV1, Phase};
-use solana_program::{hash::hash, pubkey::Pubkey};
+use solana_program::pubkey::Pubkey;
 
-use super::physical::{
-    DirectExternalCollateralV2, DirectExternalDebitV2, DirectPhysicalError, Result,
+use super::physical::{DirectPhysicalError, Result};
+
+pub use dclutch_direct_codec::inline_candidate_v2::{
+    DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2, DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2,
+    DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3, DirectInlineCollateralFrameV2,
+    DirectInlineCustodyEffectV2, DirectInlineEffectDispatchV2,
 };
-
-/// Seller-net and combined-fee are the only positive inline collateral routes.
-pub const DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2: usize = 2;
-/// Exact fixed-width sparse native-claim transfer request.
-pub const DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2: usize = SPARSE_NATIVE_TRANSFER_BYTES_V1;
-
-/// Exact external token observations for one inline ordinary match.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectInlineCollateralFrameV2 {
-    /// Buyer-signed external source and current Custody delegation.
-    pub buyer_source: DirectExternalDebitV2,
-    /// Seller-signed external destination.
-    pub seller_destination: DirectExternalCollateralV2,
-    /// Immutable config-recipient external destination.
-    pub fee_destination: DirectExternalCollateralV2,
-}
 
 /// Authenticated fixed-role, replay, and revision facts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,19 +95,6 @@ pub struct DirectInlineLifecyclePlansV3 {
     pub buyer_maker: StateLifecyclePlanV3,
 }
 
-/// One exact Custody request and its required token/delegate poststate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DirectInlineCustodyEffectV2 {
-    /// Canonical delegated-allowance Custody V2 transfer request.
-    pub request: DelegatedCustodyRequestV2,
-    /// Exact source token balance after this CPI.
-    pub source_after: u64,
-    /// Exact source delegated allowance after this CPI.
-    pub delegated_after: u64,
-    /// Exact destination token balance after this CPI.
-    pub destination_after: u64,
-}
-
 /// Complete inline physical candidate. No authoritative account is mutated.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectInlinePhysicalPlanV2 {
@@ -126,8 +102,6 @@ pub struct DirectInlinePhysicalPlanV2 {
     pub settlement: InlineOrdinarySettlementV2,
     /// Exact generic root/maker lifecycle plans bound to the settlement.
     pub lifecycle: DirectInlineLifecyclePlansV3,
-    /// Positive seller-net then combined-fee Custody transfers.
-    pub custody: [Option<DirectInlineCustodyEffectV2>; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2],
     /// Number of positive Custody transfers.
     pub custody_count: u8,
     /// Exact encoded runtime-width Claims request length.
@@ -157,6 +131,7 @@ pub struct DirectInlineStateBuffersV2<'a> {
 /// Scratch may change on refusal. `claims_output` remains unchanged on every
 /// refusal. Width is derived from the authenticated Product and checked before
 /// any scratch write; this function has no protocol outcome ceiling.
+#[inline(never)]
 pub fn prepare_inline_ordinary_physical_v2(
     direct: InlineOrdinaryInputV2,
     context: DirectInlinePhysicalContextV2,
@@ -166,64 +141,32 @@ pub fn prepare_inline_ordinary_physical_v2(
     claims_output: &mut [u8],
 ) -> Result<Box<DirectInlinePhysicalPlanV2>> {
     validate_context(direct, context)?;
-    let settlement =
-        settle_inline_ordinary_v2(direct).map_err(|_| DirectPhysicalError::Settlement)?;
-    validate_lifecycle(direct, context, settlement, lifecycle)?;
-    validate_maker_roots(direct, context, settlement)?;
+    let candidate =
+        prepare_inline_ordinary_candidate_v2(direct, candidate_context(context), collateral)?;
+    validate_lifecycle(direct, context, candidate.settlement, lifecycle)?;
+    validate_maker_roots(direct, context, candidate.settlement)?;
     validate_replay(context)?;
-    validate_collateral(direct, context, collateral, settlement)?;
 
     let claims_bytes = DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2;
     if claims_scratch.len() != claims_bytes || claims_output.len() != claims_bytes {
         return Err(DirectPhysicalError::Width);
     }
 
-    let custody = compile_custody(direct, context, collateral, settlement)?;
-    encode_inline_claims_request_v2(direct, context, claims_scratch, claims_output)?;
-
-    Ok(Box::new(DirectInlinePhysicalPlanV2 {
-        settlement,
-        lifecycle,
-        custody: custody.effects,
-        custody_count: custody.count,
-        claims_bytes,
-        buyer_source_after: custody.source_after,
-        buyer_delegated_after: custody.delegated_after,
-        seller_destination_after: custody.seller_after,
-        fee_destination_after: custody.fee_after,
-    }))
-}
-
-#[inline(never)]
-fn encode_inline_claims_request_v2(
-    direct: InlineOrdinaryInputV2,
-    context: DirectInlinePhysicalContextV2,
-    claims_scratch: &mut [u8],
-    claims_output: &mut [u8],
-) -> Result<()> {
-    let claims = SparseNativeTransferV1::new(SparseNativeTransferInputV1 {
-        caller_role: ClaimsCallerRole::Trading,
-        release_set: context.core_market.release_set().release_set_id.to_bytes(),
-        market: context.core_market.market().to_bytes(),
-        request_id: context.parent_request_digest,
-        product_record_digest: context.core_market.product().product_record.to_bytes(),
-        semantic_basis_id: context.core_market.product().liability_basis.to_bytes(),
-        linked_basis_record_digest: context.linked_basis_record_digest,
-        source_owner: direct.seller.authenticated.maker(),
-        destination_owner: direct.buyer.authenticated.maker(),
-        expected_market_revision: context.claims_market_revision,
-        expected_source_revision: context.seller_position_revision,
-        expected_destination_revision: context.buyer_position_revision,
-        generation: context.core_market.generation(),
-        outcome: direct.seller.authenticated.intent().outcome,
-        claim_count: direct.execution.outcome_count,
-        quantity: direct.execution.fill,
-    })
-    .map_err(|_| DirectPhysicalError::Claims)?;
-    claims_scratch.copy_from_slice(&claims.to_bytes());
+    let claims_request = encode_inline_claims_request_v2(direct, candidate_context(context))?;
+    claims_scratch.copy_from_slice(&claims_request);
     SparseNativeTransferV1::decode(claims_scratch).map_err(|_| DirectPhysicalError::Claims)?;
     claims_output.copy_from_slice(claims_scratch);
-    Ok(())
+
+    Ok(Box::new(DirectInlinePhysicalPlanV2 {
+        settlement: candidate.settlement,
+        lifecycle,
+        custody_count: candidate.custody_count,
+        claims_bytes,
+        buyer_source_after: candidate.buyer_source_after,
+        buyer_delegated_after: candidate.buyer_delegated_after,
+        seller_destination_after: candidate.seller_destination_after,
+        fee_destination_after: candidate.fee_destination_after,
+    }))
 }
 
 fn validate_lifecycle(
@@ -324,23 +267,12 @@ pub fn verify_inline_claims_receipt_v2(
     receipt_bytes: &[u8],
     expected_post_resource_digest: [u8; 32],
 ) -> Result<()> {
-    if expected_post_resource_digest == [0; 32] {
-        return Err(DirectPhysicalError::ZeroIdentity);
-    }
-    let plan =
-        SparseNativeTransferV1::decode(claims_packet).map_err(|_| DirectPhysicalError::Claims)?;
-    let receipt = SparseNativeTransferReceiptV1::decode(receipt_bytes)
-        .map_err(|_| DirectPhysicalError::Claims)?;
-    receipt
-        .validate_request(plan)
-        .map_err(|_| DirectPhysicalError::Claims)?;
-    if receipt.packet_digest() != hash(claims_packet).to_bytes()
-        || receipt.claims_program() != context.claims_program
-        || receipt.post_resource_digest() != expected_post_resource_digest
-    {
-        return Err(DirectPhysicalError::Postcondition);
-    }
-    Ok(())
+    verify_candidate_claims_receipt_v2(
+        context.claims_program,
+        claims_packet,
+        receipt_bytes,
+        expected_post_resource_digest,
+    )
 }
 
 /// Verify one immediate Custody receipt and post-CPI delegate allowance.
@@ -350,35 +282,49 @@ pub fn verify_inline_custody_receipt_v2(
     replay_state_digest: [u8; 32],
     observed_delegated_after: u64,
 ) -> Result<()> {
-    let request_bytes = effect
-        .request
-        .encode()
-        .map_err(|_| DirectPhysicalError::Custody)?;
-    let receipt = DelegatedCustodyReceiptV2::decode(receipt_bytes)
-        .map_err(|_| DirectPhysicalError::Custody)?;
-    receipt
-        .custody
-        .verify_for(
-            effect.request.custody,
-            hash(&request_bytes).to_bytes(),
-            replay_state_digest,
-        )
-        .map_err(|_| DirectPhysicalError::Custody)?;
-    if receipt.starts_atomic_debit != effect.request.starts_atomic_debit
-        || receipt.terminal != effect.request.terminal
-        || receipt.delegate_before != effect.request.delegate_before
-        || receipt.delegate_after != effect.request.delegate_after
-        || receipt.total_debit != effect.request.total_debit
-        || receipt.allowance_before != effect.request.allowance_before
-        || receipt.allowance_after != effect.request.allowance_after
-        || receipt.custody.evidence.source_after != effect.source_after
-        || receipt.custody.evidence.destination_after != effect.destination_after
-        || receipt.allowance_after != effect.delegated_after
-        || observed_delegated_after != effect.delegated_after
-    {
-        return Err(DirectPhysicalError::Postcondition);
-    }
-    Ok(())
+    verify_candidate_custody_receipt_v2(
+        effect,
+        receipt_bytes,
+        replay_state_digest,
+        observed_delegated_after,
+    )
+}
+
+/// Project one positive Custody request through the shared pure candidate.
+pub fn project_inline_custody_effect_physical_v2(
+    direct: InlineOrdinaryInputV2,
+    context: DirectInlinePhysicalContextV2,
+    collateral: DirectInlineCollateralFrameV2,
+    settlement: InlineOrdinarySettlementV2,
+    transfer_index: u8,
+) -> Result<DirectInlineCustodyEffectV2> {
+    project_inline_custody_effect_v2(
+        direct,
+        candidate_context(context),
+        collateral,
+        settlement,
+        transfer_index,
+    )
+}
+
+/// Cross-check the exact authenticated Effect request and dispatch partition.
+pub fn verify_inline_effect_partition_physical_v2(
+    direct: InlineOrdinaryInputV2,
+    context: DirectInlinePhysicalContextV2,
+    collateral: DirectInlineCollateralFrameV2,
+    request_bank: &[u8],
+    dispatch: DirectInlineEffectDispatchV2,
+) -> Result<()> {
+    let candidate =
+        prepare_inline_ordinary_candidate_v2(direct, candidate_context(context), collateral)?;
+    verify_candidate_effect_partition_v2(
+        direct,
+        candidate_context(context),
+        collateral,
+        candidate,
+        request_bank,
+        dispatch,
+    )
 }
 
 /// Encode complete root/maker state candidates without writing accounts.
@@ -442,7 +388,7 @@ fn validate_context(
         return Err(DirectPhysicalError::Binding);
     }
     let custody_program = release.bindings[4].program.to_bytes();
-    let probe = base_custody_request(context, 0, 1)?;
+    let probe = base_custody_request(&context, 0, 1)?;
     let authority = CustodyAuthoritySeedsV1::from_request(probe);
     if derive(custody_program, &authority.as_slices()).0 != context.custody_authority {
         return Err(DirectPhysicalError::Binding);
@@ -450,6 +396,48 @@ fn validate_context(
     Ok(())
 }
 
+fn candidate_context(context: DirectInlinePhysicalContextV2) -> DirectInlineCandidateContextV2 {
+    let release = context.core_market.release_set();
+    let product = context.core_market.product();
+    let realm = context.core_market.realm();
+    DirectInlineCandidateContextV2 {
+        release_set: release.release_set_id.to_bytes(),
+        market: context.core_market.market().to_bytes(),
+        generation: context.core_market.generation(),
+        outcome_count: product.outcome_count,
+        product_record_digest: product.product_record.to_bytes(),
+        semantic_basis_id: product.liability_basis.to_bytes(),
+        linked_basis_record_digest: context.linked_basis_record_digest,
+        trading_program: context.trading_program,
+        realm: realm.realm_id.to_bytes(),
+        mint: realm.collateral_mint.to_bytes(),
+        token_program: realm.token_program.to_bytes(),
+        buyer_maker_root: context.buyer_maker_root,
+        custody_authority: context.custody_authority,
+        parent_request_digest: context.parent_request_digest,
+        claims_market_revision: context.claims_market_revision,
+        seller_position_revision: context.seller_position_revision,
+        buyer_position_revision: context.buyer_position_revision,
+        custody_revision: context.custody_replay_state.next_revision,
+    }
+}
+
+/// Reproduce both maker replay PDAs at the bumps the settlement carries.
+///
+/// This is the [`hot_v3`](crate::hot_v3) `borrow_finalized_record_at` argument
+/// again: the outer preplan is the walk that SEARCHES (its `plan_lifecycle`
+/// derives each maker replay canonically after AccountProfile projection), and
+/// `validate_lifecycle` has already required each settlement bump to equal
+/// that plan's authenticated bump before this runs. So the two
+/// `find_program_address` searches this function used to repeat are replaced
+/// by the two `create_program_address` calls they would have ended on. Nothing
+/// in the conjunction weakens: the derivation from the exact authenticated
+/// seeds plus the carried bump must still reproduce the exact context account,
+/// and a wrong, noncanonical, or substituted-coordinate bump reproduces a
+/// different address (or none at all) and refuses — the derivation IS the
+/// check, and the carried bump is a memo of the preplan's own search, never an
+/// authority. Only who pays for the search changed: per-maker searches were a
+/// per-draw CU variance on the 1.4M ceiling.
 fn validate_maker_roots(
     direct: InlineOrdinaryInputV2,
     context: DirectInlinePhysicalContextV2,
@@ -460,6 +448,7 @@ fn validate_maker_roots(
         context.core_market.generation(),
     )
     .map_err(|_| DirectPhysicalError::State)?;
+    let trading_program = Pubkey::new_from_array(context.trading_program);
     for (maker, key, state) in [
         (
             direct.seller.authenticated.maker(),
@@ -474,8 +463,14 @@ fn validate_maker_roots(
     ] {
         let seeds =
             MakerReplaySeedsV1::new(coordinates, maker).map_err(|_| DirectPhysicalError::State)?;
-        let (expected, bump) = derive(context.trading_program, &seeds.as_slices());
-        if key != expected || state.bump() != bump {
+        let [domain, market, generation, maker_seed] = seeds.as_slices();
+        let bump_seed = [state.bump()];
+        let reproduced = Pubkey::create_program_address(
+            &[domain, market, generation, maker_seed, &bump_seed],
+            &trading_program,
+        )
+        .map_err(|_| DirectPhysicalError::Binding)?;
+        if key != reproduced.to_bytes() {
             return Err(DirectPhysicalError::Binding);
         }
     }
@@ -503,7 +498,7 @@ fn validate_replay(context: DirectInlinePhysicalContextV2) -> Result<()> {
     {
         return Err(DirectPhysicalError::Binding);
     }
-    let probe = base_custody_request(context, 0, 0)?;
+    let probe = base_custody_request(&context, 0, 0)?;
     let replay_seeds = CustodyReplaySeedsV1::from_request(probe);
     if derive(custody_program, &replay_seeds.as_slices()).0 != context.custody_replay {
         return Err(DirectPhysicalError::Binding);
@@ -511,206 +506,8 @@ fn validate_replay(context: DirectInlinePhysicalContextV2) -> Result<()> {
     Ok(())
 }
 
-fn validate_collateral(
-    direct: InlineOrdinaryInputV2,
-    context: DirectInlinePhysicalContextV2,
-    collateral: DirectInlineCollateralFrameV2,
-    settlement: InlineOrdinarySettlementV2,
-) -> Result<()> {
-    let seller = direct.seller.authenticated;
-    let buyer = direct.buyer.authenticated;
-    for identity in [
-        collateral.buyer_source.account,
-        collateral.buyer_source.owner,
-        collateral.buyer_source.delegate,
-        collateral.seller_destination.account,
-        collateral.seller_destination.owner,
-        collateral.fee_destination.account,
-        collateral.fee_destination.owner,
-    ] {
-        if identity == [0; 32] {
-            return Err(DirectPhysicalError::ZeroIdentity);
-        }
-    }
-    if collateral.buyer_source.account != buyer.intent().collateral_account
-        || collateral.buyer_source.owner != buyer.maker()
-        || collateral.buyer_source.delegate != context.custody_authority
-        || collateral.buyer_source.delegated_amount != settlement.effects.buyer_collateral_debit
-        || collateral.buyer_source.balance < settlement.effects.buyer_collateral_debit
-        || collateral.seller_destination.account != seller.intent().collateral_account
-        || collateral.seller_destination.owner != seller.maker()
-        || collateral.fee_destination.owner != direct.execution.config.fee_recipient()
-        || collateral.buyer_source.account == collateral.seller_destination.account
-        || collateral.buyer_source.account == collateral.fee_destination.account
-        || (collateral.seller_destination.account == collateral.fee_destination.account
-            && collateral.seller_destination != collateral.fee_destination)
-    {
-        return Err(DirectPhysicalError::Binding);
-    }
-    Ok(())
-}
-
-fn compile_custody(
-    direct: InlineOrdinaryInputV2,
-    context: DirectInlinePhysicalContextV2,
-    collateral: DirectInlineCollateralFrameV2,
-    settlement: InlineOrdinarySettlementV2,
-) -> Result<Box<CustodyCompilationV2>> {
-    let mut effects = [None; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2];
-    let mut count = 0_usize;
-    let mut source_after = collateral.buyer_source.balance;
-    let mut delegated_after = collateral.buyer_source.delegated_amount;
-    let mut seller_after = collateral.seller_destination.balance;
-    let mut fee_after =
-        if collateral.seller_destination.account == collateral.fee_destination.account {
-            seller_after
-        } else {
-            collateral.fee_destination.balance
-        };
-    let positive_count = usize::from(settlement.effects.seller_net_collateral_credit > 0)
-        .checked_add(usize::from(settlement.effects.total_fee_transfer > 0))
-        .ok_or(DirectPhysicalError::Arithmetic)?;
-    for (amount, destination) in [
-        (
-            settlement.effects.seller_net_collateral_credit,
-            collateral.seller_destination,
-        ),
-        (
-            settlement.effects.total_fee_transfer,
-            collateral.fee_destination,
-        ),
-    ] {
-        if amount == 0 {
-            continue;
-        }
-        let destination_before = if destination.account == collateral.seller_destination.account {
-            seller_after
-        } else {
-            fee_after
-        };
-        source_after = source_after
-            .checked_sub(amount)
-            .ok_or(DirectPhysicalError::Arithmetic)?;
-        delegated_after = delegated_after
-            .checked_sub(amount)
-            .ok_or(DirectPhysicalError::Arithmetic)?;
-        let destination_after = destination_before
-            .checked_add(amount)
-            .ok_or(DirectPhysicalError::Arithmetic)?;
-        let custody = custody_request(
-            direct,
-            context,
-            collateral.buyer_source,
-            destination,
-            count,
-            amount,
-        )?;
-        let terminal = count
-            .checked_add(1)
-            .ok_or(DirectPhysicalError::Arithmetic)?
-            == positive_count;
-        let request = DelegatedCustodyRequestV2 {
-            custody,
-            starts_atomic_debit: count == 0,
-            terminal,
-            delegate_before: context.custody_authority,
-            delegate_after: if terminal {
-                [0; 32]
-            } else {
-                context.custody_authority
-            },
-            total_debit: settlement.effects.buyer_collateral_debit,
-            allowance_before: delegated_after
-                .checked_add(amount)
-                .ok_or(DirectPhysicalError::Arithmetic)?,
-            allowance_after: delegated_after,
-        };
-        request
-            .validate()
-            .map_err(|_| DirectPhysicalError::Custody)?;
-        *effects
-            .get_mut(count)
-            .ok_or(DirectPhysicalError::Arithmetic)? = Some(DirectInlineCustodyEffectV2 {
-            request,
-            source_after,
-            delegated_after,
-            destination_after,
-        });
-        count = count
-            .checked_add(1)
-            .ok_or(DirectPhysicalError::Arithmetic)?;
-        if destination.account == collateral.seller_destination.account {
-            seller_after = destination_after;
-        }
-        if destination.account == collateral.fee_destination.account {
-            fee_after = destination_after;
-        }
-    }
-    if source_after
-        != collateral
-            .buyer_source
-            .balance
-            .checked_sub(settlement.effects.buyer_collateral_debit)
-            .ok_or(DirectPhysicalError::Arithmetic)?
-        || delegated_after
-            != collateral
-                .buyer_source
-                .delegated_amount
-                .checked_sub(settlement.effects.buyer_collateral_debit)
-                .ok_or(DirectPhysicalError::Arithmetic)?
-    {
-        return Err(DirectPhysicalError::Postcondition);
-    }
-    Ok(Box::new(CustodyCompilationV2 {
-        effects,
-        count: u8::try_from(count).map_err(|_| DirectPhysicalError::Arithmetic)?,
-        source_after,
-        delegated_after,
-        seller_after,
-        fee_after,
-    }))
-}
-
-struct CustodyCompilationV2 {
-    effects: [Option<DirectInlineCustodyEffectV2>; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2],
-    count: u8,
-    source_after: u64,
-    delegated_after: u64,
-    seller_after: u64,
-    fee_after: u64,
-}
-
-fn custody_request(
-    direct: InlineOrdinaryInputV2,
-    context: DirectInlinePhysicalContextV2,
-    source: DirectExternalDebitV2,
-    destination: DirectExternalCollateralV2,
-    transfer_index: usize,
-    amount: u64,
-) -> Result<CustodyRequestV1> {
-    let buyer_intent = direct.buyer.authenticated.intent();
-    let expected_revision = context
-        .custody_replay_state
-        .next_revision
-        .checked_add(u64::try_from(transfer_index).map_err(|_| DirectPhysicalError::Arithmetic)?)
-        .ok_or(DirectPhysicalError::Arithmetic)?;
-    let mut request = base_custody_request(context, transfer_index, amount)?;
-    request.semantic.source_owner = source.owner;
-    request.semantic.destination_owner = destination.owner;
-    request.semantic.order_nonce = buyer_intent.nonce;
-    request.semantic.execution_index = buyer_intent.outcome;
-    request.source = source.account;
-    request.destination = destination.account;
-    request.expected_revision = expected_revision;
-    request.resulting_revision = checked_next(expected_revision)?;
-    request
-        .validate()
-        .map_err(|_| DirectPhysicalError::Custody)?;
-    Ok(request)
-}
-
 fn base_custody_request(
-    context: DirectInlinePhysicalContextV2,
+    context: &DirectInlinePhysicalContextV2,
     transfer_index: usize,
     amount: u64,
 ) -> Result<CustodyRequestV1> {

@@ -2,7 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import { LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
 import { sha256 } from './bytes';
-import { REALM_SCHEMA_RELEASE_ID_V1 } from './generated/coreFound';
+import {
+  CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
+  CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_VERSION,
+  REALM_SCHEMA_RELEASE_ID_V1,
+} from './generated/coreFound';
 import {
   capabilityProvenanceV1,
   inspectMarketDetailV1,
@@ -16,11 +25,14 @@ import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 /**
- * The detail projection over the chain the campaign actually produced.
+ * The detail projection over a parser-only current Core body joined to the
+ * historical campaign's finalized companion records.
  *
- * Variants are written into a copy of the live bytes. The Core V2 Market
+ * The 352-byte finalized Market is retained as legacy-refusal evidence. The
+ * current body below is synthetic unit input, not post-upgrade chain evidence.
+ * Variants are written into that current body. The Core V2 Market
  * address is derived from the eight identities plus the generation at offsets
- * 48..280, so mutating the phase byte at 10 or the terminal receipt at 320
+ * 48..280, so mutating the phase byte at 10 or the generated receipt offset
  * leaves every derived address in the fixture correct — which is what lets a
  * terminal variant be tested without forging a whole account.
  */
@@ -30,6 +42,18 @@ const CORE = LIVE.programs.core;
 const REGISTRY = LIVE.programs.registry;
 const CLAIMS = LIVE.programs.claims;
 const SLOT = '4711';
+
+const CURRENT_MARKET_DATA = (() => {
+  const bytes = new Uint8Array(CORE_STATE_BYTES);
+  bytes.set(LIVE.market.data.slice(0, CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET));
+  bytes.set(CORE_STATE_MAGIC, 0);
+  const view = new DataView(bytes.buffer);
+  view.setUint16(CORE_STATE_VERSION_OFFSET, CORE_VERSION, true);
+  view.setBigUint64(CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET, 500_000_000n, true);
+  bytes.set(LIVE.market.data.slice(288, 320), CORE_STATE_RENT_BENEFICIARY_OFFSET);
+  bytes.set(LIVE.market.data.slice(320, 352), CORE_STATE_TERMINAL_RECEIPT_OFFSET);
+  return bytes;
+})();
 
 function client(accounts: ReadonlyMap<string, RpcAccount>): SolanaRpcClient {
   return {
@@ -41,7 +65,7 @@ function client(accounts: ReadonlyMap<string, RpcAccount>): SolanaRpcClient {
   } as unknown as SolanaRpcClient;
 }
 
-async function chain(marketData: Uint8Array = LIVE.market.data): Promise<Map<string, RpcAccount>> {
+async function chain(marketData: Uint8Array = CURRENT_MARKET_DATA): Promise<Map<string, RpcAccount>> {
   const accounts = new Map<string, RpcAccount>([
     [LIVE.market.address, liveRpcAccount(LIVE.market, { data: marketData })],
     [LIVE.claimsAggregate.address, liveRpcAccount(LIVE.claimsAggregate)],
@@ -53,15 +77,24 @@ async function chain(marketData: Uint8Array = LIVE.market.data): Promise<Map<str
 
 /** A copy of the live Market with a terminal receipt and a winning claim. */
 function terminalMarket(winner: number): Uint8Array {
-  // Core V2: phase@10, terminal winner@12, terminal receipt@320.
-  const withPhase = mutate(LIVE.market.data, 10, 2);
+  // Core V2: phase@10, terminal winner@12, generated terminal receipt offset.
+  const withPhase = mutate(CURRENT_MARKET_DATA, 10, 2);
   const withWinner = mutate(withPhase, 12, winner);
-  return mutate(withWinner, 320, new Uint8Array(32).fill(0x77));
+  return mutate(withWinner, CORE_STATE_TERMINAL_RECEIPT_OFFSET, new Uint8Array(32).fill(0x77));
 }
 
 const full = { coreProgramId: CORE, registryProgramId: REGISTRY, claimsProgramId: CLAIMS };
 
 describe('Market detail projection', () => {
+  it('refuses the superseded finalized Market generation', async () => {
+    const detail = await inspectMarketDetailV1(
+      client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market)]])),
+      { ...full, address: LIVE.market.address },
+    );
+    expect(detail.card).toMatchObject({ status: 'refused' });
+    expect(detail.card.refusal).toMatch(/older devnet Market generation is incompatible/);
+  });
+
   it('carries the immutable identities, the artifact profile, and an honest phase meaning', async () => {
     const detail = await inspectMarketDetailV1(client(await chain()), { ...full, address: LIVE.market.address });
     expect(detail.floorSlot).toBe(SLOT);
@@ -71,9 +104,9 @@ describe('Market detail projection', () => {
     expect(detail.phaseMeaning).toBe(marketPhaseMeaningV1('Open'));
     expect(detail.phaseMeaning).toMatch(/no claim can be redeemed/);
     expect(card.identity).toMatchObject({
-      schemaMagic: 'DCLTCOR2',
-      schemaVersion: 2,
-      accountBytes: 352,
+      schemaMagic: 'DCLTCOR3',
+      schemaVersion: 3,
+      accountBytes: 368,
       marketId: LIVE.market.address,
       registryProgram: REGISTRY,
     });
@@ -151,7 +184,7 @@ describe('Market detail projection', () => {
     expect(provenanceChipV1(absent.liabilityProvenance)).toBe('REFUSED');
 
     const foreign = await inspectMarketDetailV1(
-      client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market, { owner: SYSTEM_PROGRAM })]])),
+      client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market, { owner: SYSTEM_PROGRAM, data: CURRENT_MARKET_DATA })]])),
       { ...full, address: LIVE.market.address },
     );
     expect(foreign.card.status).toBe('refused');

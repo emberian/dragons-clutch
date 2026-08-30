@@ -45,16 +45,21 @@
 //! returns a plan.
 
 use dclutch_capability_contract::{
-    CapabilityManifestV1, ContentId as CapabilityContentId, FundingAssetClassV1, FundingCompartment,
-    FundingCustodyObservationV1, FundingStateV1, FundingStatus,
+    CapabilityManifestV1, ContentId as CapabilityContentId, FUNDING_LEDGER_HEADER_BYTES_V2,
+    FUNDING_LEDGER_SLOT_BYTES_V2, FundingAssetClassV1, FundingCompartment, FundingLedgerStatusV2,
+    FundingLedgerV2,
 };
+
+/// Exact width of the three-row Resolution controller subset ledger.
+pub(crate) const RESOLUTION_FUNDING_LEDGER_BYTES_V2: usize =
+    FUNDING_LEDGER_HEADER_BYTES_V2 + 3 * FUNDING_LEDGER_SLOT_BYTES_V2;
 use dclutch_product_runtime_v2::ResultDomainV2;
 use dclutch_product_runtime_v2_svm_reader::AuthenticatedProductRuntimeV2;
 use dclutch_resolution_codec::{
-    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SourceMaterialV2, SourceResolutionStateV2, WindowSpecV1,
+    ContentId as SourceContentId, SourceMaterialV3, SourceResolutionStateV2, WindowSpecV1,
 };
 
 /// Stable refusal from the pure funded walk.
@@ -94,31 +99,32 @@ pub struct DeadlineFailureRequestV1 {
 
 /// The escrowed compartment, as the outer authenticated it.
 ///
-/// `custody` is a physical observation — the account's lamports against the
-/// exact Rent minimum for its width — and it is what makes the debit below an
-/// accounting operation rather than a wish: a `FundingState` claiming to hold a
-/// bounty in an account that does not hold the lamports refuses here.
+/// The ledger and its physical custody are carried together so the debit below
+/// authenticates aggregate native custody before and after changing only the
+/// selected Failure row.
 #[derive(Clone, Copy)]
-pub struct AuthenticatedFailureFundingV1<'a> {
+pub struct AuthenticatedFailureFundingV2<'manifest> {
     /// Capability-manifest content identity, from the authenticated Market.
     pub manifest_id: CapabilityContentId,
     /// The authenticated capability manifest.
-    pub manifest: CapabilityManifestV1<'a>,
+    pub manifest: CapabilityManifestV1<'manifest>,
     /// The manifest entry this compartment was created against.
     pub entry_index: u16,
-    /// The decoded persisted funding state.
-    pub funding: FundingStateV1,
-    /// Physical custody of the funding-state account.
-    pub custody: FundingCustodyObservationV1,
+    /// Exact hostile-decoded persisted subset-ledger bytes.
+    pub ledger_bytes: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    /// Exact Rent reserve for the full ledger width.
+    pub exact_ledger_rent_lamports: u64,
+    /// Physical lamports held by the aggregate ledger account.
+    pub ledger_account_lamports: u64,
 }
 
 /// The independently authenticated Source values the walk reads.
 #[derive(Clone, Copy)]
 pub struct AuthenticatedWalkSourceV1 {
-    /// `SourceMaterialV2` content identity, from the Market's own policy.
+    /// `SourceMaterialV3` content identity, from the Market's own policy.
     pub material_id: SourceContentId,
     /// The authenticated material.
-    pub material: SourceMaterialV2,
+    pub material: SourceMaterialV3,
     /// `WindowSpecV1` content identity, from the material.
     pub window_spec_id: SourceContentId,
     /// The authenticated window whose deadline the walk is past.
@@ -132,8 +138,8 @@ pub struct DeadlineFailurePlanV1 {
     pub next_source: SourceResolutionStateV2,
     /// The terminal `ResolutionFailure` certificate.
     pub certificate: ResolutionCertificateV2,
-    /// The funding state after the bounty debit.
-    pub next_funding: FundingStateV1,
+    /// The complete subset ledger after the Failure-row bounty debit.
+    pub next_funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
     /// Exact lamports credited to whoever walked it.
     pub work_paid: u64,
     /// Bounty principal still escrowed after this debit.
@@ -152,24 +158,35 @@ pub struct DeadlineFailurePlanV1 {
 /// exhaustion compartment instead is refused by that comparison rather than by
 /// an account-position convention.
 fn plan_funding_release(
-    escrow: &AuthenticatedFailureFundingV1<'_>,
+    escrow: &AuthenticatedFailureFundingV2<'_>,
     material_id: SourceContentId,
-) -> Result<(FundingStateV1, u64, u64, u64), FundedWalkErrorV1> {
+) -> Result<([u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2], u64, u64, u64), FundedWalkErrorV1> {
     let entry = escrow
         .manifest
         .entry(escrow.entry_index)
         .map_err(|_| FundedWalkErrorV1::Funding)?;
     if entry.config_id().to_bytes() != material_id.to_bytes()
-        || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
-        || escrow.funding.entry_index() != escrow.entry_index
-        || escrow.funding.manifest_content_id() != escrow.manifest_id
-        || escrow.funding.status() != FundingStatus::Active
+        || entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
     {
         return Err(FundedWalkErrorV1::Funding);
     }
-    escrow
-        .funding
-        .validate_against(escrow.manifest_id, escrow.manifest, escrow.custody)
+    let ledger =
+        FundingLedgerV2::decode(&escrow.ledger_bytes).map_err(|_| FundedWalkErrorV1::Funding)?;
+    let authenticated = ledger
+        .authenticate(escrow.manifest_id, escrow.manifest)
+        .map_err(|_| FundedWalkErrorV1::Funding)?;
+    let failure_slot = authenticated
+        .slot(escrow.entry_index)
+        .map_err(|_| FundedWalkErrorV1::Funding)?;
+    if failure_slot.status() != FundingLedgerStatusV2::Active {
+        return Err(FundedWalkErrorV1::Funding);
+    }
+    authenticated
+        .validate_native_custody(
+            escrow.ledger_account_lamports,
+            escrow.exact_ledger_rent_lamports,
+            false,
+        )
         .map_err(|_| FundedWalkErrorV1::Funding)?;
 
     // The bounty is the capability's own quote. Nobody chooses what the walk
@@ -178,16 +195,16 @@ fn plan_funding_release(
     if quote.asset_class() != FundingAssetClassV1::NativeLamports || quote.amount() == 0 {
         return Err(FundedWalkErrorV1::Funding);
     }
-    let mut next_funding = escrow.funding;
-    let released = next_funding
-        .release(
-            escrow.manifest_id,
-            escrow.manifest,
-            escrow.custody,
-            FundingCompartment::Bounty,
-            quote.amount(),
-        )
-        .map_err(|_| FundedWalkErrorV1::Funding)?;
+    let mut next_funding = escrow.ledger_bytes;
+    let released = FundingLedgerV2::release_in_place(
+        &mut next_funding,
+        escrow.manifest_id,
+        escrow.manifest,
+        escrow.entry_index,
+        FundingCompartment::Bounty,
+        quote.amount(),
+    )
+    .map_err(|_| FundedWalkErrorV1::Funding)?;
     if released.asset_class() != FundingAssetClassV1::NativeLamports
         || released.amount() != quote.amount()
     {
@@ -196,29 +213,55 @@ fn plan_funding_release(
 
     let work_paid = quote.amount();
     let funding_lamports_after = escrow
-        .custody
-        .state_account_lamports()
+        .ledger_account_lamports
         .checked_sub(work_paid)
         .ok_or(FundedWalkErrorV1::Funding)?;
+    let post = FundingLedgerV2::decode(&next_funding)
+        .and_then(|ledger| ledger.authenticate(escrow.manifest_id, escrow.manifest))
+        .map_err(|_| FundedWalkErrorV1::Funding)?;
 
-    // The post-state has to be a canonical funding state against the custody
-    // the payout will actually leave behind, not against the one it started
-    // with. Without this the route could pay out of an account it was about to
-    // leave below its own Rent reserve, and the refusal would arrive one
-    // instruction later as an unrelated rent failure.
-    let post_custody = FundingCustodyObservationV1::native_only(
+    // The mutation authority is exactly one logical row. The header and every
+    // other selected row must remain byte-identical even when two rows carry
+    // equal totals.
+    if escrow.ledger_bytes[..FUNDING_LEDGER_HEADER_BYTES_V2]
+        != next_funding[..FUNDING_LEDGER_HEADER_BYTES_V2]
+    {
+        return Err(FundedWalkErrorV1::Funding);
+    }
+    let selected_mask = ledger.selected_mask();
+    let mut entry_index = 0_u16;
+    while entry_index < 16 {
+        let selected = selected_mask & (1_u16 << u32::from(entry_index)) != 0;
+        if selected
+            && entry_index != escrow.entry_index
+            && authenticated
+                .slot_bytes(entry_index)
+                .map_err(|_| FundedWalkErrorV1::Funding)?
+                != post
+                    .slot_bytes(entry_index)
+                    .map_err(|_| FundedWalkErrorV1::Funding)?
+        {
+            return Err(FundedWalkErrorV1::Funding);
+        }
+        entry_index = entry_index
+            .checked_add(1)
+            .ok_or(FundedWalkErrorV1::Funding)?;
+    }
+    post.validate_native_custody(
         funding_lamports_after,
-        escrow.custody.exact_state_rent_lamports(),
+        escrow.exact_ledger_rent_lamports,
+        false,
     )
     .map_err(|_| FundedWalkErrorV1::Funding)?;
-    next_funding
-        .validate_against(escrow.manifest_id, escrow.manifest, post_custody)
-        .map_err(|_| FundedWalkErrorV1::Funding)?;
 
     Ok((
         next_funding,
         work_paid,
-        next_funding.remaining().bounty().amount(),
+        post.slot(escrow.entry_index)
+            .map_err(|_| FundedWalkErrorV1::Funding)?
+            .remaining()
+            .bounty()
+            .amount(),
         funding_lamports_after,
     ))
 }
@@ -237,7 +280,7 @@ pub fn plan_deadline_failure_v1(
     source: &AuthenticatedWalkSourceV1,
     product_runtime: &AuthenticatedProductRuntimeV2,
     result_domain: ResultDomainV2<'_>,
-    escrow: &AuthenticatedFailureFundingV1<'_>,
+    escrow: &AuthenticatedFailureFundingV2<'_>,
 ) -> Result<DeadlineFailurePlanV1, FundedWalkErrorV1> {
     if source_state.market() != request.market
         || source_state.generation() != request.generation

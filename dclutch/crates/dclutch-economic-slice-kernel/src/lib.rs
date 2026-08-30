@@ -552,6 +552,15 @@ pub fn market_outcome_count(bytes: &[u8]) -> Result<u32> {
     decode_market(bytes).map(|value| value.outcome_count)
 }
 
+/// Return one Market's exact outstanding complete-set principal.
+///
+/// In the Open phase this is the canonical complete-set count: founding and
+/// every split credit it once, while a merge debits it once. It is expressed
+/// in complete-set units, not collateral atoms.
+pub fn market_hoard(bytes: &[u8]) -> Result<u64> {
+    decode_market(bytes).map(|value| value.hoard)
+}
+
 /// Return one Position's immutable owner coordinate.
 pub fn position_owner(bytes: &[u8], outcome_count: u32) -> Result<[u8; 32]> {
     validate_position(bytes, outcome_count).map(|value| value.owner)

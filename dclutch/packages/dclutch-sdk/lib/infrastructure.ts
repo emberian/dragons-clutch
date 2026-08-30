@@ -14,6 +14,7 @@ import {
   decodeArtifactReleaseV1,
   decodeExecutionReleaseSetV1,
   deriveFinalizedRecordAddressesV1,
+  REGISTRY_ACTIVATION_PDA_SEED_V1,
   requireSlotPinnedReleaseV1,
   type ArtifactReleaseV1,
   type CheckedMultiprogramV1,
@@ -45,7 +46,6 @@ const CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET = CHECKED_INFRASTRUCTURE_PROFILE
 const CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET = CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET + 32;
 const CHECKED_INFRASTRUCTURE_LEAF_BYTES = ARTIFACT_RELEASE_BYTES + 32;
 const CHECKED_INFRASTRUCTURE_RENT_OFFSET = CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES;
-const ACTIVATION_PDA_DOMAIN = new TextEncoder().encode('dclutch:release-activation:v1');
 
 export type InfrastructureBindingV1 = Readonly<{
   program: string;
@@ -101,7 +101,7 @@ type InfrastructureRpc = Pick<
   'finalizedSlot' | 'multipleAccounts' | 'minimumBalanceForRentExemption'
 >;
 
-type ActivatedProjectionV1 = Readonly<{
+export type ActivatedProjectionV1 = Readonly<{
   releaseSetId: string;
   releaseSet: ExecutionReleaseSetV1;
   artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>;
@@ -203,7 +203,7 @@ function releaseSetBytes(artifacts: Readonly<Record<RegistryRole, ArtifactReleas
   return output;
 }
 
-async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram: string, address: string): Promise<ActivatedProjectionV1> {
+export async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram: string, address: string): Promise<ActivatedProjectionV1> {
   if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('activation cache has the wrong exact width, magic, schema, or profile');
   }
@@ -211,7 +211,7 @@ async function decodeActivationCacheV1(bytes: Uint8Array, registryProgram: strin
   const releaseSetIdentity = slice(bytes, 16, 32);
   requireNonzero(releaseSetIdentity, 'activation release-set identity');
   const expected = PublicKey.findProgramAddressSync(
-    [ACTIVATION_PDA_DOMAIN, releaseSetIdentity],
+    [REGISTRY_ACTIVATION_PDA_SEED_V1, releaseSetIdentity],
     publicKey(registryProgram, 'Registry program'),
   )[0].toBase58();
   if (expected !== address) throw new Error('activation cache is not the release-derived Registry PDA');

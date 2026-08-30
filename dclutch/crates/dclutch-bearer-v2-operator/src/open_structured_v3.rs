@@ -197,6 +197,106 @@ pub struct RationalOpenStructuredHotBundleV3 {
 }
 
 /// Build one complete immutable structured-action artifact bundle.
+/// Pre-founding-safe inputs for one selected structured artifact bundle.
+///
+/// This is the same bundle the V3 builder emits, described without anything a
+/// Market could reach. Where V3 takes a `RepresentationDescriptorV2` -- whose
+/// identity is the SHA-256 of a preimage carrying the Core Market -- and an
+/// `AuthenticatedTokenBehaviorV2` -- which cannot be constructed before that
+/// descriptor exists -- this takes the representation WIDTH and the bare
+/// `TokenBehaviorSelectionV2` those two were consulted for.
+///
+/// # Why this narrowing is mechanical rather than a redesign
+///
+/// The V3 builder never baked the descriptor: it read `outcome_count()` from
+/// it and used the rest for runtime equality joins that refuse on mismatch.
+/// That is measured rather than asserted --
+/// `every_structured_artifact_is_byte_identical_across_two_markets` and
+/// `the_whole_five_action_program_set_has_one_identity_across_two_markets` (in
+/// `dclutch-structured-v2-operator`) compile complete bundles and the whole
+/// five-action program set from closures differing only in the Market and
+/// require every artifact byte, the `program_set_id` and the `config_id` to be
+/// identical. Since the emitted bytes provably do not move with the Market,
+/// removing the Market-bearing inputs cannot alter an artifact.
+///
+/// This type is therefore the SOLE AUTHOR of the bundle: the V3 entry point
+/// performs its descriptor joins and then delegates here, so the two cannot
+/// drift into two encoders of one artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalOpenStructuredSelectedBundleInputV6<'a> {
+    /// IssueStructured or UnwrapStructured.
+    pub action: RepresentationActionV2,
+    /// Exact fixed logical account widths.
+    pub fixed_data_lengths: &'a [u32],
+    /// Exact per-coordinate item widths.
+    pub item_data_lengths: [u32; 4],
+    /// Exact Registry-authenticated ProductBasis body.
+    pub product_basis: &'a [u8],
+    /// Representation coordinate count `K`, supplied rather than read off a
+    /// Market-bound descriptor.
+    pub representation_outcome_count: u32,
+    /// Immutable Realm/release selection, chosen before Market founding.
+    pub token_behavior_selection: TokenBehaviorSelectionV2,
+    /// Manifest-selected capability kind.
+    pub kind: [u8; 32],
+    /// Manifest-selected root-tail schema.
+    pub root_schema: [u8; 32],
+    /// Exact finalized lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
+    /// Manifest-selected capacity profile.
+    pub capacity_profile: [u8; 32],
+    /// Exact mutable root-tail width.
+    pub root_state_bytes: u32,
+}
+
+/// Build one structured artifact bundle with no Market in scope.
+pub fn build_rational_open_structured_selected_bundle_v6(
+    input: RationalOpenStructuredSelectedBundleInputV6<'_>,
+) -> Result<RationalOpenStructuredHotBundleV3> {
+    if !matches!(
+        input.action,
+        RepresentationActionV2::IssueStructured | RepresentationActionV2::UnwrapStructured
+    ) {
+        return Err(Error::ArtifactGeometry);
+    }
+    let basis =
+        ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountProfileInput)?;
+    let representation_width = usize::try_from(input.representation_outcome_count)
+        .map_err(|_| Error::AccountProfileInput)?;
+    if input.representation_outcome_count == 0
+        || input.representation_outcome_count > RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3
+        || input.fixed_data_lengths.len() != usize::from(RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3)
+        || input.fixed_data_lengths.get(4).copied() != u32::try_from(input.product_basis.len()).ok()
+        || input.fixed_data_lengths.get(29).copied()
+            != u32::try_from(input.product_basis.len()).ok()
+        || basis.basis_width() == 0
+    {
+        return Err(Error::AccountProfileInput);
+    }
+    structured_logical_accounts(representation_width)?;
+    build_structured_bundle_inner(
+        input.action,
+        input.fixed_data_lengths,
+        input.item_data_lengths,
+        input.representation_outcome_count,
+        input.token_behavior_selection,
+        input.kind,
+        input.root_schema,
+        input.lifecycle_policy,
+        input.capacity_profile,
+        input.root_state_bytes,
+    )
+}
+
+/// Build one structured artifact bundle from a Market-bound descriptor.
+///
+/// Identical output to [`build_rational_open_structured_selected_bundle_v6`],
+/// which it delegates to. What this entry point adds is the descriptor and
+/// Token-behavior admission joins: the width is READ from the descriptor rather
+/// than supplied, and the descriptor's identity, release set and Token program
+/// are required to agree with the authenticated behavior. Callers who hold a
+/// finalized descriptor should keep using this; callers compiling a release
+/// before the Market exists cannot, and want the V6 form.
 pub fn build_rational_open_structured_hot_bundle_v3(
     input: RationalOpenStructuredHotBundleInputV3<'_>,
 ) -> Result<RationalOpenStructuredHotBundleV3> {
@@ -206,12 +306,52 @@ pub fn build_rational_open_structured_hot_bundle_v3(
     ) {
         return Err(Error::ArtifactGeometry);
     }
+    // The descriptor and the authenticated behavior are consulted HERE, for the
+    // width and for the joins they exist to enforce, and then go no further:
+    // the artifacts themselves are authored by the V6 builder below.
     let representation_outcome_count = require_representation_width(input)?;
-    let account_profile = encode_account_profile(input, representation_outcome_count)?;
-    let lifecycle_policy = Vec::from(input.lifecycle_policy);
-    let request_profile = encode_request_profile(input.action, representation_outcome_count)?;
+    let selection = input.authenticated_token_behavior.selection();
+    if hash(&selection.to_bytes()).to_bytes() != input.authenticated_token_behavior.content_digest()
+    {
+        return Err(Error::ContentIdentity);
+    }
+    build_structured_bundle_inner(
+        input.action,
+        input.fixed_data_lengths,
+        input.item_data_lengths,
+        representation_outcome_count,
+        selection,
+        input.kind,
+        input.root_schema,
+        input.lifecycle_policy,
+        input.capacity_profile,
+        input.root_state_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_structured_bundle_inner(
+    action: RepresentationActionV2,
+    fixed_data_lengths: &[u32],
+    item_data_lengths: [u32; 4],
+    representation_outcome_count: u32,
+    token_behavior_selection: TokenBehaviorSelectionV2,
+    kind: [u8; 32],
+    root_schema: [u8; 32],
+    lifecycle_policy_bytes: &[u8],
+    capacity_profile: [u8; 32],
+    root_state_bytes: u32,
+) -> Result<RationalOpenStructuredHotBundleV3> {
+    let input_action = action;
+    let account_profile = encode_account_profile(
+        fixed_data_lengths,
+        item_data_lengths,
+        representation_outcome_count,
+    )?;
+    let lifecycle_policy = Vec::from(lifecycle_policy_bytes);
+    let request_profile = encode_request_profile(input_action, representation_outcome_count)?;
     let transition = encode_transition(representation_outcome_count)?;
-    let effect = encode_effect(input.action, representation_outcome_count)?;
+    let effect = encode_effect(input_action, representation_outcome_count)?;
     let strategy_value = ExecutionStrategyProgramV2::new(
         StrategyDispositionV2::Interpreted,
         content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
@@ -225,20 +365,15 @@ pub fn build_rational_open_structured_hot_bundle_v3(
     )
     .map_err(Error::ExecutionStrategy)?;
     let strategy = strategy_value.to_bytes();
-    let token_behavior_selection = input.authenticated_token_behavior.selection().to_bytes();
-    if hash(&token_behavior_selection).to_bytes()
-        != input.authenticated_token_behavior.content_digest()
-    {
-        return Err(Error::ContentIdentity);
-    }
+    let token_behavior_selection = token_behavior_selection.to_bytes();
     let lifecycle_id = digest(&lifecycle_policy)?;
     let descriptor = CapabilityProgramV4::new(
-        content(input.kind)?,
+        content(kind)?,
         content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
         content(OPEN_REPRESENTATION_HOT_REQUEST_SCHEMA_ID_V3)?,
-        content(input.root_schema)?,
+        content(root_schema)?,
         lifecycle_id,
-        content(input.capacity_profile)?,
+        content(capacity_profile)?,
         CapabilityArtifactsV4 {
             account_profile: artifact(
                 dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
@@ -259,7 +394,7 @@ pub fn build_rational_open_structured_hot_bundle_v3(
             )?,
             effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&effect)?.to_bytes())?,
         },
-        input.root_state_bytes,
+        root_state_bytes,
     )
     .map_err(Error::CapabilityDescriptor)?
     .encode();
@@ -274,10 +409,10 @@ pub fn build_rational_open_structured_hot_bundle_v3(
         effect,
         descriptor,
     };
-    validate_rational_open_structured_hot_bundle_for_authenticated_selection_v3(
-        &bundle,
-        input.authenticated_token_behavior,
-    )?;
+    // The Realm/release join the V3 entry point used to run here is now true by
+    // construction -- the bundle's config IS the selection it was built from --
+    // so what remains to check is the artifact geometry itself.
+    validate_rational_open_structured_hot_bundle_v3(&bundle)?;
     Ok(bundle)
 }
 
@@ -419,13 +554,14 @@ pub fn validate_rational_open_structured_hot_bundle_for_authenticated_selection_
 }
 
 fn encode_account_profile(
-    input: RationalOpenStructuredHotBundleInputV3<'_>,
+    fixed_data_lengths: &[u32],
+    item_data_lengths: [u32; 4],
     representation_outcome_count: u32,
 ) -> Result<Vec<u8>> {
     let representation_outcome_count =
         usize::try_from(representation_outcome_count).map_err(|_| Error::AccountProfileInput)?;
     let mut rules = Vec::with_capacity(structured_logical_accounts(representation_outcome_count)?);
-    for index in 0..input.fixed_data_lengths.len() {
+    for index in 0..fixed_data_lengths.len() {
         let writable = matches!(index, 0 | 16 | 25 | 26);
         let signer = index == 8;
         // A route alias carries NO privileges of its own: `authenticate` takes
@@ -456,8 +592,7 @@ fn encode_account_profile(
             4 => narrow_u32(BASIS_HEADER_BYTES_V3)?,
             28 | 29 | 31 | 35 => 0,
             _ if opaque => 0,
-            _ => *input
-                .fixed_data_lengths
+            _ => *fixed_data_lengths
                 .get(index)
                 .ok_or(Error::AccountProfileInput)?,
         };
@@ -471,7 +606,7 @@ fn encode_account_profile(
         ));
     }
     for _ in 0..representation_outcome_count {
-        for (index, length) in input.item_data_lengths.iter().copied().enumerate() {
+        for (index, length) in item_data_lengths.iter().copied().enumerate() {
             let opaque = matches!(index, 1..=3);
             rules.push(rule(
                 false,

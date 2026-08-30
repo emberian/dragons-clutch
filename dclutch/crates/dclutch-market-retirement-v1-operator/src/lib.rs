@@ -12,6 +12,10 @@ use dclutch_claims_svm::{
         ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestInputV1,
         ClaimsMarketClosureRequestV1,
     },
+    retirement_checkpoint_handoff_v1::{
+        CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
+        ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
+    },
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
@@ -20,7 +24,10 @@ use dclutch_custody_contract::{
     CustodyRequestV1, CustodyVaultSeedsV1, OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_market_core_codec::{
-    Action, CoreState, MarketCoreStateSeedsV2, Phase, REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1,
+    AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1,
+    AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1, AGGREGATE_RETIREMENT_FINISH_MAGIC_V1,
+    AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action, AggregateRetirementSuffixRequestV1,
+    CoreState, MarketCoreStateSeedsV2, Phase, REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1,
     RETIREMENT_CUSTODY_RECEIPT_COUNT_V1, RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1,
     RETIREMENT_ROLE_COUNT_V1, Request, RetirementBundleInputV1, RetirementBundleV1, STATE_BYTES,
 };
@@ -44,8 +51,11 @@ use dclutch_release_set_contract::{
 use dclutch_rent_contract::lifecycle_v2::{
     LifecycleAccountIdV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
 };
-use dclutch_resolution_codec::SourceClosureReceiptV2;
-pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
+use dclutch_resolution_codec::SourceClosureReceiptV3;
+use dclutch_resolution_core_v3_operator::authenticate_resolution_retirement_receipt_v3;
+pub use dclutch_resolution_core_v3_operator::{
+    Finality, Observation, ObservedAccount, ResolutionRetirementReceiptFactsV3,
+};
 use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
@@ -67,6 +77,15 @@ pub const MARKET_RETIREMENT_CORE_INSTRUCTION_BYTES_V1: usize = REQUEST_BYTES
 /// Exact top-level Registry account count for one aggregate retirement.
 pub const MARKET_RETIREMENT_ACCOUNT_COUNT_V1: usize =
     REGISTRY_RETIREMENT_CONTINUATION_PREFIX_ACCOUNTS_V1 + CORE_RETIREMENT_ACCOUNT_COUNT_V1 + 1;
+/// Exact Core prepare width for checkpointed retirement.
+pub const CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1: usize =
+    REQUEST_BYTES + RETIREMENT_BUNDLE_BYTES_V1 + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
+/// Exact direct Custody suffix width.
+pub const CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1: usize =
+    AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1 + CUSTODY_REQUEST_BYTES_V1;
+/// Exact direct terminal suffix width.
+pub const CHECKPOINT_RETIREMENT_FINISH_BYTES_V1: usize =
+    AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1 + REQUEST_BYTES + RETIREMENT_BUNDLE_BYTES_V1;
 
 const RETIREMENT_CANDIDATE_DOMAIN_V1: &[u8] = b"dclutch/market-retirement-candidate/v1";
 const RETIREMENT_ORDER_DOMAIN_V1: &[u8] = b"dclutch/market-retirement-order/v1";
@@ -157,12 +176,31 @@ pub struct MarketRetirementReportV1 {
     pub close_replay_authority: Pubkey,
     /// Core-derived RentV2 close authority.
     pub rent_close_authority: Pubkey,
-    /// Exact lamports credited through Claims, Custody, Core, and RentV2.
+    /// Exact Resolution-owned Source and subset-ledger closure facts.
+    pub resolution_facts: ResolutionRetirementReceiptFactsV3,
+    /// Exact post-Resolution lamports credited through Claims, Custody, Core, and RentV2.
     pub expected_refund_delta: u64,
     /// Runtime Claims width; never assumed equal to a compile-time `N`.
     pub claim_count: u32,
     /// Exact Registry continuation header.
     pub continuation: RegistryContinuationRequestV1,
+}
+
+/// Four packet-bounded instructions for one crash-resumable retirement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckpointMarketRetirementReportV1 {
+    /// Direct Core Claims handoff and first checkpoint commit.
+    pub prepare: Instruction,
+    /// Direct Core HoardPrincipal close and second checkpoint commit.
+    pub close_vault: Instruction,
+    /// Direct Core Custody replay close and third checkpoint commit.
+    pub close_replay: Instruction,
+    /// Direct Core checkpoint/Core/Rent terminal closure.
+    pub finish: Instruction,
+    /// Same finalized observation used for all four packets.
+    pub observation: Observation,
+    /// Exact terminal refund wallet delta.
+    pub expected_refund_delta: u64,
 }
 
 /// Stable refusal from chain observation, semantic join, or instruction construction.
@@ -192,7 +230,7 @@ pub enum MarketRetirementOperatorErrorV1 {
 struct AuthenticatedRetirementV1 {
     observation: Observation,
     market: CoreState,
-    source: SourceClosureReceiptV2,
+    source: ResolutionRetirementReceiptFactsV3,
     claims: LiabilityBasisMarketViewV2,
     replay: CustodyReplayV1,
 }
@@ -436,9 +474,233 @@ pub fn build_market_retirement_v1(
         close_vault_authority,
         close_replay_authority,
         rent_close_authority,
+        resolution_facts: authenticated.source,
         expected_refund_delta,
         claim_count: authenticated.claims.claim_count,
         continuation,
+    })
+}
+
+/// Construct the four packet-bounded retirement instructions from the same
+/// finalized snapshot used by the legacy aggregate builder.
+pub fn build_checkpoint_market_retirement_v1(
+    snapshot: &MarketRetirementSnapshotV1,
+) -> Result<CheckpointMarketRetirementReportV1, MarketRetirementOperatorErrorV1> {
+    let legacy = build_market_retirement_v1(snapshot)?;
+    let authenticated = authenticate_snapshot(snapshot)?;
+    let core_bytes: [u8; REQUEST_BYTES] = legacy
+        .direct_instruction
+        .data
+        .get(..REQUEST_BYTES)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(MarketRetirementOperatorErrorV1::Encoding)?;
+    let bundle_start = REQUEST_BYTES;
+    let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
+    let vault_start = claims_start + CLAIMS_MARKET_CLOSURE_REQUEST_BYTES_V1;
+    let replay_start = vault_start + CUSTODY_REQUEST_BYTES_V1;
+    let old_bundle = RetirementBundleV1::decode(
+        legacy
+            .direct_instruction
+            .data
+            .get(bundle_start..claims_start)
+            .ok_or(MarketRetirementOperatorErrorV1::Encoding)?,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
+    let old_claims = ClaimsMarketClosureRequestV1::decode(
+        legacy
+            .direct_instruction
+            .data
+            .get(claims_start..vault_start)
+            .ok_or(MarketRetirementOperatorErrorV1::Encoding)?,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
+    let handoff = ClaimsRetirementCheckpointHandoffRequestV1::new(old_claims.input())
+        .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?;
+    let handoff_bytes = handoff.to_bytes();
+    let close_vault_bytes = legacy
+        .direct_instruction
+        .data
+        .get(vault_start..replay_start)
+        .ok_or(MarketRetirementOperatorErrorV1::Encoding)?;
+    let close_replay_bytes = legacy
+        .direct_instruction
+        .data
+        .get(replay_start..)
+        .ok_or(MarketRetirementOperatorErrorV1::Encoding)?;
+    let old = old_bundle.input();
+    let bundle = RetirementBundleV1::new(RetirementBundleInputV1 {
+        market: old.market,
+        release_set: old.release_set,
+        rent_credit: old.rent_credit,
+        source_receipt_account: old.source_receipt_account,
+        claims_aggregate: old.claims_aggregate,
+        custody_replay: old.custody_replay,
+        hoard_vault: old.hoard_vault,
+        source_receipt_digest: old.source_receipt_digest,
+        claims_request_digest: hash(&handoff_bytes).to_bytes(),
+        custody_close_vault_request_digest: old.custody_close_vault_request_digest,
+        custody_close_replay_request_digest: old.custody_close_replay_request_digest,
+        core_prestate_digest: old.core_prestate_digest,
+        generation: old.generation,
+        source_closure_revision: old.source_closure_revision,
+        claims_pre_revision: old.claims_pre_revision,
+        claims_post_revision: old.claims_post_revision,
+        custody_pre_revision: old.custody_pre_revision,
+        custody_middle_revision: old.custody_middle_revision,
+        custody_post_revision: old.custody_post_revision,
+        expected_core_lamports: old.expected_core_lamports,
+    })
+    .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
+    let bundle_bytes = bundle.to_bytes();
+    let bundle_digest = hash(&bundle_bytes).to_bytes();
+    let source_digest = hash(&snapshot.source_receipt.data).to_bytes();
+    let handoff_receipt =
+        projected_claims_handoff_receipt(snapshot, authenticated, hash(&handoff_bytes).to_bytes())?;
+    let handoff_receipt_digest = hash(&handoff_receipt.to_bytes()).to_bytes();
+    let close_vault = CustodyRequestV1::decode(close_vault_bytes)
+        .map_err(|_| MarketRetirementOperatorErrorV1::Custody)?;
+    let close_replay = CustodyRequestV1::decode(close_replay_bytes)
+        .map_err(|_| MarketRetirementOperatorErrorV1::Custody)?;
+    let (vault_receipt_digest, replay_receipt_digest) = projected_custody_receipts(
+        snapshot,
+        authenticated,
+        close_vault,
+        close_vault_bytes,
+        close_replay,
+        close_replay_bytes,
+    )?;
+    let custody_refund = snapshot
+        .hoard_vault
+        .lamports
+        .checked_add(snapshot.custody_replay.lamports)
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
+    let expected_refund_delta = snapshot
+        .rent_credit
+        .lamports
+        .checked_add(snapshot.claims_aggregate.lamports)
+        .and_then(|value| value.checked_add(custody_refund))
+        .and_then(|value| value.checked_add(snapshot.market.lamports))
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
+    let post_resource_digest = hashv(&[
+        &RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1,
+        &[RETIREMENT_ROLE_COUNT_V1],
+        &[RETIREMENT_CUSTODY_RECEIPT_COUNT_V1],
+        snapshot.rent_credit.key.as_ref(),
+        &source_digest,
+        &handoff_receipt_digest,
+        &vault_receipt_digest,
+        &replay_receipt_digest,
+        &snapshot.market.lamports.to_le_bytes(),
+        &snapshot.claims_aggregate.lamports.to_le_bytes(),
+        &custody_refund.to_le_bytes(),
+        &expected_refund_delta.to_le_bytes(),
+    ])
+    .to_bytes();
+    let rent_seeds = LifecycleRentCoreCloseAuthoritySeedsV2::new(
+        LifecycleAccountIdV2::new(snapshot.rent_credit.key.to_bytes())
+            .map_err(|_| MarketRetirementOperatorErrorV1::Market)?,
+        post_resource_digest,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Market)?;
+    let credit = rent_seeds.credit().to_bytes();
+    let post = rent_seeds.post_resource_digest();
+    let rent_close_authority = Pubkey::find_program_address(
+        &[rent_seeds.domain(), credit.as_slice(), post.as_slice()],
+        &snapshot.core_program.key,
+    )
+    .0;
+    let claims_authority = caller_authority(
+        old.release_set,
+        snapshot.market.key,
+        hash(&core_bytes).to_bytes(),
+        &handoff_bytes,
+        snapshot.core_program.key,
+    )?;
+    let close_vault_authority = caller_authority(
+        old.release_set,
+        snapshot.market.key,
+        authenticated.replay.context,
+        close_vault_bytes,
+        snapshot.core_program.key,
+    )?;
+    let close_replay_authority = caller_authority(
+        old.release_set,
+        snapshot.market.key,
+        authenticated.replay.context,
+        close_replay_bytes,
+        snapshot.core_program.key,
+    )?;
+    let accounts = core_accounts(
+        snapshot,
+        claims_authority,
+        close_vault_authority,
+        close_replay_authority,
+        rent_close_authority,
+    );
+    let mut prepare_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1);
+    prepare_data.extend_from_slice(&core_bytes);
+    prepare_data.extend_from_slice(&bundle_bytes);
+    prepare_data.extend_from_slice(&handoff_bytes);
+    let prepare = Instruction {
+        program_id: snapshot.core_program.key,
+        accounts: accounts.clone(),
+        data: prepare_data,
+    };
+    let vault_suffix = AggregateRetirementSuffixRequestV1::new(
+        AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
+        snapshot.market.key.to_bytes(),
+        snapshot.claims_aggregate.key.to_bytes(),
+        bundle_digest,
+        source_digest,
+        hash(close_vault_bytes).to_bytes(),
+        1,
+        old.custody_pre_revision,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
+    let replay_suffix = AggregateRetirementSuffixRequestV1::new(
+        AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1,
+        snapshot.market.key.to_bytes(),
+        snapshot.claims_aggregate.key.to_bytes(),
+        bundle_digest,
+        source_digest,
+        hash(close_replay_bytes).to_bytes(),
+        2,
+        old.custody_middle_revision,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
+    let finish_suffix = AggregateRetirementSuffixRequestV1::new(
+        AGGREGATE_RETIREMENT_FINISH_MAGIC_V1,
+        snapshot.market.key.to_bytes(),
+        snapshot.claims_aggregate.key.to_bytes(),
+        bundle_digest,
+        source_digest,
+        [0; 32],
+        3,
+        old.custody_post_revision,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
+    let direct = |data: Vec<u8>| Instruction {
+        program_id: snapshot.core_program.key,
+        accounts: accounts.clone(),
+        data,
+    };
+    let mut vault_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1);
+    vault_data.extend_from_slice(&vault_suffix.to_bytes());
+    vault_data.extend_from_slice(close_vault_bytes);
+    let mut replay_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1);
+    replay_data.extend_from_slice(&replay_suffix.to_bytes());
+    replay_data.extend_from_slice(close_replay_bytes);
+    let mut finish_data = Vec::with_capacity(CHECKPOINT_RETIREMENT_FINISH_BYTES_V1);
+    finish_data.extend_from_slice(&finish_suffix.to_bytes());
+    finish_data.extend_from_slice(&core_bytes);
+    finish_data.extend_from_slice(&bundle_bytes);
+    Ok(CheckpointMarketRetirementReportV1 {
+        prepare,
+        close_vault: direct(vault_data),
+        close_replay: direct(replay_data),
+        finish: direct(finish_data),
+        observation: authenticated.observation,
+        expected_refund_delta,
     })
 }
 
@@ -493,7 +755,7 @@ fn authenticate_snapshot(
     authenticate_rent(snapshot, market)?;
     let source = authenticate_resolution(snapshot, market)?;
     let claims = authenticate_claims(snapshot, market)?;
-    let (replay, _) = authenticate_custody(snapshot, market)?;
+    let (replay, _) = authenticate_custody(snapshot, market, source)?;
     Ok(AuthenticatedRetirementV1 {
         observation,
         market,
@@ -782,21 +1044,56 @@ fn authenticate_rent(
 fn authenticate_resolution(
     snapshot: &MarketRetirementSnapshotV1,
     market: CoreState,
-) -> Result<SourceClosureReceiptV2, MarketRetirementOperatorErrorV1> {
-    let source = SourceClosureReceiptV2::decode(&snapshot.source_receipt.data)
+) -> Result<ResolutionRetirementReceiptFactsV3, MarketRetirementOperatorErrorV1> {
+    let source = SourceClosureReceiptV3::decode(&snapshot.source_receipt.data)
         .map_err(|_| MarketRetirementOperatorErrorV1::Resolution)?;
-    if snapshot.source_receipt.owner != snapshot.resolution_program.key
-        || snapshot.source_receipt.executable
+    let classified_total = source
+        .source_refund_lamports
+        .checked_add(source.ledger_remaining_native_principal)
+        .and_then(|value| value.checked_add(source.ledger_rent_lamports))
+        .and_then(|value| value.checked_add(source.ledger_lamport_surplus))
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
+    if classified_total != source.refund_lamports
         || source.receipt_account != snapshot.source_receipt.key.to_bytes()
         || source.market != snapshot.market.key.to_bytes()
         || source.generation != market.identity.generation
+        || source.source_material != market.identity.resolution_policy.to_bytes()
+        || source.capability_manifest != market.identity.capability_manifest.to_bytes()
         || source.beneficiary != snapshot.rent_credit.key.to_bytes()
+        || source.selector != market.terminal_winner
         || market.terminal_receipt.map(|value| value.to_bytes())
             != Some(source.terminal_certificate)
     {
         return Err(MarketRetirementOperatorErrorV1::Resolution);
     }
-    Ok(source)
+    let expected = ResolutionRetirementReceiptFactsV3 {
+        market: source.market,
+        generation: source.generation,
+        resolution_closure_receipt: source.receipt_account,
+        source_state: source.source_state,
+        source_material: source.source_material,
+        capability_manifest: source.capability_manifest,
+        terminal_certificate: source.terminal_certificate,
+        beneficiary: source.beneficiary,
+        selector: source.selector,
+        terminal_sequence: source.terminal_sequence,
+        source_state_digest: source.source_state_digest,
+        terminal_certificate_digest: source.terminal_certificate_digest,
+        funding_set_digest: source.funding_set_digest,
+        source_refund_lamports: source.source_refund_lamports,
+        ledger_remaining_native_principal: source.ledger_remaining_native_principal,
+        ledger_rent_lamports: source.ledger_rent_lamports,
+        ledger_lamport_surplus: source.ledger_lamport_surplus,
+        refund_lamports: source.refund_lamports,
+        closed_at: source.closed_at,
+    };
+    authenticate_resolution_retirement_receipt_v3(
+        &snapshot.source_receipt,
+        &snapshot.rent_sysvar,
+        snapshot.resolution_program.key,
+        expected,
+    )
+    .map_err(|_| MarketRetirementOperatorErrorV1::Resolution)
 }
 
 fn authenticate_claims(
@@ -839,6 +1136,7 @@ fn authenticate_claims(
 fn authenticate_custody(
     snapshot: &MarketRetirementSnapshotV1,
     market: CoreState,
+    source: ResolutionRetirementReceiptFactsV3,
 ) -> Result<(CustodyReplayV1, RealmV1), MarketRetirementOperatorErrorV1> {
     let replay = CustodyReplayV1::decode(&snapshot.custody_replay.data)
         .map_err(|_| MarketRetirementOperatorErrorV1::Custody)?;
@@ -894,8 +1192,7 @@ fn authenticate_custody(
         AuthenticatedRetirementV1 {
             observation: snapshot.market.observation,
             market,
-            source: SourceClosureReceiptV2::decode(&snapshot.source_receipt.data)
-                .map_err(|_| MarketRetirementOperatorErrorV1::Resolution)?,
+            source,
             claims: LiabilityBasisMarketViewV2::decode(&snapshot.claims_aggregate.data)
                 .map_err(|_| MarketRetirementOperatorErrorV1::Claims)?,
             replay,
@@ -1102,6 +1399,56 @@ fn projected_claims_receipt(
     ])
     .to_bytes();
     ClaimsMarketClosureReceiptV1::new(ClaimsMarketClosureReceiptInputV1 {
+        producer: snapshot.claims_program.key.to_bytes(),
+        release_set: authenticated
+            .market
+            .identity
+            .selected_release_set
+            .to_bytes(),
+        market: snapshot.market.key.to_bytes(),
+        aggregate: snapshot.claims_aggregate.key.to_bytes(),
+        rent_credit: snapshot.rent_credit.key.to_bytes(),
+        request_digest,
+        pre_resource_digest,
+        post_resource_digest,
+        generation: authenticated.market.identity.generation,
+        pre_revision: authenticated.claims.revision,
+        post_revision,
+        liability_units: 0,
+        refund_lamports: snapshot.claims_aggregate.lamports,
+        claim_count: authenticated.claims.claim_count,
+    })
+    .map_err(|_| MarketRetirementOperatorErrorV1::Claims)
+}
+
+fn projected_claims_handoff_receipt(
+    snapshot: &MarketRetirementSnapshotV1,
+    authenticated: AuthenticatedRetirementV1,
+    request_digest: [u8; 32],
+) -> Result<ClaimsRetirementCheckpointHandoffReceiptV1, MarketRetirementOperatorErrorV1> {
+    let post_revision = authenticated
+        .claims
+        .revision
+        .checked_add(1)
+        .ok_or(MarketRetirementOperatorErrorV1::Arithmetic)?;
+    let pre_resource_digest = hashv(&[
+        &CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1,
+        snapshot.claims_aggregate.key.as_ref(),
+        &snapshot.claims_aggregate.data,
+    ])
+    .to_bytes();
+    let post_resource_digest = hashv(&[
+        CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
+        snapshot.claims_aggregate.key.as_ref(),
+        snapshot.core_program.key.as_ref(),
+        AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1
+            .to_le_bytes()
+            .as_slice(),
+        snapshot.claims_aggregate.lamports.to_le_bytes().as_slice(),
+        snapshot.rent_credit.lamports.to_le_bytes().as_slice(),
+    ])
+    .to_bytes();
+    ClaimsRetirementCheckpointHandoffReceiptV1::new(ClaimsMarketClosureReceiptInputV1 {
         producer: snapshot.claims_program.key.to_bytes(),
         release_set: authenticated
             .market

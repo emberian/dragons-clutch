@@ -25,7 +25,7 @@ Sources, in the order the wire is assembled:
 
 | name | value |
 | --- | --- |
-| `GENERIC_MARKET_FOUNDING_MAGIC_V1` | `DCLTGMF1` |
+| `GENERIC_MARKET_FOUNDING_MAGIC_V3` | `DCLTGMF3` |
 | `GENERIC_FOUNDING_REQUEST_MAGIC_V1` | `DCLTGFQ1` |
 | `GENERIC_FOUNDING_ACK_MAGIC_V1` | `DCLTGFA1` |
 | `GENERIC_FOUNDING_FUNDING_LIST_DOMAIN_V1` | `dclutch/generic-founding-funding-list/v1` |
@@ -34,20 +34,22 @@ Sources, in the order the wire is assembled:
 
 | name | value |
 | --- | ---: |
-| `GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1` | 8 |
-| `GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1` | 4 |
-| `GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1` | 4 |
+| `GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3` | 5 |
+| `GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3` | 13 |
+| `GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3` | 4 |
+| `GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3` | 4 |
 | `GENERIC_FOUNDING_FOUND_RAW_INDEX_V1` | 0 |
 | `GENERIC_FOUNDING_LOCK_RAW_INDEX_V1` | 1 |
 | `GENERIC_FOUNDING_REALIZE_RAW_INDEX_V1` | 2 |
 | `PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1` | 14 |
 | `PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1` | 12 |
-| `GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1` | 34 |
+| `GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1` | 26 |
 | `GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1` | 15 |
-| `CLAIMS_FOUNDING_ACCOUNT_COUNT_V5` | 32 |
+| `CLAIMS_FOUNDING_ACCOUNT_COUNT_V5` | 31 |
+| `GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3` | 125 |
 | `CORE_FOUND_MARKET_INDEX_V1` | 1 |
-| `CORE_FOUND_CORE_PROGRAM_INDEX_V1` | 19 |
-| `CORE_FOUND_TRADING_PROGRAM_INDEX_V1` | 31 |
+| `CORE_FOUND_CORE_PROGRAM_INDEX_V1` | 13 |
+| `CORE_FOUND_TRADING_PROGRAM_INDEX_V1` | 24 |
 | `CORE_FOUND_PERMIT_SUFFIX_INDEX_V1` | 0 |
 | `CORE_FOUND_CLAIMS_PROGRAM_SUFFIX_INDEX_V1` | 7 |
 | `GENERIC_FOUNDING_REQUEST_BYTES_V1` | 400 |
@@ -78,7 +80,7 @@ The renderer did not recognize these statement shapes, so they are
 shown verbatim rather than dropped.
 
 ```ts
-export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1 = 5 as const;
+export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3 = 5 as const;
 
 /** Index of each readonly request account inside the frame prefix. */
 ```
@@ -88,7 +90,7 @@ export const GENERIC_FOUNDING_CLAIMS_RAW_INDEX_V1 = 3 as const;
 /** Stage account widths. The frame is exactly the concatenation of these. */
 ```
 ```ts
-export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
+export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 21 as const;
 
 /**
  * Frame width at `funding_count = 0`, restated by the reference client.
@@ -99,17 +101,17 @@ export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
  */
 ```
 ```ts
-export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1 = 135 as const;
+export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 24 as const;
 
 /** Exact distinct writable keys the outer requires, asserted by the client. */
 ```
 ```ts
-export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V1 = 11 as const;
+export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 12 as const;
 
-/** Agave `increase_tx_account_lock_limit`; the fee payer is the key outside the frame. */
+/** Devnet transaction account-lock limit without the raise feature. */
 ```
 ```ts
-export const MAX_TX_ACCOUNT_LOCKS_V1 = 128 as const;
+export const MAX_TX_ACCOUNT_LOCKS_V2 = 64 as const;
 
 /** Indexes into the Found stage that the route itself dereferences. */
 ```
@@ -167,9 +169,8 @@ export const GENERIC_FOUNDING_STAGES_V1 = Object.freeze([
  * ComputeBudget declarations the reference client puts on every transaction.
  *
  * `bounded_instructions` owns these and refuses a caller-supplied duplicate.
- * The default per-transaction ceiling is 200,000 CU and Found31 alone spends
- * over a million, so a builder that omits the limit does not produce a slow
- * transaction -- it produces one that cannot complete.
+ * The configured limit is part of the emitted bytes, not a performance claim.
+ * Current V2 routes require their own pass-count and 20-seed mean evidence.
  */
 ```
 ```ts

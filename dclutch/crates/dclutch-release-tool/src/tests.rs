@@ -124,6 +124,119 @@ fn pyth_semantic_preimage() -> Result<Vec<u8>> {
 }
 
 #[test]
+fn checked_redeployment_reuses_build_facts_but_mints_exact_loader_identity() -> Result<()> {
+    let basis_fixture = Fixture::new(
+        "unowned",
+        b"dclutch/test/build-basis-semantic/v1".to_vec(),
+        None,
+    )?;
+    let basis = build_checked_release(basis_fixture.evidence())?;
+    let semantic = b"dclutch/test/redeployed-semantic/v1";
+    let program_id = [21; 32];
+    let programdata_id = [22; 32];
+    let authority = [23; 32];
+    let mut program = vec![0_u8; LOADER_V3_PROGRAM_BYTES];
+    put(&mut program, 0, &2_u32.to_le_bytes())?;
+    put(&mut program, 4, &programdata_id)?;
+    let mut programdata =
+        vec![0_u8; LOADER_V3_PROGRAMDATA_METADATA_BYTES + basis_fixture.elf.len()];
+    put(&mut programdata, 0, &3_u32.to_le_bytes())?;
+    put(&mut programdata, 4, &88_u64.to_le_bytes())?;
+    put(&mut programdata, 12, &[1])?;
+    put(&mut programdata, 13, &authority)?;
+    put(
+        &mut programdata,
+        LOADER_V3_PROGRAMDATA_METADATA_BYTES,
+        &basis_fixture.elf,
+    )?;
+    let assumptions = vec![
+        "deployment Loader snapshots are exact localhost account bytes".to_owned(),
+        "source and toolchain facts are inherited from the checked build basis".to_owned(),
+    ];
+
+    let rebound = build_redeployed_checked_release(RedeployedReleaseEvidenceV1 {
+        build_basis: &basis,
+        elf: &basis_fixture.elf,
+        semantic_preimage: semantic,
+        program_id,
+        programdata_id,
+        program_account_data: &program,
+        programdata_account_data: &programdata,
+        deployment_assumptions: &assumptions,
+    })?;
+
+    assert_eq!(rebound.program_id(), program_id);
+    assert_eq!(rebound.programdata_id(), programdata_id);
+    assert_eq!(rebound.loader_program_id(), basis.loader_program_id());
+    assert_eq!(rebound.deployment_slot(), 88);
+    assert_eq!(rebound.upgrade_authority(), Some(authority));
+    assert_eq!(rebound.artifact_digest(), basis.artifact_digest());
+    assert_ne!(rebound.semantic_release_id(), basis.semantic_release_id());
+    assert_ne!(rebound.checked_release_id()?, basis.checked_release_id()?);
+    let rendered = rebound.render_text()?;
+    assert!(rendered.contains("source_revision=source-commit-abc\n"));
+    assert!(rendered.contains(
+        "assumption=source and toolchain facts are inherited from the checked build basis\n"
+    ));
+    Ok(())
+}
+
+#[test]
+fn checked_redeployment_refuses_artifact_or_loader_substitution() -> Result<()> {
+    let basis_fixture = Fixture::new(
+        "unowned",
+        b"dclutch/test/build-basis-semantic/v1".to_vec(),
+        None,
+    )?;
+    let basis = build_checked_release(basis_fixture.evidence())?;
+    let mut program = vec![0_u8; LOADER_V3_PROGRAM_BYTES];
+    put(&mut program, 0, &2_u32.to_le_bytes())?;
+    put(&mut program, 4, &[22; 32])?;
+    let mut programdata =
+        vec![0_u8; LOADER_V3_PROGRAMDATA_METADATA_BYTES + basis_fixture.elf.len()];
+    put(&mut programdata, 0, &3_u32.to_le_bytes())?;
+    put(
+        &mut programdata,
+        LOADER_V3_PROGRAMDATA_METADATA_BYTES,
+        &basis_fixture.elf,
+    )?;
+    let assumptions = vec!["deployment observation is exact".to_owned()];
+    let evidence = |elf| RedeployedReleaseEvidenceV1 {
+        build_basis: &basis,
+        elf,
+        semantic_preimage: b"dclutch/test/redeployed-semantic/v1",
+        program_id: [21; 32],
+        programdata_id: [22; 32],
+        program_account_data: &program,
+        programdata_account_data: &programdata,
+        deployment_assumptions: &assumptions,
+    };
+    let mut other_elf = basis_fixture.elf.clone();
+    *other_elf.last_mut().expect("ELF byte") ^= 1;
+    assert_eq!(
+        build_redeployed_checked_release(evidence(&other_elf)),
+        Err(Error::DeployedElfMismatch)
+    );
+
+    let mut aliased = evidence(&basis_fixture.elf);
+    aliased.program_id = basis.loader_program_id();
+    assert_eq!(
+        build_redeployed_checked_release(aliased),
+        Err(Error::AliasedLoaderIdentity)
+    );
+
+    let mut wrong_link = program.clone();
+    put(&mut wrong_link, 4, &[24; 32])?;
+    let mut wrong = evidence(&basis_fixture.elf);
+    wrong.program_account_data = &wrong_link;
+    assert_eq!(
+        build_redeployed_checked_release(wrong),
+        Err(Error::ProgramDataLinkMismatch)
+    );
+    Ok(())
+}
+
+#[test]
 fn checked_release_round_trips_and_text_surfaces_every_boundary() -> Result<()> {
     let fixture = Fixture::capability()?;
     let release = build_checked_release(fixture.evidence())?;
@@ -513,8 +626,11 @@ fn offline_loader_construction_feeds_the_checked_release_path_exactly() -> Resul
         build_checked_release(hostile),
         Err(Error::ProgramDataLinkMismatch)
     );
-    let upgradeable =
-        loader_v3_programdata_account_data_v1(&elf, 5, LoaderV3AuthorityStateV1::Upgradeable([2; 32]))?;
+    let upgradeable = loader_v3_programdata_account_data_v1(
+        &elf,
+        5,
+        LoaderV3AuthorityStateV1::Upgradeable([2; 32]),
+    )?;
     let mutable = ReleaseEvidenceV1 {
         programdata_account_data: &upgradeable,
         ..evidence
@@ -539,10 +655,16 @@ fn a_revoked_program_keeps_its_former_authority_and_the_release_path_takes_it() 
         531,
         LoaderV3AuthorityStateV1::Revoked(former),
     )?;
-    let never =
-        loader_v3_programdata_account_data_v1(&elf, 531, LoaderV3AuthorityStateV1::NeverAuthorized)?;
-    let upgradeable =
-        loader_v3_programdata_account_data_v1(&elf, 531, LoaderV3AuthorityStateV1::Upgradeable(former))?;
+    let never = loader_v3_programdata_account_data_v1(
+        &elf,
+        531,
+        LoaderV3AuthorityStateV1::NeverAuthorized,
+    )?;
+    let upgradeable = loader_v3_programdata_account_data_v1(
+        &elf,
+        531,
+        LoaderV3AuthorityStateV1::Upgradeable(former),
+    )?;
 
     // The bytes, exactly. Byte 12 is the Option tag; [13..45] is the key;
     // the ELF starts at 45 in all three states, which is why the loader can

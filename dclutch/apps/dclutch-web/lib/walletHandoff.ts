@@ -189,6 +189,9 @@ type HandoffWallet = Readonly<{
   signMessage?(message: Uint8Array): Promise<Uint8Array>;
 }>;
 
+type MutationAdmissionClient = Pick<SolanaRpcClient, 'assertMutationCluster'>;
+type MutationSubmissionClient = MutationAdmissionClient & Pick<SolanaRpcClient, 'sendRawTransaction'>;
+
 function handoff(candidate: unknown): HandoffWallet {
   if (candidate === null || typeof candidate !== 'object' || !('connect' in candidate) || typeof candidate.connect !== 'function') {
     throw new Error('no connected browser wallet handoff was supplied');
@@ -208,10 +211,12 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
 
 /** Request one detached maker signature after a user-triggered wallet action. */
 export async function requestWalletMessageSignatureV1(
+  client: MutationAdmissionClient,
   candidate: unknown,
   expectedMaker: string,
   message: Uint8Array,
 ): Promise<Uint8Array> {
+  await client.assertMutationCluster();
   const wallet = handoff(candidate);
   if (typeof wallet.signMessage !== 'function') throw new Error('wallet does not expose signMessage');
   const canonicalMaker = new PublicKey(expectedMaker).toBase58();
@@ -224,10 +229,12 @@ export async function requestWalletMessageSignatureV1(
 
 /** Request a wallet signature without allowing the wallet to rewrite the v0 message. */
 export async function requestWalletTransactionSignatureV1(
+  client: MutationAdmissionClient,
   candidate: unknown,
   transaction: VersionedTransaction,
   expectedSigner: string,
 ): Promise<WalletSignedTransactionV1> {
+  await client.assertMutationCluster();
   const wallet = handoff(candidate);
   if (typeof wallet.signTransaction !== 'function') throw new Error('wallet does not expose signTransaction');
   const canonicalSigner = new PublicKey(expectedSigner).toBase58();
@@ -257,11 +264,24 @@ export async function requestWalletTransactionSignatureV1(
 
 /** Submit only an already complete signed packet after a separate user action. */
 export async function submitSignedTransactionV1(
-  client: Pick<SolanaRpcClient, 'sendRawTransaction'>,
-  transaction: VersionedTransaction,
+  client: MutationSubmissionClient,
+  signedWireBytes: Uint8Array,
 ): Promise<string> {
+  if (!(signedWireBytes instanceof Uint8Array) || signedWireBytes.length === 0
+      || signedWireBytes.length > SOLANA_PACKET_BYTES) {
+    throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
+  }
+  const exactWire = new Uint8Array(signedWireBytes);
+  let transaction: VersionedTransaction;
+  try { transaction = VersionedTransaction.deserialize(exactWire); } catch {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
+  if (!sameBytes(transaction.serialize(), exactWire)) {
+    throw new Error('signed transaction is not one canonical Solana packet');
+  }
   if (transaction.signatures.length === 0 || transaction.signatures.some((signature) => signature.every((byte) => byte === 0))) {
     throw new Error('transaction is not fully signed');
   }
-  return client.sendRawTransaction(transaction.serialize());
+  await client.assertMutationCluster();
+  return client.sendRawTransaction(exactWire, { maxRetries: 0 });
 }

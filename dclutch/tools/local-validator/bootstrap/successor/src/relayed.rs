@@ -46,7 +46,6 @@ use dclutch_relay_contract::{
     },
 };
 use dclutch_release_set_contract::ProgramIdentityV1;
-use dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V4;
 use dclutch_source_contract::{
     BONDING_CURVE_FLOOR_DERIVATION_ID_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
     CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1, CHAIN_STATE_DEFAULT_KAPPA_NUMERATOR_V1,
@@ -54,11 +53,12 @@ use dclutch_source_contract::{
     PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, ProviderReleaseV1,
     RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1, RoundingBoundary,
     SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceAccessProfile, SourceCapacityProfileV1,
-    SourceMaterialV2, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
+    SourceMaterialV3, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
     admit_founding_principal,
 };
 use solana_sdk_ids::sysvar;
 
+use crate::direct_market::{DirectMarketCompilerInputV1, attach_direct_market_capability_v1};
 use crate::market::{
     compile_linked_basis_v3, demo_id, record_identity, semantic_basis_identity_v3,
 };
@@ -204,7 +204,7 @@ pub(crate) fn window_choice(now_unix_seconds: i64, success: bool) -> WindowChoic
     }
 }
 
-const MAX_CLUSTER_SKEW_SECONDS: u64 = 120;
+pub(crate) const MAX_CLUSTER_SKEW_SECONDS: u64 = 120;
 
 /// Compile the whole relayed market input from the run-time facts.
 pub(crate) fn relayed_market_input(
@@ -212,6 +212,7 @@ pub(crate) fn relayed_market_input(
     relayer_pubkey: [u8; 32],
     window_choice: &WindowChoiceV1,
     venue: &RelayedVenueFactsV1,
+    direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<RelayedMarketFactsV1> {
     let set_id = account_set_id(venue)?;
 
@@ -445,15 +446,16 @@ pub(crate) fn relayed_market_input(
         ));
     }
 
-    // 8. SourceMaterialV2 with NO recovery policy: the §12.7 shape whose
+    // 8. SourceMaterialV3 with a bounded floor and no recovery policy: the §12.7 shape whose
     //    silent-provider path is the funded deadline walk.
-    let material = SourceMaterialV2::new(
+    let material = SourceMaterialV3::bounded_by_floor(
         source_content(product_record_digest)?,
         source_content(source_spec_digest)?,
         source_content(window_digest)?,
         source_content(statistic_digest)?,
         None,
         source_content(SOURCE_FAILURE_POLICY_RELEASE_ID_V2)?,
+        source_content(manipulation_floor_digest)?,
     );
     let material_digest: [u8; 32] = Sha256::digest(material.to_bytes()).into();
 
@@ -478,7 +480,10 @@ pub(crate) fn relayed_market_input(
     .map_err(|error| Error::new(format!("funding amounts: {error:?}")))?;
     let quote = FundingQuoteV1::new(amounts, None)
         .map_err(|error| Error::new(format!("funding quote: {error:?}")))?;
-    let release = capability_content(RESOLUTION_CONTROLLER_RELEASE_ID_V4)?;
+    // The checked Direct compiler is the semantic owner for the activated
+    // Resolution role. Reuse that exact release identity so the relayed
+    // controller ledger cannot drift behind the selected executable.
+    let release = capability_content(direct.resolution_release)?;
     let mut entries_input: Vec<([u8; 32], [u8; 32])> = vec![
         (
             demo_id("relayed/capability/recovery-companion", &[&set_id]),
@@ -519,9 +524,10 @@ pub(crate) fn relayed_market_input(
     CapabilityManifestV1::encode_into(&entries, &mut manifest)
         .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
 
-    let input = MarketRunInput {
+    let mut input = MarketRunInput {
         generation: 1,
         collateral_display_decimals: 6,
+        local_participant_fixture_liquidity_atoms: 0,
         initial_collateral_atoms: 1_000_000_000,
         product_id: hex(&product_identity),
         coordinate_domain_id: hex(&coordinate_domain),
@@ -539,6 +545,8 @@ pub(crate) fn relayed_market_input(
         statistic_spec_id: hex(&statistic_digest),
         failure_policy_release_id: hex(&SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
         source_spec_hex: hex(&source_spec_bytes),
+        source_capacity_profile_hex: hex(&capacity.to_bytes()),
+        manipulation_floor_hex: hex(&manipulation_floor_bytes),
         window_spec_hex: hex(&window_bytes),
         statistic_spec_hex: hex(&statistic_bytes),
         provider_release_hex: hex(&provider_release_bytes),
@@ -547,10 +555,14 @@ pub(crate) fn relayed_market_input(
         // the artifact-release schema by reading the provider release's own
         // extension.
         pyth_adapter_config_hex: hex(&venue_release_bytes),
+        pyth_sponsored_push_release_hex: String::new(),
         recovery_policy_hex: String::new(),
         capability_manifest_hex: hex(&manifest),
+        direct_capability: None,
+        selected_capability: None,
         linked_basis_hex: hex(&linked_basis),
     };
+    attach_direct_market_capability_v1(&mut input, direct)?;
     crate::market::validate_market_input(&input)?;
 
     // The market founds UNDER the capacity predicate, host-side (the on-chain
@@ -638,4 +650,69 @@ fn product_content(bytes: [u8; 32]) -> Result<dclutch_product_runtime_v2::Conten
 fn capability_content(bytes: [u8; 32]) -> Result<CapabilityContentId> {
     CapabilityContentId::new(bytes)
         .map_err(|error| Error::new(format!("capability identity: {error:?}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direct_market::{DirectDeploymentWidthsV1, DirectMarketCompilerOwnedV1};
+
+    #[test]
+    fn relayed_manifest_uses_the_authenticated_resolution_release() {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037)
+                .expect("test deployment widths"),
+        );
+        let compiler = direct.compiler();
+        let facts = relayed_market_input(
+            registry,
+            [0x42; 32],
+            &WindowChoiceV1 {
+                start_unix_seconds: 1_800_000_000,
+                end_unix_seconds: 1_800_003_600,
+                max_age_seconds: 900,
+            },
+            &RelayedVenueFactsV1 {
+                program: [0x51; 32],
+                programdata: [0x52; 32],
+                pool: [0x53; 32],
+                elf_digest: [0x54; 32],
+                deployment_slot: 99,
+                upgrade_authority: [0x55; 32],
+            },
+            compiler,
+        )
+        .expect("relayed market input");
+        assert!(facts.input.pyth_sponsored_push_release_hex.is_empty());
+        assert!(
+            serde_json::to_value(&facts.input)
+                .expect("relayed JSON")
+                .get("pyth_sponsored_push_release_hex")
+                .is_none(),
+            "the optional sponsored field must not change legacy relayed inputs"
+        );
+        let manifest = CapabilityManifestV1::decode(&facts.manifest_bytes)
+            .expect("relayed capability manifest");
+        assert_eq!(manifest.entry_count(), 3);
+        for entry_index in 0..manifest.entry_count() {
+            assert_eq!(
+                manifest
+                    .entry(entry_index)
+                    .expect("controller entry")
+                    .release_id()
+                    .to_bytes(),
+                compiler.resolution_release,
+            );
+            assert_ne!(
+                manifest
+                    .entry(entry_index)
+                    .expect("controller entry")
+                    .release_id()
+                    .to_bytes(),
+                dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            );
+        }
+    }
 }

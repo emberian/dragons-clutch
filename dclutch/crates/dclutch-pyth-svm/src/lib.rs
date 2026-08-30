@@ -26,6 +26,8 @@ pub mod receiver_config;
 pub mod release;
 /// Exact borrowed Wormhole router account views used by Pyth Receiver.
 pub mod router_accounts;
+/// Immutable release and account facts for sponsored Solana push feeds.
+pub mod sponsored_push;
 /// Provenance-pinned synthetic-local release facts, never production catalog data.
 #[cfg(feature = "synthetic-local-fixture")]
 pub mod synthetic_fixture;
@@ -51,6 +53,11 @@ pub use router_accounts::{
     ENCODED_VAA_DISCRIMINATOR_V1, ENCODED_VAA_HEADER_BYTES_V1, ENCODED_VAA_VERIFIED_STATUS_V1,
     GUARDIAN_ADDRESS_BYTES_V1, GUARDIAN_SET_HEADER_BYTES_V1, GuardianSetV1, RouterAccountErrorV1,
     VerifiedEncodedVaaV1,
+};
+pub use sponsored_push::{
+    PYTH_SPONSORED_PUSH_RELEASE_SCHEMA_ID_V1, PYTH_SPONSORED_PUSH_RELEASE_V1_ENCODED_LEN,
+    PythSponsoredPushReleaseV1, PythSponsoredPushReleaseV1Error, PythSponsoredPushReleaseV1Input,
+    devnet_sponsored_sol_usd_release_v1,
 };
 #[cfg(feature = "synthetic-local-fixture")]
 pub use synthetic_fixture::{

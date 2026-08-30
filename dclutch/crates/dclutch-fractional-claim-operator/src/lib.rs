@@ -10,12 +10,16 @@
 //! input and are rechecked by the onchain child route.
 
 mod artifacts;
+mod artifacts_v4;
+mod atomic_v3;
 mod claims;
 mod composition;
 mod exposure_action_v2;
 mod hot_v2;
 mod records;
+mod selected_release_v4;
 mod token2022;
+mod topology_v3;
 
 use dclutch_fractional_claim_contract::{
     FractionalActionV1, FractionalArtifactBundleV1, FractionalFamilyRequestInputV1,
@@ -42,6 +46,16 @@ pub use artifacts::{
     FractionalArtifactCompilerErrorV1, FractionalClaimsAccountRuleV1,
     FractionalFinalizedArtifactBundleV1, build_fractional_composed_artifact_bundle_v1,
     build_fractional_finalized_artifact_bundle_v1,
+};
+pub use artifacts_v4::{
+    FRACTIONAL_COMMON_IDENTITIES_V4, FRACTIONAL_COMMON_SCALARS_V4,
+    FRACTIONAL_HOT_INJECTED_ACCOUNT_COUNT_V4, FractionalSelectedArtifactErrorV4,
+    FractionalSelectedBundleInputV4, FractionalSelectedBundleV4, FractionalSelectedProfileInputV4,
+    build_fractional_selected_bundle_v4, validate_fractional_selected_bundle_v4,
+};
+pub use atomic_v3::{
+    build_fractional_atomic_claims_instruction_v3,
+    build_fractional_terminal_atomic_claims_instruction_v3,
 };
 pub use claims::{
     FractionalClaimsPositionSnapshotV1, FractionalSignedDeltaChainObservationV1,
@@ -78,6 +92,15 @@ pub use records::{
     FractionalPreparedChainArtifactsV1, authenticate_fractional_chain_artifacts_v1,
     prepare_fractional_chain_artifacts_v1,
 };
+pub use selected_release_v4::{
+    FRACTIONAL_MAX_SETTLEABLE_WIDTH_V4, FRACTIONAL_SELECTED_ACTION_COUNT_V4,
+    FRACTIONAL_SELECTED_ACTIONS_V4, FRACTIONAL_SELECTED_PUBLICATION_BYTES_V4,
+    FRACTIONAL_SELECTED_PUBLICATION_MAGIC_V4, FractionalFrameWidthsV4,
+    FractionalPublicationRecordV1, FractionalSelectedPublicationV4,
+    FractionalSelectedReleaseErrorV4,
+    FractionalSelectedReleaseInputV4, FractionalSelectedReleaseV4, fractional_claims_frame_spec_v4,
+    fractional_selected_release_v4, validate_fractional_selected_release_v4,
+};
 pub use token2022::{
     FractionalDenominatorExecutionV1, FractionalLifecycleRentClosePlanV2, FractionalMintSnapshotV1,
     FractionalPhysicalTokenEffectsV1, FractionalPhysicalTokenObservationV1,
@@ -86,6 +109,11 @@ pub use token2022::{
     FractionalTokenEffectV1, build_fractional_physical_unsigned_v0_from_chain_v1,
     plan_fractional_lifecycle_rent_close_v2, plan_fractional_retirement_token_effects_v1,
     plan_fractional_token_effect_v1,
+};
+pub use topology_v3::{
+    FRACTIONAL_CHILD_ENVELOPE_BYTES_V3, FRACTIONAL_DEVNET_MAX_ACCOUNT_LOCKS_V3,
+    FractionalFrameCensusV3, FractionalFrameKindV3, TOKEN_2022_TRANSFER_CHECKED_BYTES,
+    admit_fractional_devnet_locks_v3, fractional_frame_census_v3,
 };
 
 /// Exact semantic coordinates obtained from authenticated chain state.

@@ -28,9 +28,9 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    PROJECTED_CUSTODY_STATE_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    PROJECTED_CUSTODY_STATE_BYTES_V2, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
     ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1, ProjectedCustodyPhaseV1,
-    ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+    ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, Request, Role, SERIES_FOUND_POST_RESOURCE_DIGEST_DOMAIN_V1,
@@ -67,7 +67,7 @@ use solana_sdk_ids::{system_program, sysvar};
 use crate::{
     CoreSbfError,
     found::{self, PreparedFound},
-    frame::{FOUND_ACCOUNT_COUNT_V2, FoundAccounts, require_distinct},
+    frame::{FOUND_ACCOUNT_COUNT_V3, FoundAccounts, require_distinct},
     generic_founding_v1::{
         GenericFoundingPermitInputV1, GenericFoundingPermitPlanV1,
         build_permit_plan as build_generic_permit_plan, create_permit as create_generic_permit,
@@ -77,9 +77,13 @@ use crate::{
 };
 
 /// Fixed account count before the ordered FundingState prefix and Claims suffix.
-pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V2 + 11;
-/// Exact evidence suffix after the ordered FundingState accounts for Found.
-pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1: usize = 15;
+pub const SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1: usize = FOUND_ACCOUNT_COUNT_V3 + 11;
+/// Exact V2 evidence suffix after the ordered FundingState accounts for Found.
+///
+/// Found37 already authenticates the linked basis pair. V2 therefore has one
+/// physical observation of that finalized record rather than repeating its
+/// raw/staging accounts in this suffix.
+pub const SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2: usize = 13;
 const MAXIMUM_FUNDING_STATES_V1: usize = 16;
 
 struct SeriesConsumeAccounts<'accounts, 'info> {
@@ -105,8 +109,6 @@ struct SeriesFoundSuffix<'accounts, 'info> {
     hoard: &'accounts AccountInfo<'info>,
     funding_source: &'accounts AccountInfo<'info>,
     funding_source_replay: &'accounts AccountInfo<'info>,
-    linked_basis_raw: &'accounts AccountInfo<'info>,
-    linked_basis_staging: &'accounts AccountInfo<'info>,
     claims_program: &'accounts AccountInfo<'info>,
     claims_programdata: &'accounts AccountInfo<'info>,
     custody_program: &'accounts AccountInfo<'info>,
@@ -119,7 +121,7 @@ struct SeriesFoundSuffix<'accounts, 'info> {
 
 impl<'accounts, 'info> SeriesFoundSuffix<'accounts, 'info> {
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
-        if accounts.len() != SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1 {
+        if accounts.len() != SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2 {
             return Err(CoreSbfError::AccountFrame);
         }
         let value = Self {
@@ -128,16 +130,14 @@ impl<'accounts, 'info> SeriesFoundSuffix<'accounts, 'info> {
             hoard: account(accounts, 2)?,
             funding_source: account(accounts, 3)?,
             funding_source_replay: account(accounts, 4)?,
-            linked_basis_raw: account(accounts, 5)?,
-            linked_basis_staging: account(accounts, 6)?,
-            claims_program: account(accounts, 7)?,
-            claims_programdata: account(accounts, 8)?,
-            custody_program: account(accounts, 9)?,
-            custody_programdata: account(accounts, 10)?,
-            aggregate: account(accounts, 11)?,
-            position: account(accounts, 12)?,
-            admission: account(accounts, 13)?,
-            founder: account(accounts, 14)?,
+            claims_program: account(accounts, 5)?,
+            claims_programdata: account(accounts, 6)?,
+            custody_program: account(accounts, 7)?,
+            custody_programdata: account(accounts, 8)?,
+            aggregate: account(accounts, 9)?,
+            position: account(accounts, 10)?,
+            admission: account(accounts, 11)?,
+            founder: account(accounts, 12)?,
         };
         if value.permit.is_signer
             || !value.permit.is_writable
@@ -156,8 +156,6 @@ impl<'accounts, 'info> SeriesFoundSuffix<'accounts, 'info> {
             value.hoard,
             value.funding_source,
             value.funding_source_replay,
-            value.linked_basis_raw,
-            value.linked_basis_staging,
             value.claims_programdata,
             value.custody_programdata,
             value.aggregate,
@@ -183,24 +181,24 @@ impl<'accounts, 'info> SeriesConsumeAccounts<'accounts, 'info> {
             return Err(CoreSbfError::AccountFrame);
         }
         let found_slice = accounts
-            .get(..FOUND_ACCOUNT_COUNT_V2)
+            .get(..FOUND_ACCOUNT_COUNT_V3)
             .ok_or(CoreSbfError::AccountFrame)?;
         let fixed = accounts
             .get(..SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1)
             .ok_or(CoreSbfError::AccountFrame)?;
         require_distinct(fixed)?;
         let found = FoundAccounts::parse(program_id, found_slice)?;
-        let trading_program = account(accounts, 31)?;
-        let trading_programdata = account(accounts, 32)?;
-        let root = account(accounts, 33)?;
-        let ticket_state = account(accounts, 34)?;
-        let template_raw = account(accounts, 35)?;
-        let template_staging = account(accounts, 36)?;
-        let occurrence_raw = account(accounts, 37)?;
-        let occurrence_staging = account(accounts, 38)?;
-        let ticket_raw = account(accounts, 39)?;
-        let ticket_staging = account(accounts, 40)?;
-        let clock = account(accounts, 41)?;
+        let trading_program = account(accounts, FOUND_ACCOUNT_COUNT_V3)?;
+        let trading_programdata = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 1)?;
+        let root = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 2)?;
+        let ticket_state = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 3)?;
+        let template_raw = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 4)?;
+        let template_staging = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 5)?;
+        let occurrence_raw = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 6)?;
+        let occurrence_staging = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 7)?;
+        let ticket_raw = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 8)?;
+        let ticket_staging = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 9)?;
+        let clock = account(accounts, FOUND_ACCOUNT_COUNT_V3 + 10)?;
         if trading_program.is_signer
             || trading_program.is_writable
             || !trading_program.executable
@@ -299,7 +297,8 @@ pub(crate) fn process(
     let frame = SeriesConsumeAccounts::parse(program_id, accounts)?;
     require_distinct(accounts)?;
     let lock_receipt = decode_lock_receipt(lock_receipt_bytes)?;
-    let rent = Rent::from_account_info(frame.found.rent).map_err(|_| CoreSbfError::Creation)?;
+    let rent = Rent::from_account_info(frame.found.rent.ok_or(CoreSbfError::AccountFrame)?)
+        .map_err(|_| CoreSbfError::Creation)?;
     let release_admissions = Box::new(authenticate_release_batch(&frame, request)?);
 
     // This single preparation establishes the infrastructure root, immutable
@@ -404,13 +403,13 @@ fn prepare_found(
                 .to_bytes(),
         )?,
     );
-    Ok(Box::new(found::prepare_with_admission(
+    found::prepare_with_admission(
         program_id,
         frame,
         found_request,
         rent,
         release_admissions.admission(Role::Core)?,
-    )?))
+    )
 }
 
 #[inline(never)]
@@ -420,7 +419,7 @@ fn fixed_suffix<'accounts, 'info>(
     let funding_count = frame
         .tail
         .len()
-        .checked_sub(SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1)
+        .checked_sub(SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2)
         .ok_or(CoreSbfError::AccountFrame)?;
     if funding_count == 0 || funding_count > MAXIMUM_FUNDING_STATES_V1 {
         return Err(CoreSbfError::AccountFrame);
@@ -848,7 +847,22 @@ fn authenticate_found_coordinates(
         || request.capability_rent() != occurrence.funds().capability_native()
         || request.work() != occurrence.funds().founding_work()
         || request.hoard_principal() != occurrence.funds().hoard_principal()
-        || frame.found.market.lamports() != request.market_rent()
+        // A FLOOR, NOT AN EQUALITY, and here the equality was worse than the
+        // one census row R13 names. R13's victim declared a snapshot a slot
+        // early; this victim cannot choose a different account at all, because
+        // `:825-829` above pins `request.market()` to `occurrence.market()` --
+        // the address is PUBLISHED ON CHAIN IN THE OCCURRENCE RECORD before the
+        // founding transaction exists. Anyone could read a scheduled
+        // occurrence, send its market PDA one lamport, and strand that
+        // occurrence's prepaid ticket permanently, for about one lamport.
+        //
+        // Nothing is loosened. `market_rent` is not caller-chosen either: `:846`
+        // pins it to `occurrence.funds().market_rent()`, so the floor reads
+        // `live >= the rent the occurrence itself budgeted`. Underfunding still
+        // refuses. And `market_rent` appears at exactly two lines in this file,
+        // that pin and this comparison, so no arithmetic anywhere depends on the
+        // difference between an exact balance and a donated one.
+        || frame.found.market.lamports() < request.market_rent()
         || frame.found.market.owner != &system_program::ID
         || frame.found.market.data_len() != 0
     {
@@ -911,7 +925,7 @@ fn prepare_permit<'accounts, 'info>(
     lock_receipt_bytes: &[u8],
     rent: &Rent,
 ) -> Result<GenericFoundingPermitPlanV1, CoreSbfError> {
-    let product = authenticate_product_facts(frame, suffix, prepared, rent)?;
+    let product = authenticate_product_facts(frame, prepared, rent)?;
     let projected = authenticate_projected_facts(
         program_id,
         frame,
@@ -940,7 +954,6 @@ fn prepare_permit<'accounts, 'info>(
 #[inline(never)]
 fn authenticate_product_facts<'accounts, 'info>(
     frame: &SeriesConsumeAccounts<'accounts, 'info>,
-    suffix: SeriesFoundSuffix<'accounts, 'info>,
     prepared: &PreparedFound,
     rent: &Rent,
 ) -> Result<ProductFacts, CoreSbfError> {
@@ -949,8 +962,8 @@ fn authenticate_product_facts<'accounts, 'info>(
         rent,
         *prepared.runtime,
         FinalizedRecordFrameV2 {
-            raw: suffix.linked_basis_raw,
-            staging: suffix.linked_basis_staging,
+            raw: frame.found.linked_basis_raw,
+            staging: frame.found.linked_basis_staging,
         },
     )
     .map_err(|_| CoreSbfError::Reference)?;
@@ -1045,20 +1058,20 @@ fn authenticate_projected_state(
     admitted: &AdmittedSeries,
     prepared: &PreparedFound,
     lock_receipt: &ProjectedCustodyLockReceiptV1,
-) -> Result<Box<ProjectedCustodyStateV1>, CoreSbfError> {
+) -> Result<Box<ProjectedCustodyStateV2>, CoreSbfError> {
     let data = suffix
         .projected_replay
         .try_borrow_data()
         .map_err(|_| CoreSbfError::ChildAck)?;
     if suffix.projected_replay.owner != suffix.custody_program.key
-        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V1
+        || data.len() != PROJECTED_CUSTODY_STATE_BYTES_V2
     {
         return Err(CoreSbfError::ChildAck);
     }
     let projected =
-        Box::new(ProjectedCustodyStateV1::decode(&data).map_err(|_| CoreSbfError::ChildAck)?);
+        Box::new(ProjectedCustodyStateV2::decode(&data).map_err(|_| CoreSbfError::ChildAck)?);
     drop(data);
-    let seeds = ProjectedCustodyStateSeedsV1::from_request(projected.request);
+    let seeds = ProjectedCustodyStateSeedsV2::from_request(projected.request);
     let (expected, bump) =
         Pubkey::find_program_address(&seeds.as_slices(), suffix.custody_program.key);
     let ticket_context = admitted.ticket.content_id().to_bytes();
@@ -1145,7 +1158,7 @@ fn authenticate_projected_state(
 }
 
 fn canonical_realize_request(
-    projected: &ProjectedCustodyStateV1,
+    projected: &ProjectedCustodyStateV2,
 ) -> Result<dclutch_custody_contract::ProjectedCustodyRequestV1, CoreSbfError> {
     let mut request = projected.request;
     request.operation = ProjectedCustodyOperationV1::RealizeAndClose;
@@ -1159,7 +1172,7 @@ fn canonical_realize_request(
 }
 
 #[inline(never)]
-fn realize_request_digest(projected: &ProjectedCustodyStateV1) -> Result<[u8; 32], CoreSbfError> {
+fn realize_request_digest(projected: &ProjectedCustodyStateV2) -> Result<[u8; 32], CoreSbfError> {
     Ok(hash(
         &canonical_realize_request(projected)?
             .encode()
@@ -1170,7 +1183,7 @@ fn realize_request_digest(projected: &ProjectedCustodyStateV1) -> Result<[u8; 32
 
 #[inline(never)]
 fn realize_receipt_facts(
-    projected: &ProjectedCustodyStateV1,
+    projected: &ProjectedCustodyStateV2,
     request_digest: [u8; 32],
     market: dclutch_market_core_codec::CoreState,
     hoard_amount: u64,

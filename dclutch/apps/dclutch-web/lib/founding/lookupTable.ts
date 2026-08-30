@@ -1,7 +1,7 @@
 /**
  * Address lookup tables for the founding routes, built in the browser.
  *
- * Found31 is a 31-account frame. Inline, with the ComputeBudget declaration it
+ * Found37 is a 37-account frame. Inline, with the ComputeBudget declaration it
  * cannot execute without, its v0 message is 1,242 bytes against a 1,232-byte
  * packet — ten bytes over, exactly as the Rust client measured before it moved
  * the route onto a table. So a lookup table is not an optimization here; it is

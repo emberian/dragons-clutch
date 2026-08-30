@@ -1,4 +1,4 @@
-//! Real-ELF Core Found31 infrastructure and Runtime Product V2 composition.
+//! Real-ELF Core Found37 infrastructure and Runtime Product V2 composition.
 
 use std::{env, fs, path::PathBuf, vec, vec::Vec};
 
@@ -25,14 +25,14 @@ use dclutch_claims_svm::{
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
-    CompartmentV1, PROJECTED_CUSTODY_STATE_BYTES_V1, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
+    CompartmentV1, PROJECTED_CUSTODY_STATE_BYTES_V2, PROJECTED_HOARD_CONTEXT_DOMAIN_V1,
     ProjectedCallerRoleV1, ProjectedCustodyLockReceiptV1, ProjectedCustodyOperationV1,
-    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV1,
-    ProjectedCustodyStateV1,
+    ProjectedCustodyPhaseV1, ProjectedCustodyRequestV1, ProjectedCustodyStateSeedsV2,
+    ProjectedCustodyStateV2,
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    ProjectFoundRequestV1, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
+    ProjectFoundRequestV2, Readiness, Request, SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES,
     SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
 };
 use dclutch_product_payoff_v2_codec::{
@@ -96,9 +96,18 @@ use dclutch_series_v3_kernel::{
     series_core_consume_request, template_content_id, ticket_content_id,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
+    CapacityEnvelope, ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+    ManipulationFloorBasis, ManipulationFloorV1, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
+    SourceCapacityProfileV1, SourceMaterialV3, SourceSpecV1,
 };
 use solana_account::Account;
+use solana_address_lookup_table_interface::{
+    program as lookup_table_program,
+    state::{AddressLookupTable, LookupTableMeta},
+};
+use solana_hash::Hash;
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_program::{
     hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
@@ -110,7 +119,7 @@ use solana_program_pack::Pack;
 use solana_program_test::ProgramTest;
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
-use solana_transaction::Transaction;
+use solana_transaction::versioned::VersionedTransaction;
 use spl_token_interface::state::{Account as SplAccount, AccountState as SplAccountState};
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
@@ -121,6 +130,7 @@ const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc6; 32]);
 const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID);
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0xb2; 32]);
+const LOOKUP_TABLE: Pubkey = Pubkey::new_from_array([0xb8; 32]);
 const GENERATION: u64 = 1;
 
 /// Preimage of this campaign's fixed key seed.
@@ -231,6 +241,9 @@ struct Fixture {
     portfolio: Record,
     linked_basis: Record,
     source: Record,
+    source_spec: Record,
+    capacity_profile: Record,
+    manipulation_floor: Record,
     manifest: Record,
     release_set: Record,
     cache: Pubkey,
@@ -278,6 +291,12 @@ enum SeriesFault {
     None,
     LateHoardBalance,
     BatchClaimsProgramdata,
+    /// The Market PDA holds one lamport LESS than the occurrence budgeted.
+    ///
+    /// The negative control for the rent floor: underfunding must refuse, and a
+    /// genesis is the only place to express it, since nobody can take lamports
+    /// back out of a keyless PDA.
+    UnderfundedMarket,
 }
 
 fn artifacts() -> Artifacts {
@@ -585,6 +604,24 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
     let mut base = fixture(false);
     let test = base.test.as_mut().expect("ProgramTest");
     let rent = Rent::default();
+    if fault == SeriesFault::UnderfundedMarket {
+        // Re-declare the Market PDA one lamport short of what the occurrence
+        // budgets. Genesis is the only place this can be expressed: nothing can
+        // take lamports back out of a keyless system-owned PDA once they land.
+        test.add_account(
+            base.market,
+            Account {
+                lamports: rent
+                    .minimum_balance(STATE_BYTES)
+                    .checked_sub(1)
+                    .expect("underfunded market"),
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
     let manifest = CapabilityManifestV1::decode(&base.manifest.data).expect("manifest");
     let manifest_id = CapabilityContentId::new(base.manifest.digest).expect("manifest ID");
     let funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
@@ -940,7 +977,7 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
         expected_revision: 2,
         resulting_revision: 3,
         amount: hoard_principal,
-        state_rent_lamports: rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V1),
+        state_rent_lamports: rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V2),
         vault_rent_lamports: rent.minimum_balance(SplAccount::LEN),
         funding_source_replay_revision: 3,
         funding_source_state_rent_lamports: 1,
@@ -952,15 +989,16 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
             .expect("projected LockAndClose request"),
     )
     .to_bytes();
-    let projected_seeds = ProjectedCustodyStateSeedsV1::from_request(projected_request);
+    let projected_seeds = ProjectedCustodyStateSeedsV2::from_request(projected_request);
     let (projected_replay, projected_bump) =
         Pubkey::find_program_address(&projected_seeds.as_slices(), &CUSTODY_PROGRAM_ID);
-    let projected_state = ProjectedCustodyStateV1 {
+    let projected_state = ProjectedCustodyStateV2 {
         phase: ProjectedCustodyPhaseV1::HoardLocked,
         request: projected_request,
         next_revision: 3,
         locked_amount: hoard_principal,
         last_request_digest: lock_request_digest,
+        principal_cap_sets: u64::MAX,
         bump: projected_bump,
     };
     let projected_data = projected_state.encode().expect("projected state").to_vec();
@@ -1220,16 +1258,60 @@ fn fixture(core_mutable: bool) -> Fixture {
     })
     .expect("Realm");
     let realm = Record::new(REALM_SCHEMA_RELEASE_ID_V1, realm_value.to_bytes().to_vec());
-    let source_value = SourceMaterialV2::new(
+    let capacity_profile = SourceCapacityProfileV1::new(
+        CapacityEnvelope::Provisional,
+        1,
+        0,
+        source_id(0xd5),
+        source_id(0xd6),
+        208,
+        0,
+    )
+    .expect("Source capacity profile")
+    .bounding_principal(1, 4)
+    .expect("bounded principal ratio");
+    let capacity_profile = Record::new(
+        SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+        capacity_profile.to_bytes().to_vec(),
+    );
+    let adapter_config_id = source_id(0xda);
+    let source_spec_value = SourceSpecV1::new(
+        source_id(0xd7),
+        source_id(0xd8),
+        source_id(0xd9),
+        SourceAccessProfile::RelayedObservationRecord,
+        adapter_config_id,
+        SourceContentId::new(capacity_profile.digest).expect("capacity identity"),
+    );
+    let source_spec = Record::new(
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        source_spec_value.to_bytes().to_vec(),
+    );
+    // κ=1/4 over a 20,000-atom venue floor admits exactly 5,000 complete
+    // sets at this fixture's unit basis. Series consumes that full bound.
+    let manipulation_floor_value = ManipulationFloorV1::new(
+        ManipulationFloorBasis::ObservedDepth,
+        SourceContentId::new(source_spec.digest).expect("SourceSpec identity"),
+        adapter_config_id,
+        SourceContentId::new(COLLATERAL_MINT.to_bytes()).expect("collateral unit"),
+        source_id(0xdb),
+        20_000,
+    );
+    let manipulation_floor = Record::new(
+        MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+        manipulation_floor_value.to_bytes().to_vec(),
+    );
+    let source_value = SourceMaterialV3::bounded_by_floor(
         SourceContentId::new(product.digest).expect("Product root"),
-        source_id(0xb4),
+        SourceContentId::new(source_spec.digest).expect("SourceSpec identity"),
         source_id(0xb5),
         source_id(0xb6),
         None,
         source_id(0xb7),
+        SourceContentId::new(manipulation_floor.digest).expect("manipulation floor identity"),
     );
     let source = Record::new(
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source_value.to_bytes().to_vec(),
     );
     let manifest = funded_manifest_record();
@@ -1252,6 +1334,9 @@ fn fixture(core_mutable: bool) -> Fixture {
         &portfolio,
         &linked_basis,
         &source,
+        &source_spec,
+        &capacity_profile,
+        &manipulation_floor,
         &manifest,
         &release_set,
         &registry_artifact,
@@ -1356,6 +1441,9 @@ fn fixture(core_mutable: bool) -> Fixture {
         portfolio,
         linked_basis,
         source,
+        source_spec,
+        capacity_profile,
+        manipulation_floor,
         manifest,
         release_set,
         cache,
@@ -1403,12 +1491,18 @@ fn found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruction {
             AccountMeta::new_readonly(fixture.domain.staging, false),
             AccountMeta::new_readonly(fixture.portfolio.raw, false),
             AccountMeta::new_readonly(fixture.portfolio.staging, false),
+            AccountMeta::new_readonly(fixture.linked_basis.raw, false),
+            AccountMeta::new_readonly(fixture.linked_basis.staging, false),
             AccountMeta::new_readonly(fixture.source.raw, false),
             AccountMeta::new_readonly(fixture.source.staging, false),
+            AccountMeta::new_readonly(fixture.source_spec.raw, false),
+            AccountMeta::new_readonly(fixture.source_spec.staging, false),
+            AccountMeta::new_readonly(fixture.capacity_profile.raw, false),
+            AccountMeta::new_readonly(fixture.capacity_profile.staging, false),
+            AccountMeta::new_readonly(fixture.manipulation_floor.raw, false),
+            AccountMeta::new_readonly(fixture.manipulation_floor.staging, false),
             AccountMeta::new_readonly(fixture.manifest.raw, false),
             AccountMeta::new_readonly(fixture.manifest.staging, false),
-            AccountMeta::new_readonly(fixture.release_set.raw, false),
-            AccountMeta::new_readonly(fixture.release_set.staging, false),
             AccountMeta::new_readonly(fixture.cache, false),
             AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
             AccountMeta::new_readonly(fixture.core_programdata, false),
@@ -1440,12 +1534,19 @@ fn project_found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruc
         AccountMeta::new_readonly(fixture.payer.pubkey(), false);
     *instruction.accounts.get_mut(1).expect("Market") =
         AccountMeta::new_readonly(fixture.market, false);
+    instruction
+        .accounts
+        .remove(dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3);
+    assert_eq!(
+        instruction.accounts.len(),
+        dclutch_market_core_codec::PROJECT_FOUND_ACCOUNT_COUNT_V2
+    );
     let found = Request::administrative(
         Action::Found,
         GENERATION,
         identity(fixture.market.to_bytes()),
     );
-    instruction.data = ProjectFoundRequestV1::new(found)
+    instruction.data = ProjectFoundRequestV2::new(found)
         .expect("ProjectFound")
         .encode()
         .expect("ProjectFound bytes")
@@ -1453,22 +1554,96 @@ fn project_found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruc
     instruction
 }
 
+/// Install one canonical lookup table for the complete instruction frame.
+///
+/// The fee payer and instruction signers remain static. Every other key,
+/// including the invoked program, is sorted by raw public-key bytes and
+/// deduplicated before the message compiler chooses its writable/readonly
+/// indexes. The bank therefore resolves the same table the packet names.
+fn add_instruction_lookup(
+    test: &mut ProgramTest,
+    instructions: &[Instruction],
+) -> AddressLookupTableAccount {
+    let mut addresses = instructions
+        .iter()
+        .flat_map(|instruction| {
+            core::iter::once(instruction.program_id).chain(
+                instruction
+                    .accounts
+                    .iter()
+                    .filter(|meta| !meta.is_signer)
+                    .map(|meta| meta.pubkey),
+            )
+        })
+        .filter(|address| *address != LOOKUP_TABLE)
+        .collect::<Vec<_>>();
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    let data = AddressLookupTable {
+        meta: LookupTableMeta::default(),
+        addresses: addresses.as_slice().into(),
+    }
+    .serialize_for_tests()
+    .expect("lookup-table bytes");
+    test.add_account(
+        LOOKUP_TABLE,
+        Account {
+            lamports: Rent::default().minimum_balance(data.len()),
+            data,
+            owner: lookup_table_program::id(),
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    AddressLookupTableAccount {
+        key: LOOKUP_TABLE,
+        addresses,
+    }
+}
+
+fn signed_v0(
+    payer: &Pubkey,
+    instructions: &[Instruction],
+    lookup: &AddressLookupTableAccount,
+    blockhash: Hash,
+    signers: &[&Keypair],
+) -> VersionedTransaction {
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            payer,
+            instructions,
+            core::slice::from_ref(lookup),
+            blockhash,
+        )
+        .expect("canonical v0 message"),
+    );
+    let transaction =
+        VersionedTransaction::try_new(message, signers).expect("signed v0 transaction");
+    wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
+    transaction
+}
+
 async fn execute(
     mut fixture: Fixture,
     instruction: Instruction,
 ) -> (Fixture, solana_program_test::ProgramTestContext, bool) {
-    let test = fixture.test.take().expect("ProgramTest");
+    let mut test = fixture.test.take().expect("ProgramTest");
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
         &[instruction],
-        Some(&context.payer.pubkey()),
-        &[&context.payer, &fixture.payer],
+        &lookup,
         blockhash,
+        &[&context.payer, &fixture.payer],
     );
     let accepted = context
         .banks_client
@@ -1482,18 +1657,20 @@ async fn execute_project(
     mut fixture: Fixture,
     instruction: Instruction,
 ) -> (Fixture, solana_program_test::ProgramTestContext, bool) {
-    let test = fixture.test.take().expect("ProgramTest");
+    let mut test = fixture.test.take().expect("ProgramTest");
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
         &[instruction],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
+        &lookup,
         blockhash,
+        &[&context.payer],
     );
     let accepted = context
         .banks_client
@@ -1524,8 +1701,6 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
         AccountMeta::new_readonly(fixture.hoard, false),
         AccountMeta::new_readonly(fixture.funding_source, false),
         AccountMeta::new_readonly(fixture.funding_source_replay, false),
-        AccountMeta::new_readonly(fixture.base.linked_basis.raw, false),
-        AccountMeta::new_readonly(fixture.base.linked_basis.staging, false),
         AccountMeta::new_readonly(CLAIMS_PROGRAM_ID, false),
         AccountMeta::new_readonly(fixture.claims_programdata_meta, false),
         AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
@@ -1537,6 +1712,29 @@ fn series_instruction(fixture: &SeriesFixture) -> Instruction {
     ]);
     let mut data = fixture.request.to_vec();
     data.extend_from_slice(&fixture.lock_receipt);
+    let fixed = accounts
+        .get(..dclutch_core_sbf::SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1)
+        .expect("complete Series fixed frame");
+    for (left_index, left) in fixed.iter().enumerate() {
+        for (right_index, right) in fixed.iter().enumerate().skip(left_index + 1) {
+            assert_ne!(
+                left.pubkey, right.pubkey,
+                "Series fixed-frame alias at {left_index}/{right_index}"
+            );
+        }
+        for (right_index, right) in accounts.iter().enumerate() {
+            if left.pubkey == right.pubkey {
+                assert!(
+                    !right.is_signer || left.is_signer,
+                    "Series privilege union makes fixed account {left_index} signer at {right_index}"
+                );
+                assert!(
+                    !right.is_writable || left.is_writable,
+                    "Series privilege union makes fixed account {left_index} writable at {right_index}"
+                );
+            }
+        }
+    }
     Instruction {
         program_id: TRADING_PROGRAM_ID,
         accounts,
@@ -1561,18 +1759,21 @@ async fn execute_series(
     solana_program_test::ProgramTestContext,
     Option<String>,
 ) {
-    let test = fixture.base.test.take().expect("ProgramTest");
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let transaction = Transaction::new_signed_with_payer(
-        &[series_instruction(&fixture)],
-        Some(&context.payer.pubkey()),
-        &[&context.payer],
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
+        &[instruction],
+        &lookup,
         blockhash,
+        &[&context.payer],
     );
     let failure = submit_and_record(&context, transaction, label).await;
     (fixture, context, failure)
@@ -1614,7 +1815,7 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
 /// Submit one already-built transaction and, if asked, record it as evidence.
 async fn submit_and_record(
     context: &solana_program_test::ProgramTestContext,
-    transaction: Transaction,
+    transaction: VersionedTransaction,
     label: &str,
 ) -> Option<String> {
     let signature = transaction
@@ -1623,7 +1824,10 @@ async fn submit_and_record(
         .copied()
         .expect("a signed transaction has a signature")
         .to_string();
-    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message_data());
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
     let outcome = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -1669,21 +1873,23 @@ async fn execute_series_twice(
     Option<String>,
     Option<String>,
 ) {
-    let test = fixture.base.test.take().expect("ProgramTest");
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
     let mut context = test.start_with_context().await;
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
-    let instruction = series_instruction(&fixture);
     let first = submit_and_record(
         &context,
-        Transaction::new_signed_with_payer(
+        signed_v0(
+            &context.payer.pubkey(),
             core::slice::from_ref(&instruction),
-            Some(&context.payer.pubkey()),
-            &[&context.payer],
+            &lookup,
             blockhash,
+            &[&context.payer],
         ),
         first_label,
     )
@@ -1698,11 +1904,12 @@ async fn execute_series_twice(
     );
     let replay = submit_and_record(
         &context,
-        Transaction::new_signed_with_payer(
+        signed_v0(
+            &context.payer.pubkey(),
             &[instruction],
-            Some(&context.payer.pubkey()),
-            &[&context.payer],
+            &lookup,
             replay_blockhash,
+            &[&context.payer],
         ),
         replay_label,
     )
@@ -1711,7 +1918,7 @@ async fn execute_series_twice(
 }
 
 #[tokio::test]
-async fn real_found31_accepts_258_outcomes_after_immutable_infrastructure_auth() {
+async fn real_found37_accepts_258_outcomes_after_pinned_infrastructure_auth() {
     let fixture = fixture(false);
     let instruction = found_instruction(&fixture, false);
     let (fixture, context, accepted) = execute(fixture, instruction).await;
@@ -1738,7 +1945,7 @@ async fn real_found31_accepts_258_outcomes_after_immutable_infrastructure_auth()
 }
 
 #[tokio::test]
-async fn project_found31_authenticates_without_signature_or_market_mutation() {
+async fn project_found36_authenticates_without_signature_or_market_mutation() {
     let fixture = fixture(false);
     let instruction = project_found_instruction(&fixture, false);
     let payer = instruction.accounts.first().expect("projection payer meta");
@@ -1763,9 +1970,33 @@ async fn project_found31_authenticates_without_signature_or_market_mutation() {
 }
 
 #[tokio::test]
-async fn projected_found31_refuses_swapped_infrastructure_without_market_mutation() {
+async fn projected_found36_refuses_swapped_infrastructure_without_market_mutation() {
     let fixture = fixture(false);
     let instruction = project_found_instruction(&fixture, true);
+    let (fixture, context, accepted) = execute_project(fixture, instruction).await;
+    assert!(!accepted);
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+}
+
+#[tokio::test]
+async fn superseded_project_found37_frame_refuses_without_market_mutation() {
+    let fixture = fixture(false);
+    let mut instruction = project_found_instruction(&fixture, false);
+    instruction.accounts.insert(
+        dclutch_market_core_codec::FOUND_RENT_SYSVAR_INDEX_V3,
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+    );
+    assert_eq!(
+        instruction.accounts.len(),
+        dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3
+    );
     let (fixture, context, accepted) = execute_project(fixture, instruction).await;
     assert!(!accepted);
     let market = context
@@ -1799,23 +2030,21 @@ async fn swapped_registry_and_rent_artifacts_refuse_without_market_write() {
 }
 
 #[tokio::test]
-async fn mutable_core_release_refuses_after_profile_init_without_market_write() {
+async fn slot_pinned_mutable_core_release_accepts_after_profile_init() {
     let fixture = fixture(true);
     let instruction = found_instruction(&fixture, false);
     let (fixture, context, accepted) = execute(fixture, instruction).await;
-    assert!(!accepted);
+    assert!(accepted);
     let market = context
         .banks_client
         .get_account(fixture.market)
         .await
         .expect("Market query")
-        .expect("vacant Market");
-    assert_eq!(market.owner, system_program::ID);
-    assert!(market.data.is_empty());
-    assert_eq!(
-        market.lamports,
-        Rent::default().minimum_balance(STATE_BYTES)
-    );
+        .expect("Market");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+    let state = CoreState::decode(&market.data).expect("CoreState");
+    assert_eq!(state.phase, Phase::Founding);
+    assert_eq!(state.readiness, Readiness::Prepaid);
 }
 
 async fn assert_series_found_rollback(
@@ -1947,7 +2176,7 @@ async fn series_consume_accepts_258_outcomes_and_commits_found_with_permit() {
 }
 
 #[tokio::test]
-async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollback() {
+async fn series_consume_hostile_programdata_refuses_with_byte_exact_rollback() {
     let fixture = series_fixture(SeriesFault::BatchClaimsProgramdata);
     let (fixture, context, failure) = execute_series(
         fixture,
@@ -1957,8 +2186,8 @@ async fn series_consume_hostile_batch_programdata_refuses_with_byte_exact_rollba
     let failure = failure.expect("substituted Claims ProgramData must refuse");
     assert_refused_with(
         &failure,
-        dclutch_registry_sbf::RegistryError::Deployment as u32,
-        "the Registry batch's exact Deployment refusal",
+        dclutch_core_sbf::CoreSbfError::Release as u32,
+        "Core's exact current-release refusal",
     );
     assert_series_found_rollback(&fixture, &context).await;
 }
@@ -2030,4 +2259,342 @@ async fn series_consume_late_hoard_refusal_rolls_back_found_and_all_replay_state
         "CoreSbfError::ChildAck on a late postcondition",
     );
     assert_series_found_rollback(&fixture, &context).await;
+}
+
+/// Emit the `series_consume` campaign as a bundle a live validator can run.
+///
+/// # Why this exists, and why it is a test rather than a tool
+///
+/// `series_consume` is the only executed Series route in the tree, and until
+/// now it had executed only inside `ProgramTest`. Moving it onto a real
+/// validator means reproducing roughly 1,250 lines of fixture — a batch of
+/// finalized Registry records, six loader-v3 program pairs, a projected-Custody
+/// lock, exact-rent vacant accounts — and porting that into a host tool is a
+/// multi-hour rewrite with a wide surface for silent divergence.
+///
+/// So it is not ported. The fixture stays exactly where it is and keeps its one
+/// author, and this test changes only the SINK: it builds the campaign the way
+/// every other Series test does, starts the genesis it would have run against,
+/// and then reads every account the instruction names straight back out of the
+/// banks client. What is written out is therefore what `ProgramTest` itself
+/// constructed, not a second reconstruction of it.
+///
+/// That reading is what disposes of the two hazards a hand-port would have hit:
+/// the exact-lamports rule (`series_consume` compares
+/// `market.lamports()` to `request.market_rent()` with `!=`, so a rent
+/// heuristic silently refuses) and the six loader-v3 Program/ProgramData pairs
+/// (whose deployment slot flows into the release-set digest and therefore into
+/// the Market PDA, making deploy-then-derive circular with genesis). Both are
+/// simply observed rather than recomputed.
+///
+/// It is `#[ignore]`d because it writes to a directory and is a build step for
+/// a validator run, not an assertion about the protocol. The assertions about
+/// the protocol are the four `series_consume_*` tests above, which are
+/// unchanged.
+///
+/// Run it as:
+///
+/// ```sh
+/// SBF_OUT_DIR=... DCLUTCH_SERIES_CAMPAIGN_DIR=/abs/dir \
+///   cargo test --manifest-path programs/dclutch-core-sbf/Cargo.toml \
+///   --test found_program_test -- --ignored emit_series_consume_validator_campaign
+/// ```
+#[tokio::test]
+#[ignore = "emits a genesis and instruction bundle for a live local validator"]
+async fn emit_series_consume_validator_campaign() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use std::collections::BTreeSet;
+
+    let directory = PathBuf::from(
+        env::var("DCLUTCH_SERIES_CAMPAIGN_DIR")
+            .expect("DCLUTCH_SERIES_CAMPAIGN_DIR is required to emit the campaign"),
+    );
+    let accounts_directory = directory.join("accounts");
+    fs::create_dir_all(&accounts_directory).expect("campaign account directory");
+
+    let mut fixture = series_fixture(SeriesFault::None);
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+    let context = test.start_with_context().await;
+
+    // Every key the transaction touches: the invoked program, every meta, the
+    // lookup table, and every address the table resolves. The table's addresses
+    // are a superset of the readonly metas, but taking their union rather than
+    // assuming that keeps this correct if the table's contents ever widen.
+    let mut keys: BTreeSet<Pubkey> = BTreeSet::new();
+    keys.insert(instruction.program_id);
+    keys.insert(lookup.key);
+    for meta in &instruction.accounts {
+        keys.insert(meta.pubkey);
+    }
+    for address in &lookup.addresses {
+        keys.insert(*address);
+    }
+
+    let mut written = 0_usize;
+    let mut absent = Vec::new();
+    for key in &keys {
+        let Some(account) = context
+            .banks_client
+            .get_account(*key)
+            .await
+            .expect("banks client")
+        else {
+            // A nonexistent readonly account is a real part of this frame:
+            // `funding_source` and `funding_source_replay` are passed as keys
+            // that were deliberately never created. Recording them keeps the
+            // emitted bundle honest about which accounts are absent BY DESIGN,
+            // rather than leaving a reader to wonder what went missing.
+            absent.push(key.to_string());
+            continue;
+        };
+        let body = serde_json::json!({
+            "pubkey": key.to_string(),
+            "account": {
+                "lamports": account.lamports,
+                "data": [BASE64.encode(&account.data), "base64"],
+                "owner": account.owner.to_string(),
+                "executable": account.executable,
+                "rentEpoch": account.rent_epoch,
+            }
+        });
+        fs::write(
+            accounts_directory.join(format!("{key}.json")),
+            serde_json::to_vec_pretty(&body).expect("account json"),
+        )
+        .expect("write genesis account");
+        written += 1;
+    }
+
+    let manifest = serde_json::json!({
+        "schema": "dclutch-series-consume-validator-campaign-v1",
+        "programId": instruction.program_id.to_string(),
+        "lookupTable": lookup.key.to_string(),
+        "dataBase64": BASE64.encode(&instruction.data),
+        "accounts": instruction
+            .accounts
+            .iter()
+            .map(|meta| serde_json::json!({
+                "pubkey": meta.pubkey.to_string(),
+                "isSigner": meta.is_signer,
+                "isWritable": meta.is_writable,
+            }))
+            .collect::<Vec<_>>(),
+        // Measured, not guessed: docs/reference/budgets.md records 722,142 CU
+        // for this route. ProgramTest hands out 1,400,000 globally and a real
+        // validator gives 200,000, so the limit has to travel with the bundle.
+        "computeUnitLimit": 900_000,
+        "genesisAccountCount": written,
+        "absentByDesign": absent,
+        // What a caller must check AFTER the transaction finalizes. These are
+        // the same facts `series_consume_accepts_258_outcomes_and_commits_found_with_permit`
+        // asserts, carried out to whoever submits the packet.
+        "expect": {
+            "outcomeCount": fixture.base.outcome_count,
+            "market": fixture.base.market.to_string(),
+            "marketOwner": CORE_PROGRAM_ID.to_string(),
+            "permit": fixture.permit.to_string(),
+            "permitOwner": CORE_PROGRAM_ID.to_string(),
+            "permitLamports": fixture.permit_lamports,
+        }
+    });
+    fs::write(
+        directory.join("campaign.json"),
+        serde_json::to_vec_pretty(&manifest).expect("manifest json"),
+    )
+    .expect("write campaign manifest");
+
+    assert!(written > 0, "the campaign emitted no genesis accounts");
+    println!(
+        "series-consume campaign: {written} genesis accounts ({} absent by design), \
+         {} metas, {} data bytes, lookup table {} -> {}",
+        absent.len(),
+        instruction.accounts.len(),
+        instruction.data.len(),
+        lookup.key,
+        directory.display()
+    );
+}
+
+/// A STRANGER'S ONE LAMPORT NO LONGER STRANDS A SCHEDULED OCCURRENCE.
+///
+/// Census row R13's class, and this instance was worse than the one the census
+/// named. R13's victim declared a balance a slot early and was front-run in the
+/// gap. Here the victim cannot choose a different account at all:
+/// `series_consume.rs:825-829` pins `request.market()` to
+/// `occurrence.market()`, so the market PDA's address is **published on chain
+/// in the occurrence record before the founding transaction exists**. Anyone
+/// could read a scheduled occurrence, send its market PDA a single lamport, and
+/// strand that occurrence's prepaid ticket forever, for about one lamport plus
+/// a fee, with no race to win.
+///
+/// This harness already knew about the rule and routed around it rather than
+/// treating it as a defect: `emit_series_consume_validator_campaign`'s header
+/// names "the exact-lamports rule (`series_consume` compares
+/// `market.lamports()` to `request.market_rent()` with `!=`, so a rent
+/// heuristic silently refuses)" as one of two hazards a host port would hit.
+/// It is now a floor, so that hazard is gone for any future port too.
+///
+/// The attack is executed, not simulated: a funded keypair that is nobody sends
+/// the lamport in its own finalized transaction, after genesis and before the
+/// Consume lands, and the test asserts it arrived before submitting.
+#[tokio::test]
+async fn a_strangers_lamport_cannot_strand_a_scheduled_series_occurrence() {
+    let mut fixture = series_fixture(SeriesFault::None);
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+    let mut context = test.start_with_context().await;
+
+    let budgeted = context
+        .banks_client
+        .get_account(fixture.base.market)
+        .await
+        .expect("market query")
+        .expect("prepaid market")
+        .lamports;
+
+    // THE ATTACK. The occurrence record names this address publicly; the griefer
+    // needs no permission, no race, and no knowledge the chain does not already
+    // publish.
+    let griefer = Keypair::new();
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let payer = context.payer.pubkey();
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[solana_system_interface::instruction::transfer(
+                &payer,
+                &griefer.pubkey(),
+                Rent::default()
+                    .minimum_balance(0)
+                    .checked_mul(64)
+                    .expect("griefer funding"),
+            )],
+            Some(&payer),
+            &[&context.payer],
+            blockhash,
+        ))
+        .await
+        .expect("the stranger is funded like anyone else");
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[solana_system_interface::instruction::transfer(
+                &griefer.pubkey(),
+                &fixture.base.market,
+                1,
+            )],
+            Some(&griefer.pubkey()),
+            &[&griefer],
+            blockhash,
+        ))
+        .await
+        .expect("one lamport to a published address needs nobody's permission");
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(fixture.base.market)
+            .await
+            .expect("market query")
+            .expect("donated market")
+            .lamports,
+        budgeted + 1,
+        "the attack must have landed, or nothing below is a test"
+    );
+
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("post-donation blockhash");
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
+        &[instruction],
+        &lookup,
+        blockhash,
+        &[&context.payer],
+    );
+    let failure = submit_and_record(
+        &context,
+        transaction,
+        "Series occurrence Consume survives a one-lamport front-run",
+    )
+    .await;
+    assert_eq!(
+        failure, None,
+        "a stranger's lamport must not be able to strand this occurrence"
+    );
+
+    // The Market is founded on the occurrence's own terms, and the donation is
+    // simply carried by the account rather than accounted anywhere.
+    let market = context
+        .banks_client
+        .get_account(fixture.base.market)
+        .await
+        .expect("Market query")
+        .expect("founded Market");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+    assert_eq!(market.lamports, budgeted + 1);
+    let state = CoreState::decode(&market.data).expect("Core state");
+    assert_eq!(state.phase, Phase::Founding);
+    assert_eq!(state.readiness, Readiness::Prepaid);
+}
+
+/// UNDERFUNDING A SCHEDULED OCCURRENCE'S MARKET STILL REFUSES, AT THE CODE.
+///
+/// The negative control for the floor above, and the reason it is a separate
+/// test rather than an assertion inside that one: it must run against a market
+/// account that holds LESS than the occurrence budgeted, which is a different
+/// genesis, not a different transaction.
+///
+/// This is the entire safety content of the comparison that was relaxed. If it
+/// ever passes, the floor became no check at all.
+#[tokio::test]
+async fn a_market_short_of_its_occurrences_budgeted_rent_still_refuses() {
+    let fixture = series_fixture(SeriesFault::UnderfundedMarket);
+    let (_fixture, _context, failure) = execute_series(
+        fixture,
+        "Series occurrence Consume against an underfunded Market",
+    )
+    .await;
+    let failure = failure.expect("an underfunded Market must refuse");
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::Reference as u32,
+        "underfunded Series Market rent",
+    );
+    // Seal the lie: prove the genesis really was short, and that the refusal
+    // left the Market vacant rather than founding it anyway. Without this the
+    // test would still pass if the fault had silently not been applied and
+    // something else had refused.
+    let market = _context
+        .banks_client
+        .get_account(_fixture.base.market)
+        .await
+        .expect("market query")
+        .expect("underfunded market");
+    assert_eq!(
+        market.lamports,
+        Rent::default()
+            .minimum_balance(STATE_BYTES)
+            .checked_sub(1)
+            .expect("underfunded market"),
+        "the fault must actually have been applied"
+    );
+    assert_eq!(market.owner, system_program::ID);
+    assert!(
+        market.data.is_empty(),
+        "the refused found allocated nothing"
+    );
 }

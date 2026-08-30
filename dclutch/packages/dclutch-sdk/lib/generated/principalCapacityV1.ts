@@ -11,6 +11,26 @@ export const CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1 = 4 as const;
 /** The venue floor the default kappa is scaled against, in lamports. */
 export const BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1 = 18618074000n as const;
 
+/**
+ * The magic a `ManipulationFloorV1` record announces itself with.
+ *
+ * Emitted alongside the offsets rather than left out of them. A browser
+ * that has the layout but not the magic can read a floor record and cannot
+ * RECOGNIZE one -- it would be indexing into whatever bytes it was handed,
+ * which for a value that bounds founding principal is the difference between
+ * a check and a decoration.
+ */
+export const MANIPULATION_FLOOR_V1_MAGIC = 'DCLTMFL1';
+
+/** The schema release this record is published under, as lowercase hex. */
+export const MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1 = '9c1dc900e6b6bf2c7ef2febebe2c0aa08529af8c44c4fd1d22abb765b1da1600';
+export const MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1 = 'dclutch/schema/source-manipulation-floor-v1';
+
+/** The bonding-curve buyout/exit derivation, the only one released today. */
+export const BONDING_CURVE_FLOOR_DERIVATION_ID_V1 = '0c2e4a32ad014352ec6ff0e72d6a7af1eefb01997edf56fb8308dbf19bcf80bd';
+export const BONDING_CURVE_FLOOR_DERIVATION_PREIMAGE_V1 = 'dclutch/source-manipulation-floor-derivation/bonding-curve-buyout-exit/v1';
+export const MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1 = 18446744073709551615n as const;
+
 /** `ManipulationFloorV1` layout, for a decoder that reads a real floor record. */
 export const MANIPULATION_FLOOR_V1_BYTES = 160 as const;
 export const MANIPULATION_FLOOR_V1_SCHEMA_VERSION = 1 as const;
@@ -56,4 +76,19 @@ export const PRINCIPAL_ADMISSION_CASES_V1 = Object.freeze([
   Object.freeze({ numerator: 4294967295, denominator: 1, floorAtoms: 18446744073709551615n, principalAtoms: 18446744073709551615n, admitted: true }),
   Object.freeze({ numerator: 4294967295, denominator: 1, floorAtoms: 18446744073709551615n, principalAtoms: 340282366920938463463374607431768211455n, admitted: false }),
   Object.freeze({ numerator: 1, denominator: 4294967295, floorAtoms: 18446744073709551615n, principalAtoms: 340282366920938463463374607431768211455n, admitted: false }),
+] as const);
+
+/** The Lean-emitted collateral-atom cap to complete-set projection corpus. */
+export const PRINCIPAL_CAP_PROJECTION_CASES_V1 = Object.freeze([
+  Object.freeze({ capAtoms: 0n, basisScale: 1n, projectedSets: 0n }),
+  Object.freeze({ capAtoms: 1n, basisScale: 1n, projectedSets: 1n }),
+  Object.freeze({ capAtoms: 4654518500n, basisScale: 1n, projectedSets: 4654518500n }),
+  Object.freeze({ capAtoms: 4654518500n, basisScale: 1000000000n, projectedSets: 4n }),
+  Object.freeze({ capAtoms: 4654518500n, basisScale: 10000000000n, projectedSets: 0n }),
+  Object.freeze({ capAtoms: 18446744073709551614n, basisScale: 1n, projectedSets: 18446744073709551614n }),
+  Object.freeze({ capAtoms: 18446744073709551615n, basisScale: 1n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 18446744073709551616n, basisScale: 1n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 340282366920938463463374607431768211455n, basisScale: 1n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 340282366920938463463374607431768211455n, basisScale: 18446744073709551615n, projectedSets: 18446744073709551615n }),
+  Object.freeze({ capAtoms: 1n, basisScale: 0n, projectedSets: null }),
 ] as const);

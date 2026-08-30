@@ -30,13 +30,18 @@ mod generated_retirement_v1 {
 }
 
 mod capability;
+mod capability_funding_v2;
+mod found_frame_v3;
 mod generic_founding_v1;
 mod physical;
 mod project_found;
+mod retirement_checkpoint_v1;
 mod retirement_v1;
 mod series_permit;
 
 pub use capability::*;
+pub use capability_funding_v2::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2};
+pub use found_frame_v3::*;
 pub use generated::state_layout::CoreStateLayoutV2;
 pub use generated::*;
 pub use generated_physical::{
@@ -53,5 +58,6 @@ pub use generated_physical::{
 pub use generic_founding_v1::*;
 pub use physical::*;
 pub use project_found::*;
+pub use retirement_checkpoint_v1::*;
 pub use retirement_v1::*;
 pub use series_permit::*;

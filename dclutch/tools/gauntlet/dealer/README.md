@@ -90,11 +90,14 @@ satisfies. This one:
   Dealer route reads ProgramData only through the Registry CPI, which refuses
   this campaign for a reason (no activation) that is upstream of any ProgramData
   layout question.
-- **Packet serialisation limits** — NOT satisfied, and it does not need to be.
-  ProgramTest submits no packet. The Dealer common frame is 23 accounts and the
-  widest action frame in the family is 35, so nothing here is near the 1,232-byte
-  legacy maximum; but the exemption is stated rather than assumed, and a Dealer
-  campaign that ever grew a large frame would have to move to a validator.
+- **Packet serialisation limits** — NOT satisfied. This legacy Dealer-family
+  campaign still tops out at 35 accounts, but that is not an exemption for the
+  admitted selector-9 path. Its unsplit canonical scenario has 122 metas and
+  121 distinct instruction locks before the transaction payer. A v0 message and
+  address lookup table can reduce packet bytes but cannot reduce Solana's lock
+  count, so that shape cannot run on devnet's 64-lock runtime. The Accepted path
+  must accumulate authenticated preparation receipts and use a separately
+  censused at-most-64-lock atomic commit. This campaign submits no packet.
 - **1,400,000 compute and 32,768 heap, neither adjustable** — satisfied. The
   campaign sets `set_compute_max_units(1_400_000)` and never raises it; the heap
   is the SBF default and is never lifted. The deepest transaction consumed

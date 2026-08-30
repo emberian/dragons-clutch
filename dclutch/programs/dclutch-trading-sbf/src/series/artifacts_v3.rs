@@ -15,7 +15,7 @@ use dclutch_capability_program_contract::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2, PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -103,10 +103,10 @@ pub const SERIES_CONSUME_IR_REQUEST_BYTES_V3: usize = 2 * SERIES_CONSUME_CORE_RE
 pub const SERIES_CONSUME_LOCK_ACCOUNT_COUNT_V3: u16 = 14;
 /// Exact Core Found accounts other than the 1..16 ordered FundingStates.
 ///
-/// This is the fixed 42-account Found/Series prefix plus the exact 15-account
+/// This is the fixed 48-account Found37/Series prefix plus the exact 13-account
 /// permit/Custody/Claims evidence suffix. The FundingState slice is inserted
 /// between them by the Core frame and is the only affine account dimension.
-pub const SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3: u16 = 57;
+pub const SERIES_CONSUME_CORE_FOUND_ACCOUNT_BASE_V3: u16 = 61;
 /// Exact Projected Custody Realize child frame.
 pub const SERIES_CONSUME_REALIZE_ACCOUNT_COUNT_V3: u16 = 12;
 /// Exact Claims Founding V5 child frame.
@@ -138,7 +138,7 @@ pub const SERIES_PREPARE_ESCROW_LOCK_OFFSET_V3: usize =
 pub const SERIES_PREPARE_IR_REQUEST_BYTES_V3: usize =
     2 * SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3 + 3 * SERIES_ESCROW_CUSTODY_REQUEST_BYTES_V3;
 /// Exact Projected Initialize child frame, including internal ProjectFound.
-pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 42;
+pub const SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3: u16 = 47;
 /// Exact Projected OpenHoard child frame.
 pub const SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3: u16 = 15;
 
@@ -148,7 +148,7 @@ const _: () = {
     // u16-typed; the build fails if the two ever disagree.
     assert!(
         SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3 as usize
-            == PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1
+            == PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2
     );
     assert!(
         SERIES_PREPARE_PROJECTED_OPEN_ACCOUNT_COUNT_V3 as usize
@@ -1085,8 +1085,7 @@ mod tests {
         }
     }
 
-    fn account_profile(action: SeriesActionV3) -> Vec<u8> {
-        let fixed_accounts = fixture_fixed_accounts(action);
+    fn account_profile_with_fixed_accounts(fixed_accounts: u16) -> Vec<u8> {
         let mut output = vec![
             0_u8;
             dclutch_account_profile_contract::v2::HEADER_BYTES
@@ -1200,7 +1199,10 @@ mod tests {
         output
     }
 
-    fn effect(action: SeriesActionV3) -> Vec<u8> {
+    fn effect_with_prepare_initialize_count(
+        action: SeriesActionV3,
+        prepare_initialize_count: u16,
+    ) -> Vec<u8> {
         let request_bytes = match action {
             SeriesActionV3::Prepare => SERIES_PREPARE_IR_REQUEST_BYTES_V3,
             SeriesActionV3::Consume => SERIES_CONSUME_IR_REQUEST_BYTES_V3,
@@ -1214,7 +1216,7 @@ mod tests {
                     (
                         FixedRole::Custody,
                         SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-                        SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3,
+                        prepare_initialize_count,
                         false,
                         &SERIES_NO_RECEIPT_DEPENDENCIES_V3,
                     ),
@@ -1352,9 +1354,14 @@ mod tests {
             + request_bytes;
         let mut scratch = vec![0_u8; output_bytes];
         let mut output = vec![0_u8; output_bytes];
+        let fixed_accounts = if action == SeriesActionV3::Prepare {
+            prepare_initialize_count
+        } else {
+            fixture_fixed_accounts(action)
+        };
         encode_effect_program_v4_atomic(
             EffectGeometryV3 {
-                fixed_accounts: fixture_fixed_accounts(action),
+                fixed_accounts,
                 item_account_stride: 0,
                 common_scalars: FIXTURE_SCALARS,
                 item_scalar_stride: 0,
@@ -1424,11 +1431,26 @@ mod tests {
     }
 
     fn fixture(action: SeriesActionV3) -> Fixture {
+        fixture_with_prepare_initialize_count(
+            action,
+            SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3,
+        )
+    }
+
+    fn fixture_with_prepare_initialize_count(
+        action: SeriesActionV3,
+        prepare_initialize_count: u16,
+    ) -> Fixture {
         let template = id([41; 32]);
-        let account = account_profile(action);
+        let fixed_accounts = if action == SeriesActionV3::Prepare {
+            prepare_initialize_count
+        } else {
+            fixture_fixed_accounts(action)
+        };
+        let account = account_profile_with_fixed_accounts(fixed_accounts);
         let request_profile = request_profile(action);
         let transition = transition();
-        let effect = effect(action);
+        let effect = effect_with_prepare_initialize_count(action, prepare_initialize_count);
         let strategy = ExecutionStrategyProgramV2::new(
             StrategyDispositionV2::Interpreted,
             id(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID),
@@ -1586,6 +1608,29 @@ mod tests {
             );
             let _ = projected_scalars(&fixture, joined);
         }
+    }
+
+    #[test]
+    fn prepare_profile_rejects_the_superseded_project_found37_child_width() {
+        let exact = fixture(SeriesActionV3::Prepare);
+        let legacy = fixture_with_prepare_initialize_count(SeriesActionV3::Prepare, 48);
+        assert_ne!(digest(&exact.effect), digest(&legacy.effect));
+        assert_eq!(
+            EffectProgramV3::decode(&exact.effect)
+                .expect("current Prepare effect")
+                .route(0)
+                .expect("Initialize route")
+                .fixed_account_count(),
+            SERIES_PREPARE_PROJECTED_INITIALIZE_ACCOUNT_COUNT_V3
+        );
+        assert_eq!(
+            authenticate_series_artifacts_v3(
+                legacy.selection(),
+                legacy.artifacts(),
+                &legacy.request,
+            ),
+            Err(SeriesArtifactErrorV3::Effect)
+        );
     }
 
     #[test]

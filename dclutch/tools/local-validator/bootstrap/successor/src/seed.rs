@@ -76,6 +76,10 @@ pub(crate) const KEYPAIR_SEED_DOMAIN_V1: &[u8] =
 pub(crate) mod role {
     /// The ephemeral Core upgrade authority, and the campaign's fee payer.
     pub(crate) const CORE_UPGRADE_AUTHORITY: &str = "core-upgrade-authority";
+    /// The disposable public-founding fee and rent payer. It is deliberately
+    /// distinct from every retained protocol signer and from the deployment's
+    /// upgrade authority.
+    pub(crate) const CAMPAIGN_PAYER: &str = "campaign-payer";
     /// The wrong authority every refusal probe signs with.
     pub(crate) const HOSTILE_AUTHORITY: &str = "hostile-authority";
     /// The Token-2022 collateral mint.
@@ -311,8 +315,10 @@ impl KeyForge {
                  not exist until it is drawn"
             ))),
             KeyOriginV1::Seeded(seed) => {
-                Ok(Keypair::new_from_array(derive(KEYPAIR_SEED_DOMAIN_V1, seed, role, index))
-                    .pubkey())
+                Ok(
+                    Keypair::new_from_array(derive(KEYPAIR_SEED_DOMAIN_V1, seed, role, index))
+                        .pubkey(),
+                )
             }
             KeyOriginV1::Persisted(secrets) => match secrets.get(role) {
                 None => Err(Error::new(format!(
@@ -444,7 +450,9 @@ mod tests {
         let second_peek = forge.peek_pubkey("collateral-mint").expect("peek again");
         assert_eq!(first_peek, second_peek, "a peek must not issue");
         assert_eq!(forge.keypair("collateral-mint").pubkey(), first_peek);
-        let after_draw = forge.peek_pubkey("collateral-mint").expect("peek after draw");
+        let after_draw = forge
+            .peek_pubkey("collateral-mint")
+            .expect("peek after draw");
         assert_ne!(after_draw, first_peek);
         assert_eq!(forge.keypair("collateral-mint").pubkey(), after_draw);
         // Random: refused, because the future key does not exist.

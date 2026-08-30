@@ -38,7 +38,9 @@
 //
 // Why the app owns the root. The export emits ROOT-ABSOLUTE URLs for both its
 // assets (`/_next/…`) and its own navigation (`/markets`, `/create`), and
-// vinext 1.0.0-beta.3 offers no way to move both:
+// The domain-root mount was established against vinext 1.0.0-beta.3. The
+// artifact-level invariant below remains version-independent: assets and app
+// routes must resolve together at the URLs the export emitted.
 //
 //   - `basePath` is incompatible with output:'export' -- its export
 //     prerenderer requests un-prefixed paths and skips every route;
@@ -110,7 +112,49 @@ renderSet.set("tools/sbom/NOTICES.md", "notices.html");
       }
     }
   };
-  walk("docs/guides");
+  // The guides are published BY THE INDEX, not by walking the directory.
+  //
+  // Walking it published five operator runbooks nobody had listed and nobody
+  // meant to publish -- among them a 512-line Loader-v3 program-upgrade
+  // procedure describing the retained-authority workflow, live and crawlable
+  // at /docs/guides/devnet-permanent-id-upgrade.html with no link to it from
+  // anywhere on the site. Unlinked is not unpublished.
+  //
+  // Deriving the set from docs/guides/README.md keeps the property the walk
+  // had -- no hand-kept list here, add a guide and it ships -- while making
+  // the act of listing a guide for readers the same act as publishing it. A
+  // file that is not in the index is internal, which is what "not in the
+  // index" already meant to everyone reading it.
+  renderSet.set("docs/guides/README.md", "guides/README.html");
+  {
+    const index = fs.readFileSync(
+      path.join(REPO, "docs/guides/README.md"),
+      "utf8",
+    );
+    const listed = new Set();
+    for (const m of index.matchAll(/\]\(([A-Za-z0-9._-]+\.md)\)/g)) {
+      listed.add(m[1]);
+    }
+    if (listed.size === 0) {
+      console.error(
+        "render-site: docs/guides/README.md lists no guide; refusing the artifact.",
+      );
+      process.exit(1);
+    }
+    for (const name of [...listed].sort()) {
+      const rel = path.posix.join("docs/guides", name);
+      if (!fs.existsSync(path.join(REPO, rel))) {
+        console.error(
+          `render-site: the guides index lists ${name}, which does not exist; refusing the artifact.`,
+        );
+        process.exit(1);
+      }
+      renderSet.set(rel, `guides/${name.replace(/\.md$/, ".html")}`);
+    }
+    console.log(
+      `render-site: publishing ${listed.size} guides named by the index.`,
+    );
+  }
   // The run evidence renders too. A filed public comment cites the Evidence
   // page by URL, so these documents have to be readable on the site and not
   // only in the repository -- see the `/evidence` index below.
@@ -406,25 +450,26 @@ function page({ title, body, depth, crumbs, style }) {
 ${crumbHtml}
 ${body}
 </main>
-<footer>dClutch is not live yet: no deployment, no live market, nothing to
-buy. <a href="${repoUrl.replace(/\/blob\/.*$/, "")}">Repository</a>.</footer>
+<footer>dClutch has seven programs on Solana devnet. There is no open market,
+no value at risk, and nothing to buy. This is not a mainnet release.
+<a href="${repoUrl.replace(/\/blob\/.*$/, "")}">Repository</a>.</footer>
 </body>
 </html>
 `;
 }
 
-// The documentation landing, at docs/index.html. What dClutch IS, and the
-// fact that it is not deployed, are the app's landing to state -- this page is
-// the section's own front door and says what is IN the section.
+// The documentation landing, at docs/index.html. This page is the section's
+// own front door and states the deployed devnet boundary without turning it
+// into a mainnet or open-market claim.
 const DOCS_BODY = `<h1>dClutch documentation</h1>
 <p>Everything below is generated from, or lives beside, the code it
 describes. dClutch is a Solana protocol for markets on real-world numbers:
 you buy claims on the outcome you believe in, and every claim is fully
 backed by collateral locked up before the claim exists.</p>
-<div class="unreleased"><strong>Not live yet.</strong> dClutch is not
-deployed on any network. There is no live market, no token, and nothing to
-buy today. Everything on this site describes software running on a local
-test chain.</div>
+<div class="unreleased"><strong>Devnet preview.</strong> The seven programs
+are deployed on Solana devnet. There is no open market, no value at risk, and
+nothing to buy today. Devnet and local test-chain runs are not mainnet
+evidence.</div>
 <ul class="cards">
 <li><strong><a href="guides/README.html">Guides</a></strong>
 Start here: what a claim is, how protection works, how to run a market,
@@ -561,10 +606,11 @@ fs.writeFileSync(
 executed, against which chain or harness, and what it produced. They are
 kept beside the code they were run against, and each one states its own
 scope -- including what it did <em>not</em> establish.</p>
-<div class="unreleased"><strong>Not live yet.</strong> dClutch is not
-deployed on any network. These runs were made on local test chains and in
-test harnesses. A run here is evidence about software, not about a
-deployment, and none of it is an offer of anything.</div>
+<div class="unreleased"><strong>Live on Solana devnet.</strong> You can
+inspect seven protocol programs at permanent devnet addresses. The first
+open market is not live yet. Each document below tells you whether its
+evidence came from devnet, a local test chain, or a test harness. None of
+this is mainnet evidence, an investment, or an offer of anything.</div>
 <ul class="cards">
 ${items}
 </ul>
@@ -573,6 +619,88 @@ live beside it in the
 <a href="${repoUrl}/docs/evidence/">repository</a>.</p>`,
     }),
   );
+}
+
+// These pages describe the project's current public state. Historical evidence
+// may accurately say that a named candidate was not deployed, but these five
+// reader entry points must not regress to the pre-DEPLOY-1 blanket claim.
+const currentDeploymentTruthPages = [
+  "evidence.html",
+  `${DOCS}/guides/operator.html`,
+  `${DOCS}/guides/trader.html`,
+  `${DOCS}/guides/reader.html`,
+  `${DOCS}/guides/trencher.html`,
+];
+const retiredDeploymentClaims = [
+  "dclutch is not deployed on any network",
+  "nothing is deployed yet",
+  "dclutch is not deployed anywhere",
+  "none of this is deployed",
+  "not deployed. no token. local validators only",
+];
+for (const relative of currentDeploymentTruthPages) {
+  const rendered = fs.readFileSync(path.join(outDir, relative), "utf8").toLowerCase();
+  for (const claim of retiredDeploymentClaims) {
+    if (rendered.includes(claim)) {
+      console.error(
+        `render-site: ${relative} regressed to the retired pre-devnet claim ${JSON.stringify(claim)}`,
+      );
+      process.exit(1);
+    }
+  }
+}
+
+// The guard above catches a claim that understates what is deployed. This one
+// catches the opposite, which is the failure that actually reached readers:
+// the site telling someone to run something that cannot work, or offering them
+// something that is not open.
+//
+// Both of these shipped. README and the reader guide published
+// `run.sh --mode full` as "boot a local validator, create and open a market
+// (about 13 minutes)" while that mode dies unconditionally at the retired
+// demo-market boundary -- so a reader built for minutes and got exit 1. Kept
+// narrow and literal on purpose: a guard that tried to judge whether prose
+// "promises too much" would either misfire or be ignored, but a guard that
+// refuses one exact dead command cannot do either.
+const deadInstructions = [
+  // If a mode or driver is un-parked, delete its row here in the same commit.
+  ["--mode full", "run.sh --mode full dies at the retired demo-market boundary"],
+];
+const instructionPages = [
+  `${DOCS}/readme.html`,
+  `${DOCS}/guides/reader.html`,
+  `${DOCS}/guides/trader.html`,
+  `${DOCS}/guides/client-developers.html`,
+];
+for (const relative of instructionPages) {
+  const rendered = fs.readFileSync(path.join(outDir, relative), "utf8");
+  for (const [needle, why] of deadInstructions) {
+    if (rendered.includes(needle)) {
+      console.error(
+        `render-site: ${relative} tells a reader to run ${JSON.stringify(needle)}, and ${why}; refusing the artifact.`,
+      );
+      process.exit(1);
+    }
+  }
+}
+
+// The posture the whole site is written to, pinned where a reader meets it
+// first. These are not style preferences -- each one replaced a live overclaim.
+const requiredPosture = [
+  [`${DOCS}/guides/README.html`, "There is no open market"],
+  [`${DOCS}/guides/trader.html`, "no devnet market is open for trading"],
+  // Joining is one third of the chain that works today, and for a long time no
+  // guide mentioned it at all.
+  [`${DOCS}/guides/trader.html`, "dclutch join"],
+];
+for (const [relative, needle] of requiredPosture) {
+  const rendered = fs.readFileSync(path.join(outDir, relative), "utf8");
+  if (!rendered.includes(needle)) {
+    console.error(
+      `render-site: ${relative} no longer says ${JSON.stringify(needle)}; refusing the artifact.`,
+    );
+    process.exit(1);
+  }
 }
 
 if (!appDir) {
@@ -620,6 +748,58 @@ function servedBy(abs) {
   return null;
 }
 
+// The app export writes `route.html`; Pages serves its canonical public URL as
+// `/route`. Unlike that extensionless form, `/route/` is not an asset match:
+// GitHub Pages looks up `route/index.html`, finds nothing, and serves 404.html.
+// (A `_redirects` file is a Netlify/Cloudflare convention; GitHub Pages
+// ignores it — shipping one was exactly how `/live/` 404'd on the live host
+// while a green check watched the wrong artifact.) The only routing a Pages
+// artifact really has is its file layout, so the fix IS layout: every
+// top-level `route.html` gets a `route/index.html` stub that sends the
+// browser to the canonical extensionless URL, keeping query and fragment.
+// Emitted here, from what actually rendered, so the app's routes and this
+// file's own evidence.html are covered by one rule and no hand-kept list.
+function emitTrailingSlashDirectoryIndexes() {
+  let failures = 0;
+  let emitted = 0;
+  for (const entry of fs.readdirSync(outDir).sort()) {
+    if (!entry.endsWith(".html") || entry === "index.html" || entry === "404.html") {
+      continue;
+    }
+    const route = entry.slice(0, -".html".length);
+    const stubPath = path.join(outDir, route, "index.html");
+    if (fs.existsSync(stubPath)) {
+      // Two answers for one URL; decide which, rather than letting copy order.
+      console.error(
+        `render-site: both ${entry} and ${route}/index.html exist; refusing the artifact.`,
+      );
+      failures++;
+      continue;
+    }
+    fs.mkdirSync(path.join(outDir, route), { recursive: true });
+    fs.writeFileSync(
+      stubPath,
+      `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url=/${route}">
+<link rel="canonical" href="/${route}">
+<title>dClutch</title>
+<script>location.replace("/${route}" + location.search + location.hash);</script>
+</head>
+<body><p><a href="/${route}">Continue to /${route}</a></p></body>
+</html>
+`,
+    );
+    emitted++;
+  }
+  console.log(
+    `render-site: emitted ${emitted} trailing-slash directory indexes.`,
+  );
+  return failures;
+}
+
 // Routes the export declares dynamic: `/markets/:address` is rendered from a
 // path parameter, so no prerendered file exists and no href in a STATIC page
 // can name one. If one ever does, this list is the place to justify it.
@@ -631,6 +811,7 @@ function servedBy(abs) {
 const DYNAMIC_PREFIXES = ["/markets/"];
 
 let checkedPages = 0;
+broken += emitTrailingSlashDirectoryIndexes();
 for (const file of walkOut(outDir)) {
   if (!file.endsWith(".html")) continue;
   checkedPages++;

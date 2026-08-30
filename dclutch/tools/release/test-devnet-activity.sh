@@ -1,55 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/bin" "$WORK/state"
-
-printf '%s\n' '#!/usr/bin/env bash' \
-  'case "$1" in' \
-  '  genesis-hash) echo EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG ;;' \
-  '  balance) echo 0 ;;' \
-  '  *) exit 0 ;;' \
-  'esac' > "$WORK/bin/solana"
-printf '%s\n' '#!/usr/bin/env bash' \
-  'if [ "$1" = new ]; then' \
-  '  while [ "$1" != --outfile ]; do shift; done' \
-  '  printf "[1]\\n" > "$2"' \
-  'else' \
-  '  basename "$2" .json | tr -d "-" | awk "{printf \"1111111111111111111111111111111%s\\n\", substr(\$0,length(\$0),1)}"' \
-  'fi' > "$WORK/bin/solana-keygen"
-printf '%s\n' '#!/usr/bin/env bash' \
-  'if printf "%s\\n" "$*" | grep -q " create-account "; then' \
-  '  echo "Creating account MockTokenAccount111111111111111111111111111"' \
-  'else' \
-  '  echo "Signature: MockTokenSignature111111111111111111111111111111111111111111111111111111111111111"' \
-  'fi' > "$WORK/bin/spl-token"
-printf '%s\n' '#!/usr/bin/env bash' \
-  'if printf "%s\\n" "$*" | grep -q " sell "; then' \
-  '  echo "submitted MockTradeSignature111111111111111111111111111111111111111111111111111111111111111111111"' \
-  '  echo "finalized at slot 1"' \
-  'elif printf "%s\\n" "$*" | grep -q " redeem "; then' \
-  '  echo "Claims-role Custody replay already exists"' \
-  'else' \
-  '  echo "portfolio mocked"' \
-  'fi' > "$WORK/bin/dclutch"
-chmod +x "$WORK/bin/solana" "$WORK/bin/solana-keygen"
-chmod +x "$WORK/bin/spl-token" "$WORK/bin/dclutch"
-printf '[9]\n' > "$WORK/payer.json"
-printf '{}\n' > "$WORK/session.json"
-printf '{}\n' > "$WORK/route.json"
-printf 'wallet-1\twallet-2\t%s\t1\t1\t1\n' "$WORK/route.json" > "$WORK/trades.tsv"
-
-PATH="$WORK/bin:$PATH" "$ROOT/tools/release/devnet-activity.sh" \
-  --rpc-url https://example.invalid --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
-  --state-dir "$WORK/state" --participants 2 --payer-keypair "$WORK/payer.json" \
-  --collateral-mint MockMint111111111111111111111111111111111 --collateral-source MockSource11111111111111111111111111111111 --token-atoms 1 \
-  --session "$WORK/session.json" --market MockMarket11111111111111111111111111111111 \
-  --trades "$WORK/trades.tsv" --replay --execute >/dev/null
-test "$(awk 'END {print NR}' "$WORK/state/participants.tsv")" = 2
-test -f "$WORK/state/keys/wallet-1.json"
-test -f "$WORK/state/keys/wallet-2.json"
-test -s "$WORK/state/trades/1.signature"
-test -s "$WORK/state/tokens/wallet-1.signature"
-echo "devnet activity wrapper local mock test: PASS"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT; mkdir -p "$WORK/bin" "$WORK/state"
+printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in' 'genesis-hash) echo EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG ;;' 'balance) echo 0 ;;' '*) exit 0 ;;' 'esac' > "$WORK/bin/solana"
+printf '%s\n' '#!/usr/bin/env bash' 'if [ "$1" = new ]; then while [ "$1" != --outfile ]; do shift; done; printf "[1]\\n" > "$2"; else basename "$2" .json | tr -d "-" | awk "{printf \"1111111111111111111111111111111%s\\n\",substr(\$0,length(\$0),1)}"; fi' > "$WORK/bin/solana-keygen"
+printf '%s\n' '#!/usr/bin/env bash' 'if printf "%s\\n" "$*" | grep -q " create-account "; then echo "Creating account MockTokenAccount111111111111111111111111111"; else echo "Signature: MockTokenSignature111111111111111111111111111111111111111111111111111111111111111"; fi' > "$WORK/bin/spl-token"
+printf '%s\n' '#!/usr/bin/env bash' 'if printf "%s\\n" "$*" | grep -q " sell "; then echo "submitted MockTradeSignature111111111111111111111111111111111111111111111111111111111111111111111"; echo "finalized at slot 1"; elif printf "%s\\n" "$*" | grep -q " redeem "; then count_file="${MOCK_REDEEM_COUNT:?}"; count=$(cat "$count_file"); count=$((count+1)); printf "%s\\n" "$count" > "$count_file"; if [ $((count % 2)) -eq 1 ]; then echo "{\"status\":\"replay-finalized\",\"signature\":\"MockReplaySignature111111111111111111111111111111111111111111111111111111111111111\"}"; else echo "{\"status\":\"finalized\",\"signature\":\"MockPayoutSignature111111111111111111111111111111111111111111111111111111111111111\"}"; fi; else echo "portfolio mocked"; fi' > "$WORK/bin/dclutch"
+chmod +x "$WORK/bin"/*; printf '[9]\n' > "$WORK/payer.json"; printf '{}\n' > "$WORK/session.json"; mkdir "$WORK/payout-inputs"; printf '{}\n' > "$WORK/payout-inputs/wallet-1.json"; printf '{}\n' > "$WORK/payout-inputs/wallet-2.json"; printf '0\n' > "$WORK/redeem-count"; printf 'wallet-1\twallet-2\t%s\t1\t1\t1\n' "$WORK/route.json" > "$WORK/trades.tsv"
+MOCK_REDEEM_COUNT="$WORK/redeem-count" PATH="$WORK/bin:$PATH" "$ROOT/tools/release/devnet-activity.sh" --rpc-url https://example.invalid --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG --state-dir "$WORK/state" --participants 2 --payer-keypair "$WORK/payer.json" --collateral-mint MockMint111111111111111111111111111111111 --collateral-source MockSource11111111111111111111111111111111 --token-atoms 1 --session "$WORK/session.json" --market MockMarket11111111111111111111111111111111 --replay --payout-input-dir "$WORK/payout-inputs" --execute >/dev/null
+if MOCK_REDEEM_COUNT="$WORK/redeem-count" PATH="$WORK/bin:$PATH" "$ROOT/tools/release/devnet-activity.sh" --rpc-url https://example.invalid --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG --state-dir "$WORK/state" --participants 2 --payer-keypair "$WORK/payer.json" --trades "$WORK/trades.tsv" --execute 2>/dev/null; then exit 1; fi
+test "$(awk 'END {print NR}' "$WORK/state/participants.tsv")" = 2; test -f "$WORK/state/keys/wallet-1.json"; test -s "$WORK/state/tokens/wallet-1.signature"; test -s "$WORK/state/redemptions/wallet-1.replay.signature"; test -s "$WORK/state/redemptions/wallet-1.payout.signature"; test -s "$WORK/state/redemptions/wallet-2.payout.signature"; echo 'devnet activity wrapper local mock test: PASS'

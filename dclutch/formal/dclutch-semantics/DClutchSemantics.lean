@@ -32,6 +32,7 @@ import DClutchSemantics.SourceResolution
 import DClutchSemantics.SourceResolutionAbi
 import DClutchSemantics.SourceResolutionControllerAbi
 import DClutchSemantics.SourceMaterialV2Abi
+import DClutchSemantics.SourceMaterialV3Abi
 import DClutchSemantics.SourcePrincipalCapacityV1
 import DClutchSemantics.SourceScheduledMedianV1
 import DClutchSemantics.SourceRecoveryPolicyV2Abi
@@ -41,6 +42,7 @@ import DClutchSemantics.GeneralClearing
 import DClutchSemantics.GeneralClearingExamples
 import DClutchSemantics.GeneralV5Assurance
 import DClutchSemantics.GeneralControllerAbi
+import DClutchSemantics.GeneralControllerRequestV3
 import DClutchSemantics.GeneralConfigAbi
 import DClutchSemantics.GeneralConfigV3Abi
 import DClutchSemantics.GeneralRequestProfilesV1

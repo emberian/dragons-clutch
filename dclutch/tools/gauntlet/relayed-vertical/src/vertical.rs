@@ -10,10 +10,10 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
 use dclutch_capability_contract::{
-    CapabilityFundingDerivationV1, CapabilityManifestV1, ContentId as CapabilityContentId,
-    FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1, FundingStatus,
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerStatusV2, FundingLedgerV2, funding_ledger_bytes_v2,
 };
-use dclutch_market_core_codec::CoreState;
+use dclutch_market_core_codec::{CoreState, Phase};
 use dclutch_product_runtime_v2::ResultDomainV2;
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -24,16 +24,19 @@ use dclutch_relay_contract::{
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1,
     record::{RelayedObservationRecordViewV1, RelayedRecordPhaseV1},
 };
-use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2};
+use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2};
 use dclutch_resolution_core_v3_operator::{
-    ObservedAccount, ResolutionCreateFundSnapshotV3, ResolutionVerifyFundReadySnapshotV3,
+    ObservedAccount, ResolutionAdmitTerminalSnapshotV3, ResolutionCreateFundSnapshotV3,
+    ResolutionVerifyFundReadySnapshotV3, build_resolution_admit_terminal_v3,
     build_resolution_create_fund_v3, build_resolution_verify_fund_ready_v3,
-    validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
+    validate_resolution_admit_terminal_report_v3, validate_resolution_create_fund_report_v3,
+    validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
-    SOURCE_SPEC_SCHEMA_ID_V1, SourceResolutionPhaseV1, WINDOW_SPEC_SCHEMA_ID_V1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
+    SOURCE_SPEC_SCHEMA_ID_V1, SourceMaterialV3, SourcePrincipalPolicyV1, SourceResolutionPhaseV1,
+    WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::transfer;
@@ -48,7 +51,8 @@ use crate::relayworld::{
     self, RESOLUTION_FAILURE_KIND, RESOLUTION_SUCCESS_KIND, RecordPairV1, RelayAddressBookV1,
 };
 use crate::rpc::Rpc;
-use crate::runtime::{OpenMarketSessionV1, found_through_open, publish_record};
+use crate::runtime::publish_record;
+use crate::substrate::{self, SubstrateRequestV1};
 use crate::twin;
 use crate::{Error, Result};
 
@@ -61,11 +65,62 @@ pub(crate) enum WalkV1 {
 
 pub(crate) struct VerticalRequestV1 {
     pub(crate) walk: WalkV1,
-    pub(crate) spec_template: PathBuf,
     pub(crate) transcript: PathBuf,
     pub(crate) relayer_bin: PathBuf,
     pub(crate) work: PathBuf,
-    pub(crate) keypair_seed: Option<String>,
+    /// The successor validator's RPC port; the twin allocates around it.
+    pub(crate) rpc_port: u16,
+    /// The checked release gate the substrate is prepared from, with its
+    /// pinned identity — the same four facts the lifecycle driver demands.
+    pub(crate) checked_release_gate: PathBuf,
+    pub(crate) expected_gate_sha256: String,
+    pub(crate) expected_source_revision: String,
+    pub(crate) expected_source_tree_sha256: String,
+    /// The prepare seed (64 lowercase hex): loopback-only determinism for the
+    /// disposable role keys.
+    pub(crate) seed: String,
+}
+
+/// A live campaign session over the checked-mutable substrate.
+///
+/// The shape `found_through_open` used to return, rebuilt from the campaign
+/// evidence instead: the validator is this driver's own child, the plan is
+/// the checked-mutable plan, and the authority is the retained upgrade
+/// authority whose key file the prepare stage wrote. Unlike the tier-1
+/// session, the keys here ARE persisted (disposable, loopback-only, under the
+/// prepare work dir), and the evidence says so instead of claiming otherwise.
+pub(crate) struct RelaySessionV1 {
+    /// Kept solely to own the child's lifetime; `Drop` kills the validator.
+    #[allow(dead_code)]
+    pub(crate) validator: substrate::ValidatorGuardV1,
+    pub(crate) rpc: Rpc,
+    pub(crate) plan: crate::model::SuccessorPlan,
+    pub(crate) plan_sha256: String,
+    pub(crate) authority: Keypair,
+    pub(crate) output: PathBuf,
+    pub(crate) transactions: Vec<crate::model::TransactionEvidence>,
+    pub(crate) accounts: std::collections::BTreeMap<String, crate::model::AccountEvidence>,
+    pub(crate) completed: Vec<String>,
+    pub(crate) founding_custody_context: String,
+    pub(crate) direct_selected_manifest_entry_index: u16,
+}
+
+impl RelaySessionV1 {
+    fn evidence_json(&self) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "schema": "dclutch-relayed-vertical-session-evidence-v1",
+            "rpc_url": self.rpc.url(),
+            "plan_sha256": self.plan_sha256,
+            "authority_pubkey": self.authority.pubkey().to_string(),
+            "private_key_persisted": true,
+            "keypair_derivation": "prepared-disposable-loopback-roles",
+            "founding_custody_context": self.founding_custody_context,
+            "direct_selected_manifest_entry_index": self.direct_selected_manifest_entry_index,
+            "completed": self.completed,
+            "transactions": serde_json::to_value(&self.transactions)?,
+            "accounts": serde_json::to_value(&self.accounts)?,
+        }))
+    }
 }
 
 #[derive(Serialize)]
@@ -80,23 +135,18 @@ fn now_unix() -> Result<i64> {
     i64::try_from(elapsed.as_secs()).map_err(|_| Error::new("wall clock out of range"))
 }
 
-/// The whole vertical.
+/// The whole vertical, in the order the park banner prescribed: prepare the
+/// checked substrate, authenticate it live, compile the market against it,
+/// found, then relay.
 pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     std::fs::create_dir_all(&request.work)?;
     let mut stages: Vec<StageV1> = Vec::new();
     let start_unix = now_unix()?;
 
     // ---------------------------------------------------------- 1. the twin
-    // The successor validator's base is allocated by the runner but not yet
+    // The successor validator's base is chosen by the runner but not yet
     // bound; the twin's allocator must not take that block.
-    let template_probe: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&request.spec_template)?)?;
-    let successor_base = template_probe
-        .get("rpc_url")
-        .and_then(|value| value.as_str())
-        .and_then(|url| url.rsplit(':').next())
-        .and_then(|tail| tail.trim_end_matches('/').parse::<u16>().ok());
-    let twin = twin::start(&request.work, start_unix, successor_base)?;
+    let twin = twin::start(&request.work, start_unix, Some(request.rpc_port))?;
     stages.push(StageV1 {
         stage: "mainnet twin".into(),
         outcome: "running".into(),
@@ -110,44 +160,120 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         ),
     });
 
-    // ---------------------------------------------- 2. keys and the market
+    // ----------------------------------- 2. the checked-mutable substrate
+    // prepare-mutable -> spawn -> authenticate -> campaign activation. Only
+    // after this does a live loopback deployment exist for the deployment-
+    // bound Direct compiler to observe.
+    let substrate_dir = request.work.join("substrate");
+    std::fs::create_dir_all(&substrate_dir)?;
+    let checked = substrate::bring_up(&SubstrateRequestV1 {
+        work: &substrate_dir,
+        checked_release_gate: &request.checked_release_gate,
+        expected_gate_sha256: &request.expected_gate_sha256,
+        expected_source_revision: &request.expected_source_revision,
+        expected_source_tree_sha256: &request.expected_source_tree_sha256,
+        seed: &request.seed,
+        rpc_port: request.rpc_port,
+    })?;
+    stages.push(StageV1 {
+        stage: "checked-mutable substrate".into(),
+        outcome: "executed".into(),
+        note: format!(
+            "local-mutable-prepare-v1 derived the seven-role mutable substrate from the checked \
+             release gate ({}), a fresh solana-test-validator booted the prepared account \
+             directory (no --upgradeable-program, so the retained tag-0 authority survives), the \
+             plan re-authenticated against the gate on disk, and the administration campaign \
+             published, initialized and activated through the retained authority.",
+            request.expected_gate_sha256
+        ),
+    });
+
+    // ------------------------------------------- 3. keys and the market
     // The relayer's attestation key is FOUNDING CONTENT (the key-set record's
-    // digest seeds half the graph), so it is generated before the spec exists
-    // and disclosed through the records rather than through any wallet store.
+    // digest seeds half the graph), so it is generated before the market
+    // compiles and disclosed through the records rather than any wallet store.
     let attestation = Keypair::new();
     let fee_payer = Keypair::new();
     let keys_dir = request.work.join("relayer-keys");
     let attestation_path = daemon::write_keypair_file(&keys_dir, "attestation.json", &attestation)?;
     let fee_payer_path = daemon::write_keypair_file(&keys_dir, "fee-payer.json", &fee_payer)?;
 
-    let template: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&request.spec_template)?)?;
-    let registry = pubkey(
-        template
-            .get("registry")
-            .and_then(|role| role.get("program_id"))
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| Error::new("the spec template names no registry program id"))?,
-    )?;
+    let registry = pubkey(&checked.plan.registry.program_id)?;
     let window_choice = input::window_choice(start_unix, request.walk == WalkV1::Success);
-    let facts =
-        input::relayed_market_input(registry, attestation.pubkey().to_bytes(), &window_choice)?;
+    // The deployment-bound compiler, observing the LIVE checked substrate —
+    // the exact ordering the park banner demanded. The fee recipient is a
+    // fresh disposable identity; the scenario's 50 bps mirrors the published
+    // graduation fixture.
+    let fee_recipient = Keypair::new();
+    let direct = crate::direct_market::DirectMarketCompilerOwnedV1::load_local(
+        &checked.plan_path,
+        &checked.rpc_url,
+        registry,
+        Some(50),
+        Some(fee_recipient.pubkey()),
+    )?;
+    let facts = input::relayed_market_input(
+        registry,
+        attestation.pubkey().to_bytes(),
+        &window_choice,
+        direct.compiler(),
+    )?;
 
-    let mut spec_value = template;
-    spec_value["market"] = serde_json::to_value(&facts.input)?;
-    spec_value["record_publication"] = serde_json::Value::String("transaction".into());
-    let spec_path = request.work.join("spec.json");
-    std::fs::write(&spec_path, serde_json::to_vec_pretty(&spec_value)?)?;
+    // The graduation wrapper, exactly as the shipped `graduation-market`
+    // subcommand emits it; the founding campaign authenticates the whole
+    // envelope back into the inner source graph.
+    let market_path = request.work.join("market.json");
+    let wrapper = serde_json::json!({
+        "schema": "dclutch-graduation-market-input-v1",
+        "market": facts.input,
+        "account_set_id": hex(&facts.account_set_id),
+        "relayer_attestation": attestation.pubkey().to_string(),
+        "relayer_key_set_hex": hex(&facts.relayer_key_set_bytes),
+        "relayer_key_set_digest": hex(&facts.relayer_key_set_digest),
+        "venue_release_digest": hex(&facts.venue_release_digest),
+        "relayed_adapter_config_digest": hex(&facts.relayed_adapter_config_digest),
+        "source_spec_digest": hex(&facts.source_spec_digest),
+        "window": {
+            "start_unix_seconds": window_choice.start_unix_seconds,
+            "end_unix_seconds": window_choice.end_unix_seconds,
+            "max_age_seconds": window_choice.max_age_seconds,
+        },
+        "walk_bounty_lamports": WALK_BOUNTY_LAMPORTS,
+        "admitted_principal_atoms": facts.admitted_principal_atoms.to_string(),
+        "admitted_principal_cap_atoms": facts.admitted_principal_cap_atoms.to_string(),
+        "disclosed_failure_conflation": DISCLOSED_FAILURE_CONFLATION,
+    });
+    std::fs::write(&market_path, serde_json::to_vec_pretty(&wrapper)?)?;
 
-    // ------------------------------------------------------- 3. the founding
-    let mut session = found_through_open(&spec_path, request.keypair_seed.as_deref())?;
+    // ------------------------------------------------------- 4. the founding
+    let mut rpc = Rpc::connect(&checked.rpc_url)?;
+    let founding = substrate::found_market(
+        &checked,
+        &mut rpc,
+        &market_path,
+        &request.work.join("founding-evidence.json"),
+    )?;
+    let authority_keypair = substrate::authority_keypair(&checked)?;
+    let mut session = RelaySessionV1 {
+        validator: checked.validator,
+        rpc,
+        plan: checked.plan,
+        plan_sha256: checked.plan_sha256,
+        authority: authority_keypair,
+        output: request.work.join("session-evidence.json"),
+        transactions: founding.transactions,
+        accounts: founding.market.accounts,
+        completed: founding.market.completed,
+        founding_custody_context: founding.market.founding_custody_context,
+        direct_selected_manifest_entry_index: founding.market.direct_selected_manifest_entry_index,
+    };
     stages.push(StageV1 {
         stage: "founding through Open".into(),
         outcome: "executed".into(),
         note: format!(
-            "The tier-1 producer's own campaign, transaction-only record publication, founding \
-             the zero-cut graduation Product with NO recovery policy. {} transactions to here. \
-             Disclosed at founding: {DISCLOSED_FAILURE_CONFLATION}",
+            "campaign --founding-only over the live checked substrate, transaction-only record \
+             publication, founding the zero-cut graduation Product with NO recovery policy. {} \
+             transactions to here. Disclosed at founding: {DISCLOSED_FAILURE_CONFLATION}",
             session.transactions.len()
         ),
     });
@@ -188,11 +314,37 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             .map_err(|error| Error::new(format!("founded Market: {error:?}")))?;
     let generation = market_state.identity.generation;
     let rent_beneficiary = Pubkey::new_from_array(market_state.rent_beneficiary.to_bytes());
-    if market_state.identity.resolution_policy.to_bytes() != facts.material_digest {
-        return Err(Error::new(
-            "the founded Market's resolution policy is not the compiled relayed material",
-        ));
-    }
+    // The Market's resolution policy is the digest of the source material the
+    // campaign PUBLISHED, and that is deliberately not the digest `relayed.rs`
+    // compiled. The market compiler rebuilds the manipulation floor with the
+    // market's own coordinates, and one of them is the collateral mint --
+    // created at run time, unknowable to any compiler. So a market whose floor
+    // is bounded can never publish the compiler's `material_digest`, and
+    // comparing the two could never hold for this family. Every record
+    // identity below is therefore read off the FOUNDED MARKET, and the ties
+    // back to what this campaign compiled are made on the fields the market
+    // compiler does not rewrite: the source spec, and the absence of a
+    // recovery policy.
+    let published_material = market_state.identity.resolution_policy.to_bytes();
+    // The floor the market PUBLISHED. The compiler proposes a template; the
+    // market compiler keeps its basis, derivation release and atoms and
+    // replaces the source spec, adapter config and collateral unit with the
+    // market's own, so the published record is the only one that exists.
+    let published_floor = crate::market::record_identity(
+        &session
+            .rpc
+            .required_account(
+                pubkey(
+                    &session
+                        .accounts
+                        .get("manipulation_floor_record")
+                        .ok_or_else(|| Error::new("no manipulation_floor_record evidence"))?
+                        .address,
+                )?,
+                "published ManipulationFloorV1 record",
+            )?
+            .data,
+    );
 
     let founder_wallet = pubkey(
         &session
@@ -307,7 +459,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
              was admitted UNDER kappa = 1/4: principal {} of the {}-atom cap.",
             attestation.pubkey(),
             hex(&facts.account_set_id),
-            hex(&facts.manipulation_floor_digest),
+            hex(&published_floor),
             dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
             facts.admitted_principal_atoms,
             facts.admitted_principal_cap_atoms,
@@ -324,36 +476,63 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     )?;
 
     // ------------------------------------ 5. resolution funding, no-recovery
-    let manifest_view = CapabilityManifestV1::decode(&facts.manifest_bytes)
+    // The PUBLISHED manifest and the PUBLISHED material digest. The market
+    // compiler rewrote the Source entry's config id from the floor template's
+    // digest to the compiled material's, so selecting the no-recovery entries
+    // out of the DECLARED manifest picks the right indexes for a market that
+    // was never founded -- and the FundingLedgerV2 address derived from that
+    // mask does not exist, which the chain reports only as `Funding`.
+    let manifest_record = pubkey(
+        &session
+            .accounts
+            .get("capability_manifest_record")
+            .ok_or_else(|| Error::new("no capability_manifest_record evidence"))?
+            .address,
+    )?;
+    let published_manifest_bytes = session
+        .rpc
+        .required_account(manifest_record, "published CapabilityManifestV1 record")?
+        .data;
+    let manifest_view = CapabilityManifestV1::decode(&published_manifest_bytes)
         .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
-    let funding_entry_indices = select_no_recovery_entries(manifest_view, facts.material_digest)?;
+    let funding_entry_indices = select_no_recovery_entries(manifest_view, published_material)?;
     let manifest_id =
         CapabilityContentId::new(market_state.identity.capability_manifest.to_bytes())
             .map_err(|error| Error::new(format!("manifest identity: {error:?}")))?;
-    let funding_state_rent = session.rpc.minimum_balance(FUNDING_STATE_BYTES)?;
-    let mut funding = [Pubkey::default(); 3];
-    for (slot, entry_index) in funding_entry_indices.into_iter().enumerate() {
-        let entry = manifest_view
-            .entry(entry_index)
-            .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        let target = funding_state_rent
-            .checked_add(entry.funding_quote().amounts().native_lamports_total())
-            .ok_or_else(|| Error::new("funding target overflow"))?;
-        let custody = FundingCustodyObservationV1::native_only(target, funding_state_rent)
-            .map_err(|error| Error::new(format!("funding custody: {error:?}")))?;
-        let state = FundingStateV1::new(manifest_id, manifest_view, entry_index, custody)
-            .map_err(|error| Error::new(format!("pending FundingState: {error:?}")))?;
-        let derivation = CapabilityFundingDerivationV1::new(
-            market.to_bytes(),
-            generation,
-            manifest_id,
-            manifest_view,
-            state,
-        )
-        .map_err(|error| Error::new(format!("funding derivation: {error:?}")))?;
-        funding[slot] =
-            Pubkey::find_program_address(&derivation.seed_components(), &resolution_program).0;
-    }
+    let selected_mask =
+        funding_entry_indices
+            .into_iter()
+            .try_fold(0_u16, |mask, entry_index| {
+                1_u16
+                    .checked_shl(u32::from(entry_index))
+                    .map(|bit| mask | bit)
+                    .ok_or_else(|| Error::new("funding entry index exceeds the subset-ledger mask"))
+            })?;
+    let mut funding_ledger_bytes = vec![
+        0_u8;
+        funding_ledger_bytes_v2(3).map_err(|error| Error::new(
+            format!("FundingLedgerV2 width: {error:?}")
+        ))?
+    ];
+    FundingLedgerV2::initialize(
+        &mut funding_ledger_bytes,
+        manifest_id,
+        manifest_view,
+        selected_mask,
+    )
+    .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
+    let pending_funding = FundingLedgerV2::decode(&funding_ledger_bytes)
+        .map_err(|error| Error::new(format!("pending FundingLedgerV2: {error:?}")))?;
+    let funding_derivation = CapabilityFundingLedgerDerivationV2::new(
+        resolution_program.to_bytes(),
+        market.to_bytes(),
+        generation,
+        manifest_id,
+        pending_funding,
+    )
+    .map_err(|error| Error::new(format!("funding-ledger derivation: {error:?}")))?;
+    let funding =
+        Pubkey::find_program_address(&funding_derivation.seed_components(), &resolution_program).0;
     let source_state = Pubkey::find_program_address(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
@@ -366,13 +545,39 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
 
     let material_pair = RecordPairV1::derive(
         registry_program,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-        facts.material_digest,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+        published_material,
     );
+    let material_account = session
+        .rpc
+        .required_account(material_pair.raw, "SourceMaterialV3 record")?;
+    let material = SourceMaterialV3::decode(&material_account.data)
+        .map_err(|error| Error::new(format!("SourceMaterialV3: {error:?}")))?;
+    // The two facts the market compiler does NOT rewrite, so they still tie
+    // the founded market back to the graph this campaign compiled.
+    if material.primary_source_spec().to_bytes() != facts.source_spec_digest {
+        return Err(Error::new(
+            "the founded Market's source material does not name the relayed source spec",
+        ));
+    }
+    if material.recovery_policy().is_some() {
+        return Err(Error::new(
+            "the relayed vertical requires a no-recovery SourceMaterialV3",
+        ));
+    }
+    match material.principal_policy() {
+        SourcePrincipalPolicyV1::BoundedByFloor(floor)
+            if floor.to_bytes() == published_floor => {}
+        _ => {
+            return Err(Error::new(
+                "the relayed SourceMaterialV3 does not select the published manipulation floor",
+            ));
+        }
+    }
     let manifest_pair = RecordPairV1::derive(
         registry_program,
         dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-        crate::market::record_identity(&facts.manifest_bytes),
+        market_state.identity.capability_manifest.to_bytes(),
     );
 
     let create_snapshot = fund_snapshot(
@@ -401,14 +606,9 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             create.source_top_up_lamports,
         ));
     }
-    for (destination, top_up) in funding.into_iter().zip(create.funding_top_up_lamports) {
-        if top_up > 0 {
-            prepay.push(transfer(&authority.pubkey(), &destination, top_up));
-        }
-    }
     if !prepay.is_empty() {
         session.transactions.push(session.rpc.send(
-            "relayed vertical: prepay the Source state and the three Resolution Funds",
+            "relayed vertical: prepay the Source state",
             &prepay,
             &authority,
         )?);
@@ -450,7 +650,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             &mut session.transactions,
         )?;
     session.transactions.push(session.rpc.send_v0(
-        "relayed vertical: a no-recovery Market creates its own Resolution funding",
+        "relayed vertical: a no-recovery Market creates its Source against initialized Resolution funding",
         std::slice::from_ref(&create.instruction),
         &authority,
         funding_observation,
@@ -470,6 +670,15 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         source_state,
         funding,
         rent_beneficiary,
+        Pubkey::find_program_address(
+            &[
+                dclutch_resolution_codec::FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+                market.as_ref(),
+                &generation.to_le_bytes(),
+            ],
+            &resolution_program,
+        )
+        .0,
     )?)
     .map_err(|error| Error::new(format!("chain-derived VerifyFundReady: {error:?}")))?;
     validate_resolution_verify_fund_ready_report_v3(&verify)
@@ -481,16 +690,25 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         funding_observation,
         &funding_tables,
     )?);
-    for (label, address) in [
-        ("recovery companion Fund", funding[0]),
-        ("exhaustion companion Fund", funding[1]),
-        ("failure Fund", funding[2]),
-    ] {
-        let status = FundingStateV1::decode(&session.rpc.required_account(address, label)?.data)
-            .map_err(|error| Error::new(format!("{label}: {error:?}")))?
+    let funding_account = session
+        .rpc
+        .required_account(funding, "Resolution funding ledger")?;
+    let active_funding = FundingLedgerV2::decode(&funding_account.data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest_view))
+        .map_err(|error| Error::new(format!("Resolution funding ledger: {error:?}")))?;
+    for entry_index in funding_entry_indices {
+        let status = active_funding
+            .slot(entry_index)
+            .map_err(|error| {
+                Error::new(format!(
+                    "Resolution funding ledger entry {entry_index}: {error:?}"
+                ))
+            })?
             .status();
-        if status != FundingStatus::Active {
-            return Err(Error::new(format!("{label} is {status:?}, not Active")));
+        if status != FundingLedgerStatusV2::Active {
+            return Err(Error::new(format!(
+                "Resolution funding ledger entry {entry_index} is {status:?}, not Active"
+            )));
         }
     }
     relayworld::require_source_phase(
@@ -501,14 +719,14 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     stages.push(StageV1 {
         stage: "resolution funding (no recovery)".into(),
         outcome: "executed".into(),
-        note: "CreateFund and VerifyFundReady over the SHORT no-recovery frame (the two \
-               RecoveryPolicyV2 tail positions absent), the first execution of the e5b6923 \
-               admission on a live validator. The failure compartment is configured by the \
-               market's own Source material; the two companions are prepaid and refundable."
+        note: "CreateFund and VerifyFundReady over the short no-recovery frame (the two \
+               RecoveryPolicyV2 tail positions absent). One Resolution-owned subset ledger \
+               carries the failure compartment configured by the market's Source material and \
+               its two prepaid, refundable companions."
             .into(),
     });
     ledger.watch("resolution_source_state", source_state);
-    ledger.watch("resolution_funding_failure", funding[2]);
+    ledger.watch("resolution_funding_ledger", funding);
     ledger.watch("resolution_rent_beneficiary", rent_beneficiary);
     ledger.observe(
         &mut session.rpc,
@@ -582,7 +800,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         manifest: manifest_pair,
         rent_beneficiary,
         source_state,
-        failure_funding: funding[2],
+        failure_funding: funding,
     };
 
     // Prepay both certificate destinations: success and failure are different
@@ -605,6 +823,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             &twin,
             &mut session,
             &facts,
+            published_material,
             &authority,
             &fee_payer,
             &attestation_path,
@@ -628,11 +847,8 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     // ------------------------------------------------------- 7. the verdict
     let violations = ledger.violations();
     let conserved = violations.is_empty();
-    let evidence = session.evidence();
-    std::fs::write(
-        &session.spec.output,
-        serde_json::to_vec_pretty(&serde_json::to_value(&evidence)?)?,
-    )?;
+    let evidence = session.evidence_json()?;
+    std::fs::write(&session.output, serde_json::to_vec_pretty(&evidence)?)?;
 
     let transcript = serde_json::json!({
         "schema": "dclutch-relayed-vertical-transcript-v1",
@@ -660,7 +876,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             "kappa_denominator": dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
             "manipulation_floor_lamports":
                 dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
-            "manipulation_floor_record": hex(&facts.manipulation_floor_digest),
+            "manipulation_floor_record": hex(&published_floor),
             "principal_atoms": facts.admitted_principal_atoms.to_string(),
             "principal_cap_atoms": facts.admitted_principal_cap_atoms.to_string(),
         },
@@ -686,8 +902,13 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
 fn success_walk(
     request: &VerticalRequestV1,
     twin: &twin::MainnetTwinV1,
-    session: &mut OpenMarketSessionV1,
+    session: &mut RelaySessionV1,
     facts: &RelayedMarketFactsV1,
+    // The source-material identity the founded Market NAMES, which is not the
+    // one the compiler produced: the market compiler rebuilds the manipulation
+    // floor with the market's own collateral unit, so only the published
+    // identity exists on chain for the relay to select.
+    published_material: [u8; 32],
     authority: &Keypair,
     fee_payer: &Keypair,
     attestation_path: &std::path::Path,
@@ -778,7 +999,7 @@ fn success_walk(
         generation,
         artifacts.observed_slot,
         u16::try_from(entries.len()).map_err(|_| Error::new("set width overflow"))?,
-        facts.material_digest,
+        published_material,
         facts.source_spec_digest,
     )?;
     session.transactions.push(session.rpc.send(
@@ -819,7 +1040,7 @@ fn success_walk(
         &book,
         generation,
         artifacts.observed_slot,
-        facts.material_digest,
+        published_material,
         facts.source_spec_digest,
         &entries,
     )?;
@@ -853,7 +1074,7 @@ fn success_walk(
             relay_program_data: pubkey(&session.plan.resolution.programdata_id)?,
             relay_program_deployment_slot: session.plan.resolution.deployment_slot,
             market_owner: pubkey(&session.plan.core.program_id)?,
-            source_material_id: facts.material_digest,
+            source_material_id: published_material,
             provider_release_id: crate::market::record_identity(&hex_decode(
                 &facts.input.provider_release_hex,
             )),
@@ -1002,9 +1223,9 @@ fn success_walk(
 /// The silent-relayer sibling: nobody observes, the deadline passes, the
 /// funded walk pays a walker on a bare legacy transaction.
 fn failure_walk(
-    session: &mut OpenMarketSessionV1,
+    session: &mut RelaySessionV1,
     facts: &RelayedMarketFactsV1,
-    _authority: &Keypair,
+    authority: &Keypair,
     book_template: impl Fn(Pubkey, u8) -> RelayAddressBookV1,
     generation: u64,
     ledger: &mut ConservationLedgerV1,
@@ -1130,17 +1351,80 @@ fn failure_walk(
              Product's pre-disclosed failure cell with route and provider evidence zero."
         ),
     });
+    // ------------------------- the walked market ENDS TERMINAL, live
+    // The exact next instruction the ProgramTest campaign proved
+    // (walked_to_failure, resolution_core_v3_lifecycle.rs), now against the
+    // live validator: chain-derived, validated, then asserted three ways.
+    let admit = build_resolution_admit_terminal_v3(&terminal_snapshot(
+        &mut session.rpc,
+        &walker_book,
+        pubkey(&session.plan.registry.program_id)?,
+        pubkey(&session.plan.core.programdata_id)?,
+        pubkey(&session.plan.resolution.programdata_id)?,
+    )?)
+    .map_err(|error| Error::new(format!("chain-derived AdmitTerminal: {error:?}")))?;
+    validate_resolution_admit_terminal_report_v3(&admit)
+        .map_err(|error| Error::new(format!("AdmitTerminal report: {error:?}")))?;
+    session.transactions.push(session.rpc.send(
+        "relayed vertical: the walked market ends terminal on its pre-disclosed failure terms",
+        std::slice::from_ref(&admit.instruction),
+        authority,
+    )?);
+    let admitted = CoreState::decode(
+        &session
+            .rpc
+            .required_account(walker_book.market, "terminal Market")?
+            .data,
+    )
+    .map_err(|error| Error::new(format!("terminal Market: {error:?}")))?;
+    let expected_certificate = walker_book.certificate_of(RESOLUTION_FAILURE_KIND);
+    if !matches!(admitted.phase, Phase::Terminal) {
+        return Err(Error::new(format!(
+            "the walked market did not end Terminal: phase {:?}",
+            admitted.phase
+        )));
+    }
+    if admitted.terminal_receipt.map(|value| value.to_bytes())
+        != Some(expected_certificate.to_bytes())
+    {
+        return Err(Error::new(
+            "the Market did not commit to the FAILURE certificate's own address — the seat a \
+             provider-resolved terminal writes is a different PDA, and neither may occupy the \
+             other's",
+        ));
+    }
+    if admitted.terminal_winner != domain.failure_selector() {
+        return Err(Error::new(format!(
+            "terminal_winner {} is not the Product's pre-disclosed failure selector {}",
+            admitted.terminal_winner,
+            domain.failure_selector()
+        )));
+    }
+    stages.push(StageV1 {
+        stage: "the walked market ends terminal".into(),
+        outcome: "executed".into(),
+        note: format!(
+            "AdmitTerminal, chain-derived from the FailureCommitted Source, executed against the \
+             live validator. The Market is Terminal, committed to the failure certificate's own \
+             address (a different PDA from a provider-resolved terminal's seat), and \
+             terminal_winner {} is the selector the Source's own failure decision carried.",
+            admitted.terminal_winner
+        ),
+    });
     ledger.observe(
         &mut session.rpc,
         "market terminalized (failure walk)",
         0,
         0,
         LamportClaimV1::inapplicable(
-            "the walk moves the disclosed bounty from the watched escrow to the walker; the \
-             stage's own assertions carry the exact lamport deltas",
+            "the walk moves the disclosed bounty from the watched escrow to the walker, and the \
+             terminal admission moves no collateral; the stage's own assertions carry the exact \
+             lamport deltas",
         ),
     )?;
     Ok(serde_json::json!({
+        "terminal_phase": "Terminal",
+        "terminal_winner": admitted.terminal_winner,
         "walk_wire_bytes": extent,
         "walker": walker.pubkey().to_string(),
         "bounty_paid_lamports": WALK_BOUNTY_LAMPORTS,
@@ -1163,7 +1447,7 @@ fn select_no_recovery_entries(
         let entry = manifest
             .entry(entry_index)
             .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
-        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4 {
+        if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
             continue;
         }
         if entry.config_id().to_bytes() == material_digest {
@@ -1200,7 +1484,7 @@ fn fund_snapshot(
     material: RecordPairV1,
     manifest: RecordPairV1,
     source_state: Pubkey,
-    funding: [Pubkey; 3],
+    funding_ledger: Pubkey,
 ) -> Result<ResolutionCreateFundSnapshotV3> {
     let (observation, present) = rpc.finalized_observed_accounts(
         &[
@@ -1237,9 +1521,7 @@ fn fund_snapshot(
         capability_manifest: at(8)?,
         capability_manifest_staging: vacant(observation, manifest.staging),
         source_destination: observed_or_vacant(rpc, observation, source_state)?,
-        recovery_destination: observed_or_vacant(rpc, observation, funding[0])?,
-        exhaustion_destination: observed_or_vacant(rpc, observation, funding[1])?,
-        failure_destination: observed_or_vacant(rpc, observation, funding[2])?,
+        funding_ledger: observed_or_vacant(rpc, observation, funding_ledger)?,
         rent_sysvar: at(9)?,
         system_program: at(10)?,
         // The no-recovery material has no policy record; per the operator's
@@ -1262,8 +1544,9 @@ fn verify_snapshot(
     material: RecordPairV1,
     manifest: RecordPairV1,
     source_state: Pubkey,
-    funding: [Pubkey; 3],
+    funding: Pubkey,
     rent_beneficiary: Pubkey,
+    activation_receipt: Pubkey,
 ) -> Result<ResolutionVerifyFundReadySnapshotV3> {
     let (observation, present) = rpc.finalized_observed_accounts(
         &[
@@ -1277,9 +1560,7 @@ fn verify_snapshot(
             material.raw,
             manifest.raw,
             source_state,
-            funding[0],
-            funding[1],
-            funding[2],
+            funding,
             rent_beneficiary,
             sysvar::rent::ID,
             sysvar::clock::ID,
@@ -1305,14 +1586,79 @@ fn verify_snapshot(
         capability_manifest: at(8)?,
         capability_manifest_staging: vacant(observation, manifest.staging),
         source_state: at(9)?,
-        recovery_funding: at(10)?,
-        exhaustion_funding: at(11)?,
-        failure_funding: at(12)?,
-        beneficiary: at(13)?,
-        rent_sysvar: at(14)?,
-        clock_sysvar: at(15)?,
+        funding_ledger: at(10)?,
+        beneficiary: at(11)?,
+        rent_sysvar: at(12)?,
+        clock_sysvar: at(13)?,
+        // Verification precedes activation, so the receipt PDA is vacant.
+        activation_receipt: vacant(observation, activation_receipt),
         recovery_policy: at(7)?,
         recovery_policy_staging: vacant(observation, material.staging),
+    })
+}
+
+/// Same-finalized snapshot for the terminal admission of a walked market.
+///
+/// Every address comes off the campaign's own book; the five staging cursors
+/// are vacant by construction on a chain whose records were published in
+/// transactions and never staged again.
+fn terminal_snapshot(
+    rpc: &mut Rpc,
+    book: &RelayAddressBookV1,
+    registry_program: Pubkey,
+    core_programdata: Pubkey,
+    resolution_programdata: Pubkey,
+) -> Result<ResolutionAdmitTerminalSnapshotV3> {
+    let certificate = book.certificate_of(RESOLUTION_FAILURE_KIND);
+    let (observation, present) = rpc.finalized_observed_accounts(
+        &[
+            book.market,
+            book.activation,
+            registry_program,
+            book.core_program,
+            core_programdata,
+            book.resolution_program,
+            resolution_programdata,
+            book.material.raw,
+            book.manifest.raw,
+            book.source_state,
+            book.failure_funding,
+            certificate,
+            sysvar::rent::ID,
+            book.product.raw,
+            book.result_domain.raw,
+            book.portfolio.raw,
+        ],
+        0,
+    )?;
+    let at = |index: usize| -> Result<ObservedAccount> {
+        present
+            .get(index)
+            .cloned()
+            .ok_or_else(|| Error::new("finalized observation lost an account"))
+    };
+    Ok(ResolutionAdmitTerminalSnapshotV3 {
+        market: at(0)?,
+        activation_cache: at(1)?,
+        registry_program: at(2)?,
+        core_program: at(3)?,
+        core_programdata: at(4)?,
+        resolution_program: at(5)?,
+        resolution_programdata: at(6)?,
+        source_material: at(7)?,
+        source_material_staging: vacant(observation, book.material.staging),
+        capability_manifest: at(8)?,
+        capability_manifest_staging: vacant(observation, book.manifest.staging),
+        source_state: at(9)?,
+        funding_ledger: at(10)?,
+        certificate: at(11)?,
+        rent_sysvar: at(12)?,
+        product_raw: at(13)?,
+        product_staging: vacant(observation, book.product.staging),
+        result_domain_raw: at(14)?,
+        result_domain_staging: vacant(observation, book.result_domain.staging),
+        portfolio_raw: at(15)?,
+        portfolio_staging: vacant(observation, book.portfolio.staging),
     })
 }
 

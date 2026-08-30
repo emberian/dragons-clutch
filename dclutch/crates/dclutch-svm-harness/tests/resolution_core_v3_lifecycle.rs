@@ -5,7 +5,7 @@
 // opening, and separately starts from an authenticated provider-produced
 // terminal Source/certificate boundary to execute chain-derived terminal
 // admission and closure. A deliberately stale retirement instruction proves
-// rollback of the physical close across Core, Source, all three Funds, the
+// rollback of the physical close across Core, Source, the subset ledger, the
 // closure output, and the immutable RentCredit beneficiary.
 
 use std::{env, fs, path::PathBuf};
@@ -16,10 +16,10 @@ mod pyth_provider;
 
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-    CapabilityEntryV1, CapabilityFundingDerivationV1, CapabilityManifestV1, CompartmentFundingV1,
-    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
-    FundingCustodyObservationV1, FundingQuoteV1, FundingStateV1, FundingStatus,
-    MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+    CapabilityEntryV1, CapabilityFundingLedgerDerivationV2, CapabilityManifestV1,
+    CompartmentFundingV1, ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingAmountsV1,
+    FundingLedgerStatusV2, FundingLedgerV2, FundingQuoteV1, MANIFEST_HEADER_BYTES,
+    MAX_DEPENDENCIES_PER_CAPABILITY, funding_ledger_bytes_v2,
 };
 use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_custody_contract::{
@@ -28,7 +28,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    Readiness, Request,
+    REQUEST_BYTES, Readiness, Request, StateBumpsV1,
 };
 use dclutch_market_open_v1_operator::{
     RegistryOpenMarketContinuationStateV1, build_registry_open_market_continuation_v1,
@@ -66,28 +66,30 @@ use dclutch_release_set_contract::{
     ProtocolInfrastructureProfileV1,
 };
 use dclutch_resolution_codec::{
-    PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
-    ResolutionCertificateKindV2, ResolutionCertificateV2, SOURCE_CLOSURE_RECEIPT_BYTES_V2,
-    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2, SourceClosureReceiptV2,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
+    PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
+    RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_resolution_core_v3_operator::{
-    Finality, Observation, ObservedAccount, ResolutionAdmitTerminalSnapshotV3,
-    ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
-    ResolutionVerifyFundReadySnapshotV3, build_resolution_admit_terminal_v3,
-    build_resolution_close_fund_v3, build_resolution_create_fund_v3,
-    build_resolution_verify_fund_ready_v3, validate_resolution_close_fund_report_v3,
+    Finality, Observation, ObservedAccount, ResolutionActivateFundSnapshotV1,
+    ResolutionAdmitTerminalSnapshotV3, ResolutionCloseFundSnapshotV3,
+    ResolutionCreateFundSnapshotV3, ResolutionDirectCloseFundReportV1,
+    ResolutionVerifyFundReadySnapshotV3, build_resolution_activate_fund_v1,
+    build_resolution_admit_terminal_v3, build_resolution_create_fund_v3,
+    build_resolution_direct_close_fund_v1, build_resolution_verify_fund_ready_v3,
     validate_resolution_create_fund_report_v3, validate_resolution_verify_fund_ready_report_v3,
 };
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1, PythAdapterConfigV1,
     RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2, RecoveryPolicyV2, RoundingBoundary,
-    SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+    SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
     SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1, SourceAccessProfile,
-    SourceCapacityProfileV1, SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2,
+    SourceCapacityProfileV1, SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionRouteV1,
+    SourceResolutionStateV2,
     SourceSpecV1, StatisticKind, StatisticSpecV1, WINDOW_SPEC_SCHEMA_ID_V1, WindowKind,
     WindowSpecV1,
 };
@@ -119,6 +121,10 @@ const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x75; 32]);
 const GENERATION: u64 = 7;
 const TERMINAL_SEQUENCE: u64 = 1;
 const TERMINAL_TIME: i64 = 1_787_431_680;
+/// A wall clock strictly past the market's own primary deadline
+/// (`window.end + max_age`), which is the only time a deadline walk exists at.
+/// `exhaust_after_primary_deadline` refuses at or before it.
+const FAILURE_TIME: i64 = TERMINAL_TIME + 20;
 const BOUNTY: u64 = 7;
 
 struct Elves {
@@ -166,7 +172,8 @@ struct Fixture {
     domain: RecordPair,
     portfolio: RecordPair,
     source: Pubkey,
-    funding: [Pubkey; 3],
+    funding: Pubkey,
+    activation_receipt: Pubkey,
     certificate: Pubkey,
     closure: Pubkey,
     rent_credit: Pubkey,
@@ -176,7 +183,7 @@ struct Fixture {
 struct RetirementSnapshot {
     market: Option<Account>,
     source: Option<Account>,
-    funding: [Option<Account>; 3],
+    funding: Option<Account>,
     certificate: Option<Account>,
     closure: Option<Account>,
     rent_credit: Option<Account>,
@@ -186,7 +193,7 @@ struct RetirementSnapshot {
 struct OpenRollbackSnapshot {
     market: Option<Account>,
     source: Option<Account>,
-    funding: [Option<Account>; 3],
+    funding: Option<Account>,
     replay: Option<Account>,
     vault: Option<Account>,
     rent_credit: Option<Account>,
@@ -198,7 +205,7 @@ struct ProviderRollbackSnapshot {
     source: Option<Account>,
     lifecycle: Option<Account>,
     update: Option<Account>,
-    funding: [Option<Account>; 3],
+    funding: Option<Account>,
     certificate: Option<Account>,
     replay: Option<Account>,
     vault: Option<Account>,
@@ -388,27 +395,67 @@ fn add_active_funding(
     market: Pubkey,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
-    entry_index: u16,
+    entries: [u16; 3],
 ) -> Pubkey {
-    let rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
-    let custody = FundingCustodyObservationV1::native_only(
-        rent.checked_mul(2)
-            .and_then(|value| value.checked_add(BOUNTY))
-            .expect("bounded funding custody"),
-        rent,
-    )
-    .expect("native funding custody");
-    let mut state = FundingStateV1::new(manifest_id, manifest, entry_index, custody)
-        .expect("pending FundingState");
-    state
-        .activate(manifest_id, manifest, custody, 1)
-        .expect("active FundingState");
-    let key = funding_key(market, manifest_id, manifest, entry_index);
+    let selected_mask = entries
+        .into_iter()
+        .fold(0_u16, |mask, entry| mask | (1_u16 << entry));
+    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let rent = Rent::default().minimum_balance(width);
+    let mut state = vec![0_u8; width];
+    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask)
+        .expect("pending FundingLedgerV2");
+    for entry_index in entries {
+        FundingLedgerV2::activate_in_place(&mut state, manifest_id, manifest, entry_index, 1)
+            .expect("active FundingLedgerV2 row");
+    }
+    let authenticated = FundingLedgerV2::decode(&state)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .expect("authenticated active FundingLedgerV2");
+    let remaining = authenticated
+        .remaining_native_lamports_total()
+        .expect("bounded aggregate native principal");
+    let key = funding_key(market, manifest_id, manifest, selected_mask);
     test.add_account(
         key,
         Account {
-            lamports: rent + BOUNTY,
-            data: state.to_bytes().to_vec(),
+            lamports: rent + remaining,
+            data: state,
+            owner: RESOLUTION_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    key
+}
+
+fn add_pending_funding(
+    test: &mut ProgramTest,
+    market: Pubkey,
+    manifest_id: CapabilityContentId,
+    manifest: CapabilityManifestV1<'_>,
+    entries: [u16; 3],
+) -> Pubkey {
+    let selected_mask = entries
+        .into_iter()
+        .fold(0_u16, |mask, entry| mask | (1_u16 << entry));
+    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let rent = Rent::default().minimum_balance(width);
+    let mut state = vec![0_u8; width];
+    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask)
+        .expect("pre-Market Pending FundingLedgerV2");
+    let authenticated = FundingLedgerV2::decode(&state)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .expect("authenticated pre-Market Pending FundingLedgerV2");
+    let principal = authenticated
+        .remaining_native_lamports_total()
+        .expect("bounded aggregate native principal");
+    let key = funding_key(market, manifest_id, manifest, selected_mask);
+    test.add_account(
+        key,
+        Account {
+            lamports: rent + principal,
+            data: state,
             owner: RESOLUTION_PROGRAM_ID,
             executable: false,
             rent_epoch: 0,
@@ -421,24 +468,19 @@ fn funding_key(
     market: Pubkey,
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'_>,
-    entry_index: u16,
+    selected_mask: u16,
 ) -> Pubkey {
-    let rent = Rent::default().minimum_balance(FUNDING_STATE_BYTES);
-    let custody = FundingCustodyObservationV1::native_only(
-        rent.checked_mul(2)
-            .and_then(|value| value.checked_add(BOUNTY))
-            .expect("bounded funding custody"),
-        rent,
-    )
-    .expect("native funding custody");
-    let state = FundingStateV1::new(manifest_id, manifest, entry_index, custody)
-        .expect("pending FundingState");
-    let derivation = CapabilityFundingDerivationV1::new(
+    let width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let mut state = vec![0_u8; width];
+    FundingLedgerV2::initialize(&mut state, manifest_id, manifest, selected_mask)
+        .expect("pending FundingLedgerV2");
+    let ledger = FundingLedgerV2::decode(&state).expect("FundingLedgerV2");
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        RESOLUTION_PROGRAM_ID.to_bytes(),
         market.to_bytes(),
         GENERATION,
         manifest_id,
-        manifest,
-        state,
+        ledger,
     )
     .expect("funding derivation");
     Pubkey::find_program_address(&derivation.seed_components(), &RESOLUTION_PROGRAM_ID).0
@@ -534,24 +576,48 @@ enum MarketPrestateV1 {
     /// and a minted certificate — the prestate of terminal admission and
     /// retirement.
     Terminal,
+    /// The same terminal shape, reached the other way: a market founded with
+    /// NO recovery policy whose primary deadline passed with no answer, so the
+    /// Source walked `Primary → Exhausted → FailureCommitted` and the
+    /// certificate it minted is a `ResolutionFailure` at the Product's own
+    /// pre-disclosed failure region, with no route and no provider evidence
+    /// behind it.
+    ///
+    /// This is the prestate a funded deadline walk leaves. The no-recovery
+    /// material is not a simplification: `exhaust_after_primary_deadline`
+    /// refuses a market that still has recovery attempts owed to it, so a
+    /// deadline walk only exists on this shape.
+    TerminalFailure,
 }
 
 impl MarketPrestateV1 {
     /// Whether the Market account starts `Open + Consumed` rather than
     /// `Founding + Prepaid`.
     const fn open(self) -> bool {
-        matches!(self, Self::AtomicallyFounded | Self::Terminal)
+        matches!(
+            self,
+            Self::AtomicallyFounded | Self::Terminal | Self::TerminalFailure
+        )
     }
 
-    /// Whether the Source state, its three Funds and the terminal certificate
+    /// Whether the Source state, its subset ledger and the terminal certificate
     /// are seeded as already-terminal rather than left to be created.
     const fn preload_terminal(self) -> bool {
-        matches!(self, Self::Terminal)
+        matches!(self, Self::Terminal | Self::TerminalFailure)
+    }
+
+    /// Whether that terminal was reached by a deadline walk rather than by a
+    /// provider. This flips the material's recovery policy, the Source
+    /// transition, the certificate kind and the certificate PDA's kind tag
+    /// together, because they are one fact about one market.
+    const fn failure_terms(self) -> bool {
+        matches!(self, Self::TerminalFailure)
     }
 }
 
 fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let preload_terminal = prestate.preload_terminal();
+    let failure_terms = prestate.failure_terms();
     let elves = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -582,7 +648,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     let core_release = release(CORE_PROGRAM_ID, [0x41; 32], &elves.core);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         &elves.resolution,
     );
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
@@ -786,12 +852,20 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     .expect("captured terminal statistic");
     let statistic_bytes = statistic_value.to_bytes();
     let statistic_id = hash(&statistic_bytes).to_bytes();
-    let material_value = SourceMaterialV2::new(
+    let material_value = SourceMaterialV3::explicitly_unbounded(
         source_id(product_record_id),
         source_id(source_spec_id),
         source_id(window_id),
         source_id(statistic_id),
-        Some(source_id(recovery_policy_id)),
+        // A funded deadline walk only exists where nothing else is owed: with a
+        // recovery policy still unspent, `exhaust_after_primary_deadline`
+        // refuses, because a market that has attempts left has not run out of
+        // ways to be answered honestly.
+        if failure_terms {
+            None
+        } else {
+            Some(source_id(recovery_policy_id))
+        },
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
     let material_bytes = material_value.to_bytes();
@@ -820,7 +894,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     .map(|(seed, config)| {
         CapabilityEntryV1::new(
             id([seed; 32]),
-            id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+            id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
             id(config),
             id([0xa4; 32]),
             id([0xa5; 32]),
@@ -840,7 +914,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
 
     let source_material = add_record(
         &mut test,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_bytes.to_vec(),
     );
     let source_spec = add_record(
@@ -936,8 +1010,10 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     test.add_account(
         market,
@@ -969,16 +1045,38 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     }
     let manifest_id = CapabilityContentId::new(manifest_id_bytes).expect("manifest identity");
     let funding = if preload_terminal {
-        [0_u16, 1, 2]
-            .map(|entry| add_active_funding(&mut test, market, manifest_id, manifest, entry))
+        add_active_funding(&mut test, market, manifest_id, manifest, [0, 1, 2])
     } else {
-        [0_u16, 1, 2].map(|entry| funding_key(market, manifest_id, manifest, entry))
+        add_pending_funding(&mut test, market, manifest_id, manifest, [0, 1, 2])
     };
+    let activation_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
+    test.add_account(
+        activation_receipt,
+        Account {
+            lamports: 1,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    // Success and failure are different ADDRESSES for one Source at one
+    // sequence, so a walked market's certificate can never occupy the seat a
+    // provider-resolved one would have taken.
+    let terminal_kind_tag: u8 = if failure_terms { 4 } else { 1 };
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
             source.as_ref(),
-            &[1],
+            &[terminal_kind_tag],
             &TERMINAL_SEQUENCE.to_le_bytes(),
         ],
         &RESOLUTION_PROGRAM_ID,
@@ -997,43 +1095,97 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         .expect("fresh Source")
         .state();
         let result_domain = ResultDomainV2::decode(&domain_bytes).expect("ResultDomain view");
-        let decision = source_value
-            .resolve_primary_from_authenticated_domain(
-                source_id(material_id),
-                material_value,
-                source_id(product_record_id),
-                result_domain,
-                source_id([0xb3; 32]),
-                -1,
-                1,
-                GENERATION,
-                TERMINAL_TIME,
-                TERMINAL_SEQUENCE,
-            )
-            .expect("provider-authenticated terminal Source projection");
-        assert_eq!(decision.selector(), 0);
+        let decision = if failure_terms {
+            // The funded deadline walk's own transition, host-side. Nothing
+            // about a provider is an input -- no record, no observation, no
+            // evidence id -- because this is exactly the world where everyone
+            // responsible stopped answering. Neither leg can be conjured
+            // early: `exhaust_after_primary_deadline` refuses at or before the
+            // market's own deadline, and `commit_failure_from_authenticated_domain`
+            // refuses anywhere but Exhausted.
+            source_value
+                .exhaust_after_primary_deadline(
+                    source_id(material_id),
+                    material_value,
+                    source_id(window_id),
+                    window_value,
+                    GENERATION,
+                    FAILURE_TIME,
+                )
+                .expect("a primary deadline reached with no answer exhausts the Source");
+            let decision = source_value
+                .commit_failure_from_authenticated_domain(
+                    source_id(material_id),
+                    material_value,
+                    source_id(product_record_id),
+                    result_domain,
+                    GENERATION,
+                    FAILURE_TIME,
+                    TERMINAL_SEQUENCE,
+                )
+                .expect("the exhausted Source commits its pre-disclosed failure terms");
+            assert_eq!(
+                decision.selector(),
+                result_domain.failure_selector(),
+                "the walk selects the Product's own explicit failure region, never a chosen value"
+            );
+            decision
+        } else {
+            let decision = source_value
+                .resolve_primary_from_authenticated_domain(
+                    source_id(material_id),
+                    material_value,
+                    source_id(product_record_id),
+                    result_domain,
+                    source_id([0xb3; 32]),
+                    -1,
+                    1,
+                    GENERATION,
+                    TERMINAL_TIME,
+                    TERMINAL_SEQUENCE,
+                )
+                .expect("provider-authenticated terminal Source projection");
+            assert_eq!(decision.selector(), 0);
+            decision
+        };
         test.add_account(
             source,
             protocol_account(RESOLUTION_PROGRAM_ID, source_value.to_bytes().to_vec()),
         );
+        // Every field that differs is FORCED by `validate_shape`'s
+        // ResolutionFailure arm, not chosen for convenience: no route and no
+        // provider evidence (nobody stood behind this terminal), a nonzero
+        // funding_allocation naming the market's own Source material (what
+        // makes the explicit-failure compartment identifiable at all), a
+        // nonzero work_paid (a walk that could not be paid for could not have
+        // encoded its own certificate either), and a zero result and
+        // observed_at (there was no observation to record).
         let certificate_value = ResolutionCertificateV2 {
-            kind: ResolutionCertificateKindV2::ResolutionSuccess,
+            kind: if failure_terms {
+                ResolutionCertificateKindV2::ResolutionFailure
+            } else {
+                ResolutionCertificateKindV2::ResolutionSuccess
+            },
             market: market.to_bytes(),
-            route: [0xb4; 32],
+            route: if failure_terms { [0; 32] } else { [0xb4; 32] },
             source_material: material_id,
             product_record_digest: product_record_id,
-            provider_evidence: [0xb3; 32],
-            funding_allocation: [0; 32],
+            provider_evidence: if failure_terms { [0; 32] } else { [0xb3; 32] },
+            funding_allocation: if failure_terms { material_id } else { [0; 32] },
             receipt_account: certificate.to_bytes(),
             generation: GENERATION,
             attempt_index: 0,
             schedule_index: 0,
             selector: decision.selector(),
-            work_paid: 0,
+            work_paid: if failure_terms { BOUNTY } else { 0 },
             funding_remaining: 0,
-            result_numerator: -1,
-            result_denominator: 1,
-            observed_at: u64::try_from(TERMINAL_TIME).expect("positive terminal time"),
+            result_numerator: if failure_terms { 0 } else { -1 },
+            result_denominator: if failure_terms { 0 } else { 1 },
+            observed_at: if failure_terms {
+                0
+            } else {
+                u64::try_from(TERMINAL_TIME).expect("positive terminal time")
+            },
         };
         test.add_account(
             certificate,
@@ -1048,7 +1200,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
     }
     let closure = Pubkey::find_program_address(
         &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
             source.as_ref(),
             &(TERMINAL_SEQUENCE + 1).to_le_bytes(),
         ],
@@ -1122,6 +1274,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         portfolio,
         source,
         funding,
+        activation_receipt,
         certificate,
         closure,
         rent_credit,
@@ -1168,6 +1321,33 @@ async fn observed_or_vacant(context: &mut ProgramTestContext, key: Pubkey) -> Ob
     match observed(context, key).await {
         Some(account) => into_observed(key, account),
         None => vacant_observed(key),
+    }
+}
+
+async fn assert_funding_ledger_status(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    expected: FundingLedgerStatusV2,
+) {
+    let ledger_account = observed(context, fixture.funding)
+        .await
+        .expect("Resolution FundingLedgerV2");
+    let manifest_account = observed(context, fixture.capability_manifest.raw)
+        .await
+        .expect("capability manifest");
+    let manifest = CapabilityManifestV1::decode(&manifest_account.data).expect("manifest");
+    let manifest_id = CapabilityContentId::new(hash(&manifest_account.data).to_bytes())
+        .expect("manifest content identity");
+    let ledger = FundingLedgerV2::decode(&ledger_account.data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .expect("authenticated FundingLedgerV2");
+    assert_eq!(ledger.ledger().selected_mask(), 0b111);
+    assert_eq!(ledger.ledger().slot_count(), 3);
+    for entry_index in [0_u16, 1, 2] {
+        assert_eq!(
+            ledger.slot(entry_index).expect("selected row").status(),
+            expected
+        );
     }
 }
 
@@ -1281,9 +1461,7 @@ async fn create_snapshot(
         capability_manifest: required_observed(context, fixture.capability_manifest.raw).await,
         capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
         source_destination: observed_or_vacant(context, fixture.source).await,
-        recovery_destination: observed_or_vacant(context, fixture.funding[0]).await,
-        exhaustion_destination: observed_or_vacant(context, fixture.funding[1]).await,
-        failure_destination: observed_or_vacant(context, fixture.funding[2]).await,
+        funding_ledger: required_observed(context, fixture.funding).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
         system_program: required_observed(context, system_program::ID).await,
         recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
@@ -1308,12 +1486,11 @@ async fn verify_snapshot(
         capability_manifest: required_observed(context, fixture.capability_manifest.raw).await,
         capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
         source_state: required_observed(context, fixture.source).await,
-        recovery_funding: required_observed(context, fixture.funding[0]).await,
-        exhaustion_funding: required_observed(context, fixture.funding[1]).await,
-        failure_funding: required_observed(context, fixture.funding[2]).await,
+        funding_ledger: required_observed(context, fixture.funding).await,
         beneficiary: required_observed(context, fixture.rent_credit).await,
         clock_sysvar: required_observed(context, sysvar::clock::ID).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
+        activation_receipt: observed_or_vacant(context, fixture.activation_receipt).await,
         recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
         recovery_policy_staging: vacant_observed(fixture.recovery_policy.staging),
     }
@@ -1336,9 +1513,7 @@ async fn admit_snapshot(
         capability_manifest: required_observed(context, fixture.capability_manifest.raw).await,
         capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
         source_state: required_observed(context, fixture.source).await,
-        recovery_funding: required_observed(context, fixture.funding[0]).await,
-        exhaustion_funding: required_observed(context, fixture.funding[1]).await,
-        failure_funding: required_observed(context, fixture.funding[2]).await,
+        funding_ledger: required_observed(context, fixture.funding).await,
         certificate: required_observed(context, fixture.certificate).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
         product_raw: required_observed(context, fixture.product.raw).await,
@@ -1411,6 +1586,7 @@ fn core_open_instruction(fixture: &Fixture, payer: Pubkey, operation: OperationV
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new(fixture.rent_credit, false),
         ]),
         OperationV1::OpenVault => accounts.extend([
             AccountMeta::new_readonly(fixture.mint, false),
@@ -1479,9 +1655,7 @@ async fn close_snapshot(
         capability_manifest: required_observed(context, fixture.capability_manifest.raw).await,
         capability_manifest_staging: vacant_observed(fixture.capability_manifest.staging),
         source_state: required_observed(context, fixture.source).await,
-        recovery_funding: required_observed(context, fixture.funding[0]).await,
-        exhaustion_funding: required_observed(context, fixture.funding[1]).await,
-        failure_funding: required_observed(context, fixture.funding[2]).await,
+        funding_ledger: required_observed(context, fixture.funding).await,
         certificate: required_observed(context, fixture.certificate).await,
         closure_destination: required_observed(context, fixture.closure).await,
         beneficiary: required_observed(context, fixture.rent_credit).await,
@@ -1500,15 +1674,60 @@ async fn retirement_snapshot(
     RetirementSnapshot {
         market: observed(context, fixture.market).await,
         source: observed(context, fixture.source).await,
-        funding: [
-            observed(context, fixture.funding[0]).await,
-            observed(context, fixture.funding[1]).await,
-            observed(context, fixture.funding[2]).await,
-        ],
+        funding: observed(context, fixture.funding).await,
         certificate: observed(context, fixture.certificate).await,
         closure: observed(context, fixture.closure).await,
         rent_credit: observed(context, fixture.rent_credit).await,
     }
+}
+
+fn assert_exhaustive_closure_receipt(
+    receipt: SourceClosureReceiptV3,
+    close: &ResolutionDirectCloseFundReportV1,
+) {
+    let facts = close.expected_retirement_facts;
+    assert_eq!(
+        receipt,
+        SourceClosureReceiptV3 {
+            market: facts.market,
+            source_state: facts.source_state,
+            source_material: facts.source_material,
+            capability_manifest: facts.capability_manifest,
+            terminal_certificate: facts.terminal_certificate,
+            receipt_account: facts.resolution_closure_receipt,
+            beneficiary: facts.beneficiary,
+            source_state_digest: facts.source_state_digest,
+            terminal_certificate_digest: facts.terminal_certificate_digest,
+            funding_set_digest: facts.funding_set_digest,
+            generation: facts.generation,
+            terminal_sequence: facts.terminal_sequence,
+            selector: facts.selector,
+            source_refund_lamports: facts.source_refund_lamports,
+            ledger_remaining_native_principal: facts.ledger_remaining_native_principal,
+            ledger_rent_lamports: facts.ledger_rent_lamports,
+            ledger_lamport_surplus: facts.ledger_lamport_surplus,
+            refund_lamports: facts.refund_lamports,
+            closed_at: facts.closed_at,
+        },
+        "the persisted V3 closure receipt must reproduce every chain-derived retirement fact"
+    );
+    assert_eq!(receipt.source_refund_lamports, facts.source_refund_lamports);
+    assert_eq!(
+        receipt.ledger_remaining_native_principal,
+        facts.ledger_remaining_native_principal
+    );
+    assert_eq!(receipt.ledger_rent_lamports, facts.ledger_rent_lamports);
+    assert_eq!(receipt.ledger_lamport_surplus, facts.ledger_lamport_surplus);
+    assert_eq!(receipt.refund_lamports, facts.refund_lamports);
+    assert_eq!(
+        receipt
+            .source_refund_lamports
+            .checked_add(receipt.ledger_remaining_native_principal)
+            .and_then(|value| value.checked_add(receipt.ledger_rent_lamports))
+            .and_then(|value| value.checked_add(receipt.ledger_lamport_surplus)),
+        Some(receipt.refund_lamports),
+        "V3 exhaustively classifies every discharged Source and subset-ledger lamport"
+    );
 }
 
 async fn provider_rollback_snapshot(
@@ -1521,11 +1740,7 @@ async fn provider_rollback_snapshot(
         source: observed(context, fixture.source).await,
         lifecycle: observed(context, lifecycle).await,
         update: observed(context, fixture.update.pubkey()).await,
-        funding: [
-            observed(context, fixture.funding[0]).await,
-            observed(context, fixture.funding[1]).await,
-            observed(context, fixture.funding[2]).await,
-        ],
+        funding: observed(context, fixture.funding).await,
         certificate: observed(context, fixture.certificate).await,
         replay: observed(context, fixture.replay).await,
         vault: observed(context, fixture.vault).await,
@@ -1559,11 +1774,7 @@ async fn open_rollback_snapshot(
     OpenRollbackSnapshot {
         market: observed(context, fixture.market).await,
         source: observed(context, fixture.source).await,
-        funding: [
-            observed(context, fixture.funding[0]).await,
-            observed(context, fixture.funding[1]).await,
-            observed(context, fixture.funding[2]).await,
-        ],
+        funding: observed(context, fixture.funding).await,
         replay: observed(context, fixture.replay).await,
         vault: observed(context, fixture.vault).await,
         rent_credit: observed(context, fixture.rent_credit).await,
@@ -1600,26 +1811,18 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         build_resolution_create_fund_v3(&create_snapshot).expect("chain-derived CreateFund");
     validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
     assert!(create.source_top_up_lamports > 0);
-    assert!(
-        create
-            .funding_top_up_lamports
-            .iter()
-            .all(|value| *value > 0)
-    );
+    assert_eq!(create.funding_entry_indices, [0, 1, 2]);
+    let pending_ledger_before = observed(&mut context, fixture.funding)
+        .await
+        .expect("pre-Market Resolution-owned Pending ledger");
+    assert_eq!(pending_ledger_before.owner, RESOLUTION_PROGRAM_ID);
 
-    let mut create_instructions = Vec::with_capacity(5);
+    let mut create_instructions = Vec::with_capacity(2);
     create_instructions.push(transfer(
         &payer,
         &fixture.source,
         create.source_top_up_lamports,
     ));
-    for (funding, top_up) in fixture
-        .funding
-        .into_iter()
-        .zip(create.funding_top_up_lamports)
-    {
-        create_instructions.push(transfer(&payer, &funding, top_up));
-    }
     create_instructions.push(create.instruction);
     submit(&mut context, &create_instructions)
         .await
@@ -1633,33 +1836,85 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     )
     .expect("Source state");
     assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
-    for funding in fixture.funding {
-        let state = FundingStateV1::decode(
-            &observed(&mut context, funding)
-                .await
-                .expect("created Funding")
-                .data,
-        )
-        .expect("Funding state");
-        assert_eq!(state.status(), FundingStatus::Pending);
+    assert_eq!(
+        observed(&mut context, fixture.funding)
+            .await
+            .expect("unchanged pre-Market Resolution ledger"),
+        pending_ledger_before,
+        "CreateFund creates only Source state and leaves the existing Pending ledger bytes and lamports unchanged"
+    );
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Pending).await;
+
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("chain-derived direct activation");
+    let beneficiary_before = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
     }
+    activation_instructions.push(activation.instruction);
+    submit(&mut context, &activation_instructions)
+        .await
+        .expect("activate exact three-row Resolution funding ledger");
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        beneficiary_before + activation.expected_beneficiary_credit_lamports
+    );
+
+    let after_activation = retirement_snapshot(&mut context, &fixture).await;
+    let activation_receipt_after_activation = observed(&mut context, fixture.activation_receipt)
+        .await
+        .expect("durable activation receipt");
+    let activation_replay = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("receipt-authenticated activation replay");
+    assert_eq!(activation_replay.receipt_top_up_lamports, 0);
+    assert_eq!(activation_replay.expected_beneficiary_credit_lamports, 0);
+    assert_eq!(activation_replay.request_digest, activation.request_digest);
+    submit(&mut context, &[activation_replay.instruction])
+        .await
+        .expect("completed activation replays without mutation");
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        after_activation,
+        "activation replay preserves every mutable lifecycle account"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.activation_receipt).await,
+        Some(activation_receipt_after_activation),
+        "activation replay preserves the immutable receipt"
+    );
 
     let verify =
         build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
-            .expect("chain-derived VerifyFundReady");
+            .expect("chain-derived no-CPI VerifyFundReady acceptance");
     validate_resolution_verify_fund_ready_report_v3(&verify).expect("exact VerifyFundReady report");
     let before_privilege_refusal = retirement_snapshot(&mut context, &fixture).await;
-    let mut read_only_beneficiary = verify.instruction.clone();
-    read_only_beneficiary
+    let mut writable_beneficiary = verify.instruction.clone();
+    writable_beneficiary
         .accounts
-        .get_mut(16)
+        .get_mut(14)
         .expect("beneficiary account")
-        .is_writable = false;
+        .is_writable = true;
     assert!(
-        submit(&mut context, &[read_only_beneficiary])
-            .await
-            .is_err(),
-        "read-only beneficiary privilege must refuse"
+        submit(&mut context, &[writable_beneficiary]).await.is_err(),
+        "surplus writable beneficiary privilege must refuse"
     );
     assert_eq!(
         retirement_snapshot(&mut context, &fixture).await,
@@ -1667,13 +1922,9 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         "privilege refusal preserves Source, Funds, Core, and RentCredit"
     );
 
-    let beneficiary_before = observed(&mut context, fixture.rent_credit)
-        .await
-        .expect("RentCredit")
-        .lamports;
     submit(&mut context, &[verify.instruction])
         .await
-        .expect("activate exact three-ledger Resolution funding");
+        .expect("accept the durable activation receipt into Core readiness");
     let ready = CoreState::decode(
         &observed(&mut context, fixture.market)
             .await
@@ -1690,16 +1941,28 @@ async fn current_resolution_creates_and_activates_exact_funding() {
             .lamports,
         beneficiary_before + verify.expected_beneficiary_credit_lamports
     );
-    for funding in fixture.funding {
-        let state = FundingStateV1::decode(
-            &observed(&mut context, funding)
-                .await
-                .expect("active Funding")
-                .data,
-        )
-        .expect("Funding state");
-        assert_eq!(state.status(), FundingStatus::Active);
-    }
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+
+    let after_accept = retirement_snapshot(&mut context, &fixture).await;
+    let activation_receipt_after_accept = observed(&mut context, fixture.activation_receipt)
+        .await
+        .expect("accepted activation receipt");
+    let accept_replay =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("Ready replay authenticates the Prepaid predecessor receipt");
+    submit(&mut context, &[accept_replay.instruction])
+        .await
+        .expect("completed Core Accept replays without mutation");
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        after_accept,
+        "Core Accept replay preserves every mutable lifecycle account"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.activation_receipt).await,
+        Some(activation_receipt_after_accept),
+        "Core Accept replay preserves the immutable receipt"
+    );
 
     let beneficiary_after_readiness = observed(&mut context, fixture.rent_credit)
         .await
@@ -1851,7 +2114,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     assert_eq!(
         provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
         before_material_substitution,
-        "SourceMaterial substitution rolls back Market, Source, lifecycle, certificate, all three Funds, Custody, update, and RentCredit"
+        "SourceMaterial substitution rolls back Market, Source, lifecycle, certificate, the subset ledger, Custody, update, and RentCredit"
     );
 
     let before_treasury_key_substitution =
@@ -1980,6 +2243,38 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         &execute_intent,
     )
     .expect("chain-derived Core provider execution");
+    assert!(
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
+        "before ExecuteProvider the Market is Open but Source is Primary and the standalone terminal-admission family must refuse"
+    );
+
+    let before_missing_caller_signature =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    let direct_resolution_without_core_caller = Instruction {
+        program_id: RESOLUTION_PROGRAM_ID,
+        accounts: provider_execute.instruction.accounts.clone(),
+        data: provider_execute
+            .instruction
+            .data
+            .get(REQUEST_BYTES..)
+            .expect("provider body after Core request")
+            .to_vec(),
+    };
+    assert!(
+        pyth_provider::submit(
+            &mut context,
+            &[direct_resolution_without_core_caller],
+            &[&resolver],
+        )
+        .await
+        .is_err(),
+        "a top-level Resolution invocation cannot substitute for Core's program-signed caller PDA"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_missing_caller_signature,
+        "the missing program-signed caller PDA rolls back every provider and Market write"
+    );
 
     let before_late_substitution =
         provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
@@ -2008,12 +2303,29 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     assert_eq!(
         provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
         before_late_substitution,
-        "the late substitution rolls back Market, Source, lifecycle, certificate, all three Funds, Custody, update, and RentCredit"
+        "the late substitution rolls back Market, Source, lifecycle, certificate, the subset ledger, Custody, update, and RentCredit"
     );
 
     pyth_provider::submit(&mut context, &[provider_execute.instruction], &[&resolver])
         .await
-        .expect("Core consumes the authenticated provider result and admits terminal Market state");
+        .expect(
+            "Resolution consumes the authenticated provider result and persists its certificate",
+        );
+    let post_provider_market = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("post-provider Market")
+            .data,
+    )
+    .expect("post-provider Core state");
+    assert_eq!(post_provider_market.phase, Phase::Open);
+    assert!(post_provider_market.terminal_receipt.is_none());
+
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived no-CPI terminal certificate Accept");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core accepts the durable Resolution certificate and commits terminal state");
     let terminal_market = CoreState::decode(
         &observed(&mut context, fixture.market)
             .await
@@ -2023,6 +2335,18 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     .expect("terminal Core state");
     assert_eq!(terminal_market.phase, Phase::Terminal);
     assert!(terminal_market.terminal_receipt.is_some());
+    let after_terminal_accept = retirement_snapshot(&mut context, &fixture).await;
+    let admit_replay =
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+            .expect("terminal certificate Accept replay");
+    submit(&mut context, &[admit_replay.instruction])
+        .await
+        .expect("terminal certificate Accept replays without mutation");
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        after_terminal_accept,
+        "terminal Accept replay preserves every mutable lifecycle account"
+    );
     let resolved_source = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.source)
             .await
@@ -2040,6 +2364,10 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     .expect("provider lifecycle");
     assert_eq!(lifecycle.status, ProviderUpdateStatusV3::Consumed);
     assert_eq!(lifecycle.terminal_sequence, TERMINAL_SEQUENCE);
+    assert!(
+        build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_ok(),
+        "the exact terminal certificate Accept remains a reconstructable no-op after Core is Terminal"
+    );
     assert_eq!(
         observed(&mut context, provider_submit.lifecycle)
             .await
@@ -2088,34 +2416,115 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         .get_rent()
         .await
         .expect("chain Rent")
-        .minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V2);
+        .minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
     submit(
         &mut context,
         &[transfer(&payer, &fixture.closure, closure_rent)],
     )
     .await
     .expect("prepay the same-lineage closure receipt");
-    let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture).await)
-        .expect("chain-derived same-lineage CloseFund");
-    validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
-    submit(&mut context, &[close.instruction])
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived same-lineage CloseFund");
+    submit(&mut context, &[close.instruction.clone()])
         .await
-        .expect("close all three provider-resolution funding compartments");
+        .expect("close all three rows in the provider-resolution subset ledger");
 
     assert!(observed(&mut context, fixture.source).await.is_none());
-    for funding in fixture.funding {
-        assert!(observed(&mut context, funding).await.is_none());
-    }
-    let closure = SourceClosureReceiptV2::decode(
+    assert!(observed(&mut context, fixture.funding).await.is_none());
+    let closure = SourceClosureReceiptV3::decode(
         &observed(&mut context, fixture.closure)
             .await
             .expect("same-lineage Source closure receipt")
             .data,
     )
     .expect("Source closure receipt");
-    assert_eq!(closure.market, fixture.market.to_bytes());
-    assert_eq!(closure.terminal_certificate, fixture.certificate.to_bytes());
-    assert_eq!(closure.beneficiary, fixture.rent_credit.to_bytes());
+    assert_exhaustive_closure_receipt(closure, &close);
+}
+
+#[tokio::test]
+async fn a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms() {
+    // The other half of the funded failure walk, and the half nothing in this
+    // tree had executed.
+    //
+    // `CommitDeadlineFailure` pays the walker and writes a `ResolutionFailure`
+    // certificate, but it leaves the Market READONLY in its own frame. The
+    // Market becoming terminal is this separate no-CPI Core route. Core's
+    // failure arm is first-class rather than a fallback --
+    // `build_resolution_admit_terminal_v3` derives the receipt kind, the
+    // certificate kind and the PDA kind tag from the Source phase, and
+    // `admit_terminal` has no branch on kind at all -- but until this test
+    // every executed `AdmitTerminal` in the tree admitted a certificate a
+    // provider stood behind, so the failure arm had never once been driven
+    // against a real Core ELF.
+    //
+    // This is what a holder's exit at failure terms waits on: `terminal_winner`
+    // has to be the Product's own failure region before any Claims redemption
+    // can select it.
+    let mut fixture = fixture(MarketPrestateV1::TerminalFailure);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.unix_timestamp = FAILURE_TIME + 1;
+    context.set_sysvar(&clock);
+
+    let before = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(before.phase, Phase::Open);
+    assert_eq!(before.terminal_receipt, None);
+
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived AdmitTerminal from a FailureCommitted Source");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("a walked market's failure certificate terminalizes its Market");
+
+    let admitted = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("Market")
+            .data,
+    )
+    .expect("Core state");
+    assert_eq!(admitted.phase, Phase::Terminal);
+    assert_eq!(
+        admitted.terminal_receipt.map(|value| value.to_bytes()),
+        Some(fixture.certificate.to_bytes()),
+        "the Market commits to the failure certificate's own address, which is a different \
+         address from the one a provider-resolved terminal would have written"
+    );
+
+    let source = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("Source")
+            .data,
+    )
+    .expect("Source state");
+    assert_eq!(source.phase(), SourceResolutionPhaseV1::FailureCommitted);
+    let terminal = source
+        .terminal_projection()
+        .expect("a FailureCommitted Source projects its terminal");
+    assert_eq!(terminal.route(), SourceResolutionRouteV1::Failure);
+    assert_eq!(
+        admitted.terminal_winner,
+        terminal.selector(),
+        "the winner Core commits is the selector the Source's own failure decision carried, not \
+         a value this route chose"
+    );
 }
 
 #[tokio::test]
@@ -2165,7 +2574,7 @@ async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() 
     .expect("Core state");
     assert_eq!(retiring.phase, Phase::Retiring);
 
-    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V2);
+    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
     let payer = context.payer.pubkey();
     submit(
         &mut context,
@@ -2173,9 +2582,9 @@ async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() 
     )
     .await
     .expect("prepay canonical closure receipt");
-    let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture).await)
-        .expect("chain-derived CloseFund");
-    validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived CloseFund");
 
     let before_refusal = retirement_snapshot(&mut context, &fixture).await;
     let mut substituted_release = begin_retiring_instruction(&fixture);
@@ -2198,24 +2607,20 @@ async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() 
     assert_eq!(
         retirement_snapshot(&mut context, &fixture).await,
         before_refusal,
-        "SVM rollback restores Core, Source, all three Funds, closure prepayment, certificate, and RentCredit"
+        "SVM rollback restores Core, Source, the subset ledger, closure prepayment, certificate, and RentCredit"
     );
 
-    submit(&mut context, &[close.instruction])
+    submit(&mut context, &[close.instruction.clone()])
         .await
         .expect("Core -> Resolution physical close");
     assert!(observed(&mut context, fixture.source).await.is_none());
-    for funding in fixture.funding {
-        assert!(observed(&mut context, funding).await.is_none());
-    }
+    assert!(observed(&mut context, fixture.funding).await.is_none());
     let closure = observed(&mut context, fixture.closure)
         .await
         .expect("Source closure receipt");
     assert_eq!(closure.owner, RESOLUTION_PROGRAM_ID);
-    let closure = SourceClosureReceiptV2::decode(&closure.data).expect("closure receipt");
-    assert_eq!(closure.market, fixture.market.to_bytes());
-    assert_eq!(closure.terminal_certificate, fixture.certificate.to_bytes());
-    assert_eq!(closure.beneficiary, fixture.rent_credit.to_bytes());
+    let closure = SourceClosureReceiptV3::decode(&closure.data).expect("closure receipt");
+    assert_exhaustive_closure_receipt(closure, &close);
     let terminal =
         SourceResolutionStateV2::decode(&before_refusal.source.expect("Source prestate").data)
             .expect("terminal Source");
@@ -2249,10 +2654,10 @@ async fn current_resolution_admits_retires_closes_and_rolls_back_late_refusal() 
 /// Before the Fund admission landed, this exact prestate was a permanently
 /// unresolvable Market: open, tradeable, and with no reachable outcome.
 ///
-/// `MarketPrestateV1::AtomicallyFounded` is that poststate and nothing else —
-/// `Open + Consumed`, no terminal receipt, and no Source state, Fund or
-/// certificate anywhere. The test walks it to a real terminal certificate
-/// through the real Pyth transport, and refuses four hostile inputs on the way.
+/// `MarketPrestateV1::AtomicallyFounded` is that poststate plus the Resolution
+/// ledger initialized before Found: `Open + Consumed`, no terminal receipt or
+/// Source state, one exact Pending subset ledger, and no certificate. The test
+/// walks it to a real terminal certificate through the real Pyth transport.
 #[tokio::test]
 async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     let mut fixture = fixture(MarketPrestateV1::AtomicallyFounded);
@@ -2294,25 +2699,16 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         system_program::ID,
         "an atomically founded Market has no Source resolution state at all"
     );
-    for funding in fixture.funding {
-        assert!(
-            observed(&mut context, funding).await.is_none(),
-            "an atomically founded Market has no Resolution Fund at all"
-        );
-    }
+    let pre_market_ledger = observed(&mut context, fixture.funding)
+        .await
+        .expect("pre-Market Resolution-owned subset ledger");
+    assert_eq!(pre_market_ledger.owner, RESOLUTION_PROGRAM_ID);
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Pending).await;
 
     let create = build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await)
         .expect("chain-derived CreateFund against an Open Market");
     validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
-    let prepay = |top_ups: [u64; 3], source: u64| {
-        let mut instructions = Vec::with_capacity(4);
-        instructions.push(transfer(&payer, &fixture.source, source));
-        for (funding, top_up) in fixture.funding.into_iter().zip(top_ups) {
-            instructions.push(transfer(&payer, &funding, top_up));
-        }
-        instructions
-    };
-    let exact_top_ups = create.funding_top_up_lamports;
+    assert_eq!(create.funding_entry_indices, [0, 1, 2]);
 
     // Hostile 1 — Source resolution-state substitution. The one account whose
     // address is not pinned by a manifest entry is the Source state, so its
@@ -2326,7 +2722,11 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         .get_mut(12)
         .expect("Source output account")
         .pubkey = fixture.closure;
-    let mut substitution = prepay(exact_top_ups, create.source_top_up_lamports);
+    let mut substitution = vec![transfer(
+        &payer,
+        &fixture.source,
+        create.source_top_up_lamports,
+    )];
     substitution.push(transfer(
         &payer,
         &fixture.closure,
@@ -2343,37 +2743,39 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         "the substitution rolls back every prepayment with it"
     );
 
-    // Hostile 2 — wrong-capability funding, under and over. Each Fund's
-    // lamports must equal rent plus exactly the native principal its manifest
-    // entry quotes; a Fund that is not the manifest's Fund is not this
-    // Market's Fund. Both directions refuse, which is deliberate: over-funding
-    // is not a donation the Fund may keep.
-    for (label, delta) in [("under-funded", -1_i64), ("over-funded", 1_i64)] {
-        let mut skewed = exact_top_ups;
-        let first = skewed.first_mut().expect("recovery Fund top-up");
-        *first = first
-            .checked_add_signed(delta)
-            .expect("bounded hostile top-up");
-        let before = retirement_snapshot(&mut context, &fixture).await;
-        let mut hostile = prepay(skewed, create.source_top_up_lamports);
-        hostile.push(create.instruction.clone());
-        assert!(
-            submit(&mut context, &hostile).await.is_err(),
-            "a {label} recovery compartment must refuse"
-        );
-        assert_eq!(
-            retirement_snapshot(&mut context, &fixture).await,
-            before,
-            "the {label} refusal rolls back Source, all three Funds, Market and RentCredit"
-        );
-    }
+    // Hostile 2 — surplus funding. The pre-Market initializer owns exact
+    // ledger custody; CreateFund must refuse even one extra lamport and the
+    // enclosing transaction must roll that hostile transfer back.
+    let before_surplus = retirement_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(
+            &mut context,
+            &[
+                transfer(&payer, &fixture.source, create.source_top_up_lamports),
+                transfer(&payer, &fixture.funding, 1),
+                create.instruction.clone(),
+            ],
+        )
+        .await
+        .is_err(),
+        "a surplus-funded Resolution ledger must refuse"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_surplus,
+        "surplus refusal rolls back Source, subset ledger, Market and RentCredit"
+    );
 
     // The honest creation.
-    let mut creation = prepay(exact_top_ups, create.source_top_up_lamports);
-    creation.push(create.instruction.clone());
-    submit(&mut context, &creation)
-        .await
-        .expect("an Open Market prepays and creates its own Resolution Fund");
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &fixture.source, create.source_top_up_lamports),
+            create.instruction.clone(),
+        ],
+    )
+    .await
+    .expect("an Open Market creates Source against its pre-Market Resolution ledger");
     let source = SourceResolutionStateV2::decode(
         &observed(&mut context, fixture.source)
             .await
@@ -2384,29 +2786,24 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     assert_eq!(source.phase(), SourceResolutionPhaseV1::Primary);
     assert_eq!(source.market(), fixture.market.to_bytes());
     assert_eq!(source.generation(), GENERATION);
-    for funding in fixture.funding {
-        assert_eq!(
-            FundingStateV1::decode(
-                &observed(&mut context, funding)
-                    .await
-                    .expect("created Funding")
-                    .data,
-            )
-            .expect("Funding state")
-            .status(),
-            FundingStatus::Pending
-        );
-    }
+    assert_eq!(
+        observed(&mut context, fixture.funding)
+            .await
+            .expect("existing Resolution ledger after CreateFund"),
+        pre_market_ledger,
+        "CreateFund must leave the initializer-owned Pending ledger bytes and lamports unchanged"
+    );
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Pending).await;
 
     // Hostile 3 — double create. The Source PDA is one per Market generation
     // and `require_prepaid_output` refuses anything that is not
     // System-owned and empty, so the second creation cannot overwrite the
     // first.
     let before_double = retirement_snapshot(&mut context, &fixture).await;
-    let mut double = prepay(exact_top_ups, create.source_top_up_lamports);
-    double.push(create.instruction.clone());
     assert!(
-        submit(&mut context, &double).await.is_err(),
+        submit(&mut context, &[create.instruction.clone()])
+            .await
+            .is_err(),
         "a second CreateFund on the same Market generation must refuse"
     );
     assert_eq!(
@@ -2418,7 +2815,8 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     // Activation. Core stays `Open + Consumed`: `Readiness::Ready` is the
     // Founding lane's record of this same fact, and this Market consumed its
     // readiness at the commit-last Open. The activation itself lives in the
-    // three FundingState accounts, which is what `AdmitTerminal` rechecks.
+    // three active rows in one FundingLedgerV2, which is what `AdmitTerminal`
+    // rechecks.
     let verify =
         build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
             .expect("chain-derived VerifyFundReady against an Open Market");
@@ -2429,7 +2827,7 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         .lamports;
     submit(&mut context, &[verify.instruction])
         .await
-        .expect("activate the three-ledger Resolution funding of an Open Market");
+        .expect("activate the three-row Resolution funding ledger of an Open Market");
     let activated = CoreState::decode(
         &observed(&mut context, fixture.market)
             .await
@@ -2450,19 +2848,7 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
             .lamports,
         beneficiary_before + verify.expected_beneficiary_credit_lamports
     );
-    for funding in fixture.funding {
-        assert_eq!(
-            FundingStateV1::decode(
-                &observed(&mut context, funding)
-                    .await
-                    .expect("active Funding")
-                    .data,
-            )
-            .expect("Funding state")
-            .status(),
-            FundingStatus::Active
-        );
-    }
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
 
     // The real provider transport, unchanged from the ladder campaign: one
     // Pyth update posted through the real Receiver ELF, then one Core-driven
@@ -2530,10 +2916,15 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
             post_update_body,
         },
     )
-    .expect("chain-derived Core provider execution");
+    .expect("chain-derived direct Resolution provider execution");
     pyth_provider::submit(&mut context, &[provider_execute.instruction], &[&resolver])
         .await
-        .expect("Core admits the terminal state of an atomically founded Market");
+        .expect("Resolution persists the atomically founded Market's terminal certificate");
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived atomically founded terminal Accept");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core accepts the terminal state of an atomically founded Market");
 
     let terminal = CoreState::decode(
         &observed(&mut context, fixture.market)

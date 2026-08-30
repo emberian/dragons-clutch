@@ -4,11 +4,15 @@
 
 //! Canonical data-driven SBF adapter for the fixed Trading execution role.
 //!
-//! The executable activation path authenticates the common Core envelope,
-//! current Registry releases, finalized descriptor/config/profile/effect
-//! records, and interpreted transition/effects before committing one composite
-//! root, its FundingState accounts, and the exact Core acknowledgment. It has
-//! no family discriminator.
+//! The executable capability lifecycle path authenticates the common Core
+//! envelope, current Registry releases, finalized
+//! descriptor/config/profile/effect records, and interpreted
+//! transition/effects. Activation commits one composite root and its selected
+//! FundingLedgerV2 row. Native close refunds the exact remaining principal,
+//! root/ledger Rent, and separately classified surplus to the Market's one
+//! RentCredit before making the root and selected ledger vacant. Realm/token
+//! custody remains explicitly unsupported. The boundary has no family
+//! discriminator.
 
 // The kernel crates this adapter calls are `no_std`; the adapter layer itself
 // allocates, so the executable links `std` for `Vec`/`Box` and for the
@@ -33,7 +37,8 @@ pub mod admitted_composition_v3;
 #[cfg(any(
     feature = "families",
     feature = "series-family",
-    feature = "dealer-family"
+    feature = "dealer-family",
+    feature = "outer-only"
 ))]
 pub mod claims_composition_v3;
 /// Family-neutral EffectProgram V3 composition for canonical Core CPIs.
@@ -42,15 +47,28 @@ pub mod core_composition_v3;
 #[cfg(any(
     feature = "families",
     feature = "series-family",
-    feature = "dealer-family"
+    feature = "dealer-family",
+    feature = "outer-only"
 ))]
 pub mod custody_composition_v3;
 /// Dealer family projection behind the common data-defined Trading boundary.
 #[cfg(any(feature = "families", feature = "dealer-family"))]
 pub mod dealer;
+/// Lock-bounded durable Dealer scenario checkpoint lifecycle.
+#[cfg(any(feature = "families", feature = "dealer-family"))]
+pub mod dealer_scenario_checkpoint_v1;
 /// Direct family projection behind the common data-defined Trading boundary.
 #[cfg(feature = "families")]
 pub mod direct;
+/// Permissionless, release-authenticated Direct Open-to-Retiring transition.
+#[cfg(feature = "families")]
+pub mod direct_begin_retiring_v1;
+/// Permissionless first-use Direct Custody replay setup.
+#[cfg(feature = "families")]
+pub mod direct_replay_setup_v1;
+/// Permissionless dust-tolerant setup of Direct's Token-2022 destinations.
+#[cfg(feature = "families")]
+pub mod direct_token_setup_v1;
 /// Manifest-, root-, release-, and descriptor-authenticated generic dispatch.
 pub mod dispatch;
 /// V3 descriptor joins for independently finalized runtime-tail artifacts.
@@ -68,6 +86,13 @@ mod dynamic_accounts_v4;
 pub mod entrypoint_adapter;
 /// Registry-authenticated family-neutral Execution Strategy V2 admission.
 pub mod execution_strategy_v2;
+/// Two-stage generic Market founding: Found-and-permit, then commit-last Open.
+#[cfg(any(
+    feature = "families",
+    feature = "series-family",
+    feature = "dealer-family"
+))]
+pub mod generic_founding_stages_v1;
 /// Generic atomic Custody→Core→Claims Market founding and commit-last Open.
 #[cfg(any(
     feature = "families",
@@ -138,6 +163,8 @@ pub mod resolution_composition_v3;
 pub mod series;
 /// Family-neutral read-only Shadow-AOT comparison CPI.
 pub mod shadow_composition_v3;
+/// Wallet-authorized caller for one canonical Claims User Position.
+pub mod user_position_admission_v1;
 
 /// Stable refusal from the canonical Trading SBF boundary.
 #[repr(u32)]
@@ -165,6 +192,19 @@ pub enum TradingSbfError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x4007,
+    /// This route needs the extended heap and the transaction did not grant it.
+    ///
+    /// The route declares an extended heap profile, but the runtime handed it
+    /// the protocol default anyway, because the transaction carried no
+    /// ComputeBudget `RequestHeapFrame` or presented no instructions sysvar.
+    /// That grant is best-effort by construction, so without this refusal the
+    /// route would allocate until it died -- and an out-of-memory abort names
+    /// nothing: not the route, not the budget, not what the caller omitted.
+    ///
+    /// The remedy is always the caller's and always the same: add
+    /// `ComputeBudgetInstruction::request_heap_frame` to the transaction and
+    /// keep the instructions sysvar in the account frame.
+    HeapFrame = 0x4008,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -175,7 +215,7 @@ const _: () = assert!(
     "TradingSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (TradingSbfError::ReleaseSuperseded as u32)
+    (TradingSbfError::HeapFrame as u32)
         < dclutch_refusal_registry::TRADING_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "TradingSbfError must not run past its registered refusal band"
 );
@@ -248,10 +288,11 @@ pub const TRADING_MAX_INSTRUCTION_ACCOUNTS_V3: usize = HOT_FIXED_ACCOUNT_COUNT_V
     + TRADING_MAX_HOT_BANK_PAGES_V3
     + TRADING_MAX_HOT_PHYSICAL_REPRESENTATIVES_V3;
 
-/// Execute the family-neutral authenticated activation route.
+/// Execute the family-neutral authenticated capability lifecycle route.
 ///
-/// Hot actions and closure remain fail-closed until their common profile and
-/// fixed-role receipt composition land in this same authority boundary.
+/// Activation and native closure share the common descriptor/profile boundary.
+/// Realm/token closure remains fail-closed until its ordered-vault adapter
+/// lands in this same authority boundary.
 #[inline(never)]
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -259,13 +300,88 @@ pub fn process_instruction(
     instruction_data: &[u8],
 ) -> ProgramResult {
     require_instruction_account_bound_v3(accounts.len())?;
-    #[cfg(any(
-        feature = "families",
-        feature = "series-family",
-        feature = "dealer-family"
-    ))]
-    if generic_market_founding_v1::is_generic_market_founding_v1(instruction_data) {
-        return generic_market_founding_v1::process_generic_market_founding_v1(
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_create_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_create_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_page_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_page_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_evaluate_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_evaluate_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_reserve_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_reserve_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_rollback_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_rollback_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_commit_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_commit_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(feature = "families", feature = "dealer-family"))]
+    if dealer_scenario_checkpoint_v1::is_dealer_scenario_checkpoint_cleanup_v1(instruction_data) {
+        return dealer_scenario_checkpoint_v1::process_dealer_scenario_checkpoint_cleanup_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if dclutch_user_position_admission_contract::is_user_position_admission_v1(instruction_data) {
+        return user_position_admission_v1::process_user_position_admission_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
+    if dclutch_direct_codec::retirement_v1::is_direct_begin_retiring_v1(instruction_data) {
+        return direct_begin_retiring_v1::process_direct_begin_retiring_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
+    if dclutch_direct_codec::replay_setup_v1::is_direct_replay_setup_v1(instruction_data) {
+        return direct_replay_setup_v1::process_direct_replay_setup_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
+    if dclutch_direct_codec::token_setup_v1::is_direct_token_setup_v1(instruction_data) {
+        return direct_token_setup_v1::process_direct_token_setup_v1(
             program_id,
             accounts,
             instruction_data,
@@ -276,8 +392,56 @@ pub fn process_instruction(
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    if projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v1(instruction_data) {
-        return projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v1(
+    if generic_market_founding_v1::is_generic_market_founding_v3(instruction_data) {
+        return generic_market_founding_v1::process_generic_market_founding_v3(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if generic_founding_stages_v1::is_generic_found_and_permit_v1(instruction_data) {
+        return generic_founding_stages_v1::process_generic_found_and_permit_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if generic_founding_stages_v1::is_generic_market_open_v1(instruction_data) {
+        return generic_founding_stages_v1::process_generic_market_open_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2(instruction_data) {
+        return projected_custody_bootstrap_v1::process_projected_custody_bootstrap_v2(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if projected_custody_bootstrap_v1::is_controller_funding_prepare_v1(instruction_data) {
+        return projected_custody_bootstrap_v1::process_controller_funding_prepare_v1(
             program_id,
             accounts,
             instruction_data,
@@ -300,6 +464,30 @@ pub fn process_instruction(
             instruction_data,
         );
     }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if projected_custody_bootstrap_v1::is_controller_funding_cleanup_step1_v1(instruction_data) {
+        return projected_custody_bootstrap_v1::process_controller_funding_cleanup_step1_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(any(
+        feature = "families",
+        feature = "series-family",
+        feature = "dealer-family"
+    ))]
+    if projected_custody_bootstrap_v1::is_controller_funding_cleanup_step2_v1(instruction_data) {
+        return projected_custody_bootstrap_v1::process_controller_funding_cleanup_step2_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     // Decision 0005. The validated-artifact seal is written by its own outer,
     // once per (descriptor, action, Trading interpreter release, Registry).
     // It creates one PDA under this Program, signs nothing else, and can only
@@ -310,7 +498,7 @@ pub fn process_instruction(
     if hot_v3::is_hot_execution_v3(instruction_data) {
         hot_v3::process_hot_execution_v3(program_id, accounts, instruction_data)
     } else {
-        outer::process_activation(program_id, accounts, instruction_data)
+        outer::process_capability_lifecycle(program_id, accounts, instruction_data)
     }
 }
 

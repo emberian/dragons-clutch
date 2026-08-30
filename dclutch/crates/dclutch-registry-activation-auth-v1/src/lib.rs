@@ -60,8 +60,8 @@
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetViewV1, ArtifactReleaseV1, DeploymentObservationV1,
-    Error as RegistryContractError, require_slot_pinned_release_v1,
-    slot_pinned_release_elf_digest_v1,
+    Error as RegistryContractError, RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
+    require_slot_pinned_release_v1, slot_pinned_release_elf_digest_v1,
 };
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::ExecutionRoleV1;
@@ -105,6 +105,19 @@ impl From<ActivationAuthErrorV1> for ProgramError {
 
 type Result<T> = core::result::Result<T, ActivationAuthErrorV1>;
 
+/// Canonical activation-cache bump authenticated by one complete PDA search.
+///
+/// The field is private so downstream adapters cannot turn an untrusted byte
+/// into an authentication shortcut. A caller obtains this witness only from
+/// [`authenticate_activated_role_and_bump_v1`], after the searched address has
+/// matched the Registry-owned cache. The same adapter can then authenticate
+/// additional roles from that exact cache with
+/// [`authenticate_activated_role_with_bump_v1`], which reproduces the address
+/// with `create_program_address` instead of paying for the same 256-way search
+/// again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedActivationCacheBumpV1(u8);
+
 /// Authenticate one activated role out of the Registry-owned cache, no CPI.
 ///
 /// `release_set_id` is the activation generation the caller is executing under.
@@ -120,14 +133,167 @@ pub fn authenticate_activated_role_v1(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
 ) -> Result<AuthenticatedRoleReceiptV1> {
-    let expected = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_slice()],
-        registry.key,
+    authenticate_activated_role_and_bump_v1(
+        registry,
+        cache,
+        release_set_id,
+        role,
+        program,
+        programdata,
     )
-    .0;
+    .map(|(receipt, _)| receipt)
+}
+
+/// Authenticate one role and return the canonical cache bump found on the
+/// same exact address check.
+///
+/// This is the first role in a multi-role adapter frame. It performs the sole
+/// canonical search and returns an opaque witness that can be reused only by
+/// [`authenticate_activated_role_with_bump_v1`].
+#[inline(never)]
+pub fn authenticate_activated_role_and_bump_v1(
+    registry: &AccountInfo<'_>,
+    cache: &AccountInfo<'_>,
+    release_set_id: &[u8; 32],
+    role: ExecutionRoleV1,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+) -> Result<(
+    AuthenticatedRoleReceiptV1,
+    AuthenticatedActivationCacheBumpV1,
+)> {
+    let bump = authenticate_activation_cache_bump_v1(registry, cache, release_set_id)?;
+    let receipt =
+        authenticate_role_in_account(registry, cache, release_set_id, role, program, programdata)?;
+    Ok((receipt, bump))
+}
+
+/// Authenticate the canonical Registry-owned cache coordinate and return its
+/// opaque bump witness without selecting a deployment role.
+///
+/// Adapters that must first join other immutable cache facts (for example, a
+/// Market's selected Core program) use this once, then pass the returned
+/// witness to [`authenticate_activated_role_with_bump_v1`] for every role in
+/// the same frame. The complete fixed-width hostile decoder runs here, so the
+/// witness cannot come from address/owner checks alone.
+///
+/// # Why this reads the bump instead of searching for it
+///
+/// This one address is derived SIX times per top-level Direct transaction --
+/// once in Trading, twice inside the Registry's own `Reauthenticate` CPIs, once
+/// from Claims and twice from Custody -- and its depth is a lottery redrawn by
+/// every rebuild, because `release_set_id` hashes the deployed ELF digests. One
+/// step of that lottery moved all six searches by 9,000 CU on a route whose
+/// whole margin is about eighteen thousand.
+///
+/// Every one of those six sites already holds this account and already runs the
+/// hostile decoder over it, so the cache carries its own bump and each reader
+/// REPRODUCES the address rather than walking down from 255. The conjunction is
+/// the same one, with the search removed:
+///
+/// * the account's owner and exact width are required BEFORE its bytes are
+///   read, so the bump is not taken from a stranger's account;
+/// * the body must hostile-decode and must name the very `release_set_id` the
+///   caller is executing under, which is the other of the two seeds;
+/// * the address `create_program_address` produces from those seeds and that
+///   bump must equal the account the caller was handed -- a wrong byte produces
+///   a different address and refuses.
+///
+/// So the byte is a memo of the Registry's own derivation. Canonicality is
+/// enforced where the account is created: the Registry signs the cache into
+/// existence with the bump it searched for, and can write at no other address.
+///
+/// A cache whose bump byte is zero was written before it was persisted; that
+/// reader falls back to the search, which is exactly what it used to do.
+#[inline(never)]
+pub fn authenticate_activation_cache_bump_v1(
+    registry: &AccountInfo<'_>,
+    cache: &AccountInfo<'_>,
+    release_set_id: &[u8; 32],
+) -> Result<AuthenticatedActivationCacheBumpV1> {
+    require_cache_account(registry.key, cache)?;
+    let bytes = cache
+        .try_borrow_data()
+        .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
+        .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    if activated
+        .execution_release_set_id()
+        .map_err(|_| ActivationAuthErrorV1::ActivationCache)?
+        .as_bytes()
+        != release_set_id
+    {
+        return Err(ActivationAuthErrorV1::ActivationCache);
+    }
+    let carried = activated
+        .cache_bump()
+        .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    let (expected, bump) = match carried {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let expected = Pubkey::create_program_address(
+                &[
+                    ACTIVATION_PDA_DOMAIN_V1,
+                    release_set_id.as_slice(),
+                    &bump_seed,
+                ],
+                registry.key,
+            )
+            .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+            (expected, bump)
+        }
+        None => Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_slice()],
+            registry.key,
+        ),
+    };
     if cache.key != &expected {
         return Err(ActivationAuthErrorV1::ActivationCache);
     }
+    Ok(AuthenticatedActivationCacheBumpV1(bump))
+}
+
+/// Authenticate another role from the same cache using a previously
+/// authenticated canonical bump.
+///
+/// A wrong or cross-release witness cannot reproduce `cache.key` and refuses
+/// before account bytes are read. This preserves the exact address, owner,
+/// fixed-width, hostile-decode, release-set, and deployment checks of
+/// [`authenticate_activated_role_v1`]; only the repeated bump search changes.
+#[inline(never)]
+pub fn authenticate_activated_role_with_bump_v1(
+    registry: &AccountInfo<'_>,
+    cache: &AccountInfo<'_>,
+    release_set_id: &[u8; 32],
+    bump: AuthenticatedActivationCacheBumpV1,
+    role: ExecutionRoleV1,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+) -> Result<AuthenticatedRoleReceiptV1> {
+    let bump_seed = [bump.0];
+    let expected = Pubkey::create_program_address(
+        &[
+            ACTIVATION_PDA_DOMAIN_V1,
+            release_set_id.as_slice(),
+            &bump_seed,
+        ],
+        registry.key,
+    )
+    .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    if cache.key != &expected {
+        return Err(ActivationAuthErrorV1::ActivationCache);
+    }
+    authenticate_role_in_account(registry, cache, release_set_id, role, program, programdata)
+}
+
+fn authenticate_role_in_account(
+    registry: &AccountInfo<'_>,
+    cache: &AccountInfo<'_>,
+    release_set_id: &[u8; 32],
+    role: ExecutionRoleV1,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+) -> Result<AuthenticatedRoleReceiptV1> {
     require_readonly_frame(cache, program, programdata)?;
     require_cache_account(registry.key, cache)?;
     let bytes = cache
@@ -169,6 +335,50 @@ pub fn activation_cache_address_v1(registry: &Pubkey, release_set_id: &[u8; 32])
         registry,
     )
     .0
+}
+
+/// Derive the sole lineage-record address and bump for one predecessor set.
+///
+/// This is the only place the lineage seeds are spelled. The Registry derives
+/// it to create the record and to sign for it; Core derives it to find the
+/// successor its market may hop to. Two programs, one derivation — a second
+/// spelling is how a route ends up reading an account nobody wrote.
+pub fn release_lineage_address_and_bump_v1(
+    registry: &Pubkey,
+    predecessor_release_set_id: &[u8; 32],
+) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            RELEASE_LINEAGE_PDA_DOMAIN_V1,
+            predecessor_release_set_id.as_slice(),
+        ],
+        registry,
+    )
+}
+
+/// Derive the sole lineage-record address for one predecessor release set.
+pub fn release_lineage_address_v1(
+    registry: &Pubkey,
+    predecessor_release_set_id: &[u8; 32],
+) -> Pubkey {
+    release_lineage_address_and_bump_v1(registry, predecessor_release_set_id).0
+}
+
+/// Answer whether this is the Registry-owned record of the one exact width.
+///
+/// Returns a plain answer rather than a refusal, for the same reason it
+/// deliberately does not check privileges: the declaration route needs the
+/// record writable and the migration route needs it read-only, so each frame
+/// states its own and neither borrows the other's. The refusal is likewise the
+/// caller's to name in its own band -- `ActivationAuthErrorV1` is the
+/// activation cache's vocabulary, and a lineage record is a different account.
+/// Widening that enum for this one check would have handed a variant they can
+/// never receive to every consumer of every other function here.
+#[must_use]
+pub fn is_lineage_account_v1(registry: &Pubkey, lineage: &AccountInfo<'_>) -> bool {
+    lineage.owner == registry
+        && !lineage.executable
+        && lineage.data_len() == RELEASE_LINEAGE_BYTES_V1
 }
 
 /// Require the exact read-only three-account reauthentication frame.
@@ -276,9 +486,16 @@ pub fn cached_role_deployment_observation_v1(
         .map_err(|_| ActivationAuthErrorV1::Deployment)?;
     let program_view =
         ProgramV3View::parse(&program_bytes).map_err(|_| ActivationAuthErrorV1::Deployment)?;
-    let derived =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata() != release.programdata() || programdata.key != &derived {
+    // Loader V3's Program account is the runtime owner of this link. The
+    // account is executable, Loader-owned, and hostile-parsed above; the
+    // Loader follows this exact stored ProgramData address when it executes or
+    // upgrades the program. Re-deriving that already-authenticated link pays a
+    // PDA search without authenticating an additional fact. Keep the full
+    // three-way equality instead: Loader-owned link == activated release ==
+    // supplied Loader-owned ProgramData account.
+    if program_view.programdata() != release.programdata()
+        || program_view.programdata() != programdata.key.to_bytes()
+    {
         return Err(ActivationAuthErrorV1::Deployment);
     }
     let carried_programdata = program_view.programdata();

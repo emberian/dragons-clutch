@@ -31,6 +31,8 @@ mod generated_scheduled_median_v1;
 #[allow(missing_docs)]
 mod generated_source_material_v2;
 #[allow(missing_docs)]
+mod generated_source_material_v3;
+#[allow(missing_docs)]
 mod generated_source_recovery_policy_v2;
 #[allow(missing_docs)]
 mod generated_source_resolution_state_v2;
@@ -38,6 +40,7 @@ mod principal_capacity_v1;
 mod provider_join_v2;
 mod scheduled_median_v1;
 mod source_material_v2;
+mod source_material_v3;
 mod source_recovery_policy_v2;
 mod source_resolution_v2;
 
@@ -48,10 +51,12 @@ pub use principal_capacity_v1::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_PREIMAGE_V1, MANIPULATION_FLOOR_V1_BYTES,
     MANIPULATION_FLOOR_V1_MAGIC, MANIPULATION_FLOOR_V1_MAGIC_OFFSET,
     MANIPULATION_FLOOR_V1_SCHEMA_VERSION, MANIPULATION_FLOOR_V1_VERSION_OFFSET,
-    MARKET_PRINCIPAL_CAP_BYTES_V1, MARKET_PRINCIPAL_CAP_UNBOUNDED_V1, ManipulationFloorBasis,
-    ManipulationFloorV1, MarketPrincipalCapV1, PRINCIPAL_ADMISSION_CASES_V1,
-    PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1,
-    PRINCIPAL_CARRIED_CAPS_V1, PrincipalAdmissionCaseV1, PrincipalCapacityV1,
+    MARKET_PRINCIPAL_CAP_BYTES_V1, MARKET_PRINCIPAL_CAP_SETS_UNBOUNDED_V1,
+    MARKET_PRINCIPAL_CAP_UNBOUNDED_V1, ManipulationFloorBasis, ManipulationFloorV1,
+    MarketPrincipalCapSetsV1, MarketPrincipalCapV1, PRINCIPAL_ADMISSION_CASES_V1,
+    PRINCIPAL_CAP_PROJECTION_CASES_V1, PRINCIPAL_CAPACITY_LIFTING_PLAN_ID_V1,
+    PRINCIPAL_CAPACITY_LIFTING_PLAN_PREIMAGE_V1, PRINCIPAL_CARRIED_CAPS_V1,
+    PrincipalAdmissionCaseV1, PrincipalCapProjectionCaseV1, PrincipalCapacityV1,
     SOURCE_CAPACITY_PRINCIPAL_DENOMINATOR_OFFSET_V1, SOURCE_CAPACITY_PRINCIPAL_NUMERATOR_OFFSET_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_BYTES_V1,
     SOURCE_CAPACITY_PRINCIPAL_TAIL_RESERVED_OFFSET_V1, admit_founding_principal,
@@ -71,6 +76,11 @@ pub use generated_source_material_v2::{
     SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V2,
     SOURCE_MATERIAL_V2_BYTES, SOURCE_MATERIAL_V2_MAGIC, SOURCE_MATERIAL_V2_SCHEMA_VERSION,
 };
+pub use generated_source_material_v3::{
+    SOURCE_MATERIAL_DERIVATION_RELEASE_ID_V3, SOURCE_MATERIAL_DERIVATION_RELEASE_PREIMAGE_V3,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3,
+    SOURCE_MATERIAL_V3_BYTES, SOURCE_MATERIAL_V3_MAGIC, SOURCE_MATERIAL_V3_SCHEMA_VERSION,
+};
 pub use generated_source_recovery_policy_v2::{
     RECOVERY_ATTEMPT_BYTES_V2, RECOVERY_POLICY_BYTES_V2, RECOVERY_POLICY_MAGIC_V2,
     RECOVERY_POLICY_MAX_ATTEMPTS_V2, RECOVERY_POLICY_SCHEMA_ID_V2,
@@ -79,11 +89,13 @@ pub use generated_source_recovery_policy_v2::{
 pub use provider_join_v2::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1,
     PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
-    PythProviderAdapterObligationV2, SOURCE_SPEC_SCHEMA_ID_V1, SOURCE_SPEC_SCHEMA_PREIMAGE_V1,
-    STATISTIC_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1, WINDOW_SPEC_SCHEMA_ID_V1,
-    WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
+    PythProviderAdapterObligationV2, SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+    SOURCE_CAPACITY_PROFILE_SCHEMA_PREIMAGE_V1, SOURCE_SPEC_SCHEMA_ID_V1,
+    SOURCE_SPEC_SCHEMA_PREIMAGE_V1, STATISTIC_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1,
+    WINDOW_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
 };
 pub use source_material_v2::SourceMaterialV2;
+pub use source_material_v3::{SourceMaterialV3, SourcePrincipalPolicyV1};
 pub use source_recovery_policy_v2::{RecoveryAttemptV2, RecoveryPolicyV2};
 pub use source_resolution_v2::{
     SourceResolutionCreationPlanV2, SourceResolutionDecisionV2, SourceResolutionPdaSeedsV2,
@@ -268,6 +280,15 @@ pub const RELAYED_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1: &[u8] =
 pub const RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1: [u8; 32] = [
     0x4f, 0x3e, 0x60, 0xe3, 0x40, 0x89, 0x5c, 0x3e, 0xf0, 0x0c, 0x37, 0x1c, 0xeb, 0x3e, 0xf7, 0x98,
     0xdf, 0xa5, 0x80, 0x66, 0xb6, 0x17, 0xc6, 0xde, 0x0d, 0xea, 0x87, 0x50, 0x13, 0x4c, 0x99, 0x46,
+];
+/// Closed sponsored-push extension: permissionless capture, canonical
+/// best-submitted head, and post-deadline consumption.
+pub const PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1: &[u8] =
+    b"dclutch/source-pyth-sponsored-push-extension/v1";
+/// SHA-256 identity of [`PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_PREIMAGE_V1`].
+pub const PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_ID_V1: [u8; 32] = [
+    0xfc, 0x5d, 0xcd, 0x15, 0x3e, 0x4d, 0x95, 0xd3, 0x65, 0x31, 0x5f, 0x75, 0xad, 0xf6, 0x0e, 0x17,
+    0xac, 0x5a, 0xed, 0xe8, 0xfc, 0x57, 0xab, 0xd9, 0xb9, 0x0d, 0xde, 0x53, 0x88, 0xe9, 0x6c, 0xde,
 ];
 /// Closed preimage release for the canonical shared-evidence-set digest.
 pub const SHARED_EVIDENCE_SET_RELEASE_PREIMAGE_V1: &[u8] = b"dclutch/source-shared-evidence-set/v1";
@@ -798,6 +819,11 @@ pub enum SourceAccessProfile {
     /// owns is unchanged: binding that normalized evidence to the immutable
     /// material, the window, and the statistic.
     RelayedObservationRecord = 3,
+    /// A fixed sponsored Pyth push account captured before the primary
+    /// deadline into immutable Resolution-owned candidate records. A mutable
+    /// head selects the best valid submitted candidate; consumption occurs
+    /// only after candidate admission has closed.
+    PythSponsoredPushSnapshot = 4,
 }
 
 impl SourceAccessProfile {
@@ -806,6 +832,7 @@ impl SourceAccessProfile {
             1 => Ok(Self::PythTerminalOneTransaction),
             2 => Ok(Self::SharedObservationChild),
             3 => Ok(Self::RelayedObservationRecord),
+            4 => Ok(Self::PythSponsoredPushSnapshot),
             _ => Err(Error::UnknownSourceAccess),
         }
     }
@@ -838,6 +865,7 @@ impl SourceAccessProfile {
                 PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1
             }
             Self::RelayedObservationRecord => RELAYED_PROVIDER_EXTENSION_RELEASE_ID_V1,
+            Self::PythSponsoredPushSnapshot => PYTH_SPONSORED_PUSH_PROVIDER_EXTENSION_RELEASE_ID_V1,
         }
     }
 }
@@ -7169,6 +7197,10 @@ mod tests {
             (
                 REOPEN_LINK_SCHEMA_RELEASE_PREIMAGE_V1,
                 REOPEN_LINK_SCHEMA_RELEASE_ID_V1,
+            ),
+            (
+                SOURCE_CAPACITY_PROFILE_SCHEMA_PREIMAGE_V1,
+                SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
             ),
             (
                 RECOVERY_POLICY_SCHEMA_PREIMAGE_V2,

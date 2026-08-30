@@ -440,7 +440,7 @@ export async function connectWalletIdentityV1(
   return Object.freeze({ address: account.address, label: account.label, chains: Object.freeze(solana) });
 }
 
-/** Pick the wallet chain that matches a finalized RPC endpoint, or refuse. */
+/** Pick only the authorized devnet/local wallet chain label, or refuse. */
 export function solanaChainForEndpointV1(endpoint: string, available: ReadonlyArray<string>): SolanaChainV1 {
   let host: string;
   try {
@@ -449,9 +449,13 @@ export function solanaChainForEndpointV1(endpoint: string, available: ReadonlyAr
     throw new Error('RPC endpoint is not one absolute http or https URL');
   }
   const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0';
+  // Mutation admission separately authenticates the endpoint's genesis before
+  // any wallet method runs. Never label a non-loopback request as mainnet or
+  // testnet merely because a wallet announces those chains: the only public
+  // chain this application is authorized to mutate is devnet.
   const preference: ReadonlyArray<SolanaChainV1> = loopback
-    ? ['solana:localnet', 'solana:devnet', 'solana:testnet', 'solana:mainnet']
-    : ['solana:mainnet', 'solana:devnet', 'solana:testnet', 'solana:localnet'];
+    ? ['solana:localnet', 'solana:devnet']
+    : ['solana:devnet'];
   const chain = preference.find((candidate) => available.includes(candidate));
   if (chain === undefined) throw new Error(`wallet announces none of ${SOLANA_CHAINS.join(', ')} for endpoint ${endpoint}`);
   return chain;

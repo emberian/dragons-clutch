@@ -182,6 +182,58 @@ use solana_program::{
 
 use crate::TradingSbfError;
 
+/// Read current CPI return data into a caller-owned allocation.
+///
+/// The SDK helper always allocates a new `Vec`. Common Hot's last child owns a
+/// wire buffer whose bytes die at the CPI boundary; reusing that exact
+/// allocation avoids a late, unreclaimable bump-heap allocation without
+/// changing the syscall, producer, width, or receipt bytes being verified.
+/// A return wider than the supplied capacity is refused rather than truncated.
+pub(crate) fn get_return_data_into_v1(
+    output: &mut Vec<u8>,
+) -> Result<Option<Pubkey>, ProgramError> {
+    let capacity = output.capacity();
+    if capacity == 0 {
+        return Err(TradingSbfError::Content.into());
+    }
+    output.clear();
+    #[cfg(target_os = "solana")]
+    {
+        let mut producer = Pubkey::default();
+        #[allow(deprecated)]
+        let returned = unsafe {
+            solana_program::syscalls::sol_get_return_data(
+                output.as_mut_ptr(),
+                u64::try_from(capacity).map_err(|_| TradingSbfError::Content)?,
+                &mut producer,
+            )
+        };
+        if returned == 0 {
+            return Ok(None);
+        }
+        let returned = usize::try_from(returned).map_err(|_| TradingSbfError::Transition)?;
+        if returned > capacity {
+            return Err(TradingSbfError::Transition.into());
+        }
+        // SAFETY: `sol_get_return_data` initialized exactly `returned` bytes
+        // in this allocation, and the checked branch above proves that range
+        // lies within its capacity.
+        unsafe { output.set_len(returned) };
+        Ok(Some(producer))
+    }
+    #[cfg(not(target_os = "solana"))]
+    {
+        let Some((producer, returned)) = solana_program::program::get_return_data() else {
+            return Ok(None);
+        };
+        if returned.len() > capacity {
+            return Err(TradingSbfError::Transition.into());
+        }
+        output.extend_from_slice(&returned);
+        Ok(Some(producer))
+    }
+}
+
 /// Accounts deserialized into the entrypoint's own stack frame at zero heap
 /// cost.
 ///
@@ -214,6 +266,9 @@ pub const ADAPTER_MAX_HEAP_BYTES: usize = 256 * 1024;
 /// Chain-derived: `ComputeBudgetInstructionDetails::sanitize_requested_heap_size`
 /// requires the request to be a multiple of 1,024.
 const HEAP_FRAME_GRANULARITY_BYTES: usize = 1_024;
+
+/// Width of the eight-byte route magic every Trading instruction opens with.
+const HOT_EXECUTION_MAGIC_BYTES_V1: usize = 8;
 
 /// ComputeBudget program instruction discriminant for `RequestHeapFrame(u32)`.
 ///
@@ -661,6 +716,44 @@ pub fn program_heap_bytes_used_v1() -> usize {
 #[must_use]
 pub fn program_heap_capacity_v1() -> usize {
     PROGRAM_HEAP_V1.bytes_capacity()
+}
+
+/// Refuse a route that needs the extended heap and was not granted it.
+///
+/// [`lift_declared_heap_profile_v1`] is best-effort BY CONSTRUCTION: a
+/// transaction that declares the profile but carries no `RequestHeapFrame`, or
+/// presents no instructions sysvar, keeps the protocol default and proceeds.
+/// For a route whose peak is known to exceed that default, "proceeds" means it
+/// allocates until it dies, and an out-of-memory abort names nothing at all --
+/// not the route, not the budget, not the one instruction the caller left out.
+/// That is the worst thing to hand the first person who integrates.
+///
+/// So the route that needs the frame asks here instead, and a caller who
+/// forgot is told exactly what to add. This is a question about THIS
+/// invocation's granted ceiling, not about the declaration: a route can be on
+/// the list and still arrive without a grant, which is precisely the case
+/// worth naming.
+#[cfg(all(
+    target_os = "solana",
+    not(feature = "custom-heap"),
+    not(feature = "no-entrypoint")
+))]
+pub fn require_extended_heap_admitted_v1() -> Result<(), ProgramError> {
+    if PROGRAM_HEAP_V1.bytes_capacity() > ADAPTER_DEFAULT_HEAP_BYTES {
+        return Ok(());
+    }
+    Err(crate::TradingSbfError::HeapFrame.into())
+}
+
+/// Host builds allocate from the system allocator, which has no such ceiling,
+/// so there is nothing to admit and nothing to refuse.
+#[cfg(not(all(
+    target_os = "solana",
+    not(feature = "custom-heap"),
+    not(feature = "no-entrypoint")
+)))]
+pub fn require_extended_heap_admitted_v1() -> Result<(), ProgramError> {
+    Ok(())
 }
 
 /// Bytes outstanding at the program heap's scratch end.
@@ -1135,19 +1228,19 @@ const fn hot_cu_profile_lifts_every_route_v1() -> bool {
 /// Routes permitted to run on a runtime-granted heap frame larger than the
 /// protocol default.
 ///
-/// Exhaustive and adapter-owned. The Hot execution path is deliberately absent:
-/// its continuation packet -- 1,228 bytes of the 1,232-byte v0 ceiling, as
-/// `waist.rs` measures it -- has no room to carry a ComputeBudget
-/// instruction and its heap demand is being closed structurally. Adding a route
-/// here is the single visible act that takes it off the 32 KiB discipline, and
-/// it must be an instruction whose transaction has the packet room to actually
-/// carry `RequestHeapFrame` and to present the instructions sysvar - without
-/// both, the declaration is inert and the route keeps the default ceiling.
+/// Exhaustive and adapter-owned. Adding a route here is the single visible act
+/// that takes it off the 32 KiB discipline, and it must be an instruction whose
+/// transaction has the packet room to actually carry `RequestHeapFrame` and to
+/// present the instructions sysvar - without both, the declaration is inert and
+/// the route keeps the default ceiling.
 ///
-/// The two entries are the one-time, ALT-backed founding transactions:
+/// The first entries are the one-time, ALT-backed founding transactions:
 ///
-/// - `DCLTGMF1`, the atomic Lock/Found/Realize/Claims/Open route;
-/// - `DCLTPCB1`, projected-Custody bootstrap, which commit `328fead` measured
+/// - `DCLTGMF3`, the composed Lock/Found/Realize/Claims/Open route;
+/// - `DCLTGFP1`, the split founding's stage 1 — the same frame and the same
+///   child allocation profile minus only the Open window, so it inherits the
+///   same declaration for the same measured reason;
+/// - `DCLTPCB2`, projected-Custody bootstrap, which commit `328fead` measured
 ///   dying out of memory and diagnosed precisely: it "holds three stages' worth
 ///   of allocations live [...] against an allocator that never frees, so its
 ///   peak is the sum. Either it allocates less, or it supplies its own global
@@ -1157,15 +1250,33 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     if hot_cu_profile_lifts_every_route_v1() {
         return true;
     }
+    // `DCLTHOT3`, Hot execution. Added 2026-08-30, and the reason is the route
+    // rather than the tail W2p closed: a caller who invokes Trading DIRECTLY --
+    // which is how every public caller sends a Direct trade -- makes two
+    // Registry reauthentication CPIs that a Registry continuation never makes,
+    // and holds their frames and receipts against an allocator that never
+    // frees. The continuation route still fits the 32 KiB default and still
+    // carries no grant; its packet has four spare bytes and could not carry one
+    // anyway. Declaring here is what makes a grant ADMISSIBLE, not required:
+    // the route that needs it asks for it, and asks
+    // `require_extended_heap_admitted_v1` to refuse by name if it did not
+    // arrive.
+    if instruction_data.get(..HOT_EXECUTION_MAGIC_BYTES_V1)
+        == Some(dclutch_capability_program_contract::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
+    {
+        return true;
+    }
     #[cfg(any(
         feature = "families",
         feature = "series-family",
         feature = "dealer-family"
     ))]
-    if crate::generic_market_founding_v1::is_generic_market_founding_v1(instruction_data)
-        || crate::projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v1(
+    if crate::generic_market_founding_v1::is_generic_market_founding_v3(instruction_data)
+        || crate::generic_founding_stages_v1::is_generic_found_and_permit_v1(instruction_data)
+        || crate::projected_custody_bootstrap_v1::is_projected_custody_bootstrap_v2(
             instruction_data,
         )
+        || crate::projected_custody_bootstrap_v1::is_controller_funding_prepare_v1(instruction_data)
     {
         return true;
     }
@@ -2710,18 +2821,47 @@ mod tests {
                 feature = "dealer-family"
             ))]
             {
+                let mut founding = vec![
+                    0_u8;
+                    crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3
+                ];
+                founding[..8].copy_from_slice(
+                    &crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V3,
+                );
+                let mut stage1 = vec![
+                    0_u8;
+                    crate::generic_founding_stages_v1::GENERIC_FOUND_AND_PERMIT_INSTRUCTION_BYTES_V1
+                ];
+                stage1[..8].copy_from_slice(
+                    &crate::generic_founding_stages_v1::GENERIC_FOUND_AND_PERMIT_MAGIC_V1,
+                );
                 for magic in [
-                    crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V1,
-                    crate::projected_custody_bootstrap_v1::PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V1,
+                    founding,
+                    stage1,
+                    crate::projected_custody_bootstrap_v1::PROJECTED_CUSTODY_BOOTSTRAP_MAGIC_V2
+                        .to_vec(),
                 ] {
                     assert!(declares_extended_heap_profile_v1(&magic));
-                    let mut nearly = magic;
+                    let mut nearly = magic.clone();
                     nearly[7] = nearly[7].wrapping_add(1);
                     assert!(!declares_extended_heap_profile_v1(&nearly));
                     assert!(!declares_extended_heap_profile_v1(
                         magic.get(..7).expect("prefix")
                     ));
                 }
+                // The split founding's stage 2 stays on the 32 KiB discipline:
+                // its frame is two raw accounts and Core's 21-account Open
+                // window, and keeping it off this list is a deliberate
+                // property, not an omission.
+                let mut open = vec![
+                    0_u8;
+                    crate::generic_founding_stages_v1::GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1
+                ];
+                open[..8].copy_from_slice(
+                    &crate::generic_founding_stages_v1::GENERIC_MARKET_OPEN_MAGIC_V1,
+                );
+                assert!(crate::generic_founding_stages_v1::is_generic_market_open_v1(&open));
+                assert!(!declares_extended_heap_profile_v1(&open));
             }
         }
     }

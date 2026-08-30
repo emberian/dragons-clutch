@@ -141,14 +141,15 @@ finalized address lookup tables as v0 transactions, through the producer's own
 `publish_routing_table` rather than a second copy of the routing shape here.
 
 **What the first run of this stage found in the Market itself.** The demo
-Market's `SourceMaterialV2` named its source spec, window spec and statistic
-spec — and its failure policy — by domain-separated demo digests. A finalized
+Market's then-current `SourceMaterialV2` named its source spec, window spec and
+statistic spec — and its failure policy — by domain-separated demo digests. A finalized
 record lives at an address derived from the hash of its own body, so those were
 records nobody could ever publish, and the Market could fund its resolution and
 then stop forever one step short of a certificate. Nothing refused; it simply
-had no next move. `market.rs::demo_market_input` now compiles the graph, every
+had no next move. The current campaign uses the clean-break 240-byte
+`SourceMaterialV3`; `market.rs::demo_market_input` compiles its graph, every
 identity is its body's digest, `validate_market_input` checks exactly that, and
-the five records are published with the rest.
+the selected records are published with the rest.
 
 ## §12.3 is two clocks, and only one is a market parameter
 

@@ -1065,7 +1065,15 @@ mod tests {
         assert_eq!(profile.identity_count(), 16);
         let (descriptor, config, clock) = account_data();
         let accounts = [
-            AccountObservationV1::new(&[0x31; 32], &[0x81; 32], 11, &descriptor, false, false, false),
+            AccountObservationV1::new(
+                &[0x31; 32],
+                &[0x81; 32],
+                11,
+                &descriptor,
+                false,
+                false,
+                false,
+            ),
             AccountObservationV1::new(&[0x32; 32], &[0x81; 32], 12, &config, false, false, false),
             AccountObservationV1::new(&[0x33; 32], &[0x82; 32], 13, &[], false, true, false),
             AccountObservationV1::new(&[0x34; 32], &[0x83; 32], 14, &clock, false, false, false),
@@ -1206,7 +1214,15 @@ mod tests {
         let profile = profile();
         let (descriptor, config, clock) = account_data();
         let canonical_accounts = [
-            AccountObservationV1::new(&[0x31; 32], &[0x81; 32], 11, &descriptor, false, false, false),
+            AccountObservationV1::new(
+                &[0x31; 32],
+                &[0x81; 32],
+                11,
+                &descriptor,
+                false,
+                false,
+                false,
+            ),
             AccountObservationV1::new(&[0x32; 32], &[0x81; 32], 12, &config, false, false, false),
             AccountObservationV1::new(&[0x33; 32], &[0x82; 32], 13, &[], false, true, false),
             AccountObservationV1::new(&[0x34; 32], &[0x83; 32], 14, &clock, false, false, false),

@@ -11,7 +11,7 @@
 //! - the **successor validator**: the tier-1 producer's own founding campaign
 //!   (`found_through_open`, compiled in by `#[path]`), in transaction-only
 //!   record publication, founding a zero-cut graduation Product whose
-//!   `SourceMaterialV2` carries NO recovery policy — the §12.8 demo shape the
+//!   240-byte `SourceMaterialV3` carries NO recovery policy — the §12.8 demo shape the
 //!   no-recovery admission (`e5b6923`) made foundable.
 //!
 //! The success walk drives the REAL `dclutch-relayer` daemon binary: observe
@@ -26,12 +26,27 @@
 //! The journey's conservation ledger is threaded through every stage boundary.
 #![forbid(unsafe_code)]
 
-use std::{env, error::Error as StdError, fmt, io::Write, path::PathBuf};
+use std::{env, error::Error as StdError, fmt};
 
 // ------------------------------------------------------------- tier-1, verbatim
+#[path = "../../../local-validator/bootstrap/successor/src/campaign.rs"]
+#[allow(dead_code)]
+mod campaign;
 #[path = "../../../local-validator/bootstrap/successor/src/cluster.rs"]
 #[allow(dead_code)]
 mod cluster;
+#[path = "../../../local-validator/bootstrap/successor/src/direct_market.rs"]
+#[allow(dead_code)]
+mod direct_market;
+#[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
+#[allow(dead_code)]
+mod funding_readiness;
+#[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
+#[allow(dead_code)]
+mod general_market;
+#[path = "../../../local-validator/bootstrap/successor/src/local_mutable.rs"]
+#[allow(dead_code)]
+mod local_mutable;
 #[path = "../../../local-validator/bootstrap/successor/src/market.rs"]
 #[allow(dead_code)]
 mod market;
@@ -41,15 +56,30 @@ mod model;
 #[path = "../../../local-validator/bootstrap/successor/src/plan.rs"]
 #[allow(dead_code)]
 mod plan;
+#[path = "../../../local-validator/bootstrap/successor/src/rational_market.rs"]
+#[allow(dead_code)]
+mod rational_market;
+#[path = "../../../local-validator/bootstrap/successor/src/relayed.rs"]
+#[allow(dead_code)]
+mod relayed;
+#[path = "../../../local-validator/bootstrap/successor/src/release_identity.rs"]
+#[allow(dead_code)]
+mod release_identity;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
+#[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
+#[allow(dead_code)]
+mod selected_capability;
 #[path = "../../../local-validator/bootstrap/successor/src/runtime.rs"]
 #[allow(dead_code)]
 mod runtime;
 #[path = "../../../local-validator/bootstrap/successor/src/seed.rs"]
 #[allow(dead_code)]
 mod seed;
+#[path = "../../../local-validator/bootstrap/successor/src/upgrade.rs"]
+#[allow(dead_code)]
+mod upgrade;
 
 // ------------------------------------------------------- the journey's ledger
 #[path = "../../journey/src/ledger.rs"]
@@ -57,10 +87,17 @@ mod seed;
 mod ledger;
 
 // ------------------------------------------------------------- this campaign
+#[allow(dead_code)]
 mod daemon;
+#[allow(dead_code)]
 mod input;
+#[allow(dead_code)]
 mod relayworld;
+#[allow(dead_code)]
+mod substrate;
+#[allow(dead_code)]
 mod twin;
+#[allow(dead_code)]
 mod vertical;
 
 type Result<T> = core::result::Result<T, Error>;
@@ -120,68 +157,101 @@ fn run() -> Result<()> {
     }
 }
 
-fn run_vertical(arguments: Vec<String>) -> Result<()> {
-    let mut walk = None;
-    let mut spec_template = None;
-    let mut transcript = None;
-    let mut relayer_bin = None;
-    let mut work = None;
-    let mut keypair_seed = None;
-    let mut iterator = arguments.into_iter();
-    while let Some(argument) = iterator.next() {
-        let value = iterator
-            .next()
-            .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
-        let slot = match argument.as_str() {
-            "--walk" => &mut walk,
-            "--spec-template" => &mut spec_template,
-            "--transcript" => &mut transcript,
-            "--relayer-bin" => &mut relayer_bin,
-            "--work" => &mut work,
-            "--keypair-seed" => &mut keypair_seed,
-            _ => return Err(Error::new(format!("unknown run argument: {argument}"))),
-        };
-        if slot.replace(value).is_some() {
-            return Err(Error::new(format!("{argument} may be supplied only once")));
-        }
-    }
-    let walk = match walk.as_deref() {
-        Some("success") => vertical::WalkV1::Success,
-        Some("failure") => vertical::WalkV1::Failure,
-        other => {
-            return Err(Error::new(format!(
-                "--walk must be success or failure, found {other:?}"
-            )));
-        }
-    };
-    let transcript_value = vertical::execute(vertical::VerticalRequestV1 {
-        walk,
-        spec_template: absolute(spec_template, "--spec-template")?,
-        transcript: absolute(transcript, "--transcript")?,
-        relayer_bin: absolute(relayer_bin, "--relayer-bin")?,
-        work: absolute(work, "--work")?,
-        keypair_seed,
-    })?;
-    let mut stdout = std::io::stdout();
-    stdout.write_all(&serde_json::to_vec_pretty(&transcript_value)?)?;
-    stdout.write_all(b"\n")?;
-    Ok(())
+fn required<'a>(
+    values: &'a std::collections::BTreeMap<String, String>,
+    flag: &str,
+) -> Result<&'a str> {
+    values
+        .get(flag)
+        .map(String::as_str)
+        .ok_or_else(|| Error::new(format!("{flag} is required")))
 }
 
-fn required(value: Option<String>, label: &str) -> Result<String> {
-    value.ok_or_else(|| Error::new(format!("{label} is required")))
-}
-
-fn absolute(value: Option<String>, label: &str) -> Result<PathBuf> {
-    let path = PathBuf::from(required(value, label)?);
+fn absolute(value: &str, flag: &str) -> Result<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(value);
     if !path.is_absolute() {
-        return Err(Error::new(format!("{label} must be absolute")));
+        return Err(Error::new(format!("{flag} must be an absolute path")));
     }
     Ok(path)
 }
 
+/// The restored vertical, in exactly the order the park banner prescribed:
+/// prepare-mutable -> authenticate live substrate -> compile market -> found
+/// -> relay. Fixture Direct identities remain refused: the market compiler is
+/// `DirectMarketCompilerOwnedV1::load_local`, which authenticates the checked
+/// local mutable plan against the gate on disk and observes the LIVE loopback
+/// deployment before anything compiles.
+fn run_vertical(arguments: Vec<String>) -> Result<()> {
+    let mut values = std::collections::BTreeMap::new();
+    let mut iterator = arguments.into_iter();
+    while let Some(flag) = iterator.next() {
+        let value = iterator
+            .next()
+            .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+        if values.insert(flag.clone(), value).is_some() {
+            return Err(Error::new(format!("{flag} was given twice")));
+        }
+    }
+    let walk = match required(&values, "--walk")? {
+        "success" => vertical::WalkV1::Success,
+        "failure" => vertical::WalkV1::Failure,
+        other => return Err(Error::new(format!("--walk must be success or failure: {other}"))),
+    };
+    let rpc_port: u16 = required(&values, "--rpc-port")?
+        .parse()
+        .map_err(|_| Error::new("--rpc-port must be a port number"))?;
+    let request = vertical::VerticalRequestV1 {
+        walk,
+        transcript: absolute(required(&values, "--transcript")?, "--transcript")?,
+        relayer_bin: absolute(required(&values, "--relayer-bin")?, "--relayer-bin")?,
+        work: absolute(required(&values, "--work")?, "--work")?,
+        rpc_port,
+        checked_release_gate: absolute(
+            required(&values, "--checked-release-gate")?,
+            "--checked-release-gate",
+        )?,
+        expected_gate_sha256: required(&values, "--expected-gate-sha256")?.to_owned(),
+        expected_source_revision: required(&values, "--expected-source-revision")?.to_owned(),
+        expected_source_tree_sha256: required(&values, "--expected-source-tree-sha256")?.to_owned(),
+        seed: required(&values, "--seed")?.to_owned(),
+    };
+    vertical::execute(request).map(|_| ())
+}
+
 fn usage() {
     println!(
-        "Usage:\n  dclutch-relayed-vertical-campaign run --walk success|failure \\\n      --spec-template ABSOLUTE_JSON --transcript ABSOLUTE_NEW_JSON \\\n      --relayer-bin ABSOLUTE_DCLUTCH_RELAYER --work ABSOLUTE_DIR \\\n      [--keypair-seed 64_LOWERCASE_HEX]\n\nThe spec template is a `dclutch-local-successor-run-spec-v2` document whose\n`market` field this campaign REPLACES with the relayed graduation market it\ncompiles at run time (the market's terminal window is wall-clock content and\nthe relayer key set is generated per run, so the input cannot be static).\nEverything runs on 127.0.0.1: the successor validator on the template's own\nport block, and the mainnet twin on a port this campaign binds under --work.\nNothing here signs with a persisted key or touches a public cluster."
+        "Usage:\n  dclutch-relayed-vertical-campaign run --walk success|failure \\\n      \
+         --transcript ABSOLUTE_NEW_JSON --relayer-bin ABSOLUTE_DCLUTCH_RELAYER \\\n      \
+         --work ABSOLUTE_DIR --rpc-port PORT \\\n      \
+         --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n      \
+         --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n      \
+         --expected-source-tree-sha256 HEX64 --seed HEX64\n\nThe campaign brings up its own \
+         checked-mutable loopback substrate from the named\nchecked release gate \
+         (local-mutable-prepare-v1), boots a fresh solana-test-validator\nover the prepared \
+         account directory, runs the administration campaign through\nactivation, compiles the \
+         relayed graduation market against the LIVE deployment\n(load_local; fixture Direct \
+         identities are refused), founds it with\ncampaign --founding-only, and only then \
+         relays. Everything runs on 127.0.0.1:\nthe successor validator on --rpc-port and the \
+         mainnet twin on a port this\ncampaign binds under --work. The prepared keys are \
+         disposable loopback-only\nfiles under --work; nothing here touches a public cluster."
     );
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_vertical_refuses_missing_and_relative_arguments_before_any_work() {
+        let error = super::run_vertical(Vec::new()).expect_err("no arguments must refuse");
+        assert!(error.0.contains("--walk is required"));
+        let error = super::run_vertical(vec![
+            "--walk".into(),
+            "failure".into(),
+            "--rpc-port".into(),
+            "21000".into(),
+            "--transcript".into(),
+            "relative.json".into(),
+        ])
+        .expect_err("a relative transcript must refuse");
+        assert!(error.0.contains("--transcript must be an absolute path"));
+    }
 }

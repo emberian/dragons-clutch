@@ -34,7 +34,7 @@ import {
   PRODUCT_RECORD_SCHEMA_ID_V2,
   REALM_SCHEMA_RELEASE_ID_V1,
   RESULT_DOMAIN_SCHEMA_ID_V2,
-  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
 } from '../generated/coreFound';
 import {
   CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V1,
@@ -145,7 +145,7 @@ const SCHEMA_IDS: ReadonlyArray<Readonly<{ name: string; id: Uint8Array }>> = Ob
   { name: 'Product record', id: PRODUCT_RECORD_SCHEMA_ID_V2 },
   { name: 'Result domain', id: RESULT_DOMAIN_SCHEMA_ID_V2 },
   { name: 'Portfolio', id: PORTFOLIO_SCHEMA_ID_V2 },
-  { name: 'Source material', id: SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2 },
+  { name: 'Source material', id: SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3 },
   { name: 'Capability manifest', id: CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 },
   { name: 'Execution release set', id: EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1 },
   { name: 'Artifact release', id: ARTIFACT_RELEASE_SCHEMA_ID_V1 },

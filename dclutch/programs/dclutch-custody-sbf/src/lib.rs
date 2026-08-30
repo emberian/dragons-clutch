@@ -19,14 +19,19 @@ use dclutch_custody_contract::{
     ProjectedCustodyRequestV1, ReceiptEvidenceV1,
 };
 
+mod dealer_reservation_v1;
 mod delegated;
 mod projected;
+mod retirement_replay_handoff_v1;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
+use dclutch_registry_activation_auth_v1::{
+    AuthenticatedActivationCacheBumpV1, authenticate_activated_role_with_bump_v1,
+    authenticate_activation_cache_bump_v1,
+};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
@@ -49,7 +54,7 @@ use solana_program::{
     sysvar::{Sysvar, SysvarSerialize},
 };
 use solana_sdk_ids::{system_program, sysvar};
-use solana_system_interface::instruction::create_account;
+use solana_system_interface::instruction::{allocate, assign, create_account, transfer};
 
 /// Exact common prefix length.
 pub const COMMON_ACCOUNT_COUNT_V1: usize =
@@ -170,11 +175,37 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if dealer_reservation_v1::is_instruction(instruction_data) {
+        return dealer_reservation_v1::process(program_id, accounts, instruction_data);
+    }
+    let (instruction_data, caller_authority_bump) =
+        split_caller_authority_bump_v1(instruction_data);
+    if instruction_data.len()
+        == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        && instruction_data
+            .get(..dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+            == Some(dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request =
+            dclutch_custody_contract::RetirementReplayHandoffRequestV1::decode(instruction_data)
+                .map_err(|_| CustodySbfError::Instruction)?;
+        return retirement_replay_handoff_v1::process(
+            program_id,
+            accounts,
+            request,
+            instruction_data,
+        );
+    }
     if instruction_data.len() == DELEGATED_CUSTODY_REQUEST_BYTES_V2
         && instruction_data.get(..DELEGATED_CUSTODY_REQUEST_MAGIC_V2.len())
             == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice())
     {
-        return delegated::process(program_id, accounts, instruction_data);
+        return delegated::process(
+            program_id,
+            accounts,
+            instruction_data,
+            caller_authority_bump,
+        );
     }
     if instruction_data.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
         && instruction_data.get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
@@ -189,8 +220,14 @@ pub fn process_instruction(
         CustodyRequestV1::decode(request_bytes).map_err(|_| CustodySbfError::Instruction)?;
     require_account_count(accounts, request.operation, continuation.is_some())?;
     let request_digest = hash(request_bytes).to_bytes();
-    let market =
-        authenticate_common_frame(program_id, accounts, request, request_digest, continuation)?;
+    let market = authenticate_common_frame(
+        program_id,
+        accounts,
+        request,
+        request_digest,
+        continuation,
+        caller_authority_bump,
+    )?;
     let realm = authenticate_realm(program_id, accounts, request, market)?;
     match request.operation {
         OperationV1::InitializeReplay => {
@@ -205,6 +242,81 @@ pub fn process_instruction(
         }
         OperationV1::CloseReplay => close_replay(program_id, accounts, request, request_digest),
     }
+}
+
+/// Strip the optional caller-authority bump the parent appended after its
+/// request, and return the instruction this program's own dispatch sees.
+///
+/// # Why a byte AFTER the request, and not a reserved byte inside it
+///
+/// `CallerAuthoritySeedsV1`'s last seed is `hash(request_bytes)`. A bump written
+/// into the request would change that digest, which changes the address, which
+/// changes the bump: the obvious carrier has no fixed point. A byte after the
+/// request is outside the loop, because the digest is taken over the request
+/// only -- pinned by
+/// `the_caller_authority_digest_covers_the_request_prefix_only` below, so that
+/// widening the digest to cover the whole instruction data meets a red row that
+/// explains what it breaks.
+///
+/// # Why this is length-driven, and why that is safe
+///
+/// This program dispatches on EXACT LENGTH, so the carry has to be legible to
+/// the dispatch before the dispatch runs. Each accepted length plus one is a
+/// length no route of this program otherwise accepts, which the compile-time
+/// assertions below make a checked fact rather than a reading of the file. A
+/// wire that is not `known + 1` is handed on untouched and refuses exactly
+/// where it used to.
+///
+/// The byte is not an authority: `authenticate_common_frame` reproduces the
+/// address from it and compares against the account at coordinate 0, so a wrong
+/// byte reproduces a different address and refuses. A caller that sends no
+/// suffix gets the search this always used to do.
+fn split_caller_authority_bump_v1(instruction_data: &[u8]) -> (&[u8], Option<u8>) {
+    const V1: usize = dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
+    const CONTINUED: usize = V1 + REGISTRY_CONTINUATION_REQUEST_BYTES_V1;
+    const DELEGATED: usize = DELEGATED_CUSTODY_REQUEST_BYTES_V2;
+    const PROJECTED: usize = PROJECTED_CUSTODY_REQUEST_BYTES_V1;
+    const HANDOFF: usize = dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1;
+
+    /// The routes whose handler READS a carried bump. The projected and
+    /// retirement-handoff routes derive their caller authority elsewhere and
+    /// are not on the hot path, so a byte after them would be stripped and then
+    /// dropped -- worse than not stripping it.
+    const CARRIED: [usize; 3] = [V1, CONTINUED, DELEGATED];
+    /// Every exact length this program dispatches on, carried or not.
+    const KNOWN: [usize; 5] = [V1, CONTINUED, DELEGATED, PROJECTED, HANDOFF];
+
+    // No carried length may BE another route's exact length, or a wire would
+    // dispatch as a different route with its last byte eaten.
+    const _: () = {
+        let mut outer = 0;
+        while outer < CARRIED.len() {
+            let mut inner = 0;
+            while inner < KNOWN.len() {
+                assert!(
+                    CARRIED[outer] + 1 != KNOWN[inner],
+                    "a carried Custody wire would collide with another route's exact length"
+                );
+                inner += 1;
+            }
+            outer += 1;
+        }
+    };
+
+    let Some(carried) = instruction_data.len().checked_sub(1) else {
+        return (instruction_data, None);
+    };
+    let mut index = 0;
+    while index < CARRIED.len() {
+        if CARRIED[index] == carried {
+            let (request, suffix) = instruction_data.split_at(carried);
+            // Zero is not a bump any derivation produces, so it reads as absent
+            // rather than as a value that is certain to fail to reproduce.
+            return (request, suffix.first().copied().filter(|bump| *bump != 0));
+        }
+        index += 1;
+    }
+    (instruction_data, None)
 }
 
 fn split_registry_continuation(
@@ -232,6 +344,7 @@ fn authenticate_common_frame(
     request: CustodyRequestV1,
     request_digest: [u8; 32],
     continuation: Option<RegistryContinuationRequestV1>,
+    carried_bump: Option<u8>,
 ) -> Result<CoreState, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
@@ -240,7 +353,7 @@ fn authenticate_common_frame(
     if caller_program.key.to_bytes() != request.caller_program {
         return Err(CustodySbfError::Release.into());
     }
-    let market_state = authenticate_market(accounts, request)?;
+    let market = authenticate_market(accounts, request)?;
     let caller_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(request.release_set).map_err(|_| CustodySbfError::Release)?,
         request.market,
@@ -249,33 +362,52 @@ fn authenticate_common_frame(
         request_digest,
     )
     .map_err(|_| CustodySbfError::CallerAuthority)?;
-    let expected_caller =
-        Pubkey::find_program_address(&caller_seeds.as_slices(), caller_program.key).0;
+    // Reproduced from the bump the parent carried after the request, not
+    // searched for; see `split_caller_authority_bump_v1`. A wrong bump
+    // reproduces a different address and refuses at the equality below.
+    let expected_caller = match carried_bump {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let [domain, release, market, role, context, digest] = caller_seeds.as_slices();
+            Pubkey::create_program_address(
+                &[domain, release, market, role, context, digest, &bump_seed],
+                caller_program.key,
+            )
+            .map_err(|_| CustodySbfError::CallerAuthority)?
+        }
+        None => Pubkey::find_program_address(&caller_seeds.as_slices(), caller_program.key).0,
+    };
     if caller_authority.key != &expected_caller {
         return Err(CustodySbfError::CallerAuthority.into());
     }
-    authenticate_calling_release(program_id, accounts, request, continuation)?;
+    authenticate_calling_release(
+        program_id,
+        accounts,
+        request,
+        continuation,
+        market.cache_bump,
+    )?;
     authenticate_replay_identity(program_id, replay, request)?;
-    Ok(market_state)
+    Ok(market.state)
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedMarketV1 {
+    state: CoreState,
+    cache_bump: AuthenticatedActivationCacheBumpV1,
 }
 
 #[inline(never)]
 fn authenticate_market(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
-) -> Result<CoreState, ProgramError> {
+) -> Result<AuthenticatedMarketV1, ProgramError> {
     let market = account(accounts, CORE_MARKET)?;
     let cache = account(accounts, ACTIVATION_CACHE)?;
     let registry = account(accounts, REGISTRY_PROGRAM)?;
-    let expected_cache = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, &request.release_set],
-        registry.key,
-    )
-    .0;
-    if cache.key != &expected_cache
-        || cache.owner != registry.key
-        || market.data_len() != STATE_BYTES
-    {
+    let cache_bump = authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)
+        .map_err(CustodySbfError::from)?;
+    if market.data_len() != STATE_BYTES {
         return Err(CustodySbfError::Release.into());
     }
     let core_program = {
@@ -314,15 +446,68 @@ fn authenticate_market(
         || state.identity.selected_release_set.to_bytes() != request.release_set
         || state.identity.registry_program.to_bytes() != registry.key.to_bytes()
         || state.identity.generation != request.semantic.generation
-        || Pubkey::find_program_address(
-            &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
-            &core_program,
-        )
-        .0 != *market.key
+        || market_core_state_address_v2(state, &core_program)? != *market.key
     {
         return Err(CustodySbfError::Release.into());
     }
-    Ok(state)
+    Ok(AuthenticatedMarketV1 { state, cache_bump })
+}
+
+/// Reproduce one Realm record address at a recorded bump, or search for it.
+///
+/// The seeds are `[domain, REALM_SCHEMA_RELEASE_ID_V1, realm_digest]` under the
+/// Registry. Only the digest varies, and the founding derived it from the very
+/// bytes this reader just hashed.
+fn registry_record_address_v1(
+    domain: &[u8],
+    realm_digest: &[u8; 32],
+    registry: &Pubkey,
+    recorded: Option<u8>,
+) -> Result<Pubkey, ProgramError> {
+    let base: [&[u8]; 3] = [domain, &REALM_SCHEMA_RELEASE_ID_V1, realm_digest];
+    match recorded {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(&[base[0], base[1], base[2], &bump_seed], registry)
+                .map_err(|_| CustodySbfError::Realm.into())
+        }
+        None => Ok(Pubkey::find_program_address(&base, registry).0),
+    }
+}
+
+/// Reproduce a Market's own Core state address, or search for it.
+///
+/// Nine seeds, all drawn from the Market identity, so all nine move with the
+/// key draw -- and Trading, Claims and this program each derive the same
+/// address on the same transaction. `CoreState` carries the bump the founding
+/// derived, so the readers reproduce it.
+///
+/// The derivation IS the check: a wrong bump reproduces a different address,
+/// which is compared against the account this frame was handed, and refuses.
+/// Canonicality is enforced where the account is made -- Core creates market
+/// states only at the canonical bump -- and not where it is read. A state
+/// written before the bump tail existed carries none and is searched for
+/// exactly as it used to be. See `StateBumpsV1`.
+fn market_core_state_address_v2(
+    state: CoreState,
+    core_program: &Pubkey,
+) -> Result<Pubkey, ProgramError> {
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
+    let base = seeds.as_slices();
+    match state.bumps.market {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    base[0], base[1], base[2], base[3], base[4], base[5], base[6], base[7],
+                    base[8], &bump_seed,
+                ],
+                core_program,
+            )
+            .map_err(|_| CustodySbfError::Release.into())
+        }
+        None => Ok(Pubkey::find_program_address(&base, core_program).0),
+    }
 }
 
 #[inline(never)]
@@ -331,6 +516,7 @@ fn authenticate_calling_release(
     accounts: &[AccountInfo<'_>],
     request: CustodyRequestV1,
     continuation: Option<RegistryContinuationRequestV1>,
+    cache_bump: AuthenticatedActivationCacheBumpV1,
 ) -> ProgramResult {
     if let Some(continuation) = continuation {
         return authenticate_registry_continuation(program_id, accounts, request, continuation);
@@ -346,10 +532,11 @@ fn authenticate_calling_release(
     // here is reentrancy and the route could not execute at all. The cache
     // account is Registry-owned at a Registry-derived address and carries the
     // whole of what `Reauthenticate` would have returned.
-    let receipt = authenticate_activated_role_v1(
+    let receipt = authenticate_activated_role_with_bump_v1(
         registry,
         cache,
         &request.release_set,
+        cache_bump,
         role,
         caller_program,
         caller_programdata,
@@ -505,24 +692,27 @@ fn authenticate_realm(
         .try_borrow_data()
         .map_err(|_| CustodySbfError::Realm)?;
     let realm_digest = hash(&realm_data).to_bytes();
-    let expected_realm = Pubkey::find_program_address(
-        &[
-            RAW_RECORD_PDA_SEED_V1,
-            &REALM_SCHEMA_RELEASE_ID_V1,
-            &realm_digest,
-        ],
+    // THE TWO MOST EXPENSIVE SEARCHES ON THE DIRECT ROUTE, and this function
+    // runs once per Custody invocation -- twice per canonical trade, so four
+    // searches. The founding authenticated this exact record pair and recorded
+    // both bumps in the Market state, so they are reproduced here.
+    //
+    // The derivation IS the check: a wrong bump reproduces a different address,
+    // which `require_realm_authority` compares against the account this frame
+    // was handed, and refuses. Bumps a founding never recorded are `None` and
+    // search, which is what every market opened before the tail existed does.
+    let expected_realm = registry_record_address_v1(
+        RAW_RECORD_PDA_SEED_V1,
+        &realm_digest,
         registry.key,
-    )
-    .0;
-    let expected_staging = Pubkey::find_program_address(
-        &[
-            STAGING_CURSOR_PDA_SEED_V1,
-            &REALM_SCHEMA_RELEASE_ID_V1,
-            &realm_digest,
-        ],
+        market.bumps.realm_raw_record,
+    )?;
+    let expected_staging = registry_record_address_v1(
+        STAGING_CURSOR_PDA_SEED_V1,
+        &realm_digest,
         registry.key,
-    )
-    .0;
+        market.bumps.realm_staging_record,
+    )?;
     require_realm_authority(RealmAuthorityObservation {
         registry: *registry.key,
         persisted_registry: Pubkey::new_from_array(market.identity.registry_program.to_bytes()),
@@ -600,10 +790,7 @@ fn authenticate_replay_identity(
     }
     match request.operation {
         OperationV1::InitializeReplay => {
-            if replay.owner != &system_program::ID
-                || replay.lamports() != 0
-                || replay.data_len() != 0
-            {
+            if replay.owner != &system_program::ID || replay.data_len() != 0 {
                 return Err(CustodySbfError::Replay.into());
             }
         }
@@ -630,9 +817,13 @@ fn initialize_replay(
     let payer = account(accounts, 9)?;
     let system = account(accounts, 10)?;
     let rent_account = account(accounts, 11)?;
+    let rent_refund = account(accounts, 12)?;
     if system.key != &system_program::ID
         || rent_account.key != &sysvar::rent::ID
         || payer.key.to_bytes() != request.payer
+        || rent_refund.key.to_bytes() != request.rent_refund
+        || rent_refund.key == payer.key
+        || rent_refund.key == replay.key
     {
         return Err(CustodySbfError::AccountFrame.into());
     }
@@ -641,21 +832,41 @@ fn initialize_replay(
     if exact_rent != request.rent_lamports {
         return Err(CustodySbfError::Create.into());
     }
-    let instruction = create_account(
-        payer.key,
-        replay.key,
-        exact_rent,
-        u64::try_from(CUSTODY_REPLAY_BYTES_V1).map_err(|_| CustodySbfError::Create)?,
-        program_id,
-    );
     let replay_seeds = CustodyReplaySeedsV1::from_request(request);
     let bump = Pubkey::find_program_address(&replay_seeds.as_slices(), program_id).1;
     let bump_seed = [bump];
     let [domain, market, release, role, context] = replay_seeds.as_slices();
+    let signer_seeds = &[domain, market, release, role, context, &bump_seed];
+    let observed_lamports = replay.lamports();
+    let normalization =
+        replay_rent_normalization(observed_lamports, exact_rent, rent_refund.lamports())?;
+    if normalization.excess != 0 {
+        invoke_signed(
+            &transfer(replay.key, rent_refund.key, normalization.excess),
+            &[replay.clone(), rent_refund.clone(), system.clone()],
+            &[signer_seeds],
+        )
+        .map_err(|_| CustodySbfError::Create)?;
+    } else if normalization.shortfall != 0 {
+        invoke(
+            &transfer(payer.key, replay.key, normalization.shortfall),
+            &[payer.clone(), replay.clone(), system.clone()],
+        )
+        .map_err(|_| CustodySbfError::Create)?;
+    }
     invoke_signed(
-        &instruction,
-        &[payer.clone(), replay.clone(), system.clone()],
-        &[&[domain, market, release, role, context, &bump_seed]],
+        &allocate(
+            replay.key,
+            u64::try_from(CUSTODY_REPLAY_BYTES_V1).map_err(|_| CustodySbfError::Create)?,
+        ),
+        &[replay.clone(), system.clone()],
+        &[signer_seeds],
+    )
+    .map_err(|_| CustodySbfError::Create)?;
+    invoke_signed(
+        &assign(replay.key, program_id),
+        &[replay.clone(), system.clone()],
+        &[signer_seeds],
     )
     .map_err(|_| CustodySbfError::Create)?;
     if replay.owner != program_id
@@ -685,6 +896,38 @@ fn initialize_replay(
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReplayRentNormalizationV1 {
+    shortfall: u64,
+    excess: u64,
+}
+
+fn replay_rent_normalization(
+    observed_lamports: u64,
+    exact_rent: u64,
+    refund_lamports: u64,
+) -> Result<ReplayRentNormalizationV1, ProgramError> {
+    if observed_lamports > exact_rent {
+        let excess = observed_lamports
+            .checked_sub(exact_rent)
+            .ok_or(CustodySbfError::Create)?;
+        refund_lamports
+            .checked_add(excess)
+            .ok_or(CustodySbfError::Create)?;
+        Ok(ReplayRentNormalizationV1 {
+            shortfall: 0,
+            excess,
+        })
+    } else {
+        Ok(ReplayRentNormalizationV1 {
+            shortfall: exact_rent
+                .checked_sub(observed_lamports)
+                .ok_or(CustodySbfError::Create)?,
+            excess: 0,
+        })
+    }
+}
+
 #[inline(never)]
 fn open_vault(
     program_id: &Pubkey,
@@ -701,7 +944,7 @@ fn open_vault(
     let system = account(accounts, 14)?;
     let rent_account = account(accounts, 15)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    validate_custody_authority(program_id, authority, request)?;
+    let _authority_bump = validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, false)?;
     if vault.owner != &system_program::ID
         || vault.lamports() != 0
@@ -773,7 +1016,7 @@ fn execute_transfer(
     let authority = account(accounts, 12)?;
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    validate_custody_authority(program_id, authority, request)?;
+    let authority_bump = validate_custody_authority(program_id, authority, request)?;
     if source.key.to_bytes() != request.source
         || destination.key.to_bytes() != request.destination
         || source.owner != token_program.key
@@ -795,7 +1038,7 @@ fn execute_transfer(
         token_program,
     };
     let before = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, true)?;
-    invoke_exact_transfer(transfer_accounts, request, before.decimals, program_id)?;
+    invoke_exact_transfer(transfer_accounts, request, before.decimals, authority_bump)?;
     let after = authenticate_transfer_accounts(transfer_accounts, request, realm.profile, false)?;
     if before
         .source
@@ -854,7 +1097,7 @@ fn close_vault(
     let token_program = account(accounts, 12)?;
     let rent_refund = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    validate_custody_authority(program_id, authority, request)?;
+    let authority_bump = validate_custody_authority(program_id, authority, request)?;
     validate_vault_key(program_id, vault, request, true)?;
     if rent_refund.key.to_bytes() != request.rent_refund {
         return Err(CustodySbfError::AccountFrame.into());
@@ -874,7 +1117,7 @@ fn close_vault(
         authority,
         token_program,
         request,
-        program_id,
+        authority_bump,
     )?;
     if vault.lamports() != 0
         || rent_refund.lamports()
@@ -1081,17 +1324,20 @@ fn account<'a, 'info>(
         .ok_or_else(|| CustodySbfError::AccountFrame.into())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuthenticatedCustodyAuthorityBumpV1(u8);
+
 fn validate_custody_authority(
     program_id: &Pubkey,
     authority: &AccountInfo<'_>,
     request: CustodyRequestV1,
-) -> ProgramResult {
+) -> Result<AuthenticatedCustodyAuthorityBumpV1, ProgramError> {
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
-    let expected = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).0;
+    let (expected, bump) = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
     if authority.key != &expected {
         return Err(CustodySbfError::TokenState.into());
     }
-    Ok(())
+    Ok(AuthenticatedCustodyAuthorityBumpV1(bump))
 }
 
 fn validate_vault_key(
@@ -1319,7 +1565,7 @@ fn invoke_exact_transfer(
     accounts: TransferAccounts<'_, '_>,
     request: CustodyRequestV1,
     decimals: u8,
-    program_id: &Pubkey,
+    authority_bump: AuthenticatedCustodyAuthorityBumpV1,
 ) -> ProgramResult {
     let specification = transfer_checked(
         request.token_program,
@@ -1333,8 +1579,7 @@ fn invoke_exact_transfer(
     .map_err(|_| CustodySbfError::TokenState)?;
     let instruction = token_instruction(&specification);
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
-    let bump = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).1;
-    let bump_seed = [bump];
+    let bump_seed = [authority_bump.0];
     let [domain, market, release] = authority_seeds.as_slices();
     invoke_signed(
         &instruction,
@@ -1356,7 +1601,7 @@ fn invoke_close<'a>(
     authority: &AccountInfo<'a>,
     token_program: &AccountInfo<'a>,
     request: CustodyRequestV1,
-    program_id: &Pubkey,
+    authority_bump: AuthenticatedCustodyAuthorityBumpV1,
 ) -> ProgramResult {
     let specification = close_account(
         request.token_program,
@@ -1367,8 +1612,7 @@ fn invoke_close<'a>(
     .map_err(|_| CustodySbfError::TokenState)?;
     let instruction = token_instruction(&specification);
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
-    let bump = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id).1;
-    let bump_seed = [bump];
+    let bump_seed = [authority_bump.0];
     let [domain, market, release] = authority_seeds.as_slices();
     invoke_signed(
         &instruction,
@@ -1483,9 +1727,151 @@ fn poststate_commitment(projection: PoststateProjection) -> [u8; 32] {
 mod tests {
     use super::*;
 
+    /// THE INVARIANT THE CALLER-AUTHORITY BUMP CARRY RESTS ON.
+    ///
+    /// `CallerAuthoritySeedsV1`'s last seed is `hash(request_bytes)`, and
+    /// `request_bytes` is what `split_registry_continuation` hands back -- the
+    /// request, never the whole instruction data. That is the only reason the
+    /// parent can append its bump after the request: a bump inside the hashed
+    /// region would change the digest, which changes the address, which changes
+    /// the bump, and the carrier would have no fixed point.
+    ///
+    /// **If you are here because this row went red:** something widened the
+    /// digest to cover more than the request. That is a reasonable-looking
+    /// hardening and it silently breaks the carry -- what fails afterwards is
+    /// `authenticate_common_frame`, reproducing an address nobody signed with,
+    /// for reasons no refusal code explains. Either keep the digest over the
+    /// request, or remove `split_caller_authority_bump_v1` and the push in
+    /// `trading-sbf/src/custody_composition_v3.rs` in the same change.
+    #[test]
+    fn the_caller_authority_digest_covers_the_request_prefix_only() {
+        let request = alloc::vec![0x5a_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        let bare = hash(&request).to_bytes();
+
+        let mut carried = request.clone();
+        carried.push(0xfd);
+        let (stripped, bump) = split_caller_authority_bump_v1(&carried);
+        assert_eq!(bump, Some(0xfd));
+        assert_eq!(stripped, &request[..]);
+        let (digest_input, continuation) =
+            split_registry_continuation(stripped).expect("a bare V1 request");
+        assert!(continuation.is_none());
+        assert_eq!(
+            hash(digest_input).to_bytes(),
+            bare,
+            "appending the caller-authority bump changed the digest its own address is \
+             derived from. The carrier is unsatisfiable in that state -- see this test's \
+             own doc comment."
+        );
+    }
+
+    /// Every declared length, carried and uncarried, lands on its own route.
+    #[test]
+    fn the_carried_suffix_never_collides_with_another_exact_length() {
+        let carried_widths = [
+            dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1,
+            dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1
+                + REGISTRY_CONTINUATION_REQUEST_BYTES_V1,
+            DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+        ];
+        // The two routes that do NOT read a carried bump. A byte after one of
+        // them must be left where it is, so the route refuses it exactly as it
+        // did before this carrier existed rather than silently dropping it.
+        let uncarried_widths = [
+            PROJECTED_CUSTODY_REQUEST_BYTES_V1,
+            dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1,
+        ];
+        for width in carried_widths {
+            // An exact width is handed on untouched -- no route loses its last
+            // byte to a carrier that is not there.
+            let bare = alloc::vec![0x11_u8; width];
+            assert_eq!(split_caller_authority_bump_v1(&bare), (&bare[..], None));
+
+            // One more is a carried wire for that route, and one less is
+            // neither and must not be silently reinterpreted as one.
+            let mut carried = bare.clone();
+            carried.push(0x22);
+            let (stripped, bump) = split_caller_authority_bump_v1(&carried);
+            assert_eq!(stripped.len(), width);
+            assert_eq!(bump, Some(0x22));
+
+            let short = alloc::vec![0x11_u8; width - 1];
+            assert_eq!(split_caller_authority_bump_v1(&short), (&short[..], None));
+        }
+        for width in uncarried_widths {
+            for length in [width, width + 1] {
+                let bytes = alloc::vec![0x11_u8; length];
+                assert_eq!(
+                    split_caller_authority_bump_v1(&bytes),
+                    (&bytes[..], None),
+                    "a {length}-byte wire is not a carried shape and must reach dispatch whole"
+                );
+            }
+        }
+        // And no carried wire can be mistaken for another route's exact length.
+        for width in carried_widths {
+            for other in carried_widths.into_iter().chain(uncarried_widths) {
+                assert_ne!(width + 1, other);
+            }
+        }
+        // A zero suffix byte is not a bump any derivation produces, so it reads
+        // as absent rather than as a value certain to fail to reproduce.
+        let mut zeroed = alloc::vec![0x11_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        zeroed.push(0);
+        assert_eq!(split_caller_authority_bump_v1(&zeroed).1, None);
+    }
+
+    #[test]
+    fn replay_rent_normalization_is_exact_and_overflow_safe() {
+        const RENT: u64 = 1_000;
+        assert_eq!(
+            replay_rent_normalization(1, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 999,
+                excess: 0,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT - 1, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 1,
+                excess: 0,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 0,
+                excess: 0,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT + 1, RENT, 7),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 0,
+                excess: 1,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(RENT + 1, RENT, u64::MAX),
+            Err(CustodySbfError::Create.into())
+        );
+        assert_eq!(
+            replay_rent_normalization(u64::MAX, RENT, 0),
+            Ok(ReplayRentNormalizationV1 {
+                shortfall: 0,
+                excess: u64::MAX - RENT,
+            })
+        );
+        assert_eq!(
+            replay_rent_normalization(u64::MAX, RENT, RENT + 1),
+            Err(CustodySbfError::Create.into())
+        );
+    }
+
     #[test]
     fn account_counts_are_operation_specific() {
-        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 12);
+        assert_eq!(INITIALIZE_REPLAY_ACCOUNT_COUNT_V1, 13);
         assert_eq!(OPEN_VAULT_ACCOUNT_COUNT_V1, 16);
         assert_eq!(TRANSFER_ACCOUNT_COUNT_V1, 14);
         assert_eq!(CLOSE_VAULT_ACCOUNT_COUNT_V1, 14);
@@ -1644,5 +2030,23 @@ mod tests {
                 Ok(release)
             );
         }
+    }
+
+    #[test]
+    fn authenticated_authority_bump_reproduces_exact_key_and_wrong_bump_does_not() {
+        let program = Pubkey::new_from_array([0x51; 32]);
+        let seeds = CustodyAuthoritySeedsV1::new([0x52; 32], [0x53; 32]);
+        let (canonical, bump) = Pubkey::find_program_address(&seeds.as_slices(), &program);
+        let witness = AuthenticatedCustodyAuthorityBumpV1(bump);
+        let [domain, market, release] = seeds.as_slices();
+        assert_eq!(
+            Pubkey::create_program_address(&[domain, market, release, &[witness.0]], &program,),
+            Ok(canonical),
+        );
+        let wrong = witness.0.wrapping_sub(1);
+        assert_ne!(
+            Pubkey::create_program_address(&[domain, market, release, &[wrong]], &program).ok(),
+            Some(canonical),
+        );
     }
 }

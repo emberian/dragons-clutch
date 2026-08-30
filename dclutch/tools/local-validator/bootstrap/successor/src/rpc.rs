@@ -7,6 +7,10 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use dclutch_versioned_message_operator::{Finality, Observation, ObservedAccount};
 use reqwest::{Url, blocking::Client, redirect::Policy};
+use serde::{
+    Deserialize, Serialize,
+    de::{DeserializeSeed, MapAccess, SeqAccess, Visitor},
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use solana_sdk::{
@@ -30,7 +34,8 @@ const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 ///
 /// A previous campaign requested 256 KiB here and **measured it to change
 /// nothing**: the transaction carried the instruction and the runtime accepted
-/// it, but `DCLTPCB1` still died out of memory at the same point, because
+/// it, but the pre-V2 projected bootstrap still died out of memory at the same
+/// point, because
 /// `RequestHeapFrame` raises the region the runtime *grants* while the stock
 /// `solana-program-entrypoint` allocator is constructed with the compile-time
 /// constant `HEAP_LENGTH = 32 * 1024` and never asks how much it was given.
@@ -41,16 +46,21 @@ const LOCAL_PROTOCOL_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 /// and its allocator (`programs/dclutch-trading-sbf/src/entrypoint_adapter.rs`),
 /// and `admit_heap_frame_v1` re-derives the grant from the instructions sysvar
 /// the runtime itself serialized, applying agave's own
-/// `sanitize_requested_heap_size`. Exactly two routes declare the extended
-/// profile — `DCLTGMF1` and `DCLTPCB1` — and both now carry the instructions
-/// sysvar in their frame so the adapter can find it. The Hot execution path is
-/// deliberately **not** on that list and keeps the 32 KiB discipline, so this
-/// constant is applied per transaction and never globally.
+/// `sanitize_requested_heap_size`. Three routes declare the extended profile:
+/// the two founding routes `DCLTGMF3` and `DCLTPCB2`, and — since 2026-08-30 —
+/// `DCLTHOT3`, Hot execution. All carry the instructions sysvar in their frame
+/// so the adapter can find it, so this constant is applied per transaction and
+/// never globally.
+///
+/// Hot was deliberately OFF that list until a top-level submission was actually
+/// executed: invoking Trading directly makes two Registry reauthentication CPIs
+/// a continuation never makes, and that route does not fit the 32 KiB default.
+/// A CONTINUATION submission still fits it and still carries no grant.
 ///
 /// Chain-derived: agave's `MAX_HEAP_FRAME_BYTES`. The adapter refuses anything
 /// outside `[32 KiB, 256 KiB]` or not a multiple of 1 KiB, which are the same
 /// bounds `sanitize_requested_heap_size` enforces.
-const FOUNDING_HEAP_FRAME_BYTES: u32 = 256 * 1024;
+pub(crate) const FOUNDING_HEAP_FRAME_BYTES: u32 = 256 * 1024;
 
 /// ComputeBudget program instruction discriminant for `RequestHeapFrame(u32)`.
 const REQUEST_HEAP_FRAME_DISCRIMINANT: u8 = 1;
@@ -65,9 +75,9 @@ const SET_COMPUTE_UNIT_PRICE_DISCRIMINANT: u8 = 3;
 /// The priority fee every campaign transaction now carries, in microlamports
 /// per compute unit.
 ///
-/// Measured on devnet 2026-08-28: every small transaction of a founding landed
-/// in seconds while the 1.4M-CU DCLTGMF1-route transactions were left behind
-/// by leaders for a full blockhash lifetime, repeatedly, at priority zero —
+/// Measured on devnet 2026-08-28 against the pre-V2 founding wire: every small
+/// transaction landed in seconds while the 1.4M-CU atomic founding was left
+/// behind by leaders for a full blockhash lifetime, repeatedly, at priority zero —
 /// block packing prefers paid-per-CU, and a zero-fee compute-heavy transaction
 /// is the first thing a leader drops. 50,000 µlam/CU prices a 1.4M-CU
 /// transaction's priority at 70,000 lamports (0.00007 SOL) — decisive on
@@ -81,6 +91,29 @@ const COMPUTE_UNIT_PRICE_MICROLAMPORTS: u64 = 50_000;
 /// a drop).
 const REBUILD_ON_DROP_ATTEMPTS: u32 = 5;
 
+/// How many times a durable legacy packet is polled for finalized history.
+///
+/// The blockhash's own last-valid height is the authority on whether the
+/// packet can still land, and it is checked every pass; this bound only stops
+/// an unresponsive endpoint from spinning forever. At 400ms a pass it is about
+/// two minutes, which is far past finality on a 16-tick loopback slot.
+const FINALIZED_POLL_ATTEMPTS: u32 = 300;
+
+/// One exact signed versioned packet persisted before its first submission.
+///
+/// The last-valid height is liveness metadata returned beside the blockhash;
+/// it never participates in protocol semantics.  The packet digest and
+/// signature let a restarting exterior reject a changed journal before it
+/// polls or submits anything.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SignedVersionedPacketV1 {
+    pub(crate) signature: String,
+    pub(crate) packet_base64: String,
+    pub(crate) packet_sha256: String,
+    pub(crate) last_valid_block_height: u64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RpcAccount {
     pub(crate) lamports: u64,
@@ -88,6 +121,212 @@ pub(crate) struct RpcAccount {
     pub(crate) executable: bool,
     pub(crate) rent_epoch: u64,
     pub(crate) data: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcSuccessEnvelopeV1 {
+    jsonrpc: String,
+    id: u64,
+    result: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcErrorEnvelopeV1 {
+    jsonrpc: String,
+    id: u64,
+    error: RpcErrorBodyV1,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcErrorBodyV1 {
+    code: i64,
+    message: String,
+    #[serde(default)]
+    data: Option<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcContextValueV1<T> {
+    context: RpcContextV1,
+    value: T,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcContextV1 {
+    slot: u64,
+    #[serde(rename = "apiVersion", default)]
+    api_version: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RpcAccountWireV1 {
+    lamports: u64,
+    owner: String,
+    executable: bool,
+    #[serde(rename = "rentEpoch")]
+    rent_epoch: u64,
+    data: [String; 2],
+    space: u64,
+}
+
+#[derive(Clone, Copy)]
+struct ExactJsonValueSeedV1;
+
+impl<'de> DeserializeSeed<'de> for ExactJsonValueSeedV1 {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> core::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(ExactJsonValueVisitorV1)
+    }
+}
+
+struct ExactJsonValueVisitorV1;
+
+impl<'de> Visitor<'de> for ExactJsonValueVisitorV1 {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("one JSON value with no duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> core::result::Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("JSON number was not finite"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> core::result::Result<Self::Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> core::result::Result<Self::Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_none<E>(self) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_unit<E>(self) -> core::result::Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> core::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        ExactJsonValueSeedV1.deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> core::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+        while let Some(value) = sequence.next_element_seed(ExactJsonValueSeedV1)? {
+            values.push(value);
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> core::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = serde_json::Map::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some(key) = map.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
+            let value = map.next_value_seed(ExactJsonValueSeedV1)?;
+            values.insert(key, value);
+        }
+        Ok(Value::Object(values))
+    }
+}
+
+pub(crate) fn parse_json_without_duplicate_keys_v1(bytes: &[u8]) -> Result<Value> {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let value = ExactJsonValueSeedV1
+        .deserialize(&mut deserializer)
+        .map_err(|error| Error::new(format!("JSON: {error}")))?;
+    deserializer
+        .end()
+        .map_err(|error| Error::new(format!("JSON trailing bytes: {error}")))?;
+    Ok(value)
+}
+
+fn parse_rpc_response_v1(method: &str, request_id: u64, bytes: &[u8]) -> Result<Value> {
+    let body = parse_json_without_duplicate_keys_v1(bytes)
+        .map_err(|error| Error::new(format!("{method} {error}")))?;
+    let object = body
+        .as_object()
+        .ok_or_else(|| Error::new(format!("{method} RPC response was not an object")))?;
+    match (object.contains_key("result"), object.contains_key("error")) {
+        (true, false) => {
+            let envelope: RpcSuccessEnvelopeV1 = serde_json::from_value(body)
+                .map_err(|error| Error::new(format!("{method} RPC response shape: {error}")))?;
+            require_rpc_envelope_v1(method, request_id, &envelope.jsonrpc, envelope.id)?;
+            Ok(envelope.result)
+        }
+        (false, true) => {
+            let envelope: RpcErrorEnvelopeV1 = serde_json::from_value(body)
+                .map_err(|error| Error::new(format!("{method} RPC error shape: {error}")))?;
+            require_rpc_envelope_v1(method, request_id, &envelope.jsonrpc, envelope.id)?;
+            let data = envelope
+                .error
+                .data
+                .map(|value| format!(" data {value}"))
+                .unwrap_or_default();
+            Err(Error::new(format!(
+                "{method} RPC error: code {} message {}{data}",
+                envelope.error.code, envelope.error.message
+            )))
+        }
+        _ => Err(Error::new(format!(
+            "{method} RPC response must carry exactly one of result or error"
+        ))),
+    }
+}
+
+fn require_rpc_envelope_v1(
+    method: &str,
+    request_id: u64,
+    jsonrpc: &str,
+    response_id: u64,
+) -> Result<()> {
+    if jsonrpc != "2.0" || response_id != request_id {
+        return Err(Error::new(format!(
+            "{method} RPC response version or request ID differed"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether this connection is allowed to change anything on the cluster.
@@ -162,6 +401,45 @@ enum ConfirmOutcomeV1 {
     Dropped,
 }
 
+/// The chain's sealing-time answer about a durable signature the campaign
+/// never observed finalize -- [`Rpc::finalized_signed_packet`]'s `None`,
+/// distinguished into the three facts an accounting marker must separate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LateSignatureProbeV1 {
+    /// A finalized status is served but the transaction metadata is not: the
+    /// send LANDED at this slot, and its deterministic fee was charged.
+    StatusWithoutMetadata { slot: u64 },
+    /// Neither status nor metadata: purged history, or a send that never
+    /// landed. The fee stays two-point.
+    Unserved,
+    /// The endpoint could not answer; nothing may be concluded.
+    Refused,
+}
+
+/// One exact finalized transaction recovered without any submission attempt.
+pub(crate) struct FinalizedSignedPacketV1 {
+    pub(crate) evidence: TransactionEvidence,
+    pub(crate) packet: Vec<u8>,
+    /// Exact top-level program return data when the finalized transaction
+    /// published it. Durable family callers authenticate this at the same
+    /// boundary as the signed packet rather than accepting a log projection.
+    ///
+    /// A log line is a projection the validator is free to truncate; the
+    /// `returnData` field is the datum the program actually set. A family ACK
+    /// is commit-last evidence, so reading it from anywhere but here would let
+    /// a truncated log silently weaken the strongest claim the caller makes.
+    pub(crate) return_data: Option<FinalizedReturnDataV1>,
+}
+
+/// Canonical finalized transaction return-data projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FinalizedReturnDataV1 {
+    /// Program that called `set_return_data` last.
+    pub(crate) program: Pubkey,
+    /// Canonically decoded base64 payload.
+    pub(crate) data: Vec<u8>,
+}
+
 impl Rpc {
     pub(crate) fn connect(value: &str) -> Result<Self> {
         let url = validate_loopback_url(value)?;
@@ -223,6 +501,280 @@ impl Rpc {
     }
 
     pub(crate) fn call(&mut self, method: &str, params: &Value) -> Result<Value> {
+        self.call_with_transport_attempt_limit(method, params, 3)
+    }
+
+    /// Issue exactly one HTTP request, including across a transport-ambiguous
+    /// failure.
+    ///
+    /// A durable exterior uses this only after the exact signed packet and its
+    /// expected signature are fsynced in a Dispatching journal. Retrying at this
+    /// layer would bypass that exterior's poll-only recovery state machine.
+    pub(crate) fn call_once(&mut self, method: &str, params: &Value) -> Result<Value> {
+        self.call_with_transport_attempt_limit(method, params, 1)
+    }
+
+    /// Submit exactly one already-authenticated signed packet.
+    ///
+    /// The caller must have fsynced the packet and signature before entering
+    /// this method. A transport error is intentionally not retried here: the
+    /// durable exterior retains its Dispatching phase and may only resend these
+    /// identical bytes on recovery.
+    pub(crate) fn submit_signed_packet_once(
+        &mut self,
+        label: &str,
+        packet: &[u8],
+        expected_signature: Signature,
+        skip_preflight: bool,
+    ) -> Result<Signature> {
+        let returned = self
+            .call_once(
+                "sendTransaction",
+                &json!([BASE64.encode(packet), {
+                    "encoding":"base64",
+                    "skipPreflight":skip_preflight,
+                    "preflightCommitment":"confirmed",
+                    "maxRetries":8
+                }]),
+            )
+            .map_err(|error| Error::new(format!("{label}: {error}")))?
+            .as_str()
+            .ok_or_else(|| Error::new("sendTransaction result was not a signature"))?
+            .parse::<Signature>()
+            .map_err(|error| Error::new(format!("transaction signature: {error}")))?;
+        if returned != expected_signature {
+            return Err(Error::new(format!(
+                "{label}: sendTransaction returned {returned}, not durable signature {expected_signature}"
+            )));
+        }
+        Ok(returned)
+    }
+
+    /// One late, single-shot question at campaign sealing: did the chain ever
+    /// see this durable signature? Errors are ANSWERS here, not fatalities --
+    /// the caller is writing an accounting marker for a submission it never
+    /// observed finalize, and a refused endpoint must degrade the marker to
+    /// "refused", never abort the seal. Returns the verdict and the finalized
+    /// slot at which the chain was asked (0 when even that is unknowable).
+    pub(crate) fn late_signature_probe_v1(
+        &mut self,
+        signature: Signature,
+    ) -> (LateSignatureProbeV1, u64) {
+        let result = match self.call(
+            "getSignatureStatuses",
+            &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
+        ) {
+            Ok(result) => result,
+            Err(_) => return (LateSignatureProbeV1::Refused, 0),
+        };
+        let checked_at_slot = result
+            .get("context")
+            .and_then(|context| context.get("slot"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let Some(status) = result
+            .get("value")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .filter(|value| !value.is_null())
+        else {
+            return (LateSignatureProbeV1::Unserved, checked_at_slot);
+        };
+        // Only a FINALIZED status proves the fee is settled history; a lesser
+        // commitment at sealing time stays an unserved two-point unknown
+        // rather than becoming a claim the chain could still roll back.
+        if status.get("confirmationStatus").and_then(Value::as_str) != Some("finalized") {
+            return (LateSignatureProbeV1::Unserved, checked_at_slot);
+        }
+        match status.get("slot").and_then(Value::as_u64) {
+            Some(slot) if slot > 0 => (
+                LateSignatureProbeV1::StatusWithoutMetadata { slot },
+                checked_at_slot,
+            ),
+            _ => (LateSignatureProbeV1::Refused, checked_at_slot),
+        }
+    }
+
+    /// Poll one exact signature and, only when finalized, authenticate and
+    /// return the chain's complete signed packet and transaction metadata.
+    /// No key and no send method is reachable from this path.
+    pub(crate) fn finalized_signed_packet(
+        &mut self,
+        label: &str,
+        signature: Signature,
+        expect_failure: bool,
+    ) -> Result<Option<FinalizedSignedPacketV1>> {
+        let result = self.call(
+            "getSignatureStatuses",
+            &json!([[signature.to_string()], {"searchTransactionHistory":true}]),
+        )?;
+        let Some(status) = result
+            .get("value")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .filter(|value| !value.is_null())
+        else {
+            return Ok(None);
+        };
+        if status.get("confirmationStatus").and_then(Value::as_str) != Some("finalized") {
+            return Ok(None);
+        }
+        let status_error = status.get("err").cloned().filter(|value| !value.is_null());
+        if expect_failure != status_error.is_some() {
+            return Err(Error::new(format!(
+                "{label} finalized status contradicted expectation: {}",
+                status.get("err").unwrap_or(&Value::Null)
+            )));
+        }
+        let transaction = self.call(
+            "getTransaction",
+            &json!([signature.to_string(), {
+                "encoding":"base64",
+                "commitment":"finalized",
+                "maxSupportedTransactionVersion":0
+            }]),
+        )?;
+        if transaction.is_null() {
+            return Ok(None);
+        }
+        let slot = transaction
+            .get("slot")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| Error::new(format!("{label} transaction omitted slot")))?;
+        let meta = transaction
+            .get("meta")
+            .ok_or_else(|| Error::new(format!("{label} transaction omitted meta")))?;
+        let meta_error = meta.get("err").cloned().filter(|value| !value.is_null());
+        if meta_error != status_error {
+            return Err(Error::new(format!(
+                "{label} status and transaction errors differ"
+            )));
+        }
+        let packet_base64 = transaction
+            .get("transaction")
+            .and_then(Value::as_array)
+            .and_then(|values| values.first())
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new(format!("{label} transaction omitted base64 packet")))?;
+        let packet = BASE64
+            .decode(packet_base64)
+            .map_err(|error| Error::new(format!("{label} finalized packet base64: {error}")))?;
+        if BASE64.encode(&packet) != packet_base64 {
+            return Err(Error::new(format!(
+                "{label} finalized packet was not canonical base64"
+            )));
+        }
+        let decoded: VersionedTransaction = bincode::deserialize(&packet)
+            .map_err(|error| Error::new(format!("{label} finalized packet: {error}")))?;
+        decoded
+            .verify_and_hash_message()
+            .map_err(|error| Error::new(format!("{label} finalized packet signature: {error}")))?;
+        if decoded.signatures.first() != Some(&signature)
+            || bincode::serialize(&decoded)
+                .map_err(|error| Error::new(format!("{label} packet reencode: {error}")))?
+                != packet
+        {
+            return Err(Error::new(format!(
+                "{label} finalized packet signature or canonical bytes changed"
+            )));
+        }
+        let fee_lamports = u64_field(meta, "fee")?;
+        let compute_units_consumed = meta.get("computeUnitsConsumed").and_then(Value::as_u64);
+        let fee_only_balance_change = (|| {
+            let pre = meta.get("preBalances")?.as_array()?;
+            let post = meta.get("postBalances")?.as_array()?;
+            if pre.len() != post.len() || pre.is_empty() {
+                return None;
+            }
+            let payer_pre = pre.first()?.as_u64()?;
+            let payer_post = post.first()?.as_u64()?;
+            let others_unmoved = pre
+                .iter()
+                .zip(post.iter())
+                .skip(1)
+                .all(|(before, after)| before.as_u64() == after.as_u64());
+            Some(payer_post.checked_add(fee_lamports)? == payer_pre && others_unmoved)
+        })();
+        let logs = meta
+            .get("logMessages")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Absent and JSON null both mean the transaction published no return
+        // data. Anything present must be the canonical `[base64, "base64"]`
+        // pair; a noncanonical encoding is refused rather than coerced,
+        // because the bytes it decodes to are what a family ACK is checked
+        // against and a lenient decode would admit two spellings of one ACK.
+        let return_data = match meta.get("returnData") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let program = value
+                    .get("programId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::new(format!("{label} return data omitted programId")))?
+                    .parse::<Pubkey>()
+                    .map_err(|error| {
+                        Error::new(format!("{label} return data programId: {error}"))
+                    })?;
+                let pair = value
+                    .get("data")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| Error::new(format!("{label} return data omitted data pair")))?;
+                if pair.len() != 2 || pair.get(1).and_then(Value::as_str) != Some("base64") {
+                    return Err(Error::new(format!(
+                        "{label} return data encoding was not canonical base64"
+                    )));
+                }
+                let encoded = pair
+                    .first()
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        Error::new(format!("{label} return data payload was not a string"))
+                    })?;
+                let data = BASE64
+                    .decode(encoded)
+                    .map_err(|error| Error::new(format!("{label} return data base64: {error}")))?;
+                if BASE64.encode(&data) != encoded {
+                    return Err(Error::new(format!(
+                        "{label} return data was not canonical base64"
+                    )));
+                }
+                Some(FinalizedReturnDataV1 { program, data })
+            }
+        };
+        self.read_floor = self.read_floor.max(slot);
+        Ok(Some(FinalizedSignedPacketV1 {
+            evidence: TransactionEvidence {
+                label: label.into(),
+                signature: signature.to_string(),
+                slot,
+                transaction_metadata_available: true,
+                fee_lamports: Some(fee_lamports),
+                fee_only_balance_change,
+                compute_units_consumed,
+                error: meta_error,
+                logs,
+            },
+            packet,
+            return_data,
+        }))
+    }
+
+    fn call_with_transport_attempt_limit(
+        &mut self,
+        method: &str,
+        params: &Value,
+        transport_attempt_limit: u32,
+    ) -> Result<Value> {
+        if transport_attempt_limit == 0 {
+            return Err(Error::new("RPC transport attempt limit must be positive"));
+        }
         if self.policy == WritePolicyV1::ReadsOnly && !READ_METHODS.contains(&method) {
             return Err(Error::new(format!(
                 "REFUSED: {method} is not a read method and this connection is read-only. A \
@@ -272,11 +824,11 @@ impl Rpc {
                 Ok(response) => break response,
                 Err(error) => {
                     attempt = attempt.saturating_add(1);
-                    if attempt >= 3 {
+                    if attempt >= transport_attempt_limit {
                         return Err(Error::new(format!("{method} transport: {error}")));
                     }
                     eprintln!(
-                        "rpc: {method} transport failure (attempt {attempt} of 3): {error}; \
+                        "rpc: {method} transport failure (attempt {attempt} of {transport_attempt_limit}): {error}; \
                          retrying"
                     );
                     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -289,15 +841,10 @@ impl Rpc {
                 response.status()
             )));
         }
-        let body: Value = response
-            .json()
-            .map_err(|error| Error::new(format!("{method} JSON: {error}")))?;
-        if let Some(error) = body.get("error") {
-            return Err(Error::new(format!("{method} RPC error: {error}")));
-        }
-        body.get("result")
-            .cloned()
-            .ok_or_else(|| Error::new(format!("{method} response omitted result")))
+        let body = response
+            .bytes()
+            .map_err(|error| Error::new(format!("{method} response body: {error}")))?;
+        parse_rpc_response_v1(method, self.request_id, &body)
     }
 
     pub(crate) fn account(&mut self, address: Pubkey) -> Result<Option<RpcAccount>> {
@@ -330,31 +877,7 @@ impl Rpc {
                 }
             }
         };
-        let Some(account) = value.get("value") else {
-            return Err(Error::new("getAccountInfo omitted value"));
-        };
-        if account.is_null() {
-            return Ok(None);
-        }
-        let encoded = account
-            .get("data")
-            .and_then(Value::as_array)
-            .and_then(|values| values.first())
-            .and_then(Value::as_str)
-            .ok_or_else(|| Error::new("getAccountInfo omitted base64 data"))?;
-        let data = BASE64
-            .decode(encoded)
-            .map_err(|error| Error::new(format!("account base64: {error}")))?;
-        Ok(Some(RpcAccount {
-            lamports: u64_field(account, "lamports")?,
-            owner: pubkey(string_field(account, "owner")?)?,
-            executable: account
-                .get("executable")
-                .and_then(Value::as_bool)
-                .ok_or_else(|| Error::new("account omitted executable"))?,
-            rent_epoch: u64_field(account, "rentEpoch")?,
-            data,
-        }))
+        parse_account_info_result_v1(value, self.read_floor)
     }
 
     pub(crate) fn required_account(&mut self, address: Pubkey, label: &str) -> Result<RpcAccount> {
@@ -380,30 +903,7 @@ impl Rpc {
                 "minContextSlot":minimum_slot
             }]),
         )?;
-        let slot = value
-            .get("context")
-            .and_then(|context| context.get("slot"))
-            .and_then(Value::as_u64)
-            .ok_or_else(|| Error::new("getMultipleAccounts omitted context slot"))?;
-        if slot < minimum_slot {
-            return Err(Error::new(
-                "getMultipleAccounts returned a snapshot before the required transaction",
-            ));
-        }
-        let values = value
-            .get("value")
-            .and_then(Value::as_array)
-            .ok_or_else(|| Error::new("getMultipleAccounts omitted values"))?;
-        if values.len() != addresses.len() {
-            return Err(Error::new(
-                "getMultipleAccounts response width differed from request",
-            ));
-        }
-        let accounts = values
-            .iter()
-            .map(parse_optional_account)
-            .collect::<Result<Vec<_>>>()?;
-        Ok((slot, accounts))
+        parse_multiple_accounts_result_v1(value, addresses.len(), minimum_slot)
     }
 
     /// Reacquire one finalized account as an exact routing observation.
@@ -481,6 +981,351 @@ impl Rpc {
         payer: &Keypair,
     ) -> Result<TransactionEvidence> {
         self.send_inner(label, instructions, payer, false)
+    }
+
+    /// Sign one exact legacy packet without submitting it.
+    ///
+    /// The v0 path above is the right one whenever a frame needs routing. A
+    /// family whose whole frame already fits the 1,232-byte ceiling does not,
+    /// and making it publish an address lookup table first would add an
+    /// activation round trip and a table the campaign then has to own. The
+    /// durability rule is identical and is the entire point of both: persist
+    /// these exact bytes, then only ever resend them.
+    pub(crate) fn prepare_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+    ) -> Result<SignedVersionedPacketV1> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, last_valid_block_height) = self.latest_blockhash_with_height()?;
+        let signers: Vec<&dyn Signer> = vec![payer];
+        let transaction = Transaction::new_signed_with_payer(
+            &bounded,
+            Some(&payer.pubkey()),
+            &signers,
+            blockhash,
+        );
+        let packet = bincode::serialize(&transaction)
+            .map_err(|error| Error::new(format!("{label}: serialize transaction: {error}")))?;
+        if packet.len() > 1_232 {
+            return Err(Error::new(format!(
+                "{label}: legacy transaction is {} bytes, above the 1,232-byte packet ceiling; \
+                 this frame needs v0 routing",
+                packet.len()
+            )));
+        }
+        let signature = transaction
+            .signatures
+            .first()
+            .ok_or_else(|| Error::new(format!("{label}: signed packet omitted signature")))?
+            .to_string();
+        Ok(SignedVersionedPacketV1 {
+            signature,
+            packet_base64: BASE64.encode(&packet),
+            packet_sha256: hex(&Sha256::digest(&packet)),
+            last_valid_block_height,
+        })
+    }
+
+    /// Submit the already-persisted legacy packet exactly once.
+    pub(crate) fn submit_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        let expected = Self::authenticate_signed_legacy_packet(label, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, false)?;
+        if observed != expected {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Poll one submitted, persisted legacy signature through finalized history.
+    ///
+    /// Poll-only by construction, exactly like the v0 sibling: a `Submitted`
+    /// journal can never fan out into a second transaction identity.
+    pub(crate) fn confirm_signed_legacy_packet(
+        &mut self,
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<FinalizedSignedPacketV1> {
+        let signature = Self::authenticate_signed_legacy_packet(label, packet)?;
+        for _ in 0..FINALIZED_POLL_ATTEMPTS {
+            if let Some(finalized) = self.finalized_signed_packet(label, signature, false)? {
+                return Ok(finalized);
+            }
+            let height = self.block_height()?;
+            if height > packet.last_valid_block_height {
+                return Err(Error::new(format!(
+                    "{label}: persisted signature {signature} expired at block height {height} \
+                     without a finalized status; retain the journal as evidence and prepare a new \
+                     action under a new output path"
+                )));
+            }
+            thread::sleep(Duration::from_millis(400));
+        }
+        Err(Error::new(format!(
+            "{label}: persisted signature {signature} did not reach finalized history within \
+             {FINALIZED_POLL_ATTEMPTS} polls"
+        )))
+    }
+
+    /// Reauthenticate one persisted legacy packet against its own digest.
+    pub(crate) fn authenticate_signed_legacy_packet(
+        label: &str,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<Signature> {
+        let bytes = BASE64
+            .decode(&packet.packet_base64)
+            .map_err(|error| Error::new(format!("{label}: persisted packet base64: {error}")))?;
+        if BASE64.encode(&bytes) != packet.packet_base64
+            || hex(&Sha256::digest(&bytes)) != packet.packet_sha256
+        {
+            return Err(Error::new(format!(
+                "{label}: persisted packet digest changed"
+            )));
+        }
+        let transaction: Transaction = bincode::deserialize(&bytes)
+            .map_err(|error| Error::new(format!("{label}: persisted transaction: {error}")))?;
+        transaction
+            .verify()
+            .map_err(|error| Error::new(format!("{label}: persisted signature: {error}")))?;
+        let signature = transaction
+            .signatures
+            .first()
+            .copied()
+            .ok_or_else(|| Error::new(format!("{label}: persisted transaction is unsigned")))?;
+        if signature.to_string() != packet.signature {
+            return Err(Error::new(format!("{label}: persisted signature changed")));
+        }
+        Ok(signature)
+    }
+
+    /// Sign one exact routed v0 packet without submitting it.
+    ///
+    /// The caller must durably persist the returned value before invoking
+    /// [`Self::submit_signed_v0_packet`]. Unlike [`Self::send`], this path
+    /// never rebuilds a different signature after the persistence boundary.
+    pub(crate) fn prepare_signed_v0_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        table: &ObservedAccount,
+    ) -> Result<SignedVersionedPacketV1> {
+        self.prepare_signed_v0_packet_with_signers(label, instructions, payer, &[], table)
+    }
+
+    /// Sign one exact routed v0 packet with its complete signer set without
+    /// submitting it. The additional signatures are covered by the same
+    /// durable packet digest and are reauthenticated on every restart.
+    pub(crate) fn prepare_signed_v0_packet_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        table: &ObservedAccount,
+    ) -> Result<SignedVersionedPacketV1> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, last_valid_block_height) = self.latest_blockhash_with_height()?;
+        let routed = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            table.observation,
+            std::slice::from_ref(table),
+        )
+        .map_err(|error| Error::new(format!("{label}: v0 message: {error:?}")))?;
+        if routed.wire_bytes > 1_232 {
+            return Err(Error::new(format!(
+                "{label}: routed transaction is {} bytes, above the 1,232-byte packet ceiling",
+                routed.wire_bytes
+            )));
+        }
+        let mut signers = Vec::with_capacity(additional_signers.len() + 1);
+        signers.push(payer);
+        signers.extend_from_slice(additional_signers);
+        let transaction = VersionedTransaction::try_new(routed.message, &signers)
+            .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
+        let signature = transaction
+            .signatures
+            .first()
+            .ok_or_else(|| Error::new(format!("{label}: signed packet omitted signature")))?
+            .to_string();
+        let packet = bincode::serialize(&transaction)
+            .map_err(|error| Error::new(format!("{label}: serialize transaction: {error}")))?;
+        Ok(SignedVersionedPacketV1 {
+            signature,
+            packet_base64: BASE64.encode(&packet),
+            packet_sha256: hex(&Sha256::digest(&packet)),
+            last_valid_block_height,
+        })
+    }
+
+    /// Submit the already-persisted packet exactly once.
+    ///
+    /// A crash after this call but before the caller records `Submitted` is
+    /// recovered by submitting the same bytes again: Solana deduplicates the
+    /// identical signature. No fresh blockhash or signature is created here.
+    pub(crate) fn submit_signed_v0_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, false)?;
+        if observed.to_string() != packet.signature {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Submit one persisted v0 packet that is EXPECTED to fail on chain.
+    ///
+    /// A hostile is only evidence if it reaches consensus. With preflight on,
+    /// the RPC simulates the transaction and rejects it before it is ever a
+    /// block entry, which proves what a simulator thinks rather than what the
+    /// chain did. This skips preflight so the refusal is committed, paid for,
+    /// and readable in finalized history like any other outcome.
+    pub(crate) fn submit_signed_v0_packet_expecting_failure(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<()> {
+        Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        let observed = self.submit_encoded(label, &packet.packet_base64, true)?;
+        if observed.to_string() != packet.signature {
+            return Err(Error::new(format!(
+                "{label}: RPC returned a signature other than the persisted packet signature"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Poll one persisted v0 signature that is expected to have failed.
+    ///
+    /// Returns the finalized evidence with its error intact. A transaction
+    /// that SUCCEEDED here is itself a refusal: a hostile that landed is the
+    /// loudest possible failure of the property it was meant to defend.
+    pub(crate) fn confirm_signed_v0_packet_expecting_failure(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<TransactionEvidence> {
+        let signature =
+            Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        for _ in 0..FINALIZED_POLL_ATTEMPTS {
+            if let Some(finalized) = self.finalized_signed_packet(label, signature, true)? {
+                return Ok(finalized.evidence);
+            }
+            let height = self.block_height()?;
+            if height > packet.last_valid_block_height {
+                return Err(Error::new(format!(
+                    "{label}: hostile signature {signature} expired at block height {height} \
+                     without a finalized status"
+                )));
+            }
+            thread::sleep(Duration::from_millis(400));
+        }
+        Err(Error::new(format!(
+            "{label}: hostile signature {signature} did not reach finalized history"
+        )))
+    }
+
+    /// Poll one submitted, persisted signature through finalized history.
+    ///
+    /// This is deliberately poll-only. It neither sends the packet nor
+    /// rebuilds it after blockhash expiry, so a `Submitted` journal can never
+    /// fan out into a second transaction identity on restart.
+    pub(crate) fn confirm_signed_v0_packet(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<TransactionEvidence> {
+        let signature =
+            Self::authenticate_signed_v0_packet(label, instructions, payer, table, packet)?;
+        match self.confirm_inner(
+            label,
+            signature,
+            None,
+            false,
+            packet.last_valid_block_height,
+        )? {
+            ConfirmOutcomeV1::Confirmed(evidence) => Ok(evidence),
+            ConfirmOutcomeV1::Dropped => Err(Error::new(format!(
+                "{label}: persisted signature {} expired without a finalized status; retain the journal as evidence and prepare a new action under a new output path",
+                packet.signature
+            ))),
+        }
+    }
+
+    pub(crate) fn authenticate_signed_v0_packet(
+        label: &str,
+        instructions: &[Instruction],
+        payer: Pubkey,
+        table: &ObservedAccount,
+        packet: &SignedVersionedPacketV1,
+    ) -> Result<Signature> {
+        let bytes = BASE64
+            .decode(&packet.packet_base64)
+            .map_err(|error| Error::new(format!("{label}: persisted packet base64: {error}")))?;
+        if BASE64.encode(&bytes) != packet.packet_base64
+            || hex(&Sha256::digest(&bytes)) != packet.packet_sha256
+        {
+            return Err(Error::new(format!(
+                "{label}: persisted packet digest changed"
+            )));
+        }
+        let transaction: VersionedTransaction = bincode::deserialize(&bytes)
+            .map_err(|error| Error::new(format!("{label}: persisted transaction: {error}")))?;
+        transaction
+            .verify_and_hash_message()
+            .map_err(|error| Error::new(format!("{label}: persisted signature: {error}")))?;
+        let signature = transaction
+            .signatures
+            .first()
+            .copied()
+            .ok_or_else(|| Error::new(format!("{label}: persisted transaction is unsigned")))?;
+        if signature.to_string() != packet.signature {
+            return Err(Error::new(format!("{label}: persisted signature changed")));
+        }
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let expected = dclutch_versioned_message_operator::compile_v0_message(
+            payer,
+            &bounded,
+            *transaction.message.recent_blockhash(),
+            table.observation,
+            std::slice::from_ref(table),
+        )
+        .map_err(|error| Error::new(format!("{label}: canonical v0 message: {error:?}")))?;
+        if transaction.message != expected.message {
+            return Err(Error::new(format!(
+                "{label}: persisted transaction no longer matches the authenticated instruction"
+            )));
+        }
+        Ok(signature)
     }
 
     pub(crate) fn send_with_signers(
@@ -606,12 +1451,17 @@ impl Rpc {
 
     /// Submit one routed v0 transaction on a runtime-granted extended heap.
     ///
-    /// Only the two founding routes may use this: `DCLTGMF1` and `DCLTPCB1`
-    /// are the exhaustive list in
-    /// `entrypoint_adapter::declares_extended_heap_profile_v1`, and each
-    /// presents the instructions sysvar in its own frame so the program can
-    /// re-derive the grant. A route not on that list keeps the 32 KiB
-    /// structural discipline and the instruction would be dead weight.
+    /// Only routes on `entrypoint_adapter::declares_extended_heap_profile_v1`
+    /// may use this: the two founding routes `DCLTGMF3` and `DCLTPCB2`, and
+    /// `DCLTHOT3` for a TOP-LEVEL Hot submission. Each presents the
+    /// instructions sysvar in its own frame so the program can re-derive the
+    /// grant. A route not on that list keeps the 32 KiB structural discipline
+    /// and the instruction would be dead weight.
+    ///
+    /// Note this helper prepends, so it is NOT the mechanism for the top-level
+    /// Direct route: that transaction carries a signature precompile whose
+    /// evidence binds instruction indices, and its grant is placed by the
+    /// operator's builder at a fixed position instead.
     pub(crate) fn send_v0_on_founding_heap_with_signers(
         &mut self,
         label: &str,
@@ -862,6 +1712,23 @@ impl Rpc {
         expect_failure: bool,
         last_valid_block_height: u64,
     ) -> Result<ConfirmOutcomeV1> {
+        self.confirm_inner(
+            label,
+            signature,
+            Some(encoded),
+            expect_failure,
+            last_valid_block_height,
+        )
+    }
+
+    fn confirm_inner(
+        &mut self,
+        label: &str,
+        signature: Signature,
+        resubmit_packet: Option<&str>,
+        expect_failure: bool,
+        last_valid_block_height: u64,
+    ) -> Result<ConfirmOutcomeV1> {
         // A DEADLINE, not an iteration count. The count was equivalent while
         // every connection polled an unpaced loopback validator at 100 ms; on a
         // paced connection each iteration also waits out the call interval, so
@@ -880,12 +1747,16 @@ impl Rpc {
         // long enough never to fire inside the 60 s local budget.
         let mut next_resubmit = Instant::now() + self.pacing.resubmit_interval;
         while Instant::now() < deadline {
-            if Instant::now() >= next_resubmit {
+            if Instant::now() >= next_resubmit && resubmit_packet.is_some() {
                 // Resubmit against a transient drop while the blockhash is
                 // still valid. A resubmit failure is not fatal: the status
                 // poll below is the authority on whether it landed, and the
                 // block-height check is the authority on whether it ever can.
-                let _ = self.submit_encoded(label, encoded, expect_failure);
+                let _ = self.submit_encoded(
+                    label,
+                    resubmit_packet.ok_or_else(|| Error::new("resubmit packet disappeared"))?,
+                    expect_failure,
+                );
                 next_resubmit = Instant::now() + self.pacing.resubmit_interval;
             }
             let result = self.call(
@@ -921,10 +1792,7 @@ impl Rpc {
                 // no replica's — has passed since submit, and (b) the height
                 // exceeds the bound by a finalization-depth margin.
                 let aged = submitted_at.elapsed() >= Duration::from_secs(75);
-                if aged
-                    && self.block_height()?
-                        > last_valid_block_height.saturating_add(32)
-                {
+                if aged && self.block_height()? > last_valid_block_height.saturating_add(32) {
                     return Ok(ConfirmOutcomeV1::Dropped);
                 }
             }
@@ -1087,7 +1955,7 @@ impl Rpc {
 /// instruction. This campaign builds no such transaction today, and this
 /// refusal is what keeps that true: a precompile appearing in a bounded list
 /// is a defect to fix at the call site, never something to prepend past.
-fn bounded_instructions(
+pub(crate) fn bounded_instructions(
     instructions: &[Instruction],
     heap_frame_bytes: Option<u32>,
 ) -> Result<Vec<Instruction>> {
@@ -1137,29 +2005,66 @@ fn bounded_instructions(
     Ok(bounded)
 }
 
-fn parse_optional_account(value: &Value) -> Result<Option<RpcAccount>> {
-    if value.is_null() {
-        return Ok(None);
+fn parse_account_info_result_v1(value: Value, minimum_slot: u64) -> Result<Option<RpcAccount>> {
+    let result: RpcContextValueV1<Option<RpcAccountWireV1>> = serde_json::from_value(value)
+        .map_err(|error| Error::new(format!("getAccountInfo result shape: {error}")))?;
+    require_rpc_context_v1("getAccountInfo", &result.context, minimum_slot)?;
+    result.value.map(parse_account_wire_v1).transpose()
+}
+
+fn parse_multiple_accounts_result_v1(
+    value: Value,
+    expected_width: usize,
+    minimum_slot: u64,
+) -> Result<(u64, Vec<Option<RpcAccount>>)> {
+    let result: RpcContextValueV1<Vec<Option<RpcAccountWireV1>>> = serde_json::from_value(value)
+        .map_err(|error| Error::new(format!("getMultipleAccounts result shape: {error}")))?;
+    require_rpc_context_v1("getMultipleAccounts", &result.context, minimum_slot)?;
+    if result.value.len() != expected_width {
+        return Err(Error::new(
+            "getMultipleAccounts response width differed from request",
+        ));
     }
-    let encoded = value
-        .get("data")
-        .and_then(Value::as_array)
-        .and_then(|values| values.first())
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new("account omitted base64 data"))?;
+    let accounts = result
+        .value
+        .into_iter()
+        .map(|account| account.map(parse_account_wire_v1).transpose())
+        .collect::<Result<Vec<_>>>()?;
+    Ok((result.context.slot, accounts))
+}
+
+fn require_rpc_context_v1(method: &str, context: &RpcContextV1, minimum_slot: u64) -> Result<()> {
+    if context.slot < minimum_slot {
+        return Err(Error::new(format!(
+            "{method} returned a snapshot before the required transaction"
+        )));
+    }
+    if context.api_version.as_deref().is_some_and(str::is_empty) {
+        return Err(Error::new(format!("{method} returned an empty apiVersion")));
+    }
+    Ok(())
+}
+
+fn parse_account_wire_v1(value: RpcAccountWireV1) -> Result<RpcAccount> {
+    if value.data[1] != "base64" {
+        return Err(Error::new(
+            "account data must be the exact [base64, \"base64\"] tuple",
+        ));
+    }
     let data = BASE64
-        .decode(encoded)
+        .decode(&value.data[0])
         .map_err(|error| Error::new(format!("account base64: {error}")))?;
-    Ok(Some(RpcAccount {
-        lamports: u64_field(value, "lamports")?,
-        owner: pubkey(string_field(value, "owner")?)?,
-        executable: value
-            .get("executable")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| Error::new("account omitted executable"))?,
-        rent_epoch: u64_field(value, "rentEpoch")?,
+    if BASE64.encode(&data) != value.data[0] || u64::try_from(data.len()).ok() != Some(value.space)
+    {
+        return Err(Error::new("account base64 or declared space was not exact"));
+    }
+    Ok(RpcAccount {
+        lamports: value.lamports,
+        owner: pubkey(&value.owner)?,
+        executable: value.executable,
+        rent_epoch: value.rent_epoch,
         data,
-    }))
+    })
 }
 
 pub(crate) fn account_evidence(address: Pubkey, account: &RpcAccount) -> AccountEvidence {
@@ -1214,13 +2119,6 @@ pub(crate) fn validate_loopback_url(value: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn string_field<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::new(format!("JSON omitted string {name}")))
-}
-
 fn u64_field(value: &Value, name: &str) -> Result<u64> {
     value
         .get(name)
@@ -1231,6 +2129,296 @@ fn u64_field(value: &Value, name: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::Read as _,
+        net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    fn account_value_v1() -> Value {
+        json!({
+            "lamports": 9_u64,
+            "owner": solana_sdk_ids::system_program::ID.to_string(),
+            "executable": false,
+            "rentEpoch": 4_u64,
+            "data": ["AQID", "base64"],
+            "space": 3_u64
+        })
+    }
+
+    fn account_result_v1(account: Value) -> Value {
+        json!({
+            "context": {"slot": 17_u64, "apiVersion": "2.2.7"},
+            "value": account
+        })
+    }
+
+    #[test]
+    fn persisted_v0_packet_binds_signature_bytes_payer_table_and_instruction() {
+        use std::borrow::Cow;
+
+        use solana_address_lookup_table_interface::{
+            program as lookup_table_program,
+            state::{AddressLookupTable, LookupTableMeta},
+        };
+
+        let payer = Keypair::new();
+        let destination = Pubkey::new_unique();
+        let instruction = Instruction {
+            program_id: Pubkey::new_unique(),
+            accounts: vec![solana_sdk::instruction::AccountMeta::new(
+                destination,
+                false,
+            )],
+            data: vec![1, 2, 3],
+        };
+        let observation = Observation {
+            slot: 20,
+            unix_timestamp: 30,
+            finality: Finality::Finalized,
+        };
+        let table = AddressLookupTable {
+            meta: LookupTableMeta {
+                authority: None,
+                deactivation_slot: u64::MAX,
+                last_extended_slot: 19,
+                ..LookupTableMeta::default()
+            },
+            addresses: Cow::Owned(vec![destination]),
+        };
+        let table = ObservedAccount {
+            observation,
+            key: Pubkey::new_unique(),
+            owner: lookup_table_program::ID,
+            lamports: 1,
+            executable: false,
+            data: table.serialize_for_tests().expect("table bytes"),
+        };
+        let bounded = bounded_instructions(std::slice::from_ref(&instruction), None)
+            .expect("bounded instruction");
+        let routed = dclutch_versioned_message_operator::compile_v0_message(
+            payer.pubkey(),
+            &bounded,
+            Hash::new_unique(),
+            observation,
+            std::slice::from_ref(&table),
+        )
+        .expect("v0 message");
+        let transaction = VersionedTransaction::try_new(routed.message, &[&payer])
+            .expect("signed v0 transaction");
+        let packet_bytes = bincode::serialize(&transaction).expect("packet bytes");
+        let packet = SignedVersionedPacketV1 {
+            signature: transaction.signatures[0].to_string(),
+            packet_base64: BASE64.encode(&packet_bytes),
+            packet_sha256: hex(&Sha256::digest(&packet_bytes)),
+            last_valid_block_height: 99,
+        };
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &packet,
+            )
+            .is_ok()
+        );
+
+        let mut changed_digest = packet.clone();
+        changed_digest.packet_sha256 = "00".repeat(32);
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &changed_digest,
+            )
+            .is_err()
+        );
+        let mut changed_signature = packet.clone();
+        changed_signature.signature = Signature::default().to_string();
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &table,
+                &changed_signature,
+            )
+            .is_err()
+        );
+        let mut changed_instruction = instruction.clone();
+        changed_instruction.data.push(4);
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&changed_instruction),
+                payer.pubkey(),
+                &table,
+                &packet,
+            )
+            .is_err()
+        );
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                Pubkey::new_unique(),
+                &table,
+                &packet,
+            )
+            .is_err()
+        );
+        let mut changed_table = table.clone();
+        changed_table.key = Pubkey::new_unique();
+        assert!(
+            Rpc::authenticate_signed_v0_packet(
+                "test",
+                std::slice::from_ref(&instruction),
+                payer.pubkey(),
+                &changed_table,
+                &packet,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rpc_json_refuses_duplicate_keys_at_every_depth_before_value_normalization() {
+        for bytes in [
+            br#"{"jsonrpc":"2.0","id":7,"id":8,"result":null}"#.as_slice(),
+            br#"{"jsonrpc":"2.0","id":7,"result":{"context":{"slot":17,"slot":18}}}"#,
+            br#"{"jsonrpc":"2.0","id":7,"result":[{"owner":"a","owner":"b"}]}"#,
+        ] {
+            let error = parse_rpc_response_v1("test", 7, bytes)
+                .expect_err("duplicate JSON object key unexpectedly normalized")
+                .to_string();
+            assert!(error.contains("duplicate JSON object key"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rpc_envelope_is_exact_versioned_and_request_bound() {
+        let valid = br#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#;
+        assert_eq!(
+            parse_rpc_response_v1("test", 7, valid).expect("exact response"),
+            json!({"ok": true})
+        );
+        for bytes in [
+            br#"{"jsonrpc":"2.0","id":7,"result":null,"extra":0}"#.as_slice(),
+            br#"{"jsonrpc":"1.0","id":7,"result":null}"#,
+            br#"{"jsonrpc":"2.0","id":8,"result":null}"#,
+            br#"{"jsonrpc":"2.0","id":7,"result":null,"error":{"code":-1,"message":"x"}}"#,
+            br#"{"jsonrpc":"2.0","id":7}"#,
+            br#"[]"#,
+        ] {
+            assert!(
+                parse_rpc_response_v1("test", 7, bytes).is_err(),
+                "hostile RPC envelope unexpectedly accepted: {}",
+                String::from_utf8_lossy(bytes)
+            );
+        }
+        let error = parse_rpc_response_v1(
+            "test",
+            7,
+            br#"{"jsonrpc":"2.0","id":7,"error":{"code":-32016,"message":"Minimum context slot has not been reached","data":{"slot":16}}}"#,
+        )
+        .expect_err("RPC error unexpectedly became a result")
+        .to_string();
+        assert!(error.contains("-32016"), "{error}");
+        assert!(
+            error.contains("Minimum context slot has not been reached"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn account_result_requires_exact_shape_base64_tuple_space_and_slot_floor() {
+        let account = parse_account_info_result_v1(account_result_v1(account_value_v1()), 17)
+            .expect("exact account result")
+            .expect("present account");
+        assert_eq!(account.lamports, 9);
+        assert_eq!(account.rent_epoch, 4);
+        assert_eq!(account.data, [1, 2, 3]);
+
+        let mut cases = Vec::new();
+        let mut unknown_account = account_value_v1();
+        unknown_account["unknown"] = json!(true);
+        cases.push(account_result_v1(unknown_account));
+        let mut unknown_context = account_result_v1(account_value_v1());
+        unknown_context["context"]["unknown"] = json!(true);
+        cases.push(unknown_context);
+        let mut unknown_result = account_result_v1(account_value_v1());
+        unknown_result["unknown"] = json!(true);
+        cases.push(unknown_result);
+        for data in [
+            json!(["AQID"]),
+            json!(["AQID", "base64", "extra"]),
+            json!(["AQID", "base58"]),
+            json!([1, "base64"]),
+            json!(["AQID", 1]),
+        ] {
+            let mut value = account_value_v1();
+            value["data"] = data;
+            cases.push(account_result_v1(value));
+        }
+        let mut wrong_space = account_value_v1();
+        wrong_space["space"] = json!(4_u64);
+        cases.push(account_result_v1(wrong_space));
+        let mut wrong_width = account_value_v1();
+        wrong_width["lamports"] = json!(-1_i64);
+        cases.push(account_result_v1(wrong_width));
+        let mut wrong_encoding = account_value_v1();
+        wrong_encoding["data"] = json!(["AQI", "base64"]);
+        wrong_encoding["space"] = json!(2_u64);
+        cases.push(account_result_v1(wrong_encoding));
+        for value in cases {
+            assert!(
+                parse_account_info_result_v1(value, 17).is_err(),
+                "hostile account result unexpectedly accepted"
+            );
+        }
+
+        assert!(
+            parse_account_info_result_v1(account_result_v1(account_value_v1()), 18).is_err(),
+            "context slot below the requested floor unexpectedly accepted"
+        );
+        assert!(
+            parse_account_info_result_v1(json!({"context":{"slot":17_u64},"value":null}), 17,)
+                .expect("exact absent account")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn multiple_accounts_preserves_width_nulls_and_the_same_exact_account_parser() {
+        let (slot, accounts) = parse_multiple_accounts_result_v1(
+            json!({
+                "context": {"slot": 19_u64},
+                "value": [account_value_v1(), null]
+            }),
+            2,
+            19,
+        )
+        .expect("exact multiple-account result");
+        assert_eq!(slot, 19);
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].as_ref().expect("present").data, [1, 2, 3]);
+        assert!(accounts[1].is_none());
+        assert!(
+            parse_multiple_accounts_result_v1(
+                json!({"context":{"slot":19_u64},"value":[account_value_v1()]}),
+                2,
+                19,
+            )
+            .is_err(),
+            "wrong response width unexpectedly accepted"
+        );
+    }
 
     #[test]
     fn only_explicit_loopback_origins_are_admitted() {
@@ -1246,5 +2434,47 @@ mod tests {
         ] {
             assert!(validate_loopback_url(value).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn one_shot_transport_ambiguity_never_retries_the_http_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind hostile RPC");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking hostile RPC");
+        let address = listener.local_addr().expect("hostile RPC address");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&accepted);
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .expect("hostile stream timeout");
+                        let mut request = [0_u8; 4096];
+                        let _ = stream.read(&mut request);
+                        // Drop without an HTTP response. The request may have
+                        // reached a validator, so retrying would be ambiguous.
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("hostile RPC accept: {error}"),
+                }
+            }
+        });
+        let url = Url::parse(&format!("http://{address}/")).expect("hostile RPC URL");
+        let mut rpc =
+            Rpc::build(url, LOOPBACK_PACING, WritePolicyV1::Writes).expect("hostile RPC client");
+        assert!(
+            rpc.call_once("sendTransaction", &json!(["packet"]))
+                .is_err(),
+            "connection close without a response unexpectedly succeeded"
+        );
+        server.join().expect("hostile RPC server");
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
     }
 }

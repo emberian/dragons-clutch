@@ -7,6 +7,7 @@
 //! smuggle those coordinates into its fixed-role route.
 
 use crate::{Error, Result};
+use dclutch_sha256_adapter::digestv;
 
 /// Exact real-provider request width.
 pub const PROVIDER_EXECUTION_REQUEST_BYTES_V3: usize = 608;
@@ -28,6 +29,9 @@ pub const PROVIDER_EXECUTION_REQUEST_SCHEMA_ID_V3: [u8; 32] = [
     0xcd, 0x32, 0xad, 0xc8, 0x75, 0xf9, 0x18, 0x1e, 0xe9, 0x64, 0x3b, 0x08, 0x05, 0xd3, 0xe4, 0x1f,
     0x79, 0x03, 0x7d, 0x9d, 0xbc, 0xf3, 0xc7, 0x70, 0xde, 0x42, 0x35, 0xb6, 0x40, 0x78, 0xd2, 0xde,
 ];
+/// Domain for a direct Resolution execution intent, excluding its self-bound digest field.
+pub const PROVIDER_RESOLUTION_DIRECT_INTENT_DIGEST_DOMAIN_V1: &[u8] =
+    b"dclutch/provider-resolution-direct-intent/v1";
 
 /// Exact account count for the fixed Core caller frame.
 pub const PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3: usize = 47;
@@ -79,6 +83,9 @@ const GENERATION_OFFSET: usize = 16;
 const TERMINAL_SEQUENCE_OFFSET: usize = 24;
 const REQUEST_IDENTITIES_OFFSET: usize = 32;
 const REQUEST_IDENTITY_COUNT: usize = 18;
+/// Where `parent_request_digest` sits: the seventeenth request identity, and so
+/// the one field the direct-intent digest has to blank out.
+const PARENT_REQUEST_DIGEST_OFFSET: usize = REQUEST_IDENTITIES_OFFSET + 16 * 32;
 const RECEIPT_IDENTITIES_OFFSET: usize = 32;
 const RECEIPT_IDENTITY_COUNT: usize = 18;
 
@@ -90,6 +97,8 @@ pub enum ProviderCallerV3 {
     Core = 1,
     /// Current Registry-selected Trading V3 interpreter route.
     Trading = 2,
+    /// Permissionless top-level Resolution execution followed by Core accept.
+    Resolution = 3,
 }
 
 impl ProviderCallerV3 {
@@ -97,6 +106,7 @@ impl ProviderCallerV3 {
         match value {
             1 => Ok(Self::Core),
             2 => Ok(Self::Trading),
+            3 => Ok(Self::Resolution),
             _ => Err(Error::UnknownAction),
         }
     }
@@ -117,7 +127,7 @@ pub struct ProviderExecutionRequestV3 {
     pub source_state: [u8; 32],
     /// Deterministic typed terminal certificate destination.
     pub certificate_account: [u8; 32],
-    /// Exact SourceMaterialV2 content identity.
+    /// Exact `SourceMaterialV3` content identity.
     pub source_material: [u8; 32],
     /// Exact primary SourceSpec content identity.
     pub source_spec: [u8; 32],
@@ -263,7 +273,7 @@ impl ProviderExecutionRequestV3 {
             return Err(Error::ZeroCoordinate);
         }
         match self.caller {
-            ProviderCallerV3::Core
+            ProviderCallerV3::Core | ProviderCallerV3::Resolution
                 if !is_zero(&self.capability_program_set)
                     || !is_zero(&self.selected_capability_program) =>
             {
@@ -467,7 +477,7 @@ impl ProviderExecutionReceiptV3 {
             return Err(Error::InvalidReceiptShape);
         }
         match self.caller {
-            ProviderCallerV3::Core
+            ProviderCallerV3::Core | ProviderCallerV3::Resolution
                 if !is_zero(&self.capability_program_set)
                     || !is_zero(&self.selected_capability_program) =>
             {
@@ -482,6 +492,22 @@ impl ProviderExecutionReceiptV3 {
             _ => Ok(()),
         }
     }
+}
+
+/// Digest one direct Resolution intent without a recursive dependency on its
+/// own `parent_request_digest` field.
+pub fn provider_resolution_direct_intent_digest_v1(
+    request: ProviderExecutionRequestV3,
+) -> Result<[u8; 32]> {
+    if request.caller != ProviderCallerV3::Resolution {
+        return Err(Error::InvalidReceiptShape);
+    }
+    let mut bytes = request.to_bytes()?;
+    bytes[PARENT_REQUEST_DIGEST_OFFSET..PARENT_REQUEST_DIGEST_OFFSET + 32].fill(0);
+    Ok(digestv(&[
+        PROVIDER_RESOLUTION_DIRECT_INTENT_DIGEST_DOMAIN_V1,
+        &bytes,
+    ]))
 }
 
 fn byte(bytes: &[u8], offset: usize) -> Result<u8> {
@@ -623,8 +649,12 @@ mod tests {
     }
 
     #[test]
-    fn both_current_caller_profiles_round_trip_exactly() {
-        for caller in [ProviderCallerV3::Core, ProviderCallerV3::Trading] {
+    fn all_current_caller_profiles_round_trip_exactly() {
+        for caller in [
+            ProviderCallerV3::Core,
+            ProviderCallerV3::Trading,
+            ProviderCallerV3::Resolution,
+        ] {
             let request = request(caller);
             let request_bytes = request.to_bytes().expect("canonical request");
             assert_eq!(
@@ -638,6 +668,44 @@ mod tests {
                 Ok(receipt)
             );
         }
+    }
+
+    #[test]
+    fn direct_resolution_intent_is_self_zeroing_and_binds_every_other_byte() {
+        let mut direct = request(ProviderCallerV3::Resolution);
+        let digest = provider_resolution_direct_intent_digest_v1(direct)
+            .expect("canonical direct Resolution intent");
+        direct.parent_request_digest = digest;
+        assert_eq!(
+            provider_resolution_direct_intent_digest_v1(direct),
+            Ok(digest),
+            "the persisted digest field is excluded from its own preimage"
+        );
+
+        let canonical = direct
+            .to_bytes()
+            .expect("canonical direct Resolution request");
+        let parent_digest_offset = REQUEST_IDENTITIES_OFFSET + 16 * 32;
+        for index in 0..canonical.len() {
+            if (parent_digest_offset..parent_digest_offset + 32).contains(&index) {
+                continue;
+            }
+            let mut hostile = canonical;
+            hostile[index] ^= 1;
+            let Ok(hostile) = ProviderExecutionRequestV3::decode(&hostile) else {
+                continue;
+            };
+            assert_ne!(
+                provider_resolution_direct_intent_digest_v1(hostile),
+                Ok(digest),
+                "direct intent digest omitted request byte {index}"
+            );
+        }
+
+        assert_eq!(
+            provider_resolution_direct_intent_digest_v1(request(ProviderCallerV3::Core)),
+            Err(Error::InvalidReceiptShape)
+        );
     }
 
     #[test]

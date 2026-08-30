@@ -20,6 +20,7 @@ mod frame_spec_v1;
 mod generated;
 mod projected;
 mod request_layout;
+mod retirement_replay_handoff_v1;
 
 pub use delegated::*;
 pub use frame_spec_v1::*;
@@ -28,6 +29,7 @@ pub use generated::{
 };
 pub use projected::*;
 pub use request_layout::CustodyRequestLayoutV1;
+pub use retirement_replay_handoff_v1::*;
 
 use generated::*;
 
@@ -233,12 +235,17 @@ pub struct CustodyAuthoritySeedsV1 {
 }
 
 impl CustodyAuthoritySeedsV1 {
+    /// Construct the sole transfer-authority tuple from exact Market facts.
+    pub const fn new(market: [u8; 32], release_set: [u8; 32]) -> Self {
+        Self {
+            market,
+            release_set,
+        }
+    }
+
     /// Project the sole transfer-authority tuple from one request.
     pub const fn from_request(request: CustodyRequestV1) -> Self {
-        Self {
-            market: request.market,
-            release_set: request.release_set,
-        }
+        Self::new(request.market, request.release_set)
     }
 
     /// Borrow the exact ordered SVM seed slices, excluding the bump.

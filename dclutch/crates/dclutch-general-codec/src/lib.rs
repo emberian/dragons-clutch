@@ -12,8 +12,12 @@
 
 #[rustfmt::skip]
 mod generated_general_controller;
+#[rustfmt::skip]
+mod generated_general_controller_request_v3;
 /// Runtime-width successor request with canonical-PDA bump witnesses.
 pub mod successor_request_v2;
+/// Exact 64-byte successor request for both settlement and GEN-SEVEN actions.
+pub mod successor_request_v3;
 
 /// Maximum outcomes admitted by this physical profile.
 pub const MAX_OUTCOMES: usize = generated_general_controller::MAX_OUTCOMES;

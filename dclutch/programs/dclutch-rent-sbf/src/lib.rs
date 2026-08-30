@@ -37,7 +37,7 @@ use dclutch_rent_contract::{
         LifecycleAccountMetaV2, LifecycleClosePlanV2, LifecycleRentCreditV2,
         LifecycleRentInstructionV2, LifecycleRetiredMarketObservationV2, LifecycleSweepPlanV2,
         SweepLifecycleRentCreditV2, validate_create_frame_v2, validate_refund_wallet_v2,
-        validate_sweep_frame_v2,
+        validate_sweep_crank_v2, validate_sweep_frame_v2,
     },
 };
 use solana_program::{
@@ -351,17 +351,32 @@ struct SweepAccountsV2<'a, 'info> {
     credit: &'a AccountInfo<'info>,
     wallet: &'a AccountInfo<'info>,
     rent: &'a AccountInfo<'info>,
+    crank: Option<&'a AccountInfo<'info>>,
 }
 
 impl<'a, 'info> SweepAccountsV2<'a, 'info> {
+    /// Parse the fixed three-account Sweep frame, or the funded four.
+    ///
+    /// The crank recipient is OPTIONAL by frame length -- the same idiom
+    /// `CloseAccountsV2` uses for its balance witness. That is what makes this
+    /// change invisible to every existing caller: a three-account sweep behaves
+    /// exactly as it did, which keeps the unpaid path first-class rather than
+    /// deprecated. When the caller IS the refund wallet they are already the
+    /// beneficiary and need no reward.
     fn parse(accounts: &'a [AccountInfo<'info>]) -> Result<Self, ProgramError> {
-        if accounts.len() != SWEEP_ACCOUNT_COUNT_V2 {
+        let funded = accounts.len() == SWEEP_ACCOUNT_COUNT_V2 + 1;
+        if accounts.len() != SWEEP_ACCOUNT_COUNT_V2 && !funded {
             return Err(RentSbfError::AccountFrame.into());
         }
         Ok(Self {
             credit: account(accounts, 0)?,
             wallet: account(accounts, 1)?,
             rent: account(accounts, 2)?,
+            crank: if funded {
+                Some(account(accounts, 3)?)
+            } else {
+                None
+            },
         })
     }
 }
@@ -387,12 +402,42 @@ fn process_sweep_v2(
         meta_v2(accounts.rent),
     )
     .map_err(|_| RentSbfError::AccountFrame)?;
-    let plan = LifecycleSweepPlanV2::new(
-        accounts.credit.lamports(),
-        accounts.wallet.lamports(),
-        rent.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2),
-        request,
-    )
+    // The reward's magnitude is chain-derived, never a source literal: it is
+    // the credit's own Rent minimum, which this frame has already computed.
+    // See docs/design/FUNDED_CRANK_V1.md section 3.
+    let rent_floor = rent.minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2);
+    let crank_before = match accounts.crank {
+        Some(crank) => {
+            let crank_data_len =
+                u64::try_from(crank.data_len()).map_err(|_| RentSbfError::AccountFrame)?;
+            validate_sweep_crank_v2(
+                meta_v2(crank),
+                crank.owner.to_bytes(),
+                crank_data_len,
+                meta_v2(accounts.credit),
+                meta_v2(accounts.wallet),
+                meta_v2(accounts.rent),
+            )
+            .map_err(|_| RentSbfError::AccountFrame)?;
+            Some(crank.lamports())
+        }
+        None => None,
+    };
+    let plan = match crank_before {
+        Some(_) => LifecycleSweepPlanV2::new_with_crank(
+            accounts.credit.lamports(),
+            accounts.wallet.lamports(),
+            rent_floor,
+            request,
+            rent_floor,
+        ),
+        None => LifecycleSweepPlanV2::new(
+            accounts.credit.lamports(),
+            accounts.wallet.lamports(),
+            rent_floor,
+            request,
+        ),
+    }
     .map_err(|_| RentSbfError::Balance)?;
     drop(
         accounts
@@ -418,11 +463,27 @@ fn process_sweep_v2(
         **credit = plan.credit_after();
         **wallet = plan.wallet_after();
     }
-    if accounts.credit.lamports() != plan.credit_after()
-        || accounts.wallet.lamports() != plan.wallet_after()
-    {
-        return Err(RentSbfError::Postcondition.into());
+    if let (Some(crank), Some(before)) = (accounts.crank, crank_before) {
+        let credited = before
+            .checked_add(plan.crank_reward())
+            .ok_or(RentSbfError::Balance)?;
+        let mut lamports = crank
+            .try_borrow_mut_lamports()
+            .map_err(|_| RentSbfError::Borrow)?;
+        **lamports = credited;
     }
+    // Plan against observation, for all three accounts at once. The plan's own
+    // fields reconcile by construction and would prove nothing; what is worth
+    // checking is that the program applied what the plan said.
+    plan.validate_post(
+        accounts.credit.lamports(),
+        accounts.wallet.lamports(),
+        accounts
+            .crank
+            .zip(crank_before)
+            .map(|(crank, before)| (before, crank.lamports())),
+    )
+    .map_err(|_| RentSbfError::Postcondition)?;
     Ok(())
 }
 
@@ -436,12 +497,16 @@ struct CloseAccountsV2<'a, 'info> {
     core_caller: &'a AccountInfo<'info>,
     retired_market: &'a AccountInfo<'info>,
     registry_admission: Option<&'a AccountInfo<'info>>,
+    balance_witness: Option<&'a AccountInfo<'info>>,
 }
 
 impl<'a, 'info> CloseAccountsV2<'a, 'info> {
     fn parse(accounts: &'a [AccountInfo<'info>], continuation: bool) -> Result<Self, ProgramError> {
+        let direct_with_witness = !continuation && accounts.len() == CLOSE_ACCOUNT_COUNT_V2 + 1;
         let expected_count = if continuation {
             CLOSE_CONTINUATION_ACCOUNT_COUNT_V2
+        } else if direct_with_witness {
+            CLOSE_ACCOUNT_COUNT_V2 + 1
         } else {
             CLOSE_ACCOUNT_COUNT_V2
         };
@@ -458,6 +523,11 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
             core_caller: account(accounts, 6)?,
             retired_market: account(accounts, 7)?,
             registry_admission: if continuation {
+                Some(account(accounts, 8)?)
+            } else {
+                None
+            },
+            balance_witness: if direct_with_witness {
                 Some(account(accounts, 8)?)
             } else {
                 None
@@ -494,6 +564,14 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
                     || !admission.data_is_empty()
                     || admission.lamports() != 0
             })
+            || value.balance_witness.is_some_and(|witness| {
+                witness.is_signer
+                    || witness.is_writable
+                    || witness.executable
+                    || witness.owner != &system_program::ID
+                    || !witness.data_is_empty()
+                    || witness.lamports() != 0
+            })
         {
             return Err(RentSbfError::AccountFrame.into());
         }
@@ -515,6 +593,9 @@ impl<'a, 'info> CloseAccountsV2<'a, 'info> {
         if value
             .registry_admission
             .is_some_and(|admission| keys.contains(&admission.key))
+            || value
+                .balance_witness
+                .is_some_and(|witness| keys.contains(&witness.key))
         {
             return Err(RentSbfError::AccountFrame.into());
         }
@@ -1038,5 +1119,278 @@ mod tests {
         );
         assert_eq!(substituted[0].lamports(), floor + 1);
         assert_eq!(substituted[1].lamports(), 9);
+    }
+
+    /// One crank recipient's runtime shape, so a hostile varies exactly one field.
+    struct CrankShape {
+        key: Pubkey,
+        signer: bool,
+        writable: bool,
+        data: Vec<u8>,
+        owner: Pubkey,
+    }
+
+    impl CrankShape {
+        /// The admitted baseline every hostile below is one mutation away from.
+        fn good(key: Pubkey) -> Self {
+            Self {
+                key,
+                signer: false,
+                writable: true,
+                data: vec![],
+                owner: system_program::ID,
+            }
+        }
+    }
+
+    /// Build one funded four-account Sweep frame with a chosen crank shape.
+    fn funded_sweep_frame(
+        program_id: Pubkey,
+        state: LifecycleRentCreditV2,
+        credit: Pubkey,
+        wallet: Pubkey,
+        credit_lamports: u64,
+        crank: CrankShape,
+    ) -> [AccountInfo<'static>; 4] {
+        [
+            account_info(
+                credit,
+                false,
+                true,
+                credit_lamports,
+                state.to_bytes().to_vec(),
+                program_id,
+                false,
+            ),
+            account_info(wallet, false, true, 9, vec![], system_program::ID, false),
+            rent_account(),
+            account_info(
+                crank.key,
+                crank.signer,
+                crank.writable,
+                5,
+                crank.data,
+                crank.owner,
+                false,
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_funded_sweep_pays_the_crank_and_conserves_every_lamport() {
+        let program_id = Pubkey::new_unique();
+        let wallet = Pubkey::new_unique();
+        let (credit, state) = lifecycle_state(
+            program_id,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            wallet,
+        );
+        let floor = Rent::default().minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2);
+        let crank = Pubkey::new_unique();
+        // 1_600_000 / 16 == 100_000, which is under the chain-derived floor, so
+        // the SHARE binds and the wallet keeps the other fifteen sixteenths.
+        let accounts = funded_sweep_frame(
+            program_id,
+            state,
+            credit,
+            wallet,
+            floor + 1_600_000,
+            CrankShape {
+                signer: true,
+                ..CrankShape::good(crank)
+            },
+        );
+        let before: u64 = accounts.iter().map(|a| a.lamports()).sum();
+
+        process_sweep_v2(
+            &program_id,
+            &accounts,
+            SweepLifecycleRentCreditV2::new(1_600_000).expect("sweep"),
+        )
+        .expect("a funded sweep must be admitted");
+
+        // *** The crank is genuinely PAID, read back off account state. ***
+        assert_eq!(accounts[3].lamports(), 5 + 100_000);
+        assert_eq!(accounts[0].lamports(), floor);
+        assert_eq!(accounts[1].lamports(), 9 + 1_500_000);
+        // Conservation across every account the route can touch.
+        let after: u64 = accounts.iter().map(|a| a.lamports()).sum();
+        assert_eq!(before, after, "the sweep must neither mint nor burn");
+        // And the beneficiary still out-earns the crank by fifteen to one.
+        assert!(accounts[1].lamports() - 9 > 14 * (accounts[3].lamports() - 5));
+    }
+
+    #[test]
+    fn the_unfunded_three_account_sweep_is_unchanged_and_still_conserves() {
+        // The negative control for the whole change: the pre-existing frame must
+        // behave exactly as it did, paying the wallet the FULL amount and
+        // nobody else. If the crank leg had leaked into the unpaid path this
+        // goes red.
+        let program_id = Pubkey::new_unique();
+        let wallet = Pubkey::new_unique();
+        let (credit, state) = lifecycle_state(
+            program_id,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            wallet,
+        );
+        let floor = Rent::default().minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2);
+        let accounts = [
+            account_info(
+                credit,
+                false,
+                true,
+                floor + 1_600_000,
+                state.to_bytes().to_vec(),
+                program_id,
+                false,
+            ),
+            account_info(wallet, false, true, 9, vec![], system_program::ID, false),
+            rent_account(),
+        ];
+        let before: u64 = accounts.iter().map(|a| a.lamports()).sum();
+        process_sweep_v2(
+            &program_id,
+            &accounts,
+            SweepLifecycleRentCreditV2::new(1_600_000).expect("sweep"),
+        )
+        .expect("permissionless sweep");
+        assert_eq!(accounts[0].lamports(), floor);
+        assert_eq!(accounts[1].lamports(), 9 + 1_600_000);
+        assert_eq!(before, accounts.iter().map(|a| a.lamports()).sum::<u64>());
+    }
+
+    #[test]
+    fn the_crank_may_sign_or_not_but_a_malformed_recipient_is_refused() {
+        let program_id = Pubkey::new_unique();
+        let wallet = Pubkey::new_unique();
+        let (credit, state) = lifecycle_state(
+            program_id,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            wallet,
+        );
+        let floor = Rent::default().minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2);
+        let sweep = || SweepLifecycleRentCreditV2::new(1_600_000).expect("sweep");
+
+        // *** FUNDED_CRANK_V1.md section 6: signing establishes who is OWED,
+        // never who is PERMITTED. Both a signing and a non-signing crank are
+        // admitted -- refusing the signer is the live defect that rule names. ***
+        for signs in [true, false] {
+            let accounts = funded_sweep_frame(
+                program_id,
+                state,
+                credit,
+                wallet,
+                floor + 1_600_000,
+                CrankShape {
+                    signer: signs,
+                    ..CrankShape::good(Pubkey::new_unique())
+                },
+            );
+            process_sweep_v2(&program_id, &accounts, sweep())
+                .expect("signing must not decide admission");
+            assert_eq!(accounts[3].lamports(), 5 + 100_000);
+        }
+
+        // Each hostile changes exactly one thing about the recipient, and each
+        // must refuse AND move nothing.
+        let hostiles: [(&str, bool, Vec<u8>, Pubkey); 3] = [
+            ("not writable", false, vec![], system_program::ID),
+            ("carries data", true, vec![0u8; 8], system_program::ID),
+            ("not a System wallet", true, vec![], program_id),
+        ];
+        for (label, writable, data, owner) in hostiles {
+            let accounts = funded_sweep_frame(
+                program_id,
+                state,
+                credit,
+                wallet,
+                floor + 1_600_000,
+                CrankShape {
+                    writable,
+                    data,
+                    owner,
+                    ..CrankShape::good(Pubkey::new_unique())
+                },
+            );
+            assert_eq!(
+                process_sweep_v2(&program_id, &accounts, sweep()),
+                Err(RentSbfError::AccountFrame.into()),
+                "a crank recipient that {label} must be refused"
+            );
+            assert_eq!(accounts[0].lamports(), floor + 1_600_000, "{label}");
+            assert_eq!(accounts[1].lamports(), 9, "{label}");
+            assert_eq!(accounts[3].lamports(), 5, "{label}");
+        }
+
+        // A recipient aliasing the refund wallet would be credited twice.
+        let aliased = funded_sweep_frame(
+            program_id,
+            state,
+            credit,
+            wallet,
+            floor + 1_600_000,
+            CrankShape::good(wallet),
+        );
+        assert_eq!(
+            process_sweep_v2(&program_id, &aliased, sweep()),
+            Err(RentSbfError::AccountFrame.into())
+        );
+        assert_eq!(aliased[0].lamports(), floor + 1_600_000);
+    }
+
+    #[test]
+    fn only_three_or_four_accounts_reach_the_sweep_route() {
+        let program_id = Pubkey::new_unique();
+        let wallet = Pubkey::new_unique();
+        let (credit, state) = lifecycle_state(
+            program_id,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            wallet,
+        );
+        let floor = Rent::default().minimum_balance(LIFECYCLE_RENT_CREDIT_BYTES_V2);
+        let five = [
+            account_info(
+                credit,
+                false,
+                true,
+                floor + 16,
+                state.to_bytes().to_vec(),
+                program_id,
+                false,
+            ),
+            account_info(wallet, false, true, 9, vec![], system_program::ID, false),
+            rent_account(),
+            account_info(
+                Pubkey::new_unique(),
+                false,
+                true,
+                5,
+                vec![],
+                system_program::ID,
+                false,
+            ),
+            account_info(
+                Pubkey::new_unique(),
+                false,
+                true,
+                5,
+                vec![],
+                system_program::ID,
+                false,
+            ),
+        ];
+        assert_eq!(
+            process_sweep_v2(
+                &program_id,
+                &five,
+                SweepLifecycleRentCreditV2::new(16).expect("sweep")
+            ),
+            Err(RentSbfError::AccountFrame.into())
+        );
+        assert_eq!(five[0].lamports(), floor + 16);
     }
 }

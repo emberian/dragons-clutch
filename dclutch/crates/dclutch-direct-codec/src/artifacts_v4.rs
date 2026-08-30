@@ -35,8 +35,8 @@ use dclutch_request_profile_contract::{
     RequestProfileV1,
     v2::{REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2},
 };
-use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use dclutch_sha256_adapter::digest;
+use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 
 use crate::{
     execution_v3::{

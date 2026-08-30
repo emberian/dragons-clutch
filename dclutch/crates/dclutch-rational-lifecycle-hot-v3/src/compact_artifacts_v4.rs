@@ -46,9 +46,7 @@ use dclutch_execution_strategy_contract::v2::{
     ExecutionStrategyProgramV2, StrategyDispositionV2,
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::{BASIS_WIDTH_OFFSET_V3, ProductBasisV3};
-use dclutch_rational_representation_v2_contract::{
-    AuthenticatedTokenBehaviorV2, RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-};
+use dclutch_rational_representation_v2_contract::AuthenticatedTokenBehaviorV2;
 use dclutch_rational_representation_v2_kernel::{
     DESCRIPTOR_HEADER_BYTES, RepresentationDescriptorV2,
 };
@@ -60,7 +58,9 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
         RATIONAL_LIFECYCLE_COMPACT_HOT_MAGIC_V4, RATIONAL_LIFECYCLE_COMPACT_HOT_REQUEST_BYTES_V4,
         RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4,
         RATIONAL_LIFECYCLE_COMPACT_HOT_VERSION_V4,
+        RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4,
         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4,
+        RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4,
         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_POSITION_V4,
         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_SHARD_MINT_V4,
         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_STRUCTURED_CUSTODY_V4,
@@ -132,6 +132,28 @@ pub struct RationalLifecycleCompactArtifactInputV4<'a> {
     pub claims_program: Pubkey,
 }
 
+/// Market-free inputs for one compact RetireReceipt artifact set.
+///
+/// The V4 input reaches these same facts through a
+/// [`RepresentationDescriptorV2`], which carries the Core Market and therefore
+/// cannot be built before founding. Everything the compact encoders actually
+/// read is here instead: the ordered coefficients (which fix the nonzero
+/// support and the descriptor's own byte width) and the account observations.
+///
+/// The Claims program id is deliberately absent. It was only ever needed to
+/// derive the custody-owner PDA this module used to bake, and the effect now
+/// projects that owner from a supplied account -- so a compact artifact set no
+/// longer has any reason to know which Claims program will run it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalLifecycleCompactArtifactInputV6<'a> {
+    /// Exact logical account data lengths in injected-prefix plus Claims order.
+    pub logical_data_lengths: &'a [u32],
+    /// Exact finalized ProductBasisV3 bytes authenticated at logical account four.
+    pub product_basis: &'a [u8],
+    /// Ordered representation coefficients; its length is `K`.
+    pub coefficients: &'a [u64],
+}
+
 /// Exact compact account/request/transition/effect artifact bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RationalLifecycleCompactArtifactsV4 {
@@ -190,10 +212,33 @@ pub struct RationalLifecycleCompactBundleV4 {
 }
 
 /// Build exact stateless compact RetireReceipt artifacts.
+///
+/// Retained for callers holding a finalized descriptor; it reads the
+/// coefficients off that descriptor and delegates, so there is one encoder
+/// rather than two.
 pub fn encode_rational_lifecycle_compact_artifacts_v4(
     input: RationalLifecycleCompactArtifactInputV4<'_>,
 ) -> Result<RationalLifecycleCompactArtifactsV4> {
-    let rows = support_rows(input.descriptor)?;
+    if input.claims_program == Pubkey::default() {
+        return Err(Error::AccountObservation);
+    }
+    let coefficients = descriptor_coefficients(input.descriptor)?;
+    encode_rational_lifecycle_compact_artifacts_v6(RationalLifecycleCompactArtifactInputV6 {
+        logical_data_lengths: input.logical_data_lengths,
+        product_basis: input.product_basis,
+        coefficients: &coefficients,
+    })
+}
+
+/// Build exact stateless compact RetireReceipt artifacts, before founding.
+///
+/// This is the sole encoder. Its inputs cannot name a Market, so neither can
+/// its output -- which is what allows a Rational capability manifest entry to
+/// be derived before the Market that will select it exists.
+pub fn encode_rational_lifecycle_compact_artifacts_v6(
+    input: RationalLifecycleCompactArtifactInputV6<'_>,
+) -> Result<RationalLifecycleCompactArtifactsV4> {
+    let rows = support_rows(input.coefficients)?;
     let support_count = u32::try_from(rows.len()).map_err(|_| Error::InvalidLength)?;
     let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(rows.len());
     validate_inputs(input, rows.len())?;
@@ -202,7 +247,7 @@ pub fn encode_rational_lifecycle_compact_artifacts_v4(
         account_profile: encode_account_profile(input, layout)?,
         request_profile: encode_request_profile(layout)?,
         transition: encode_transition(layout, &rows)?,
-        effect: encode_effect(input, layout, &rows)?,
+        effect: encode_effect(layout, &rows)?,
     })
 }
 
@@ -289,6 +334,101 @@ pub fn build_rational_lifecycle_compact_bundle_v4(
         &bundle,
         input.authenticated_token_behavior,
     )?;
+    Ok(bundle)
+}
+
+/// Market-free inputs for one compact RetireReceipt capability bundle.
+///
+/// The V4 form takes an `AuthenticatedTokenBehaviorV2`, which can only be
+/// constructed from a finalized descriptor and an authenticated Market Realm --
+/// so it cannot exist before founding no matter how neutral the artifacts are.
+/// This takes the immutable Realm/release selection directly, which is the same
+/// record the descriptor's `config_schema` names and is derivable up front.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RationalLifecycleCompactBundleInputV6<'a> {
+    /// Market-free descriptor-shape and account observations.
+    pub artifacts: RationalLifecycleCompactArtifactInputV6<'a>,
+    /// Manifest-selected Rational lifecycle capability kind.
+    pub kind: [u8; 32],
+    /// Immutable Realm/release Token behavior selected before Market founding.
+    pub token_behavior_selection: TokenBehaviorSelectionV2,
+    /// Manifest-selected mutable root-tail schema.
+    pub root_schema: [u8; 32],
+    /// Exact finalized successor lifecycle policy bytes.
+    pub lifecycle_policy: &'a [u8],
+    /// Manifest-selected physical capacity profile.
+    pub capacity_profile: [u8; 32],
+    /// Exact mutable root-tail byte width.
+    pub root_state_bytes: u32,
+}
+
+/// Build one compact RetireReceipt bundle before the Market exists.
+///
+/// The sole builder; the V4 entry point narrows its descriptor-bearing input to
+/// this one. Nothing reachable from here names a Market, so the emitted
+/// descriptor identity -- and therefore the ProgramSet entry and the capability
+/// manifest `release_id` above it -- is fixed before founding.
+pub fn build_rational_lifecycle_compact_bundle_v6(
+    input: RationalLifecycleCompactBundleInputV6<'_>,
+) -> Result<RationalLifecycleCompactBundleV4> {
+    let artifacts = encode_rational_lifecycle_compact_artifacts_v6(input.artifacts)?;
+    let lifecycle_policy = Vec::from(input.lifecycle_policy);
+    let lifecycle_id = digest(&lifecycle_policy)?;
+    let strategy = ExecutionStrategyProgramV2::new(
+        StrategyDispositionV2::Interpreted,
+        content(dclutch_transition_vm::v3::SCHEMA_RELEASE_ID)?,
+        digest(&artifacts.transition)?,
+        content(EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2)?,
+        None,
+        content(EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2)?,
+        None,
+        content(ACCELERATOR_REQUEST_SCHEMA_ID_V2)?,
+        content(ACCELERATOR_ACK_SCHEMA_ID_V2)?,
+    )
+    .map_err(Error::Strategy)?
+    .to_bytes();
+    let descriptor_value = CapabilityProgramV4::new(
+        content(input.kind)?,
+        content(TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2)?,
+        content(RATIONAL_LIFECYCLE_COMPACT_HOT_SCHEMA_RELEASE_ID_V4)?,
+        content(input.root_schema)?,
+        lifecycle_id,
+        content(input.capacity_profile)?,
+        CapabilityArtifactsV4 {
+            account_profile: artifact(
+                dclutch_account_profile_contract::v2::SCHEMA_RELEASE_ID,
+                digest(&artifacts.account_profile)?.to_bytes(),
+            )?,
+            request_profile: artifact(
+                dclutch_request_profile_contract::SCHEMA_RELEASE_ID,
+                digest(&artifacts.request_profile)?.to_bytes(),
+            )?,
+            lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())?,
+            strategy: artifact(
+                EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
+                digest(&strategy)?.to_bytes(),
+            )?,
+            transition: artifact(
+                dclutch_transition_vm::v3::SCHEMA_RELEASE_ID,
+                digest(&artifacts.transition)?.to_bytes(),
+            )?,
+            effect: artifact(EFFECT_SCHEMA_ID_V4, digest(&artifacts.effect)?.to_bytes())?,
+        },
+        input.root_state_bytes,
+    )
+    .map_err(Error::Descriptor)?;
+    let bundle = RationalLifecycleCompactBundleV4 {
+        support_count: artifacts.support_count,
+        token_behavior_selection: input.token_behavior_selection.to_bytes(),
+        account_profile: artifacts.account_profile,
+        request_profile: artifacts.request_profile,
+        transition: artifacts.transition,
+        lifecycle_policy,
+        strategy,
+        effect: artifacts.effect,
+        descriptor: descriptor_value.encode(),
+    };
+    validate_rational_lifecycle_compact_bundle_v4(&bundle)?;
     Ok(bundle)
 }
 
@@ -465,7 +605,7 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
     ))
 }
 
-fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usize) -> Result<()> {
+fn validate_inputs(input: RationalLifecycleCompactArtifactInputV6<'_>, rows: usize) -> Result<()> {
     let basis =
         ProductBasisV3::decode(input.product_basis).map_err(|_| Error::AccountObservation)?;
     let expected_accounts = VACANCY_LOGICAL_ACCOUNT_START
@@ -476,14 +616,14 @@ fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usi
         .ok_or(Error::InvalidLength)?;
     let descriptor_bytes = DESCRIPTOR_HEADER_BYTES
         .checked_add(
-            usize::try_from(input.descriptor.outcome_count())
-                .map_err(|_| Error::InvalidLength)?
+            input
+                .coefficients
+                .len()
                 .checked_mul(8)
                 .ok_or(Error::InvalidLength)?,
         )
         .ok_or(Error::InvalidLength)?;
-    if input.claims_program == Pubkey::default()
-        || rows == 0
+    if rows == 0
         || basis.basis_width() == 0
         || input.logical_data_lengths.len() != expected_accounts
         || input.logical_data_lengths.get(4).copied()
@@ -497,14 +637,18 @@ fn validate_inputs(input: RationalLifecycleCompactArtifactInputV4<'_>, rows: usi
     Ok(())
 }
 
-fn support_rows(descriptor: RepresentationDescriptorV2<'_>) -> Result<Vec<(u32, u64)>> {
+/// Ordered nonzero support of a coefficient vector.
+fn support_rows(coefficients: &[u64]) -> Result<Vec<(u32, u64)>> {
+    if coefficients.is_empty() || u32::try_from(coefficients.len()).is_err() {
+        return Err(Error::AccountObservation);
+    }
     let mut rows = Vec::new();
-    for outcome in 0..descriptor.outcome_count() {
-        let coefficient = descriptor
-            .coefficient(outcome)
-            .map_err(|_| Error::AccountObservation)?;
+    for (outcome, coefficient) in coefficients.iter().copied().enumerate() {
         if coefficient != 0 {
-            rows.push((outcome, coefficient));
+            rows.push((
+                u32::try_from(outcome).map_err(|_| Error::AccountObservation)?,
+                coefficient,
+            ));
         }
     }
     if rows.is_empty() {
@@ -513,8 +657,21 @@ fn support_rows(descriptor: RepresentationDescriptorV2<'_>) -> Result<Vec<(u32, 
     Ok(rows)
 }
 
+/// Read a finalized descriptor's coefficients into a market-free vector.
+fn descriptor_coefficients(descriptor: RepresentationDescriptorV2<'_>) -> Result<Vec<u64>> {
+    let mut coefficients = Vec::new();
+    for outcome in 0..descriptor.outcome_count() {
+        coefficients.push(
+            descriptor
+                .coefficient(outcome)
+                .map_err(|_| Error::AccountObservation)?,
+        );
+    }
+    Ok(coefficients)
+}
+
 fn encode_account_profile(
-    input: RationalLifecycleCompactArtifactInputV4<'_>,
+    input: RationalLifecycleCompactArtifactInputV6<'_>,
     layout: RationalLifecycleCompactHotRegisterLayoutV4,
 ) -> Result<Vec<u8>> {
     let mut rules = Vec::with_capacity(input.logical_data_lengths.len());
@@ -573,7 +730,7 @@ fn encode_account_profile(
         )?),
         data_offset: narrow_u32(BASIS_WIDTH_OFFSET_V3)?,
     });
-    let rows = support_rows(input.descriptor)?;
+    let rows = support_rows(input.coefficients)?;
     for (row, (outcome, _)) in rows.iter().copied().enumerate() {
         operations.push(AccountOperationInputV2::ProjectDataU64 {
             account: AccountCoordinateV2::fixed(14),
@@ -599,7 +756,7 @@ fn encode_account_profile(
                     .ok_or(Error::InvalidLength)?,
             )
             .ok_or(Error::InvalidLength)?;
-        for field in 0..4 {
+        for field in 0..RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4 {
             operations.push(AccountOperationInputV2::ProjectKey {
                 account: AccountCoordinateV2::fixed(narrow_u16(
                     account_start
@@ -736,12 +893,18 @@ fn encode_transition(
     Ok(output)
 }
 
+/// Encode the sole Claims effect for compact retirement.
+///
+/// Like [`child_template`], this now takes only the register layout and the
+/// row coordinates. The artifact input -- and with it the descriptor and the
+/// Claims program id that together derived the baked custody owner -- is no
+/// longer reachable from here, so the effect bytes are a function of the
+/// support shape alone.
 fn encode_effect(
-    input: RationalLifecycleCompactArtifactInputV4<'_>,
     layout: RationalLifecycleCompactHotRegisterLayoutV4,
     rows: &[(u32, u64)],
 ) -> Result<Vec<u8>> {
-    let template = child_template(input, rows)?;
+    let template = child_template(rows)?;
     let claims_accounts = LIFECYCLE_COMMON_ACCOUNT_COUNT_V2
         .checked_add(
             rows.len()
@@ -767,7 +930,7 @@ fn encode_effect(
     }];
     let mut instructions = Vec::with_capacity(
         rows.len()
-            .checked_mul(5)
+            .checked_mul(6)
             .and_then(|count| count.checked_add(18))
             .ok_or(Error::InvalidLength)?,
     );
@@ -800,6 +963,15 @@ fn encode_effect(
                         row,
                         RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_STRUCTURED_CUSTODY_V4,
                     )
+                    .ok_or(Error::InvalidLength)?,
+            )?,
+            // The fifth projection, and the one that makes this artifact
+            // market-neutral: the custody owner now arrives from a supplied
+            // account like its siblings instead of being baked by the author.
+            write_identity(
+                at(RationalLifecycleHotLayoutV3::ITEM_CUSTODY_OWNER)?,
+                layout
+                    .row_identity(row, RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4)
                     .ok_or(Error::InvalidLength)?,
             )?,
             write_identity(
@@ -863,10 +1035,14 @@ fn encode_effect(
     Ok(output)
 }
 
-fn child_template(
-    input: RationalLifecycleCompactArtifactInputV4<'_>,
-    rows: &[(u32, u64)],
-) -> Result<Vec<u8>> {
+/// Build the fixed child request every support row starts from.
+///
+/// Takes the row COORDINATES and nothing else. It used to take the whole
+/// artifact input so it could reach the descriptor and derive a custody-owner
+/// PDA; now that the effect projects that owner from a supplied account, the
+/// descriptor is not merely unused here but unreachable, so this template
+/// cannot depend on the Market even by accident.
+fn child_template(rows: &[(u32, u64)]) -> Result<Vec<u8>> {
     let bytes = rows
         .len()
         .checked_mul(LIFECYCLE_COORDINATE_BYTES_V2)
@@ -894,26 +1070,18 @@ fn child_template(
                     .ok_or(Error::InvalidLength)?,
             )
             .ok_or(Error::InvalidLength)?;
-        let owner = Pubkey::find_program_address(
-            &[
-                RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
-                input.descriptor.descriptor_id().as_slice(),
-                &outcome.to_le_bytes(),
-            ],
-            &input.claims_program,
-        )
-        .0;
+        // ITEM_CUSTODY_OWNER is deliberately NOT written here. It is a PDA
+        // seeded by the descriptor identity, and that identity hashes a
+        // preimage carrying the Core Market -- so baking it would make this
+        // template, and every digest above it up to the capability manifest
+        // entry, move with a Market that does not exist yet. The effect
+        // projects it from the supplied owner account instead, exactly as it
+        // already projects the row's four other identities.
         put(
             &mut output,
             base.checked_add(RationalLifecycleHotLayoutV3::ITEM_OUTCOME)
                 .ok_or(Error::InvalidLength)?,
             &outcome.to_le_bytes(),
-        )?;
-        put(
-            &mut output,
-            base.checked_add(RationalLifecycleHotLayoutV3::ITEM_CUSTODY_OWNER)
-                .ok_or(Error::InvalidLength)?,
-            owner.as_ref(),
         )?;
         put(
             &mut output,
@@ -1097,10 +1265,21 @@ mod tests {
     use dclutch_rational_representation_v2_contract::{
         TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
     };
+    use dclutch_rational_representation_v2_contract::RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2;
     use dclutch_rational_representation_v2_kernel::{
         DESCRIPTOR_COEFFICIENT_BYTES, DESCRIPTOR_MAGIC_V3, DESCRIPTOR_SCHEMA_VERSION_V3,
         DescriptorAdmissionV2,
     };
+
+    /// Market coordinate inside a descriptor preimage.
+    ///
+    /// The kernel keeps its offset table private, so this is a local claim --
+    /// and it is never trusted as one: `descriptor_bytes_for_market` writes
+    /// here and the test then requires the DECODED `market_id()` to be the
+    /// value written, which is what actually establishes that this is the
+    /// Market field. The surrounding fixture writes the same coordinate as a
+    /// bare `112`.
+    const FIXTURE_DESCRIPTOR_MARKET_OFFSET: usize = 112;
     use dclutch_request_profile_contract::RequestProfileV1;
     use dclutch_transition_vm::v3::{
         ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
@@ -1159,6 +1338,41 @@ mod tests {
             .expect("coefficient");
         }
         output
+    }
+
+    /// `descriptor_bytes` with the Market coordinate chosen by the caller.
+    ///
+    /// The default fixture pins every identity, which is right for the
+    /// geometry tests but cannot ask whether an artifact moves with the
+    /// Market. This varies exactly one 32-byte field.
+    fn descriptor_bytes_for_market(coefficients: &[u64; 5], market: [u8; 32]) -> Vec<u8> {
+        let mut output = descriptor_bytes(coefficients);
+        put(&mut output, FIXTURE_DESCRIPTOR_MARKET_OFFSET, &market).expect("market coordinate");
+        output
+    }
+
+    /// Decode a descriptor whose admission identity is the SHA-256 its own
+    /// bytes hash to, rather than a fixture constant.
+    ///
+    /// `validate_descriptor_admission` requires
+    /// `selected_descriptor_id == recomputed_descriptor_digest` on chain, so
+    /// this is the only admission shape a real finalized record can present --
+    /// and it is what makes the identity move when the Market moves.
+    fn self_identified_descriptor(bytes: &[u8]) -> RepresentationDescriptorV2<'_> {
+        let digest = hash(bytes).to_bytes();
+        RepresentationDescriptorV2::decode(
+            bytes,
+            DescriptorAdmissionV2 {
+                selected_descriptor_id: digest,
+                finalized_descriptor_id: digest,
+                recomputed_descriptor_digest: digest,
+                finalized_descriptor_digest: digest,
+                record_authenticated: true,
+                derived_representation_authority: id(22),
+                authority_derivation_authenticated: true,
+            },
+        )
+        .expect("self-identified descriptor")
     }
 
     fn descriptor<'a>(bytes: &'a [u8]) -> RepresentationDescriptorV2<'a> {
@@ -1320,15 +1534,18 @@ mod tests {
         assert_eq!(request.fixed_request_bytes(), 400);
         assert_eq!(request.item_request_bytes(), 0);
         assert_eq!(account.common_scalar_count(), 17);
-        assert_eq!(account.common_identity_count(), 22);
+        // 10 common + 3 rows x 5 row identities. The row gained the custody
+        // owner when it stopped being baked into the child template.
+        assert_eq!(account.common_identity_count(), 25);
         assert_eq!(transition.common_scalar_count(), 17);
-        assert_eq!(effect_base.common_identity_count(), 22);
+        assert_eq!(effect_base.common_identity_count(), 25);
         assert_eq!(layout.scalar_count(), Some(17));
         let route = effect_base.route(0).expect("route");
         assert_eq!(route.role(), FixedRole::Claims);
         assert_eq!(route.kind(), RouteKindV3::Once);
         assert_eq!(route.fixed_account_start(), 5);
-        assert_eq!(route.fixed_account_count(), 32);
+        // 20 receipt-wide Claims accounts + 3 rows x 5 vacancy accounts.
+        assert_eq!(route.fixed_account_count(), 35);
         assert_eq!(route.fixed_request_bytes(), 1_216);
         assert_eq!(route.item_request_bytes(), 0);
 
@@ -1411,6 +1628,124 @@ mod tests {
             ),
             Err(Error::AccountObservation)
         );
+    }
+
+    /// The counterpart `selected_bundle_v6` has for the three fixed-cardinality
+    /// actions, now holding for the fourth as well.
+    ///
+    /// This test shipped RED-in-spirit: it asserted the wall it found, with a
+    /// pre-registered success criterion in its own doc -- "a compact V6 that
+    /// projects the custody owner instead of baking it flips the `assert_ne!`
+    /// to `assert_eq!`, and that flip is the proof it worked". That flip has
+    /// now happened, and the expectation was never edited to accommodate the
+    /// code: the equality below is the same assertion, satisfied.
+    ///
+    /// WHAT IT GUARDS. Every capability manifest coordinate must be derivable
+    /// before the Market that will select it exists, because the manifest
+    /// digest is a Market-PDA seed. The compact effect used to bake one
+    /// custody-owner PDA per support row, seeded by a descriptor identity that
+    /// hashes a preimage carrying the Core Market -- so the effect digest, the
+    /// CapabilityV4 descriptor naming it, the ProgramSet entry, and finally the
+    /// manifest entry's `release_id` all moved with a Market that did not exist
+    /// yet. That is a SHA-256 fixed point, and it is why no Rational release
+    /// could be compiled before founding.
+    ///
+    /// Two descriptor preimages differing in exactly one 32-byte coordinate --
+    /// proven to be the Market by requiring the decoded `market_id()` to be the
+    /// value written, since the kernel keeps its offset table private -- each
+    /// carrying the descriptor identity its own bytes hash to, which is the
+    /// equality `validate_descriptor_admission` enforces on chain.
+    fn the_compact_retire_receipt_artifacts_are_market_neutral() {
+        let basis = basis();
+        let first_bytes = descriptor_bytes_for_market(&[0, 7, 5, 0, 9], id(71));
+        let second_bytes = descriptor_bytes_for_market(&[0, 7, 5, 0, 9], id(72));
+        // The two preimages differ in the Market coordinate and nowhere else.
+        assert_ne!(first_bytes, second_bytes);
+        assert_eq!(
+            first_bytes.len(),
+            second_bytes.len(),
+            "the Market substitution must not change the descriptor width"
+        );
+        let differing = first_bytes
+            .iter()
+            .zip(second_bytes.iter())
+            .enumerate()
+            .filter(|(_, (left, right))| left != right)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            differing,
+            (FIXTURE_DESCRIPTOR_MARKET_OFFSET..FIXTURE_DESCRIPTOR_MARKET_OFFSET + 32)
+                .collect::<Vec<_>>(),
+            "only one 32-byte coordinate may differ between the two preimages"
+        );
+
+        let first = self_identified_descriptor(&first_bytes);
+        let second = self_identified_descriptor(&second_bytes);
+        // This is what proves the coordinate written above IS the Market, so
+        // the offset is established by the decoder rather than asserted here.
+        assert_eq!(first.market_id(), id(71));
+        assert_eq!(second.market_id(), id(72));
+        // The identities really do move with the Market, so an equality below
+        // is market-neutrality rather than two descriptors that were the same.
+        assert_ne!(first.descriptor_id(), second.descriptor_id());
+
+        let lengths = lengths(basis.len(), first_bytes.len(), 3);
+        let claims_program = Pubkey::new_from_array(id(31));
+        let artifacts = |descriptor| {
+            encode_rational_lifecycle_compact_artifacts_v4(
+                RationalLifecycleCompactArtifactInputV4 {
+                    logical_data_lengths: &lengths,
+                    product_basis: &basis,
+                    descriptor,
+                    claims_program,
+                },
+            )
+            .expect("compact artifacts")
+        };
+        let left = artifacts(first);
+        let right = artifacts(second);
+
+        // ALL FOUR artifacts now observe no Market. This equality is the
+        // whole point: it is the assert_ne! this test shipped with, flipped by
+        // the fix rather than by an edit to the expectation.
+        assert_eq!(left.support_count, right.support_count);
+        assert_eq!(left.account_profile, right.account_profile);
+        assert_eq!(left.request_profile, right.request_profile);
+        assert_eq!(left.transition, right.transition);
+        assert_eq!(left.effect, right.effect);
+
+        // And the mechanism is gone, not merely agreeing: the custody owner
+        // that used to be baked per row is a PDA seeded by the market-bearing
+        // descriptor identity, so if ANY of them still appeared in the effect
+        // bytes the equality above could only be luck. Neither market's owner
+        // appears in either effect. Support rows for coefficients
+        // [0, 7, 5, 0, 9] are outcomes 1, 2 and 4 -- the nonzero ones.
+        for outcome in [1_u32, 2, 4] {
+            let owner_of = |descriptor: RepresentationDescriptorV2<'_>| {
+                Pubkey::find_program_address(
+                    &[
+                        RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
+                        descriptor.descriptor_id().as_slice(),
+                        &outcome.to_le_bytes(),
+                    ],
+                    &claims_program,
+                )
+                .0
+                .to_bytes()
+            };
+            let left_owner = owner_of(first);
+            let right_owner = owner_of(second);
+            assert_ne!(left_owner, right_owner);
+            for owner in [left_owner, right_owner] {
+                assert!(!contains(&left.effect, &owner));
+                assert!(!contains(&right.effect, &owner));
+            }
+        }
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8; 32]) -> bool {
+        haystack.windows(32).any(|window| window == needle.as_slice())
     }
 
     #[test]

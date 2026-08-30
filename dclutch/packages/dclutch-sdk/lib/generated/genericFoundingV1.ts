@@ -8,12 +8,13 @@
 //   crates/dclutch-claims-svm/src/founding_v5.rs                    (Claims)
 //   tools/local-validator/bootstrap/successor/src/market.rs         (the frame width)
 
-/** Sole top-level DCLTGMF1 discriminator. The outer carries no other bytes. */
-export const GENERIC_MARKET_FOUNDING_MAGIC_V1 = 'DCLTGMF1' as const;
-export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1 = 8 as const;
-export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 = 4 as const;
-export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1 = 4 as const;
-export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1 = 5 as const;
+/** Sole top-level DCLTGMF3 discriminator followed by five invocation-evidence bumps. */
+export const GENERIC_MARKET_FOUNDING_MAGIC_V3 = 'DCLTGMF3' as const;
+export const GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3 = 5 as const;
+export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3 = 13 as const;
+export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 = 4 as const;
+export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3 = 4 as const;
+export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3 = 5 as const;
 
 /** Index of each readonly request account inside the frame prefix. */
 export const GENERIC_FOUNDING_FOUND_RAW_INDEX_V1 = 0 as const;
@@ -24,10 +25,10 @@ export const GENERIC_FOUNDING_CLAIMS_RAW_INDEX_V1 = 3 as const;
 /** Stage account widths. The frame is exactly the concatenation of these. */
 export const PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1 = 14 as const;
 export const PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1 = 12 as const;
-export const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 = 34 as const;
+export const GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 = 26 as const;
 export const GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1 = 15 as const;
-export const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5 = 32 as const;
-export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
+export const CLAIMS_FOUNDING_ACCOUNT_COUNT_V5 = 31 as const;
+export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 21 as const;
 
 /**
  * Frame width at `funding_count = 0`, restated by the reference client.
@@ -36,18 +37,19 @@ export const GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1 = 23 as const;
  * disagreement rather than as a silently wider frame; the assertion that the
  * six widths above sum to it lives in `genericMarketFounding.test.ts`.
  */
-export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1 = 135 as const;
+export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 = 125 as const;
+export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = 24 as const;
 
 /** Exact distinct writable keys the outer requires, asserted by the client. */
-export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V1 = 11 as const;
+export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = 12 as const;
 
-/** Agave `increase_tx_account_lock_limit`; the fee payer is the key outside the frame. */
-export const MAX_TX_ACCOUNT_LOCKS_V1 = 128 as const;
+/** Devnet transaction account-lock limit without the raise feature. */
+export const MAX_TX_ACCOUNT_LOCKS_V2 = 64 as const;
 
 /** Indexes into the Found stage that the route itself dereferences. */
 export const CORE_FOUND_MARKET_INDEX_V1 = 1 as const;
-export const CORE_FOUND_CORE_PROGRAM_INDEX_V1 = 19 as const;
-export const CORE_FOUND_TRADING_PROGRAM_INDEX_V1 = 31 as const;
+export const CORE_FOUND_CORE_PROGRAM_INDEX_V1 = 13 as const;
+export const CORE_FOUND_TRADING_PROGRAM_INDEX_V1 = 24 as const;
 export const CORE_FOUND_PERMIT_SUFFIX_INDEX_V1 = 0 as const;
 export const CORE_FOUND_CLAIMS_PROGRAM_SUFFIX_INDEX_V1 = 7 as const;
 export const CORE_FOUND_CUSTODY_PROGRAM_SUFFIX_INDEX_V1 = 9 as const;
@@ -113,9 +115,8 @@ export const GENERIC_FOUNDING_STAGES_V1 = Object.freeze([
  * ComputeBudget declarations the reference client puts on every transaction.
  *
  * `bounded_instructions` owns these and refuses a caller-supplied duplicate.
- * The default per-transaction ceiling is 200,000 CU and Found31 alone spends
- * over a million, so a builder that omits the limit does not produce a slow
- * transaction -- it produces one that cannot complete.
+ * The configured limit is part of the emitted bytes, not a performance claim.
+ * Current V2 routes require their own pass-count and 20-seed mean evidence.
  */
 export const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT_V1 = 2 as const;
 export const REQUEST_HEAP_FRAME_DISCRIMINANT_V1 = 1 as const;

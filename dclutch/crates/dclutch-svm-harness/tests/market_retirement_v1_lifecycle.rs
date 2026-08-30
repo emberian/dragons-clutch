@@ -8,7 +8,10 @@ use dclutch_claims_svm::liability_basis_state_v2::{
     liability_basis_vector_width_v2,
 };
 use dclutch_market_retirement_v1_operator::{
-    MarketRetirementOperatorErrorV1, MarketRetirementSnapshotV1, build_market_retirement_v1,
+    CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
+    CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1, MarketRetirementOperatorErrorV1,
+    MarketRetirementSnapshotV1, ResolutionRetirementReceiptFactsV3,
+    build_checkpoint_market_retirement_v1, build_market_retirement_v1,
 };
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
@@ -20,12 +23,16 @@ use dclutch_rent_contract::RefundAuthority;
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
 };
-use spl_token_interface::state::Account as SplAccount;
+use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
+use solana_sdk::hash::Hash;
+use spl_token_interface::state::{Account as SplAccount, AccountState};
+use std::str::FromStr;
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x76; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x77; 32]);
 const CLAIMS_REVISION: u64 = 11;
 const CUSTODY_REVISION: u64 = 2;
+const SOLANA_PACKET_BYTES: usize = 1_232;
 
 struct JoinedFixture {
     base: Fixture,
@@ -115,7 +122,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let trading_release = release(TRADING_PROGRAM_ID, [0x46; 32], &trading_elf);
     let resolution_release = release(
         RESOLUTION_PROGRAM_ID,
-        RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+        RESOLUTION_CONTROLLER_RELEASE_ID_V7,
         &elves.resolution,
     );
     let custody_release = release(CUSTODY_PROGRAM_ID, [0x42; 32], &elves.custody);
@@ -205,8 +212,10 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     set_account(
         &mut context,
@@ -241,6 +250,15 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         ],
         &RESOLUTION_PROGRAM_ID,
     );
+    let activation_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RESOLUTION_PROGRAM_ID,
+    )
+    .0;
     let certificate = Pubkey::find_program_address(
         &[
             RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
@@ -253,7 +271,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     .0;
     let closure = Pubkey::find_program_address(
         &[
-            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V2,
+            SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
             source.as_ref(),
             &(TERMINAL_SEQUENCE + 1).to_le_bytes(),
         ],
@@ -266,7 +284,32 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     let manifest_id = CapabilityContentId::new(hash(&manifest_account.data).to_bytes())
         .expect("manifest identity");
     let manifest = CapabilityManifestV1::decode(&manifest_account.data).expect("manifest");
-    let funding = [0_u16, 1, 2].map(|entry| funding_key(market, manifest_id, manifest, entry));
+    const RESOLUTION_FUNDING_MASK: u16 = 0b111;
+    let funding = funding_key(market, manifest_id, manifest, RESOLUTION_FUNDING_MASK);
+    let funding_width = funding_ledger_bytes_v2(3).expect("three-row FundingLedgerV2 width");
+    let mut funding_data = vec![0_u8; funding_width];
+    FundingLedgerV2::initialize(
+        &mut funding_data,
+        manifest_id,
+        manifest,
+        RESOLUTION_FUNDING_MASK,
+    )
+    .expect("pre-Market pending Resolution subset ledger");
+    let funding_principal = FundingLedgerV2::decode(&funding_data)
+        .and_then(|ledger| ledger.authenticate(manifest_id, manifest))
+        .and_then(|ledger| ledger.remaining_native_lamports_total())
+        .expect("bounded aggregate Resolution principal");
+    set_account(
+        &mut context,
+        funding,
+        Account {
+            lamports: Rent::default().minimum_balance(funding_width) + funding_principal,
+            data: funding_data,
+            owner: RESOLUTION_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
 
     let replay_request = custody_request(
         release_set,
@@ -341,6 +384,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     base.market = market;
     base.source = source;
     base.funding = funding;
+    base.activation_receipt = activation_receipt;
     base.certificate = certificate;
     base.closure = closure;
     base.rent_credit = rent_credit;
@@ -363,10 +407,107 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
     )
 }
 
+async fn seed_exact_retirement_prestate(context: &mut ProgramTestContext, fixture: &JoinedFixture) {
+    let market_account = observed(context, fixture.base.market)
+        .await
+        .expect("prebuilt Market");
+    let mut market = CoreState::decode(&market_account.data).expect("prebuilt Core Market");
+    market.phase = Phase::Retiring;
+    market.readiness = Readiness::Consumed;
+    market.outstanding_capabilities = 0;
+    market.terminal_winner = 0;
+    market.terminal_receipt =
+        Some(CoreIdentity::new(fixture.base.certificate.to_bytes()).expect("terminal certificate"));
+    set_account(
+        context,
+        fixture.base.market,
+        Account {
+            data: market.encode().expect("Retiring Core Market").to_vec(),
+            ..market_account
+        },
+    );
+
+    let source_refund_lamports = 1_u64;
+    let closure = SourceClosureReceiptV3 {
+        market: fixture.base.market.to_bytes(),
+        source_state: fixture.base.source.to_bytes(),
+        source_material: market.identity.resolution_policy.to_bytes(),
+        capability_manifest: market.identity.capability_manifest.to_bytes(),
+        terminal_certificate: fixture.base.certificate.to_bytes(),
+        receipt_account: fixture.base.closure.to_bytes(),
+        beneficiary: fixture.base.rent_credit.to_bytes(),
+        source_state_digest: [0xa1; 32],
+        terminal_certificate_digest: [0xa2; 32],
+        funding_set_digest: [0xa3; 32],
+        generation: market.identity.generation,
+        terminal_sequence: TERMINAL_SEQUENCE,
+        selector: market.terminal_winner,
+        source_refund_lamports,
+        ledger_remaining_native_principal: 0,
+        ledger_rent_lamports: 0,
+        ledger_lamport_surplus: 0,
+        refund_lamports: source_refund_lamports,
+        closed_at: u64::try_from(TERMINAL_TIME).expect("positive terminal time"),
+    };
+    set_account(
+        context,
+        fixture.base.closure,
+        protocol_account(
+            RESOLUTION_PROGRAM_ID,
+            closure.to_bytes().expect("Source closure receipt").to_vec(),
+        ),
+    );
+
+    let replay = CustodyReplayV1 {
+        caller_role: CallerRoleV1::Core,
+        release_set: fixture.base.release_set,
+        market: fixture.base.market.to_bytes(),
+        realm: market.identity.realm_id.to_bytes(),
+        context: fixture.base.market.to_bytes(),
+        caller_program: CORE_PROGRAM_ID.to_bytes(),
+        rent_refund: fixture.base.rent_credit.to_bytes(),
+        open_vault_count: 1,
+        next_revision: CUSTODY_REVISION,
+        generation: market.identity.generation,
+        last_request_digest: [0xb1; 32],
+        last_poststate_commitment: [0xb2; 32],
+    };
+    set_account(
+        context,
+        fixture.base.replay,
+        protocol_account(
+            CUSTODY_PROGRAM_ID,
+            replay.to_bytes().expect("Custody replay").to_vec(),
+        ),
+    );
+
+    let mut vault_data = vec![0_u8; SplAccount::LEN];
+    SplAccount::pack(
+        SplAccount {
+            mint: fixture.base.mint,
+            owner: fixture.base.custody_authority,
+            amount: 0,
+            delegate: COption::None,
+            state: AccountState::Initialized,
+            is_native: COption::None,
+            delegated_amount: 0,
+            close_authority: COption::None,
+        },
+        &mut vault_data,
+    )
+    .expect("empty Hoard vault");
+    set_account(
+        context,
+        fixture.base.vault,
+        protocol_account(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), vault_data),
+    );
+}
+
 struct RetirementPlan {
     instruction: Instruction,
     direct_instruction: Instruction,
     activation_cache_digest: CoreContentId,
+    resolution_facts: ResolutionRetirementReceiptFactsV3,
     expected_refund_delta: u64,
 }
 
@@ -501,6 +642,7 @@ async fn retirement_instruction(
         instruction: report.instruction,
         direct_instruction: report.direct_instruction,
         activation_cache_digest,
+        resolution_facts: report.resolution_facts,
         expected_refund_delta: report.expected_refund_delta,
     }
 }
@@ -529,73 +671,88 @@ async fn execute_same_lineage_funding_and_open(
     let create = build_resolution_create_fund_v3(&create_snapshot(context, &fixture.base).await)
         .expect("chain-derived same-Market CreateFund");
     validate_resolution_create_fund_report_v3(&create).expect("exact same-Market CreateFund");
-    let mut create_instructions = Vec::with_capacity(5);
+    let mut create_instructions = Vec::with_capacity(2);
     create_instructions.push(transfer(
         &payer,
         &fixture.base.source,
         create.source_top_up_lamports,
     ));
-    for (funding, top_up) in fixture
-        .base
-        .funding
-        .into_iter()
-        .zip(create.funding_top_up_lamports)
-    {
-        create_instructions.push(transfer(&payer, &funding, top_up));
-    }
     create_instructions.push(create.instruction.clone());
     let mut substituted_system = create_instructions.clone();
     substituted_system
         .last_mut()
         .expect("CreateFund instruction")
-        .accounts[17]
+        .accounts[15]
         .pubkey = sysvar::rent::ID;
     assert!(
         submit(context, &substituted_system).await.is_err(),
-        "a substituted System program must refuse after all four top-ups"
+        "a substituted System program must refuse after the Source top-up"
     );
     assert_eq!(
         open_rollback_snapshot(context, &fixture.base).await,
         before_create,
-        "late CreateFund refusal rolls the Market, Source, three Funds, Custody, and RentCredit back"
+        "late CreateFund refusal rolls the Market, Source, subset ledger, Custody, and RentCredit back"
     );
     submit(context, &create_instructions)
         .await
-        .expect("create exact same-Market Source and three pending Funds");
-    for funding in fixture.base.funding {
-        assert_eq!(
-            FundingStateV1::decode(
-                &observed(context, funding)
-                    .await
-                    .expect("created same-Market Funding")
-                    .data,
-            )
-            .expect("Funding state")
-            .status(),
-            FundingStatus::Pending,
-        );
-    }
+        .expect("create the exact same-Market Source against the pending subset ledger");
+    assert_funding_ledger_status(context, &fixture.base, FundingLedgerStatusV2::Pending).await;
 
-    let verify =
-        build_resolution_verify_fund_ready_v3(&verify_snapshot(context, &fixture.base).await)
-            .expect("chain-derived same-Market VerifyFundReady");
-    validate_resolution_verify_fund_ready_report_v3(&verify)
-        .expect("exact same-Market VerifyFundReady");
-    let before_verify = open_rollback_snapshot(context, &fixture.base).await;
-    let mut read_only_beneficiary = verify.instruction.clone();
-    read_only_beneficiary.accounts[16].is_writable = false;
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(context, &fixture.base).await,
+        system_program: required_observed(context, system_program::ID).await,
+    })
+    .expect("chain-derived direct same-Market activation");
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.base.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    activation_instructions.push(activation.instruction);
+    let before_activation = open_rollback_snapshot(context, &fixture.base).await;
+    let mut read_only_beneficiary = activation_instructions.clone();
+    read_only_beneficiary
+        .last_mut()
+        .expect("direct activation instruction")
+        .accounts[13]
+        .is_writable = false;
     assert!(
-        submit(context, &[read_only_beneficiary]).await.is_err(),
-        "a read-only immutable beneficiary must refuse"
+        submit(context, &read_only_beneficiary).await.is_err(),
+        "a read-only activation beneficiary must refuse"
     );
     assert_eq!(
         open_rollback_snapshot(context, &fixture.base).await,
-        before_verify,
-        "VerifyFundReady privilege refusal rolls every funding ledger back"
+        before_activation,
+        "direct activation privilege refusal rolls its receipt top-up and every funding mutation back"
+    );
+    submit(context, &activation_instructions)
+        .await
+        .expect("activate the exact same-Market three-row subset ledger");
+    assert_funding_ledger_status(context, &fixture.base, FundingLedgerStatusV2::Active).await;
+
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(context, &fixture.base).await)
+            .expect("chain-derived no-CPI same-Market funding Accept");
+    validate_resolution_verify_fund_ready_report_v3(&verify)
+        .expect("exact same-Market funding Accept");
+    let before_accept = open_rollback_snapshot(context, &fixture.base).await;
+    let mut writable_beneficiary = verify.instruction.clone();
+    writable_beneficiary.accounts[14].is_writable = true;
+    assert!(
+        submit(context, &[writable_beneficiary]).await.is_err(),
+        "surplus writable Accept beneficiary must refuse"
+    );
+    assert_eq!(
+        open_rollback_snapshot(context, &fixture.base).await,
+        before_accept,
+        "funding Accept privilege refusal preserves the activated ledger"
     );
     submit(context, &[verify.instruction])
         .await
-        .expect("activate exact same-Market three-ledger funding");
+        .expect("accept the durable activation receipt into Core readiness");
 
     let before_open = open_rollback_snapshot(context, &fixture.base).await;
     let mut substituted_admission =
@@ -767,7 +924,7 @@ async fn execute_same_lineage_real_provider(
             post_update_body,
         },
     )
-    .expect("chain-derived Core provider execution");
+    .expect("chain-derived direct Resolution provider execution");
     let before_inactive_role_substitution =
         provider_rollback_snapshot(context, &fixture.base, submit_report.lifecycle).await;
     let mut substituted_inactive_trading = execute_report.instruction.clone();
@@ -785,7 +942,12 @@ async fn execute_same_lineage_real_provider(
     );
     pyth_provider::submit(context, &[execute_report.instruction], &[&resolver])
         .await
-        .expect("Core consumes the authenticated provider result");
+        .expect("Resolution persists the authenticated provider result");
+    let accept = build_resolution_admit_terminal_v3(&admit_snapshot(context, &fixture.base).await)
+        .expect("chain-derived no-CPI terminal Accept");
+    submit(context, &[accept.instruction])
+        .await
+        .expect("Core accepts the durable provider certificate");
 
     let market = CoreState::decode(
         &observed(context, fixture.base.market)
@@ -828,7 +990,7 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     submit(&mut context, &[begin_retiring_instruction(&fixture.base)])
         .await
         .expect("permissionless BeginRetiring");
-    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V2);
+    let closure_rent = Rent::default().minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
     let payer = context.payer.pubkey();
     submit(
         &mut context,
@@ -836,14 +998,27 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     )
     .await
     .expect("prepay Source closure receipt");
-    let close = build_resolution_close_fund_v3(&close_snapshot(&mut context, &fixture.base).await)
-        .expect("chain-derived CloseFund");
-    validate_resolution_close_fund_report_v3(&close).expect("exact CloseFund report");
-    submit(&mut context, &[close.instruction])
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture.base).await)
+            .expect("chain-derived direct CloseFund");
+    let expected_resolution_facts = close.expected_retirement_facts;
+    submit(&mut context, &[close.instruction.clone()])
         .await
         .expect("Resolution closes Source subtree first");
+    let closure = SourceClosureReceiptV3::decode(
+        &observed(&mut context, fixture.base.closure)
+            .await
+            .expect("V3 Source closure receipt")
+            .data,
+    )
+    .expect("exhaustive V3 Source closure receipt");
+    assert_exhaustive_closure_receipt(closure, &close);
 
     let plan = retirement_instruction(&mut context, &fixture).await;
+    assert_eq!(
+        plan.resolution_facts, expected_resolution_facts,
+        "the retirement builder must carry every Resolution-owned closure component unchanged"
+    );
     let chain_snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
     let mut stale_observation = chain_snapshot.clone();
     stale_observation.claims_aggregate.observation.slot += 1;
@@ -877,7 +1052,10 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
     );
     let report = build_market_retirement_v1(&chain_snapshot).expect("retirement report");
     assert_eq!(report.claim_count, 5, "Claims width is runtime-derived");
-    assert_eq!(fixture.base.funding.len(), 3, "Resolution has three funds");
+    assert_ne!(
+        plan.resolution_facts.funding_set_digest, [0; 32],
+        "retirement carries the exact three-row Resolution funding prestate digest"
+    );
     assert_eq!(plan.direct_instruction.accounts.len(), 35);
     assert_eq!(plan.direct_instruction.data.len(), 2_152);
     assert_eq!(plan.instruction.accounts.len(), 46);
@@ -998,4 +1176,306 @@ async fn joined_retirement_is_atomic_through_rent_close_last() {
         wallet_before + plan.expected_refund_delta,
         "the sole immutable wallet receives exact credit + Claims + Custody + Market lamports"
     );
+}
+
+fn packet_census(
+    instruction: &Instruction,
+    payer: Pubkey,
+    recent_blockhash: Hash,
+) -> (usize, usize) {
+    let compute_budget = Pubkey::from_str("ComputeBudget111111111111111111111111111111")
+        .expect("Compute Budget program");
+    let mut limit_data = Vec::from([2_u8]);
+    limit_data.extend_from_slice(&1_400_000_u32.to_le_bytes());
+    let mut price_data = Vec::from([3_u8]);
+    price_data.extend_from_slice(&1_u64.to_le_bytes());
+    let unique = std::iter::once(payer)
+        .chain(std::iter::once(instruction.program_id))
+        .chain(instruction.accounts.iter().map(|meta| meta.pubkey))
+        .collect::<std::collections::BTreeSet<_>>();
+    let addresses = instruction
+        .accounts
+        .iter()
+        .map(|meta| meta.pubkey)
+        .filter(|key| *key != payer && *key != instruction.program_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let lookup = AddressLookupTableAccount {
+        key: Pubkey::new_from_array([0xfc; 32]),
+        addresses,
+    };
+    let message = v0::Message::try_compile(
+        &payer,
+        &[
+            Instruction {
+                program_id: compute_budget,
+                accounts: Vec::new(),
+                data: limit_data,
+            },
+            Instruction {
+                program_id: compute_budget,
+                accounts: Vec::new(),
+                data: price_data,
+            },
+            instruction.clone(),
+        ],
+        &[lookup],
+        recent_blockhash,
+    )
+    .expect("retirement packet compiles through its dedicated ALT");
+    let signatures = usize::from(message.header.num_required_signatures);
+    let wire_bytes = 1 + signatures * 64 + VersionedMessage::V0(message).serialize().len();
+    (unique.len(), wire_bytes)
+}
+
+#[tokio::test]
+async fn checkpointed_retirement_is_packet_bounded_resumable_and_conserving() {
+    let (fixture, mut context) = joined_fixture().await;
+    seed_exact_retirement_prestate(&mut context, &fixture).await;
+    let snapshot = retirement_operator_snapshot(&mut context, &fixture).await;
+    let plan = build_checkpoint_market_retirement_v1(&snapshot)
+        .expect("checkpointed aggregate-retirement plan");
+    assert_eq!(
+        plan.prepare.data.len(),
+        CHECKPOINT_RETIREMENT_PREPARE_CORE_BYTES_V1
+    );
+    assert_eq!(
+        plan.close_vault.data.len(),
+        CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1
+    );
+    assert_eq!(
+        plan.close_replay.data.len(),
+        CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1
+    );
+    assert_eq!(
+        plan.finish.data.len(),
+        CHECKPOINT_RETIREMENT_FINISH_BYTES_V1
+    );
+    assert_eq!(plan.prepare.accounts.len(), 35);
+    assert_eq!(plan.close_vault.accounts.len(), 35);
+    assert_eq!(plan.close_replay.accounts.len(), 35);
+    assert_eq!(plan.finish.accounts.len(), 35);
+
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("packet census blockhash");
+    let census = [
+        ("prepare", &plan.prepare),
+        ("close-vault", &plan.close_vault),
+        ("close-replay", &plan.close_replay),
+        ("finish", &plan.finish),
+    ]
+    .map(|(name, instruction)| {
+        let (keys, bytes) = packet_census(instruction, context.payer.pubkey(), blockhash);
+        println!(
+            "checkpoint-retirement packet {name}: metas={} unique_keys={keys} data_bytes={} wire_bytes={bytes}",
+            instruction.accounts.len(),
+            instruction.data.len(),
+        );
+        assert!(
+            bytes <= SOLANA_PACKET_BYTES,
+            "{name} is {bytes} bytes, over the Solana packet ceiling"
+        );
+        (keys, bytes)
+    });
+    assert!(
+        2_280 > SOLANA_PACKET_BYTES,
+        "the legacy wrapped instruction data alone proves its wire cliff"
+    );
+
+    let before = joined_snapshot(&mut context, &fixture).await;
+    let claims_prestate = before
+        .claims_aggregate
+        .clone()
+        .expect("Claims aggregate prestate");
+    let mut substituted_claims_owner = claims_prestate.clone();
+    substituted_claims_owner.owner = system_program::ID;
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        substituted_claims_owner,
+    );
+    let substituted_owner_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.prepare))
+            .await
+            .is_err(),
+        "Claims handoff refuses a substituted aggregate owner"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        substituted_owner_snapshot,
+        "owner refusal cannot partially reassign or refund the aggregate"
+    );
+    set_account(&mut context, fixture.claims_aggregate, claims_prestate);
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_vault))
+            .await
+            .is_err(),
+        "a suffix cannot mint authority before Claims handoff"
+    );
+    assert_eq!(joined_snapshot(&mut context, &fixture).await, before);
+
+    submit(&mut context, std::slice::from_ref(&plan.prepare))
+        .await
+        .expect("Claims handoff and ClaimsClosed checkpoint");
+    let prepared = required_observed(&mut context, fixture.claims_aggregate).await;
+    let prepared_account = observed(&mut context, fixture.claims_aggregate)
+        .await
+        .expect("raw ClaimsClosed checkpoint");
+    assert_eq!(prepared.owner, CORE_PROGRAM_ID);
+    assert_eq!(prepared.data.len(), 256);
+    assert_eq!(
+        prepared.lamports,
+        before
+            .claims_aggregate
+            .as_ref()
+            .expect("Claims aggregate prestate")
+            .lamports,
+        "Claims refund stays in the exact handed-off account"
+    );
+    assert_eq!(
+        required_observed(&mut context, fixture.base.rent_credit)
+            .await
+            .lamports,
+        before
+            .rent_credit
+            .as_ref()
+            .expect("RentCredit prestate")
+            .lamports,
+        "Claims handoff never relabels its retained refund as RentCredit"
+    );
+    let prepared_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.prepare))
+            .await
+            .is_err(),
+        "ClaimsClosed cannot replay prepare"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        prepared_snapshot,
+        "prepare replay refusal is byte/lamport atomic"
+    );
+    let mut substituted_checkpoint_owner = prepared_account.clone();
+    substituted_checkpoint_owner.owner = CLAIMS_PROGRAM_ID;
+    set_account(
+        &mut context,
+        fixture.claims_aggregate,
+        substituted_checkpoint_owner,
+    );
+    let substituted_checkpoint_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_vault))
+            .await
+            .is_err(),
+        "a suffix refuses a checkpoint reassigned away from Core"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        substituted_checkpoint_snapshot,
+        "checkpoint-owner refusal cannot close or refund Custody state"
+    );
+    set_account(&mut context, fixture.claims_aggregate, prepared_account);
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_replay))
+            .await
+            .is_err(),
+        "Custody replay cannot close before the HoardPrincipal vault"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        prepared_snapshot,
+        "phase refusal is byte/lamport atomic"
+    );
+
+    submit(&mut context, std::slice::from_ref(&plan.close_vault))
+        .await
+        .expect("HoardPrincipal close and HoardVaultClosed checkpoint");
+    assert!(observed(&mut context, fixture.base.vault).await.is_none());
+    assert!(observed(&mut context, fixture.base.market).await.is_some());
+    assert!(
+        observed(&mut context, fixture.base.rent_credit)
+            .await
+            .is_some()
+    );
+    let vault_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_vault))
+            .await
+            .is_err(),
+        "HoardVaultClosed cannot replay close-vault"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        vault_closed_snapshot,
+        "close-vault replay refusal is byte/lamport atomic"
+    );
+    submit(&mut context, std::slice::from_ref(&plan.close_replay))
+        .await
+        .expect("Custody replay close and CustodyReplayClosed checkpoint");
+    assert!(observed(&mut context, fixture.base.replay).await.is_none());
+    assert!(observed(&mut context, fixture.base.market).await.is_some());
+    assert!(
+        observed(&mut context, fixture.base.rent_credit)
+            .await
+            .is_some()
+    );
+    let replay_closed_snapshot = joined_snapshot(&mut context, &fixture).await;
+    assert!(
+        submit(&mut context, std::slice::from_ref(&plan.close_replay))
+            .await
+            .is_err(),
+        "CustodyReplayClosed cannot replay close-replay"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        replay_closed_snapshot,
+        "close-replay replay refusal is byte/lamport atomic"
+    );
+
+    let mut substituted_refund = plan.finish.clone();
+    substituted_refund
+        .accounts
+        .iter_mut()
+        .find(|meta| meta.pubkey == fixture.refund_wallet)
+        .expect("finish refund-wallet meta")
+        .pubkey = context.payer.pubkey();
+    assert!(
+        submit(&mut context, &[substituted_refund]).await.is_err(),
+        "finish refuses substitution of the immutable refund wallet"
+    );
+    assert_eq!(
+        joined_snapshot(&mut context, &fixture).await,
+        replay_closed_snapshot,
+        "refund substitution cannot close checkpoint, Market, or RentCredit"
+    );
+
+    let wallet_before = before
+        .refund_wallet
+        .as_ref()
+        .expect("refund wallet prestate")
+        .lamports;
+    submit(&mut context, std::slice::from_ref(&plan.finish))
+        .await
+        .expect("checkpoint then Core then Rent close");
+    let after = joined_snapshot(&mut context, &fixture).await;
+    assert!(after.claims_aggregate.is_none());
+    assert!(after.market.is_none());
+    assert!(after.rent_credit.is_none());
+    assert!(after.custody_replay.is_none());
+    assert!(after.hoard_vault.is_none());
+    assert_eq!(after.source_receipt, before.source_receipt);
+    assert_eq!(
+        after
+            .refund_wallet
+            .expect("immutable refund wallet")
+            .lamports,
+        wallet_before + plan.expected_refund_delta,
+        "every classified rent lamport reaches the immutable refund wallet exactly once"
+    );
+    assert!(census.iter().all(|(keys, _)| *keys <= 64));
 }

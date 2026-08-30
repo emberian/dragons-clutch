@@ -15,6 +15,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    StateBumpsV1,
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -484,8 +485,10 @@ fn fixture(profile: Profile) -> (ProgramTest, Fixture) {
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(ACTOR).expect("beneficiary"),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     add_protocol_account(
         &mut test,
@@ -823,6 +826,7 @@ fn wrapper_instruction(
             AccountMeta::new(payer, true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new(Pubkey::new_from_array(request.rent_refund), false),
         ]),
         OperationV1::OpenVault => accounts.extend([
             AccountMeta::new_readonly(fixture.mint, false),

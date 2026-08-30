@@ -1,10 +1,11 @@
 //! Packet-safe native Ed25519 evidence for Direct signed requests.
 //!
-//! Public keys and signatures are self-contained in the native instruction.
-//! Message bytes remain in the exact authenticated current top-level
-//! instruction. Direct Hot and the headerless Registry successor both carry
-//! the exact Hot bytes beginning at byte zero; the Registry role is exposed by
-//! a distinct successor encoder so the retired headered shape cannot replay.
+//! Signatures are self-contained in the native instruction. Public keys and
+//! signed messages are referenced from the exact authenticated current
+//! top-level instruction, where each maker key immediately precedes its signed
+//! preimage. Direct Hot and the headerless Registry successor both carry the
+//! exact Hot bytes beginning at byte zero; the Registry role is exposed by a
+//! distinct successor encoder so the retired headered shape cannot replay.
 
 use dclutch_capability_program_contract::hot_v3::{
     HOT_FAMILY_REQUEST_OFFSET_V3, HotExecutionEnvelopeV3,
@@ -18,7 +19,7 @@ use crate::execution_v3::{
 const DESCRIPTOR_BYTES: usize = 14;
 const SIGNATURES: usize = 2;
 const HEADER_BYTES: usize = 2 + SIGNATURES * DESCRIPTOR_BYTES;
-const PARTICIPANT_BYTES: usize = 32 + 64;
+const PARTICIPANT_BYTES: usize = 64;
 
 /// Exact compact native Ed25519 evidence width for two Direct participants.
 pub const DIRECT_NATIVE_EVIDENCE_BYTES_V3: usize = HEADER_BYTES + SIGNATURES * PARTICIPANT_BYTES;
@@ -99,6 +100,9 @@ pub fn encode_direct_native_evidence_many_v3_atomic(
     output: &mut [u8],
 ) -> Result<(), DirectNativeEvidenceErrorV3> {
     let bias = container.bias();
+    if current_instruction_index == 0 || current_instruction_index == u16::MAX {
+        return Err(DirectNativeEvidenceErrorV3::Coordinate);
+    }
     let hot = current_instruction_data
         .get(bias..)
         .ok_or(DirectNativeEvidenceErrorV3::InvalidCurrentInstruction)?;
@@ -150,23 +154,23 @@ pub fn encode_direct_native_evidence_many_v3_atomic(
         {
             return Err(DirectNativeEvidenceErrorV3::ZeroEvidence);
         }
-        let native_public_key = header_bytes
+        let native_signature = header_bytes
             .checked_add(
                 participant
                     .checked_mul(PARTICIPANT_BYTES)
                     .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?,
             )
             .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?;
-        let native_signature = native_public_key
-            .checked_add(32)
-            .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?;
         let absolute_message = bias
             .checked_add(HOT_FAMILY_REQUEST_OFFSET_V3)
             .and_then(|offset| offset.checked_add(message_offset))
             .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?;
+        let absolute_public_key = absolute_message
+            .checked_sub(32)
+            .ok_or(DirectNativeEvidenceErrorV3::InvalidCurrentInstruction)?;
         for value in [
-            native_public_key,
             native_signature,
+            absolute_public_key,
             absolute_message,
             usize::from(slice.message_bytes),
             usize::from(current_instruction_index),
@@ -193,9 +197,6 @@ pub fn encode_direct_native_evidence_many_v3_atomic(
         .map_err(|_| DirectNativeEvidenceErrorV3::InvalidCurrentInstruction)?;
         let message_offset = usize::try_from(slice.message_offset)
             .map_err(|_| DirectNativeEvidenceErrorV3::Coordinate)?;
-        let public_key_offset = message_offset
-            .checked_sub(32)
-            .ok_or(DirectNativeEvidenceErrorV3::InvalidCurrentInstruction)?;
         let descriptor = 2_usize
             .checked_add(
                 participant
@@ -203,36 +204,31 @@ pub fn encode_direct_native_evidence_many_v3_atomic(
                     .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?,
             )
             .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?;
-        let native_public_key = header_bytes
+        let native_signature = header_bytes
             .checked_add(
                 participant
                     .checked_mul(PARTICIPANT_BYTES)
                     .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?,
             )
             .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?;
-        let native_signature = native_public_key
-            .checked_add(32)
-            .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?;
         let absolute_message = bias
             .checked_add(HOT_FAMILY_REQUEST_OFFSET_V3)
             .and_then(|offset| offset.checked_add(message_offset))
             .ok_or(DirectNativeEvidenceErrorV3::Coordinate)?;
+        let absolute_public_key = absolute_message
+            .checked_sub(32)
+            .ok_or(DirectNativeEvidenceErrorV3::InvalidCurrentInstruction)?;
         for (offset, value) in [
             (descriptor, native_signature),
             (descriptor + 2, usize::from(u16::MAX)),
-            (descriptor + 4, native_public_key),
-            (descriptor + 6, usize::from(u16::MAX)),
+            (descriptor + 4, absolute_public_key),
+            (descriptor + 6, usize::from(current_instruction_index)),
             (descriptor + 8, absolute_message),
             (descriptor + 10, usize::from(slice.message_bytes)),
             (descriptor + 12, usize::from(current_instruction_index)),
         ] {
             put_u16(scratch, offset, value)?;
         }
-        put(
-            scratch,
-            native_public_key,
-            range(request, public_key_offset, 32)?,
-        )?;
         put(
             scratch,
             native_signature,
@@ -486,14 +482,19 @@ mod tests {
             &mut registry,
         )
         .expect("Registry evidence");
-        assert_eq!(direct.len(), 222);
-        for (descriptor, expected_offset) in [(2_usize, 192_u16), (16, 396)] {
-            assert_eq!(read_u16(&direct, descriptor + 8), expected_offset);
+        assert_eq!(direct.len(), 158);
+        for (descriptor, expected_public_key, expected_message) in
+            [(2_usize, 160_u16, 192_u16), (16, 364, 396)]
+        {
+            assert_eq!(read_u16(&direct, descriptor + 4), expected_public_key);
+            assert_eq!(read_u16(&direct, descriptor + 8), expected_message);
             assert_eq!(read_u16(&direct, descriptor + 12), 2);
-            assert_eq!(read_u16(&registry, descriptor + 8), expected_offset);
+            assert_eq!(read_u16(&registry, descriptor + 4), expected_public_key);
+            assert_eq!(read_u16(&registry, descriptor + 8), expected_message);
             assert_eq!(read_u16(&registry, descriptor + 12), 3);
             assert_eq!(read_u16(&direct, descriptor + 2), u16::MAX);
-            assert_eq!(read_u16(&direct, descriptor + 6), u16::MAX);
+            assert_eq!(read_u16(&direct, descriptor + 6), 2);
+            assert_eq!(read_u16(&registry, descriptor + 6), 3);
         }
     }
 
@@ -549,9 +550,9 @@ mod tests {
         let hot = registration_hot();
         let expected = direct_native_evidence_bytes_v3(DirectExecutionActionV3::RegisterBuy, 0)
             .expect("one signature width");
-        assert_eq!(expected, 112);
-        let mut scratch = [0_u8; 112];
-        let mut output = [0_u8; 112];
+        assert_eq!(expected, 80);
+        let mut scratch = [0_u8; 80];
+        let mut output = [0_u8; 80];
         encode_direct_native_evidence_many_v3_atomic(
             DirectNativeEvidenceContainerV3::TradingHot,
             4,
@@ -563,12 +564,13 @@ mod tests {
         )
         .expect("registration evidence");
         assert_eq!(output[0], 1);
+        assert_eq!(read_u16(&output, 6), 160);
         assert_eq!(read_u16(&output, 10), 192);
         assert_eq!(read_u16(&output, 14), 4);
         assert_eq!(read_u16(&output, 4), u16::MAX);
-        assert_eq!(read_u16(&output, 8), u16::MAX);
+        assert_eq!(read_u16(&output, 8), 4);
 
-        let before = [0x77_u8; 112];
+        let before = [0x77_u8; 80];
         output = before;
         assert_eq!(
             encode_direct_native_evidence_many_v3_atomic(

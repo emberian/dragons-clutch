@@ -94,6 +94,32 @@ The seed domains are distinct:
 - `dclutch/cap-fund-vault/v1` derives the optional token vault from authority,
   token program, and mint.
 
+The native-funded V2 generation replaces multiple mutable funding-state
+accounts with controller-homogeneous subset ledgers. One exact 48-byte header
+stores the manifest identity and a nonzero `u16` selected-index mask. It is
+followed by `72 * popcount(mask)` bytes: one fixed row for each set bit in
+ascending manifest-index order. Rows store only lifecycle status, activation
+slot, and seven remaining amounts. Asset classes and released amounts are
+derived only after the immutable manifest authenticates, so there is no second
+mutable quote or released-principal truth.
+
+A capability route presents one or more ledgers in order of their lowest set
+bit. Their masks must be in manifest range, pairwise disjoint, and cover the
+required dependency union exactly. The ledger PDA binds controller program,
+Market, generation, manifest identity, and its own mask. Per-entry authorities
+and optional vaults remain below the individual ledger and manifest index;
+consolidation never pools token custody or permits one row to authorize another.
+
+Native V2 close refunds each row's remaining lamports to the Market's immutable
+RentCredit. Shared ledger Rent is refunded once, after the last selected row is
+logically Closed. Unsolicited ledger lamports remain physically segregated from
+principal and are reported as a donation only on that final close. The current
+SBF V2 adapter intentionally refuses every Realm-backed row: ordered vault
+framing, founding-time vault creation, collateral-adapter authentication, and
+Token-2022 extension-aware CPI remain a separately versioned adapter boundary.
+The contract models the required per-row token observations and close
+classification, but that model alone is not executable devnet evidence.
+
 `activate` releases only exact native Rent and Creation amounts. A subsequent
 compartment release returns a typed transfer plan, so a Realm amount cannot be
 executed as lamports or vice versa. The capability-specific adapter still owns

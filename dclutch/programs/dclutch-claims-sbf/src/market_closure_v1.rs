@@ -13,9 +13,16 @@ use dclutch_claims_svm::{
         CLAIMS_MARKET_CLOSURE_PRE_RESOURCE_DIGEST_DOMAIN_V1, ClaimsMarketClosureReceiptInputV1,
         ClaimsMarketClosureReceiptV1, ClaimsMarketClosureRequestV1,
     },
+    retirement_checkpoint_handoff_v1::{
+        CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
+        CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_BYTES_V1,
+        ClaimsRetirementCheckpointHandoffReceiptV1, ClaimsRetirementCheckpointHandoffRequestV1,
+    },
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
+use dclutch_market_core_codec::{
+    AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES,
+};
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationAdmissionSeedsV1,
@@ -237,6 +244,65 @@ pub fn process(
         claim_count: request_input.claim_count,
     })
     .map_err(|_| ClaimsMarketClosureSbfErrorV1::Receipt)?;
+    set_return_data(&receipt.to_bytes());
+    Ok(())
+}
+
+/// Prove zero liabilities, retain every aggregate lamport, and hand the exact
+/// aggregate PDA to Core as its durable retirement checkpoint.
+#[inline(never)]
+pub fn process_checkpoint_handoff(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let (request_bytes, continuation) = split_continuation(instruction_data)?;
+    if request_bytes.len() != CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_BYTES_V1 {
+        return Err(ClaimsSbfError::Instruction.into());
+    }
+    let request = ClaimsRetirementCheckpointHandoffRequestV1::decode(request_bytes)
+        .map_err(|_| ClaimsSbfError::Instruction)?;
+    let request_input = request.input();
+    let request_digest = hash(request_bytes).to_bytes();
+    let accounts = ClosureAccounts::parse(accounts, continuation.is_some())?;
+    authenticate_privileges(program_id, accounts)?;
+    authenticate_authority(accounts, request_input, request_digest)?;
+    authenticate_releases(accounts, request_input.release_set, continuation)?;
+    let core = authenticate_core(accounts, request_input)?;
+    authenticate_rent_credit(accounts, core)?;
+    let (pre_digest, refund_lamports) = authenticate_empty_aggregate(accounts, request_input)?;
+    let rent_before = accounts.rent_credit.lamports();
+    handoff_aggregate_to_core(accounts)?;
+    let checkpoint_width = AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1.to_le_bytes();
+    let refund = refund_lamports.to_le_bytes();
+    let rent = rent_before.to_le_bytes();
+    let post_digest = hashv(&[
+        CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_POST_DIGEST_DOMAIN_V1,
+        accounts.aggregate.key.as_ref(),
+        accounts.core_program.key.as_ref(),
+        checkpoint_width.as_slice(),
+        refund.as_slice(),
+        rent.as_slice(),
+    ])
+    .to_bytes();
+    let receipt =
+        ClaimsRetirementCheckpointHandoffReceiptV1::new(ClaimsMarketClosureReceiptInputV1 {
+            producer: program_id.to_bytes(),
+            release_set: request_input.release_set,
+            market: request_input.market,
+            aggregate: request_input.aggregate,
+            rent_credit: request_input.rent_credit,
+            request_digest,
+            pre_resource_digest: pre_digest,
+            post_resource_digest: post_digest,
+            generation: request_input.generation,
+            pre_revision: request_input.expected_revision,
+            post_revision: request_input.resulting_revision,
+            liability_units: 0,
+            refund_lamports,
+            claim_count: request_input.claim_count,
+        })
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Receipt)?;
     set_return_data(&receipt.to_bytes());
     Ok(())
 }
@@ -656,6 +722,39 @@ fn close_aggregate(accounts: ClosureAccounts<'_, '_>, rent_after: u64) -> Progra
         || !accounts.aggregate.data_is_empty()
         || accounts.aggregate.lamports() != 0
         || accounts.rent_credit.lamports() != rent_after
+    {
+        return Err(ClaimsMarketClosureSbfErrorV1::Commit.into());
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn handoff_aggregate_to_core(accounts: ClosureAccounts<'_, '_>) -> ProgramResult {
+    let aggregate_lamports = accounts.aggregate.lamports();
+    let rent_lamports = accounts.rent_credit.lamports();
+    {
+        let mut data = accounts
+            .aggregate
+            .try_borrow_mut_data()
+            .map_err(|_| ClaimsMarketClosureSbfErrorV1::Commit)?;
+        data.fill(0);
+    }
+    accounts
+        .aggregate
+        .resize(AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1)
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Commit)?;
+    accounts.aggregate.assign(accounts.core_program.key);
+    let zeroed = accounts
+        .aggregate
+        .try_borrow_data()
+        .map_err(|_| ClaimsMarketClosureSbfErrorV1::Commit)?
+        .iter()
+        .all(|value| *value == 0);
+    if accounts.aggregate.owner != accounts.core_program.key
+        || accounts.aggregate.data_len() != AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1
+        || !zeroed
+        || accounts.aggregate.lamports() != aggregate_lamports
+        || accounts.rent_credit.lamports() != rent_lamports
     {
         return Err(ClaimsMarketClosureSbfErrorV1::Commit.into());
     }

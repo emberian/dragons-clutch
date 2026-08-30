@@ -128,7 +128,7 @@ ones, so the family structure now reads straight off the code.
 
 | Claims family | was | now |
 |---|---|---|
-| `ClaimsSbfError` | 0–9 | `0x5000`–`0x5009` |
+| `ClaimsSbfError` | 0–11 | `0x5000`–`0x500B` |
 | `LiabilityBasisSbfErrorV2` | 100–110 | `0x5100`–`0x510A` |
 | `ProtocolPositionSbfErrorV2` | 140–150 | `0x5140`–`0x514A` |
 | `AffineBatchSbfErrorV2` | 160–167 | `0x5160`–`0x5167` |

@@ -1,6 +1,9 @@
+import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
 import {
+  authenticateDirectHotOuterDeploymentsV3,
+  authenticateDirectCapabilitySealV1,
   decodeDirectDescriptorV4,
   decodeDirectProgramSetV2,
   decodeDirectRootSelectionV1,
@@ -10,6 +13,12 @@ import {
 } from './directHotChain';
 import { sha256 } from './bytes';
 import * as Abi from './generated/directInlineV3';
+import {
+  LOADER_V3_PROGRAMDATA_OFFSET,
+  UPGRADEABLE_LOADER_ID,
+  type ArtifactReleaseV1,
+} from './releaseRegistry';
+import { type RpcAccount } from './rpc';
 
 function identity(seed: number): Uint8Array {
   return new Uint8Array(32).fill(seed);
@@ -32,6 +41,104 @@ function concat(...parts: ReadonlyArray<Uint8Array>): Uint8Array {
   let offset = 0;
   for (const part of parts) { output.set(part, offset); offset += part.length; }
   return output;
+}
+
+function rpcAccount(owner: string, executable: boolean, data: Uint8Array): RpcAccount {
+  return Object.freeze({ owner, executable, data, lamports: '1', space: data.length });
+}
+
+async function capabilitySealFixture(): Promise<Readonly<{
+  client: Parameters<typeof authenticateDirectCapabilitySealV1>[0];
+  accounts: Map<string, RpcAccount | null>;
+  fixed: Array<Readonly<{ address: string; isSigner: boolean; isWritable: boolean; executable: boolean }>>;
+  trading: string;
+  tradingRelease: string;
+  registry: string;
+  descriptorSchema: Uint8Array;
+  descriptorDigest: Uint8Array;
+  records: Parameters<typeof authenticateDirectCapabilitySealV1>[8];
+  sealAddress: string;
+}>> {
+  const trading = new PublicKey(identity(80)).toBase58();
+  const registry = new PublicKey(identity(81)).toBase58();
+  const tradingRelease = '52'.repeat(32);
+  const descriptorSchema = identity(12);
+  const descriptorDigest = identity(13);
+  const action = new Uint8Array([1, 0, 0, 0]);
+  const [seal, sealBump] = PublicKey.findProgramAddressSync([
+    new TextEncoder().encode('dclutch:capability-seal:v1'), descriptorSchema, descriptorDigest, action,
+    identity(0x52), new PublicKey(registry).toBytes(),
+  ], new PublicKey(trading));
+  const fixed = Array.from({ length: 39 }, (_, index) => Object.freeze({
+    address: new PublicKey(identity(index + 100)).toBase58(), isSigner: false, isWritable: index === 1, executable: false,
+  }));
+  fixed[38] = Object.freeze({ address: seal.toBase58(), isSigner: false, isWritable: false, executable: false });
+  const pairs = [[6, 7], [18, 19], [10, 11], [12, 13], [14, 15], [16, 17]] as const;
+  const records = pairs.map(([rawIndex, stagingIndex], ordinal) => {
+    const data = new Uint8Array(64 + ordinal).fill(ordinal + 1);
+    const schema = ordinal === 0 ? descriptorSchema : identity(20 + ordinal);
+    const digest = ordinal === 0 ? descriptorDigest : identity(30 + ordinal);
+    return Object.freeze({ schema, digest, raw: rpcAccount(registry, false, data), rawIndex, stagingIndex });
+  });
+  const body = new Uint8Array(968);
+  body.set(new TextEncoder().encode('DCLTCSL1'));
+  putU16(body, 8, 1); putU16(body, 10, 1); putU16(body, 12, 6); putU16(body, 14, 0x00ff); putU32(body, 16, 1);
+  body[20] = sealBump;
+  body.set(descriptorSchema, 24); body.set(descriptorDigest, 56); body.set(identity(0x52), 88); body.set(new PublicKey(registry).toBytes(), 120);
+  records.forEach((record, ordinal) => {
+    const row = 152 + ordinal * 136;
+    putU16(body, row, ordinal); putU32(body, row + 4, record.raw.data.length);
+    body.set(record.schema, row + 8); body.set(record.digest, row + 40);
+    body.set(new PublicKey(fixed[record.rawIndex]!.address).toBytes(), row + 72);
+    body.set(new PublicKey(fixed[record.stagingIndex]!.address).toBytes(), row + 104);
+  });
+  const accounts = new Map<string, RpcAccount | null>([[seal.toBase58(), Object.freeze({ owner: trading, executable: false, data: body, lamports: '100', space: body.length })]]);
+  return Object.freeze({
+    client: { minimumBalanceForRentExemption: async (dataLength: number) => Object.freeze({ dataLength, lamports: '100' }) },
+    accounts, fixed, trading, tradingRelease, registry, descriptorSchema, descriptorDigest, records, sealAddress: seal.toBase58(),
+  });
+}
+
+async function mutableDeployment(seed: number, slot = 81n): Promise<Readonly<{
+  artifact: ArtifactReleaseV1;
+  programAddress: string;
+  program: RpcAccount;
+  programDataAddress: string;
+  programData: RpcAccount;
+}>> {
+  const programKey = new PublicKey(identity(seed));
+  const loader = new PublicKey(UPGRADEABLE_LOADER_ID);
+  const programDataKey = PublicKey.findProgramAddressSync([programKey.toBytes()], loader)[0];
+  const authority = new PublicKey(identity(seed + 40)).toBase58();
+  const programBytes = new Uint8Array(36);
+  putU32(programBytes, 0, 2);
+  programBytes.set(programDataKey.toBytes(), 4);
+  const programDataBytes = new Uint8Array(LOADER_V3_PROGRAMDATA_OFFSET + 64);
+  putU32(programDataBytes, 0, 3);
+  putU64(programDataBytes, 4, slot);
+  programDataBytes[12] = 1;
+  programDataBytes.set(new PublicKey(authority).toBytes(), 13);
+  programDataBytes.fill(seed, LOADER_V3_PROGRAMDATA_OFFSET);
+  const elfDigest = Array.from(await sha256(programDataBytes.slice(LOADER_V3_PROGRAMDATA_OFFSET)),
+    (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const artifact: ArtifactReleaseV1 = Object.freeze({
+    bytes: new Uint8Array(),
+    program: programKey.toBase58(),
+    loader: UPGRADEABLE_LOADER_ID,
+    programData: programDataKey.toBase58(),
+    semanticReleaseId: '11'.repeat(32),
+    elfDigest,
+    deploymentSlot: 81n,
+    upgradePolicy: 'exact-authority',
+    upgradeAuthority: authority,
+  });
+  return Object.freeze({
+    artifact,
+    programAddress: programKey.toBase58(),
+    program: rpcAccount(UPGRADEABLE_LOADER_ID, true, programBytes),
+    programDataAddress: programDataKey.toBase58(),
+    programData: rpcAccount(UPGRADEABLE_LOADER_ID, false, programDataBytes),
+  });
 }
 
 async function categoricalBasisFixture(): Promise<Readonly<{ basis: Uint8Array; domain: Uint8Array }>> {
@@ -169,6 +276,61 @@ function signedRequestProfileFixture(): Uint8Array {
 }
 
 describe('Direct V3 chain-selected artifacts', () => {
+  it('authenticates the exact seal PDA/body and refuses release, row, PDA, and rent substitutions', async () => {
+    const fixture = await capabilitySealFixture();
+    await expect(authenticateDirectCapabilitySealV1(
+      fixture.client, fixture.accounts, fixture.fixed, fixture.trading, fixture.tradingRelease,
+      fixture.registry, fixture.descriptorSchema, fixture.descriptorDigest, fixture.records,
+    )).resolves.toMatch(/^[0-9a-f]{64}$/);
+
+    const seal = fixture.accounts.get(fixture.sealAddress)!;
+    const changedRow = new Uint8Array(seal!.data); changedRow[152 + 104] ^= 1;
+    await expect(authenticateDirectCapabilitySealV1(
+      fixture.client, new Map([[fixture.sealAddress, { ...seal!, data: changedRow }]]), fixture.fixed,
+      fixture.trading, fixture.tradingRelease, fixture.registry, fixture.descriptorSchema, fixture.descriptorDigest, fixture.records,
+    )).rejects.toThrow(/row 0 differs/);
+    await expect(authenticateDirectCapabilitySealV1(
+      fixture.client, fixture.accounts, fixture.fixed, fixture.trading, '53'.repeat(32),
+      fixture.registry, fixture.descriptorSchema, fixture.descriptorDigest, fixture.records,
+    )).rejects.toThrow(/another descriptor, Trading release, or Registry/);
+    const wrongPda = fixture.fixed.slice(); wrongPda[38] = { ...wrongPda[38]!, address: new PublicKey(identity(250)).toBase58() };
+    await expect(authenticateDirectCapabilitySealV1(
+      fixture.client, new Map([[wrongPda[38]!.address, seal]]), wrongPda, fixture.trading, fixture.tradingRelease,
+      fixture.registry, fixture.descriptorSchema, fixture.descriptorDigest, fixture.records,
+    )).rejects.toThrow(/canonical Trading PDA/);
+    await expect(authenticateDirectCapabilitySealV1(
+      { minimumBalanceForRentExemption: async (dataLength: number) => Object.freeze({ dataLength, lamports: '101' }) },
+      fixture.accounts, fixture.fixed, fixture.trading, fixture.tradingRelease, fixture.registry,
+      fixture.descriptorSchema, fixture.descriptorDigest, fixture.records,
+    )).rejects.toThrow(/below its exact rent minimum/);
+  });
+
+  it('admits decision-0012 mutable deployments at their exact pins and refuses slot drift', async () => {
+    const trading = await mutableDeployment(20);
+    const core = await mutableDeployment(21);
+    await expect(authenticateDirectHotOuterDeploymentsV3(
+      trading.programAddress,
+      core.programAddress,
+      trading,
+      core,
+    )).resolves.toBeUndefined();
+
+    const upgraded = await mutableDeployment(20, 82n);
+    await expect(authenticateDirectHotOuterDeploymentsV3(
+      trading.programAddress,
+      core.programAddress,
+      upgraded,
+      core,
+    )).rejects.toThrow(/ReleaseSupersededByUpgrade.*slot 81.*slot 82/);
+
+    await expect(authenticateDirectHotOuterDeploymentsV3(
+      core.programAddress,
+      trading.programAddress,
+      trading,
+      core,
+    )).rejects.toThrow(/another Core or Trading program/);
+  });
+
   it('joins the immutable root selection to one exact manifest entry', () => {
     const selection = decodeDirectRootSelectionV1(rootFixture());
     const selected = decodeSelectedDirectManifestEntryV1(manifestFixture(), selection);

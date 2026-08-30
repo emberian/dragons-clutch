@@ -33,7 +33,7 @@ use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
+    initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use dclutch_registry_svm::{
     ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
@@ -59,6 +59,7 @@ use solana_system_interface::instruction::create_account;
 mod batch_v2;
 mod continuation_v1;
 mod hot_continuation_v2;
+mod lineage_v1;
 mod record_v1;
 
 /// Exact account count for one read-only role reauthentication.
@@ -102,6 +103,34 @@ pub enum RegistryError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x100D,
+    /// This release set already declared a successor, and lineage never forks.
+    ///
+    /// The lineage record is keyed by the PREDECESSOR, so a second
+    /// `DeclareSuccessor` for the same set finds the account already created.
+    /// Nothing implements the no-fork rule; this is the address saying no.
+    ReleaseLineageAlreadyDeclared = 0x100E,
+    /// A declared hop changed some role's program id.
+    ///
+    /// A hop may move a role's BYTES, never its identity. That single conjunct
+    /// is what keeps every child address in the protocol fixed across a
+    /// migration, and it is why migrating a market is a one-field write.
+    ReleaseLineageRoleIdentityMoved = 0x100F,
+    /// A declaration named one release set as its own successor.
+    ReleaseLineageSelfSuccession = 0x1010,
+    /// A moved role's consenting upgrade authority did not sign, or cannot.
+    ///
+    /// For every role whose artifact moved, the key the successor's activated
+    /// artifact binds as its upgrade authority must sign. A role that did not
+    /// move asks for no consent and must present the System program in its slot
+    /// as a non-signer. An `Immutable` artifact binds no authority at all, so
+    /// claiming it moved is a contradiction rather than a permission problem.
+    ReleaseLineageAuthorityMissing = 0x1011,
+    /// A moved role's successor deployment slot was not strictly later.
+    ///
+    /// Under Loader V3 a ProgramData slot only moves forward, so "strictly
+    /// greater" is exactly "was upgraded after". A backward or sideways
+    /// declaration cannot be built.
+    ReleaseLineageNotForward = 0x1012,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -112,7 +141,7 @@ const _: () = assert!(
     "RegistryError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (RegistryError::ReleaseSuperseded as u32)
+    (RegistryError::ReleaseLineageNotForward as u32)
         < dclutch_refusal_registry::REGISTRY_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "RegistryError must not run past its registered refusal band"
 );
@@ -180,6 +209,11 @@ pub fn process_instruction(
     {
         return continuation_v1::process(program_id, accounts, instruction_data);
     }
+    if instruction_data.get(..8)
+        == Some(dclutch_registry_svm::lineage_v1::DECLARE_SUCCESSOR_MAGIC_V1.as_slice())
+    {
+        return lineage_v1::process(program_id, accounts, instruction_data);
+    }
     match RegistryInstructionV1::decode(instruction_data).map_err(|_| RegistryError::Instruction)? {
         RegistryInstructionV1::ActivateRole(role) => {
             process_activate_role(program_id, accounts, role)
@@ -215,13 +249,18 @@ fn process_activate_role(
         release_set_staging,
         &rent,
     )?;
-    let created =
+    let (created, cache_bump) =
         ensure_activation_cache_account(program_id, payer, cache, system, &rent, release_set_id)?;
     let mut output = cache
         .try_borrow_mut_data()
         .map_err(|_| RegistryError::Borrow)?;
     if created {
         initialize_activation_cache_v1(&mut output, release_set_id)
+            .map_err(|_| RegistryError::ActivationCache)?;
+        // The bump this act just signed the account into existence with is
+        // persisted in the body, so the six readers of this one address stop
+        // searching for it. See `ACTIVATION_CACHE_BUMP_OFFSET_V1`.
+        put_activation_cache_bump_v1(&mut output, cache_bump)
             .map_err(|_| RegistryError::ActivationCache)?;
     }
     // `activate_execution_role_into_v1` revalidates the cache header and refuses
@@ -510,11 +549,35 @@ fn authenticate_cache_identity(
     let release_set_id = activated
         .execution_release_set_id()
         .map_err(|_| RegistryError::ActivationCache)?;
-    let expected = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
-        program_id,
-    )
-    .0;
+    // Reproduced from the bump the cache carries, not searched for. A wrong
+    // byte reproduces a different address and refuses here, and only this
+    // program writes the byte -- see `ACTIVATION_CACHE_BUMP_OFFSET_V1`. A cache
+    // written before the bump existed carries zero and is searched for as
+    // before.
+    let expected = match activated
+        .cache_bump()
+        .map_err(|_| RegistryError::ActivationCache)?
+    {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    ACTIVATION_PDA_DOMAIN_V1,
+                    release_set_id.as_bytes(),
+                    &bump_seed,
+                ],
+                program_id,
+            )
+            .map_err(|_| RegistryError::ActivationCache)?
+        }
+        None => {
+            Pubkey::find_program_address(
+                &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
+                program_id,
+            )
+            .0
+        }
+    };
     if cache.key != &expected {
         return Err(RegistryError::ActivationCache.into());
     }
@@ -528,7 +591,7 @@ fn ensure_activation_cache_account<'a>(
     system: &AccountInfo<'a>,
     rent: &Rent,
     release_set_id: ContentId,
-) -> Result<bool, ProgramError> {
+) -> Result<(bool, u8), ProgramError> {
     let (expected, bump) = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
         program_id,
@@ -543,7 +606,7 @@ fn ensure_activation_cache_account<'a>(
         {
             return Err(RegistryError::ActivationCache.into());
         }
-        return Ok(false);
+        return Ok((false, bump));
     }
     if cache.owner != &system_program::ID
         || cache.executable
@@ -575,7 +638,7 @@ fn ensure_activation_cache_account<'a>(
     {
         return Err(RegistryError::CreateCpi.into());
     }
-    Ok(true)
+    Ok((true, bump))
 }
 
 fn validate_activate_role_privileges(

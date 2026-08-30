@@ -3,16 +3,17 @@ import { describe, expect, it } from 'vitest';
 
 import { sha256 } from './bytes';
 import {
+  acquireFinalizedAccountsInChunksV1,
   compileLifecycleRentCreateTransactionV2,
   compileCoreFoundTransactionV2,
   decodeCoreFoundProductGraphV2,
   prepareCoreFoundV2,
   validateCoreFoundCapabilityManifestV1,
-  validateCoreFoundSourceMaterialV2,
+  validateCoreFoundSourceMaterialV3,
 } from './coreFound';
 import {
-  CORE_FOUND_ACCOUNT_COUNT_V2,
-  CORE_FOUND_ACCOUNT_ROLES_V2,
+  CORE_FOUND_ACCOUNT_COUNT_V3,
+  CORE_FOUND_ACCOUNT_ROLES_V3,
   CORE_REQUEST_BYTES,
   CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2,
 } from './generated/coreFound';
@@ -57,7 +58,44 @@ async function graph258(): Promise<Readonly<{ product: Uint8Array; domain: Uint8
   return Object.freeze({ product, domain, portfolio, domainDigest, portfolioDigest });
 }
 
-describe('Core Found31 browser kernel', () => {
+describe('Core Found37 browser kernel', () => {
+  it('acquires Found37 in 32-key chunks at one finalized context slot', async () => {
+    const addresses = Array.from({ length: 37 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
+    const calls: Array<{ count: number; floor: string | undefined }> = [];
+    const client = {
+      multipleAccounts: async (chunk: ReadonlyArray<string>, floor?: string) => {
+        calls.push({ count: chunk.length, floor });
+        return Object.freeze({
+          slot: '77',
+          accounts: Object.freeze(chunk.map((address) => Object.freeze({ address, account: null }))),
+        });
+      },
+    } as unknown as SolanaRpcClient;
+    const observation = await acquireFinalizedAccountsInChunksV1(client, addresses, '77');
+    expect(calls).toEqual([{ count: 32, floor: '77' }, { count: 5, floor: '77' }]);
+    expect(observation.slot).toBe('77');
+    expect(observation.accounts.map((entry) => entry.address)).toEqual(addresses);
+  });
+
+  it('refuses regressed or mixed finalized chunk contexts', async () => {
+    const addresses = Array.from({ length: 33 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
+    let call = 0;
+    const mixed = {
+      multipleAccounts: async (chunk: ReadonlyArray<string>) => {
+        call += 1;
+        return { slot: call === 1 ? '77' : '78', accounts: chunk.map((address) => ({ address, account: null })) };
+      },
+    } as unknown as SolanaRpcClient;
+    await expect(acquireFinalizedAccountsInChunksV1(mixed, addresses, '77')).rejects.toThrow(/different context slots/);
+    const regressed = {
+      multipleAccounts: async (chunk: ReadonlyArray<string>) => ({
+        slot: '76',
+        accounts: chunk.map((address) => ({ address, account: null })),
+      }),
+    } as unknown as SolanaRpcClient;
+    await expect(acquireFinalizedAccountsInChunksV1(regressed, addresses, '77')).rejects.toThrow(/regressed/);
+  });
+
   it('joins a runtime-width Product with 258 outcomes and refuses same-width substitution', async () => {
     const graph = await graph258();
     expect(decodeCoreFoundProductGraphV2(graph.product, graph.domain, graph.portfolio, graph.domainDigest, graph.portfolioDigest)).toMatchObject({ outcomeCount: 258 });
@@ -76,11 +114,11 @@ describe('Core Found31 browser kernel', () => {
     const product = new Uint8Array(graph.product); put(product, 80, digest);
     expect(() => decodeCoreFoundProductGraphV2(product, graph.domain, portfolio, graph.domainDigest, digest)).toThrow(/gcd-normalized/);
 
-    const source = new Uint8Array(208);
-    put(source, 0, new TextEncoder().encode('DCLTSMV2')); putU16(source, 8, 2);
+    const source = new Uint8Array(240);
+    put(source, 0, new TextEncoder().encode('DCLTSMV3')); putU16(source, 8, 3); source[11] = 1;
     put(source, 16, id(8)); put(source, 48, id(2)); put(source, 80, id(3)); put(source, 112, id(4)); put(source, 176, id(6));
     const productDigest = await sha256(graph.product);
-    expect(() => validateCoreFoundSourceMaterialV2(source, productDigest)).toThrow(/different Product/);
+    expect(() => validateCoreFoundSourceMaterialV3(source, productDigest)).toThrow(/different Product/);
   });
 
   it('accepts the canonical empty manifest and preflights u64 generation before RPC', async () => {
@@ -90,36 +128,33 @@ describe('Core Found31 browser kernel', () => {
     expect(() => validateCoreFoundCapabilityManifestV1(manifest)).toThrow(/reserved/);
     const client = { finalizedSlot: async () => { throw new Error('RPC must not run'); } } as unknown as SolanaRpcClient;
     await expect(prepareCoreFoundV2(client, {
-      payer: '', registryProgram: '', activationCache: '', refundWallet: '', realmRecord: '', productRecord: '', resultDomainRecord: '', portfolioRecord: '', sourceMaterialRecord: '', capabilityManifestRecord: '', executionReleaseSetRecord: '', generation: 1n << 64n,
+      payer: '', registryProgram: '', activationCache: '', refundWallet: '', realmRecord: '', productRecord: '', resultDomainRecord: '', portfolioRecord: '', linkedBasisRecord: '', sourceMaterialRecord: '', sourceSpecRecord: '', capacityProfileRecord: '', manipulationFloorRecord: '', capabilityManifestRecord: '', generation: 1n << 64n,
     })).rejects.toThrow(/outside lifecycle u64/);
   });
 
-  it('refuses the 31-account Found frame inline, because it does not fit a packet', () => {
-    // MEASURED, not predicted. With the ComputeBudget declaration Found31
-    // cannot execute without -- it spends over a million CU against a 200,000
-    // default -- the inline v0 message is 1,242 bytes against a 1,232-byte
-    // bound. Ten bytes. This is the same overflow `4e1c4db` recorded on the
-    // Rust side when it moved the route onto a finalized lookup table, and it
-    // is why the browser needs one too.
-    const accounts = Object.freeze(Array.from({ length: CORE_FOUND_ACCOUNT_COUNT_V2 }, (_, index) => new PublicKey(id(index + 1)).toBase58()));
+  it('refuses the 37-account Found frame inline, because it does not fit a packet', () => {
+    // Compiled, not inferred: the bounded Found37 message is 1,242 bytes
+    // inline against a 1,232-byte packet bound. The packet geometry requires a
+    // finalized lookup table independently of any later compute measurement.
+    const accounts = Object.freeze(Array.from({ length: CORE_FOUND_ACCOUNT_COUNT_V3 }, (_, index) => new PublicKey(id(index + 1)).toBase58()));
     const compile = (lookupTable?: AddressLookupTableAccount) => compileCoreFoundTransactionV2({
       payer: accounts[0],
       market: accounts[1],
-      coreProgram: accounts[19],
+      coreProgram: accounts[25],
       generation: 77n,
       recentBlockhash: new PublicKey(id(99)).toBase58(),
       accountAddresses: accounts,
       lookupTable,
     });
-    expect(() => compile()).toThrow(/1242 bytes inline.*requires a finalized routing table/);
+    expect(() => compile()).toThrow(/exceeds the 1232-byte packet bound.*requires a finalized routing table/);
 
     // With a table carrying every routable key, it fits and stays exact.
     const routable = routableAddressesV1([new TransactionInstruction({
-      programId: new PublicKey(accounts[19]),
+      programId: new PublicKey(accounts[25]),
       keys: accounts.map((address, index) => ({
         pubkey: new PublicKey(address),
-        isSigner: CORE_FOUND_ACCOUNT_ROLES_V2[index].signer,
-        isWritable: CORE_FOUND_ACCOUNT_ROLES_V2[index].writable,
+        isSigner: CORE_FOUND_ACCOUNT_ROLES_V3[index].signer,
+        isWritable: CORE_FOUND_ACCOUNT_ROLES_V3[index].writable,
       })),
       data: Buffer.alloc(0),
     })], accounts[0]);
@@ -137,18 +172,18 @@ describe('Core Found31 browser kernel', () => {
     expect(compiled.requestBytes).toHaveLength(CORE_REQUEST_BYTES);
     expect(compiled.wireBytes.length).toBeLessThanOrEqual(1_232);
     expect(compiled.requiredSigners).toEqual([accounts[0]]);
-    // Two instructions now: the ComputeBudget limit this route cannot execute
-    // without, then Found31 itself. The declaration takes no accounts.
+    // Two instructions now: the configured ComputeBudget limit, then Found37
+    // itself. The declaration takes no accounts.
     expect(compiled.transaction.message.compiledInstructions).toHaveLength(2);
     expect(compiled.transaction.message.compiledInstructions[0].accountKeyIndexes).toHaveLength(0);
-    expect(compiled.transaction.message.compiledInstructions[1].accountKeyIndexes).toHaveLength(CORE_FOUND_ACCOUNT_COUNT_V2);
+    expect(compiled.transaction.message.compiledInstructions[1].accountKeyIndexes).toHaveLength(CORE_FOUND_ACCOUNT_COUNT_V3);
     // Privileges are the ones `found_metas` emits in
     // crates/dclutch-product-runtime-v2-operator/src/found.rs: payer writable
     // and signing, the Market destination writable, every other role readonly.
-    expect(CORE_FOUND_ACCOUNT_ROLES_V2[0]).toEqual({ signer: true, writable: true });
-    expect(CORE_FOUND_ACCOUNT_ROLES_V2[1]).toEqual({ signer: false, writable: true });
-    expect(CORE_FOUND_ACCOUNT_ROLES_V2.filter((role) => role.signer)).toHaveLength(1);
-    expect(CORE_FOUND_ACCOUNT_ROLES_V2.filter((role) => role.writable)).toHaveLength(2);
+    expect(CORE_FOUND_ACCOUNT_ROLES_V3[0]).toEqual({ signer: true, writable: true });
+    expect(CORE_FOUND_ACCOUNT_ROLES_V3[1]).toEqual({ signer: false, writable: true });
+    expect(CORE_FOUND_ACCOUNT_ROLES_V3.filter((role) => role.signer)).toHaveLength(1);
+    expect(CORE_FOUND_ACCOUNT_ROLES_V3.filter((role) => role.writable)).toHaveLength(2);
     // Routing moved most keys off the static list, so the frame is checked
     // against the RESOLVED key set -- which is the only list that says what
     // the program will actually be handed.
@@ -157,7 +192,7 @@ describe('Core Found31 browser kernel', () => {
     accounts.forEach((address, index) => {
       const position = compiled.transaction.message.compiledInstructions[1].accountKeyIndexes[index];
       expect(resolved.get(position)?.toBase58()).toBe(address);
-      expect(message.isAccountWritable(position)).toBe(CORE_FOUND_ACCOUNT_ROLES_V2[index].writable);
+      expect(message.isAccountWritable(position)).toBe(CORE_FOUND_ACCOUNT_ROLES_V3[index].writable);
     });
     // A signer can never live in a lookup table, so the payer stays static.
     expect(message.staticAccountKeys[0].toBase58()).toBe(accounts[0]);
@@ -209,14 +244,14 @@ describe('Core Found31 browser kernel', () => {
   });
 
   it('refuses account-index drift and aliasing before transaction construction', () => {
-    const accounts = Array.from({ length: CORE_FOUND_ACCOUNT_COUNT_V2 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
+    const accounts = Array.from({ length: CORE_FOUND_ACCOUNT_COUNT_V3 }, (_, index) => new PublicKey(id(index + 1)).toBase58());
     expect(() => compileCoreFoundTransactionV2({
-      payer: accounts[0], market: accounts[1], coreProgram: accounts[18], generation: 1n,
+      payer: accounts[0], market: accounts[1], coreProgram: accounts[24], generation: 1n,
       recentBlockhash: new PublicKey(id(99)).toBase58(), accountAddresses: accounts,
     })).toThrow(/wrong exact account index/);
     accounts[30] = accounts[29];
     expect(() => compileCoreFoundTransactionV2({
-      payer: accounts[0], market: accounts[1], coreProgram: accounts[19], generation: 1n,
+      payer: accounts[0], market: accounts[1], coreProgram: accounts[25], generation: 1n,
       recentBlockhash: new PublicKey(id(99)).toBase58(), accountAddresses: accounts,
     })).toThrow(/alias/);
   });

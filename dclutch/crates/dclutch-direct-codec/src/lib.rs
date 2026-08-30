@@ -17,9 +17,17 @@ mod generated_ordinary_v3;
 #[cfg(not(target_os = "solana"))]
 #[rustfmt::skip]
 mod generated_registered_fill_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod activation_bundle_v1;
 pub mod artifacts_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod begin_retiring_bundle_v1;
+pub mod direct_finalization_v3;
 pub mod execution_v3;
+pub mod inline_candidate_v2;
 pub mod intent_v2;
+#[cfg(not(target_os = "solana"))]
+pub mod native_close_bundle_v1;
 pub mod native_evidence_v3;
 #[cfg(not(target_os = "solana"))]
 pub mod ordinary_account_artifacts_v3;
@@ -29,6 +37,8 @@ pub mod ordinary_bundle_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod ordinary_effect_artifacts_v3;
 pub mod ordinary_geometry_v3;
+#[cfg(not(target_os = "solana"))]
+pub mod ordinary_route_projection_v3;
 pub mod ordinary_v3;
 #[cfg(not(target_os = "solana"))]
 pub mod program_set_v4;
@@ -44,8 +54,13 @@ pub mod registered_fill_artifacts_v4;
 pub mod registered_requests_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod registered_state_artifacts_v4;
+/// First-use Trading-mediated Direct Custody replay setup.
+pub mod replay_setup_v1;
+pub mod retirement_v1;
 pub mod state_artifacts_v3;
 pub mod successor;
+/// Permissionless dust-tolerant setup of Direct's Token-2022 destinations.
+pub mod token_setup_v1;
 
 /// Bytes in one independently signed compact intent.
 pub const COMPACT_INTENT_BYTES: usize = generated_layout::COMPACT_INTENT_BYTES_VALUE;

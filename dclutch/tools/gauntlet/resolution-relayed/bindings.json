@@ -93,7 +93,7 @@
       "note": "HOSTILE, and the one that would cost real money if it were wrong. After a committed walk the Source is terminal and the certificate PDA is occupied, so the second attempt has several independent reasons to refuse -- and the one it REACHES is Funding (14), not Transition (12), because plan_deadline_failure_v1 debits before it transitions and the compartment's bounty is already spent. A walk that cannot be paid for cannot move the market. The campaign asserts the escrow pays nobody a second time."
     },
     {
-      "label": "relayed liveness: a live compartment that is not the escrow refuses",
+      "label": "relayed liveness: a live ledger for another generation refuses",
       "routes": [
         "resolution/process_instruction",
         "resolution/relay_transport_v1::process_relay_transport_v1",
@@ -102,7 +102,7 @@
       "program": "resolution",
       "outcome": "refused",
       "refusal": "resolution/ResolutionError::Funding",
-      "note": "HOSTILE, substituted compensation. The exhaustion compartment is a REAL FundingStateV1 of this same market, Active, owned by the Resolution program, at its own correctly derived address -- every check about shape passes on it. What refuses is the check about identity: the explicit-failure compartment is the one whose manifest entry configures this market's own Source material, exactly the binding core_effect's authenticate_funding_entries established when the three compartments were created. Refuses Funding (0x800E) by that comparison rather than by an account-position convention, which is what makes the refusal survive a frame reordering."
+      "note": "HOSTILE, substituted escrow. The substitute is a REAL FundingLedgerV2 -- Resolution-owned, fully funded, all three rows Active, byte-identical in shape -- at the address canonically derived for generation+1 rather than this Market's generation. Every check about shape and custody therefore passes on it, and what refuses is the check about identity: the exact controller/Market/generation/manifest/mask authority binding. Refuses Funding (0x800E) by that comparison rather than by an account-position convention, which is what makes the refusal survive a frame reordering. The campaign re-reads the substitute afterwards and requires it byte-for-byte and lamport-for-lamport unchanged."
     },
     {
       "label": "relayed liveness: an escrow one lamport short refuses",
@@ -114,7 +114,7 @@
       "program": "resolution",
       "outcome": "refused",
       "refusal": "resolution/ResolutionError::Funding",
-      "note": "HOSTILE, unfunded shape. The FundingStateV1 bytes stay exactly canonical -- same entry index, same manifest, same Active status, same derived address -- and one lamport goes missing from the account. That is the only way to reach validate_against's custody comparison at all, because the address folds in the state's own bytes. Refuses Funding (0x800E). Without the check a route could pay a bounty out of an account it was about to leave below its own Rent reserve, and the shortfall would surface an instruction later as an unrelated rent failure."
+      "note": "HOSTILE, unfunded shape. The FundingLedgerV2 bytes stay exactly canonical -- same three-row mask, same manifest, same Active statuses, same derived address -- and one lamport goes missing from aggregate custody. That is the only way to reach validate_against's custody comparison at all, because the address folds in the state's own bytes. Refuses Funding (0x800E). Without the check a route could pay a bounty out of an account it was about to leave below its own Rent reserve, and the shortfall would surface an instruction later as an unrelated rent failure."
     }
   ]
 }

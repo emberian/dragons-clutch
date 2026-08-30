@@ -58,9 +58,8 @@
 use alloc::{boxed::Box, vec::Vec};
 
 use dclutch_capability_contract::{
-    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
-    ContentId as CapabilityContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1,
-    FundingStateV1,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
+    CapabilityManifestV1, ContentId as CapabilityContentId, FundingLedgerStatusV2, FundingLedgerV2,
 };
 use dclutch_market_core_codec::{
     CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, Readiness as CoreReadiness,
@@ -79,6 +78,7 @@ use dclutch_relay_contract::{
     RELAYED_ADAPTER_CONFIG_SCHEMA_RELEASE_ID_V1, RELAYED_FAMILY_RELEASE_ID_V1,
     RELAYED_RECORD_PDA_DOMAIN_V1, RELAYED_RECORD_TRANSPORT_PROFILE_ID_V1, RELAYER_KEY_SET_BYTES,
     RELAYER_KEY_SET_SCHEMA_RELEASE_ID_V1, SOLANA_MAINNET_GENESIS_HASH_V1,
+    Error as RelayContractError,
     frame::{RelayAccountPrivilegeV1, RelayFrameKindV1, validate_relay_frame_v1},
     instruction::{
         APPEND_OBSERVATION_PREFIX_BYTES, AppendObservationInstructionV1,
@@ -105,12 +105,13 @@ use dclutch_relay_contract::{
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_resolution_codec::{
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, ProviderReleaseV1,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_MATERIAL_V2_BYTES,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_MATERIAL_V3_BYTES,
     SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES, SOURCE_SPEC_SCHEMA_ID_V1,
-    SourceAccessProfile, SourceMaterialV2, SourceResolutionStateV2, SourceSpecV1,
+    SourceAccessProfile, SourceMaterialV3, SourceResolutionStateV2, SourceSpecV1,
     WINDOW_SPEC_BYTES, WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
@@ -130,8 +131,8 @@ use crate::{
     RecordKind, ResolutionError, authenticate_clock, authenticate_finalized_record,
     authenticate_rent,
     funded::{
-        AuthenticatedFailureFundingV1, AuthenticatedWalkSourceV1, DeadlineFailureRequestV1,
-        FundedWalkErrorV1, plan_deadline_failure_v1,
+        AuthenticatedFailureFundingV2, AuthenticatedWalkSourceV1, DeadlineFailureRequestV1,
+        FundedWalkErrorV1, RESOLUTION_FUNDING_LEDGER_BYTES_V2, plan_deadline_failure_v1,
     },
     provider_instruction_v3::authenticate_record,
     relay_v1::{
@@ -196,14 +197,14 @@ struct ReleaseFacts {
 }
 
 /// What the authenticated Core Market says, and nothing the caller said.
-struct MarketFacts {
-    registry_program: Pubkey,
-    rent_beneficiary: [u8; 32],
-    product_record: [u8; 32],
-    capability_manifest: [u8; 32],
+pub(crate) struct MarketFacts {
+    pub(crate) registry_program: Pubkey,
+    pub(crate) rent_beneficiary: [u8; 32],
+    pub(crate) product_record: [u8; 32],
+    pub(crate) capability_manifest: [u8; 32],
 }
 
-fn account<'a, 'info>(
+pub(crate) fn account<'a, 'info>(
     accounts: &'a [AccountInfo<'info>],
     index: usize,
 ) -> Result<&'a AccountInfo<'info>, ProgramError> {
@@ -212,7 +213,10 @@ fn account<'a, 'info>(
         .ok_or(ResolutionError::AccountFrame.into())
 }
 
-fn validate_frame(kind: RelayFrameKindV1, accounts: &[AccountInfo<'_>]) -> ProgramResult {
+pub(crate) fn validate_frame(
+    kind: RelayFrameKindV1,
+    accounts: &[AccountInfo<'_>],
+) -> ProgramResult {
     let mut observed = Vec::new();
     observed
         .try_reserve_exact(accounts.len())
@@ -228,7 +232,7 @@ fn validate_frame(kind: RelayFrameKindV1, accounts: &[AccountInfo<'_>]) -> Progr
     Ok(())
 }
 
-fn require_system(account: &AccountInfo<'_>) -> ProgramResult {
+pub(crate) fn require_system(account: &AccountInfo<'_>) -> ProgramResult {
     if account.key != &system_program::ID || !account.executable {
         return Err(ResolutionError::AccountFrame.into());
     }
@@ -243,7 +247,7 @@ fn require_system(account: &AccountInfo<'_>) -> ProgramResult {
 /// Market of some other Core. The activation cache then closes the loop in the
 /// other direction — the release set this Market selected must name this
 /// executing Program as its Resolution role.
-fn authenticate_market(
+pub(crate) fn authenticate_market(
     program_id: &Pubkey,
     market: &AccountInfo<'_>,
     core: &AccountInfo<'_>,
@@ -340,13 +344,13 @@ fn release_facts(
         account(accounts, 5)?,
         account(accounts, 6)?,
         rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id,
         &material_data,
-        SOURCE_MATERIAL_V2_BYTES,
+        SOURCE_MATERIAL_V3_BYTES,
     )?;
     let material =
-        SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     if material.primary_source_spec().to_bytes() != source_spec_id {
         return Err(ResolutionError::SourceMaterial.into());
     }
@@ -840,14 +844,28 @@ fn process_retire(
     {
         return Err(ResolutionError::MarketAuthority.into());
     }
+    // Census Y3/Q9. The Market is already in this frame and already read; its
+    // terminal receipt is the whole authority for whether this record is still
+    // live evidence. `terminal_receipt.is_some()` is exactly
+    // `phase in {Terminal, Retiring, Retired}` by `CoreState::valid_static`, so
+    // this reads the fact rather than re-deriving it from the phase byte.
+    let market_has_terminalized = state.terminal_receipt.is_some();
     drop(market_data);
 
     {
         let mut data = record_account
             .try_borrow_mut_data()
             .map_err(|_| ResolutionError::OutputState)?;
-        retire_relayed_observation_in_place_v1(&mut data, request.generation(), created)
-            .map_err(|_| ResolutionError::Transition)?;
+        retire_relayed_observation_in_place_v1(
+            &mut data,
+            request.generation(),
+            created,
+            market_has_terminalized,
+        )
+        .map_err(|error| match error {
+            RelayContractError::RecordStillConsumable => ResolutionError::RecordStillConsumable,
+            _ => ResolutionError::Transition,
+        })?;
     }
     close_to_beneficiary(record_account, beneficiary)
 }
@@ -1032,7 +1050,7 @@ fn process_consume(
 /// 3. the Market, its Core ownership, its derived address, this Program as its
 ///    Resolution role, and that its resolution policy is the material the state
 ///    is bound to;
-/// 4. the `SourceMaterialV2` record, and the `WindowSpecV1` it names;
+/// 4. the `SourceMaterialV3` record, and the `WindowSpecV1` it names;
 /// 5. the Product Runtime V2 graph, against the Market's own Product record;
 /// 6. the `CapabilityManifestV1` the Market names, and the explicit-failure
 ///    compartment's derived address under it.
@@ -1047,6 +1065,28 @@ fn process_commit_deadline_failure(
     request: CommitDeadlineFailureInstructionV1,
 ) -> ProgramResult {
     validate_frame(RelayFrameKindV1::CommitDeadlineFailure, accounts)?;
+    process_deadline_failure_coordinates(
+        program_id,
+        accounts,
+        request.generation(),
+        request.terminal_sequence(),
+    )
+}
+
+/// Execute the existing funded primary-deadline walk after a transport-specific
+/// caller has authenticated its own additional liveness boundary.
+///
+/// The account slice remains the exact 22-account canonical failure frame; the
+/// sponsored-push family uses this only after proving its canonical head PDA is
+/// vacant. Keeping the funding and certificate transition here preserves one
+/// semantic owner for the failure payout.
+#[inline(never)]
+pub(crate) fn process_deadline_failure_coordinates(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    generation: u64,
+    terminal_sequence: u64,
+) -> ProgramResult {
     let worker = account(accounts, 0)?;
     let market_account = account(accounts, 1)?;
     let core = account(accounts, 2)?;
@@ -1078,7 +1118,7 @@ fn process_commit_deadline_failure(
         market_account,
         core,
         activation,
-        request.generation(),
+        generation,
         material_id.to_bytes(),
     )?;
     let walk_source = Box::new(deadline_walk_source(
@@ -1130,7 +1170,8 @@ fn process_commit_deadline_failure(
         market_account,
         manifest_id,
         manifest,
-        request.generation(),
+        generation,
+        material_id.to_bytes(),
         &rent,
     )?);
 
@@ -1143,8 +1184,8 @@ fn process_commit_deadline_failure(
     let outputs = plan_and_encode_deadline_failure(
         &DeadlineFailureRequestV1 {
             market: market_account.key.to_bytes(),
-            generation: request.generation(),
-            terminal_sequence: request.terminal_sequence(),
+            generation,
+            terminal_sequence,
             certificate_account: certificate_account.key.to_bytes(),
             current_unix_seconds: clock.unix_timestamp,
         },
@@ -1163,7 +1204,7 @@ fn process_commit_deadline_failure(
     drop(manifest_data);
     commit_deadline_failure(
         program_id,
-        request.terminal_sequence(),
+        terminal_sequence,
         DeadlineFailureOutputs {
             source_state: source_state_account,
             certificate: certificate_account,
@@ -1181,11 +1222,11 @@ fn process_commit_deadline_failure(
 ///
 /// This exists to keep [`DeadlineFailurePlanV1`] out of the dispatch arm's own
 /// stack frame. The plan carries a `SourceResolutionStateV2`, a
-/// `ResolutionCertificateV2` and a `FundingStateV1` by value — about eight
-/// hundred bytes of decoded state — and encoding it produces another eight
-/// hundred of wire bytes beside them. The SBF frame is four kilobytes and the
-/// arm already holds the authenticated Market, Source graph and escrow, so the
-/// two together overflowed it: `cargo build-sbf` reported nine
+/// `ResolutionCertificateV2` and a complete three-row `FundingLedgerV2`
+/// poststate by value, and encoding them produces another full wire image
+/// beside them. The SBF frame is four kilobytes and the arm already holds the
+/// authenticated Market, Source graph and escrow, so the two together
+/// overflowed it: `cargo build-sbf` reported nine
 /// stack-frame-overwrite diagnostics against `process_commit_deadline_failure`
 /// and exited zero anyway. Boxing the result is not enough on its own, because
 /// the plan is still returned *through* the caller's frame; the planning and
@@ -1195,8 +1236,10 @@ struct EncodedDeadlineFailureV1 {
     source: [u8; SOURCE_RESOLUTION_STATE_BYTES_V2],
     /// The terminal `ResolutionFailure` certificate, already schema-validated.
     certificate: [u8; RESOLUTION_CERTIFICATE_BYTES_V2],
-    /// `FundingStateV1` after the bounty debit.
-    funding: [u8; FUNDING_STATE_BYTES],
+    /// The complete `FundingLedgerV2` after the Failure-row bounty debit.
+    funding: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+    /// Digest of the full ledger prestate authenticated by the plan.
+    funding_prestate_digest: [u8; 32],
     /// Exact lamports the walker is owed.
     work_paid: u64,
     /// Exact funding-account lamports after the debit.
@@ -1218,7 +1261,7 @@ fn plan_and_encode_deadline_failure(
     walk_source: &AuthenticatedWalkSourceV1,
     product_runtime: &AuthenticatedProductRuntimeV2,
     result_domain: ResultDomainV2<'_>,
-    escrow: &AuthenticatedFailureFundingV1<'_>,
+    escrow: &AuthenticatedFailureFundingV2<'_>,
 ) -> Result<Box<EncodedDeadlineFailureV1>, ProgramError> {
     let plan = plan_deadline_failure_v1(
         request,
@@ -1232,7 +1275,8 @@ fn plan_and_encode_deadline_failure(
     let mut encoded = Box::new(EncodedDeadlineFailureV1 {
         source: [0; SOURCE_RESOLUTION_STATE_BYTES_V2],
         certificate: [0; RESOLUTION_CERTIFICATE_BYTES_V2],
-        funding: [0; FUNDING_STATE_BYTES],
+        funding: [0; RESOLUTION_FUNDING_LEDGER_BYTES_V2],
+        funding_prestate_digest: hash(&escrow.ledger_bytes).to_bytes(),
         work_paid: plan.work_paid,
         funding_lamports_after: plan.funding_lamports_after,
     });
@@ -1241,7 +1285,7 @@ fn plan_and_encode_deadline_failure(
         .certificate
         .to_bytes()
         .map_err(|_| ResolutionError::Transition)?;
-    encoded.funding = plan.next_funding.to_bytes();
+    encoded.funding = plan.next_funding;
     Ok(encoded)
 }
 
@@ -1278,13 +1322,13 @@ fn deadline_walk_source(
         account(accounts, 6)?,
         account(accounts, 7)?,
         rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id.to_bytes(),
         &material_data,
-        SOURCE_MATERIAL_V2_BYTES,
+        SOURCE_MATERIAL_V3_BYTES,
     )?;
     let material =
-        SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let window_spec_id = material.window_spec();
     drop(material_data);
 
@@ -1312,14 +1356,11 @@ fn deadline_walk_source(
     })
 }
 
-/// Authenticate the escrowed explicit-failure compartment at its own address.
+/// Authenticate the subset ledger and select its explicit-failure row.
 ///
-/// The address is the check that matters. `CapabilityFundingDerivationV1` folds
-/// the Market, the generation, the manifest identity and the funding state's own
-/// entry index into the seeds, so a caller cannot present the *recovery*
-/// compartment — which is a real, active, correctly-owned `FundingState` of the
-/// same market — and have the walk debit it: that account lives at a different
-/// address than the one its own bytes derive.
+/// The ledger PDA binds this controller, Market, generation, manifest and exact
+/// three-row mask. The Failure row is then selected by its V6 release and this
+/// Market's Source-material configuration; it is never a caller-supplied index.
 #[inline(never)]
 fn authenticate_failure_funding<'a>(
     program_id: &Pubkey,
@@ -1328,42 +1369,81 @@ fn authenticate_failure_funding<'a>(
     manifest_id: CapabilityContentId,
     manifest: CapabilityManifestV1<'a>,
     generation: u64,
+    material_id: [u8; 32],
     rent: &Rent,
-) -> Result<AuthenticatedFailureFundingV1<'a>, ProgramError> {
+) -> Result<AuthenticatedFailureFundingV2<'a>, ProgramError> {
     if account_info.owner != program_id
         || account_info.executable
-        || account_info.data_len() != FUNDING_STATE_BYTES
+        || account_info.data_len() != RESOLUTION_FUNDING_LEDGER_BYTES_V2
     {
         return Err(ResolutionError::Funding.into());
     }
     let data = account_info
         .try_borrow_data()
         .map_err(|_| ResolutionError::Funding)?;
-    let funding = FundingStateV1::decode(&data).map_err(|_| ResolutionError::Funding)?;
-    drop(data);
-    let custody = FundingCustodyObservationV1::native_only(
-        account_info.lamports(),
-        rent.minimum_balance(FUNDING_STATE_BYTES),
-    )
-    .map_err(|_| ResolutionError::Funding)?;
-    let derivation = CapabilityFundingDerivationV1::new(
+    let ledger = FundingLedgerV2::decode(&data).map_err(|_| ResolutionError::Funding)?;
+    let authenticated = ledger
+        .authenticate(manifest_id, manifest)
+        .map_err(|_| ResolutionError::Funding)?;
+    if ledger.slot_count() != 3 {
+        return Err(ResolutionError::Funding.into());
+    }
+    let mut failure_entry_index = None;
+    let mut entry_index = 0_u16;
+    while entry_index < manifest.entry_count() {
+        if ledger.selected_mask() & (1_u16 << u32::from(entry_index)) != 0 {
+            let entry = manifest
+                .entry(entry_index)
+                .map_err(|_| ResolutionError::Funding)?;
+            if entry.release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+                || authenticated
+                    .slot(entry_index)
+                    .map_err(|_| ResolutionError::Funding)?
+                    .status()
+                    != FundingLedgerStatusV2::Active
+            {
+                return Err(ResolutionError::Funding.into());
+            }
+            if entry.config_id().to_bytes() == material_id {
+                if failure_entry_index.replace(entry_index).is_some() {
+                    return Err(ResolutionError::Funding.into());
+                }
+            }
+        }
+        entry_index = entry_index
+            .checked_add(1)
+            .ok_or(ResolutionError::Arithmetic)?;
+    }
+    let failure_entry_index = failure_entry_index.ok_or(ResolutionError::Funding)?;
+    let exact_ledger_rent_lamports = rent.minimum_balance(RESOLUTION_FUNDING_LEDGER_BYTES_V2);
+    authenticated
+        .validate_native_custody(account_info.lamports(), exact_ledger_rent_lamports, false)
+        .map_err(|_| ResolutionError::Funding)?;
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        program_id.to_bytes(),
         market.key.to_bytes(),
         generation,
         manifest_id,
-        manifest,
-        funding,
+        ledger,
     )
     .map_err(|_| ResolutionError::Funding)?;
-    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0 != *account_info.key
+    if Pubkey::find_program_address(&derivation.seed_components(), program_id).0
+        != *account_info.key
     {
         return Err(ResolutionError::Funding.into());
     }
-    Ok(AuthenticatedFailureFundingV1 {
+    let ledger_bytes: [u8; RESOLUTION_FUNDING_LEDGER_BYTES_V2] = data
+        .as_ref()
+        .try_into()
+        .map_err(|_| ResolutionError::Funding)?;
+    drop(data);
+    Ok(AuthenticatedFailureFundingV2 {
         manifest_id,
         manifest,
-        entry_index: funding.entry_index(),
-        funding,
-        custody,
+        entry_index: failure_entry_index,
+        ledger_bytes,
+        exact_ledger_rent_lamports,
+        ledger_account_lamports: account_info.lamports(),
     })
 }
 
@@ -1414,14 +1494,18 @@ fn commit_deadline_failure(
         .map_err(|_| ResolutionError::OutputState)?;
     if state_output.len() != SOURCE_RESOLUTION_STATE_BYTES_V2
         || certificate_output.len() != RESOLUTION_CERTIFICATE_BYTES_V2
-        || funding_output.len() != FUNDING_STATE_BYTES
+        || funding_output.len() != RESOLUTION_FUNDING_LEDGER_BYTES_V2
         || certificate_output.iter().any(|byte| *byte != 0)
+        || hash(&funding_output).to_bytes() != encoded.funding_prestate_digest
     {
         return Err(ResolutionError::OutputState.into());
     }
     state_output.copy_from_slice(&encoded.source);
     certificate_output.copy_from_slice(&encoded.certificate);
     funding_output.copy_from_slice(&encoded.funding);
+    if funding_output.as_ref() != encoded.funding {
+        return Err(ResolutionError::OutputState.into());
+    }
 
     let mut funding_lamports = outputs
         .funding
@@ -1462,7 +1546,7 @@ const fn map_relay_join_error(error: RelayJoinErrorV1) -> ResolutionError {
 /// result through a *Product*, and the records that decide how are not fields of
 /// the record being consumed.
 #[inline(never)]
-fn boxed_product_runtime(
+pub(crate) fn boxed_product_runtime(
     registry: &Pubkey,
     rent: &Rent,
     product_record: ProductContentId,
@@ -1508,13 +1592,13 @@ fn consume_source_records(
         account(accounts, 7)?,
         account(accounts, 8)?,
         rent,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         material_id,
         &material_data,
-        SOURCE_MATERIAL_V2_BYTES,
+        SOURCE_MATERIAL_V3_BYTES,
     )?;
     let material =
-        SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let window_spec_id = material.window_spec().to_bytes();
     drop(material_data);
 
@@ -1672,7 +1756,7 @@ fn authenticate_consumable_record(
 
 /// Authenticate the Source state account this consumption makes terminal.
 #[inline(never)]
-fn authenticate_source_state_account(
+pub(crate) fn authenticate_source_state_account(
     program_id: &Pubkey,
     state: &AccountInfo<'_>,
     market: &AccountInfo<'_>,
@@ -1820,7 +1904,7 @@ fn commit_consumption<'info>(
 /// `ResolutionFailure` has the tag `4` and no route emits it yet: see the
 /// `CommitDeadlineFailure` arm above for why that is a refusal rather than an
 /// omission.
-const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
+pub(crate) const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
 
 /// Allocate and assign a terminal certificate at its canonical address.
 ///
@@ -1832,7 +1916,7 @@ const RESOLUTION_SUCCESS_CERTIFICATE_KIND_SEED: u8 = 1;
 /// addresses and neither can quietly overwrite the other.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-fn initialize_certificate_at_kind<'info>(
+pub(crate) fn initialize_certificate_at_kind<'info>(
     program_id: &Pubkey,
     kind: u8,
     terminal_sequence: u64,
@@ -2019,7 +2103,7 @@ fn authenticate_adjacent_signature(
     Ok(authorization.signer())
 }
 
-fn create_prefunded_pda<'info>(
+pub(crate) fn create_prefunded_pda<'info>(
     payer: &AccountInfo<'info>,
     created: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
@@ -2081,7 +2165,10 @@ fn create_prefunded_pda<'info>(
     Ok(())
 }
 
-fn close_to_beneficiary(source: &AccountInfo<'_>, beneficiary: &AccountInfo<'_>) -> ProgramResult {
+pub(crate) fn close_to_beneficiary(
+    source: &AccountInfo<'_>,
+    beneficiary: &AccountInfo<'_>,
+) -> ProgramResult {
     let source_balance = source.lamports();
     let after = beneficiary
         .lamports()

@@ -104,6 +104,16 @@ pub enum Error {
     SealThresholdNotReached,
     /// The record was not in a phase that admits the requested transition.
     InvalidRecordTransition,
+    /// Retirement was attempted on live evidence a live market could still use.
+    ///
+    /// Liveness census Y3 / queue Q9. A `Collecting` or `Sealed` record whose
+    /// market carries no terminal receipt is still an answer the market can
+    /// reach — consumption is permissionless — so deleting it would take the
+    /// success outcome away from the holders rather than reclaim a dead
+    /// deposit. Distinct from `InvalidRecordTransition` on purpose: this one
+    /// means "not yet", and it clears itself the moment the market
+    /// terminalizes, by any route including the funded failure walk.
+    RecordStillConsumable,
     /// The record's persisted binding did not match the supplied authority.
     RecordBindingMismatch,
     /// The recomputed running set digest did not equal the sealed one.

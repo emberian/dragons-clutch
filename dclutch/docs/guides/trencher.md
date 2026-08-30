@@ -6,13 +6,15 @@ is the same failure: your money was somewhere a stranger could touch it.
 
 dClutch is a claims protocol built so there is no such place. This page
 tells you what you'd actually be holding, why the payout can't be walked
-back, and how there's a standing bounty you can collect just for paying
-attention.
+back, and how an open market can fund a bounty for the person who closes its
+failure case. There is no bounty to collect on devnet today because there is
+no open market there.
 
-First, the disclaimer you actually care about: **none of this is deployed.
-There is no token. There is nothing to buy today.** It runs on local test
-validators while it gets finished. You're early — this page is so you know
-what it is before it ships.
+First, the disclaimer you actually care about: **seven protocol programs
+are deployed on Solana devnet, but there is no open market, no token, and
+nothing to buy today.** The complete market and trading rehearsals still run
+on local test validators while the first public test market is prepared.
+You're early — this page is so you know what it is before that market opens.
 
 ## What a claim is
 
@@ -55,10 +57,15 @@ dclutch markets ls
 dclutch markets show <market>
 dclutch intent buy --route route.json --outcome 1 --fill 5 \
     --price 400000 --collateral <acct> --keypair me.json --out my-bid.json
-dclutch buy --route route.json --take their-ask.json --fill 5 --price 400000 \
-    --collateral <acct> --keypair me.json
 dclutch portfolio
 ```
+
+That intent is an off-chain handoff, not a submitted trade. The public `buy`
+and `sell` commands currently refuse before they read your session, route, or
+key. They stay closed until the client can journal the exact packet before your
+key is opened, authenticate the chain's `HotExecutionAckV3`, and reconcile all
+ten writable accounts at finality. Use `spine` to inspect whether a market is
+Direct-tradable; there is no public Direct submitter to trust yet.
 
 When the chain says no, you get told who said no and why — the actual
 program and the actual reason, not a hex number and a shrug:
@@ -69,7 +76,7 @@ $ dclutch refusal 0x5000
   were hostile or selected no supported family.
 ```
 
-## The failure walk: get paid for watching
+## The failure walk: how the bounty is designed to work
 
 Here's the outcome nobody else's protocol has: the oracle ghosting is **a
 priced outcome with a bounty on it.**
@@ -82,31 +89,44 @@ redeems their collateral back out. And **you get paid the bounty for
 sending it** — escrowed by the market at founding, so it's already there,
 not a promise.
 
+That is the design, and the bounty really is escrowed. **You cannot collect
+one today**: no market is open, and the command below previews the
+transaction without submitting it. The rest of this section is what the walk
+will look like when it opens.
+
 ```sh
 dclutch walk --book walk-book.json --generation 1 --terminal-sequence 1 \
-    --keypair anyone.json
+    --keypair anyone.json --dry-run \
+    --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 ```
 
-Any wallet can be the walker. You pay one transaction fee; the market pays
-you the quoted bounty (the current demo market escrows 250,000 lamports).
-Too early? The program refuses and tells you so, and you're out one fee.
-It's a race worth scripting: watch deadlines, be first, collect. Free money
-for insomniacs, and it's not a bug — it's the mechanism that makes "the
-oracle ghosted" cost the market instead of costing you.
+The command currently previews the exact account frame and packet only. It
+does not sign or submit a walk. Submission stays closed until the command can
+save the unsigned packet before your key is read, save the exact signature and
+packet in a durable Submitted journal before one send, and verify the finalized
+certificate and bounty afterward.
+
+Once that caller exists and an open market reaches its deadline, any wallet can
+be the walker: you pay one transaction fee and the market pays the bounty its
+creator funded. The archived demo input disclosed 250,000 lamports, but that
+input did not open on devnet, so the number is not a current offer or
+collectible bounty. The mechanism is implemented; the public submission caller
+is the part still closed.
 
 ## The honest part
 
-- Not deployed. No token. Local validators only, today.
-- You can't redeem a winning position from your own wallet yet — the last
-  payout step is still being wired up ([the CLI](../../packages/dclutch-cli/README.md)
-  does the part that works and tells you exactly where it stops).
+- Seven programs are live on devnet. No open market and no token exist
+  today.
+- A winning-position payout has not completed end to end from a user's
+  wallet on devnet yet. [The CLI](../../packages/dclutch-cli/README.md)
+  tells you exactly which checks and submission steps it can perform.
 - Where something isn't finished, the tools say so to your face instead of
   spinning. That's the house style: the chain refuses loudly, and no
   partial state survives a refused transaction.
 
-When it ships, the pitch will be the same one this page just made: the
-money is where you can see it, the math is fixed before you enter, and even
-the disaster case pays somebody — might as well be you.
+When the first market opens, the promise will be the same one this page just
+made: the money is where you can see it, the math is fixed before you enter,
+and even the disaster case pays somebody — might as well be you.
 
 The numbers behind everything here — payouts, fees, every refusal code —
 are in the [reference](../reference/README.md), and the

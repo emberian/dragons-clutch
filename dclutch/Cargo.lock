@@ -904,7 +904,7 @@ dependencies = [
  "cc",
  "cfg-if",
  "constant_time_eq",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
  "digest 0.11.3",
 ]
 
@@ -965,9 +965,9 @@ dependencies = [
 
 [[package]]
 name = "borsh"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a88b7ea17d208c4193f2c1e6de3c35fe71f98c96982d5ced308bdcc749ff6e1f"
+checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
 dependencies = [
  "borsh-derive",
  "bytes",
@@ -976,15 +976,15 @@ dependencies = [
 
 [[package]]
 name = "borsh-derive"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8f347189c62a579b8cd5f80714efa178f52e461dc2e6d701d264f5ff22e566c"
+checksum = "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
 dependencies = [
  "once_cell",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -1162,12 +1162,12 @@ dependencies = [
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
  "rand_core 0.10.1",
 ]
 
@@ -1293,9 +1293,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
+checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
@@ -1562,6 +1562,7 @@ name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -1591,6 +1592,9 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-custody-contract",
  "dclutch-economic-slice-kernel",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-fractional-claims-kernel",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
  "dclutch-product-payoff-v2-codec",
@@ -1601,6 +1605,7 @@ dependencies = [
  "dclutch-rational-representation-v2-contract",
  "dclutch-rational-representation-v2-kernel",
  "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-rational-representation-v2-request-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-refusal-registry",
@@ -1610,6 +1615,11 @@ dependencies = [
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
+ "dclutch-sha256-adapter",
+ "dclutch-source-contract",
+ "dclutch-structured-v2-kernel",
+ "dclutch-structured-v2-operator",
  "dclutch-token-svm",
  "solana-account 4.6.0",
  "solana-address-lookup-table-interface",
@@ -1638,6 +1648,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-rational-representation-v2-request-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-sha256-adapter",
  "dclutch-token-svm",
 ]
 
@@ -1649,11 +1660,13 @@ version = "0.1.0"
 name = "dclutch-core-sbf"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
+ "dclutch-direct-codec",
  "dclutch-market-core-codec",
  "dclutch-product-contract",
  "dclutch-product-payoff-v2-codec",
@@ -1675,9 +1688,12 @@ dependencies = [
  "dclutch-series-v3-kernel",
  "dclutch-source-contract",
  "dclutch-token-svm",
+ "serde_json",
  "solana-account 4.6.0",
+ "solana-address-lookup-table-interface",
+ "solana-compute-budget-interface",
  "solana-hash 4.6.0",
- "solana-message 3.1.0",
+ "solana-message 4.5.0",
  "solana-program",
  "solana-program-option",
  "solana-program-pack",
@@ -1696,14 +1712,17 @@ version = "0.1.0"
 dependencies = [
  "dclutch-market-core-codec",
  "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
 name = "dclutch-custody-sbf"
 version = "0.1.0"
 dependencies = [
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
+ "dclutch-dealer-codec",
  "dclutch-market-core-codec",
  "dclutch-program-test-evidence",
  "dclutch-realm-contract",
@@ -1809,6 +1828,7 @@ name = "dclutch-direct-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -1824,6 +1844,8 @@ dependencies = [
  "dclutch-registry-svm",
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
+ "dclutch-sha256-adapter",
+ "dclutch-token-svm",
  "dclutch-transition-vm",
  "sha2 0.10.9",
 ]
@@ -1849,7 +1871,9 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-core-contract",
+ "dclutch-execution-strategy-contract",
  "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
  "sha2 0.10.9",
 ]
 
@@ -1905,6 +1929,7 @@ dependencies = [
  "dclutch-versioned-message-operator",
  "sha2 0.10.9",
  "solana-hash 4.6.0",
+ "solana-message 3.1.0",
  "solana-program",
  "solana-sdk-ids",
  "spl-token-2022-interface",
@@ -1917,6 +1942,7 @@ dependencies = [
  "dclutch-claims-svm",
  "dclutch-fractional-claim-contract",
  "dclutch-fractional-claim-kernel",
+ "dclutch-sha256-adapter",
  "sha2 0.10.9",
 ]
 
@@ -2043,8 +2069,11 @@ dependencies = [
  "dclutch-bearer-v2-operator",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
+ "dclutch-dealer-codec",
  "dclutch-direct-codec",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
@@ -2054,20 +2083,31 @@ dependencies = [
  "dclutch-general-config-contract",
  "dclutch-market-core-codec",
  "dclutch-market-open-v1-operator",
+ "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
  "dclutch-product-runtime-v2-operator",
  "dclutch-provider-transport-v3-operator",
+ "dclutch-rational-lifecycle-hot-v3",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
+ "dclutch-relay-contract",
  "dclutch-release-set-contract",
  "dclutch-release-tool",
  "dclutch-rent-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-request-profile-contract",
  "dclutch-resolution-core-v3-operator",
  "dclutch-series-v3-kernel",
+ "dclutch-structured-v2-kernel",
+ "dclutch-token-svm",
  "dclutch-trading-sbf",
+ "dclutch-transition-vm",
+ "dclutch-user-position-admission-contract",
  "dclutch-versioned-message-operator",
  "solana-address-lookup-table-interface",
  "solana-compute-budget-interface",
@@ -2075,6 +2115,7 @@ dependencies = [
  "solana-message 3.1.0",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
  "spl-token-2022-interface",
 ]
 
@@ -2105,7 +2146,7 @@ name = "dclutch-product-payoff-v2-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-product-runtime-v2",
- "sha2 0.10.9",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
@@ -2284,12 +2325,14 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
  "dclutch-token-svm",
  "solana-program",
  "solana-program-option",
  "solana-program-pack",
  "solana-sdk-ids",
  "spl-associated-token-account-interface",
+ "spl-token-2022-interface",
  "spl-token-interface",
 ]
 
@@ -2453,12 +2496,17 @@ dependencies = [
 [[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-resolution-core-v3-operator"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-contract",
+ "dclutch-core-contract",
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-admission",
@@ -2491,6 +2539,7 @@ dependencies = [
  "dclutch-pyth-svm",
  "dclutch-record-contract",
  "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-relay-contract",
@@ -2518,6 +2567,7 @@ dependencies = [
  "dclutch-refusal-registry",
  "dclutch-request-profile-contract",
  "dclutch-series-v3-kernel",
+ "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",
  "dclutch-transition-vm",
  "sha2 0.10.9",
@@ -2532,6 +2582,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-market-core-codec",
  "dclutch-rent-contract",
+ "dclutch-sha256-adapter",
  "sha2 0.10.9",
 ]
 
@@ -2585,9 +2636,19 @@ dependencies = [
 name = "dclutch-structured-v2-operator"
 version = "0.1.0"
 dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-bearer-v2-operator",
  "dclutch-fractional-claim-kernel",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-rational-representation-v2-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-request-profile-contract",
+ "dclutch-sha256-adapter",
  "dclutch-structured-v2-contract",
  "dclutch-structured-v2-kernel",
+ "dclutch-token-svm",
  "sha2 0.10.9",
 ]
 
@@ -2619,6 +2680,7 @@ dependencies = [
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
+ "dclutch-fractional-claim-contract",
  "dclutch-market-core-codec",
  "dclutch-product-runtime-v2",
  "dclutch-product-runtime-v2-svm-reader",
@@ -2628,6 +2690,7 @@ dependencies = [
  "dclutch-realm-contract",
  "dclutch-record-contract",
  "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
@@ -2635,9 +2698,11 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-resolution-codec",
  "dclutch-series-v3-kernel",
+ "dclutch-sha256-adapter",
  "dclutch-shadow-accelerator-auth-v4",
  "dclutch-token-svm",
  "dclutch-transition-vm",
+ "dclutch-user-position-admission-contract",
  "solana-hash 4.6.0",
  "solana-instructions-sysvar 3.0.1",
  "solana-message 3.1.0",
@@ -2651,6 +2716,13 @@ name = "dclutch-transition-vm"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-seal-contract",
+]
+
+[[package]]
+name = "dclutch-user-position-admission-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
 ]
 
 [[package]]
@@ -3095,12 +3167,13 @@ checksum = "059c31d7d36c43fe39d89e55711858b4da8be7eb6dabac23c7289b1a19489406"
 
 [[package]]
 name = "flate2"
-version = "1.1.9"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
+checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -4053,9 +4126,9 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lru"
-version = "0.18.2"
+version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d2f2f9b4ba7e6b24d95e7e899329d35be83bcded72c8540cdd5368932d1d90a"
+checksum = "0d317b4b9eb398e6acce275758ec6125535505e7a146fb1a9b8bda2451b0ff4c"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -4138,9 +4211,9 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "miniz_oxide"
-version = "0.8.9"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
  "simd-adler32",
@@ -5375,7 +5448,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
  "digest 0.11.3",
 ]
 
@@ -6194,7 +6267,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff4c7caf3fe3d70815869a5838ee45b4d2b009eaacea1790ef3cd9b3c89edbbd"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
  "curve25519-dalek-derive",
  "digest 0.11.3",
  "ed25519 2.2.3",
@@ -9889,6 +9962,12 @@ dependencies = [
  "quote",
  "syn 3.0.4",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"

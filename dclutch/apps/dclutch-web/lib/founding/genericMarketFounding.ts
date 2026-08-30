@@ -1,5 +1,5 @@
 /**
- * The DCLTGMF1 outer instruction: Lock → Found → Realize → Claims → Open.
+ * The DCLTGMF3 outer instruction: Lock → Found → Realize → Claims → Open.
  *
  * Five stages in one rollback domain. The Market is created by the Found stage
  * and Opened by the last, so this single transaction is the whole distance
@@ -7,20 +7,22 @@
  * all five back, which is why `execute_generic_market_founding` can prove a
  * substituted Claims request costs exactly one transaction fee.
  *
- * The instruction data is eight ASCII bytes. Everything else this builder does
+ * The instruction data is eight ASCII bytes followed by five canonical caller
+ * bumps. The bumps are invocation evidence, not persisted protocol truth.
+ * Everything else this builder does
  * is assemble the account frame, and the frame *is* the wire: `GenericFoundingFrameV1::parse`
  * slices it by fixed stage widths and refuses on any other length, so a meta in
  * the wrong slot is a different instruction.
  *
- * ONE AUTHORITY. The stage widths, indices, magic, and the 135-account fixed
+ * ONE AUTHORITY. The stage widths, indices, magic, and the 125-account fixed
  * total all come from `lib/generated/genericFoundingV1.ts`, which
  * `scripts/generate-generic-founding.mjs` reads out of the on-chain route, the
  * codec crate, and the reference client. The *order* within each stage is the
  * one thing no constant carries; it is transcribed from
  * `tools/local-validator/bootstrap/successor/src/market.rs`'s
- * `build_generic_market_founding_v1`, the sole assembler of this frame in the
+ * `build_generic_market_founding_v3`, the sole assembler of this frame in the
  * tree, and the two invariants that client asserts on itself — the exact width
- * and exactly eleven distinct writable keys — are asserted here too, so a
+ * and exactly twelve distinct writable keys — are asserted here too, so a
  * transcription slip that changes a privilege is caught rather than submitted.
  */
 
@@ -30,27 +32,25 @@ import {
   CLAIMS_FOUNDING_ACCOUNT_COUNT_V5,
   GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1,
   GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
-  GENERIC_FOUNDING_MAX_FUNDING_STATES_V1,
   GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
-  GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V1,
-  GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1,
-  GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1,
-  GENERIC_MARKET_FOUNDING_MAGIC_V1,
-  GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1,
-  GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1,
-  MAX_TX_ACCOUNT_LOCKS_V1,
+  GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3,
+  GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3,
+  GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3,
+  GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3,
+  GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3,
+  GENERIC_MARKET_FOUNDING_MAGIC_V3,
+  GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3,
+  GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3,
+  PROJECTED_FOUND_ACCOUNT_COUNT_V2,
   PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1,
   PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1,
 } from '../generated/genericFoundingV1';
-import { CORE_FOUND_ACCOUNT_COUNT_V2 } from '../generated/coreFound';
 
 export const INSTRUCTIONS_SYSVAR_ID = 'Sysvar1nstructions1111111111111111111111111';
-export const CLOCK_SYSVAR_ID = 'SysvarC1ock11111111111111111111111111111111';
-export const RENT_SYSVAR_ID = 'SysvarRent111111111111111111111111111111111';
 export const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 
 /** Every address the outer frame names, by the role the route reads it as. */
-export type GenericMarketFoundingCoordinatesV1 = Readonly<{
+export type GenericMarketFoundingCoordinatesV3 = Readonly<{
   /** The four readonly content-addressed request records, in frame order. */
   foundRequest: string;
   lockRequest: string;
@@ -77,6 +77,9 @@ export type GenericMarketFoundingCoordinatesV1 = Readonly<{
   claimsCaller: string;
   foundAuthority: string;
   openAuthority: string;
+
+  /** Canonical Lock, Found, Realize, Claims, Open caller bumps, in that order. */
+  callerBumps: readonly [number, number, number, number, number];
 
   /** Market and Custody coordinates. */
   market: string;
@@ -106,7 +109,7 @@ export type GenericMarketFoundingCoordinatesV1 = Readonly<{
   portfolioStaging: string;
 
   /**
-   * The 31-account Core Found31 frame, in its exact ABI order.
+   * The 25-account compact ProjectedFound V2 frame, in its exact ABI order.
    *
    * Index 0 is the found authority rather than a payer and index 1 is the
    * Market the stage creates; both are writable, everything else is not. The
@@ -114,33 +117,36 @@ export type GenericMarketFoundingCoordinatesV1 = Readonly<{
    * builder takes it whole rather than re-deriving it: two derivations of one
    * frame is one derivation too many.
    */
-  foundSnapshotKeys: ReadonlyArray<string>;
+  projectedFoundKeys: ReadonlyArray<string>;
 
-  /** One FundingState per capability manifest entry, in manifest order. */
-  fundingStates: ReadonlyArray<string>;
+  /** One canonical controller-subset FundingLedgerV2 per physical controller. */
+  fundingLedgers: ReadonlyArray<string>;
+
+  /** Durable CustodyStaged checkpoint consumed only after Open succeeds. */
+  controllerFundingCheckpoint: string;
 }>;
 
-/** The five CPI stages, plus the readonly prefix the route parses first. */
-export type GenericMarketFoundingStageV1 = 'prefix' | 'lock' | 'found' | 'realize' | 'claims' | 'open';
+/** The five CPI stages, the readonly prefix, and the commit-last checkpoint. */
+export type GenericMarketFoundingStageV3 = 'prefix' | 'lock' | 'found' | 'realize' | 'claims' | 'open' | 'checkpoint';
 
-export type GenericMarketFoundingAccountV1 = Readonly<{
+export type GenericMarketFoundingAccountV3 = Readonly<{
   address: string;
   signer: boolean;
   writable: boolean;
-  stage: GenericMarketFoundingStageV1;
+  stage: GenericMarketFoundingStageV3;
   role: string;
 }>;
 
-export type GenericMarketFoundingStageBoundV1 = Readonly<{ start: number; count: number }>;
+export type GenericMarketFoundingStageBoundV3 = Readonly<{ start: number; count: number }>;
 
-export type GenericMarketFoundingFrameV1 = Readonly<{
+export type GenericMarketFoundingFrameV3 = Readonly<{
   programId: string;
   data: Uint8Array;
-  accounts: ReadonlyArray<GenericMarketFoundingAccountV1>;
+  accounts: ReadonlyArray<GenericMarketFoundingAccountV3>;
   fundingCount: number;
   distinctAccounts: ReadonlyArray<string>;
   distinctWritable: ReadonlyArray<string>;
-  stageBounds: Readonly<Record<GenericMarketFoundingStageV1, GenericMarketFoundingStageBoundV1>>;
+  stageBounds: Readonly<Record<GenericMarketFoundingStageV3, GenericMarketFoundingStageBoundV3>>;
 }>;
 
 function canonical(value: string, field: string): string {
@@ -161,22 +167,22 @@ type Emit = (address: string, writable: boolean, role: string) => void;
  * its own boundary and names itself, instead of shifting every later stage by
  * one and failing as a total-width mismatch.
  */
-export function buildGenericMarketFoundingFrameV1(input: GenericMarketFoundingCoordinatesV1): GenericMarketFoundingFrameV1 {
-  const fundingCount = input.fundingStates.length;
-  if (fundingCount < 1 || fundingCount > GENERIC_FOUNDING_MAX_FUNDING_STATES_V1) {
-    throw new Error(`the founding frame requires 1..${GENERIC_FOUNDING_MAX_FUNDING_STATES_V1} FundingState accounts`);
+export function buildGenericMarketFoundingFrameV3(input: GenericMarketFoundingCoordinatesV3): GenericMarketFoundingFrameV3 {
+  const fundingCount = input.fundingLedgers.length;
+  if (fundingCount < 1 || fundingCount > 2) {
+    throw new Error('the founding frame requires one or two controller-subset FundingLedgerV2 accounts');
   }
-  if (input.foundSnapshotKeys.length !== CORE_FOUND_ACCOUNT_COUNT_V2) {
-    throw new Error(`the Found stage requires exactly ${CORE_FOUND_ACCOUNT_COUNT_V2} Found31 keys`);
+  if (input.projectedFoundKeys.length !== PROJECTED_FOUND_ACCOUNT_COUNT_V2) {
+    throw new Error(`the Found stage requires exactly ${PROJECTED_FOUND_ACCOUNT_COUNT_V2} compact ProjectedFound V2 keys`);
   }
 
-  const accounts: GenericMarketFoundingAccountV1[] = [];
+  const accounts: GenericMarketFoundingAccountV3[] = [];
   const bounds: Record<string, { start: number; count: number }> = {};
-  let stage: GenericMarketFoundingStageV1 = 'prefix';
+  let stage: GenericMarketFoundingStageV3 = 'prefix';
   const push: Emit = (address, writable, role) => {
     accounts.push(Object.freeze({ address: canonical(address, role), signer: false, writable, stage, role }));
   };
-  function segment(name: GenericMarketFoundingStageV1, expected: number, body: (push: Emit) => void): void {
+  function segment(name: GenericMarketFoundingStageV3, expected: number, body: (push: Emit) => void): void {
     const start = accounts.length;
     stage = name;
     body(push);
@@ -185,7 +191,7 @@ export function buildGenericMarketFoundingFrameV1(input: GenericMarketFoundingCo
     bounds[name] = { start, count };
   }
 
-  segment('prefix', GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1, (emit) => {
+  segment('prefix', GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3, (emit) => {
     // Four readonly content-addressed requests, then the instructions sysvar
     // the heap-frame admission reads this transaction's own grant back out of.
     // The sysvar is not a convenience: `admit_heap_frame_v1` scans this
@@ -197,8 +203,8 @@ export function buildGenericMarketFoundingFrameV1(input: GenericMarketFoundingCo
     emit(input.claimsRequest, false, 'Claims FoundingV5 request record');
     emit(INSTRUCTIONS_SYSVAR_ID, false, 'instructions sysvar');
   });
-  if (bounds.prefix.count !== GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 + 1
-      || accounts[GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1].address !== INSTRUCTIONS_SYSVAR_ID) {
+  if (bounds.prefix.count !== GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 + 1
+      || accounts[GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3].address !== INSTRUCTIONS_SYSVAR_ID) {
     throw new Error('the instructions sysvar is not at the index the heap-frame admission scans');
   }
 
@@ -221,15 +227,14 @@ export function buildGenericMarketFoundingFrameV1(input: GenericMarketFoundingCo
 
   const foundCount = GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 + fundingCount + GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1;
   segment('found', foundCount, (emit) => {
-    input.foundSnapshotKeys.forEach((key, index) => {
+    input.projectedFoundKeys.forEach((key, index) => {
       // Index 0 is the found authority and index 1 is the Market the stage
-      // creates; those two are the writable pair, exactly as Found31 declares.
-      emit(key, index < 2, `Found31 account ${index.toString().padStart(2, '0')}`);
+      // creates; those two are the writable pair the compact frame declares.
+      emit(key, index < 2, `ProjectedFound V2 account ${index.toString().padStart(2, '0')}`);
     });
     emit(input.tradingProgram, false, 'Trading program');
     emit(input.tradingProgramData, false, 'Trading ProgramData');
-    emit(CLOCK_SYSVAR_ID, false, 'Clock sysvar');
-    input.fundingStates.forEach((funding, index) => emit(funding, false, `FundingState ${index}`));
+    input.fundingLedgers.forEach((funding, index) => emit(funding, false, `FundingLedgerV2 ${index}`));
     emit(input.permit, true, 'one-shot Core permit');
     emit(input.projectedReplay, true, 'projected Custody replay');
     emit(input.hoardVault, true, 'Hoard vault');
@@ -279,7 +284,6 @@ export function buildGenericMarketFoundingFrameV1(input: GenericMarketFoundingCo
     emit(input.resultDomainStaging, false, 'result domain staging');
     emit(input.portfolioRaw, false, 'portfolio raw');
     emit(input.portfolioStaging, false, 'portfolio staging');
-    emit(RENT_SYSVAR_ID, false, 'Rent sysvar');
     emit(SYSTEM_PROGRAM_ID, false, 'System program');
     emit(input.market, false, 'Market');
     emit(input.activationCache, false, 'release activation cache');
@@ -319,11 +323,13 @@ export function buildGenericMarketFoundingFrameV1(input: GenericMarketFoundingCo
     emit(input.aggregate, true, 'Claims liability aggregate');
     emit(input.position, true, 'founder Position');
     emit(input.admission, true, 'Position admission');
-    emit(CLOCK_SYSVAR_ID, false, 'Clock sysvar');
-    emit(RENT_SYSVAR_ID, false, 'Rent sysvar');
   });
 
-  const expected = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1 + fundingCount;
+  segment('checkpoint', 1, (emit) => {
+    emit(input.controllerFundingCheckpoint, true, 'controller funding checkpoint');
+  });
+
+  const expected = GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 + fundingCount;
   if (accounts.length !== expected) {
     throw new Error(`the assembled founding frame is ${accounts.length} accounts, not the ${expected} its ABI declares`);
   }
@@ -340,27 +346,34 @@ export function buildGenericMarketFoundingFrameV1(input: GenericMarketFoundingCo
 
   const distinctAccounts = [...new Set(unioned.map((account) => account.address))];
   const distinctWritable = [...writable];
-  if (distinctWritable.length !== GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V1) {
-    throw new Error(`the founding frame declared ${distinctWritable.length} writable keys, not the ${GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V1} the outer requires`);
+  if (distinctWritable.length !== GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3) {
+    throw new Error(`the founding frame declared ${distinctWritable.length} writable keys, not the ${GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3} the outer requires`);
   }
-  // The fee payer is the one key that is not in this frame, so it is the `+ 1`.
-  if (distinctAccounts.length + 1 > MAX_TX_ACCOUNT_LOCKS_V1) {
-    throw new Error(`the founding frame locks ${distinctAccounts.length + 1} accounts, above the ${MAX_TX_ACCOUNT_LOCKS_V1}-account transaction limit`);
+  // Admission belongs to the fully compiled v0 message. The frame cannot see
+  // the fee payer, ComputeBudget program, or which keys the canonical ALT
+  // loads, so it deliberately does not substitute a `distinct + 2` estimate.
+
+  if (input.callerBumps.length !== GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3
+      || input.callerBumps.some((bump) => !Number.isInteger(bump) || bump < 0 || bump > 255)) {
+    throw new Error('the founding frame requires five canonical u8 caller bumps in Lock, Found, Realize, Claims, Open order');
   }
+  const data = new Uint8Array(GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3);
+  data.set(new TextEncoder().encode(GENERIC_MARKET_FOUNDING_MAGIC_V3), 0);
+  data.set(input.callerBumps, 8);
 
   return Object.freeze({
     programId: canonical(input.tradingProgram, 'Trading program'),
-    data: new TextEncoder().encode(GENERIC_MARKET_FOUNDING_MAGIC_V1),
+    data,
     accounts: Object.freeze(unioned),
     fundingCount,
     distinctAccounts: Object.freeze(distinctAccounts),
     distinctWritable: Object.freeze(distinctWritable),
-    stageBounds: Object.freeze(bounds) as GenericMarketFoundingFrameV1['stageBounds'],
+    stageBounds: Object.freeze(bounds) as GenericMarketFoundingFrameV3['stageBounds'],
   });
 }
 
 /** Lower one assembled frame to the instruction a versioned message carries. */
-export function genericMarketFoundingInstructionV1(frame: GenericMarketFoundingFrameV1): TransactionInstruction {
+export function genericMarketFoundingInstructionV3(frame: GenericMarketFoundingFrameV3): TransactionInstruction {
   return new TransactionInstruction({
     programId: new PublicKey(frame.programId),
     keys: frame.accounts.map((account) => ({

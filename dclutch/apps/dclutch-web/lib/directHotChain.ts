@@ -40,6 +40,7 @@ import {
   HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
   HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
   HOT_ACTIVATION_CACHE_ACCOUNT_V3,
+  HOT_CAPABILITY_SEAL_ACCOUNT_V3,
   HOT_CONFIG_RAW_ACCOUNT_V3,
   HOT_CONFIG_STAGING_ACCOUNT_V3,
   HOT_CORE_PROGRAM_ACCOUNT_V3,
@@ -97,6 +98,7 @@ import {
   type DirectHotAccountMetaV3,
   type DirectInlineHotRouteV3,
   canonicalDirectInlineLookupAddressesV3,
+  projectDirectInlineSealedExecutionRouteV3,
   validateRuntimeAccountProfileV2,
 } from './directInlineV3';
 import {
@@ -104,6 +106,7 @@ import {
   SYSTEM_PROGRAM_ID,
   authenticateArtifactDeploymentV1,
   deriveFinalizedRecordAddressesV1,
+  type ArtifactReleaseV1,
 } from './releaseRegistry';
 import { decodeCheckedInfrastructureV1 } from './infrastructure';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
@@ -117,6 +120,10 @@ const ACCOUNT_PROFILE_OPERATION_BYTES = 16;
 const ACCOUNT_PROFILE_TAIL_COUNT_OPCODE = 8;
 const ACTIVATION_CACHE_TRADING_OFFSET = 48 + 2 * (32 + ARTIFACT_RELEASE_BYTES);
 const BASIS_SEMANTIC_DOMAIN_V3 = new TextEncoder().encode('dclutch/product-basis/semantic/v3');
+const CAPABILITY_SEAL_BYTES_V1 = 968;
+const CAPABILITY_SEAL_HEADER_BYTES_V1 = 152;
+const CAPABILITY_SEAL_ROW_BYTES_V1 = 136;
+const CAPABILITY_SEAL_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:capability-seal:v1');
 
 export type DirectHotRouteCoordinateV3 = Readonly<{ address: string; isSigner: boolean; isWritable: boolean }>;
 
@@ -126,6 +133,7 @@ export type DirectHotRouteManifestV3 = Readonly<{
   strategyAccounts: ReadonlyArray<DirectHotRouteCoordinateV3>;
   runtimeAccounts: ReadonlyArray<DirectHotRouteCoordinateV3>;
   lookupTables: ReadonlyArray<string>;
+  lookupTableCreationSlot: bigint;
   checkedInfrastructure: Uint8Array | null;
 }>;
 
@@ -138,8 +146,48 @@ export type DirectHotRouteInspectionV3 = Readonly<{
   accountProfileDigest: string;
   strategyDigest: string;
   transitionDigest: string;
+  capabilitySealDigest: string;
   checkedOuter: CheckedHotOuterEvidenceV3;
 }>;
+
+export type DirectHotDeploymentObservationV3 = Readonly<{
+  artifact: ArtifactReleaseV1;
+  programAddress: string;
+  program: RpcAccount;
+  programDataAddress: string;
+  programData: RpcAccount;
+}>;
+
+/** Authenticate both executable deployments under decision 0012's slot pin. */
+export async function authenticateDirectHotOuterDeploymentsV3(
+  expectedTradingProgram: string,
+  expectedCoreProgram: string,
+  trading: DirectHotDeploymentObservationV3,
+  core: DirectHotDeploymentObservationV3,
+): Promise<void> {
+  if (trading.programAddress !== expectedTradingProgram
+      || core.programAddress !== expectedCoreProgram
+      || trading.artifact.program !== expectedTradingProgram
+      || core.artifact.program !== expectedCoreProgram) {
+    throw new Error('checked infrastructure selects another Core or Trading program');
+  }
+  await Promise.all([
+    authenticateArtifactDeploymentV1(
+      trading.program,
+      trading.programAddress,
+      trading.programData,
+      trading.programDataAddress,
+      trading.artifact,
+    ),
+    authenticateArtifactDeploymentV1(
+      core.program,
+      core.programAddress,
+      core.programData,
+      core.programDataAddress,
+      core.artifact,
+    ),
+  ]);
+}
 
 function same(left: Uint8Array, right: Uint8Array): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -286,27 +334,19 @@ function required(accounts: ReadonlyMap<string, RpcAccount | null>, address: str
   return account;
 }
 
-function chunks<T>(values: ReadonlyArray<T>, width: number): T[][] {
-  const output: T[][] = [];
-  for (let index = 0; index < values.length; index += width) output.push(values.slice(index, index + width));
-  return output;
-}
-
 async function acquire(
   client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
   addresses: ReadonlyArray<string>,
 ): Promise<Readonly<{ slot: string; accounts: ReadonlyMap<string, RpcAccount | null> }>> {
   const canonical = [...new Set(addresses.map((address, index) => key(address, `route address ${index}`).toBase58()))];
   const floor = await client.finalizedSlot();
-  const accounts = new Map<string, RpcAccount | null>();
-  let slot = floor;
-  for (const group of chunks(canonical, 32)) {
-    const observation = await client.multipleAccounts(group, floor);
-    if (BigInt(observation.slot) < BigInt(floor)) throw new Error('route observation regressed below its finalized floor');
-    slot = BigInt(observation.slot) > BigInt(slot) ? observation.slot : slot;
-    observation.accounts.forEach((entry) => accounts.set(entry.address, entry.account));
-  }
-  return Object.freeze({ slot, accounts });
+  if (canonical.length > 100) throw new Error('Direct route exceeds one exact getMultipleAccounts snapshot');
+  const observation = await client.multipleAccounts(canonical, floor);
+  if (BigInt(observation.slot) < BigInt(floor)) throw new Error('route observation regressed below its finalized floor');
+  return Object.freeze({
+    slot: observation.slot,
+    accounts: new Map(observation.accounts.map((entry) => [entry.address, entry.account])),
+  });
 }
 
 async function finalizedRecord(
@@ -713,13 +753,103 @@ function metas(
   }));
 }
 
-function lookupTable(address: string, account: RpcAccount): AddressLookupTableAccount {
+function lookupTable(
+  address: string,
+  account: RpcAccount,
+  payer: string,
+  creationSlot: bigint,
+  observationSlot: bigint,
+): AddressLookupTableAccount {
   if (account.owner !== AddressLookupTableProgram.programId.toBase58() || account.executable) throw new Error(`lookup table ${address} has the wrong owner or executable bit`);
   let state: ReturnType<typeof AddressLookupTableAccount.deserialize>;
   try { state = AddressLookupTableAccount.deserialize(account.data); } catch { throw new Error(`lookup table ${address} has malformed data`); }
   const table = new AddressLookupTableAccount({ key: key(address, 'lookup table'), state });
-  if (!table.isActive()) throw new Error(`lookup table ${address} is deactivated`);
+  if (!table.isActive() || state.authority !== undefined || state.deactivationSlot !== 0xffff_ffff_ffff_ffffn
+      || creationSlot >= observationSlot || state.lastExtendedSlot < creationSlot || state.lastExtendedSlot >= observationSlot
+      || creationSlot > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`lookup table ${address} is not the exact frozen, activated Direct table`);
+  }
+  const [, derived] = AddressLookupTableProgram.createLookupTable({
+    authority: key(payer, 'lookup authority'),
+    payer: key(payer, 'lookup payer'),
+    recentSlot: Number(creationSlot),
+  });
+  if (!derived.equals(table.key)) throw new Error(`lookup table ${address} is not derived from the route payer and creation slot`);
   return table;
+}
+
+function hexIdentity(value: string, field: string): Uint8Array {
+  if (!/^[0-9a-f]{64}$/.test(value) || /^0{64}$/.test(value)) throw new Error(`${field} is not one nonzero lowercase 32-byte identity`);
+  return Uint8Array.from(value.match(/../g) ?? [], (part) => Number.parseInt(part, 16));
+}
+
+export async function authenticateDirectCapabilitySealV1(
+  client: Pick<SolanaRpcClient, 'minimumBalanceForRentExemption'>,
+  accounts: ReadonlyMap<string, RpcAccount | null>,
+  fixed: ReadonlyArray<DirectHotAccountMetaV3>,
+  tradingProgram: string,
+  tradingSemanticRelease: string,
+  registryProgram: string,
+  descriptorSchema: Uint8Array,
+  descriptorDigest: Uint8Array,
+  records: ReadonlyArray<Readonly<{
+    schema: Uint8Array;
+    digest: Uint8Array;
+    raw: RpcAccount;
+    rawIndex: number;
+    stagingIndex: number;
+  }>>,
+): Promise<string> {
+  const coordinate = fixed[HOT_CAPABILITY_SEAL_ACCOUNT_V3];
+  if (coordinate === undefined) throw new Error('Direct capability seal coordinate is absent');
+  const seal = required(accounts, coordinate.address, 'Direct capability seal');
+  if (seal.owner !== tradingProgram || seal.executable || seal.data.length !== CAPABILITY_SEAL_BYTES_V1
+      || ascii(seal.data, 0, 8) !== 'DCLTCSL1' || u16(seal.data, 8) !== 1 || u16(seal.data, 10) !== 1
+      || u16(seal.data, 12) !== 6 || u16(seal.data, 14) !== 0x00ff || readU32(seal.data, 16) !== 1) {
+    throw new Error('Direct capability seal has the wrong exact owner, header, or width');
+  }
+  requireZero(seal.data, 21, 3, 'Direct capability seal header');
+  const tradingRelease = hexIdentity(tradingSemanticRelease, 'Trading semantic release');
+  if (!same(slice(seal.data, 24, 32), descriptorSchema)
+      || !same(slice(seal.data, 56, 32), descriptorDigest)
+      || !same(slice(seal.data, 88, 32), tradingRelease)
+      || !same(slice(seal.data, 120, 32), key(registryProgram, 'Registry program').toBytes())) {
+    throw new Error('Direct capability seal selects another descriptor, Trading release, or Registry');
+  }
+  const action = new Uint8Array(4);
+  new DataView(action.buffer).setUint32(0, 1, true);
+  const [derived, derivedBump] = PublicKey.findProgramAddressSync([
+    CAPABILITY_SEAL_PDA_DOMAIN_V1,
+    descriptorSchema,
+    descriptorDigest,
+    action,
+    tradingRelease,
+    key(registryProgram, 'Registry program').toBytes(),
+  ], key(tradingProgram, 'Trading program'));
+  if (derived.toBase58() !== coordinate.address) throw new Error('Direct capability seal is not the canonical Trading PDA');
+  // Byte 20 is the seal's own canonical bump, which Trading persists so that on-chain
+  // readers reproduce this address instead of searching for it. A client that searches
+  // anyway can therefore check the persisted byte against its own answer, which is a
+  // stronger statement than the zero this offset used to have to be.
+  if (seal.data[20] !== derivedBump) throw new Error('Direct capability seal does not carry its own canonical bump');
+  if (records.length !== 6) throw new Error('Direct capability seal expectation has another row count');
+  for (const [ordinal, record] of records.entries()) {
+    const row = CAPABILITY_SEAL_HEADER_BYTES_V1 + ordinal * CAPABILITY_SEAL_ROW_BYTES_V1;
+    const raw = fixed[record.rawIndex];
+    const staging = fixed[record.stagingIndex];
+    if (raw === undefined || staging === undefined
+        || u16(seal.data, row) !== ordinal || readU32(seal.data, row + 4) !== record.raw.data.length
+        || !same(slice(seal.data, row + 8, 32), record.schema)
+        || !same(slice(seal.data, row + 40, 32), record.digest)
+        || !same(slice(seal.data, row + 72, 32), key(raw.address, `sealed raw ${ordinal}`).toBytes())
+        || !same(slice(seal.data, row + 104, 32), key(staging.address, `sealed staging ${ordinal}`).toBytes())) {
+      throw new Error(`Direct capability seal row ${ordinal} differs from its authenticated Registry record`);
+    }
+    requireZero(seal.data, row + 2, 2, `Direct capability seal row ${ordinal}`);
+  }
+  const rent = await client.minimumBalanceForRentExemption(CAPABILITY_SEAL_BYTES_V1);
+  if (BigInt(seal.lamports) < BigInt(rent.lamports)) throw new Error('Direct capability seal is below its exact rent minimum');
+  return hex(await sha256(seal.data));
 }
 
 export async function inspectDirectHotRouteV3(
@@ -823,7 +953,7 @@ export async function inspectDirectHotRouteV3(
     fixed[HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3].address, fixed[HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3].address,
     descriptor.requestProfile.schema, descriptor.requestProfile.program, 'RequestProfile V2');
   validateDirectSignedRequestProfileV2(requestProfileRaw.data);
-  await finalizedRecord(client, observation.accounts, registryProgram,
+  const lifecycleRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_LIFECYCLE_RAW_ACCOUNT_V3].address, fixed[HOT_LIFECYCLE_STAGING_ACCOUNT_V3].address,
     descriptor.lifecycle.schema, descriptor.lifecycle.program, 'state lifecycle policy');
   const strategyRaw = await finalizedRecord(client, observation.accounts, registryProgram,
@@ -837,7 +967,7 @@ export async function inspectDirectHotRouteV3(
   const transitionRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_TRANSITION_RAW_ACCOUNT_V3].address, fixed[HOT_TRANSITION_STAGING_ACCOUNT_V3].address,
     descriptor.transition.schema, descriptor.transition.program, 'TransitionVM V3');
-  await finalizedRecord(client, observation.accounts, registryProgram,
+  const effectRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HOT_EFFECT_RAW_ACCOUNT_V3].address, fixed[HOT_EFFECT_STAGING_ACCOUNT_V3].address,
     descriptor.effect.schema, descriptor.effect.program, 'EffectProgram V3');
   const runtimeAccounts = manifest.runtimeAccounts.map((coordinate, index) => required(observation.accounts, coordinate.address, `runtime account ${index}`));
@@ -867,29 +997,59 @@ export async function inspectDirectHotRouteV3(
   );
 
   let checkedOuter: CheckedHotOuterEvidenceV3 = Object.freeze({ status: 'unavailable', reason: 'no user-supplied checked infrastructure manifest recognizes this Trading release' });
+  let tradingSemanticRelease: string | null = null;
   if (manifest.checkedInfrastructure !== null) {
     const checked = await decodeCheckedInfrastructureV1(manifest.checkedInfrastructure);
     if (checked.execution.releaseSet.id !== hex(releaseSet)) throw new Error('checked infrastructure selects another Market execution release set');
     const trading = checked.execution.artifacts.trading;
     const core = checked.execution.artifacts.core;
-    if (trading.upgradeAuthority !== null || core.upgradeAuthority !== null) throw new Error('Core and Trading releases must both be immutable for checked hot execution');
-    if (trading.program !== tradingProgram || core.program !== coreProgram) throw new Error('checked infrastructure selects another Core or Trading program');
     const tradingProgramAccount = required(observation.accounts, fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3].address, 'Trading program');
     const tradingProgramData = required(observation.accounts, fixed[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3].address, 'Trading ProgramData');
     const coreProgramAccount = required(observation.accounts, fixed[HOT_CORE_PROGRAM_ACCOUNT_V3].address, 'Core program');
     const coreProgramData = required(observation.accounts, fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address, 'Core ProgramData');
-    await authenticateArtifactDeploymentV1(tradingProgramAccount, tradingProgram, tradingProgramData, fixed[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3].address, trading);
-    await authenticateArtifactDeploymentV1(coreProgramAccount, coreProgram, coreProgramData, fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address, core);
+    await authenticateDirectHotOuterDeploymentsV3(
+      tradingProgram,
+      coreProgram,
+      Object.freeze({ artifact: trading, programAddress: tradingProgram, program: tradingProgramAccount, programDataAddress: fixed[HOT_TRADING_PROGRAMDATA_ACCOUNT_V3].address, programData: tradingProgramData }),
+      Object.freeze({ artifact: core, programAddress: coreProgram, program: coreProgramAccount, programDataAddress: fixed[HOT_CORE_PROGRAMDATA_ACCOUNT_V3].address, programData: coreProgramData }),
+    );
     const cache = required(observation.accounts, fixed[HOT_ACTIVATION_CACHE_ACCOUNT_V3].address, 'activation cache');
     if (cache.owner !== registryProgram || cache.executable || ascii(cache.data, 0, 8) !== 'DCLTACT1' || !same(slice(cache.data, 16, 32), releaseSet)) throw new Error('Registry activation cache does not select this Market release set');
     if (!same(slice(cache.data, ACTIVATION_CACHE_TRADING_OFFSET, 32), Uint8Array.from((checked.execution.releaseSet.roles.trading.artifactReleaseId.match(/../g) ?? []).map((value) => Number.parseInt(value, 16))))) throw new Error('activation cache Trading artifact differs from checked release evidence');
     checkedOuter = Object.freeze({ status: 'checked', tradingArtifactRelease: checked.execution.releaseSet.roles.trading.artifactReleaseId, checkedManifestDigest: checked.checkedInfrastructureId });
+    tradingSemanticRelease = trading.semanticReleaseId;
   }
 
-  const latest = await client.latestBlockhash(observation.slot);
+  if (tradingSemanticRelease === null) throw new Error('Direct capability seal requires checked Trading semantic-release evidence');
+  const capabilitySealDigest = await authenticateDirectCapabilitySealV1(
+    client,
+    observation.accounts,
+    fixed,
+    tradingProgram,
+    tradingSemanticRelease,
+    registryProgram,
+    selectedProgram.schema,
+    selectedProgram.program,
+    [
+      { schema: selectedProgram.schema, digest: selectedProgram.program, raw: descriptorRaw, rawIndex: HOT_DESCRIPTOR_RAW_ACCOUNT_V3, stagingIndex: HOT_DESCRIPTOR_STAGING_ACCOUNT_V3 },
+      { schema: descriptor.lifecycle.schema, digest: descriptor.lifecycle.program, raw: lifecycleRaw, rawIndex: HOT_LIFECYCLE_RAW_ACCOUNT_V3, stagingIndex: HOT_LIFECYCLE_STAGING_ACCOUNT_V3 },
+      { schema: descriptor.accountProfile.schema, digest: descriptor.accountProfile.program, raw: profileRaw, rawIndex: HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, stagingIndex: HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3 },
+      { schema: descriptor.requestProfile.schema, digest: descriptor.requestProfile.program, raw: requestProfileRaw, rawIndex: HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, stagingIndex: HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3 },
+      { schema: descriptor.transition.schema, digest: descriptor.transition.program, raw: transitionRaw, rawIndex: HOT_TRANSITION_RAW_ACCOUNT_V3, stagingIndex: HOT_TRANSITION_STAGING_ACCOUNT_V3 },
+      { schema: descriptor.effect.schema, digest: descriptor.effect.program, raw: effectRaw, rawIndex: HOT_EFFECT_RAW_ACCOUNT_V3, stagingIndex: HOT_EFFECT_STAGING_ACCOUNT_V3 },
+    ],
+  );
+
+  const latest = await client.latestMutationBlockhash(observation.slot);
   if (manifest.lookupTables.length !== 1) throw new Error('Direct InlineOrdinary requires one canonical finalized lookup table');
-  const lookupTables = Object.freeze(manifest.lookupTables.map((address) => lookupTable(address, required(observation.accounts, address, 'lookup table'))));
-  const route: DirectInlineHotRouteV3 = Object.freeze({
+  const lookupTables = Object.freeze(manifest.lookupTables.map((address) => lookupTable(
+    address,
+    required(observation.accounts, address, 'lookup table'),
+    manifest.payer,
+    manifest.lookupTableCreationSlot,
+    BigInt(observation.slot),
+  )));
+  const namedRoute: DirectInlineHotRouteV3 = Object.freeze({
     payer: manifest.payer,
     tradingProgram,
     market: marketAddress,
@@ -902,13 +1062,18 @@ export async function inspectDirectHotRouteV3(
     accountProfile: profileRaw.data,
     selectedProgramSchema: selectedProgram.schema,
     selectedProgram: selectedProgram.program,
+    observedSlot: BigInt(observation.slot),
     fixedAccounts: fixed,
     strategyAccounts: strategyMetas,
     runtimeAccounts: runtimeMetas,
     recentBlockhash: latest.blockhash,
+    blockhashObservedSlot: BigInt(latest.slot),
+    lastValidBlockHeight: BigInt(latest.lastValidBlockHeight),
+    lookupTableCreationSlot: manifest.lookupTableCreationSlot,
     lookupTables,
     outerEvidence: checkedOuter,
   });
+  const route = projectDirectInlineSealedExecutionRouteV3(namedRoute);
   const expectedLookupAddresses = canonicalDirectInlineLookupAddressesV3(route);
   const observedLookupAddresses = lookupTables[0]?.state.addresses;
   if (observedLookupAddresses === undefined || observedLookupAddresses.length !== expectedLookupAddresses.length
@@ -924,6 +1089,7 @@ export async function inspectDirectHotRouteV3(
     accountProfileDigest: hex(await sha256(profileRaw.data)),
     strategyDigest: hex(await sha256(strategyRaw.data)),
     transitionDigest: hex(await sha256(transitionRaw.data)),
+    capabilitySealDigest,
     checkedOuter,
   });
 }

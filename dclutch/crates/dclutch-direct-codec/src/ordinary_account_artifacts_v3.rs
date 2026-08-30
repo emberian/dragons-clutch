@@ -642,9 +642,10 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
     // and 9 as distinct self-representatives asserted two signers, which the
     // runtime refuses as a `CrossItemAlias` the moment both coordinates observe
     // the same key -- and which this topology has no packet room for either:
-    // `waist.rs` measures the canonical continuation at 1,228 bytes of the one
-    // 1,232-byte v0 ceiling, four bytes of margin, and a second signer costs 64
-    // for its signature plus 32 for a static key a signer may never ALT-route.
+    // `waist.rs` measures the canonical budgeted continuation at 1,204 bytes of
+    // the 1,232-byte v0 ceiling, 28 bytes of margin, and a second signer costs 64
+    // for its transaction signature plus 32 for a static key a signer may never
+    // ALT-route (before its account-index contribution).
     // The refusal is the binding reason; the packet is why there is no room to
     // argue with it. (1,224 was this packet's measured extent before decision
     // 0005's seal and the Custody callee each added two index bytes.)
@@ -1130,7 +1131,12 @@ mod tests {
             ),
         ] {
             let mut lengths = lengths_at(4, width(BASIS_PREFIX_BYTES + 32).expect("basis"));
-            lengths[coordinate] += width(stride).expect("stride");
+            let observed = lengths
+                .get_mut(coordinate)
+                .expect("named geometry coordinate");
+            *observed = observed
+                .checked_add(width(stride).expect("stride"))
+                .expect("geometry perturbation width");
             assert_eq!(
                 encode_direct_inline_ordinary_account_profile_v3_atomic(
                     DirectInlineOrdinaryAccountProfileInputV3 {
@@ -1213,6 +1219,14 @@ mod tests {
         );
         let root = profile.rule(false, 0).expect("root");
         assert_eq!(root.effect_permissions(), EFFECT_PERMISSION_WRITE_DATA);
+        // CoreState V3 added the source-projected principal cap and grew from
+        // 352 to 360 bytes. Coordinate 23 is the semantic join that makes that
+        // clean break part of this content-addressed AccountProfile.
+        assert_eq!(CORE_STATE_BYTES, 368);
+        assert_eq!(
+            profile.rule(false, 23).expect("Core state").data_length(),
+            width(CORE_STATE_BYTES).expect("Core state width")
+        );
         let maker = profile.rule(false, 5).expect("maker");
         assert_eq!(
             maker.effect_permissions(),
@@ -1360,6 +1374,34 @@ mod tests {
         let mut hostile = lengths(256);
         *hostile.get_mut(33).expect("Claims destination") +=
             u32::try_from(CLAIMS_ROW_BYTES).expect("Claims row width");
+        assert_eq!(
+            encode_direct_inline_ordinary_account_profile_v3_atomic(
+                DirectInlineOrdinaryAccountProfileInputV3 {
+                    logical_data_lengths: &hostile,
+                },
+                &mut scratch,
+                &mut output,
+            ),
+            Err(DirectOrdinaryAccountArtifactErrorV3::Geometry)
+        );
+        assert_eq!(
+            output,
+            [0x5a; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3]
+        );
+    }
+
+    /// The pre-cap CoreState V2 observation must not reproduce or select the
+    /// current Direct artifact. Founding writes only CoreState V3, whose extra
+    /// principal-cap field is authenticated through coordinate 23's exact
+    /// width before any projection or effect can execute.
+    #[test]
+    fn superseded_core_state_v2_width_refuses_atomically() {
+        let mut hostile = lengths(256);
+        *hostile.get_mut(23).expect("Core state coordinate") = 352;
+        // Coordinate 35 is a route alias of the same Core state observation.
+        *hostile.get_mut(35).expect("Core state alias") = 352;
+        let mut scratch = [0_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
+        let mut output = [0x5a_u8; DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_BYTES_V3];
         assert_eq!(
             encode_direct_inline_ordinary_account_profile_v3_atomic(
                 DirectInlineOrdinaryAccountProfileInputV3 {
@@ -1756,8 +1798,9 @@ mod tests {
         assert_eq!(permissions.get(6), Some(&debit));
         assert_eq!(permissions.get(9), Some(&debit));
         // Ninety-one logical coordinates pack into forty-four physical accounts
-        // carrying exactly one signer, which is what the canonical continuation
-        // packet -- 1,228 bytes of the 1,232-byte v0 ceiling, measured in
+        // carrying exactly one signer, which is what the canonical budgeted
+        // continuation packet -- 1,204 bytes of the 1,232-byte v0 ceiling,
+        // measured in
         // `waist.rs` -- can actually carry. The forty-fourth is the
         // Custody program: one readonly executable key, no signer, no writable.
         assert_eq!(

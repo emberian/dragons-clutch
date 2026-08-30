@@ -8,7 +8,8 @@ import {
 
 import { ascii, isZero, requireZero, slice, u16, u64 } from './bytes';
 import { decodeCompactIntentV1, encodeCompactIntentV1, type CompactIntentV1 } from './directCodec';
-import { CLAIM_PROGRAM_ID, CONTROLLER_SEED, CUSTODY_PROGRAM_ID, PACKET_DATA_SIZE, POSITION_SEED, REPLAY_SEED } from './directTransaction';
+import { CLAIM_PROGRAM_ID, CONTROLLER_SEED, CUSTODY_PROGRAM_ID, POSITION_SEED, REPLAY_SEED } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 import {
   REGISTERED_BUYER_POSITION_BUMP_OFFSET,
   REGISTERED_BUYER_REGISTRATION_BUMP_OFFSET,
@@ -517,7 +518,7 @@ function transactionPlan(instruction: TransactionInstruction, payer: PublicKey, 
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash, instructions: [instruction] }).compileToV0Message();
   const transaction = new VersionedTransaction(message);
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`registered transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`registered transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   return Object.freeze({
     instruction,
     transaction,
@@ -595,7 +596,7 @@ export function buildRegisteredCreateTransaction(input: RegisteredCreateInputV1)
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash: input.recentBlockhash, instructions }).compileToV0Message();
   const transaction = new VersionedTransaction(message);
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`registered creation transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`registered creation transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   return Object.freeze({
     instructions: Object.freeze(instructions), transaction, wireBytes,
     requiredSignerKeys: Object.freeze(message.staticAccountKeys.slice(0, message.header.numRequiredSignatures).map((key) => key.toBase58())),
@@ -647,7 +648,7 @@ export function buildRegisteredRetireTransaction(input: RegisteredRetireInputV1)
   const message = new TransactionMessage({ payerKey: payer, recentBlockhash: input.recentBlockhash, instructions: [instruction] }).compileToV0Message();
   const transaction = new VersionedTransaction(message);
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`registered retirement transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`registered retirement transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   return Object.freeze({
     instruction, transaction, wireBytes,
     requiredSignerKeys: Object.freeze(message.staticAccountKeys.slice(0, message.header.numRequiredSignatures).map((key) => key.toBase58())),

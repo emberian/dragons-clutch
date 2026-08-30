@@ -8,7 +8,7 @@
 
 use super::{
     ContentId, Error, NormalizedProviderEvidenceV1, ProviderReleaseV1, PythAdapterConfigV1, Result,
-    SourceAccessProfile, SourceMaterialV2, SourceSpecV1, StatisticKind, StatisticSpecV1,
+    SourceAccessProfile, SourceMaterialV3, SourceSpecV1, StatisticKind, StatisticSpecV1,
     WindowKind, WindowSpecV1,
 };
 
@@ -18,6 +18,14 @@ pub const SOURCE_SPEC_SCHEMA_PREIMAGE_V1: &[u8] = b"dclutch/schema/source-spec-v
 pub const SOURCE_SPEC_SCHEMA_ID_V1: [u8; 32] = [
     0xcc, 0xea, 0xf8, 0xdb, 0xc2, 0xac, 0x3a, 0xe8, 0x11, 0xb5, 0x22, 0x19, 0x72, 0x92, 0x9c, 0xf3,
     0xfc, 0x34, 0x13, 0x72, 0x1b, 0x08, 0x0d, 0x56, 0x0f, 0xf9, 0x54, 0xb8, 0xab, 0x81, 0x86, 0xb6,
+];
+/// Canonical finalized-record schema for [`super::SourceCapacityProfileV1`].
+pub const SOURCE_CAPACITY_PROFILE_SCHEMA_PREIMAGE_V1: &[u8] =
+    b"dclutch/schema/source-capacity-profile-v1";
+/// SHA-256 of [`SOURCE_CAPACITY_PROFILE_SCHEMA_PREIMAGE_V1`].
+pub const SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1: [u8; 32] = [
+    0x92, 0xfa, 0xdd, 0x2f, 0x51, 0x54, 0x82, 0xb7, 0x6e, 0x25, 0x55, 0x52, 0x4d, 0x57, 0x75, 0x3e,
+    0x61, 0xcd, 0x42, 0xde, 0x40, 0xa3, 0x98, 0xf9, 0x6a, 0x17, 0x28, 0xc6, 0x4f, 0x28, 0x4e, 0x01,
 ];
 /// Canonical finalized-record schema for [`ProviderReleaseV1`].
 pub const PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1: &[u8] = b"dclutch/schema/provider-release-v1";
@@ -65,10 +73,10 @@ impl PythProviderAdapterObligationV2 {
     ///
     /// Every `*_id` is the authenticated content digest of the adjacent value.
     /// The Product record digest is authenticated separately because
-    /// [`SourceMaterialV2`] intentionally owns only that graph root.
+    /// [`SourceMaterialV3`] intentionally owns only that graph root.
     #[allow(clippy::too_many_arguments)]
     pub fn from_authenticated_records(
-        material: SourceMaterialV2,
+        material: SourceMaterialV3,
         authenticated_product_record_digest: ContentId,
         source_spec_id: ContentId,
         source: SourceSpecV1,
@@ -81,6 +89,78 @@ impl PythProviderAdapterObligationV2 {
         statistic_spec_id: ContentId,
         statistic: StatisticSpecV1,
         failure_policy_release: ContentId,
+    ) -> Result<Self> {
+        Self::from_authenticated_records_for_profile(
+            material,
+            authenticated_product_record_digest,
+            source_spec_id,
+            source,
+            provider_release_id,
+            provider_release,
+            adapter_config_id,
+            adapter_config,
+            window_spec_id,
+            window,
+            statistic_spec_id,
+            statistic,
+            failure_policy_release,
+            SourceAccessProfile::PythTerminalOneTransaction,
+        )
+    }
+
+    /// Join the same terminal-sample graph for the distinct sponsored-push
+    /// snapshot transport. This entry point cannot admit a Receiver/PostUpdate
+    /// source profile, and the existing entry point cannot admit this one.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_authenticated_sponsored_push_records(
+        material: SourceMaterialV3,
+        authenticated_product_record_digest: ContentId,
+        source_spec_id: ContentId,
+        source: SourceSpecV1,
+        provider_release_id: ContentId,
+        provider_release: ProviderReleaseV1,
+        adapter_config_id: ContentId,
+        adapter_config: PythAdapterConfigV1,
+        window_spec_id: ContentId,
+        window: WindowSpecV1,
+        statistic_spec_id: ContentId,
+        statistic: StatisticSpecV1,
+        failure_policy_release: ContentId,
+    ) -> Result<Self> {
+        Self::from_authenticated_records_for_profile(
+            material,
+            authenticated_product_record_digest,
+            source_spec_id,
+            source,
+            provider_release_id,
+            provider_release,
+            adapter_config_id,
+            adapter_config,
+            window_spec_id,
+            window,
+            statistic_spec_id,
+            statistic,
+            failure_policy_release,
+            SourceAccessProfile::PythSponsoredPushSnapshot,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_authenticated_records_for_profile(
+        material: SourceMaterialV3,
+        authenticated_product_record_digest: ContentId,
+        source_spec_id: ContentId,
+        source: SourceSpecV1,
+        provider_release_id: ContentId,
+        provider_release: ProviderReleaseV1,
+        adapter_config_id: ContentId,
+        adapter_config: PythAdapterConfigV1,
+        window_spec_id: ContentId,
+        window: WindowSpecV1,
+        statistic_spec_id: ContentId,
+        statistic: StatisticSpecV1,
+        failure_policy_release: ContentId,
+        expected_profile: SourceAccessProfile,
     ) -> Result<Self> {
         material.authenticate_product_record(authenticated_product_record_digest)?;
         material.validate_source_graph(
@@ -96,7 +176,7 @@ impl PythProviderAdapterObligationV2 {
         source.validate_dependencies(provider_release_id, source.capacity_profile_id())?;
         if source.provider_release_id() != provider_release_id
             || source.adapter_config_id() != adapter_config_id
-            || source.access_profile() != SourceAccessProfile::PythTerminalOneTransaction
+            || source.access_profile() != expected_profile
             || statistic.source_unit_id() != source.unit_id()
             || statistic.kind() != StatisticKind::TerminalSample
             || statistic.required_samples() != 1
@@ -216,7 +296,7 @@ mod tests {
     }
 
     struct Fixture {
-        material: SourceMaterialV2,
+        material: SourceMaterialV3,
         product: ContentId,
         source_id: ContentId,
         source: SourceSpecV1,
@@ -272,8 +352,14 @@ mod tests {
             capacity,
         )
         .expect("terminal statistic");
-        let material =
-            SourceMaterialV2::new(product, source_id, window_id, statistic_id, None, failure);
+        let material = SourceMaterialV3::explicitly_unbounded(
+            product,
+            source_id,
+            window_id,
+            statistic_id,
+            None,
+            failure,
+        );
         Fixture {
             material,
             product,
@@ -329,7 +415,7 @@ mod tests {
     #[test]
     fn parallel_provider_and_product_truth_refuse() {
         let mut altered = fixture();
-        altered.material = SourceMaterialV2::new(
+        altered.material = SourceMaterialV3::explicitly_unbounded(
             id(99),
             altered.source_id,
             altered.window_id,

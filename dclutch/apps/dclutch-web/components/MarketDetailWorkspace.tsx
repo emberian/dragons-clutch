@@ -2,7 +2,7 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 
@@ -12,6 +12,7 @@ import {
   requiredBackingMeaningV1,
   type MarketDetailV1,
 } from '@/lib/marketDetail';
+import { MARKET_EDITORIAL_NOTE_V1, marketEditorialV1 } from '@/lib/marketRegistry';
 import {
   provenanceChipV1,
   shortAddressV1,
@@ -21,9 +22,18 @@ import {
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
 import CellStrip from '@/components/charts/CellStrip';
+import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
+import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
+import { SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
+import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
+import JoinPanel from '@/components/JoinPanel';
 import MarketTradePanel from '@/components/MarketTradePanel';
+import RefusedMarketStory from '@/components/RefusedMarketStory';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
+import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
+import { watchSentenceV1 } from '@/lib/rpcSubscribe';
+import { useAccountWatchV1 } from '@/lib/useAccountWatch';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -100,25 +110,32 @@ function FundingQuote({ funding }: Readonly<{ funding: CapabilityFundingQuoteV1 
   </div>;
 }
 
-function CapabilityEntry({ badge }: Readonly<{ badge: MarketCapabilityBadgeV1 }>) {
+type SlotClockPropsV1 = Readonly<{ clock?: SlotClockV1 | null; nowMs?: number | null }>;
+
+function deadlinePhrase(deadline: string | null, clock: SlotClockV1 | null | undefined, nowMs: number | null | undefined): string {
+  if (deadline === null || clock === undefined || clock === null || nowMs === undefined || nowMs === null) return '';
+  return ` · ${deadlineMomentPhraseV1(clock, deadline, nowMs)}`;
+}
+
+function CapabilityEntry({ badge, clock, nowMs }: Readonly<{ badge: MarketCapabilityBadgeV1 }> & SlotClockPropsV1) {
   return <details className="capability-drawer">
     <summary>
       <span className={`capability-badge${badge.recognized ? ' recognized' : ''}`}>{badge.label}</span>
-      <small>entry {badge.index} · {badge.activation === 'deadline' ? `activation deadline slot ${badge.deadline}` : 'immediate activation'}</small>
+      <small>entry {badge.index} · {badge.activation === 'deadline' ? `activation deadline slot ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}` : 'immediate activation'}</small>
     </summary>
     <dl className="detail-facts">
       <ContentId label="Kind ID" value={badge.kindId} />
       <ContentId label="Release / program-set ID" value={badge.programSetId} />
       <ContentId label="Config ID" value={badge.configId} />
       <Fact label="Activation policy" value={badge.activation} />
-      <Fact label="Activation deadline slot" value={badge.deadline ?? 'none — activation is immediate'} />
+      <Fact label="Activation deadline slot" value={badge.deadline === null ? 'none — activation is immediate' : `${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}`} />
       <Fact label="Depends on entries" value={badge.dependencies.length === 0 ? 'none' : badge.dependencies.join(', ')} />
     </dl>
     <FundingQuote funding={badge.funding} />
   </details>;
 }
 
-function Capabilities({ capabilities }: Readonly<{ capabilities: MarketCapabilityManifestV1 }>) {
+function Capabilities({ capabilities, clock, nowMs }: Readonly<{ capabilities: MarketCapabilityManifestV1 }> & SlotClockPropsV1) {
   if (capabilities.status !== 'authenticated') {
     return <p className="market-capability-refusal">
       <span>{capabilities.status === 'unread' ? 'capabilities unread' : 'capabilities refused'}</span>
@@ -131,7 +148,7 @@ function Capabilities({ capabilities }: Readonly<{ capabilities: MarketCapabilit
       <Fact label="Registry record" value={capabilities.recordAddress} />
       <Fact label="Entries" value={String(capabilities.badges.length)} />
     </dl>
-    <div className="capability-drawers">{capabilities.badges.map((badge) => <CapabilityEntry key={badge.index} badge={badge} />)}</div>
+    <div className="capability-drawers">{capabilities.badges.map((badge) => <CapabilityEntry key={badge.index} badge={badge} clock={clock} nowMs={nowMs} />)}</div>
   </>;
 }
 
@@ -152,13 +169,35 @@ function Realm({ collateral }: Readonly<{ collateral: MarketCollateralV1 }>) {
 
 export default function MarketDetailWorkspace({ address }: Readonly<{ address: string }>) {
   const deployment = useDeploymentV1();
+  // Editorial words for this address, if the shipped registry has any. They
+  // never gate a read and never stand in for one: an unregistered market
+  // renders its address, exactly as before.
+  const editorial = marketEditorialV1(address);
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this Market at the finalized floor…' });
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
+  const refused = card !== null && card.status === 'refused' ? card : null;
+  // Wall-clock layer: measured slot-rate clock plus a ticking now, both
+  // absent until they can be true — see MarketDiscoveryWorkspace.
+  const [clock, setClock] = useState<SlotClockV1 | null>(null);
+  const [nowMs, setNowMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setNowMs(Date.now());
+    });
+    const tick = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(tick);
+    };
+  }, []);
 
   const read = useCallback(async () => {
     setState({ kind: 'loading', message: 'Reading this Market, the Realm record and capability manifest it commits to, and the Claims aggregate holding its liabilities, behind one finalized floor…' });
+    setClock(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -170,6 +209,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         address,
       });
       setState({ kind: 'ready', detail: next, facts, message: next.reason });
+      setClock(await readSlotClockV1(client, next.floorSlot));
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
@@ -187,6 +227,32 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     };
   }, [read]);
 
+  // The live layer. Two accounts carry everything that can change under a
+  // reader on this page — the Market root and the Claims aggregate holding its
+  // liabilities — so those are the only two watched, and a market whose
+  // aggregate was not read watches only the root.
+  //
+  // A notification is never decoded here. It says "what you read is stale",
+  // and the answer is to run the SAME bounded finalized read the page already
+  // uses, so nothing on screen can come from a second, unaudited path. The
+  // re-read is delayed a moment because a transaction usually moves both
+  // accounts and a reader does not need two reads for one event.
+  const watched = decoded === null
+    ? [address]
+    : decoded.liability.status === 'bound'
+      ? [address, decoded.liability.aggregateAddress]
+      : [address];
+  const [changedAtSlot, setChangedAtSlot] = useState<string | null>(null);
+  const reread = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watchState = useAccountWatchV1(deployment.endpoint, watched, (change) => {
+    setChangedAtSlot(change.slot);
+    if (reread.current !== null) clearTimeout(reread.current);
+    reread.current = setTimeout(() => { void read(); }, 1_200);
+  });
+  useEffect(() => () => {
+    if (reread.current !== null) clearTimeout(reread.current);
+  }, []);
+
   const marketProvenance: MarketProvenanceV1 = card?.provenance
     ?? Object.freeze({ kind: 'refused', reason: 'This Market has not been read at any finalized floor yet.' });
   const realmProvenance = detail?.realmProvenance
@@ -194,7 +260,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const liabilityProvenance = detail?.liabilityProvenance
     ?? Object.freeze({ kind: 'refused' as const, reason: 'No Claims aggregate has been read, because no Market has been read.' });
   const capabilityProvenance = detail?.capabilityProvenance
-    ?? Object.freeze({ kind: 'refused' as const, reason: 'No capability manifest has been authenticated, because no Market has been read.' });
+    ?? Object.freeze({ kind: 'refused' as const, reason: 'Nothing to show yet: no market has been read, so there is nothing to check.' });
 
   return <main className="product-shell trade-v3-shell">
     <Nav current="/markets" status={`${deployment.label} · finalized reads`} />
@@ -202,7 +268,11 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow"><Anchor href="/markets">← all Markets</Anchor> · one Market, decoded field by field</p>
-        <h1>{shortAddressV1(address, 8)}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : 'unread') : decoded.phase}</em></h1>
+        <h1>{editorial === null ? shortAddressV1(address, 8) : editorial.title}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : card !== null && card.status === 'refused' ? 'refused' : 'unread') : decoded.phase}</em></h1>
+        {editorial !== null && <p className="market-question">{editorial.question}</p>}
+        {editorial !== null && editorial.resolution !== null && <p className="market-resolution">{editorial.resolution}</p>}
+        {editorial !== null && editorial.story !== null && <p className="market-story">{editorial.story}</p>}
+        {editorial !== null && <p className="market-editorial-note">{MARKET_EDITORIAL_NOTE_V1}</p>}
         <p>Every field below is decoded from a finalized account this browser read, or the section carries REFUSED and its exact reason. Nothing here is aggregated, estimated, or carried over from a previous observation, and no sub-state renders as empty-but-fine.</p>
       </div>
       <aside>
@@ -218,22 +288,36 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     <section className="trade-v3-card route-card">
       <header>
         <span>00</span>
-        <div><h2>The read</h2><p>The Core program that owns this account decides what its bytes mean; it and every other program here come from the active {deployment.label} deployment. The capability manifest is authenticated against the Registry program of the same deployment.</p></div>
+        <div><h2>The read</h2><p>The program that owns this account is what decides what its bytes mean, and it — like every other program named on this page — comes from the active {deployment.label} deployment. What this market is allowed to do is checked against that same deployment, not taken from the market&apos;s own word for it.</p></div>
         <div className="direct-actions"><button type="button" onClick={() => void read()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read this Market'}</button></div>
       </header>
       <p className="direct-status" aria-live="polite">{state.message}</p>
       {state.kind === 'ready' && <div className="trade-v3-evidence">
         <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
-        <article><span>Finalized floor</span><strong>{state.detail.floorSlot}</strong><small>one observation epoch for every section</small></article>
+        <article><span>Finalized floor</span><strong>{state.detail.floorSlot}</strong><small>{clock === null ? 'one observation epoch for every section' : `read at ${new Date(clock.observedAtMs).toLocaleTimeString()} · one observation epoch for every section`}</small></article>
         <article><span>Core program</span><strong>{shortAddressV1(state.detail.coreProgramId, 6)}</strong><small>owner of these bytes</small></article>
         <article><span>Capability source</span><strong>{state.detail.registryProgramId === null ? 'not selected' : shortAddressV1(state.detail.registryProgramId, 6)}</strong><small>{state.detail.registryProgramId === null ? 'manifest unread' : 'manifest authenticated by content'}</small></article>
       </div>}
+      {clock !== null && <p className="slot-clock-note">{slotClockCaveatV1(clock)}</p>}
+      {/* The live layer, stated rather than implied. A reader is told whether
+          this page is watching, and an endpoint that cannot carry a
+          subscription is a fact about the connection — never about the
+          market, and never a reason to distrust what is already on screen. */}
+      <p className={watchState === 'unavailable' ? 'market-capability-refusal' : 'live-watch-note'} aria-live="polite">
+        {watchState === 'unavailable' && <span>not watching</span>}
+        {watchState === 'live' && <i className="live-watch-dot" />}
+        {watchSentenceV1(watchState, deployment.label)}
+        {changedAtSlot !== null && watchState === 'live'
+          ? ` It last changed at slot ${changedAtSlot}, and this page re-read it.`
+          : ''}
+      </p>
     </section>
 
     <section className="trade-v3-card">
       <header><span>01</span><div><h2>Overview</h2><p>What this account is, and the immutable identities it committed to when it was founded.</p></div><SectionProvenance provenance={marketProvenance} /></header>
+      {refused !== null && <RefusedMarketStory refusal={refused.refusal} observedSlot={refused.observedSlot} address={address} />}
       {decoded === null
-        ? <p className="market-empty">No decoded Market root. Nothing about phase, generation, or identity is asserted until one finalized read succeeds.</p>
+        ? refused === null && <p className="market-empty">No decoded Market root. Nothing about phase, generation, or identity is asserted until one finalized read succeeds.</p>
         : <>
           <dl className="detail-facts">
             <CopyableAddress label="Market address" address={decoded.address} />
@@ -266,10 +350,9 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             ))}
           </ul>
         </>}
-      {card !== null && card.status === 'refused' && <p className="market-refusal">{card.refusal}</p>}
     </section>
 
-    <section className="trade-v3-card">
+    {refused === null && <section className="trade-v3-card">
       <header><span>02</span><div><h2>Economics</h2><p>Raw u64 atoms, read where the chain keeps them. A Core Market root carries no supply vector and no Hoard figure, so this section is not decoded from the Market at all: the per-claim supplies come from the Claims LiabilityBasisV2 aggregate this Market derives, and the Hoard is stated as underivable rather than guessed.</p></div><SectionProvenance provenance={liabilityProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No decoded economic state. A zero is a fact a read has to justify, so none is shown here.</p>
@@ -297,23 +380,42 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               requiredBackingAtoms={decoded.liability.requiredBackingAtoms}
               requiredBackingNote={requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}
               caption="Each cell is one claim across this Market&rsquo;s outcome domain; heights are issued claim atoms from the Claims aggregate, against the exact required-backing line."
-              notes={decoded.liability.supplyAtoms.map((_, index) => (
-                decoded.settlement.status === 'terminal'
+              notes={decoded.liability.supplyAtoms.map((_, index) => {
+                const outcome = editorial?.outcomes?.[index];
+                const status = decoded.settlement.status === 'terminal'
                   ? (decoded.settlement.winner === index
                     ? 'winning · pays out under the Market’s own basis (one atom per claim atom when categorical)'
                     : 'losing · pays zero')
-                  : 'unsettled · the terminal receipt decides what this claim pays'
-              ))}
+                  : 'unsettled · the terminal receipt decides what this claim pays';
+                return outcome === undefined ? status : `${outcome} (editorial name) · ${status}`;
+              })}
             />
             <ol className="outcome-vector">
-              {decoded.liability.supplyAtoms.map((amount, index) => (
+              {decoded.liability.supplyAtoms.map((amount, index) => {
+                const outcomeName = editorial !== null && editorial.outcomes !== null ? editorial.outcomes[index] : undefined;
+                return (
                 <li key={index} className={decoded.settlement.status === 'terminal' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
-                  <span>claim {index}</span>
+                  <span>claim {index}{outcomeName === undefined ? '' : ` · ${outcomeName}`}</span>
                   <strong>{amount}</strong>
                   {decoded.settlement.status === 'terminal' && <small>{decoded.settlement.winner === index ? 'winning · pays out under the Market\u2019s own basis (one atom per claim atom when categorical)' : 'losing · pays zero'}</small>}
                 </li>
-              ))}
+                );
+              })}
             </ol>
+            {editorial !== null && editorial.outcomes !== null
+              && <p className="market-editorial-note">The outcome names beside the claim indices are this site&apos;s editorial; the indices, atoms, and every figure above are the chain&apos;s.</p>}
+            <h3 className="detail-subhead">The issuance split</h3>
+            {/* FE-CHART mount: the same supply vector as the cell strip and
+                the ordered list, re-expressed as shares of the whole. */}
+            <SupplyShareStrip
+              supplies={decoded.liability.supplyAtoms}
+              outcomes={editorial?.outcomes ?? null}
+              caption={SUPPLY_SHARE_MEANING_V1}
+              emptyReason="No claims have been issued on this market yet, so there is no split to draw."
+            />
+            {/* Drawn only for a market some run actually recorded; every other
+                market renders nothing here rather than an empty frame. */}
+            <MarketIssuanceHistory address={address} outcomes={editorial?.outcomes ?? null} />
             <h3 className="detail-subhead">Hoard</h3>
             {decoded.hoard.status === 'derived'
               ? <dl className="detail-facts">
@@ -334,21 +436,33 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               </dl>
               : <p className="market-hoard-note">No terminal receipt is written, so no claim is winning and no claim can be redeemed. This is the account&apos;s own state, not a missing read.</p>}
           </>}
-    </section>
+    </section>}
 
-    <section className="trade-v3-card">
+    {refused === null && <section className="trade-v3-card">
       <header><span>03</span><div><h2>Realm</h2><p>The Market names its Realm by content identity. The Realm account read here is the content-addressed program address of that identity, so the collateral binding is derived, never supplied.</p></div><SectionProvenance provenance={realmProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No Realm was reacquired, because no Market root has been decoded.</p>
         : <Realm collateral={decoded.collateral} />}
-    </section>
+    </section>}
 
-    <section className="trade-v3-card">
+    {refused === null && <section className="trade-v3-card">
       <header><span>04</span><div><h2>Capabilities</h2><p>A capability exists only if this Market&apos;s own authenticated manifest lists it. Each entry opens to its exact identities, activation policy, dependency list, and immutable funding quote — quoted in seven segregated compartments with separate native-lamport and Realm-collateral totals, never merged into one number.</p></div><SectionProvenance provenance={capabilityProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No capability manifest identity exists to authenticate, because no Market root has been decoded.</p>
-        : <Capabilities capabilities={decoded.capabilities} />}
-    </section>
+        : <Capabilities capabilities={decoded.capabilities} clock={clock} nowMs={nowMs} />}
+    </section>}
+
+    {decoded !== null && <JoinPanel
+      endpoint={deployment.endpoint}
+      marketAddress={address}
+      marketPhase={decoded.phase}
+      coreProgramId={deployment.programs.core}
+      registryProgramId={deployment.programs.registry}
+      claimsProgramId={deployment.programs.claims}
+      tradingProgramId={deployment.programs.trading}
+      custodyProgramId={deployment.programs.custody}
+      rentProgramId={deployment.programs.rent}
+    />}
 
     {decoded !== null && <MarketTradePanel
       endpoint={deployment.endpoint}
@@ -357,7 +471,19 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       registryProgramId={deployment.programs.registry}
       claimsProgramId={deployment.programs.claims}
       tradingProgramId={deployment.programs.trading}
+      custodyProgramId={deployment.programs.custody}
+      rentProgramId={deployment.programs.rent}
       liability={decoded.liability}
+    />}
+
+    {decoded !== null && <AggregateRetirementStatus
+      endpoint={deployment.endpoint}
+      coreProgramId={deployment.programs.core}
+      claimsProgramId={deployment.programs.claims}
+      marketAddress={address}
+      marketPhase={decoded.phase}
+      marketGeneration={decoded.generation}
+      minimumContextSlot={state.kind === 'ready' ? state.detail.floorSlot : decoded.observedSlot}
     />}
 
     <footer className="product-footer">

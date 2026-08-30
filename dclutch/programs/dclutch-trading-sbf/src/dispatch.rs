@@ -6,9 +6,7 @@ use dclutch_capability_program_contract::{
     CapabilityRootHeaderV1, Error as CapabilityProgramError, SelectedRecordBumpsV1,
 };
 use dclutch_core_contract::ContentId;
-use dclutch_market_core_codec::{
-    CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CapabilityFundingHeaderV1,
-};
+use dclutch_market_core_codec::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2};
 use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
@@ -17,20 +15,35 @@ use solana_program::{hash::hash, pubkey::Pubkey};
 
 use crate::TradingSbfError;
 
+/// Close-profile identity register seeded with the authenticated RentCredit.
+///
+/// Common activation identities occupy `0..12`; the close generation adds
+/// exactly this first extension slot so an AccountProfile can anchor the
+/// writable credit account without trusting a request-supplied address.
+pub const TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2: u16 = 12;
+
 /// Borrowed exact activation request after the Core effect envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TradingActivationRequestV1<'a> {
+pub struct TradingActivationRequestV2<'a> {
     selection: CapabilityExecutionSelectionV1,
-    funding: CapabilityFundingHeaderV1,
+    funding: CapabilityFundingHeaderV2,
     family_request: &'a [u8],
 }
 
-impl<'a> TradingActivationRequestV1<'a> {
+/// Borrowed exact close request after the Core effect envelope.
+///
+/// Activation and close deliberately share one hostile-decoded wire owner:
+/// `selector(144) || funding-header(16) || family request`. The envelope action
+/// and the ProgramSet-selected descriptor are the versioned action authorities;
+/// this alias cannot introduce a parallel DTO truth.
+pub type TradingCloseRequestV2<'a> = TradingActivationRequestV2<'a>;
+
+impl<'a> TradingActivationRequestV2<'a> {
     /// Hostile-decode `selector(144) || funding-header(16) || family request`.
     pub fn decode(role_request: &'a [u8]) -> Result<Self, TradingSbfError> {
         let funding_offset = dclutch_release_set_contract::CAPABILITY_EXECUTION_SELECTION_BYTES_V1;
         let family_offset = funding_offset
-            .checked_add(CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1)
+            .checked_add(CAPABILITY_FUNDING_HEADER_BYTES_V2)
             .ok_or(TradingSbfError::Content)?;
         let selection = CapabilityExecutionSelectionV1::decode(
             role_request
@@ -48,7 +61,7 @@ impl<'a> TradingActivationRequestV1<'a> {
         if !selection.carries_no_record_bumps() {
             return Err(TradingSbfError::Content);
         }
-        let funding = CapabilityFundingHeaderV1::decode(
+        let funding = CapabilityFundingHeaderV2::decode(
             role_request
                 .get(funding_offset..family_offset)
                 .ok_or(TradingSbfError::Content)?,
@@ -68,8 +81,8 @@ impl<'a> TradingActivationRequestV1<'a> {
         self.selection
     }
 
-    /// Return the bounded count of leading FundingState accounts.
-    pub const fn funding(self) -> CapabilityFundingHeaderV1 {
+    /// Return the bounded physical-ledger count and logical union mask.
+    pub const fn funding(self) -> CapabilityFundingHeaderV2 {
         self.funding
     }
 
@@ -86,7 +99,7 @@ impl<'a> TradingActivationRequestV1<'a> {
 /// all schema-specific resources; there is no family discriminator here.
 /// Common accounts cannot alias each other or the suffix. Safe aliases wholly
 /// inside the suffix are owned by the authenticated account profile.
-pub struct TradingActivationAccountsV1<'accounts, 'info> {
+pub struct TradingActivationAccountsV2<'accounts, 'info> {
     core_authority: &'accounts solana_program::account_info::AccountInfo<'info>,
     child_root: &'accounts solana_program::account_info::AccountInfo<'info>,
     funding: &'accounts [solana_program::account_info::AccountInfo<'info>],
@@ -95,17 +108,17 @@ pub struct TradingActivationAccountsV1<'accounts, 'info> {
     family_accounts: &'accounts [solana_program::account_info::AccountInfo<'info>],
 }
 
-impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
+impl<'accounts, 'info> TradingActivationAccountsV2<'accounts, 'info> {
     /// Hostile-frame the exact common prefix using the authenticated header count.
     pub fn parse(
         accounts: &'accounts [solana_program::account_info::AccountInfo<'info>],
-        funding: CapabilityFundingHeaderV1,
+        funding: CapabilityFundingHeaderV2,
     ) -> Result<Self, TradingSbfError> {
         const AUTHORITY: usize = 0;
         const ROOT: usize = 1;
         const FUNDING_START: usize = 2;
         let manifest_index = FUNDING_START
-            .checked_add(usize::from(funding.funding_count()))
+            .checked_add(usize::from(funding.physical_count()))
             .ok_or(TradingSbfError::Content)?;
         let market_index = manifest_index
             .checked_add(1)
@@ -139,7 +152,7 @@ impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
             || market.executable
             || funding_accounts
                 .iter()
-                .any(|account| account.is_signer || !account.is_writable || account.executable)
+                .any(|account| account.is_signer || account.executable)
             || family_accounts.iter().any(|account| account.is_signer)
         {
             return Err(TradingSbfError::Content);
@@ -167,7 +180,10 @@ impl<'accounts, 'info> TradingActivationAccountsV1<'accounts, 'info> {
         self.child_root
     }
 
-    /// Return the ordered writable FundingState account list.
+    /// Return the ordered controller-owned FundingLedgerV2 account list.
+    ///
+    /// The selected Trading ledger is writable; dependency ledgers are foreign
+    /// readonly snapshots. The authenticated masks decide which is which.
     pub const fn funding(&self) -> &'accounts [solana_program::account_info::AccountInfo<'info>] {
         self.funding
     }
@@ -474,7 +490,7 @@ mod tests {
         initialize_root_account_v1,
     };
     use dclutch_market_core_codec::{
-        CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1, REQUEST_BYTES,
+        CAPABILITY_FUNDING_HEADER_BYTES_V2, CORE_EFFECT_ENVELOPE_BYTES_V1, REQUEST_BYTES,
     };
     use dclutch_record_contract::{
         APPEND_PAGE_HEADER_BYTES_V1, BEGIN_RECORD_BYTES_V1, CANONICAL_RECORD_PAGE_BYTES_V1,
@@ -708,11 +724,11 @@ mod tests {
     fn activation_request_has_one_exact_selector_and_funding_header() {
         let (context, _manifest, _descriptor, _config) = canonical_dispatch_fixture();
         let family = [31_u8; 9];
-        let funding = CapabilityFundingHeaderV1::new(16).expect("funding header");
+        let funding = CapabilityFundingHeaderV2::new(1, 16, u16::MAX).expect("funding header");
         let mut bytes = vec![
             0_u8;
             CAPABILITY_EXECUTION_SELECTION_BYTES_V1
-                + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1
+                + CAPABILITY_FUNDING_HEADER_BYTES_V2
                 + family.len()
         ];
         fixture_write(&mut bytes, 0, &context.selection().to_bytes());
@@ -723,19 +739,19 @@ mod tests {
         );
         fixture_write(
             &mut bytes,
-            CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1,
+            CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_HEADER_BYTES_V2,
             &family,
         );
-        let decoded = TradingActivationRequestV1::decode(&bytes).expect("activation request");
+        let decoded = TradingActivationRequestV2::decode(&bytes).expect("activation request");
         assert_eq!(decoded.selection(), context.selection());
         assert_eq!(decoded.funding(), funding);
         assert_eq!(decoded.family_request(), family);
 
         for truncated in
-            0..CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1
+            0..CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_HEADER_BYTES_V2
         {
             assert_eq!(
-                TradingActivationRequestV1::decode(
+                TradingActivationRequestV2::decode(
                     bytes.get(..truncated).expect("truncated role request")
                 ),
                 Err(TradingSbfError::Content)
@@ -748,14 +764,14 @@ mod tests {
             1,
         );
         assert_eq!(
-            TradingActivationRequestV1::decode(&noncanonical_header),
+            TradingActivationRequestV2::decode(&noncanonical_header),
             Err(TradingSbfError::Content)
         );
     }
 
     #[test]
     fn activation_account_prefix_is_ordered_distinct_and_privilege_exact() {
-        let funding = CapabilityFundingHeaderV1::new(2).expect("funding header");
+        let funding = CapabilityFundingHeaderV2::new(2, 2, 0b11).expect("funding header");
         let accounts = [
             account(Pubkey::new_from_array([1; 32]), true, false),
             account(Pubkey::new_from_array([2; 32]), false, true),
@@ -767,7 +783,7 @@ mod tests {
             account(Pubkey::new_from_array([7; 32]), false, false),
         ];
         let decoded =
-            TradingActivationAccountsV1::parse(&accounts, funding).expect("account prefix");
+            TradingActivationAccountsV2::parse(&accounts, funding).expect("account prefix");
         assert_eq!(decoded.core_authority().key, accounts[0].key);
         assert_eq!(decoded.child_root().key, accounts[1].key);
         assert_eq!(decoded.funding().len(), 2);
@@ -787,7 +803,7 @@ mod tests {
             account(Pubkey::new_from_array([15; 32]), false, false),
             account(Pubkey::new_from_array([16; 32]), false, false),
         ];
-        assert!(TradingActivationAccountsV1::parse(&wrong_privilege, funding).is_err());
+        assert!(TradingActivationAccountsV2::parse(&wrong_privilege, funding).is_err());
 
         let duplicate = [
             account(Pubkey::new_from_array([21; 32]), true, false),
@@ -797,7 +813,7 @@ mod tests {
             account(Pubkey::new_from_array([25; 32]), false, false),
             account(Pubkey::new_from_array([26; 32]), false, false),
         ];
-        assert!(TradingActivationAccountsV1::parse(&duplicate, funding).is_err());
+        assert!(TradingActivationAccountsV2::parse(&duplicate, funding).is_err());
 
         let writable_market = [
             account(Pubkey::new_from_array([31; 32]), true, false),
@@ -807,7 +823,7 @@ mod tests {
             account(Pubkey::new_from_array([35; 32]), false, false),
             account(Pubkey::new_from_array([36; 32]), false, true),
         ];
-        assert!(TradingActivationAccountsV1::parse(&writable_market, funding).is_err());
+        assert!(TradingActivationAccountsV2::parse(&writable_market, funding).is_err());
 
         let suffix_substitutes_market = [
             account(Pubkey::new_from_array([41; 32]), true, false),
@@ -818,7 +834,7 @@ mod tests {
             account(Pubkey::new_from_array([46; 32]), false, false),
             account(Pubkey::new_from_array([46; 32]), false, false),
         ];
-        assert!(TradingActivationAccountsV1::parse(&suffix_substitutes_market, funding).is_err());
+        assert!(TradingActivationAccountsV2::parse(&suffix_substitutes_market, funding).is_err());
     }
 
     #[test]
@@ -889,7 +905,7 @@ mod tests {
             .map(|key| AccountMeta::new_readonly(*key, false))
             .collect::<vec::Vec<_>>();
         let role_bytes = CAPABILITY_EXECUTION_SELECTION_BYTES_V1
-            + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1
+            + CAPABILITY_FUNDING_HEADER_BYTES_V2
             + REPRESENTATIVE_MAX_FAMILY_ACTIVATION_REQUEST_BYTES;
         assert_eq!(role_bytes, 416);
         let instruction_bytes = REQUEST_BYTES + CORE_EFFECT_ENVELOPE_BYTES_V1 + role_bytes;

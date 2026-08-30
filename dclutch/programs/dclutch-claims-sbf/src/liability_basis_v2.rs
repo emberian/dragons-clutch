@@ -4,8 +4,8 @@
 //! surface eight sibling modules and roughly twenty crates reach the LBV2
 //! aggregate/Position vocabulary through (`MarketViewV2`, `PositionViewV2`,
 //! `LIABILITY_BASIS_MARKET_SEED_V2`, the two header widths, the two input
-//! types), the terminal-coordinate schema identity, and the four encode/read
-//! helpers that speak it. It owns no route and dispatches nothing.
+//! types), and the three encode/read helpers that speak it. It owns no route
+//! and dispatches nothing.
 //!
 //! # What was here, and why it is not
 //!
@@ -45,11 +45,6 @@ pub use dclutch_claims_svm::liability_basis_state_v2::{
 pub(crate) use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2 as MarketViewV2, LiabilityBasisPositionViewV2 as PositionViewV2,
 };
-pub use dclutch_claims_svm::product_basis_terminal_v3::{
-    TERMINAL_COORDINATE_BYTES_V2, TERMINAL_COORDINATE_MAGIC_V2,
-    TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-};
-const ABI_VERSION_V2: u16 = 2;
 /// Stable LiabilityBasisV2 SBF refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -126,22 +121,6 @@ pub fn encode_liability_basis_position_v2(
     Ok(output)
 }
 
-/// Encode one exact rational terminal-coordinate record.
-pub fn encode_terminal_coordinate_v2(
-    numerator: i64,
-    denominator: u32,
-) -> Result<[u8; TERMINAL_COORDINATE_BYTES_V2], LiabilityBasisSbfErrorV2> {
-    if denominator == 0 {
-        return Err(LiabilityBasisSbfErrorV2::Instruction);
-    }
-    let mut output = [0_u8; TERMINAL_COORDINATE_BYTES_V2];
-    put_infallible(&mut output, 0, &TERMINAL_COORDINATE_MAGIC_V2);
-    put_infallible(&mut output, 8, &ABI_VERSION_V2.to_le_bytes());
-    put_infallible(&mut output, 16, &numerator.to_le_bytes());
-    put_infallible(&mut output, 24, &denominator.to_le_bytes());
-    Ok(output)
-}
-
 pub(crate) fn vector_width(
     header: usize,
     claim_count: u32,
@@ -169,10 +148,4 @@ pub(crate) fn read_vector(
         );
     }
     Ok(output)
-}
-
-fn put_infallible(output: &mut [u8], offset: usize, value: &[u8]) {
-    if let Some(target) = output.get_mut(offset..offset.saturating_add(value.len())) {
-        target.copy_from_slice(value);
-    }
 }

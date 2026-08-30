@@ -12,10 +12,14 @@ describe('the console index', () => {
     }
   });
 
-  it('says who each console is for and defines the one internal term it uses', () => {
-    expect(html).toContain('For operators deploying the protocol');
+  it('states readiness boundaries and names the provenance answer key', () => {
+    expect(html).toContain('does not update programs');
+    expect(html).toContain('does not mean it can send a transaction');
     expect(html).toContain('For market authors');
-    expect(html).toContain('the evidence bundle the build pipeline produces');
+    expect(html).toContain('Wallet redemption');
+    // The blurb used to offer redemption as something a reader could do today.
+    expect(html).toContain('Wallet redemption (not open yet)');
+    expect(html).toContain('Paying out winning claims is not available yet');
     // Names the provenance answer key and its standard.
     expect(html).toContain('The artifacts, and where they come from');
     expect(html).toContain('a bug in the console');

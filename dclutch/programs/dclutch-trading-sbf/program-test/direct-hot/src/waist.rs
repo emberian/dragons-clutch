@@ -14,14 +14,21 @@
 //! alone, and for that reason.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::indexing_slicing)]
 
-use std::{env, fs, path::PathBuf};
+use std::{cell::Cell, collections::HashSet, env, fs, path::PathBuf};
 
 use crate::{
     DirectHotDeploymentWidthsV5,
     chain::install_direct_hot_chain_accounts_v5,
     fixture::{DirectHotChainFixtureV5, DirectHotChainInputV5, build_direct_hot_chain_fixture_v5},
 };
-use dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3;
+use dclutch_capability_program_contract::hot_v3::{
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+    HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+    HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3,
+    HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+    HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+    HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_direct_codec::native_evidence_v3::{
     DIRECT_NATIVE_EVIDENCE_BYTES_V3, encode_direct_headerless_registry_native_evidence_v4_atomic,
@@ -31,7 +38,7 @@ use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
+    initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationRequestV1,
@@ -56,7 +63,9 @@ use solana_program::{
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::{Keypair, Signer};
-use solana_sdk_ids::{bpf_loader_upgradeable, ed25519_program, system_program, sysvar};
+use solana_sdk_ids::{
+    bpf_loader_upgradeable, compute_budget, ed25519_program, system_program, sysvar,
+};
 use solana_transaction::versioned::VersionedTransaction;
 
 pub const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0x91; 32]);
@@ -333,13 +342,34 @@ pub fn programdata(program: Pubkey) -> Pubkey {
 
 pub fn elves() -> Elves {
     let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
-    let read = |name: &str| fs::read(directory.join(name)).expect("required real ELF");
+    let read = |role: &str, name: &str| {
+        let variable = format!("DCLUTCH_{}_ELF_PATH", role.to_ascii_uppercase());
+        let path = match env::var_os(&variable) {
+            Some(value) => {
+                let path = PathBuf::from(value);
+                assert!(path.is_absolute(), "{variable} must be absolute");
+                let metadata = fs::symlink_metadata(&path).expect("role ELF metadata");
+                assert!(
+                    metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+                    "{variable} must be one regular non-symlink file"
+                );
+                assert_eq!(
+                    fs::canonicalize(&path).expect("canonical role ELF"),
+                    path,
+                    "{variable} must be an exact canonical path"
+                );
+                path
+            }
+            None => directory.join(name),
+        };
+        fs::read(path).expect("required real ELF")
+    };
     Elves {
-        registry: read("dclutch_registry_sbf.so"),
-        trading: read("dclutch_trading_sbf.so"),
-        core: read("dclutch_core_sbf.so"),
-        claims: read("dclutch_claims_sbf.so"),
-        custody: read("dclutch_custody_sbf.so"),
+        registry: read("registry", "dclutch_registry_sbf.so"),
+        trading: read("trading", "dclutch_trading_sbf.so"),
+        core: read("core", "dclutch_core_sbf.so"),
+        claims: read("claims", "dclutch_claims_sbf.so"),
+        custody: read("custody", "dclutch_custody_sbf.so"),
     }
 }
 
@@ -504,13 +534,17 @@ pub fn add_release_waist_v2(
         )
         .expect("activate exact role");
     }
-    ActivatedExecutionReleaseSetV1::decode(&cache).expect("complete activation cache");
-    let activation_digest = hash(&cache).to_bytes();
-    let activation = Pubkey::find_program_address(
+    let (activation, activation_bump) = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
         &REGISTRY_PROGRAM_ID,
-    )
-    .0;
+    );
+    // The real Registry records this at activation, and the six readers of the
+    // cache reproduce the address from it instead of searching. A fixture that
+    // left it zero would stage an account no deployment produces and would
+    // measure a route nobody runs.
+    put_activation_cache_bump_v1(&mut cache, activation_bump).expect("activation cache bump");
+    ActivatedExecutionReleaseSetV1::decode(&cache).expect("complete activation cache");
+    let activation_digest = hash(&cache).to_bytes();
     test.add_account(
         activation,
         Account {
@@ -529,6 +563,40 @@ pub fn add_release_waist_v2(
         trading_programdata: programdata(TRADING_PROGRAM_ID),
         claims_programdata: programdata(CLAIMS_PROGRAM_ID),
     }
+}
+
+thread_local! {
+    /// In-process seed override. `None` defers to `DCLUTCH_FIXTURE_SEED`.
+    static FIXTURE_SEED_OVERRIDE: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Restores the previous override however [`with_fixture_seed`] leaves.
+struct FixtureSeedGuard(Option<u64>);
+
+impl Drop for FixtureSeedGuard {
+    fn drop(&mut self) {
+        FIXTURE_SEED_OVERRIDE.with(|cell| cell.set(self.0));
+    }
+}
+
+/// Draw every fixture key from `seed` for the duration of `body`.
+///
+/// `DCLUTCH_FIXTURE_SEED` sweeps one seed per PROCESS, which is right for a
+/// human bisecting by hand and useless for a checked-in gate that has to sweep
+/// many seeds inside one `cargo test`. The obvious reach is `env::set_var`,
+/// which Rust 2024 makes unsafe -- correctly, because another thread reading
+/// the environment concurrently is a data race and this binary links a runtime
+/// that does read it.
+///
+/// So the sweep does not touch the environment at all. A thread-local carries
+/// the override: `#[tokio::test]` is a current-thread runtime, every fixture
+/// key is drawn on that thread during the synchronous fixture build, and no
+/// other thread can observe or race it. The guard restores the prior value even
+/// if `body` panics, so one failing seed cannot silently reseed the next.
+pub fn with_fixture_seed<R>(seed: u64, body: impl FnOnce() -> R) -> R {
+    let restore = FIXTURE_SEED_OVERRIDE.with(|cell| cell.replace(Some(seed)));
+    let _guard = FixtureSeedGuard(restore);
+    body()
 }
 
 /// One fixture keypair, derived from a PINNED seed rather than drawn fresh.
@@ -555,9 +623,13 @@ pub fn add_release_waist_v2(
 /// by hashing them -- so a low-entropy seed still produces a public key that is
 /// a fair sample for a bump search.
 fn fixture_keypair(role: u8) -> Keypair {
-    let seed = env::var("DCLUTCH_FIXTURE_SEED")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
+    let seed = FIXTURE_SEED_OVERRIDE
+        .with(Cell::get)
+        .or_else(|| {
+            env::var("DCLUTCH_FIXTURE_SEED")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+        })
         .unwrap_or(0);
     let mut secret = [0_u8; 32];
     secret[0] = role;
@@ -878,7 +950,7 @@ pub fn legacy_registry_hot_instruction(
     (outer, admission)
 }
 
-pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> [Instruction; 2] {
+pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> [Instruction; 3] {
     let (registry, _) = registry_hot_instruction(releases, direct.chain.hot_instruction.clone());
     let signatures = [
         direct.makers[0]
@@ -894,7 +966,7 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
     ];
     let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
     encode_direct_headerless_registry_native_evidence_v4_atomic(
-        1,
+        2,
         &registry.data,
         signatures,
         &mut evidence,
@@ -902,11 +974,108 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
     .expect("detached current-Registry native evidence");
     [
         Instruction {
+            program_id: compute_budget::ID,
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![2];
+                data.extend_from_slice(
+                    &u32::try_from(COMPUTE_LIMIT)
+                        .expect("compute limit width")
+                        .to_le_bytes(),
+                );
+                data
+            },
+        },
+        Instruction {
             program_id: ed25519_program::ID,
             accounts: Vec::new(),
             data: evidence.to_vec(),
         },
         registry,
+    ]
+}
+
+/// The same Direct trade, submitted TOP-LEVEL to Trading.
+///
+/// This is how every public caller sends one: no Registry outer, no admission
+/// PDA, just the bare Hot instruction on the canonical fixed frame. Trading
+/// takes its `ReauthenticateRegistry` arm and asks the Registry to
+/// re-authenticate Core and itself by CPI, rather than being handed a
+/// continuation's receipts.
+///
+/// The native evidence is byte-for-byte the evidence the continuation form
+/// uses. It can be, because the container is already `TradingHot` with
+/// Hot-relative coordinates and the Registry outer's data is byte-identical to
+/// the Hot data it wraps -- so the makers sign the same message either way, at
+/// the same instruction index. Nothing about the makers' intent changes with
+/// the route; only who is invoked first does.
+pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 4] {
+    let signatures = [
+        direct.makers[0]
+            .sign_message(&direct.chain.signed_messages[0])
+            .as_ref()
+            .try_into()
+            .expect("seller signature width"),
+        direct.makers[1]
+            .sign_message(&direct.chain.signed_messages[1])
+            .as_ref()
+            .try_into()
+            .expect("buyer signature width"),
+    ];
+    // The heap grant rides AHEAD of the evidence, and the Hot instruction is
+    // therefore at index 3 rather than 2. Both positions are forced, and by
+    // opposite constraints:
+    //
+    // - it cannot go last. The runtime clears return data at the start of every
+    //   top-level instruction, so a trailing ComputeBudget instruction erases
+    //   the commit-last ACK the Hot execution just produced -- the transaction
+    //   succeeds and its evidence is gone.
+    // - it cannot go silently in front either. The native-signature evidence
+    //   names the index it expects to find the signed Hot instruction at, so
+    //   moving Hot means re-encoding the evidence for its new index. That is
+    //   what this does, rather than leaving a stale 2 behind.
+    //
+    // The continuation route carries no such instruction and must not: it fits
+    // the protocol default. This route makes two Registry reauthentication CPIs
+    // the other never makes and holds their frames against an allocator that
+    // never frees.
+    let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
+    encode_direct_headerless_registry_native_evidence_v4_atomic(
+        3,
+        &direct.chain.hot_instruction.data,
+        signatures,
+        &mut evidence,
+    )
+    .expect("detached native evidence over the top-level Hot instruction");
+    [
+        Instruction {
+            program_id: compute_budget::ID,
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![2];
+                data.extend_from_slice(
+                    &u32::try_from(COMPUTE_LIMIT)
+                        .expect("compute limit width")
+                        .to_le_bytes(),
+                );
+                data
+            },
+        },
+        Instruction {
+            program_id: compute_budget::ID,
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![1];
+                data.extend_from_slice(&DIRECT_HOT_HEAP_FRAME_BYTES_V1.to_le_bytes());
+                data
+            },
+        },
+        Instruction {
+            program_id: ed25519_program::ID,
+            accounts: Vec::new(),
+            data: evidence.to_vec(),
+        },
+        direct.chain.hot_instruction.clone(),
     ]
 }
 
@@ -976,6 +1145,21 @@ pub async fn submit_v0(
     transaction_payer: Option<&Keypair>,
     signers: &[&Keypair],
 ) -> Result<u64, RefusedExecution> {
+    Ok(
+        submit_v0_observed(context, instructions, addresses, transaction_payer, signers)
+            .await?
+            .compute_units_consumed,
+    )
+}
+
+/// Submit one canonical v0 transaction and retain exact success metadata.
+pub async fn submit_v0_observed(
+    context: &mut ProgramTestContext,
+    instructions: &[Instruction],
+    addresses: Vec<Pubkey>,
+    transaction_payer: Option<&Keypair>,
+    signers: &[&Keypair],
+) -> Result<SuccessfulExecution, RefusedExecution> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let transaction_payer = transaction_payer.unwrap_or(&context.payer);
     let message = VersionedMessage::V0(
@@ -1002,32 +1186,31 @@ pub async fn submit_v0(
         wire <= 1_232,
         "canonical continuation packet overflow: {wire} bytes"
     );
-    if instructions.len() == 2
+    if instructions.len() == 3
         && instructions
             .first()
-            .is_some_and(|instruction| instruction.program_id == ed25519_program::ID)
+            .is_some_and(|instruction| instruction.program_id == compute_budget::ID)
         && instructions
             .get(1)
+            .is_some_and(|instruction| instruction.program_id == ed25519_program::ID)
+        && instructions
+            .get(2)
             .is_some_and(|instruction| instruction.program_id == REGISTRY_PROGRAM_ID)
+        && instructions
+            .get(2)
+            .is_some_and(has_canonical_sealed_execution_aliases)
     {
-        // Decision 0005 added the read-only validated-artifact seal at fixed
-        // coordinate 38. The key itself is ALT-routed, but the continuation
-        // carries the nested Hot account list twice, so the canonical packet
-        // grew by exactly two index bytes: 1,224 -> 1,226 of the 1,232 limit.
-        //
-        // `10d5a8b` then appended the Custody callee at logical coordinate 90,
-        // taking the Direct profile from ninety fixed accounts to ninety-one.
-        // That is one more physical account in the same twice-carried list, so
-        // it is the same two index bytes again: 1,226 -> 1,228.
-        //
-        // !! FOUR BYTES OF MARGIN REMAIN !! Two more accounts appended to this
-        // profile overflow the canonical packet, and the failure is a hard
-        // refusal at `wire <= 1_232` above, not a partial result. This assertion
-        // is the tripwire that made the growth visible at all -- both increments
-        // reached it as a stale-pin failure before any execution, which is the
-        // behaviour to keep. The next coordinate added here needs a plan for the
-        // packet, not just a new number on this line.
-        assert_eq!(wire, 1_228, "transparent continuation wire changed");
+        // Compact native evidence references both maker keys from the exact
+        // following Registry/Trading bytes instead of restating 64 bytes. That
+        // pays for the mandatory 40-byte SetComputeUnitLimit addition and leaves
+        // 28 bytes before the validated-artifact seal was introduced:
+        // 1,228 + 40 - 64 = 1,204. The execution-only seal projection aliases
+        // its six authenticated staging coordinates to the matching raw
+        // coordinates, removing six lookup indexes and producing 1,198.
+        assert_eq!(
+            wire, 1_198,
+            "budgeted transparent continuation wire changed"
+        );
     }
     let mut all_signers = vec![transaction_payer];
     all_signers.extend_from_slice(signers);
@@ -1055,8 +1238,64 @@ pub async fn submit_v0(
     }
     Ok(processed
         .metadata
-        .map(|metadata| metadata.compute_units_consumed)
-        .unwrap_or_default())
+        .map_or_else(SuccessfulExecution::default, |metadata| {
+            SuccessfulExecution {
+                compute_units_consumed: metadata.compute_units_consumed,
+                return_data: metadata
+                    .return_data
+                    .map(|returned| (returned.program_id, returned.data)),
+            }
+        }))
+}
+
+fn has_canonical_sealed_execution_aliases(instruction: &Instruction) -> bool {
+    const REGISTRY_HOT_CHILD_START: usize = 6;
+    const SEALED_ALIASES: [(usize, usize); 6] = [
+        (
+            HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+            HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+            HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+            HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_TRANSITION_RAW_ACCOUNT_V3,
+            HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        ),
+        (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
+        (
+            HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+            HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        ),
+    ];
+    let fixed = instruction
+        .accounts
+        .get(REGISTRY_HOT_CHILD_START..REGISTRY_HOT_CHILD_START + HOT_FIXED_ACCOUNT_COUNT_V3);
+    let Some(fixed) = fixed else {
+        return false;
+    };
+    SEALED_ALIASES.iter().all(|(raw, staging)| {
+        fixed.get(*raw).map(|meta| meta.pubkey) == fixed.get(*staging).map(|meta| meta.pubkey)
+    }) && fixed
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect::<HashSet<_>>()
+        .len()
+        == HOT_FIXED_ACCOUNT_COUNT_V3 - SEALED_ALIASES.len()
+}
+
+/// Exact metadata retained from one successful canonical v0 execution.
+#[derive(Default)]
+pub struct SuccessfulExecution {
+    /// Compute units the runtime charged.
+    pub compute_units_consumed: u64,
+    /// Final transaction return-data producer and bytes, when present.
+    pub return_data: Option<(Pubkey, Vec<u8>)>,
 }
 
 /// One refused execution together with the program log it reached.
@@ -1103,6 +1342,44 @@ impl RefusedExecution {
 
 pub fn program_test(artifacts: &Elves) -> ProgramTest {
     program_test_v2(artifacts, fixture_substrate())
+}
+
+/// The same substrate WITHOUT a forced compute budget.
+///
+/// `set_compute_max_units` makes solana-program-test install one fixed budget
+/// and ignore the transaction's own ComputeBudget instructions -- including
+/// `RequestHeapFrame`. A route that must be exercised WITH its heap grant
+/// therefore cannot use `program_test`: the sysvar still shows the request, the
+/// adapter authenticates it and lifts its ceiling, and the runtime maps the
+/// default anyway, so the first scratch write lands outside the mapping and the
+/// run dies on an access violation that looks like a program bug and is not.
+/// That cost this lane an hour; it is a harness fact and it is named here now.
+pub fn program_test_without_forced_budget(artifacts: &Elves) -> ProgramTest {
+    let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
+    let substrate = fixture_substrate();
+    for (name, id, elf) in [
+        (
+            "dclutch_registry_sbf",
+            REGISTRY_PROGRAM_ID,
+            &artifacts.registry,
+        ),
+        (
+            "dclutch_trading_sbf",
+            TRADING_PROGRAM_ID,
+            &artifacts.trading,
+        ),
+        ("dclutch_core_sbf", CORE_PROGRAM_ID, &artifacts.core),
+        ("dclutch_claims_sbf", CLAIMS_PROGRAM_ID, &artifacts.claims),
+        (
+            "dclutch_custody_sbf",
+            CUSTODY_PROGRAM_ID,
+            &artifacts.custody,
+        ),
+    ] {
+        add_program_v2(&mut test, name, id, elf, substrate);
+    }
+    test
 }
 
 pub fn program_test_v2(artifacts: &Elves, substrate: FixtureSubstrateV1) -> ProgramTest {

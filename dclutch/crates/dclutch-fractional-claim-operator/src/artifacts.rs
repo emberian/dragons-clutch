@@ -125,7 +125,21 @@ pub struct FractionalClaimsAccountRuleV1 {
     /// Whether this coordinate must be executable.
     pub executable: bool,
     /// Exact observed data width selected by the physical release.
+    ///
+    /// Meaningful only when `opaque_data` is false. A zero width then means the
+    /// canonical vacant account that Claims requires to be empty.
     pub data_length: u32,
+    /// Whether the release withholds this coordinate's bytes from the profile.
+    ///
+    /// Claims frames contain coordinates whose byte width no release compiler
+    /// can know: wallets, Mints, Token accounts, sysvars, and deployment-sized
+    /// ProgramData. Setting this emits `AuthenticatedOpaqueReadonlyData`, which
+    /// authenticates key, owner, lamports, and privileges while granting the
+    /// profile no projection or data effect over the account.
+    ///
+    /// The V1 compiler predates this distinction and ignores the bit; only the
+    /// executable V4 compiler honours it.
+    pub opaque_data: bool,
 }
 
 /// Exact emitted Registry bodies for one action-specialized descriptor.

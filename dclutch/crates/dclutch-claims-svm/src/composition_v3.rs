@@ -102,10 +102,49 @@ pub struct ClaimsCompositionV3<'a> {
     founding: Option<&'a [u8]>,
     rational_representation: Option<&'a [u8]>,
     rational_lifecycle: Option<&'a [u8]>,
+    external_once: Option<&'a [u8]>,
     close: Option<ProtocolPositionRequestV2>,
     admit_route: Option<u16>,
     mutation_route: u16,
     close_route: Option<u16>,
+}
+
+/// Caller-authenticated extension for one family request Claims itself owns.
+///
+/// This keeps the family DTO and its semantic binding in its sole owning
+/// crate. The generic Claims composer admits only byte-for-byte identity,
+/// exact fixed geometry, one invocation, and the ordinary single-mutation
+/// order; the caller must authenticate release/Market/parent facts before
+/// constructing this value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimsExternalOnceV3<'a> {
+    request: &'a [u8],
+    fixed_account_count: u16,
+}
+
+impl<'a> ClaimsExternalOnceV3<'a> {
+    /// Bind exact already-authenticated request bytes to their fixed frame.
+    pub fn new(
+        request: &'a [u8],
+        fixed_account_count: u16,
+    ) -> Result<Self, ClaimsCompositionErrorV3> {
+        if request.is_empty() || fixed_account_count == 0 {
+            return Err(ClaimsCompositionErrorV3::Route);
+        }
+        Ok(Self {
+            request,
+            fixed_account_count,
+        })
+    }
+
+    /// Exact authenticated request bytes.
+    pub const fn request(self) -> &'a [u8] {
+        self.request
+    }
+    /// Exact fixed account count.
+    pub const fn fixed_account_count(self) -> u16 {
+        self.fixed_account_count
+    }
 }
 
 impl<'a> ClaimsCompositionV3<'a> {
@@ -141,6 +180,30 @@ impl<'a> ClaimsCompositionV3<'a> {
         family_request: &'a [u8],
         parent: ClaimsCompositionParentV3,
     ) -> Result<Self, ClaimsCompositionErrorV3> {
+        Self::decode_selected_with_external(
+            effect,
+            tail_count,
+            scalars,
+            identities,
+            request_bank,
+            family_request,
+            parent,
+            None,
+        )
+    }
+
+    /// Decode with one exact family-owned atomic mutation admitted by its caller.
+    #[allow(clippy::too_many_arguments)]
+    pub fn decode_selected_with_external(
+        effect: ProgramV3<'_>,
+        tail_count: u32,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+        request_bank: &'a [u8],
+        family_request: &'a [u8],
+        parent: ClaimsCompositionParentV3,
+        external: Option<ClaimsExternalOnceV3<'a>>,
+    ) -> Result<Self, ClaimsCompositionErrorV3> {
         parent.validate()?;
         if effect
             .request_bytes(tail_count)
@@ -156,6 +219,7 @@ impl<'a> ClaimsCompositionV3<'a> {
         let mut founding = None;
         let mut rational_representation = None;
         let mut rational_lifecycle = None;
+        let mut external_once = None;
         let mut close = None;
         let mut admit_route = None;
         let mut mutation_route = None;
@@ -307,6 +371,20 @@ impl<'a> ClaimsCompositionV3<'a> {
                     rational_lifecycle = Some(request);
                     mutation_route = Some(route_index);
                     state = CompositionStateV3::Affined;
+                } else if let Some(admitted) = external.filter(|value| value.request == request) {
+                    if route.kind() != RouteKindV3::Once
+                        || state != CompositionStateV3::Start
+                        || invocation.fixed_account_count != admitted.fixed_account_count
+                        || invocation.item_account_count != 0
+                        || invocation.repeated_item_count != 0
+                        || invocation.borrowed_witness.is_some()
+                        || external_once.is_some()
+                    {
+                        return Err(ClaimsCompositionErrorV3::Route);
+                    }
+                    external_once = Some(request);
+                    mutation_route = Some(route_index);
+                    state = CompositionStateV3::Affined;
                 } else {
                     return Err(ClaimsCompositionErrorV3::Route);
                 }
@@ -322,6 +400,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             .and_then(|count| count.checked_add(u8::from(founding.is_some())))
             .and_then(|count| count.checked_add(u8::from(rational_representation.is_some())))
             .and_then(|count| count.checked_add(u8::from(rational_lifecycle.is_some())))
+            .and_then(|count| count.checked_add(u8::from(external_once.is_some())))
             .ok_or(ClaimsCompositionErrorV3::MissingAffine)?;
         if mutation_count != 1 {
             return Err(ClaimsCompositionErrorV3::MissingAffine);
@@ -354,6 +433,7 @@ impl<'a> ClaimsCompositionV3<'a> {
             founding,
             rational_representation,
             rational_lifecycle,
+            external_once,
             close,
             admit_route,
             mutation_route,
@@ -397,6 +477,11 @@ impl<'a> ClaimsCompositionV3<'a> {
     pub fn rational_lifecycle(self) -> Option<LifecycleRequestV2<'a>> {
         self.rational_lifecycle
             .and_then(|request| LifecycleRequestV2::decode(request).ok())
+    }
+
+    /// Sole exact family-owned atomic mutation request, when selected.
+    pub const fn external_once(self) -> Option<&'a [u8]> {
+        self.external_once
     }
 
     /// Optional canonical zero-Position close request.
@@ -1313,6 +1398,71 @@ mod tests {
                 &[],
                 &family,
                 parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Route)
+        );
+    }
+
+    #[test]
+    fn external_once_admits_only_exact_bytes_geometry_and_single_mutation() {
+        let mut external_request = vec![0_u8; 416];
+        external_request[..8].copy_from_slice(b"DCFREQ02");
+        let fixture = RouteFixture {
+            role: 1,
+            kind: 0,
+            enabled: false,
+            fixed_account_count: 31,
+            request: external_request.clone(),
+        };
+        let (effect_bytes, requests) = effect(core::slice::from_ref(&fixture));
+        let admitted = ClaimsExternalOnceV3::new(&external_request, 31).expect("external");
+        let composition = ClaimsCompositionV3::decode_selected_with_external(
+            ProgramV3::decode(&effect_bytes).expect("effect"),
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &requests,
+            &[],
+            parent(),
+            Some(admitted),
+        )
+        .expect("composition");
+        assert_eq!(
+            composition.external_once(),
+            Some(external_request.as_slice())
+        );
+        assert_eq!(composition.mutation_route(), 0);
+
+        for hostile in [
+            ClaimsExternalOnceV3::new(&external_request, 30).expect("wrong frame"),
+            ClaimsExternalOnceV3::new(b"substituted", 31).expect("wrong bytes"),
+        ] {
+            assert_eq!(
+                ClaimsCompositionV3::decode_selected_with_external(
+                    ProgramV3::decode(&effect_bytes).expect("effect"),
+                    TAIL_COUNT,
+                    &[1],
+                    &[id(40)],
+                    &requests,
+                    &[],
+                    parent(),
+                    Some(hostile),
+                ),
+                Err(ClaimsCompositionErrorV3::Route)
+            );
+        }
+
+        let (twice, twice_requests) = effect(&[fixture.clone(), fixture]);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected_with_external(
+                ProgramV3::decode(&twice).expect("effect"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &twice_requests,
+                &[],
+                parent(),
+                Some(admitted),
             ),
             Err(ClaimsCompositionErrorV3::Route)
         );

@@ -7,7 +7,7 @@
 use dclutch_program_test_evidence::TransactionEvidence;
 use std::{env, fs, path::PathBuf, vec::Vec};
 
-
+use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_claims_affine_batch_program_test::fixture::{
     FinalizedRecordFixtureV2, ProductLbv2FixtureInputV2, compile_product_lbv2_fixture_v2,
 };
@@ -19,6 +19,19 @@ use dclutch_claims_sbf::protocol_position_v2::{
     ProtocolPositionSeedsV2,
 };
 use dclutch_core_contract::ContentId;
+use dclutch_fractional_claim_contract::{
+    FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
+    FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3, FRACTIONAL_RETIREMENT_CURSOR_PDA_SEED_V3,
+    FractionalRetirementActionV3, FractionalRetirementCursorInputV3, FractionalRetirementCursorV3,
+    FractionalRetirementRequestInputV3, FractionalRetirementRequestV3, FractionalRootInputV1,
+    FractionalRootV1, NO_RETIREMENT_COORDINATE_V3,
+};
+use dclutch_fractional_claim_kernel::{
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
+    FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
+    fractional_exposure_terms_bytes_v2,
+};
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -26,14 +39,18 @@ use dclutch_registry_contract::{
     initialize_activation_cache_v1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, ProgramIdentityV1,
+    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
+    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
 };
 use dclutch_rent_contract::{
     RefundAuthority,
     lifecycle_v2::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
+};
+use dclutch_token_svm::{
+    TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
+    TokenBehaviorSelectionV2,
 };
 use solana_account::Account;
 use solana_address_lookup_table_interface::instruction::{
@@ -48,8 +65,9 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_system_interface::instruction::transfer;
 use solana_transaction::versioned::VersionedTransaction;
 
 const CLAIMS: Pubkey = Pubkey::new_from_array([0xb1; 32]);
@@ -57,6 +75,7 @@ const REGISTRY: Pubkey = Pubkey::new_from_array([0xb3; 32]);
 const CORE: Pubkey = Pubkey::new_from_array([0xb4; 32]);
 const TRADING: Pubkey = Pubkey::new_from_array([0xb5; 32]);
 const RENT_PROGRAM: Pubkey = Pubkey::new_from_array([0xb6; 32]);
+const TOKEN_PROGRAM: Pubkey = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 const GENERATION: u64 = 23;
 
 struct Artifacts {
@@ -212,6 +231,43 @@ fn add_record(test: &mut ProgramTest, record: &FinalizedRecordFixtureV2) {
     add_account(test, record.staging, system_program::ID, Vec::new(), 1);
 }
 
+fn finalized_record(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> FinalizedRecordFixtureV2 {
+    let digest = hash(&bytes).to_bytes();
+    FinalizedRecordFixtureV2 {
+        owner,
+        schema,
+        digest,
+        raw: Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner).0,
+        staging: Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+            &owner,
+        )
+        .0,
+        bytes,
+    }
+}
+
+fn retirement_mint_bytes(controller: Pubkey) -> Vec<u8> {
+    const TLV_START: usize = 166;
+    let mut bytes = vec![0_u8; TLV_START];
+    bytes
+        .get_mut(0..4)
+        .expect("Mint authority tag")
+        .copy_from_slice(&1_u32.to_le_bytes());
+    bytes
+        .get_mut(4..36)
+        .expect("Mint authority")
+        .copy_from_slice(controller.as_ref());
+    *bytes.get_mut(45).expect("Mint initialized") = 1;
+    *bytes.get_mut(165).expect("Mint account type") = 1;
+    for extension in [3_u16, 28_u16] {
+        bytes.extend_from_slice(&extension.to_le_bytes());
+        bytes.extend_from_slice(&32_u16.to_le_bytes());
+        bytes.extend_from_slice(controller.as_ref());
+    }
+    bytes
+}
+
 struct Fixture {
     release: [u8; 32],
     cache: Pubkey,
@@ -224,6 +280,13 @@ struct Fixture {
     rent_credit: Pubkey,
     position_lamports: u64,
     admission_lamports: u64,
+    retirement_authority: Pubkey,
+    root: Pubkey,
+    cursor: Pubkey,
+    terms: FinalizedRecordFixtureV2,
+    token_behavior: FinalizedRecordFixtureV2,
+    mint: Pubkey,
+    retirement: FractionalRetirementRequestV3,
     graph: dclutch_claims_affine_batch_program_test::fixture::ProductLbv2FixtureV2,
 }
 
@@ -249,10 +312,15 @@ fn fixture() -> (ProgramTest, Fixture) {
     ] {
         add_program(&mut test, name, id, elf);
     }
+    add_program(
+        &mut test,
+        "dclutch_claims_liability_basis_test_caller_sbf",
+        TOKEN_PROGRAM,
+        artifacts.trading.as_slice(),
+    );
     let (release, cache_bytes) = activation(&artifacts);
     let cache = Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release], &REGISTRY).0;
     add_account(&mut test, cache, REGISTRY, cache_bytes, 1);
-    let owner = Pubkey::new_from_array([0xd1; 32]);
     let wrong_owner = Pubkey::new_from_array([0xd2; 32]);
     let graph = compile_product_lbv2_fixture_v2(ProductLbv2FixtureInputV2 {
         registry_program: REGISTRY,
@@ -288,7 +356,105 @@ fn fixture() -> (ProgramTest, Fixture) {
         graph.claims_market_bytes.clone(),
         1,
     );
-    add_account(&mut test, owner, TRADING, vec![1], 1);
+    let refund = RefundAuthority::new([0x71; 32]).expect("refund authority");
+    let (rent_credit, bump) = Pubkey::find_program_address(
+        &[
+            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
+            graph.core_market.as_ref(),
+            &GENERATION.to_le_bytes(),
+        ],
+        &RENT_PROGRAM,
+    );
+    let rent_credit_data = LifecycleRentCreditV2::new(
+        refund,
+        LifecycleAccountIdV2::new(graph.core_market.to_bytes()).expect("Market"),
+        LifecycleAccountIdV2::new(release).expect("release set"),
+        GENERATION,
+        bump,
+    )
+    .expect("lifecycle RentCredit")
+    .to_bytes()
+    .to_vec();
+    add_account(&mut test, rent_credit, RENT_PROGRAM, rent_credit_data, 1);
+
+    let token_behavior_bytes = TokenBehaviorSelectionV2::new([0x61; 32], release)
+        .expect("Token behavior")
+        .to_bytes()
+        .to_vec();
+    let token_behavior = finalized_record(
+        REGISTRY,
+        TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+        token_behavior_bytes,
+    );
+    add_record(&mut test, &token_behavior);
+    let mint = Pubkey::new_from_array([0xe1; 32]);
+    let mut terms_scratch = vec![0_u8; fractional_exposure_terms_bytes_v2(1).expect("terms width")];
+    let mut terms_bytes = terms_scratch.clone();
+    encode_fractional_exposure_terms_v2(
+        FractionalExposureTermsInputV2 {
+            market: graph.core_market.to_bytes(),
+            product_record: graph.product.digest,
+            result_domain: graph.result_domain.digest,
+            release_set: release,
+            token_program: TOKEN_2022_PROGRAM_ID,
+            token_behavior: token_behavior.digest,
+            exposure_id: [0x63; 32],
+            product_basis: graph.linked_basis.digest,
+            representation_basis: [0x64; 32],
+            graph_id: [0x65; 32],
+            product_width: 258,
+            denominator: 10,
+            shard_mints: &[mint.to_bytes()],
+        },
+        &mut terms_scratch,
+        &mut terms_bytes,
+    )
+    .expect("Fractional terms");
+    let terms = finalized_record(
+        REGISTRY,
+        FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+        terms_bytes,
+    );
+    add_record(&mut test, &terms);
+    let selection = CapabilityExecutionSelectionV1::new(
+        0,
+        ContentId::new([0x66; 32]).expect("manifest"),
+        ContentId::new([0x67; 32]).expect("kind"),
+        ContentId::new([0x68; 32]).expect("capability release"),
+        ContentId::new(terms.digest).expect("terms"),
+    )
+    .expect("selection");
+    let root_header = CapabilityRootHeaderV1::new(
+        ContentId::new(release).expect("release"),
+        graph.core_market.to_bytes(),
+        1,
+        selection,
+        SelectedRecordBumpsV1::default(),
+    )
+    .expect("root header");
+    let (root, root_bump) =
+        Pubkey::find_program_address(&root_header.seeds().as_slices(), &TRADING);
+    let root_lamports = Rent::default().minimum_balance(FRACTIONAL_CAPABILITY_ROOT_BYTES_V4);
+    let root_state = FractionalRootV1::new(FractionalRootInputV1 {
+        bump: root_bump,
+        terms: terms.digest,
+        market: graph.core_market.to_bytes(),
+        rent_beneficiary: rent_credit.to_bytes(),
+        revision: 5,
+        historical_rent_principal: root_lamports,
+    })
+    .expect("root state");
+    let mut root_bytes = vec![0_u8; FRACTIONAL_CAPABILITY_ROOT_BYTES_V4];
+    root_bytes
+        .get_mut(..FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4)
+        .expect("root header bytes")
+        .copy_from_slice(&root_header.to_bytes());
+    root_bytes
+        .get_mut(FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4..)
+        .expect("root state bytes")
+        .copy_from_slice(&root_state.to_bytes());
+    add_account(&mut test, root, TRADING, root_bytes, root_lamports);
+    let owner = root;
     add_account(&mut test, wrong_owner, system_program::ID, Vec::new(), 1);
     let position_seeds =
         ProtocolPositionSeedsV2::new(graph.claims_market.to_bytes(), owner.to_bytes())
@@ -315,26 +481,92 @@ fn fixture() -> (ProgramTest, Fixture) {
         Vec::new(),
         admission_lamports,
     );
-    let refund = RefundAuthority::new([0x71; 32]).expect("refund authority");
-    let (rent_credit, bump) = Pubkey::find_program_address(
-        &[
-            LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
-            graph.core_market.as_ref(),
-            &GENERATION.to_le_bytes(),
-        ],
-        &RENT_PROGRAM,
-    );
-    let rent_credit_data = LifecycleRentCreditV2::new(
-        refund,
-        LifecycleAccountIdV2::new(graph.core_market.to_bytes()).expect("Market"),
-        LifecycleAccountIdV2::new(release).expect("release set"),
-        GENERATION,
-        bump,
+
+    let terms_view = FractionalExposureTermsV2::decode(
+        &terms.bytes,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: terms.digest,
+            finalized_terms_id: terms.digest,
+            recomputed_terms_digest: terms.digest,
+            finalized_terms_digest: terms.digest,
+            record_authenticated: true,
+        },
     )
-    .expect("lifecycle RentCredit")
-    .to_bytes()
-    .to_vec();
-    add_account(&mut test, rent_credit, RENT_PROGRAM, rent_credit_data, 1);
+    .expect("terms view");
+    let cursor_rent = Rent::default().minimum_balance(FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3);
+    let (cursor, cursor_bump) = Pubkey::find_program_address(
+        &[FRACTIONAL_RETIREMENT_CURSOR_PDA_SEED_V3, root.as_ref()],
+        &CLAIMS,
+    );
+    let retirement_input = |revision, coordinate| FractionalRetirementRequestInputV3 {
+        release_set: release,
+        market: graph.core_market.to_bytes(),
+        terms: terms.digest,
+        token_program: TOKEN_2022_PROGRAM_ID,
+        token_behavior: token_behavior.digest,
+        exposure: [0x63; 32],
+        root: root.to_bytes(),
+        rent_credit: rent_credit.to_bytes(),
+        expected_revision: revision,
+        representation_coordinate: coordinate,
+    };
+    let begin = FractionalRetirementRequestV3::new(
+        FractionalRetirementActionV3::Begin,
+        retirement_input(4, NO_RETIREMENT_COORDINATE_V3),
+    )
+    .expect("begin");
+    let cursor_state = FractionalRetirementCursorV3::begin(
+        terms_view,
+        begin,
+        FractionalRetirementCursorInputV3 {
+            bump: cursor_bump,
+            pre_revision: 4,
+            historical_rent_principal: cursor_rent,
+        },
+    )
+    .expect("cursor");
+    add_account(
+        &mut test,
+        cursor,
+        CLAIMS,
+        cursor_state.to_bytes().expect("cursor bytes").to_vec(),
+        cursor_rent,
+    );
+    let retirement = FractionalRetirementRequestV3::new(
+        FractionalRetirementActionV3::RetireCoordinate,
+        retirement_input(5, 0),
+    )
+    .expect("retirement");
+    let retirement_bytes = retirement.to_bytes().expect("retirement bytes");
+    let retirement_seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(release).expect("release"),
+        graph.core_market.to_bytes(),
+        ExecutionRoleV1::Trading,
+        terms.digest,
+        hash(&retirement_bytes).to_bytes(),
+    )
+    .expect("retirement authority");
+    let retirement_authority =
+        Pubkey::find_program_address(&retirement_seeds.as_slices(), &TRADING).0;
+    add_account(
+        &mut test,
+        retirement_authority,
+        system_program::ID,
+        Vec::new(),
+        1,
+    );
+    let mint_bytes = retirement_mint_bytes(root);
+    Token2022BehaviorProfileV2::check_mint(
+        TOKEN_2022_PROGRAM_ID,
+        mint.to_bytes(),
+        &mint_bytes,
+        root.to_bytes(),
+        0,
+    )
+    .expect("retirement Mint profile");
+    add_account(&mut test, mint, TOKEN_PROGRAM, mint_bytes, 1);
     (
         test,
         Fixture {
@@ -349,6 +581,13 @@ fn fixture() -> (ProgramTest, Fixture) {
             rent_credit,
             position_lamports,
             admission_lamports,
+            retirement_authority,
+            root,
+            cursor,
+            terms,
+            token_behavior,
+            mint,
+            retirement,
             graph,
         },
     )
@@ -468,6 +707,42 @@ fn wrapped(
     }
 }
 
+fn retirement_wrapped(f: &Fixture) -> Instruction {
+    let forwarded = vec![
+        AccountMeta::new_readonly(f.retirement_authority, false),
+        AccountMeta::new_readonly(f.market, false),
+        AccountMeta::new(f.position, false),
+        AccountMeta::new(f.admission, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(f.cache, false),
+        AccountMeta::new_readonly(REGISTRY, false),
+        AccountMeta::new_readonly(TRADING, false),
+        AccountMeta::new_readonly(programdata(TRADING), false),
+        AccountMeta::new_readonly(CLAIMS, false),
+        AccountMeta::new_readonly(programdata(CLAIMS), false),
+        AccountMeta::new(f.root, false),
+        AccountMeta::new(f.rent_credit, false),
+        AccountMeta::new_readonly(RENT_PROGRAM, false),
+        AccountMeta::new(f.cursor, false),
+        AccountMeta::new_readonly(f.terms.raw, false),
+        AccountMeta::new_readonly(f.terms.staging, false),
+        AccountMeta::new_readonly(f.token_behavior.raw, false),
+        AccountMeta::new_readonly(f.token_behavior.staging, false),
+        AccountMeta::new(f.mint, false),
+        AccountMeta::new_readonly(TOKEN_PROGRAM, false),
+    ];
+    let mut accounts = vec![AccountMeta::new_readonly(CLAIMS, false)];
+    accounts.extend(forwarded);
+    let mut data = vec![0_u8];
+    data.extend_from_slice(&f.retirement.to_bytes().expect("retirement bytes"));
+    Instruction {
+        program_id: TRADING,
+        accounts,
+        data,
+    }
+}
+
 /// Solana's legacy packet maximum. ProgramTest submits no packet and therefore
 /// cannot enforce it, so this campaign MEASURES every transaction against it:
 /// Found31 was a frame ten bytes past this limit and it survived every fixture
@@ -487,11 +762,7 @@ fn wire_extent(signatures: usize, message: &[u8]) -> usize {
     extent
 }
 
-async fn process_legacy(
-    context: &mut ProgramTestContext,
-    instruction: Instruction,
-    label: &str,
-) {
+async fn process_legacy(context: &mut ProgramTestContext, instruction: Instruction, label: &str) {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -632,7 +903,11 @@ async fn submit(
     let accepted = processed.result.is_ok();
     // The refusal is rendered from what the RUNTIME returned, never from what
     // the campaign expected.
-    let failure = processed.result.clone().err().map(|error| format!("{error:?}"));
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
     let (logs, returned, compute_units) = processed
         .metadata
         .map(|metadata| {
@@ -836,5 +1111,364 @@ async fn real_sbf_admit_rolls_back_and_zero_close_reclaims_both_accounts() {
     );
     println!(
         "runtime-width LBV2 protocol Position CU: admit={admit_compute_units}, close={close_compute_units}"
+    );
+}
+
+#[tokio::test]
+async fn real_sbf_late_token_refusal_rolls_back_fractional_position_mint_and_cursor() {
+    let (test, f) = fixture();
+    let mut context = test.start_with_context().await;
+    let admit = wrapped(
+        &f,
+        request(&f, ProtocolPositionActionV2::Admit),
+        false,
+        f.owner,
+    );
+    let retirement = retirement_wrapped(&f);
+    let addresses = lookup_addresses(context.payer.pubkey(), &[admit.clone(), retirement.clone()]);
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let (accepted, _, _, _) = submit(
+        &mut context,
+        admit,
+        table,
+        &addresses,
+        "claims fractional retirement: admit zero root Position",
+    )
+    .await
+    .expect("admit");
+    assert!(accepted);
+
+    let before_position = context
+        .banks_client
+        .get_account(f.position)
+        .await
+        .expect("position");
+    let before_admission = context
+        .banks_client
+        .get_account(f.admission)
+        .await
+        .expect("admission");
+    let before_rent = context
+        .banks_client
+        .get_account(f.rent_credit)
+        .await
+        .expect("RentCredit");
+    let before_cursor = context
+        .banks_client
+        .get_account(f.cursor)
+        .await
+        .expect("cursor");
+    let before_mint = context
+        .banks_client
+        .get_account(f.mint)
+        .await
+        .expect("Mint");
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        retirement,
+        table,
+        &addresses,
+        "claims fractional retirement: canonical Token program refuses at late Mint close CPI",
+    )
+    .await
+    .expect("retirement refusal");
+    assert!(!accepted, "the test Token processor must refuse Mint close");
+    assert!(
+        logs.iter()
+            .any(|line| line.contains(&format!("Program {TOKEN_PROGRAM} invoke"))),
+        "the refusal must occur after Claims reaches the canonical-ID test Token SBF: {logs:#?}"
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(f.position)
+            .await
+            .expect("position"),
+        before_position
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(f.admission)
+            .await
+            .expect("admission"),
+        before_admission
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(f.rent_credit)
+            .await
+            .expect("RentCredit"),
+        before_rent
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(f.cursor)
+            .await
+            .expect("cursor"),
+        before_cursor
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(f.mint)
+            .await
+            .expect("Mint"),
+        before_mint
+    );
+}
+
+/// Assert a refusal carried an exact program error code.
+///
+/// A hostile that only asserts "the transaction failed" passes on any failure,
+/// including one raised by a gate long before the check the hostile claims to
+/// be about. The code is what makes the claim checkable.
+fn refused_with(logs: &[String], code: u32) -> bool {
+    let needle = format!("custom program error: {code:#x}");
+    logs.iter().any(|line| line.contains(&needle))
+}
+
+/// Refusal code for `ProtocolPositionSbfErrorV2::Position`.
+///
+/// Written literally so a code read out of a validator log is greppable to
+/// here; the program's own `const _: () = assert!` band pins the enum.
+const POSITION_REFUSAL: u32 = 0x5145;
+
+/// A STRANGER'S ONE LAMPORT NO LONGER BLOCKS ADMISSION, AND UNDERFUNDING STILL REFUSES.
+///
+/// Census row R13. The Position and admission accounts are keyless, off-curve,
+/// system-owned PDAs, so anyone on the network may send them lamports at any
+/// time and nothing can stop them. Admission compared their LIVE balance to a
+/// balance the caller had *declared* one slot earlier, by exact equality, so a
+/// single lamport arriving in between refused the transaction -- repeatable by
+/// anyone, against any pending admission, for about one lamport plus a fee,
+/// every slot, forever. That is not a delay a retry outlasts: retrying costs
+/// strictly more than attacking.
+///
+/// This test executes the attack with a real transfer from a wallet that is
+/// nobody, and then admits the position anyway on a request whose bytes are
+/// unchanged. It also pins the half that must NOT move: over-declaring -- a
+/// caller claiming the accounts hold more than they do -- still refuses at
+/// `0x5145`, which is the entire safety content of the check that was relaxed.
+/// The refusal is proven to reach that check rather than an earlier gate,
+/// because the accepting admit that follows it in this same run differs from it
+/// in nothing but the declared lamports.
+///
+/// WHAT THIS TEST DELIBERATELY DOES NOT FIX, asserted rather than omitted: the
+/// close route's twin comparison is still an exact equality, so the last leg
+/// below shows a truthful pre-attack close REFUSING at `0x5146` and only a
+/// close that re-declares the post-attack balance committing. Close is still
+/// front-runnable the same way. It is not relaxed here because it cannot be
+/// alone -- close credits the rent account `rent_before + declared_total` by
+/// absolute assignment while zeroing accounts that hold the live balance, and
+/// its receipt's lamport fields are re-derived and whole-struct
+/// equality-checked inside trading-sbf
+/// (`programs/dclutch-trading-sbf/src/direct/sell_escrow.rs:497-523`), so
+/// relaxing it changes what the receipt means and moves two ELFs.
+#[tokio::test]
+async fn a_strangers_lamport_cannot_block_admission_and_underfunding_still_refuses() {
+    let (test, f) = fixture();
+    let mut context = test.start_with_context().await;
+
+    // The admit whose bytes never change: it declares the balance the caller
+    // read BEFORE the attack, which is the only balance a caller can ever know.
+    let admit = wrapped(
+        &f,
+        request(&f, ProtocolPositionActionV2::Admit),
+        false,
+        f.owner,
+    );
+    // The negative control. Claiming the accounts hold more than they do is
+    // underfunding, and underfunding is exactly what this check exists to
+    // refuse. It must still refuse after the relaxation, or the relaxation
+    // removed a guard instead of widening one.
+    let mut overdeclared = request(&f, ProtocolPositionActionV2::Admit);
+    overdeclared.observed_position_lamports = f
+        .position_lamports
+        .checked_add(1_000)
+        .expect("over-declaration");
+    let underfunded = wrapped(&f, overdeclared, false, f.owner);
+    // Two closes: one truthful about the pre-attack balance, one truthful about
+    // the balance the attack left behind.
+    let stale_close = wrapped(
+        &f,
+        request(&f, ProtocolPositionActionV2::Close),
+        false,
+        f.owner,
+    );
+    let mut post_attack = request(&f, ProtocolPositionActionV2::Close);
+    post_attack.observed_position_lamports = f
+        .position_lamports
+        .checked_add(1)
+        .expect("post-attack balance");
+    let honest_close = wrapped(&f, post_attack, false, f.owner);
+
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        &[
+            underfunded.clone(),
+            admit.clone(),
+            stale_close.clone(),
+            honest_close.clone(),
+        ],
+    );
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+
+    // THE ATTACK. A wallet that holds no role, is named nowhere in this market
+    // and signs nothing but its own transfer, sends one lamport to the Position
+    // PDA. It needs no permission because the PDA is system-owned and has no
+    // key: this is the cheapest griefing verb in the tree.
+    let griefer = Keypair::new();
+    let griefer_stake = Rent::default()
+        .minimum_balance(0)
+        .checked_mul(64)
+        .expect("griefer funding");
+    let funder = context.payer.pubkey();
+    process_legacy(
+        &mut context,
+        transfer(&funder, &griefer.pubkey(), griefer_stake),
+        "claims position: fund a stranger",
+    )
+    .await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[transfer(&griefer.pubkey(), &f.position, 1)],
+            Some(&griefer.pubkey()),
+            &[&griefer],
+            blockhash,
+        ))
+        .await
+        .expect("one lamport, from anybody, needs nobody's permission");
+    let attacked = context
+        .banks_client
+        .get_account(f.position)
+        .await
+        .expect("read")
+        .expect("position")
+        .lamports;
+    assert_eq!(
+        attacked,
+        f.position_lamports + 1,
+        "the attack must actually have landed, or nothing below is a test"
+    );
+
+    // The negative control refuses, at the code, on the attacked state.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        underfunded,
+        table,
+        &addresses,
+        "claims position: an over-declared prepayment is underfunding and still refuses",
+    )
+    .await
+    .expect("underfunded");
+    assert!(!accepted, "over-declaration must never be admissible");
+    assert!(
+        refused_with(&logs, POSITION_REFUSAL),
+        "underfunding must refuse at {POSITION_REFUSAL:#x}, not merely fail:\n{}",
+        logs.join("\n")
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(f.position)
+            .await
+            .expect("read")
+            .expect("position")
+            .data
+            .is_empty(),
+        "a refused admission allocates nothing"
+    );
+
+    // THE WELD. Same request bytes, one stranger's lamport later.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        admit,
+        table,
+        &addresses,
+        "claims position: admission survives a one-lamport front-run",
+    )
+    .await
+    .expect("admit");
+    assert!(
+        accepted,
+        "a stranger's lamport must not be able to block this admission:\n{}",
+        logs.join("\n")
+    );
+
+    // The close side is NOT fixed, and this is what that costs today: the
+    // truthful-about-yesterday close refuses.
+    let (accepted, logs, _, _) = submit(
+        &mut context,
+        stale_close,
+        table,
+        &addresses,
+        "claims position: close still refuses a pre-front-run declaration",
+    )
+    .await
+    .expect("stale close");
+    assert!(!accepted);
+    assert!(
+        refused_with(&logs, 0x5146),
+        "the close-side exposure is real and this is where it shows -- it must \
+         refuse at 0x5146 (Rent), so that closing the census row later has a \
+         test to turn green:\n{}",
+        logs.join("\n")
+    );
+
+    // And conservation over the TRUE balance, dust included: every lamport the
+    // stranger donated reaches the Market's rent credit rather than stranding.
+    let rent_before = context
+        .banks_client
+        .get_account(f.rent_credit)
+        .await
+        .expect("read")
+        .expect("rent")
+        .lamports;
+    let (accepted, logs, returned, _) = submit(
+        &mut context,
+        honest_close,
+        table,
+        &addresses,
+        "claims position: a close that declares the post-attack balance commits",
+    )
+    .await
+    .expect("honest close");
+    assert!(accepted, "close refusal logs:\n{}", logs.join("\n"));
+    let (_, bytes) = returned.expect("close receipt");
+    ProtocolPositionCloseReceiptV2::decode(&bytes).expect("close receipt");
+    let rent_after = context
+        .banks_client
+        .get_account(f.rent_credit)
+        .await
+        .expect("read")
+        .expect("rent")
+        .lamports;
+    assert_eq!(
+        rent_after,
+        rent_before + f.position_lamports + 1 + f.admission_lamports,
+        "the stranger's lamport is swept with the rest, not stranded"
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(f.position)
+            .await
+            .expect("read")
+            .is_none()
+            && context
+                .banks_client
+                .get_account(f.admission)
+                .await
+                .expect("read")
+                .is_none()
     );
 }

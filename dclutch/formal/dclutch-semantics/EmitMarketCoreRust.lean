@@ -302,6 +302,49 @@ pub enum Readiness {
     Consumed,
 }
 
+/// Canonical PDA bumps the founding recorded for this Market.
+///
+/// The founding is the only party that derives these addresses from seeds it
+/// has already authenticated; every later reader would otherwise search for
+/// them. `None` is an unrecorded bump whose reader searches, so a state that
+/// records nothing behaves exactly as it did before this field existed.
+///
+/// A bump is never an authority. A reader reproduces the address from the
+/// recorded bump and compares it with the account it was handed, so a wrong
+/// bump reproduces a different address and refuses.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StateBumpsV1 {
+    /// Bump of this Market's own Core state address.
+    pub market: Option<u8>,
+    /// Bump of the Registry raw record naming `identity.realm_id`.
+    pub realm_raw_record: Option<u8>,
+    /// Bump of that record's Registry staging cursor.
+    pub realm_staging_record: Option<u8>,
+}
+
+impl StateBumpsV1 {
+    /// Record no bump; every reader searches.
+    pub const UNRECORDED: Self = Self {
+        market: None,
+        realm_raw_record: None,
+        realm_staging_record: None,
+    };
+
+    /// Carry one derived bump. Zero is the unrecorded encoding and cannot be
+    /// carried, so a zero bump degrades to a search instead of refusing.
+    #[must_use]
+    pub const fn record(bump: u8) -> Option<u8> {
+        if bump == 0 { None } else { Some(bump) }
+    }
+
+    /// Zero is the unrecorded encoding, so it is not a representable bump.
+    pub(crate) fn canonical(self) -> bool {
+        [self.market, self.realm_raw_record, self.realm_staging_record]
+            .iter()
+            .all(|bump| *bump != Some(0))
+    }
+}
+
 /// Persisted fixed Market Core header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoreState {
@@ -310,13 +353,17 @@ pub struct CoreState {
     pub terminal_winner: u32,
     pub identity: MarketIdentity,
     pub outstanding_capabilities: u64,
+    /// Source-projected ceiling in complete-set units. `u64::MAX` is unbounded.
+    pub principal_cap_sets: u64,
     pub rent_beneficiary: Identity,
     pub terminal_receipt: Option<Identity>,
+    /// Canonical PDA bumps recorded at founding.
+    pub bumps: StateBumpsV1,
 }
 
 impl CoreState {
     fn valid_static(self) -> bool {
-        match self.phase {
+        self.principal_cap_sets != 0 && self.bumps.canonical() && match self.phase {
             Phase::Founding => {
                 self.readiness != Readiness::Consumed
                     && self.terminal_receipt.is_none()
@@ -364,10 +411,26 @@ impl CoreState {
             STATE_OUTSTANDING_CAPABILITIES_OFFSET,
             self.outstanding_capabilities,
         )?;
+        put_u64(
+            &mut output,
+            STATE_PRINCIPAL_CAP_SETS_OFFSET,
+            self.principal_cap_sets,
+        )?;
         put_identity(&mut output, STATE_RENT_BENEFICIARY_OFFSET, self.rent_beneficiary)?;
         if let Some(receipt) = self.terminal_receipt {
             put_identity(&mut output, STATE_TERMINAL_RECEIPT_OFFSET, receipt)?;
         }
+        put_bump(&mut output, STATE_MARKET_BUMP_OFFSET, self.bumps.market)?;
+        put_bump(
+            &mut output,
+            STATE_REALM_RAW_RECORD_BUMP_OFFSET,
+            self.bumps.realm_raw_record,
+        )?;
+        put_bump(
+            &mut output,
+            STATE_REALM_STAGING_RECORD_BUMP_OFFSET,
+            self.bumps.realm_staging_record,
+        )?;
         Ok(output)
     }
 
@@ -380,6 +443,7 @@ impl CoreState {
         if read_u16(input, STATE_VERSION_OFFSET)? != VERSION {
             return Err(Error::UnsupportedVersion);
         }
+        require_zero(input, STATE_RESERVED_BUMPS_OFFSET, 5)?;
         let phase = decode_phase(read_byte(input, STATE_PHASE_OFFSET)?)?;
         let readiness = decode_readiness(read_byte(input, STATE_READINESS_OFFSET)?)?;
         let receipt_bytes = read_array(input, STATE_TERMINAL_RECEIPT_OFFSET)?;
@@ -404,8 +468,14 @@ impl CoreState {
                 generation: read_u64(input, STATE_GENERATION_OFFSET)?,
             },
             outstanding_capabilities: read_u64(input, STATE_OUTSTANDING_CAPABILITIES_OFFSET)?,
+            principal_cap_sets: read_u64(input, STATE_PRINCIPAL_CAP_SETS_OFFSET)?,
             rent_beneficiary: read_identity(input, STATE_RENT_BENEFICIARY_OFFSET)?,
             terminal_receipt,
+            bumps: StateBumpsV1 {
+                market: read_bump(input, STATE_MARKET_BUMP_OFFSET)?,
+                realm_raw_record: read_bump(input, STATE_REALM_RAW_RECORD_BUMP_OFFSET)?,
+                realm_staging_record: read_bump(input, STATE_REALM_STAGING_RECORD_BUMP_OFFSET)?,
+            },
         };
         if !state.valid_static() {
             return Err(Error::InvalidPhase);
@@ -626,9 +696,14 @@ pub struct FoundingFrame {
     pub realm: Realm,
     pub product: Product,
     pub identity: MarketIdentity,
+    /// Canonical complete-set cap projected by authenticated Source policy.
+    pub principal_cap_sets: u64,
     pub core_admission: Admission,
     pub quote: FoundingQuote,
     pub accounts: FoundingAccounts,
+    /// Bumps the adapter derived while authenticating this frame's own
+    /// addresses. They are adapter observations, like account lamports.
+    pub bumps: StateBumpsV1,
 }
 
 /// Exact creation decomposition for one account.
@@ -742,6 +817,7 @@ pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, E
         || frame.identity.realm_id != frame.realm.realm_id
         || frame.identity.product_record != frame.product.product_record
         || frame.identity.product_id != frame.product.product_id
+        || frame.principal_cap_sets == 0
         || frame.identity.selected_release_set != frame.core_admission.selected.release_set_id
         || frame.identity.registry_program != frame.core_admission.market_registry_program
         || !admission_valid(frame.core_admission, Role::Core)
@@ -771,8 +847,10 @@ pub fn found(request: Request, frame: FoundingFrame) -> Result<FoundingResult, E
         terminal_winner: 0,
         identity: frame.identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: frame.principal_cap_sets,
         rent_beneficiary: frame.accounts.rent_credit,
         terminal_receipt: None,
+        bumps: frame.bumps,
     };
     if !state.valid_static() {
         return Err(Error::InvalidPhase);
@@ -1318,6 +1396,18 @@ fn require_zero(input: &[u8], offset: usize, width: usize) -> Result<(), Error> 
 
 fn read_byte(input: &[u8], offset: usize) -> Result<u8, Error> {
     input.get(offset).copied().ok_or(Error::InvalidLength)
+}
+
+/// Zero is the unrecorded bump; its reader searches for the address.
+fn read_bump(input: &[u8], offset: usize) -> Result<Option<u8>, Error> {
+    Ok(match read_byte(input, offset)? {
+        0 => None,
+        bump => Some(bump),
+    })
+}
+
+fn put_bump(output: &mut [u8], offset: usize, bump: Option<u8>) -> Result<(), Error> {
+    put_byte(output, offset, bump.unwrap_or(0))
 }
 
 fn read_u16(input: &[u8], offset: usize) -> Result<u16, Error> {

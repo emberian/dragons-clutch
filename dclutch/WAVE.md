@@ -5,14 +5,18 @@ costs orientation: read it first, then `AGENTS.md`, `PROJECT_METHOD.md`,
 `docs/OMISSION_INDEX.md`. It records the current cycle, active lanes, and
 gates. It is not release evidence.
 
+`docs/INTENT.md` is the other half of that orientation and reads before all of
+them: this file is what execution has found, INTENT is what the project is
+*for*, in ember's own recoverable words. It is a DRAFT FOR EMBER'S EDIT.
+
 ## Standing decisions (2026-08-26, with ember)
 
 - Local-first for several cycles. **Devnet deploy-and-recycle is deferred**
   (45 devnet SOL banked; seven-role successor ≈ 29 SOL rent; explicit named
   authorization required before any deploy).
-- **Assurance work is parked** beyond keeping every claim fail-closed and
-  honestly labeled. Finish and polish first; iterate on assurance in public
-  from a complete basis.
+- **Assurance work is parked** beyond keeping every claim honestly labeled:
+  what is unproven says so, in the surface that shows it. Finish and polish
+  first; iterate on assurance in public from a complete basis.
 - Frontend/demo excellence is first-class: browser-wallet support
   (Wallet Standard; verify Talisman et al.), transaction-complete workflows,
   and demo-quality Products for the eventual devnet/Pages demo.
@@ -205,6 +209,102 @@ deleting or "fixing" it. Unfiltered `-p <crate>` test suites are forbidden.
 
 ## Queue (next linger points) — reconciled by GIT-SCAN 2026-08-27
 
+- **OPEN PROTOCOL DECISION — the published/selected capability release is ONE
+  gap, not two** (GEN-SER, 2026-08-29; accepted open, not ruled mid-wave).
+  Neither General nor Series reaches Trading's commit half, and the reason is
+  the same for both. **There is no missing Trading dispatch site**: `hot_v3`
+  is family-neutral, already dispatched at `trading-sbf/src/lib.rs:454`, and
+  walks whatever child routes the *selected* EffectProgram declares by
+  `FixedRole`. No family has an arm there and none needs one. The
+  ~20 `series-family` cfg blocks inside `hot_v3` are those family-neutral role
+  routes, gated so a `--features series-family` build still compiles the roles
+  a Series effect declares — they are not Series dispatch, and reading them as
+  such sends you to build the wrong thing.
+  `stage_series_consume_execution_v3` (`series/execute_v3.rs:211`) has zero
+  callers because it belongs to the superseded adapter design.
+  What is actually missing is a release **published and selected**: the
+  artifacts finalized as Registry records, named by a `CapabilityProgramSetV2`,
+  and chosen by a founded Market's capability manifest. Only Direct has that
+  pipeline (`successor/src/{market,direct_market}.rs`, a whole records
+  compiler); `plan_general_capability_activation_v3` has test callers only.
+  Sizing it as one shared piece of infrastructure rather than two family
+  efforts is the point of this entry — GEN-SER's round-2 General campaign runs
+  against the accelerator ELF for exactly this reason, and that is not a
+  General-specific debt.
+- **OPEN PROTOCOL DECISION — Series declares no `StateLifecyclePolicyV5`**
+  (GEN-SER, 2026-08-29; blocks every Series release). Every other family has
+  one (`encode_general_state_lifecycle_v5_atomic`; Direct has two).
+  `series/lifecycle.rs` is about FUNDING — `FundingStateV1`, top-ups, refunds
+  — not the lifecycle *artifact*. Until this exists there is no admissible
+  Series release at all, because
+  `authenticate_series_consume_artifacts_v4` decodes the policy, runs
+  `validate_account_profile` against the Series Consume Profile13, and
+  requires `action_plan_count(Consume)` to be **nonzero** — a policy covering
+  only Prepare or Expire decodes, validates, and is still refused. So it is
+  not a field that can be left empty and filled in later. Three things need
+  deciding, none of them a caller's call:
+  (a) **which created states it covers** — Series creates a root *and* a
+  Ticket, where General's precedent covers primary+terminal;
+  (b) **which rent-quote generation it pins**;
+  (c) **who receives the refund** — and note the hazard:
+  `series/lifecycle.rs:149 ticket_capability_refund` already suggests the
+  Ticket's capability rent is spoken for by the funding path, so a policy that
+  also claimed it would be a **second author for one lamport flow**, the exact
+  class of bug the escrow work keeps fixing.
+  Do not hand-write it against prose. The requirement is derived off the
+  verifier, in order, as `SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4` in
+  `trading-sbf/src/series/release_v4.rs` (8b37cc52) — check the answer against
+  that. The assembler in the same file (e4aa2bbd) takes `lifecycle` and
+  `strategy` as typed parameters rather than defaulting them, so the moment a
+  policy exists the bundle assembles and authenticates with no other change.
+  **RULING (ORCH, 2026-08-29 12:30 EDT, ember-endorsed: selection is the
+  spine now).** The single-author principle — the day's entire defect
+  taxonomy was "two authors for one fact" — governs all three:
+  (a) the policy covers the states Series routes CREATE AND OWN: the root.
+  The Ticket appears as a referenced coordinate only; its lamport flow is
+  authored by the funding path (`ticket_capability_refund`) and the policy
+  claiming it must be a PINNED REFUSAL, not merely absent.
+  (b) the rent-quote generation pin is DERIVED at emit time from the
+  publication context the release set already binds — never supplied, never
+  a second copy.
+  (c) the refund recipient is a RULE, never an identity: the beneficiary
+  fixed at state creation (Dealer checkpoint precedent — every lamport
+  reaches the creation-fixed beneficiary).
+  Implementations are checked against `SERIES_CONSUME_LIFECYCLE_REQUIREMENTS_V4`,
+  not this prose. While in there: fix the naming collision — series/lifecycle.rs
+  is about FUNDING, the protocol-wide term means the artifact; a name that
+  misleads is the found_request_digest trap waiting for a third lane.
+  **RESOLVED (SER-POL, 2026-08-29).** b20256ee (rename: series/commit_plans.rs),
+  8f579821 (the Consume bank grows append-only so the Profile13 projects the
+  root header's own seven derivation fields — the only honest seed source),
+  4f4de38e (`lifecycle_policy_v5.rs`: root-only Authenticate plan, everything
+  derived, no lamport authorship), d5a24df2 (the Ticket claim is a PINNED
+  REFUSAL: `SeriesArtifactErrorV4::TicketAuthorship`, alias-resolving, own
+  hostile per claiming shape; the spec constant grew to five entries with the
+  verifier), b43062fc (`series_consume_selected_release_v4` + DCSRPB04
+  publication in the FRAC house shape; `authenticate_series_consume_artifacts_v4`
+  ACCEPTS a real assembled bundle for the first time, with the Prepare-only and
+  Ticket-claiming negative controls refused at their exact conjuncts). The
+  ShadowAot certificate identity remains the release's one typed deployment
+  parameter — `dclutch-series-shadow-sbf` builds fail-closed with no generated
+  release selected, so no local certificate exists to read; filling it is the
+  accelerator-staging work, not a release-compiler gap.
+- **RULING — Reaffirm disposition (ORCH, 2026-08-29 ~12:50 EDT): APPROVED AS
+  DESIGNED, IMPLEMENTATION DEFERRED to a window when upgrade.rs is quiet.**
+  CONV's investigation (board ~13:58 entry) governs: third
+  `CheckedDeploymentDispositionV1::Reaffirm` variant, gated on the gate's
+  already-authenticated carry-forward closure (upgrade.rs:6101-6122: disposition
+  carry-forward AND cohort base AND requires_new_artifact false AND
+  changed_inputs empty AND base==candidate digest) as its receipt; journal
+  schema v3→v4 explicitly; the NINE ordinal `index < 2` sites become one named
+  predicate FIRST as a standalone commit. Rationale: the current refusal forces
+  a downgrade-bounce — two real Loader mutations on live programs to satisfy
+  bookkeeping — which is strictly worse for safety than accepting the closure.
+  Conditions: hostiles are REWRITTEN TO PIN THE NEW BOUNDARY, one per closure
+  leg (wrong disposition string / non-base cohort / nonempty changed_inputs /
+  digest mismatch → each REFUSED with pinned code); the old blanket-refusal
+  hostiles are replaced, not deleted-and-forgotten. Ember veto window open —
+  recorded here precisely so it can be overruled before implementation.
 - **LINGER₂ Sonnet batch — DONE.** Satellites folded (root `exclude` is now
   empty; nested program-test harness workspaces stay per 5c663da precedent);
   both skeleton dirs deleted; `dealer_chain` warnings cleared (21df8e5).
@@ -1005,3 +1105,92 @@ for commits/fmt; the frame-diagnostic SCRIPT over every shipped link;
 M-61 margin reporting (pass count + mean); parked-is-not-landed; the
 board (/private/tmp/dclutch-wave-board.md, archived copy in docs/) is
 append-only coordination, never authority; reader-voice on anything public.
+
+DOCTRINE, from the Dealer accepted-transition lane (2026-08-29): EVERY NEW PDA
+DOMAIN GETS A CONST LENGTH ASSERTION. Four Dealer domains shipped at 35-36 bytes
+against Solana's 32-byte maximum seed length, which does not make an address
+unusual — it makes it underivable, so the whole Custody reservation/escrow/
+activation family could never be created by Custody nor authenticated by
+Trading. Every component test passed; none of them derived the address. The
+guard is one line beside the constant — `const _: () = assert!(DOMAIN.len() <=
+32)` — and it turns the next over-long seed into a build failure instead of a
+family of addresses nobody can reach. dclutch-dealer-codec carries them now;
+there was no guard of this class anywhere in the tree before. The sibling
+lesson from the same lane: two programs agreeing on a PDA by coincidence is not
+agreement — Trading and Custody derived the reservation batch under different
+seed counts, so give a cross-program address ONE supported derivation and pin it
+from both sides.
+
+## CYCLE 3 CHARTER — the coherently extrapolated platonic dClutch (2026-08-29 ~15:40 EDT, ember: "fold it all in")
+Extrapolate the protocol's own principles to completion. Spawned immediately:
+1. SELECTION COMPLETENESS (RAT-SEL): Rational selected release + publication +
+   founding via the neutral seam; Structured as its child campaign. The seam's
+   neutrality test: each family = config + publication, no new driver code.
+2. MULTI-CAPABILITY RULING (folded into SEL-SEAM): the manifest encoder
+   forbids two entries of one kind; does it PERMIT one entry each of several?
+   Read it off the codec, prove or weld shut deliberately.
+   RESOLVED (SEL-SEAM, 2026-08-29): both, deliberately. The CODEC permits
+   one entry each of several distinct kinds (a five-entry manifest with two
+   trade kinds encodes canonically; up to 16 entries fit
+   CAPABILITY_MANIFEST_MAX_BYTES_V1) — coexisting capabilities are not a
+   wire impossibility, and per-entry roots and funding quotes already exist
+   on chain. Founding is WELDED to one selected trade capability at two
+   independent seams: the selection seam pins the four-entry shape and only
+   grows the three-entry Resolution base by one
+   (several_distinct_kinds_encode_but_the_selection_seam_welds_to_one,
+   selected_capability.rs), and the funding census requires every entry
+   funded by exactly one of the two controllers with Trading funding exactly
+   the selected entry — refusing symmetrically whichever of two coexisting
+   kinds is selected
+   (founding_masks_weld_the_manifest_to_one_selected_capability, market.rs).
+   Widening to several selected capabilities per Market is therefore a
+   deliberate future decision (driver + census change, no wire change), not
+   an accident any lane can back into.
+3. PERMISSIONLESS COMPLETION UNIVERSALIZED (LIVENESS): census every
+   "someone must act" point in every lifecycle; each gets a funded,
+   anyone-can-act path or a precisely named gap. The protocol's one-sentence
+   differentiator: no liveness dependency on any identified party.
+4. SINGLE-AUTHOR, MECHANIZED (SEAM-CI): SEAM's audit method as a standing
+   automated gate (pin-vs-census, derivation-vs-restatement, seed lengths,
+   default-pubkey, privilege-merge — across every program pair).
+5. UPGRADE-PROOF CLIENTS (ERA): frame selection by on-chain release/generation
+   identity — the era-coherence maze dissolved permanently.
+6. THE ECONOMY MADE COHERENT (LEDGER): one reconciliation answering "where
+   does every lamport come from and go" across fees, rent, bounties, permits.
+Gated on the devnet address (not spawned yet): the exchange story — observer
+market via relay, graduation/abandonment live, simulator as public heartbeat.
+Queued, scoped-not-spawned: Lean as single author of seam contracts (extend
+formal/ generation); Series prepare/expire through Trading; split-route live
+run; reaffirm implementation (approved, waits for quiet upgrade.rs);
+sccache/workspace consolidation (waits for cold gates).
+- **RULING — ShadowAot certificate self-reference (ORCH, 2026-08-29 ~18:30 EDT):
+  APPROVED: the certificate binds `semantic_release_id` (source-derived, the
+  identity ERA proved stable across cohorts and that
+  `authenticate_role_semantic_release` already refuses on on-chain), NOT
+  `elf_digest`. The ELF digest stays bound where it already lives — the
+  ArtifactReleaseV1 record — so the end-to-end guarantee is two facts with
+  one author each instead of one self-referential fact. IMPLEMENTATION SHAPE:
+  the field is shared with AdmittedAot — the implementer reads ALL consumers
+  and picks the narrower change: if every consumer tolerates semantic binding,
+  change the shared field; otherwise version the certificate struct (ShadowAot
+  V2 semantic, AdmittedAot keeps V1). Wrong-certificate hostiles at the
+  evaluator AND on-chain verifier levels ship with it (SER-ACCEL's exist only
+  at the generator). Cohort-7 scope. ALSO QUEUED with it:
+  checked-release-candidate.sh sets DCLUTCH_SERIES_SHADOW_GENERATED_INCLUDE
+  when a selected release exists (every checked release to date shipped the
+  empty fail-closed series-shadow ELF as a signed artifact) — post-freeze,
+  with the seam-audit gate wire-in.
+- **EMBER RULINGS 2026-08-30 (~10:20 EDT), binding:**
+  Q1: no superseded-cache carve-out EVER (option b rejected outright); devnet
+  stranding accepted meanwhile; the real fix is design (a) — release-set
+  lineage/re-point migration — chartered as a proper design. Cohort-7 may
+  proceed. Q3: option (c) ratified — perpetual CLAIM, not perpetual account:
+  post-deadline compaction to a durable claim-check; market accounts close;
+  the holder's right survives redeemable forever. No arbitrary actor may
+  insert arbitrary delays into protocol operations. Q6: CloseReplay gated on
+  the terminal receipt, shaped by Q3(c). Licenses: all five questions ruled
+  (MPL/LGPL/permissive/dual-arm allowed — the project is AGPL; the OG-image
+  and CSS tool stack is build-time only per ember; solana-config-interface
+  allowlisted as stock Apache-2.0) — the 69-row SBOM queue closes
+  mechanically. CFTC 1388: deliberately unfiled ("nothing unique to say
+  about perps") — never re-raise.

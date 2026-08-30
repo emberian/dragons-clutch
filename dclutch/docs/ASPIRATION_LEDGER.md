@@ -41,7 +41,11 @@ calls *"the concrete expansion program"* —
 `docs/research/EXPANSION_FRONTIER_2026_08_25.md`, eight frontiers and a six-step
 implementation order — is referenced by exactly one file in the repository (the
 index), has never been amended in 1,209 commits, and the word "frontier" appears
-in `WAVE.md` **zero** times. Four kernels are proved and consumed by nothing.
+in `WAVE.md` **zero** times. ~~Four kernels are proved and consumed by
+nothing.~~ **Corrected 2026-08-30 (FRONTIER-2): one kernel is —
+`dclutch-liability-basis-v2-kernel`, 4,491 LOC, one dependency edge and that
+edge is the workspace member list. See M-9's dated amendment for the
+re-measurement of all four.**
 
 **2. Gen-1 and gen-2's stated intentions.** `WAVE.md:169` says *"Sweep of all
 1,509 commit messages."* That is gen-3. Dragons-Clutch's **5,106** commits, and
@@ -234,7 +238,12 @@ A gen-1 audit lane measured against it and returned: *"the current tree
 implements much of the middle, but not the compiler-shaped entrance or a real
 public exit."* That verdict is still accurate for gen-3.
 
-### M-4. The B-spline requirement: caught once by ember, regressed silently in the successor
+### M-4. The B-spline requirement: caught once by ember, proved in the successor and never connected
+
+*(Heading corrected 2026-08-30 — it read "regressed silently in the
+successor", which the dated amendment at the end of this section refutes.
+Corrected here rather than only below, because what other documents quote is
+the heading.)*
 
 This is the sharpest single finding in the audit, because it is a named ember
 requirement that was dropped, restored on his personal intervention, and then
@@ -269,6 +278,62 @@ successor design that is defensible on its merits, recorded in one table cell,
 never surfaced to him as a substitution, and whose first slice is not wired to
 anything. `O-013` is a decision about a *basis*; it is not a decision about
 *"'5 fixed bands' is really not good enough."*
+
+**AMENDED 2026-08-30 (FRONTIER-2). The "zero files" line above is now
+categorically false, and the correction changes what ember should be asked.**
+Re-measured at HEAD, excluding `target/` and Markdown: `spline` (case
+-insensitive) matches **17 code and Lean files**, and `Bernstein` matches
+three. The B-spline development exists in gen-3 and is substantial:
+
+| | LOC | theorems | `sorry` |
+|---|---:|---:|---:|
+| `DClutchSemantics/LiabilityBasisV2.lean` | 1,828 | 101 | 0 |
+| `LiabilityBasisV2Spline.lean` | 1,140 | 50 | 0 |
+| `LiabilityBasisV2SplineAbi.lean` | 403 | 17 | 0 |
+| `LiabilityBasisV2SplineExamples.lean` | 262 | — | 0 |
+| `LiabilityBasisV2PriceGate.lean` | 753 | 37 | 0 |
+| `LiabilityBasisV2PriceGateAbi.lean` | 452 | 13 | 0 |
+| `LiabilityBasisV2PriceGateExamples.lean` | 343 | 3 | 0 |
+| **total** | **5,181** | **221** | **0** |
+
+plus `crates/dclutch-liability-basis-v2-kernel` (4,491 LOC) with `spline.rs`
+— *"Degree-one through degree-three B-spline liability bases"*, integer de
+Boor, no floating point — a Lean-emitted `generated_spline.rs` and
+`generated_price_gate.rs`, and three byte-identity guards
+(`check-generated.sh`, `check-generated-spline.sh`,
+`check-generated-price-gate.sh`).
+
+**Three corrections follow, and the third is the one to put in front of him.**
+
+1. **"Regressed silently" is the wrong verb.** The requirement was not
+   dropped; it was *proved and not connected*. The measurement that produced
+   "zero files" searched a vocabulary (`bspline`, `BSpline`, `Bernstein`) that
+   the successor does not use for its own module names, and it ran before the
+   spline and price-gate modules landed. A vocabulary search is not a
+   capability measurement, and this row is the cost of confusing them.
+2. **Shaped payoffs already ship on the live wire.** `BasisKindV3`
+   (`crates/dclutch-product-payoff-v2-codec/src/runtime_v3.rs:105`) admits
+   `GradedExactComplement` alongside `CategoricalQ1`, and `BasisShapeV3`
+   (`:131`) carries `Constant`, `RampUp`, `RampDown` and `Tent` over
+   runtime-width knots. **Ramps and tents are not a proposal — a Market can
+   select them today**, under a certified categorical projection with a
+   componentwise integer error bound. "5 fixed bands" is not what ships.
+3. **The unreached capability is curvature — degrees 2 and 3 — and the reason
+   it is unreached is not a missing field.** It is that the tree contains
+   **two independent evaluators of one nominal format**: the live handwritten
+   `ProductBasisV3` over record magic `DCLTPAY3`, and the Lean-emitted kernel
+   over `DCLTLBV2`/`DCLTLNK2`, a record family
+   `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:11-27` says in its
+   own words was *"deleted as dead on both ends."* Unifying them is a
+   wire-format decision, not an edit. See
+   [`design/BASIS_ABI_UNIFICATION_V1.md`](design/BASIS_ABI_UNIFICATION_V1.md).
+
+**So the question to ask ember is not "we dropped your B-spline requirement,
+should we restore it?"** It is: *ramps and tents ship today; degrees 2–3 are
+proved, byte-guarded and implemented in a kernel nothing calls; connecting
+them means ruling on which of two evaluators is the authority for the
+protocol's wire. Is curvature worth that, and when?* That is a question he can
+answer. The original framing is one he would have had to correct first.
 
 ### M-5. Two CFTC filings have no submission confirmation, and one was due today
 
@@ -511,6 +576,43 @@ operations — they need a `FixedRole::Claims` child, and decision 0011 §3a
 records the open choice between adopting the Rational child ABI (which already
 executes all six, four of them under names that say "Structured") and giving
 Structured its own. That choice sits ahead of every artifact.
+
+**THE HEADLINE IS AMENDED, 2026-08-30 (FRONTIER-2). It is one kernel, not
+four, and the count in the table above is stale by more than a factor of two
+for the row it was most confident about.** Re-measured at HEAD by dependency
+edge — `rg -l '<crate>' --glob 'Cargo.toml'`, minus each crate's own manifest:
+
+| Crate | Referring manifests | Verdict |
+|---|---:|---|
+| `dclutch-liability-basis-v2-kernel` | **1** — the root workspace member list (`Cargo.toml:22`) and nothing else | **CONFIRMED ORPHAN.** 4,491 LOC |
+| `dclutch-structured-v2-kernel` | 4, including `programs/dclutch-claims-sbf/Cargo.toml:62` | **NOT AN ORPHAN.** Has a real caller |
+| `dclutch-dealer-scenario-kernel` | 2 — root, and `dclutch-dealer-codec` | Wired one hop, dead at the end of it |
+| `dclutch-representation-composition-v3-kernel` | **18** — root plus 17 crates, including `programs/dclutch-claims-sbf` | **GENUINELY WIRED.** The table above says "eight" |
+
+Three corrections follow, and the third is the one that matters.
+
+1. **`programs/dclutch-claims-sbf`'s Structured edge is a dev-dependency, and
+   that is correct by construction rather than a shortfall.** The manifest says
+   so in its own voice at `programs/dclutch-claims-sbf/Cargo.toml:59`: *"DEV
+   only: none of these reach the cdylib, and the ELF digest is the control."*
+   Under decision 0011 §3b Structured has no program and every route it can
+   execute is a Claims route, so the lowering is host-side and **no `programs/`
+   crate should depend on it.** A row that counts cdylib edges will score this
+   architecture as a failure forever.
+2. **F-5's count moved from eight to seventeen and nobody re-measured it.** The
+   table's "eight" was true when written; the tree kept wiring and the row did
+   not. This is the same decay the orphan triage names as its meta-finding
+   (`docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md`): *rows describing a gap
+   decay faster than the gap closes*.
+3. **"Four kernels consumed by nothing" survived because it was measured once.**
+   The headline is the most-quoted line in this section — the archaeology's A.4
+   re-inherited it, and the orphan triage was chartered against it — and it has
+   been wrong since Structured landed its caller on 08-27, which *this very
+   section already records two paragraphs above*. The row amended its own body
+   and left its own headline standing. **Anything citing "four proved kernels"
+   should cite one**, and the one is `dclutch-liability-basis-v2-kernel`, whose
+   missing consumer is not a wiring job but the ABI ruling in
+   `docs/design/BASIS_ABI_UNIFICATION_V1.md`.
 
 ### M-10. Every expansion frontier, verdicted
 
@@ -1713,7 +1815,8 @@ larger (an npm tree gen-1 never had).
 
 ## G-5. Upgrade posture — the one decision gen-1 explicitly deferred to ember, with no successor
 
-`docs/decisions/ADOPTED_2026-08-20.md` has a section with exactly one entry:
+`dragons-clutch/archive/gen1/docs/decisions/ADOPTED_2026-08-20.md` has a
+section with exactly one entry:
 
 > ## Deferred with the tension named
 > - **Reference-deployment upgrade posture**: the report recommended

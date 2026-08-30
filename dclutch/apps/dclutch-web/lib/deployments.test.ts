@@ -8,6 +8,7 @@ import {
   LOCAL_DEPLOYMENT_V1,
   PROTOCOL_ROLES_V1,
   deploymentProgramLabelsV1,
+  importDeploymentDocumentV1,
   parseCustomDeploymentV1,
 } from './deployments';
 
@@ -30,7 +31,11 @@ describe('the deployment manifest', () => {
       trading: '5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk',
       core: 'HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N',
     });
-    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('Hz6BXyxyf66teABb6Pr6ev9jCZBJJpP5Q9p4sYJwJSkj');
+    // Generated, not typed: `scripts/derive-activation-hint.mjs --write` moves
+    // this and the manifest together. Pinned here so the value cannot change
+    // without a reviewer seeing it — but it is a HINT the session follows past,
+    // so a cohort making it stale costs a reader accuracy, not a session.
+    expect(DEVNET_DEPLOYMENT_V1.activationCache).toBe('69d1MKP4PaPVDFankLfnzeHBugoVBjPCDm7PEHParRF6');
     expect(DEVNET_DEPLOYMENT_V1.genesisHash).toBe('EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
     expect(DEVNET_DEPLOYMENT_V1.endpoint).toBe('https://api.devnet.solana.com');
   });
@@ -95,5 +100,47 @@ describe('custom deployment parsing', () => {
     expect(() => parseCustomDeploymentV1({ ...valid, programs: { ...LOCAL_DEPLOYMENT_V1.programs, core: 'not-an-address' } })).toThrow('core program is not a Solana address');
     expect(() => parseCustomDeploymentV1({ ...valid, programs: { ...LOCAL_DEPLOYMENT_V1.programs, core: LOCAL_DEPLOYMENT_V1.programs.claims } })).toThrow('distinct');
     expect(() => parseCustomDeploymentV1({ ...valid, endpoint: 'ws://127.0.0.1:8900' })).toThrow('http or https');
+  });
+});
+
+describe('operator document import', () => {
+  const roles = {
+    registry: { program_id: LOCAL_DEPLOYMENT_V1.programs.registry },
+    core: { program_id: LOCAL_DEPLOYMENT_V1.programs.core },
+    claims: { program_id: LOCAL_DEPLOYMENT_V1.programs.claims },
+    trading: { program_id: LOCAL_DEPLOYMENT_V1.programs.trading },
+    resolution: { program_id: LOCAL_DEPLOYMENT_V1.programs.resolution },
+    custody: { program_id: LOCAL_DEPLOYMENT_V1.programs.custody },
+    rent_credit: { program_id: LOCAL_DEPLOYMENT_V1.programs.rent },
+  };
+
+  it('fills all seven roles and the endpoint from a successor run spec', () => {
+    const imported = importDeploymentDocumentV1(JSON.stringify({
+      schema: 'dclutch-local-successor-run-spec-v2',
+      rpc_url: 'http://127.0.0.1:20890/',
+      ...roles,
+    }));
+    expect(imported.endpoint).toBe('http://127.0.0.1:20890/');
+    expect(imported.programs.rent).toBe(LOCAL_DEPLOYMENT_V1.programs.rent);
+    expect(imported.programs.core).toBe(LOCAL_DEPLOYMENT_V1.programs.core);
+  });
+
+  it('fills the roles from an infrastructure plan and says it has no endpoint', () => {
+    const imported = importDeploymentDocumentV1(JSON.stringify({
+      schema: 'dclutch-local-successor-infrastructure-plan-v2',
+      ...roles,
+    }));
+    expect(imported.endpoint).toBeNull();
+    expect(imported.programs.trading).toBe(LOCAL_DEPLOYMENT_V1.programs.trading);
+  });
+
+  it('refuses non-JSON, foreign schemas, and missing roles by name', () => {
+    expect(() => importDeploymentDocumentV1('not json')).toThrow('not JSON');
+    expect(() => importDeploymentDocumentV1('{"schema":"something-else"}')).toThrow('neither a successor run spec');
+    const missingRent: Record<string, unknown> = { ...roles };
+    delete missingRent.rent_credit;
+    expect(() => importDeploymentDocumentV1(JSON.stringify({
+      schema: 'dclutch-local-successor-run-spec-v2', ...missingRent,
+    }))).toThrow('rent_credit');
   });
 });

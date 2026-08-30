@@ -151,6 +151,10 @@ name = "emit-general-controller-abi-rust"
 root = "EmitGeneralControllerAbiRust"
 
 [[lean_exe]]
+name = "emit-general-controller-request-v3-rust"
+root = "EmitGeneralControllerRequestV3Rust"
+
+[[lean_exe]]
 name = "emit-general-request-profiles-v1-rust"
 root = "EmitGeneralRequestProfilesV1Rust"
 
@@ -181,6 +185,14 @@ root = "EmitMarketCoreRust"
 [[lean_exe]]
 name = "emit-market-retirement-v1-rust"
 root = "EmitMarketRetirementV1Rust"
+
+[[lean_exe]]
+name = "emit-product-basis-v3-abi-rust"
+root = "EmitProductBasisV3AbiRust"
+
+[[lean_exe]]
+name = "emit-product-basis-v3-corpus-rust"
+root = "EmitProductBasisV3CorpusRust"
 
 [[lean_exe]]
 name = "emit-product-graded-basis-admission-v3-abi-rust"
@@ -277,6 +289,10 @@ root = "EmitSeriesOccurrenceV3Rust"
 [[lean_exe]]
 name = "emit-source-material-v2-abi-rust"
 root = "EmitSourceMaterialV2AbiRust"
+
+[[lean_exe]]
+name = "emit-source-material-v3-abi-rust"
+root = "EmitSourceMaterialV3AbiRust"
 
 [[lean_exe]]
 name = "emit-source-principal-capacity-v1-rust"

@@ -69,9 +69,8 @@ pub enum EvidenceError {
 impl core::fmt::Display for EvidenceError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::EmptySignature => {
-                formatter.write_str("campaign transaction has no signature to key an observation on")
-            }
+            Self::EmptySignature => formatter
+                .write_str("campaign transaction has no signature to key an observation on"),
             Self::EmptyLabel => formatter.write_str("campaign transaction has no label"),
             Self::Io(error) => write!(formatter, "evidence directory: {error}"),
         }
@@ -175,10 +174,15 @@ pub fn fold(directory: &Path) -> Result<String, EvidenceError> {
     let mut entries = fs::read_dir(directory)
         .map_err(EvidenceError::Io)?
         .filter_map(|entry| entry.ok().map(|found| found.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     entries.sort();
-    let mut document = String::from("{\n  \"schema\": \"dclutch-program-test-evidence-v1\",\n  \"transactions\": [\n");
+    let mut document = String::from(
+        "{\n  \"schema\": \"dclutch-program-test-evidence-v1\",\n  \"transactions\": [\n",
+    );
     for (index, path) in entries.iter().enumerate() {
         let body = fs::read_to_string(path).map_err(EvidenceError::Io)?;
         document.push_str(body.trim_end());
@@ -207,7 +211,10 @@ fn sanitize(signature: &str) -> String {
 
 fn render(evidence: &TransactionEvidence<'_>) -> String {
     let mut out = String::from("    {\n");
-    out.push_str(&format!("      \"label\": {},\n", json_string(evidence.label)));
+    out.push_str(&format!(
+        "      \"label\": {},\n",
+        json_string(evidence.label)
+    ));
     out.push_str(&format!(
         "      \"signature\": {},\n",
         json_string(evidence.signature)

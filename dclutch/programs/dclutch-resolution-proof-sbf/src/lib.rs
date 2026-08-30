@@ -9,19 +9,23 @@ extern crate std;
 
 use dclutch_capability_contract::CapabilityManifestV1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::DeploymentObservationV1;
-use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
-use dclutch_source_contract::{RecoveryPolicyV2, SourceMaterialV2};
+use dclutch_registry_activation_auth_v1::{
+    ActivationAuthErrorV1, cached_role_deployment_observation_v1,
+};
+use dclutch_registry_contract::{ArtifactReleaseV1, DeploymentObservationV1};
+use dclutch_source_contract::{RecoveryPolicyV2, SourceMaterialV3};
 use solana_program::{
     account_info::AccountInfo, clock::Clock, entrypoint::ProgramResult, hash::hash,
     program_error::ProgramError, pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
+use solana_sdk_ids::{system_program, sysvar};
 
 mod core_effect;
 /// Current-ABI funded liveness-walk accounting: the escrowed explicit-failure
 /// compartment a deadline-driven terminal spends.
 pub mod funded;
+mod pre_market_funding_abort_v1;
+mod pre_market_funding_v1;
 mod provider_instruction_v3;
 mod provider_transport_v3;
 /// Current-ABI real-provider evidence composition shared by fixed Core and
@@ -30,6 +34,7 @@ pub mod provider_v3;
 mod relay_transport_v1;
 /// Current-ABI sealed relayed-record evidence composition.
 pub mod relay_v1;
+mod sponsored_push_v1;
 
 /// Stable Resolution controller refusal.
 #[repr(u32)]
@@ -112,6 +117,23 @@ pub enum ResolutionError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x8014,
+    /// Sponsored-push candidate, head, release, or deadline authentication failed.
+    SponsoredPush = 0x8015,
+    /// `RetireRecord` was aimed at evidence a still-live market could consume.
+    ///
+    /// Liveness census Y3 / queue Q9. `RetireRecord` is permissionless and it
+    /// CLOSES the account, so before this code existed anyone could delete a
+    /// fully sealed quorum observation for a transaction fee and force the
+    /// market onto the failure walk — where the walker collects a bounty and
+    /// the holders get the pre-disclosed failure outcome instead of the real
+    /// one. Retiring evidence that is not yet `Consumed` now requires the
+    /// Market to carry a terminal receipt.
+    ///
+    /// This is "not yet", not "never": consumption is itself permissionless,
+    /// the funded failure walk terminalizes the market with no identified
+    /// party's help, and once `terminal_receipt` is `Some` every phase retires
+    /// exactly as it always did. No rent is stranded, only deferred.
+    RecordStillConsumable = 0x8016,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -122,7 +144,7 @@ const _: () = assert!(
     "ResolutionError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (ResolutionError::ReleaseSuperseded as u32)
+    (ResolutionError::RecordStillConsumable as u32)
         < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "ResolutionError must not run past its registered refusal band"
 );
@@ -135,7 +157,7 @@ impl From<ResolutionError> for ProgramError {
 
 pub(crate) enum RecordKind {
     CapabilityManifest,
-    SourceMaterialV2,
+    SourceMaterialV3,
     RecoveryPolicyV2,
 }
 
@@ -153,6 +175,34 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if pre_market_funding_abort_v1::is_pre_market_funding_abort_v1(instruction_data) {
+        return pre_market_funding_abort_v1::process_pre_market_funding_abort_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if pre_market_funding_v1::is_pre_market_funding_v2(instruction_data) {
+        return pre_market_funding_v1::process_pre_market_funding_v2(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if core_effect::is_direct_funding_activation_v1(instruction_data) {
+        return core_effect::process_direct_funding_activation_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if core_effect::is_direct_funding_close_v1(instruction_data) {
+        return core_effect::process_direct_funding_close_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     if core_effect::is_core_effect(instruction_data) {
         return core_effect::process_core_effect(program_id, accounts, instruction_data);
     }
@@ -172,6 +222,13 @@ pub fn process_instruction(
     }
     if relay_transport_v1::is_relay_transport_v1(instruction_data) {
         return relay_transport_v1::process_relay_transport_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if sponsored_push_v1::is_sponsored_push_v1(instruction_data) {
+        return sponsored_push_v1::process_sponsored_push_v1(
             program_id,
             accounts,
             instruction_data,
@@ -603,7 +660,7 @@ pub(crate) fn authenticate_finalized_record(
     }
     let valid = match kind {
         RecordKind::CapabilityManifest => CapabilityManifestV1::decode(bytes).is_ok(),
-        RecordKind::SourceMaterialV2 => SourceMaterialV2::decode(bytes).is_ok(),
+        RecordKind::SourceMaterialV3 => SourceMaterialV3::decode(bytes).is_ok(),
         RecordKind::RecoveryPolicyV2 => RecoveryPolicyV2::decode(bytes).is_ok(),
     };
     if !valid {
@@ -656,7 +713,9 @@ fn authenticate_activation_cache<'a>(
 
 #[allow(clippy::too_many_arguments)]
 #[cfg(any())]
-fn authenticate_resolution_release(
+/// Frozen authenticator for the removed V1/V5 dispatch. It is deliberately
+/// compiled out; current routes authenticate V6 in their owning modules.
+fn authenticate_resolution_release_v5_legacy(
     program_id: &Pubkey,
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
@@ -667,12 +726,13 @@ fn authenticate_resolution_release(
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     let release = role.release();
     if release.program().to_bytes() != program_id.to_bytes()
-        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V4
-        || release.loader_program().to_bytes() != bpf_loader_upgradeable::ID.to_bytes()
+        || release.semantic_release_id().to_bytes() != RESOLUTION_CONTROLLER_RELEASE_ID_V5
+        || release.loader_program().to_bytes()
+            != solana_sdk_ids::bpf_loader_upgradeable::ID.to_bytes()
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    let observation = deployment_observation(program, programdata, release.programdata())?;
+    let observation = cached_deployment_observation(program, programdata, release)?;
     role.authenticate_current_deployment(observation)
         .map_err(|_| ResolutionError::ResolutionDeployment.into())
 }
@@ -694,50 +754,46 @@ pub(crate) const fn pinned_deployment_refusal(
     }
 }
 
-pub(crate) fn deployment_observation(
+/// Re-observe one activation-pinned deployment without re-hashing its ELF.
+///
+/// Registry admission is the semantic owner of the full ELF digest. Recurring
+/// Resolution routes still authenticate the live Loader Program and
+/// ProgramData accounts, the release identities, owner/executable flags,
+/// Program-to-ProgramData link, deployment slot, and upgrade authority. The
+/// shared adapter reuses the admitted digest only after all of those facts
+/// match, and names a moved exact-authority deployment as superseded.
+pub(crate) fn cached_deployment_observation(
     program: &AccountInfo<'_>,
     programdata: &AccountInfo<'_>,
-    expected_programdata: [u8; 32],
+    release: ArtifactReleaseV1,
 ) -> Result<DeploymentObservationV1, ProgramError> {
-    if program.owner != &bpf_loader_upgradeable::ID
-        || programdata.owner != &bpf_loader_upgradeable::ID
-        || !program.executable
-        || programdata.executable
-        || programdata.key.to_bytes() != expected_programdata
-    {
-        return Err(ResolutionError::ResolutionDeployment.into());
-    }
-    let program_bytes = program
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let program_view =
-        ProgramV3View::parse(&program_bytes).map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let expected_derived =
-        Pubkey::find_program_address(&[program.key.as_ref()], &bpf_loader_upgradeable::ID).0;
-    if program_view.programdata_key() != expected_programdata
-        || programdata.key != &expected_derived
-    {
-        return Err(ResolutionError::ResolutionDeployment.into());
-    }
-    let programdata_bytes = programdata
-        .try_borrow_data()
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    let view = ProgramDataV3View::parse(&programdata_bytes)
-        .map_err(|_| ResolutionError::ResolutionDeployment)?;
-    DeploymentObservationV1::new(
-        program.key.to_bytes(),
-        program.owner.to_bytes(),
-        program.executable,
-        programdata.key.to_bytes(),
-        programdata.owner.to_bytes(),
-        programdata.executable,
-        program_view.programdata_key(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        view.deployment_slot(),
-        hash(view.elf()).to_bytes(),
-        view.upgrade_authority(),
-    )
-    .map_err(|_| ResolutionError::ResolutionDeployment.into())
+    cached_role_deployment_observation_v1(program, programdata, release).map_err(|error| {
+        match error {
+            ActivationAuthErrorV1::ReleaseSuperseded => ResolutionError::ReleaseSuperseded,
+            ActivationAuthErrorV1::AccountFrame
+            | ActivationAuthErrorV1::ActivationCache
+            | ActivationAuthErrorV1::Deployment => ResolutionError::ResolutionDeployment,
+        }
+        .into()
+    })
+}
+
+/// Observe one Loader V3 deployment through decision 0012's admitted slot pin.
+///
+/// Registry activation already authenticated and persisted the full ELF
+/// digest. Loader V3 changes the ProgramData deployment slot whenever an
+/// upgrade changes those bytes, so equality with the activated release's slot
+/// proves that admitted digest is still current. This recurring-use path still
+/// parses the actual Program and ProgramData accounts and binds their exact
+/// identity, owner, executable disposition, Program→ProgramData link, slot,
+/// and upgrade authority; it merely avoids re-hashing two large immutable ELF
+/// tails during controller cleanup.
+pub(crate) fn slot_pinned_deployment_observation(
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    release: ArtifactReleaseV1,
+) -> Result<DeploymentObservationV1, ProgramError> {
+    cached_deployment_observation(program, programdata, release)
 }
 
 #[cfg(any())]
@@ -924,6 +980,9 @@ fn authenticate_provider_loader(
     expected_programdata: [u8; 32],
     expected_slot: u64,
 ) -> ProgramResult {
+    use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
+    use solana_sdk_ids::bpf_loader_upgradeable;
+
     if program.owner != &bpf_loader_upgradeable::ID
         || programdata.owner != &bpf_loader_upgradeable::ID
         || !program.executable

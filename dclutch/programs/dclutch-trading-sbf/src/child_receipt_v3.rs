@@ -14,16 +14,18 @@ use crate::TradingSbfError;
 
 /// One exact immediate child return retained only for this top-level execution.
 struct ExecutedReceiptV3 {
-    role: FixedRole,
     route: u16,
     invocation: u32,
-    program: Pubkey,
+    /// Canonical digest of release/market/generation/parent request, producer
+    /// role/coordinate/program, and the exact framed child request. This is the
+    /// single retained provenance fact; the individual fields would duplicate
+    /// 72 bytes per receipt on the non-reclaiming SBF heap.
     context_digest: [u8; 32],
-    request_kind: [u8; 8],
-    request_digest: [u8; 32],
     receipt_kind: [u8; 8],
     bytes: Vec<u8>,
 }
+
+const _: [(); 72] = [(); core::mem::size_of::<ExecutedReceiptV3>()];
 
 /// Exact producer-side provenance recomputed from the authenticated Effect
 /// program and request bank when a later route resolves a dependency.
@@ -46,16 +48,24 @@ impl ChildReceiptBankV3 {
         }
     }
 
-    /// Buy room for one route's invocations, exactly.
+    pub(crate) fn len(&self) -> usize {
+        self.receipts.len()
+    }
+
+    /// Buy room for the complete authenticated child walk, exactly once.
     ///
     /// The receipts vector grew from empty, one `push` at a time, and on the
     /// SBF bump allocator every rung of that doubling ladder stays charged for
     /// the rest of the instruction. The walk resolves each route's invocation
-    /// count for its own loop bound; this spends that same number here, so the
-    /// ladder becomes one exact step per route and costs no extra resolution.
-    /// It is the INVOCATION count, never the route count: a declared route
-    /// whose invocation count resolves to zero must not buy a slot.
-    pub(crate) fn reserve_additional(&mut self, invocations: usize) -> Result<(), ProgramError> {
+    /// count for its own loop bound; the mutation-free preflight spends their
+    /// checked sum here before the first child, so the ladder becomes one exact
+    /// step for the complete walk. It is the INVOCATION count, never the route
+    /// count: a declared route whose invocation count resolves to zero buys no
+    /// slot.
+    pub(crate) fn reserve_total(&mut self, invocations: usize) -> Result<(), ProgramError> {
+        if !self.receipts.is_empty() {
+            return Err(TradingSbfError::Content.into());
+        }
         self.receipts
             .try_reserve_exact(invocations)
             .map_err(|_| TradingSbfError::Content.into())
@@ -64,7 +74,7 @@ impl ChildReceiptBankV3 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_exact(
         &mut self,
-        role: FixedRole,
+        _role: FixedRole,
         route: u16,
         invocation: u32,
         program: Pubkey,
@@ -75,6 +85,7 @@ impl ChildReceiptBankV3 {
         bytes: Vec<u8>,
     ) -> Result<(), ProgramError> {
         if bytes.is_empty()
+            || program == Pubkey::default()
             || context_digest == [0; 32]
             || request_kind == [0; 8]
             || request_digest == [0; 32]
@@ -88,13 +99,9 @@ impl ChildReceiptBankV3 {
             return Err(TradingSbfError::Transition.into());
         }
         self.receipts.push(ExecutedReceiptV3 {
-            role,
             route,
             invocation,
-            program,
             context_digest,
-            request_kind,
-            request_digest,
             receipt_kind,
             bytes,
         });
@@ -104,29 +111,23 @@ impl ChildReceiptBankV3 {
     pub(crate) fn resolve(
         &self,
         dependency: Option<ResolvedReceiptDependencyV3>,
-        expected_program: Option<&Pubkey>,
         expected_provenance: Option<ExpectedReceiptProvenanceV4>,
     ) -> Result<Option<&[u8]>, ProgramError> {
         let Some(dependency) = dependency else {
-            if expected_program.is_some() || expected_provenance.is_some() {
+            if expected_provenance.is_some() {
                 return Err(TradingSbfError::Content.into());
             }
             return Ok(None);
         };
-        let expected_program = expected_program.ok_or(TradingSbfError::Content)?;
         let expected_provenance = expected_provenance.ok_or(TradingSbfError::Content)?;
         let mut matching = self.receipts.iter().filter(|receipt| {
-            receipt.role == dependency.producer_role
-                && receipt.route == dependency.producer_route
+            receipt.route == dependency.producer_route
                 && receipt.invocation == dependency.producer_invocation
-                && receipt.program == *expected_program
         });
         let receipt = matching.next().ok_or(TradingSbfError::Transition)?;
         if matching.next().is_some()
             || receipt.bytes.len() != usize::from(dependency.expected_receipt_bytes)
             || receipt.context_digest != expected_provenance.context_digest
-            || receipt.request_kind != expected_provenance.request_kind
-            || receipt.request_digest != expected_provenance.request_digest
             || receipt.receipt_kind == [0; 8]
             || receipt.bytes.get(..8) != Some(receipt.receipt_kind.as_slice())
         {
@@ -173,14 +174,7 @@ pub(crate) fn deliver_receipt_dependency_v3(
     receipt: Option<&[u8]>,
     delivery: ReceiptDeliveryV3,
 ) -> Result<(), ProgramError> {
-    let dependencies = invocation.receipt_dependencies;
-    let expected = if dependencies.is_empty() {
-        invocation.receipt_dependency.map_or(0_u32, |dependency| {
-            u32::from(dependency.expected_receipt_bytes)
-        })
-    } else {
-        dependencies.expected_receipt_bytes()
-    };
+    let expected = receipt_dependency_width_v3(invocation);
     match (expected == 0, receipt) {
         (true, None) => Ok(()),
         (false, Some(receipt)) if usize::try_from(expected) == Ok(receipt.len()) => {
@@ -194,6 +188,23 @@ pub(crate) fn deliver_receipt_dependency_v3(
             Ok(())
         }
         _ => Err(TradingSbfError::Content.into()),
+    }
+}
+
+/// Exact ordered producer-receipt width selected for one invocation.
+///
+/// The single-dependency field is the compatibility view of the same
+/// authenticated table used by older Effect encoders. Keeping this selection
+/// beside delivery makes buffer sizing and delivery share one owner.
+pub(crate) fn receipt_dependency_width_v3(invocation: ResolvedInvocationV3) -> u32 {
+    let dependencies = invocation.receipt_dependencies;
+    if dependencies.is_empty() {
+        match invocation.receipt_dependency {
+            Some(dependency) => u32::from(dependency.expected_receipt_bytes),
+            None => 0,
+        }
+    } else {
+        dependencies.expected_receipt_bytes()
     }
 }
 
@@ -258,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn bank_binds_role_route_invocation_program_and_exact_width() {
+    fn bank_binds_context_route_invocation_producer_and_exact_width() {
         let program = Pubkey::new_unique();
         let mut bank = ChildReceiptBankV3::new();
         bank.record_exact(
@@ -276,7 +287,6 @@ mod tests {
         assert_eq!(
             bank.resolve(
                 Some(dependency()),
-                Some(&program),
                 Some(ExpectedReceiptProvenanceV4 {
                     context_digest: [1; 32],
                     request_kind: *b"REQUEST1",
@@ -288,19 +298,6 @@ mod tests {
         assert_eq!(
             bank.resolve(
                 Some(dependency()),
-                Some(&Pubkey::new_unique()),
-                Some(ExpectedReceiptProvenanceV4 {
-                    context_digest: [1; 32],
-                    request_kind: *b"REQUEST1",
-                    request_digest: [2; 32],
-                }),
-            ),
-            Err(TradingSbfError::Transition.into())
-        );
-        assert_eq!(
-            bank.resolve(
-                Some(dependency()),
-                Some(&program),
                 Some(ExpectedReceiptProvenanceV4 {
                     context_digest: [9; 32],
                     request_kind: *b"REQUEST1",
@@ -323,6 +320,20 @@ mod tests {
             ),
             Err(TradingSbfError::Transition.into())
         );
+        assert_eq!(
+            ChildReceiptBankV3::new().record_exact(
+                FixedRole::Custody,
+                2,
+                3,
+                Pubkey::default(),
+                [1; 32],
+                *b"REQUEST1",
+                [2; 32],
+                *b"RECEIPT1",
+                b"RECEIPT1".to_vec(),
+            ),
+            Err(TradingSbfError::Transition.into())
+        );
     }
 
     /// A producer that never ran cannot be resolved into a receipt, whatever
@@ -337,7 +348,7 @@ mod tests {
         };
         let empty = ChildReceiptBankV3::new();
         assert_eq!(
-            empty.resolve(Some(dependency()), Some(&program), Some(provenance)),
+            empty.resolve(Some(dependency()), Some(provenance)),
             Err(TradingSbfError::Transition.into())
         );
 
@@ -372,7 +383,7 @@ mod tests {
             Err(TradingSbfError::Transition.into())
         );
         assert_eq!(
-            tampered.resolve(Some(dependency()), Some(&program), Some(provenance)),
+            tampered.resolve(Some(dependency()), Some(provenance)),
             Err(TradingSbfError::Transition.into())
         );
         // The producer executed, but at another route or another invocation
@@ -391,8 +402,19 @@ mod tests {
                 ..dependency()
             },
         ] {
+            // The production provenance owner includes the selected producer
+            // role and program in this digest. Model that exact hostile by
+            // changing the digest when the dependency substitutes the role.
+            let reordered_provenance = ExpectedReceiptProvenanceV4 {
+                context_digest: if reordered.producer_role == FixedRole::Claims {
+                    [3; 32]
+                } else {
+                    provenance.context_digest
+                },
+                ..provenance
+            };
             assert_eq!(
-                bank.resolve(Some(reordered), Some(&program), Some(provenance)),
+                bank.resolve(Some(reordered), Some(reordered_provenance)),
                 Err(TradingSbfError::Transition.into())
             );
         }
@@ -404,7 +426,6 @@ mod tests {
                     expected_receipt_bytes: 7,
                     ..dependency()
                 }),
-                Some(&program),
                 Some(provenance),
             ),
             Err(TradingSbfError::Transition.into())

@@ -15,16 +15,21 @@ import { docsIndexHrefV1 } from '@/lib/flags';
  * ends that class of drift: a page states which path it is and the rest is
  * decided here.
  *
- * The canonical set is the product: Markets · Create · Portfolio · Explorer ·
- * Docs — plus one Console entry for the operator workspaces, which are indexed
- * at /console instead of competing for top-level slots. A console route lights
- * the Console entry so the reader always knows which side of the site they are
- * on.
+ * The canonical set is the product: Live · Markets · Pulse · Activity ·
+ * Design · Portfolio · Explorer · Docs — plus one Console entry for the
+ * operator workspaces, which are indexed at /console instead of competing for
+ * top-level slots. A console route lights the Console entry so the reader
+ * always knows which side of the site they are on. Pulse and Activity are the
+ * two aliveness surfaces; they earned their slots the day they became
+ * reachable only by typing a URL.
  */
 
 const PRODUCT_ITEMS = [
+  { href: '/live', label: 'Live' },
   { href: '/markets', label: 'Markets' },
-  { href: '/create', label: 'Create' },
+  { href: '/pulse', label: 'Pulse' },
+  { href: '/activity', label: 'Activity' },
+  { href: '/create', label: 'Design' },
   { href: '/portfolio', label: 'Portfolio' },
   { href: '/explorer', label: 'Explorer' },
 ] as const;
@@ -48,7 +53,7 @@ export const CONSOLE_PATHS: readonly string[] = [
 
 export default function Nav({
   current,
-  status = 'not live yet',
+  status = 'devnet preview',
 }: Readonly<{
   /** The route this page is served at, e.g. `/markets`. Sets the active item. */
   current?: string;
@@ -56,20 +61,28 @@ export default function Nav({
   status?: ReactNode;
 }>) {
   const consoleActive = current !== undefined && CONSOLE_PATHS.includes(current);
-  return <header className="product-nav">
-    <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
-    <nav>
-      {PRODUCT_ITEMS.map((item) => (
-        <Anchor key={item.href} className={item.href === current ? 'active' : undefined} href={item.href}>
-          {item.label}
-        </Anchor>
-      ))}
-      <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
-      <Anchor className={consoleActive ? 'active' : undefined} href="/console">Console</Anchor>
-    </nav>
-    <span className="nav-side">
-      <ClusterPicker />
-      <span className="preview-control"><i className="preview-dot" />{status}</span>
-    </span>
-  </header>;
+  return <>
+    <header className="product-nav">
+      <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
+      <nav aria-label="Primary navigation">
+        {PRODUCT_ITEMS.map((item) => (
+          <Anchor
+            key={item.href}
+            className={item.href === current ? 'active' : undefined}
+            href={item.href}
+            aria-current={item.href === current ? 'page' : undefined}
+          >
+            {item.label}
+          </Anchor>
+        ))}
+        <Anchor href={docsIndexHrefV1()}>Docs</Anchor>
+        <Anchor className={consoleActive ? 'active' : undefined} href="/console" aria-current={consoleActive ? 'page' : undefined}>Console</Anchor>
+      </nav>
+      <span className="nav-side">
+        <ClusterPicker />
+        <span className="preview-control"><i className="preview-dot" />{status}</span>
+      </span>
+    </header>
+    <span id="main-content" className="main-content-anchor" tabIndex={-1} />
+  </>;
 }

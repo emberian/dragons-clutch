@@ -13,7 +13,7 @@ export const CLAIMS_CUSTODY_REPLAY_RESERVED_BYTES_V1 = 6 as const;
 export const CLAIMS_CUSTODY_REPLAY_MARKET_OFFSET_V1 = 16 as const;
 
 export const CLAIMS_CUSTODY_REPLAY_PARENT_DOMAIN_V1 = new TextEncoder().encode('dclutch:claims-custody-replay-parent:v1');
-export const CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1 = 14 as const;
+export const CLAIMS_CUSTODY_REPLAY_ACCOUNT_COUNT_V1 = 15 as const;
 export const REPLAY_ACCOUNT_CUSTODY_CALLER_AUTHORITY_V1 = 0 as const;
 export const REPLAY_ACCOUNT_CORE_MARKET_V1 = 1 as const;
 export const REPLAY_ACCOUNT_ACTIVATION_CACHE_V1 = 2 as const;
@@ -26,9 +26,10 @@ export const REPLAY_ACCOUNT_CUSTODY_REPLAY_V1 = 8 as const;
 export const REPLAY_ACCOUNT_PAYER_V1 = 9 as const;
 export const REPLAY_ACCOUNT_SYSTEM_PROGRAM_V1 = 10 as const;
 export const REPLAY_ACCOUNT_RENT_SYSVAR_V1 = 11 as const;
-export const REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1 = 12 as const;
-export const REPLAY_ACCOUNT_AGGREGATE_V1 = 13 as const;
-export const CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 = 12 as const;
+export const REPLAY_ACCOUNT_RENT_REFUND_V1 = 12 as const;
+export const REPLAY_ACCOUNT_CUSTODY_PROGRAM_V1 = 13 as const;
+export const REPLAY_ACCOUNT_AGGREGATE_V1 = 14 as const;
+export const CUSTODY_INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 = 13 as const;
 
 export const CUSTODY_REQUEST_MAGIC_V1 = new TextEncoder().encode('DCLCUSR1');
 export const CUSTODY_REPLAY_MAGIC_V1 = new TextEncoder().encode('DCLCUSS1');

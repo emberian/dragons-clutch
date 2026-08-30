@@ -43,14 +43,15 @@ use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3, ProviderExecutionRequestV3,
     ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_BYTES_V2,
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    provider_resolution_direct_intent_digest_v1,
 };
 use dclutch_source_contract::{
     ContentId as SourceContentId, PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1,
     PYTH_ADAPTER_CONFIG_BYTES, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, ProviderReleaseV1,
-    PythAdapterConfigV1, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
-    SOURCE_MATERIAL_V2_BYTES, SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES,
-    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV2,
+    PythAdapterConfigV1, SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_MATERIAL_V3_BYTES, SOURCE_RESOLUTION_STATE_BYTES_V2, SOURCE_SPEC_BYTES,
+    SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_BYTES, STATISTIC_SPEC_SCHEMA_ID_V1, SourceMaterialV3,
     SourceResolutionStateV2, SourceSpecV1, StatisticSpecV1, WINDOW_SPEC_BYTES,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
@@ -67,7 +68,7 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::{allocate, assign};
 
 use crate::{
-    ResolutionError, authenticate_clock, authenticate_rent, deployment_observation,
+    ResolutionError, authenticate_clock, authenticate_rent, cached_deployment_observation,
     pinned_deployment_refusal,
     provider_v3::{
         AuthenticatedProviderObservationV3, AuthenticatedSourceRecordsV3, ProviderJoinErrorV3,
@@ -115,6 +116,12 @@ pub(crate) fn process_provider_resolution_v3(
                 return Err(ResolutionError::AccountFrame.into());
             }
             PROVIDER_RESOLUTION_TRADING_TAIL_START_V3
+        }
+        ProviderCallerV3::Resolution => {
+            if accounts.len() != PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3 {
+                return Err(ResolutionError::AccountFrame.into());
+            }
+            PROVIDER_RESOLUTION_CORE_TAIL_START_V3
         }
     };
     authenticate_privileges(program_id, accounts, tail_start)?;
@@ -556,11 +563,8 @@ fn authenticate_market_and_infrastructure(
         return Err(ResolutionError::ResolutionRelease.into());
     }
     require_slot_pinned_release_v1(artifact).map_err(|_| ResolutionError::ResolutionRelease)?;
-    let observation = deployment_observation(
-        frame.registry_program(),
-        frame.account(8),
-        artifact.programdata(),
-    )?;
+    let observation =
+        cached_deployment_observation(frame.registry_program(), frame.account(8), artifact)?;
     artifact
         .authenticate_deployment(observation)
         .map_err(pinned_deployment_refusal)?;
@@ -623,13 +627,13 @@ fn authenticate_activation_and_caller(
         if role == ExecutionRoleV1::Resolution
             && (program.key != program_id
                 || activated.release().semantic_release_id().to_bytes()
-                    != RESOLUTION_CONTROLLER_RELEASE_ID_V4)
+                    != RESOLUTION_CONTROLLER_RELEASE_ID_V7)
         {
             return Err(ResolutionError::ResolutionRelease.into());
         }
         if caller_executes_role(request.caller, role) {
             let observation =
-                deployment_observation(program, programdata, activated.release().programdata())?;
+                cached_deployment_observation(program, programdata, activated.release())?;
             activated
                 .authenticate_current_deployment(observation)
                 .map_err(|_| ResolutionError::ResolutionDeployment)?;
@@ -638,12 +642,19 @@ fn authenticate_activation_and_caller(
     let caller_role = match request.caller {
         ProviderCallerV3::Core => ExecutionRoleV1::Core,
         ProviderCallerV3::Trading => ExecutionRoleV1::Trading,
+        ProviderCallerV3::Resolution => ExecutionRoleV1::Resolution,
     };
     let caller_program = match request.caller {
         ProviderCallerV3::Core => frame.account(11),
         ProviderCallerV3::Trading => frame.account(13),
+        ProviderCallerV3::Resolution => frame.account(15),
     };
-    if request.caller_program != caller_program.key.to_bytes() {
+    if request.caller_program != caller_program.key.to_bytes()
+        || (request.caller == ProviderCallerV3::Resolution
+            && provider_resolution_direct_intent_digest_v1(*request)
+                .map_err(|_| ResolutionError::Instruction)?
+                != request.parent_request_digest)
+    {
         return Err(ResolutionError::ResolutionRelease.into());
     }
     let seeds = CallerAuthoritySeedsV1::from_bytes(
@@ -717,6 +728,7 @@ const fn caller_executes_role(caller: ProviderCallerV3, role: ExecutionRoleV1) -
             (caller, role),
             (ProviderCallerV3::Core, ExecutionRoleV1::Core)
                 | (ProviderCallerV3::Trading, ExecutionRoleV1::Trading)
+                | (ProviderCallerV3::Resolution, ExecutionRoleV1::Core)
         )
 }
 
@@ -729,12 +741,12 @@ fn authenticate_source_records(
         frame,
         rent,
         17,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         request.source_material,
-        SOURCE_MATERIAL_V2_BYTES,
+        SOURCE_MATERIAL_V3_BYTES,
     )?;
     let material =
-        SourceMaterialV2::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
+        SourceMaterialV3::decode(&material_data).map_err(|_| ResolutionError::SourceMaterial)?;
     let source_data = borrow_record(
         frame,
         rent,
@@ -1091,9 +1103,12 @@ fn initialize_certificate<'info>(
 
 #[cfg(test)]
 mod tests {
+    use std::{boxed::Box, vec::Vec};
+
     use dclutch_resolution_codec::PROVIDER_EXECUTION_REQUEST_SCHEMA_PREIMAGE_V3;
     use dclutch_source_contract::{
         PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1, PYTH_ADAPTER_CONFIG_SCHEMA_PREIMAGE_V1,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3, SOURCE_MATERIAL_V3_MAGIC,
         SOURCE_SPEC_SCHEMA_PREIMAGE_V1, STATISTIC_SPEC_SCHEMA_PREIMAGE_V1,
         WINDOW_SPEC_SCHEMA_PREIMAGE_V1,
     };
@@ -1103,6 +1118,77 @@ mod tests {
     const CAPTURED_POST_UPDATE: &[u8] = include_bytes!(
         "../../../fixtures/pyth/local-upgraded-2026-08-22/receiver-post-update.data"
     );
+
+    fn test_account(
+        key: Pubkey,
+        lamports: u64,
+        data: Vec<u8>,
+        owner: Pubkey,
+    ) -> AccountInfo<'static> {
+        AccountInfo::new(
+            Box::leak(Box::new(key)),
+            false,
+            false,
+            Box::leak(Box::new(lamports)),
+            Box::leak(data.into_boxed_slice()),
+            Box::leak(Box::new(owner)),
+            false,
+        )
+    }
+
+    #[test]
+    fn finalized_profile_release_identity_refuses_before_cached_deployment_auth() {
+        let registry = Pubkey::new_from_array([0xd1; 32]);
+        let schema = ARTIFACT_RELEASE_SCHEMA_ID_V1;
+        let artifact_bytes = std::vec![0x44; ARTIFACT_RELEASE_BYTES_V1];
+        let digest = hash(&artifact_bytes).to_bytes();
+        let raw_key =
+            Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
+        let staging_key = Pubkey::find_program_address(
+            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+            &registry,
+        )
+        .0;
+        let rent = Rent::default();
+        let raw = test_account(
+            raw_key,
+            rent.minimum_balance(artifact_bytes.len()),
+            artifact_bytes.clone(),
+            registry,
+        );
+        let staging = test_account(staging_key, 0, Vec::new(), system_program::ID);
+        assert_eq!(
+            authenticate_record(
+                &registry,
+                &raw,
+                &staging,
+                &rent,
+                schema,
+                digest,
+                &artifact_bytes,
+                ARTIFACT_RELEASE_BYTES_V1,
+            ),
+            Ok(()),
+        );
+
+        let substituted_profile_release = [0xd2; 32];
+        assert_eq!(
+            authenticate_record(
+                &registry,
+                &raw,
+                &staging,
+                &rent,
+                schema,
+                substituted_profile_release,
+                &artifact_bytes,
+                ARTIFACT_RELEASE_BYTES_V1,
+            ),
+            Err(ProgramError::Custom(
+                ResolutionError::FinalizedRecord as u32
+            )),
+            "the infrastructure profile's finalized ArtifactRelease identity remains authoritative",
+        );
+    }
 
     #[test]
     fn discriminator_requires_a_distinct_exact_post_body_suffix() {
@@ -1165,6 +1251,10 @@ mod tests {
     #[test]
     fn finalized_source_and_request_schema_ids_match_their_labels() {
         for (preimage, expected) in [
+            (
+                SOURCE_MATERIAL_SCHEMA_RELEASE_PREIMAGE_V3,
+                SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+            ),
             (SOURCE_SPEC_SCHEMA_PREIMAGE_V1, SOURCE_SPEC_SCHEMA_ID_V1),
             (
                 PROVIDER_RELEASE_SCHEMA_PREIMAGE_V1,
@@ -1186,5 +1276,34 @@ mod tests {
         ] {
             assert_eq!(hash(preimage).to_bytes(), expected);
         }
+    }
+
+    #[test]
+    fn source_material_v3_is_exact_width_and_refuses_hostile_schema_bytes() {
+        let id = |tag| SourceContentId::new([tag; 32]).expect("nonzero fixture identity");
+        let material =
+            SourceMaterialV3::explicitly_unbounded(id(1), id(2), id(3), id(4), None, id(5));
+        let exact = material.to_bytes();
+        assert_eq!(SOURCE_MATERIAL_V3_BYTES, 240);
+        assert_eq!(exact.len(), SOURCE_MATERIAL_V3_BYTES);
+        assert_eq!(SourceMaterialV3::decode(&exact), Ok(material));
+        assert!(
+            SourceMaterialV3::decode(
+                exact
+                    .get(..SOURCE_MATERIAL_V3_BYTES - 1)
+                    .expect("short hostile material"),
+            )
+            .is_err()
+        );
+        let mut long = std::vec::Vec::from(exact);
+        long.push(0);
+        assert!(SourceMaterialV3::decode(&long).is_err());
+
+        let mut wrong_magic = exact;
+        wrong_magic[0] ^= 1;
+        assert!(SourceMaterialV3::decode(&wrong_magic).is_err());
+        let mut wrong_schema = exact;
+        wrong_schema[SOURCE_MATERIAL_V3_MAGIC.len()] ^= 1;
+        assert!(SourceMaterialV3::decode(&wrong_schema).is_err());
     }
 }

@@ -1,10 +1,7 @@
 'use client';
 
-import { TransactionMessage, VersionedTransaction, type AddressLookupTableAccount, type TransactionInstruction } from '@solana/web3.js';
 import Nav from '@/components/Nav';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
-
-import { PublicKey } from '@solana/web3.js';
+import { FormEvent, useMemo, useState } from 'react';
 
 import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
 import {
@@ -46,30 +43,26 @@ import {
   assessWindowWidthV1,
   resolutionDeadlineV1,
 } from '@/lib/founding/windowCadence';
-import { hex, sha256 } from '@/lib/bytes';
-import { planLookupTableV1, lookupTableAccountV1, type LookupTablePlanV1 } from '@/lib/founding/lookupTable';
 import { SolanaRpcClient } from '@/lib/rpc';
-import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@/lib/walletHandoff';
-import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 
 type StepId = 'product' | 'window' | 'funding' | 'review' | 'submit';
 
 const STEPS: ReadonlyArray<Readonly<{ id: StepId; number: string; title: string; blurb: string }>> = Object.freeze([
-  { id: 'product', number: '01', title: 'Product', blurb: 'Range protection on a Pyth source. The partition, the payoff, and the explicit failure outcome.' },
-  { id: 'window', number: '02', title: 'Window width', blurb: '§12.3’s cadence table. The operator states a width; nothing here states one for them.' },
-  { id: 'funding', number: '03', title: 'Principal & funding', blurb: 'Seven segregated compartments, and the κ capacity bound checked at the atom.' },
-  { id: 'review', number: '04', title: 'Review the ladder', blurb: 'The exact transaction set, with every rung labelled by what actually builds it.' },
-  { id: 'submit', number: '05', title: 'Sign & submit', blurb: 'The rungs a browser can drive, signed by a wallet against a finalized RPC.' },
+  { id: 'product', number: '01', title: 'Design the payout', blurb: 'Range protection on a Pyth source: what pays, what does not, and what happens if the source is silent.' },
+  { id: 'window', number: '02', title: 'Choose the window', blurb: 'You state how long the source may answer; this page does not choose for you.' },
+  { id: 'funding', number: '03', title: 'Backing & funding', blurb: 'Seven named funding purposes and a capacity ratio checked in exact base units.' },
+  { id: 'review', number: '04', title: 'Review the plan', blurb: 'Every opening step, with a plain statement of what can build it today.' },
+  { id: 'submit', number: '05', title: 'Inspect the chain', blurb: 'Recheck the partial browser preview without signing or spending.' },
 ]);
 
 const STATUS_LABEL: Readonly<Record<FoundingRungStatusV1, string>> = Object.freeze({
-  'browser-builder': 'browser builder',
-  'browser-frame-borrowed-coordinates': 'browser frame · borrowed coordinates',
-  'tooling-only': 'tooling only',
+  'browser-builder': 'browser preview',
+  'browser-frame-borrowed-coordinates': 'uses operator coordinates',
+  'tooling-only': 'operator tooling',
 });
 
-type AddressField = Exclude<keyof CoreFoundInputV2, 'generation'>;
+type AddressField = Exclude<keyof CoreFoundInputV2, 'generation' | 'lookupTable'>;
 type AddressValues = Record<AddressField, string>;
 
 const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string }>> = Object.freeze([
@@ -81,13 +74,13 @@ const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: strin
   { field: 'productRecord', label: 'Product Runtime V2 raw' },
   { field: 'resultDomainRecord', label: 'Result domain raw' },
   { field: 'portfolioRecord', label: 'Portfolio raw' },
-  { field: 'sourceMaterialRecord', label: 'SourceMaterialV2 raw' },
+  { field: 'linkedBasisRecord', label: 'Linked basis raw' },
+  { field: 'sourceMaterialRecord', label: 'SourceMaterialV3 raw' },
+  { field: 'sourceSpecRecord', label: 'Source spec raw' },
+  { field: 'capacityProfileRecord', label: 'Source capacity profile raw' },
+  { field: 'manipulationFloorRecord', label: 'Manipulation floor raw' },
   { field: 'capabilityManifestRecord', label: 'Capability manifest raw' },
-  { field: 'executionReleaseSetRecord', label: 'Execution release set raw' },
 ]);
-
-type SubmitStageId = 'rent-credit' | 'routing-table' | 'found31';
-type SubmitStage = Readonly<{ id: SubmitStageId; label: string; signature: string | null; status: 'pending' | 'signing' | 'submitted' | 'refused'; detail: string }>;
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : 'refused without a usable reason';
@@ -152,10 +145,6 @@ export default function CreateMarketWizard() {
   };
   const [plan, setPlan] = useState<CoreFoundPlanV2 | null>(null);
   const [planStatus, setPlanStatus] = useState('No transaction has been constructed. The ladder below is the plan, not a promise.');
-  const [stages, setStages] = useState<ReadonlyArray<SubmitStage>>([]);
-  const [table, setTable] = useState<AddressLookupTableAccount | null>(null);
-  const [walletStatus, setWalletStatus] = useState('No wallet connected.');
-  const wallets = useWalletDirectoryV1();
 
   const product = useMemo(() => {
     const denominator = bigintOrNull(cutDenominator);
@@ -249,164 +238,21 @@ export default function CreateMarketWizard() {
     } catch (error) { return { ok: false as const, message: reason(error) }; }
   }, [compartments]);
 
-  // The manifest's content identity is what the Market PDA is derived from, so
-  // it is worth showing -- but SHA-256 in the browser is async, which makes it
-  // the one derived value here that cannot be a `useMemo`. The cancel flag
-  // keeps a slow digest of an old manifest from overwriting a newer one.
-  const [manifestDigest, setManifestDigest] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    void (async () => {
-      let next: string | null = null;
-      try { if (manifest.ok) next = hex(await sha256(manifest.bytes)); } catch { next = null; }
-      if (live) setManifestDigest(next);
-    })();
-    return () => { live = false; };
-  }, [manifest]);
-
   const ladder = summarizeFoundingLadderV1();
   const displayDecimals = digitsOrNull(decimals) ?? 0;
 
   async function buildChainPlan(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     setPlan(null);
-    setPlanStatus('Reacquiring immutable releases, Product semantics, and all 31 accounts at finalized commitment…');
+    setPlanStatus('Reacquiring immutable releases, Product semantics, and all 37 accounts at finalized commitment…');
     try {
       const generationValue = bigintOrNull(generation);
       if (generationValue === null || generationValue <= 0n) throw new Error('generation must be a positive integer');
       const next = await prepareCoreFoundV2(new SolanaRpcClient(endpoint), { ...effectiveAddresses, generation: generationValue });
       setPlan(next);
-      setTable(null);
-      setStages([
-        { id: 'rent-credit', label: 'Lifecycle RentCredit Create', signature: null, status: next.rentCreditState === 'created' ? 'submitted' : 'pending', detail: next.rentCreditState === 'created' ? 'Already created on this chain for this Market and generation.' : `${next.rentCreateWireBytes?.length ?? 0} bytes · unsigned` },
-        { id: 'routing-table', label: `Routing table · ${next.routableAddresses.length} addresses`, signature: null, status: 'pending', detail: 'Not created. Found31 does not fit a packet without it.' },
-        { id: 'found31', label: 'Found31 — Market at Founding', signature: null, status: 'pending', detail: next.foundRefusal ?? `${next.wireBytes?.length ?? 0} bytes · unsigned` },
-      ]);
-      setPlanStatus(`Accepted at finalized slot ${next.observedSlot}. Nothing is signed or submitted.`);
+      setPlanStatus(`Accepted as a read-only preview at finalized slot ${next.observedSlot}. Nothing can be signed or submitted from this page.`);
     } catch (error) {
       setPlanStatus(`Refused: ${reason(error)}`);
-    }
-  }
-
-  function updateStage(target: SubmitStage['id'], patch: Partial<SubmitStage>): void {
-    setStages((current) => current.map((stage) => (stage.id === target ? { ...stage, ...patch } : stage)));
-  }
-
-  /** Sign one transaction with the connected wallet and submit it, once. */
-  async function signAndSubmitOne(transaction: VersionedTransaction, client: SolanaRpcClient): Promise<string> {
-    const signed = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), transaction, addresses.payer);
-    if (!signed.complete) throw new Error('the wallet did not complete the signature set');
-    return submitSignedTransactionV1(client, signed.transaction);
-  }
-
-  /**
-   * Wait for one submitted signature to finalize, or say why it did not.
-   *
-   * Submission is not landing, and every stage here is a precondition of the
-   * next: the lifecycle credit must exist before Found31 names it, and a lookup
-   * table is usable only strictly after the slot that last extended it.
-   */
-  async function awaitFinalized(client: SolanaRpcClient, signature: string): Promise<string> {
-    for (let attempt = 0; attempt < 90; attempt += 1) {
-      const status = await client.signatureStatus(signature);
-      if (status?.err) throw new Error(`${signature} failed on chain: ${JSON.stringify(status.err)}`);
-      if (status?.confirmation === 'finalized') return status.slot;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    throw new Error(`${signature} did not finalize within ninety seconds`);
-  }
-
-  function compile(instructions: ReadonlyArray<TransactionInstruction>, blockhash: string): VersionedTransaction {
-    return new VersionedTransaction(new TransactionMessage({
-      payerKey: new PublicKey(addresses.payer),
-      recentBlockhash: blockhash,
-      instructions: [...instructions],
-    }).compileToV0Message());
-  }
-
-  function updateStage(target: SubmitStageId, patch: Partial<SubmitStage>): void {
-    setStages((current) => current.map((stage) => (stage.id === target ? { ...stage, ...patch } : stage)));
-  }
-
-  /**
-   * Build the routing table Found31 rides, and read it back off the chain.
-   *
-   * The create and every extend page is its own transaction and its own wallet
-   * signature; nothing is batched behind one click that the operator did not
-   * see. The table's contents are then re-read at finalized commitment and
-   * compared against the plan, because a client that compiles indexes against
-   * the list it built the plan FROM rather than against the table itself hands
-   * the program a permuted account frame -- which is a refusal three layers
-   * away from its cause.
-   */
-  async function buildRoutingTable(client: SolanaRpcClient, current: CoreFoundPlanV2): Promise<AddressLookupTableAccount> {
-    const recentSlot = await client.finalizedSlot();
-    const routing: LookupTablePlanV1 = planLookupTableV1({
-      authority: addresses.payer,
-      payer: addresses.payer,
-      recentSlot: BigInt(recentSlot),
-      addresses: current.routableAddresses,
-    });
-    let lastSlot = recentSlot;
-    const pages = [routing.create, ...routing.extensions];
-    for (let index = 0; index < pages.length; index += 1) {
-      updateStage('routing-table', { detail: `Signing ${index === 0 ? 'create' : `extend page ${index}`} of ${pages.length}…` });
-      const blockhash = await client.latestBlockhash();
-      const signature = await signAndSubmitOne(compile([pages[index]], blockhash.blockhash), client);
-      lastSlot = await awaitFinalized(client, signature);
-      updateStage('routing-table', { signature, detail: `${index + 1} of ${pages.length} finalized at slot ${lastSlot}` });
-    }
-    // Strictly after the slot that last extended it.
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      if (BigInt(await client.finalizedSlot()) > BigInt(lastSlot)) break;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-    const account = await lookupTableAccountV1(client, routing.lookupTable, routing.addresses);
-    updateStage('routing-table', { status: 'submitted', detail: `${routing.lookupTable} · ${routing.addresses.length} addresses, contents verified against the plan` });
-    return account;
-  }
-
-  /**
-   * Run one rung, then stop.
-   *
-   * Deliberately one rung per click. Chaining them would be deciding on the
-   * operator's behalf that the previous one landed.
-   */
-  async function runStage(target: SubmitStageId): Promise<void> {
-    if (plan === null) return;
-    const client = new SolanaRpcClient(endpoint);
-    updateStage(target, { status: 'signing', detail: 'Awaiting the wallet’s signature…' });
-    try {
-      if (target === 'rent-credit') {
-        if (plan.rentCreateTransaction === null) throw new Error('the lifecycle RentCredit already exists for this Market and generation');
-        const signature = await signAndSubmitOne(plan.rentCreateTransaction, client);
-        updateStage(target, { detail: 'Submitted. Waiting for finality…', signature });
-        const slot = await awaitFinalized(client, signature);
-        updateStage(target, { status: 'submitted', detail: `Finalized at slot ${slot}` });
-        setWalletStatus(`Lifecycle RentCredit finalized as ${signature}.`);
-        return;
-      }
-      if (target === 'routing-table') {
-        setTable(await buildRoutingTable(client, plan));
-        setWalletStatus('Routing table finalized and its contents verified.');
-        return;
-      }
-      if (table === null) throw new Error('Found31 does not fit a packet without its routing table; build that first');
-      // Recompiled against the finalized table, and reauthenticated from
-      // scratch: the chain has moved since the plan was built, and a stale
-      // blockhash or a changed record is a refusal rather than a surprise.
-      const generationValue = BigInt(generation);
-      const routed = await prepareCoreFoundV2(client, { ...effectiveAddresses, generation: generationValue, lookupTable: table });
-      if (routed.transaction === null) throw new Error(routed.foundRefusal ?? 'Found31 could not be compiled');
-      if (routed.market !== plan.market) throw new Error('the Market address changed between planning and submission');
-      const signature = await signAndSubmitOne(routed.transaction, client);
-      updateStage(target, { detail: `Submitted · ${routed.wireBytes?.length ?? 0} bytes. Waiting for finality…`, signature });
-      const slot = await awaitFinalized(client, signature);
-      updateStage(target, { status: 'submitted', detail: `Finalized at slot ${slot} · Market ${routed.market} is at phase Founding`, signature });
-      setWalletStatus(`Found31 finalized as ${signature}.`);
-    } catch (error) {
-      updateStage(target, { status: 'refused', detail: `Refused: ${reason(error)}` });
-      setWalletStatus(`Refused: ${reason(error)}`);
     }
   }
 
@@ -415,13 +261,16 @@ export default function CreateMarketWizard() {
 
     <section className="market-heading">
       <div>
-        <div className="market-kicker"><span>Create · range protection</span><span>DCLTGMF1 atomic route</span></div>
+        <div className="market-kicker"><span>Design · range protection</span><span>Read-only opening preview</span></div>
         <h1>State a band.<br />Price the window.<br />See the whole ladder.</h1>
       </div>
       <p>
-        Founding is not one transaction. This wizard composes the Product, the terminal window and the funding from the
-        same arithmetic the chain applies, then shows the exact transaction set — including the rungs a browser cannot
-        build yet, named with the reason. Nothing here fabricates a price, a market, or a release.
+        Opening a market takes several ordered steps. This page combines the payout design, answer window, and funding
+        with the same exact arithmetic the protocol uses, then shows which steps have a browser preview and which still
+        require the operator tooling. Nothing here fabricates a price, a market, or a deployed release.
+        And to say it plainly: anyone may design and preview here, with no wallet and no coin — founding the result on
+        devnet still runs through the operator tooling today. If you want to poke the live programs, devnet SOL is free
+        from the <a href="https://faucet.solana.com" rel="noreferrer">public faucet</a>.
       </p>
     </section>
 
@@ -438,7 +287,7 @@ export default function CreateMarketWizard() {
     {step === 'product' && <section className="direct-card">
       <header className="direct-card-heading"><span>01</span><div>
         <h2>Range protection on a Pyth source</h2>
-        <p>A categorical partition of one coordinate domain by two cuts, plus an explicit failure outcome. The payoff is one unit of the liability basis in either tail and nothing inside the band — the shape a holder buys as protection against the price leaving a range they can live with.</p>
+        <p>You choose a lower and upper edge, plus what happens if the source is silent. A claim pays one collateral unit when the answer falls outside the band and zero inside it.</p>
       </div></header>
       <div className="direct-form-grid">
         <label><span>Coordinate label (display only)</span><input value={coordinateLabel} onChange={(event) => setCoordinateLabel(event.target.value)} /></label>
@@ -463,7 +312,7 @@ export default function CreateMarketWizard() {
         <p className="direct-refusal">
           The labels above are display metadata and are never decoded from a Market account. What the chain re-derives at
           Found time is the partition: cuts strictly increasing, regions exactly cuts + 1, outcomes exactly regions + 1,
-          and a portfolio that is neither empty nor un-normalized.
+          and a payout design that is neither empty nor ambiguous.
         </p>
       </> : <p className="direct-refusal">Refused: {product.message}</p>}
     </section>}
@@ -508,50 +357,52 @@ export default function CreateMarketWizard() {
 
     {step === 'funding' && <section className="direct-card">
       <header className="direct-card-heading"><span>03</span><div>
-        <h2>Principal, the capacity bound, and seven segregated compartments</h2>
-        <p>Founding mints one complete set per collateral atom, so the founder holds every outcome. Capability funding is quoted per compartment and carries two independent totals; nothing anywhere adds a lamport to a collateral atom.</p>
+        <h2>Backing, the capacity ratio, and seven named funding purposes</h2>
+        <p>Opening mints one complete set per collateral atom, so the founder initially holds every outcome. Each operating purpose is funded separately, and network lamports are never added to collateral atoms.</p>
       </div></header>
       <div className="direct-form-grid">
         <label><span>Founding principal · raw collateral atoms</span><input inputMode="numeric" value={principal} onChange={(event) => setPrincipal(event.target.value)} /></label>
-        <label><span>Venue manipulation floor · lamports{floorRecord.kind === 'decoded' ? ' · from the record below' : ' · stated'}</span><input inputMode="numeric" disabled={floorRecord.kind === 'decoded'} value={floorRecord.kind === 'decoded' ? floorRecord.floor.floorAtoms.toString() : venueFloor} onChange={(event) => setVenueFloor(event.target.value)} /></label>
-        <label><span>κ numerator / denominator</span><span className="wizard-pair">
+        <label><span>Venue cost floor · lamports{floorRecord.kind === 'decoded' ? ' · from the technical proof below' : ' · stated'}</span><input inputMode="numeric" disabled={floorRecord.kind === 'decoded'} value={floorRecord.kind === 'decoded' ? floorRecord.floor.floorAtoms.toString() : venueFloor} onChange={(event) => setVenueFloor(event.target.value)} /></label>
+        <label><span>Capacity ratio · numerator / denominator</span><span className="wizard-pair">
           <input inputMode="numeric" value={kappaNumerator} onChange={(event) => setKappaNumerator(event.target.value)} />
           <input inputMode="numeric" value={kappaDenominator} onChange={(event) => setKappaDenominator(event.target.value)} />
         </span></label>
       </div>
 
-      <label><span>ManipulationFloorV1 record · {MANIPULATION_FLOOR_V1_BYTES} bytes of hexadecimal, optional — the venue&apos;s own floor derivation, from the operator&apos;s source tooling; without it the typed floor above is what counts</span>
-        <textarea spellCheck={false} value={floorRecordHex} onChange={(event) => setFloorRecordHex(event.target.value)} />
-      </label>
-      {floorRecord.kind === 'decoded'
-        ? <dl className="found-facts">
+      <details className="trade-v3-bytes">
+        <summary>Technical: verify a venue-derived floor</summary>
+        <label><span>Venue floor proof · {MANIPULATION_FLOOR_V1_BYTES} bytes of hexadecimal, optional</span>
+          <textarea spellCheck={false} value={floorRecordHex} onChange={(event) => setFloorRecordHex(event.target.value)} />
+        </label>
+        {floorRecord.kind === 'decoded'
+          ? <dl className="found-facts">
             <div><dt>Recognized</dt><dd><code>{MANIPULATION_FLOOR_V1_MAGIC}</code> · {floorRecord.floor.basis.replace('-', ' ')} derivation</dd></div>
             <div><dt>Floor</dt><dd>{floorRecord.floor.floorAtoms.toLocaleString()} atoms of the collateral unit below</dd></div>
             <div><dt>Derived for Source</dt><dd>{floorRecord.floor.sourceSpecId}</dd></div>
             <div><dt>Venue configuration</dt><dd>{floorRecord.floor.adapterConfigId}</dd></div>
             <div><dt>Collateral unit</dt><dd>{floorRecord.floor.collateralUnitId}</dd></div>
             <div><dt>Derivation release</dt><dd>{floorRecord.floor.derivationReleaseId}{floorRecord.floor.derivationReleaseId === BONDING_CURVE_FLOOR_DERIVATION_ID_V1 ? ' · bonding-curve buyout/exit' : ''}</dd></div>
-          </dl>
-        : <p className="direct-refusal">
+            </dl>
+          : <p className="direct-refusal">
             {floorRecord.kind === 'refused'
               ? `Refused: ${floorRecord.message}`
               : 'No floor record supplied, so the number above is a stated claim about a venue rather than that venue’s own derivation. A real founding binds the floor to the Source, adapter configuration and collateral unit it was derived for; a floor derived for something else is not a weaker bound, it is an answer to a different question.'}
-          </p>}
+            </p>}
+      </details>
 
       {kappa.ok ? <div className={`wizard-kappa ${kappa.verdict.admitted ? 'admitted' : 'refused'}`}>
         <strong>{kappa.verdict.admitted ? 'Under the capacity bound' : `Over the capacity bound · ${kappa.verdict.refusal}`}</strong>
         <p>
           The predicate is <code>principal · denominator ≤ numerator · floor</code>, cross-multiplied so there is no
-          division and no rounding. At κ = {formatCapacityV1(capacity)} against a floor of {BigInt(venueFloor || '0').toLocaleString()} lamports,
+          division and no rounding. At a ratio of {formatCapacityV1(capacity)} against a floor of {BigInt(venueFloor || '0').toLocaleString()} lamports,
           {' '}the largest admitted principal is {kappa.verdict.largestAdmittedPrincipal === null ? 'none' : kappa.verdict.largestAdmittedPrincipal.toLocaleString()} atoms.
           {kappa.verdict.scaled !== null && kappa.verdict.bound !== null && <> This founding states {kappa.verdict.scaled.toLocaleString()} against a bound of {kappa.verdict.bound.toLocaleString()}.</>}
         </p>
         <p className="wizard-enforcement">
-          Enforcement: <strong>{kappa.verdict.enforcement}</strong>. No on-chain route applies this predicate today — it is
-          proven in Lean and implemented in <code>dclutch-source-contract</code>, and its only non-test caller is the
-          off-chain gauntlet driver. Found sees the Source and not the principal; Claims FoundingV5 sees the reverse. So
-          this verdict tells you what the protocol <em>intends</em>, not what a validator will refuse. And even once wired,
-          a founding-only check is not a cap: principal grows on every complete-set split.
+          Enforcement: <strong>{kappa.verdict.enforcement}</strong>. ProjectFound authenticates the selected Source graph,
+          converts the atom cap to complete-set units at one floor-division boundary, and generic Found refuses a quantity
+          above that cap before mutation. Core then persists the exact <code>principal_cap_sets</code> value. This typed
+          preview is not chain evidence: the opening route still has to authenticate the floor and its three bindings.
         </p>
       </div> : <p className="direct-refusal">Refused: {kappa.message}</p>}
 
@@ -562,9 +413,9 @@ export default function CreateMarketWizard() {
         <div><dt>Paying outcomes</dt><dd>{backing.payingOutcomes.map((index) => product.value.outcomes[index].label).join(' · ')}</dd></div>
       </dl>}
 
-      <h3 className="wizard-subhead">Capability funding · one quote per entry, {manifest.ok ? manifest.entries : 0} entries</h3>
+      <h3 className="wizard-subhead">Operating funds · one quote per service, {manifest.ok ? manifest.entries : 0} services</h3>
       <table className="wizard-table">
-        <thead><tr><th>Compartment</th><th>Asset policy</th><th>Per entry · lamports</th><th>Manifest total</th></tr></thead>
+        <thead><tr><th>Purpose</th><th>Asset rule</th><th>Per service · lamports</th><th>Plan total</th></tr></thead>
         <tbody>{FUNDING_COMPARTMENTS_V1.map((compartment) => {
           const total = manifest.ok ? manifest.totals.perCompartment.find((entry) => entry.name === compartment.name) : undefined;
           return <tr key={compartment.name} className={total && total.amount > 0n ? 'wizard-paying' : ''}>
@@ -581,22 +432,21 @@ export default function CreateMarketWizard() {
       </table>
       {manifest.ok
         ? <p className="direct-status">
-            Manifest encodes to {manifest.bytes.length} bytes and passes the Found path’s own decoder.
-            {manifestDigest && <> Its content identity is <code>{manifestDigest}</code> — the digest that goes into the Market PDA.</>}
-            {' '}Capability identities here are wizard placeholders; a real founding names released kinds.
+            The funding plan encodes to {manifest.bytes.length} bytes and passes the opening decoder.
+            {' '}Service identities here are preview placeholders; a real opening names checked releases.
           </p>
         : <p className="direct-refusal">Refused: {manifest.message}</p>}
       <p className="direct-refusal">
         <code>Rent</code> and <code>Creation</code> pay for account existence and admit native lamports only. The other five
-        are capability-selected. Both totals are recomputed from the compartments and never taken from a caller, and the
+        are selected by the service. Both totals are recomputed from the named purposes and never taken from a caller, and the
         Realm collateral binding is present exactly when the Realm total is nonzero.
       </p>
     </section>}
 
     {step === 'review' && <section className="direct-card">
       <header className="direct-card-heading"><span>04</span><div>
-        <h2>The exact transaction set</h2>
-        <p>{ladder.rungs} rungs. {ladder.browserBuilders} have a browser builder, {ladder.browserFrames} assemble their frame in the browser from coordinates Rust supplies, and {ladder.toolingOnly} are tooling-only. Three ride an address lookup table.</p>
+        <h2>The ordered opening plan</h2>
+        <p>{ladder.rungs} steps. {ladder.browserBuilders} have a browser preview, {ladder.browserFrames} can be assembled from operator-supplied coordinates, and {ladder.toolingOnly} remain in the operator tooling. Three use an address lookup table.</p>
       </div></header>
       <ol className="wizard-ladder">
         {FOUNDING_LADDER_V1.map((rung, index) => <li key={rung.id} className={rung.status}>
@@ -607,38 +457,24 @@ export default function CreateMarketWizard() {
             {rung.lookupTable && <span className="wizard-badge alt">ALT</span>}
           </div>
           <p className="wizard-rung-effect">{rung.effect}</p>
-          <dl>
+          <details><summary>Technical builder details</summary><dl>
             <div><dt>Transactions</dt><dd>{rung.transactions}</dd></div>
             <div><dt>Builder</dt><dd><code>{rung.builder}</code></dd></div>
-          </dl>
+          </dl></details>
           <p className="wizard-rung-reason">{rung.reason}</p>
         </li>)}
       </ol>
       <p className="direct-refusal">
-        A “Create market” button that submitted one transaction would be a lie about five sixths of this. The rungs marked
-        tooling-only are not missing features to be filled in by hand — each names a first-party Rust encoder or kernel
-        transition that is the authority for what its bytes mean, and a browser re-implementation would be a second
-        authority rather than a client.
+        A one-click “Create market” button would misstate this plan. Steps marked for operator tooling must use the
+        first-party implementation that owns their transaction meaning; this page does not reimplement them in the browser.
       </p>
     </section>}
 
     {step === 'submit' && <section className="direct-card">
       <header className="direct-card-heading"><span>05</span><div>
-        <h2>Sign and submit the rungs a browser can drive</h2>
-        <p>Against a validator whose record graph and collateral Mint already exist, the two Core rungs are reachable from a wallet at a generation nothing has used. Each is signed and submitted separately: the lifecycle credit must confirm before Found31 is submitted, and chaining them would be deciding on your behalf that the first one landed.</p>
+        <h2>Inspect the partial browser preview</h2>
+        <p>This read-only check reacquires the immutable releases, Product semantics, and account frame at finalized commitment. It does not ask for a wallet, create a lookup table, sign a transaction, spend devnet SOL, or open a Market.</p>
       </div></header>
-
-      <WalletDirectory
-        directory={wallets}
-        purpose="founding payer and rent-refund wallet"
-        onConnected={(address) => {
-          // The connected wallet is the payer and, by default, the immutable
-          // rent-refund beneficiary. Both remain editable: a founding that
-          // refunds to a different wallet is legitimate and common.
-          setAddresses((current) => ({ ...current, payer: address, refundWallet: current.refundWallet || address }));
-          setWalletStatus(`${address} connected. No signature has been requested.`);
-        }}
-      />
 
       <form className="wizard-chain-form" onSubmit={buildChainPlan}>
         <div className="direct-form-grid">
@@ -651,7 +487,7 @@ export default function CreateMarketWizard() {
             <input required spellCheck={false} value={effectiveAddresses[field]} onChange={(event) => setAddresses((current) => ({ ...current, [field]: event.target.value.trim() }))} />
           </label>)}
         </div>
-        <button type="submit">Construct the unsigned lifecycle + Found31 pair</button>
+        <button type="submit">Inspect and construct the unsigned preview</button>
         <p className="direct-status" aria-live="polite">{planStatus}</p>
       </form>
 
@@ -664,38 +500,13 @@ export default function CreateMarketWizard() {
           <div><dt>Rent debit</dt><dd>{plan.rentCreditRentDebit} credit + {plan.marketRentTopUp} Market lamports</dd></div>
           <div><dt>Blockhash validity</dt><dd>through block height {plan.lastValidBlockHeight}</dd></div>
         </dl>
-
-        <div className="signing-grid">
-          <article>
-            <span>Wallet identity</span>
-            <strong>{wallets.address ?? 'not connected'}</strong>
-            <p>{walletStatus}</p>
-          </article>
-          <article>
-            <span>Submission boundary</span>
-            <strong>{stages.filter((stage) => stage.status === 'submitted').length} / {stages.length} submitted</strong>
-            <p>Nothing is submitted without a separate click. Preflight is never skipped.</p>
-          </article>
-        </div>
-
-        <ol className="wizard-stages">
-          {stages.map((stage) => <li key={stage.id} className={stage.status}>
-            <div><strong>{stage.label}</strong><span className={`wizard-badge ${stage.status}`}>{stage.status}</span></div>
-            <p>{stage.detail}</p>
-            {stage.signature && <code>{stage.signature}</code>}
-            <button
-              type="button"
-              disabled={stage.status === 'signing' || stage.status === 'submitted' || wallets.address === null}
-              onClick={() => void runStage(stage.id)}
-            >Sign &amp; submit this transaction</button>
-          </li>)}
-        </ol>
-        <p className="direct-refusal">
-          Submitting Found31 leaves a Market in phase <em>Founding</em>: identity exists, obligations and readiness are
-          still being assembled, and no liabilities or trading are admitted. Reaching <em>Open</em> is the DCLTGMF1 rung,
-          which needs the projected-Custody prestate the review step marks tooling-only.
-        </p>
       </>}
+      <p className="direct-refusal">
+        This page deliberately has no signing or submission button. The partial browser pair would spend devnet funds
+        and stop before the Market is open. The complete operator campaign owns the durable
+        journal, every opening step, the final transition, and recovery after a crash. Until that complete
+        caller is available here, use this page only to review the design and inspect the unsigned preview.
+      </p>
     </section>}
   </main>;
 }

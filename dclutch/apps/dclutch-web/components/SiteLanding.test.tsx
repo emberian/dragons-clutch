@@ -1,0 +1,70 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it, vi } from 'vitest';
+
+// The front door's closed face, pinned against a mock pending cut now that
+// the published fixture names a Market. Its companion,
+// SiteLanding.opened.test.tsx, renders the same page with a market named.
+
+vi.mock('@/lib/publicCutStaging', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/publicCutStaging')>('@/lib/publicCutStaging');
+  const cut = actual.parsePublicDevnetCutV1({
+    schema: 'dclutch-public-cut-v1',
+    cluster: 'devnet',
+    market: null,
+    activity: { found: null, trade: null, resolve: null, redeem: null },
+  });
+  return { ...actual, PUBLIC_DEVNET_CUT_V1: cut };
+});
+
+const { default: SiteLanding } = await import('./SiteLanding');
+
+describe('the front door', () => {
+  const html = renderToStaticMarkup(<SiteLanding />);
+
+  it('says plainly where this stands before it says anything else', () => {
+    expect(html).toContain('On devnet — nothing for sale');
+    expect(html).toContain('the first markets are being set up');
+    expect(html).toContain('no value at risk anywhere');
+  });
+
+  it('does not promise the reader a view of activity that is not there', () => {
+    // It used to say "you can watch it all happen live below", above a strip
+    // of three numbers.
+    expect(html).not.toContain('watch it all happen live');
+    expect(html).toContain('read live from the chain every time you open this page');
+  });
+
+  it('describes what needs an open market without pretending there is one', () => {
+    expect(html).toContain('The seven programs are deployed');
+    expect(html).toContain('will tell you plainly that there is not one yet');
+  });
+
+  it('offers the faucet to a reader who wants to try it, right beside the nothing-for-sale fact', () => {
+    expect(html).toContain('https://faucet.solana.com');
+    expect(html).toContain('devnet SOL is free from the');
+  });
+
+  /**
+   * The field notes were written on 25 August 2026, committed the same day to
+   * a separate posters repository, and then linked from nowhere — the one
+   * long-form piece about how this was built, unreachable by anyone who did
+   * not already know it existed. The link is pinned here so it cannot go
+   * quiet again, and the path is pinned because the artifact's link check
+   * resolves this exact string against a directory index.
+   */
+  it('gives a reader the field notes on how this was built, and says what they are', () => {
+    expect(html).toContain('/notes/plan-to-compost-at-least-three/');
+    expect(html).toContain('Plan to compost at least three');
+    expect(html).toContain('How this was built');
+    expect(html).toContain('built twice before the version you are reading now');
+    expect(html).toContain('honest about what is proved and what is still only tested');
+  });
+
+  it('carries the key art with a described image and an honest caption', () => {
+    expect(html).toContain('/art/dragons-clutch-key-art-v1-1672w.webp');
+    expect(html).toContain('claw cradling a glowing, faceted gem');
+    expect(html).toContain('holds like treasure');
+    // Lazy: the art must never delay the numbers the page exists to show.
+    expect(html).toContain('loading="lazy"');
+  });
+});

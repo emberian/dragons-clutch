@@ -42,7 +42,7 @@ use crate::{
 pub const OPEN_MARKET_INSTRUCTION_BYTES_V1: usize =
     dclutch_market_core_codec::REQUEST_BYTES + CUSTODY_REQUEST_BYTES_V1;
 /// Exact outer count for prerequisite replay initialization.
-pub const INITIALIZE_REPLAY_OUTER_ACCOUNT_COUNT_V1: usize = 15;
+pub const INITIALIZE_REPLAY_OUTER_ACCOUNT_COUNT_V1: usize = 16;
 /// Exact outer count for vault creation and Market opening.
 pub const OPEN_MARKET_OUTER_ACCOUNT_COUNT_V1: usize = 19;
 
@@ -52,6 +52,7 @@ const REPLAY: usize = 10;
 const INITIALIZE_PAYER: usize = 11;
 const INITIALIZE_SYSTEM: usize = 12;
 const INITIALIZE_RENT: usize = 13;
+const INITIALIZE_REFUND: usize = 14;
 const OPEN_MINT: usize = 11;
 const OPEN_VAULT: usize = 12;
 const OPEN_AUTHORITY: usize = 13;
@@ -301,6 +302,7 @@ fn authenticate_request_shape(
                 || request.resulting_revision != 1
                 || request.amount != 0
                 || request.rent_lamports != rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1)
+                || account(accounts, INITIALIZE_REFUND)?.key.to_bytes() != request.rent_refund
             {
                 return Err(CoreSbfError::Reference);
             }
@@ -347,6 +349,8 @@ fn authenticate_request_shape(
 #[derive(Clone, Copy)]
 struct OpenPrestate {
     payer_lamports: u64,
+    replay_lamports: u64,
+    refund_lamports: Option<u64>,
     vacant: Option<VacantAccount>,
 }
 
@@ -359,14 +363,13 @@ fn authenticate_prestate(
     let replay = account(accounts, REPLAY)?;
     match request.operation {
         OperationV1::InitializeReplay => {
-            if replay.owner != &system_program::ID
-                || replay.lamports() != 0
-                || replay.data_len() != 0
-            {
+            if replay.owner != &system_program::ID || replay.data_len() != 0 {
                 return Err(CoreSbfError::Creation);
             }
             Ok(OpenPrestate {
                 payer_lamports: account(accounts, INITIALIZE_PAYER)?.lamports(),
+                replay_lamports: replay.lamports(),
+                refund_lamports: Some(account(accounts, INITIALIZE_REFUND)?.lamports()),
                 vacant: None,
             })
         }
@@ -389,6 +392,8 @@ fn authenticate_prestate(
             }
             Ok(OpenPrestate {
                 payer_lamports: account(accounts, OPEN_PAYER)?.lamports(),
+                replay_lamports: replay.lamports(),
+                refund_lamports: None,
                 vacant: Some(VacantAccount {
                     address: identity(vault.key.to_bytes())?,
                     lamports: vault.lamports(),
@@ -414,7 +419,7 @@ fn invoke_custody<'accounts, 'info>(
     continuation: RegistryContinuationRequestV1,
 ) -> Result<(), ProgramError> {
     let indices: &[usize] = match request.operation {
-        OperationV1::InitializeReplay => &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14],
+        OperationV1::InitializeReplay => &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15],
         OperationV1::OpenVault => &[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
         OperationV1::Transfer | OperationV1::CloseVault | OperationV1::CloseReplay => {
             return Err(CoreSbfError::Instruction.into());
@@ -426,7 +431,7 @@ fn invoke_custody<'accounts, 'info>(
         let value = account(accounts, outer_index)?;
         let signer = child_index == 0 || value.is_signer;
         let writable = match request.operation {
-            OperationV1::InitializeReplay => matches!(child_index, 8 | 9),
+            OperationV1::InitializeReplay => matches!(child_index, 8 | 9 | 12),
             OperationV1::OpenVault => matches!(child_index, 8 | 10 | 13),
             OperationV1::Transfer | OperationV1::CloseVault | OperationV1::CloseReplay => {
                 return Err(CoreSbfError::Instruction.into());
@@ -541,10 +546,31 @@ fn authenticate_receipt_and_poststate(
     ])
     .to_bytes();
     let payer = account(accounts, payer_index(request.operation))?;
+    let payer_delta_is_exact = match request.operation {
+        OperationV1::InitializeReplay => {
+            pre.payer_lamports
+                .checked_sub(request.rent_lamports.saturating_sub(pre.replay_lamports))
+                == Some(payer.lamports())
+        }
+        OperationV1::OpenVault => {
+            pre.payer_lamports.checked_sub(request.rent_lamports) == Some(payer.lamports())
+        }
+        OperationV1::Transfer | OperationV1::CloseVault | OperationV1::CloseReplay => false,
+    };
+    let refund_delta_is_exact = match request.operation {
+        OperationV1::InitializeReplay => {
+            pre.refund_lamports.and_then(|before| {
+                before.checked_add(pre.replay_lamports.saturating_sub(request.rent_lamports))
+            }) == Some(account(accounts, INITIALIZE_REFUND)?.lamports())
+        }
+        OperationV1::OpenVault => true,
+        OperationV1::Transfer | OperationV1::CloseVault | OperationV1::CloseReplay => false,
+    };
     if receipt.evidence.poststate_commitment != expected_poststate
         || replay.last_poststate_commitment != expected_poststate
         || receipt.evidence.replay_state_digest != replay_digest
-        || pre.payer_lamports.checked_sub(request.rent_lamports) != Some(payer.lamports())
+        || !payer_delta_is_exact
+        || !refund_delta_is_exact
     {
         return Err(CoreSbfError::ChildAck);
     }
@@ -690,6 +716,14 @@ fn validate_outer_frame(
             require_payer(account(accounts, INITIALIZE_PAYER)?)?;
             require_program(account(accounts, INITIALIZE_SYSTEM)?, system_program::ID)?;
             require_sysvar(account(accounts, INITIALIZE_RENT)?, sysvar::rent::ID)?;
+            let refund = account(accounts, INITIALIZE_REFUND)?;
+            if refund.key.to_bytes() == account(accounts, REPLAY)?.key.to_bytes()
+                || refund.is_signer
+                || !refund.is_writable
+                || refund.executable
+            {
+                return Err(CoreSbfError::AccountFrame);
+            }
         }
         OperationV1::OpenVault => {
             require_readonly(account(accounts, OPEN_MINT)?)?;

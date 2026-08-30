@@ -24,3 +24,6 @@ solana-sdk-ids = "=3.1.0"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+dclutch-core-contract = { path = "../dclutch-core-contract" }

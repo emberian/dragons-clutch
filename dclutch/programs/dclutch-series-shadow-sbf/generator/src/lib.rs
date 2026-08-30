@@ -29,8 +29,8 @@ use dclutch_execution_strategy_contract::{
 use dclutch_request_profile_contract::{RequestProfileV1, SCHEMA_RELEASE_ID as REQUEST_SCHEMA_ID};
 use dclutch_trading_sbf::series::{
     account_profile_v4::{
-        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,
-        encode_series_consume_account_profile_v4_atomic,
+        SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4,
+        SeriesConsumeAccountProfileInputV4, encode_series_consume_account_profile_v4_atomic,
     },
     consume_artifacts_v4::{
         SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_EFFECT_BYTES_V4,
@@ -58,7 +58,7 @@ pub const SERIES_SHADOW_BUNDLE_DIGEST_DOMAIN_V4: &[u8] =
 pub const SERIES_SHADOW_COMPILER_RELEASE_PREIMAGE_V4: &[u8] =
     b"dclutch/compiler/series-shadow-bundle-v4";
 /// Fixed AccountProfile base width before the one dynamic FundingState span.
-pub const SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4: usize = 157;
+pub const SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4: usize = SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4;
 
 /// Capability semantic identities selected independently of executable bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,7 +101,7 @@ pub struct SeriesShadowBundleSourceV4<'a> {
     pub release_sources: SeriesShadowReleaseSourcesV4<'a>,
     /// Exact selected LifecycleV5 bytes.
     pub lifecycle: &'a [u8],
-    /// Exact pre-execution data widths at the 157 fixed logical coordinates.
+    /// Exact pre-execution data widths at the 161 fixed logical coordinates.
     pub fixed_data_lengths: &'a [u32; SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4],
     /// Exact canonical child requests for this occurrence.
     pub child_requests: SeriesConsumeChildRequestsV4<'a>,

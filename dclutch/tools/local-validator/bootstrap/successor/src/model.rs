@@ -16,6 +16,12 @@ pub(crate) struct RunProgramInput {
     /// deploy-day shape.
     #[serde(default)]
     pub(crate) observed_programdata: Option<String>,
+    /// SHA-256 of the complete live ELF tail inside `observed_programdata`,
+    /// including any Loader allocation padding. Required exactly when an
+    /// observed ProgramData account is supplied. `elf_sha256` remains the
+    /// checked raw build-candidate digest.
+    #[serde(default)]
+    pub(crate) observed_elf_sha256: Option<String>,
     /// Additive and optional, and **local rehearsal only**. The slot written
     /// into the genesis install this plan materializes, so a local campaign can
     /// exercise a nonzero deployment slot end to end instead of the zero a
@@ -57,6 +63,11 @@ pub(crate) struct SuccessorRunSpec {
 pub(crate) struct MarketRunInput {
     pub(crate) generation: u64,
     pub(crate) collateral_display_decimals: u8,
+    /// Local-validator-only collateral kept outside every Hoard principal so
+    /// the participant exterior can execute a real Token-2022 transfer after
+    /// founding. Zero is the only public/devnet value; the local fixture uses
+    /// the one exact amount authenticated by the campaign.
+    pub(crate) local_participant_fixture_liquidity_atoms: u64,
     pub(crate) initial_collateral_atoms: u64,
     pub(crate) product_id: String,
     pub(crate) coordinate_domain_id: String,
@@ -86,21 +97,133 @@ pub(crate) struct MarketRunInput {
     /// The run spec carries the exact bodies for the same reason it already
     /// carries `linked_basis_hex` rather than an opaque digest.
     pub(crate) source_spec_hex: String,
+    /// Exact SourceCapacityProfileV1 body named by the SourceSpec.
+    pub(crate) source_capacity_profile_hex: String,
+    /// ManipulationFloorV1 policy template. Empty selects explicit unbounded;
+    /// nonempty is rebound to the immutable Realm mint before publication.
+    pub(crate) manipulation_floor_hex: String,
     pub(crate) window_spec_hex: String,
     pub(crate) statistic_spec_hex: String,
     pub(crate) provider_release_hex: String,
     pub(crate) pyth_adapter_config_hex: String,
+    /// Exact canonical `PythSponsoredPushReleaseV1` body selected by a
+    /// `PythSponsoredPushSnapshot` source. Empty for every other access
+    /// profile. The body is published as its own Registry record; the
+    /// ProviderRelease names it by SHA-256.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) pyth_sponsored_push_release_hex: String,
     pub(crate) recovery_policy_hex: String,
     pub(crate) capability_manifest_hex: String,
+    /// Complete Direct record closure selected by the one non-Resolution
+    /// manifest entry. The field is syntactically required; `None` exists only
+    /// while an in-process producer is assembling the Resolution base and is
+    /// refused by `validate_market_input`.
+    pub(crate) direct_capability: Option<DirectMarketCapabilityV1>,
+    /// Family-neutral selected-capability closure for the one non-Resolution
+    /// manifest entry, in the byte shape the selection seam consumes. Exactly
+    /// one of this and `direct_capability` must be present:
+    /// `validate_market_input` refuses zero closures and refuses two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) selected_capability: Option<SelectedCapabilityV1>,
     pub(crate) linked_basis_hex: String,
+}
+
+/// One Registry record a selected capability's publication chain finalizes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectedCapabilityRecordV1 {
+    /// Operator-facing name; also the founding-evidence label, so it must be
+    /// unique within one closure.
+    pub(crate) label: String,
+    /// Schema/release identity the record finalizes under, read off the
+    /// release's own artifacts by the family compiler.
+    pub(crate) schema_hex: String,
+    /// Exact semantic bytes.
+    pub(crate) body_hex: String,
+}
+
+/// One family-neutral selected-capability closure, serialized.
+///
+/// Every byte field is the family release compiler's own output; the driver
+/// derives the manifest entry from these through the selection seam
+/// (`selected_capability.rs`) and restates nothing. An additional family is
+/// this payload plus its publication — not new driver code.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectedCapabilityV1 {
+    /// Operator-facing family label (for example "general").
+    pub(crate) family: String,
+    /// Exact `CapabilityProgramSetV2` bytes.
+    pub(crate) program_set_hex: String,
+    /// The selected V4 descriptor authoring the entry's kind, capacity
+    /// profile, root schema, and derivation policy.
+    pub(crate) selected_descriptor_hex: String,
+    /// Exact config record body; must be derivable before the Market exists
+    /// (the seam's fixed-point invariant).
+    pub(crate) config_hex: String,
+    /// The family's canonical Market-bindable publication bytes.
+    pub(crate) publication_hex: String,
+    /// Every record the Registry must finalize for this release.
+    pub(crate) records: Vec<SelectedCapabilityRecordV1>,
+    pub(crate) activation_deadline_slot: u64,
+    pub(crate) root_rent_minimum_lamports: u64,
+    pub(crate) selected_manifest_entry_index: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DirectMarketCapabilityV1 {
+    pub(crate) execution_config_hex: String,
+    pub(crate) ordinary_account_profile_hex: String,
+    pub(crate) ordinary_lifecycle_policy_hex: String,
+    pub(crate) ordinary_request_profile_hex: String,
+    pub(crate) ordinary_transition_hex: String,
+    pub(crate) ordinary_strategy_hex: String,
+    pub(crate) ordinary_effect_hex: String,
+    pub(crate) ordinary_descriptor_hex: String,
+    pub(crate) begin_retiring_account_profile_hex: String,
+    pub(crate) begin_retiring_effect_hex: String,
+    pub(crate) begin_retiring_descriptor_hex: String,
+    pub(crate) native_close_account_profile_hex: String,
+    pub(crate) native_close_effect_hex: String,
+    pub(crate) native_close_descriptor_hex: String,
+    /// The capability-activation artifact trio. Defaulted (empty) so market
+    /// inputs sealed before the activation entry existed still parse for
+    /// terminal and evidence paths; every authoring, founding, and trade path
+    /// refuses an input whose activation artifacts are absent, because such an
+    /// input describes a market whose capability can never activate.
+    #[serde(default)]
+    pub(crate) activation_account_profile_hex: String,
+    #[serde(default)]
+    pub(crate) activation_effect_hex: String,
+    #[serde(default)]
+    pub(crate) activation_descriptor_hex: String,
+    pub(crate) program_set_hex: String,
+    pub(crate) activation_deadline_slot: u64,
+    pub(crate) root_rent_minimum_lamports: u64,
+    pub(crate) selected_manifest_entry_index: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ProgramPin {
     pub(crate) program_id: String,
     pub(crate) programdata_id: String,
+    /// Compatibility alias for `checked_candidate_elf_path`; always exact.
     pub(crate) elf_path: String,
+    /// Compatibility alias for `checked_candidate_elf_sha256`; never the live
+    /// padded payload digest.
     pub(crate) elf_sha256: String,
+    /// Checked raw build output used for deployment.
+    pub(crate) checked_candidate_elf_path: String,
+    /// SHA-256 of the exact raw build candidate.
+    pub(crate) checked_candidate_elf_sha256: String,
+    /// SHA-256 of the complete live ProgramData ELF tail. This is the digest
+    /// bound by `ArtifactReleaseV1` and may differ from the raw candidate only
+    /// because of an all-zero allocation suffix.
+    pub(crate) live_elf_sha256: String,
+    /// Number of proven all-zero bytes after the checked candidate in the live
+    /// ProgramData ELF tail.
+    pub(crate) live_elf_padding_bytes: usize,
     pub(crate) semantic_release_id: String,
     pub(crate) artifact_release_id: String,
     pub(crate) upgrade_authority: Option<String>,
@@ -151,6 +274,154 @@ pub(crate) struct CoreBootstrapPin {
     pub(crate) release_recognition_requires_revoke: bool,
 }
 
+/// How one permanent devnet role entered the checked deployment set.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum CheckedDeploymentDispositionV1 {
+    /// A complete, freshly reauthenticated one-role Loader Upgrade receipt.
+    Upgrade,
+    /// An authenticated existing deployment and existing finalized artifact.
+    CarryForward,
+}
+
+/// One permanent devnet role and the exact evidence that authorized its
+/// release-plan projection. Upgrade-only and carry-forward-only fields are
+/// optional at the wire level so serde can represent the tagged union; the
+/// deployment-set authenticator enforces the exact field closure for each tag.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedUpgradeRolePinV1 {
+    pub(crate) role: String,
+    pub(crate) disposition: CheckedDeploymentDispositionV1,
+    pub(crate) program_id: String,
+    pub(crate) programdata_id: String,
+    pub(crate) baseline_path: Option<String>,
+    pub(crate) baseline_sha256: Option<String>,
+    pub(crate) receipt_path: Option<String>,
+    pub(crate) receipt_sha256: Option<String>,
+    pub(crate) dump_path: String,
+    pub(crate) dump_sha256: String,
+    pub(crate) checked_candidate_elf_path: String,
+    pub(crate) checked_candidate_elf_sha256: String,
+    pub(crate) live_elf_sha256: String,
+    pub(crate) deployment_slot: u64,
+    pub(crate) programdata_account_sha256: String,
+    pub(crate) semantic_release_id: String,
+    /// Exact existing `ArtifactReleaseV1` body/id for CarryForward; absent for
+    /// an Upgrade, whose new body is derived by checked prepare.
+    pub(crate) artifact_release_body_hex: Option<String>,
+    pub(crate) artifact_release_id: Option<String>,
+    /// Exact live ProgramData account body from the carry-forward snapshot.
+    /// This is a derived transport projection, never caller-authored prepare
+    /// authority, and is absent for receipt-backed Upgrade roles.
+    pub(crate) carried_programdata_base64: Option<String>,
+}
+
+/// Exact singleton infrastructure evidence shared by the two CarryForward
+/// rows. All projected addresses and bodies are rederived while admitting the
+/// referenced one-context snapshot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedInfrastructureCarryForwardPinV1 {
+    pub(crate) snapshot_path: String,
+    pub(crate) snapshot_sha256: String,
+    pub(crate) context_slot: u64,
+    pub(crate) profile_address: String,
+    pub(crate) profile_account_sha256: String,
+    pub(crate) profile_body_sha256: String,
+    pub(crate) profile_body_hex: String,
+    pub(crate) registry_raw_address: String,
+    pub(crate) registry_staging_address: String,
+    pub(crate) registry_programdata_account_sha256: String,
+    pub(crate) rent_raw_address: String,
+    pub(crate) rent_staging_address: String,
+    pub(crate) rent_programdata_account_sha256: String,
+}
+
+/// Canonical mixed permanent deployment-set evidence consumed by checked
+/// prepare: Registry/Rent CarryForward plus five receipt-backed Upgrades.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedUpgradeSetPinV1 {
+    pub(crate) schema: String,
+    pub(crate) journal_path: String,
+    pub(crate) journal_sha256: String,
+    pub(crate) final_set_sha256: String,
+    pub(crate) checked_release_gate_path: String,
+    pub(crate) checked_release_gate_sha256: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_tree_sha256: String,
+    pub(crate) devnet_genesis_hash: String,
+    pub(crate) solana_cli_version: String,
+    pub(crate) retained_upgrade_authority: String,
+    pub(crate) fee_payer: String,
+    pub(crate) semantic_derivation: String,
+    pub(crate) infrastructure_carry_forward: CheckedInfrastructureCarryForwardPinV1,
+    pub(crate) roles: Vec<CheckedUpgradeRolePinV1>,
+}
+
+/// One exact mutable Loader pair installed into a fresh localhost validator.
+///
+/// This is not a devnet Upgrade receipt.  It binds a checked-release ELF to
+/// the ProgramData image that the local launcher installs, including the
+/// retained authority and synthetic nonzero deployment slot.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalMutableRolePinV1 {
+    pub(crate) role: String,
+    pub(crate) program_id: String,
+    pub(crate) programdata_id: String,
+    pub(crate) checked_candidate_elf_path: String,
+    pub(crate) checked_candidate_elf_sha256: String,
+    pub(crate) live_elf_sha256: String,
+    pub(crate) programdata_account_sha256: String,
+    pub(crate) deployment_slot: u64,
+    pub(crate) semantic_release_id: String,
+}
+
+/// One complete deployment-bound `CheckedReleaseV1` in canonical execution
+/// role order. The manifest bytes are retained because the compact
+/// multiprogram envelope carries only their content identities.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalExecutionReleaseRolePinV1 {
+    pub(crate) role: String,
+    pub(crate) checked_release_id: String,
+    pub(crate) checked_release_base64: String,
+}
+
+/// Exact five-role local execution evidence derived from one checked build
+/// gate and the seven authenticated local Loader pairs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalExecutionReleaseSetPinV1 {
+    pub(crate) schema: String,
+    pub(crate) checked_execution_release_set_id: String,
+    pub(crate) execution_release_set_id: String,
+    pub(crate) checked_execution_release_set_base64: String,
+    pub(crate) roles: Vec<CheckedLocalExecutionReleaseRolePinV1>,
+}
+
+/// Checked provenance for the seven-role decision-0012 localhost substrate.
+///
+/// Permanent-devnet plans continue to require `checked_upgrade_set`; this
+/// sibling is admitted only for loopback and is rooted in a fresh checked
+/// release gate plus exact genesis ProgramData images.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CheckedLocalMutableSetPinV1 {
+    pub(crate) schema: String,
+    pub(crate) checked_release_gate_path: String,
+    pub(crate) checked_release_gate_sha256: String,
+    pub(crate) source_revision: String,
+    pub(crate) source_tree_sha256: String,
+    pub(crate) solana_cli_version: String,
+    pub(crate) retained_upgrade_authority: String,
+    pub(crate) execution_release_set: CheckedLocalExecutionReleaseSetPinV1,
+    pub(crate) set_sha256: String,
+    pub(crate) roles: Vec<CheckedLocalMutableRolePinV1>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct GenesisAccountPin {
     pub(crate) address: String,
@@ -179,6 +450,14 @@ pub(crate) struct SuccessorPlan {
     pub(crate) activation: String,
     pub(crate) release_set_id: String,
     pub(crate) core_bootstrap: CoreBootstrapPin,
+    /// Present only when `prepare` authenticated the complete permanent-devnet
+    /// Upgrade journal instead of accepting caller-authored release facts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checked_upgrade_set: Option<CheckedUpgradeSetPinV1>,
+    /// Present only for an exact checked-release set installed into a fresh
+    /// localhost validator with all seven decision-0012 authorities retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checked_local_mutable_set: Option<CheckedLocalMutableSetPinV1>,
     pub(crate) infrastructure_profile: InfrastructureProfilePin,
     pub(crate) records: BTreeMap<String, RecordPair>,
     /// `"genesis"` or `"transaction"`. Devnet has no genesis, so the
@@ -190,7 +469,7 @@ pub(crate) struct SuccessorPlan {
     pub(crate) genesis_accounts: BTreeMap<String, GenesisAccountPin>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct TransactionEvidence {
     pub(crate) label: String,
     pub(crate) signature: String,
@@ -212,7 +491,58 @@ pub(crate) struct TransactionEvidence {
     pub(crate) logs: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+impl TransactionEvidence {
+    /// The program refusal code this transaction actually earned, if any.
+    ///
+    /// `error` carries the runtime's whole `TransactionError`. A program
+    /// refusal is exactly `{"InstructionError":[index,{"Custom":code}]}`;
+    /// everything else the runtime can say — a missing signature, a lamport
+    /// shortfall, an unknown instruction, a blown compute meter — is a
+    /// different kind of failure and returns `None` here. That distinction is
+    /// the one a hostile most needs, because "the transaction failed" and "the
+    /// wall I aimed at refused it" are different claims and only the second is
+    /// evidence.
+    pub(crate) fn refusal_code(&self) -> Option<u32> {
+        let entry = self.error.as_ref()?.get("InstructionError")?.as_array()?;
+        u32::try_from(entry.get(1)?.get("Custom")?.as_u64()?).ok()
+    }
+
+    /// Require the exact refusal this hostile claims to prove.
+    ///
+    /// A hostile that only asserts failure proves that SOMETHING refused, which
+    /// is the weakest reading an adversarial probe admits: a typo in the frame,
+    /// an unfunded probe wallet, or a wall three layers before the one under
+    /// test all satisfy it equally. Three walls stayed invisible behind exactly
+    /// that during this wave, and the composed founding's own refusal shared a
+    /// code with a hostile that was passing beside it.
+    ///
+    /// Pinning makes the probe state which wall it believes it hit. A wall that
+    /// MOVES then becomes a loud failure naming both codes, instead of a
+    /// campaign that stays green while testing something else.
+    pub(crate) fn refusing(self, expected: u32) -> crate::Result<Self> {
+        match self.refusal_code() {
+            Some(code) if code == expected => Ok(self),
+            Some(code) => Err(crate::Error::new(format!(
+                "{}: refused with 0x{code:04X}, not the pinned 0x{expected:04X}. \
+                 The probe still refused, so the campaign would have passed on \
+                 the old boolean assertion — read which wall moved before \
+                 repinning.",
+                self.label
+            ))),
+            None => Err(crate::Error::new(format!(
+                "{}: expected refusal 0x{expected:04X} but the failure carried no \
+                 program refusal code: {}",
+                self.label,
+                self.error
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "no error at all".into())
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct AccountEvidence {
     pub(crate) address: String,
     pub(crate) owner: String,
@@ -244,8 +574,69 @@ pub(crate) struct SuccessorRunEvidence {
     /// seed: enough to say which seed produced a run's compute-unit numbers,
     /// not enough to sign as it.
     pub(crate) keypair_seed_sha256: Option<String>,
+    /// Exact founding action context persisted by the Claims/Custody join.
+    /// This is a routing hint for terminal planners; they re-derive and verify
+    /// it from the finalized founding aggregate before using it.
+    #[serde(rename = "foundingCustodyContext")]
+    pub(crate) founding_custody_context: String,
+    #[serde(rename = "directSelectedManifestEntryIndex")]
+    pub(crate) direct_selected_manifest_entry_index: u16,
     pub(crate) completed: Vec<String>,
     pub(crate) transactions: Vec<TransactionEvidence>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
     pub(crate) remaining_execution_seam: String,
+}
+
+#[cfg(test)]
+mod refusal_pin_tests {
+    use super::TransactionEvidence;
+    use serde_json::json;
+
+    fn evidence(error: Option<serde_json::Value>) -> TransactionEvidence {
+        TransactionEvidence {
+            label: "probe".into(),
+            signature: "sig".into(),
+            slot: 1,
+            transaction_metadata_available: true,
+            fee_lamports: Some(5000),
+            fee_only_balance_change: Some(true),
+            compute_units_consumed: Some(1234),
+            error,
+            logs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn reads_the_custom_code_out_of_an_instruction_error() {
+        let refused = evidence(Some(json!({"InstructionError": [1, {"Custom": 0x600B}]})));
+        assert_eq!(refused.refusal_code(), Some(0x600B));
+        let kept = refused.refusing(0x600B).expect("the pinned code is the observed one");
+        assert_eq!(kept.label, "probe");
+    }
+
+    #[test]
+    fn a_moved_wall_is_an_error_naming_both_codes() {
+        // The whole point: this transaction DID refuse, so the boolean
+        // assertion this replaces would have passed it.
+        let refused = evidence(Some(json!({"InstructionError": [0, {"Custom": 0x1004}]})));
+        let message = refused.refusing(0x1003).unwrap_err().to_string();
+        assert!(message.contains("0x1004"), "{message}");
+        assert!(message.contains("0x1003"), "{message}");
+    }
+
+    #[test]
+    fn a_failure_that_is_not_a_program_refusal_is_not_a_refusal() {
+        // A hostile that dies on its own malformed signature proves nothing
+        // about the wall it aimed at, and must not read as the pinned code.
+        for other in [
+            json!("AccountNotFound"),
+            json!({"InstructionError": [0, "PrivilegeEscalation"]}),
+            json!({"InsufficientFundsForRent": {"account_index": 0}}),
+        ] {
+            let failed = evidence(Some(other.clone()));
+            assert_eq!(failed.refusal_code(), None, "{other}");
+            assert!(failed.refusing(0x3001).is_err(), "{other}");
+        }
+        assert_eq!(evidence(None).refusal_code(), None);
+    }
 }

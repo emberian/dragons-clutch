@@ -43,10 +43,14 @@ use solana_program::{
 
 use super::{
     ClaimsSbfError,
-    rational_product_v3::{AuthenticatedRationalProductV3, authenticate_terminal_scenario_v3},
+    affine_batch_v2::CorePhaseGateV3,
+    rational_product_v3::AuthenticatedRationalProductV3,
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
         execute_parent_authenticated as execute_parent_signed_delta_v3,
+    },
+    terminal_certificate_v3::{
+        TerminalCertificateFrameV3, authenticate_terminal_certificate_scenario_v3,
     },
 };
 
@@ -76,8 +80,9 @@ pub(crate) struct RationalTerminalFrameV3<'accounts, 'info> {
     pub(crate) position: &'accounts AccountInfo<'info>,
     pub(crate) custody_caller_authority: &'accounts AccountInfo<'info>,
     pub(crate) custody_program: &'accounts AccountInfo<'info>,
-    pub(crate) coordinate: &'accounts AccountInfo<'info>,
-    pub(crate) coordinate_staging: &'accounts AccountInfo<'info>,
+    pub(crate) terminal_certificate: &'accounts AccountInfo<'info>,
+    pub(crate) resolution_program: &'accounts AccountInfo<'info>,
+    pub(crate) resolution_programdata: &'accounts AccountInfo<'info>,
     pub(crate) realm: &'accounts AccountInfo<'info>,
     pub(crate) realm_staging: &'accounts AccountInfo<'info>,
     pub(crate) custody_replay: &'accounts AccountInfo<'info>,
@@ -138,12 +143,19 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
     if owner != asset.claims_custody_owner {
         return Err(ClaimsSbfError::Identity.into());
     }
-    let scenario = authenticate_terminal_scenario_v3(
-        authenticated.as_ref(),
-        frame.core_program,
-        frame.rent,
-        frame.coordinate,
-        frame.coordinate_staging,
+    let scenario = authenticate_terminal_certificate_scenario_v3(
+        TerminalCertificateFrameV3 {
+            registry: frame.registry,
+            cache: frame.cache,
+            resolution_program: frame.resolution_program,
+            resolution_programdata: frame.resolution_programdata,
+            certificate: frame.terminal_certificate,
+            rent: frame.rent,
+        },
+        header.release_set,
+        authenticated.core,
+        authenticated.admission.basis_kind(),
+        authenticated.result_outcome_count,
     )?;
     let hoard_before = token_amount(
         frame.hoard,
@@ -244,6 +256,14 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
             parent_context: header.parent_context,
             parent_request_digest: request_digest,
         },
+        // A terminal settlement necessarily runs on a resolved Market, so the
+        // enclosed signed delta must expect a settled phase. Expecting Open
+        // here is unsatisfiable: CoreState only carries the terminal receipt
+        // this route requires once the Market has left Open. It admits
+        // Retiring as well as Terminal because `begin_retiring` is
+        // permissionless, and a redemption that refused there would hand any
+        // stranger the power to end this holder's claim.
+        CorePhaseGateV3::TerminalOrRetiring,
     )?;
     let candidate_digest = hashv(&[
         TERMINAL_CANDIDATE_DOMAIN_V3,

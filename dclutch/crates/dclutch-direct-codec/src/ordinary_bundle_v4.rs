@@ -25,8 +25,8 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_request_profile_contract::v2::{
     REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID, RequestProfileV2,
 };
-use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 use dclutch_sha256_adapter::digest;
+use dclutch_transition_vm::v3::ProgramV3 as TransitionProgramV3;
 
 use crate::{
     execution_v3::{
@@ -65,8 +65,8 @@ pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_P
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 /// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile14.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0x2c, 0x79, 0x99, 0x66, 0x9a, 0x47, 0x90, 0xbd, 0xac, 0x56, 0x03, 0x83, 0xd1, 0x47, 0xf0, 0x13,
-    0xbb, 0x41, 0x8c, 0xae, 0x6c, 0x74, 0xd1, 0xc8, 0x21, 0x74, 0xa6, 0x0d, 0xcc, 0x2e, 0xf1, 0xe6,
+    0x89, 0x33, 0x50, 0x73, 0x38, 0x30, 0x2f, 0xfc, 0x75, 0xbd, 0xda, 0xe6, 0x5a, 0x8a, 0xfc, 0x4f,
+    0xdf, 0xf1, 0x61, 0xca, 0x63, 0x4c, 0xef, 0xb3, 0x03, 0xbe, 0xc0, 0x5e, 0x39, 0x5b, 0x49, 0x58,
 ];
 /// SHA-256 identity of the exact maker LifecycleV5 policy.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
@@ -360,7 +360,7 @@ fn artifact(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     extern crate std;
 
     use super::*;
@@ -527,6 +527,10 @@ mod tests {
             capacity_profile: [0x44; 32],
         })
         .expect("bundle")
+    }
+
+    pub(crate) fn canonical_bundle_for_cross_module_tests() -> DirectInlineOrdinaryHotBundleV4 {
+        build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis"))
     }
 
     /// The same witness the registered family carries, on the live path.

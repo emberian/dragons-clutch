@@ -2,8 +2,10 @@
 
 `SBOM.md` in this directory is generated, not hand-written: every dependency
 this repository actually resolves, with its license, source, and how that
-license was determined, across the whole tree (there is no single Cargo
-workspace — 38 independent ones — plus the web app's npm tree).
+license was determined, across every tracked Cargo workspace and npm package
+tree discovered from the repository manifests. The generated Coverage section
+is the authority for the current set; no separate workspace count is maintained
+here.
 
 ```sh
 tools/sbom/sbom_check.py            # regenerate SBOM.md
@@ -26,18 +28,29 @@ docstring for the full classification and flagging rules.
 
 ## What it checks
 
-- Every `[workspace]`-bearing `Cargo.toml` (the repository root plus 37
-  self-contained test-program/tool mini-workspaces), resolved with
+- Every tracked `[workspace]`-bearing `Cargo.toml`, resolved with
   `cargo metadata --locked --offline` against its own committed `Cargo.lock`.
   A tracked `Cargo.toml` without `[workspace]` is a *member*, adopted by the
   nearest ancestor workspace regardless of whether it is literally named in
   that ancestor's `members` (Cargo's own directory-walk rule) — checking
   members individually would recompute the same closure repeatedly and
-  misattribute its rows, so only the 38 workspace roots are queried directly.
-- Every tracked `package.json` with its `package-lock.json` (today:
-  `apps/dclutch-web`; new ones are picked up automatically).
+  misattribute its rows, so only discovered workspace roots are queried
+  directly.
+- Every tracked `package.json`; dependency-bearing package trees resolve from
+  their adjacent `package-lock.json`. New package trees are picked up
+  automatically.
 
-Three things it reports without failing the gate over them (each gets its
+License expressions are evaluated by their SPDX operators rather than matched
+as substrings: `AND` conjoins obligations (every arm must be permissive),
+`OR` is a choice granted to the licensee (one fully permissive arm is
+enough). So `MIT OR Apache-2.0 OR LGPL-2.1-or-later` is not a review item —
+a permissive arm is on the table and no copyleft obligation can be compelled
+— while `Apache-2.0 AND LGPL-3.0-or-later` still is. Rows cleared this way
+are listed in `SBOM.md` anyway, under *Cleared by the permissive-arm rule*,
+so a reader who sees `GPL` in a license column can find why it was not a
+question. An expression the evaluator cannot parse is never cleared.
+
+Four things it reports without failing the gate over them (each gets its
 own section in `SBOM.md`, so none of this is swept away):
 
 - **Flagged for review** — a license this tool cannot mechanically clear:
@@ -46,6 +59,24 @@ own section in `SBOM.md`, so none of this is swept away):
   `LicenseRef-file:` row (a license file, digest-pinned, never guessed into
   an SPDX id), and anything else not on the small, explicit permissive
   allowlist. This is the deliverable for ember's counsel item.
+
+- **Reviewed and allowed** — the flags that have been *answered*. Closing a
+  review item is a human act and the tool records it as one: each entry in
+  `REVIEWED_ALLOWANCES` (in `sbom_check.py`) names what it covers, the reason
+  it was decided that way, and the evidence it rested on, and the generated
+  section lists the rows under each ruling. A ruling moves a row out of the
+  open queue into the visible record — it never deletes one, and it never
+  touches `NOTICES.md`, because reviewing an attribution obligation does not
+  discharge it. Every entry is pinned to the exact license expression that
+  was read (for a `LicenseRef-file:` row, to the file's `sha256`), so a
+  dependency that changes license on an upgrade stops matching and returns to
+  the queue by itself. An entry that stops covering any row is reported as
+  stale rather than left to accumulate.
+
+  Add one when a license question has actually been decided — never to quiet
+  a row you have not read. `--verify` byte-gates the result, so an allowance
+  that changes what the report says cannot land without the regenerated
+  `SBOM.md` beside it.
 - **Unresolvable manifests** — a mini-workspace whose `Cargo.lock` does not
   match its `Cargo.toml` (a dependency edge changed without re-running cargo
   there). A reproducibility gap, not a license question; owed to whichever

@@ -20,11 +20,13 @@ use dclutch_custody_contract::{
     PROJECTED_CUSTODY_LOCK_RECEIPT_MAGIC_V1,
 };
 use dclutch_market_core_codec::{
-    Action, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1, CORE_EFFECT_ENVELOPE_BYTES_V1,
-    CapabilityFundingHeaderV1, CoreEffectEnvelopeV1, GENERIC_FOUNDING_REQUEST_BYTES_V1,
-    GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1, PROJECT_FOUND_REQUEST_BYTES_V1,
-    PROJECT_FOUND_REQUEST_MAGIC_V1, ProjectFoundRequestV1, REQUEST_BYTES,
-    RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
+    AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
+    AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action,
+    CAPABILITY_FUNDING_HEADER_BYTES_V2, CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1,
+    CORE_EFFECT_ENVELOPE_BYTES_V1, CapabilityFundingHeaderV2, CoreEffectEnvelopeV1,
+    GENERIC_FOUNDING_REQUEST_BYTES_V1, GENERIC_FOUNDING_REQUEST_MAGIC_V1, GenericFoundingRequestV1,
+    PROJECT_FOUND_REQUEST_BYTES_V2, PROJECT_FOUND_REQUEST_MAGIC_V2, ProjectFoundRequestV2,
+    REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1, Request, SERIES_CORE_REQUEST_BYTES_V1,
     SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1,
     SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreRequestV1, SeriesPermitExpiryRequestV1,
 };
@@ -51,6 +53,7 @@ mod records;
 mod release;
 mod resolution;
 pub mod retire_v1;
+mod retirement_replay_handoff_v1;
 mod series_consume;
 mod series_open;
 mod series_permit_expiry;
@@ -59,14 +62,17 @@ pub use begin_retiring::BEGIN_RETIRING_ACCOUNT_COUNT_V1;
 pub use execute_provider_v3::{
     EXECUTE_PROVIDER_ACCOUNT_COUNT_V3, EXECUTE_PROVIDER_PREFIX_BYTES_V3,
 };
-pub use frame::{FOUND_ACCOUNT_COUNT_V2, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1};
+pub use frame::{
+    FOUND_ACCOUNT_COUNT_V3, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1,
+    PROJECTED_FOUND_ACCOUNT_COUNT_V2,
+};
 pub use generic_founding_v1::{
     GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
     GENERIC_FOUNDING_OPEN_ACCOUNT_COUNT_V1,
 };
 pub use retire_v1::{RETIREMENT_ACCOUNT_COUNT_V1, RETIREMENT_INSTRUCTION_BYTES_V1};
 pub use series_consume::{
-    SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
+    SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V1, SERIES_CONSUME_FOUND_SUFFIX_ACCOUNT_COUNT_V2,
 };
 pub use series_open::SERIES_OPEN_ACCOUNT_COUNT_V1;
 pub use series_permit_expiry::SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1;
@@ -78,6 +84,9 @@ pub const CAPABILITY_PREFIX_BYTES_V1: usize = REQUEST_BYTES + CORE_EFFECT_ENVELO
 /// Exact generic capability semantic prefix before family-owned request bytes.
 pub const CAPABILITY_ROLE_PREFIX_BYTES_V1: usize =
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_LIST_HEADER_BYTES_V1;
+/// Exact generic capability semantic prefix for subset-ledger V2 routes.
+pub const CAPABILITY_ROLE_PREFIX_BYTES_V2: usize =
+    CAPABILITY_EXECUTION_SELECTION_BYTES_V1 + CAPABILITY_FUNDING_HEADER_BYTES_V2;
 
 /// Stable refusal from the isolated Core SBF trust boundary.
 #[repr(u32)]
@@ -99,7 +108,7 @@ pub enum CoreSbfError {
     RentCredit = 0x3006,
     /// System, Rent, Clock, vacant account, or exact creation plan refused.
     Creation = 0x3007,
-    /// Capability manifest entry, FundingState, custody, deadline, or PDA refused.
+    /// Capability manifest entry, funding ledger, custody, deadline, or PDA refused.
     Funding = 0x3008,
     /// Canonical release-pinned Core caller authority refused.
     CallerAuthority = 0x3009,
@@ -123,6 +132,25 @@ pub enum CoreSbfError {
     /// on the superseded release generation refuses until a re-release
     /// re-authenticates the new deployment and re-pins its slot.
     ReleaseSuperseded = 0x3010,
+    /// A Source material bought a recovery walk that no live route can walk.
+    ///
+    /// Liveness census R2/Q2 (`docs/evidence/LIVENESS_CENSUS_2026_08_29.md`).
+    /// `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses any
+    /// material carrying a recovery policy
+    /// (`source_resolution_v2.rs`, `Error::RecoveryNotExhausted`), and the
+    /// ordered ladder that was supposed to consume those paid-for legs has no
+    /// live call site — `funded::process_funded_transition` is reachable only
+    /// from a `#[cfg(any())]` function. So a resolution fund created over such
+    /// a material admits neither the success capture nor the failure walk at
+    /// its deadline: it has no terminal at all, and every holder's principal
+    /// stays in it forever.
+    ///
+    /// `CreateFund` is therefore refused for a recovery-policy material. This
+    /// is a weld, not a design: it refuses to *create* the un-terminalizable
+    /// resolution state. `VerifyFundReady` and `CloseFund` are deliberately
+    /// untouched, so any state that already exists keeps every route it has.
+    /// The weld lifts when the ladder gets a live route.
+    RecoveryWalkUnavailable = 0x3011,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -133,7 +161,7 @@ const _: () = assert!(
     "CoreSbfError must start at its registered refusal band base"
 );
 const _: () = assert!(
-    (CoreSbfError::ReleaseSuperseded as u32)
+    (CoreSbfError::RecoveryWalkUnavailable as u32)
         < dclutch_refusal_registry::CORE_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "CoreSbfError must not run past its registered refusal band"
 );
@@ -170,6 +198,33 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    if instruction_data.len() >= AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1
+        && matches!(
+            instruction_data.get(..8),
+            Some(magic)
+                if magic == AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1
+                    || magic == AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1
+                    || magic == AGGREGATE_RETIREMENT_FINISH_MAGIC_V1
+        )
+    {
+        return retire_v1::process_checkpoint_suffix(program_id, accounts, instruction_data);
+    }
+    if instruction_data.len()
+        == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
+        && instruction_data
+            .get(..dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.len())
+            == Some(dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_MAGIC_V1.as_slice())
+    {
+        let request =
+            dclutch_custody_contract::RetirementReplayHandoffRequestV1::decode(instruction_data)
+                .map_err(|_| CoreSbfError::Instruction)?;
+        return retirement_replay_handoff_v1::process(
+            program_id,
+            accounts,
+            request,
+            instruction_data,
+        );
+    }
     if instruction_data.len() == INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1 {
         InitializeProtocolInfrastructureV1::decode(instruction_data)
             .map_err(|_| CoreSbfError::Instruction)?;
@@ -268,11 +323,11 @@ pub fn process_instruction(
         }
         return Err(CoreSbfError::Instruction.into());
     }
-    if instruction_data.len() == PROJECT_FOUND_REQUEST_BYTES_V1
-        && instruction_data.get(..PROJECT_FOUND_REQUEST_MAGIC_V1.len())
-            == Some(PROJECT_FOUND_REQUEST_MAGIC_V1.as_slice())
+    if instruction_data.len() == PROJECT_FOUND_REQUEST_BYTES_V2
+        && instruction_data.get(..PROJECT_FOUND_REQUEST_MAGIC_V2.len())
+            == Some(PROJECT_FOUND_REQUEST_MAGIC_V2.as_slice())
     {
-        let projected = ProjectFoundRequestV1::decode(instruction_data)
+        let projected = ProjectFoundRequestV2::decode(instruction_data)
             .map_err(|_| CoreSbfError::Instruction)?;
         let found_bytes = projected
             .found
@@ -341,6 +396,34 @@ pub fn process_instruction(
                 close_replay_request_bytes,
             )
         }
+        Action::Retire
+            if instruction_data.len()
+                == retire_v1::RETIREMENT_CHECKPOINT_PREPARE_INSTRUCTION_BYTES_V1 =>
+        {
+            let bundle_start = REQUEST_BYTES;
+            let claims_start = bundle_start + RETIREMENT_BUNDLE_BYTES_V1;
+            let bundle_bytes = instruction_data
+                .get(bundle_start..claims_start)
+                .ok_or(CoreSbfError::Instruction)?;
+            let claims_request_bytes = instruction_data
+                .get(claims_start..)
+                .ok_or(CoreSbfError::Instruction)?;
+            if claims_request_bytes.get(
+                ..dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.len(),
+            ) != Some(
+                dclutch_claims_svm::retirement_checkpoint_handoff_v1::CLAIMS_RETIREMENT_CHECKPOINT_HANDOFF_REQUEST_MAGIC_V1.as_slice(),
+            ) {
+                return Err(CoreSbfError::Instruction.into());
+            }
+            retire_v1::process_checkpoint_prepare(
+                program_id,
+                accounts,
+                request,
+                request_bytes,
+                bundle_bytes,
+                claims_request_bytes,
+            )
+        }
         Action::ActivateCapability | Action::CloseCapability => {
             let envelope_end = CAPABILITY_PREFIX_BYTES_V1;
             let envelope_bytes = instruction_data
@@ -352,7 +435,7 @@ pub fn process_instruction(
             let selection_bytes = role_request
                 .get(..CAPABILITY_EXECUTION_SELECTION_BYTES_V1)
                 .ok_or(CoreSbfError::Instruction)?;
-            let header_end = CAPABILITY_ROLE_PREFIX_BYTES_V1;
+            let header_end = CAPABILITY_ROLE_PREFIX_BYTES_V2;
             let header_bytes = role_request
                 .get(CAPABILITY_EXECUTION_SELECTION_BYTES_V1..header_end)
                 .ok_or(CoreSbfError::Instruction)?;
@@ -366,7 +449,7 @@ pub fn process_instruction(
                 .map_err(|_| CoreSbfError::Instruction)?;
             let selection = CapabilityExecutionSelectionV1::decode(selection_bytes)
                 .map_err(|_| CoreSbfError::Instruction)?;
-            let funding_header = CapabilityFundingHeaderV1::decode(header_bytes)
+            let funding_header = CapabilityFundingHeaderV2::decode(header_bytes)
                 .map_err(|_| CoreSbfError::Instruction)?;
             capability::process(
                 program_id,

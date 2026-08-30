@@ -9,5 +9,9 @@ description = "Generated fixed-layout codec for the successor Resolution control
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
+
 [lints]
 workspace = true

@@ -9,6 +9,8 @@
  *
  *   node scripts/sync-from-web.mjs            # report drift, exit 1 if any
  *   node scripts/sync-from-web.mjs --copy     # copy upstream-newer files in
+ *   node scripts/sync-from-web.mjs --copy --only lib/deployments.ts
+ *                                               # absorb one named seam
  *
  * Only git-TRACKED web files are considered — an untracked file is a lane's
  * work in progress and is deliberately invisible here. Files listed in
@@ -33,11 +35,23 @@ const WEB_ONLY = new Set([
   'lib/sbomVerify.test.ts',
 ]);
 
+/** App compatibility shims that already re-export their SDK semantic owner. */
+const SDK_OWNED_REEXPORTS = new Set([
+  'lib/founding/principalCapacity.ts',
+  'lib/marketDiscovery.ts',
+  'lib/rationalTerminalChainV4.ts',
+]);
+
 /** SDK files with deliberate local edits; never auto-copied. */
 const DIVERGED = new Set([
+  'lib/founding/principalCapacity.test.ts',
   'lib/rpc.ts',
   'lib/rpc.test.ts',
   'lib/localSuccessor.ts',
+  // The SDK authenticates the complete activation-cache contents and returns
+  // its route-admission boundary; the UI copy intentionally remains lighter.
+  'lib/operatorSurface.ts',
+  'lib/operatorSurface.test.ts',
   'lib/generalPlanV5.test.ts',
   'scripts/abi-coverage.mjs',
   'scripts/abi-coverage.baseline.json',
@@ -48,12 +62,16 @@ const tracked = execFileSync('git', ['-C', repoRoot, 'ls-files',
 ], { encoding: 'utf8' }).trim().split('\n').filter((line) => line.length > 0);
 
 const copy = process.argv.includes('--copy');
+const only = new Set(process.argv.flatMap((argument, index, arguments_) => (
+  argument === '--only' && arguments_[index + 1] !== undefined ? [arguments_[index + 1]] : []
+)));
 let drift = 0;
 let diverged = 0;
 let fresh = 0;
 for (const file of tracked) {
   const rel = file.replace('apps/dclutch-web/', '');
-  if (WEB_ONLY.has(rel)) continue;
+  if (only.size > 0 && !only.has(rel)) continue;
+  if (WEB_ONLY.has(rel) || SDK_OWNED_REEXPORTS.has(rel)) continue;
   const webPath = join(webRoot, rel.split('/').join('/'));
   const sdkPath = join(sdkRoot, rel.split('/').join('/'));
   const upstream = readFileSync(webPath);

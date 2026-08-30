@@ -27,7 +27,11 @@ pub const RATIONAL_LIFECYCLE_COMPACT_COMMON_IDENTITIES_V4: usize = 10;
 /// Exact protected common scalar-register width.
 pub const RATIONAL_LIFECYCLE_COMPACT_COMMON_SCALARS_V4: usize = 11;
 /// Exact account-derived identities per support row.
-pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4: usize = 4;
+///
+/// Five, matching `RATIONAL_LIFECYCLE_ITEM_IDENTITY_*_V3` field for field and
+/// in the same order, so the compact row and the coordinate item describe one
+/// account group rather than two similar ones.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4: usize = 5;
 /// Exact descriptor-derived scalars per support row.
 pub const RATIONAL_LIFECYCLE_COMPACT_ROW_SCALARS_V4: usize = 2;
 
@@ -39,10 +43,18 @@ pub const RATIONAL_LIFECYCLE_COMPACT_SCALAR_PRODUCT_OUTCOME_COUNT_V4: usize = 10
 pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_SHARD_MINT_V4: usize = 0;
 /// Row-local identity holding the supplied Structured custody account.
 pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_STRUCTURED_CUSTODY_V4: usize = 1;
+/// Row-local identity holding the supplied Claims custody owner.
+///
+/// Coordinate 2, the same slot
+/// `RATIONAL_LIFECYCLE_ITEM_IDENTITY_CUSTODY_OWNER_V3` occupies. The row stride
+/// changes with the account count either way, so there is no append-only
+/// ordering to preserve here -- and agreeing with the coordinate layout is
+/// worth more than a false symmetry with the previous compact one.
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4: usize = 2;
 /// Row-local identity holding the supplied LBV2 Position.
-pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_POSITION_V4: usize = 2;
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_POSITION_V4: usize = 3;
 /// Row-local identity holding the supplied Position admission.
-pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4: usize = 3;
+pub const RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_ADMISSION_V4: usize = 4;
 /// Row-local scalar holding the descriptor outcome index.
 pub const RATIONAL_LIFECYCLE_COMPACT_ROW_SCALAR_OUTCOME_V4: usize = 0;
 /// Row-local scalar holding the exact nonzero descriptor coefficient.
@@ -380,13 +392,25 @@ mod tests {
     #[test]
     fn row_banks_cannot_alias_protected_common_registers() {
         let layout = RationalLifecycleCompactHotRegisterLayoutV4::new(3);
-        assert_eq!(layout.identity_count(), Some(22));
+        // 10 common + 3 rows x 5 row identities.
+        assert_eq!(layout.identity_count(), Some(25));
         assert_eq!(layout.scalar_count(), Some(17));
         assert_eq!(layout.row_identity(0, 0), Some(10));
-        assert_eq!(layout.row_identity(2, 3), Some(21));
+        // Last row, last field: the custody-owner widening moved this from 21.
+        assert_eq!(layout.row_identity(2, 4), Some(24));
         assert_eq!(layout.row_scalar(0, 0), Some(11));
         assert_eq!(layout.row_scalar(2, 1), Some(16));
         assert_eq!(layout.row_identity(3, 0), None);
         assert_eq!(layout.row_scalar(0, 2), None);
+        // The bank is exactly five wide: the fifth field resolves, a sixth
+        // does not, so a row cannot reach past its own group into the next.
+        assert_eq!(
+            layout.row_identity(0, RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITY_CUSTODY_OWNER_V4),
+            Some(12)
+        );
+        assert_eq!(
+            layout.row_identity(0, RATIONAL_LIFECYCLE_COMPACT_ROW_IDENTITIES_V4),
+            None
+        );
     }
 }

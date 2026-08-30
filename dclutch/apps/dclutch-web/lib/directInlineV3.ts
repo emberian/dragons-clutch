@@ -1,5 +1,6 @@
 import {
   AddressLookupTableAccount,
+  ComputeBudgetProgram,
   Ed25519Program,
   PublicKey,
   SYSVAR_INSTRUCTIONS_PUBKEY,
@@ -40,7 +41,6 @@ import {
   DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3,
   DIRECT_NATIVE_EVIDENCE_DIRECT_BIAS_V3,
   DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3,
-  DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3,
   DIRECT_NATIVE_EVIDENCE_SELLER_MAKER_OFFSET_V3,
   DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
   DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3,
@@ -68,6 +68,18 @@ import {
   HOT_EXECUTION_VERSION_V3,
   HOT_FIXED_ACCOUNT_COUNT_V3,
   HOT_CONFIG_RAW_ACCOUNT_V3,
+  HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+  HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+  HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+  HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+  HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+  HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+  HOT_TRANSITION_RAW_ACCOUNT_V3,
+  HOT_TRANSITION_STAGING_ACCOUNT_V3,
+  HOT_EFFECT_RAW_ACCOUNT_V3,
+  HOT_EFFECT_STAGING_ACCOUNT_V3,
+  HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+  HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
   HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
   HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
   HOT_MARKET_ACCOUNT_V3,
@@ -78,10 +90,46 @@ import {
   HOT_TRADING_PROGRAM_ACCOUNT_V3,
   RULE_BYTES,
 } from './generated/directInlineV3';
-import { PACKET_DATA_SIZE } from './directTransaction';
+import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const MAX_U16 = 0xffff;
+const DIRECT_COMPUTE_UNIT_LIMIT_V3 = 1_400_000;
+const ED25519_SIGNATURE_BYTES = 64;
+
+/** Current sealed Direct physical shape, owned by the Rust route projection. */
+export const DIRECT_INLINE_SEALED_FIXED_ALIASES_V3 = Object.freeze([
+  [HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3],
+  [HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3],
+  [HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3],
+  [HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3],
+  [HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3],
+  [HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3],
+] as const);
+export const DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3 = 39 as const;
+export const DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3 = 57 as const;
+export const DIRECT_INLINE_CURRENT_UNIQUE_MESSAGE_ACCOUNTS_V3 = 61 as const;
+export const DIRECT_INLINE_CURRENT_TRADING_ACCOUNT_INDICES_V3 = 78 as const;
+export const DIRECT_INLINE_CURRENT_WIRE_BYTES_V3 = 1_167 as const;
+/**
+ * Heap frame a TOP-LEVEL Direct submission must request.
+ *
+ * Mirrors DIRECT_HOT_HEAP_FRAME_BYTES_V1 in the capability program contract.
+ * A caller invoking Trading directly makes two Registry reauthentication CPIs
+ * that a Registry continuation never makes, and holds their frames against an
+ * allocator that never frees; Trading refuses by name -- TradingSbfError
+ * HeapFrame, 0x4008 -- when the grant did not arrive.
+ */
+export const DIRECT_HOT_HEAP_FRAME_BYTES_V3 = 65_536 as const;
+/** Index of the Trading instruction in a signed top-level Direct transaction. */
+export const DIRECT_INLINE_TRADING_INSTRUCTION_INDEX_V3 = 3 as const;
+/** Exact named-route tail joins, before the six fixed seal aliases project. */
+export const DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3 = Object.freeze([
+  [8, 37], [9, 31], [10, 32], [11, 33], [12, 35], [13, 28], [14, 0],
+  [15, 22], [16, 27], [17, 25], [18, 26], [21, 23], [22, 24],
+] as const);
+export const DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3 = Object.freeze([0, 1, 2, 3, 7, 23, 24, 28, 30, 31, 36] as const);
+export const DIRECT_INLINE_RUNTIME_TAIL_EXECUTABLE_V3 = Object.freeze([4, 5, 16, 17, 19, 21, 33, 38] as const);
 
 export type CompactIntentV2Input = Readonly<{
   side: 0 | 1;
@@ -133,10 +181,14 @@ export type DirectInlineHotRouteV3 = Readonly<{
   accountProfile: Uint8Array;
   selectedProgramSchema: Uint8Array;
   selectedProgram: Uint8Array;
+  observedSlot: bigint;
   fixedAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   strategyAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   runtimeAccounts: ReadonlyArray<DirectHotAccountMetaV3>;
   recentBlockhash: string;
+  blockhashObservedSlot: bigint;
+  lastValidBlockHeight: bigint;
+  lookupTableCreationSlot: bigint;
   lookupTables: ReadonlyArray<AddressLookupTableAccount>;
   outerEvidence: CheckedHotOuterEvidenceV3;
 }>;
@@ -166,17 +218,7 @@ export type DirectInlineTransactionPlanV3 = Readonly<{
   loadedAddresses: number;
 }>;
 
-function compareKeys(left: PublicKey, right: PublicKey): number {
-  const a = left.toBytes();
-  const b = right.toBytes();
-  for (let index = 0; index < 32; index += 1) {
-    const order = (a[index] ?? 0) - (b[index] ?? 0);
-    if (order !== 0) return order;
-  }
-  return 0;
-}
-
-/** The sole sorted, duplicate-free LUT sequence accepted by the Rust operator. */
+/** The sole first-semantic-use, duplicate-free LUT sequence accepted by Rust. */
 export function canonicalDirectInlineLookupAddressesV3(
   route: Pick<DirectInlineHotRouteV3, 'payer' | 'tradingProgram' | 'fixedAccounts' | 'strategyAccounts' | 'runtimeAccounts'>,
 ): ReadonlyArray<PublicKey> {
@@ -186,15 +228,44 @@ export function canonicalDirectInlineLookupAddressesV3(
   for (const account of [...route.fixedAccounts, ...route.strategyAccounts, ...route.runtimeAccounts]) {
     if (account.isSigner) signers.add(exactKey(account.address, 'Hot instruction signer').toBase58());
   }
-  const byAddress = new Map<string, PublicKey>();
+  const addresses: PublicKey[] = [];
+  const seen = new Set<string>();
   for (const [index, account] of [...route.fixedAccounts, ...route.strategyAccounts, ...route.runtimeAccounts].entries()) {
     const address = exactKey(account.address, `Hot account ${index}`);
     const text = address.toBase58();
-    if (!signers.has(text) && !programs.has(text)) byAddress.set(text, address);
+    if (!signers.has(text) && !programs.has(text) && !seen.has(text)) {
+      seen.add(text);
+      addresses.push(address);
+    }
   }
-  const addresses = [...byAddress.values()].sort(compareKeys);
   if (addresses.length === 0 || addresses.length > 256) throw new Error('Direct InlineOrdinary canonical lookup sequence is empty or exceeds 256 addresses');
   return Object.freeze(addresses);
+}
+
+/**
+ * Apply the execution-only projection owned by an already-authenticated
+ * CapabilitySeal. Public route manifests must retain the distinct named
+ * raw/staging addresses; callers may not supply this projected shape.
+ */
+export function projectDirectInlineSealedExecutionRouteV3(
+  route: DirectInlineHotRouteV3,
+): DirectInlineHotRouteV3 {
+  if (route.fixedAccounts.length !== HOT_FIXED_ACCOUNT_COUNT_V3
+      || new Set(route.fixedAccounts.map((account) => account.address)).size !== route.fixedAccounts.length) {
+    throw new Error('named Direct route must carry 39 distinct fixed accounts before seal projection');
+  }
+  const fixedAccounts = [...route.fixedAccounts];
+  for (const [raw, staging] of DIRECT_INLINE_SEALED_FIXED_ALIASES_V3) {
+    const rawMeta = fixedAccounts[raw];
+    const stagingMeta = fixedAccounts[staging];
+    if (rawMeta === undefined || stagingMeta === undefined
+        || rawMeta.isSigner || rawMeta.isWritable || stagingMeta.isSigner || stagingMeta.isWritable
+        || rawMeta.address === stagingMeta.address) {
+      throw new Error(`named Direct route cannot project sealed roles ${raw}/${staging}`);
+    }
+    fixedAccounts[staging] = rawMeta;
+  }
+  return Object.freeze({ ...route, fixedAccounts: Object.freeze(fixedAccounts) });
 }
 
 function validateCanonicalLookupTableV3(route: DirectInlineHotRouteV3): void {
@@ -202,6 +273,9 @@ function validateCanonicalLookupTableV3(route: DirectInlineHotRouteV3): void {
   const observed = route.lookupTables[0];
   if (observed === undefined || !observed.isActive()) throw new Error('Direct InlineOrdinary lookup table is absent or deactivated');
   const expected = canonicalDirectInlineLookupAddressesV3(route);
+  if (expected.length !== DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3) {
+    throw new Error(`Direct InlineOrdinary lookup closure has ${expected.length} addresses, not the current exact ${DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3}`);
+  }
   if (observed.state.addresses.length !== expected.length
       || observed.state.addresses.some((address, index) => !address.equals(expected[index] as PublicKey))) {
     throw new Error('Direct InlineOrdinary lookup table differs from the sole canonical address sequence');
@@ -365,7 +439,7 @@ function directNativeParticipantsV3(
   return participants;
 }
 
-/** Encode the canonical 222-byte native instruction by reference to the current Trading bytes. */
+/** Encode compact native evidence whose signatures are local and whose keys/messages reference Trading. */
 export function buildDirectNativeEvidenceInstructionV3(
   currentInstruction: TransactionInstruction,
   currentInstructionIndex: number,
@@ -373,7 +447,7 @@ export function buildDirectNativeEvidenceInstructionV3(
   sellerSignature: Uint8Array,
   buyerSignature: Uint8Array,
 ): TransactionInstruction {
-  if (!Number.isInteger(currentInstructionIndex) || currentInstructionIndex < 0 || currentInstructionIndex > MAX_U16) {
+  if (!Number.isInteger(currentInstructionIndex) || currentInstructionIndex <= 0 || currentInstructionIndex >= MAX_U16) {
     throw new Error('native evidence current instruction index exceeds u16');
   }
   const participants = directNativeParticipantsV3(currentInstruction, expectedTradingProgram, sellerSignature, buyerSignature);
@@ -381,16 +455,14 @@ export function buildDirectNativeEvidenceInstructionV3(
   output[0] = DIRECT_NATIVE_EVIDENCE_SIGNATURE_COUNT_V3;
   for (const [index, participant] of participants.entries()) {
     const descriptor = 2 + index * DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3;
-    const publicKey = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + index * DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3;
-    const signature = publicKey + 32;
+    const signature = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + index * ED25519_SIGNATURE_BYTES;
     putU16(output, descriptor, signature);
     putU16(output, descriptor + 2, MAX_U16);
-    putU16(output, descriptor + 4, publicKey);
-    putU16(output, descriptor + 6, MAX_U16);
+    putU16(output, descriptor + 4, participant.makerOffset);
+    putU16(output, descriptor + 6, currentInstructionIndex);
     putU16(output, descriptor + 8, participant.messageOffset);
     putU16(output, descriptor + 10, COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2);
     putU16(output, descriptor + 12, currentInstructionIndex);
-    output.set(currentInstruction.data.slice(participant.makerOffset, participant.makerOffset + 32), publicKey);
     output.set(participant.signature, signature);
   }
   const instruction = new TransactionInstruction({ programId: Ed25519Program.programId, keys: [], data: output as Buffer });
@@ -408,7 +480,7 @@ export function validateDirectNativeEvidenceInstructionV3(
   if (!evidence.programId.equals(Ed25519Program.programId) || evidence.keys.length !== 0) {
     throw new Error('Direct native evidence substitutes the Ed25519 program or account frame');
   }
-  if (!Number.isInteger(currentInstructionIndex) || currentInstructionIndex < 0 || currentInstructionIndex > MAX_U16) {
+  if (!Number.isInteger(currentInstructionIndex) || currentInstructionIndex <= 0 || currentInstructionIndex >= MAX_U16) {
     throw new Error('Direct native evidence current instruction index exceeds u16');
   }
   const participants = directNativeParticipantsV3(currentInstruction, expectedTradingProgram, new Uint8Array(64).fill(1), new Uint8Array(64).fill(1));
@@ -419,22 +491,50 @@ export function validateDirectNativeEvidenceInstructionV3(
   }
   for (const [index, participant] of participants.entries()) {
     const descriptor = 2 + index * DIRECT_NATIVE_EVIDENCE_DESCRIPTOR_BYTES_V3;
-    const publicKey = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + index * DIRECT_NATIVE_EVIDENCE_PARTICIPANT_BYTES_V3;
-    const signature = publicKey + 32;
+    const signature = DIRECT_NATIVE_EVIDENCE_HEADER_BYTES_V3 + index * ED25519_SIGNATURE_BYTES;
     if (readU16(bytes, descriptor) !== signature
         || readU16(bytes, descriptor + 2) !== MAX_U16
-        || readU16(bytes, descriptor + 4) !== publicKey
-        || readU16(bytes, descriptor + 6) !== MAX_U16
+        || readU16(bytes, descriptor + 4) !== participant.makerOffset
+        || readU16(bytes, descriptor + 6) !== currentInstructionIndex
         || readU16(bytes, descriptor + 8) !== participant.messageOffset
         || readU16(bytes, descriptor + 10) !== COMPACT_INTENT_SIGNED_PREIMAGE_BYTES_V2
         || readU16(bytes, descriptor + 12) !== currentInstructionIndex) {
       throw new Error(`Direct native evidence descriptor ${index} substitutes an offset or instruction index`);
     }
-    if (!same(bytes.slice(publicKey, publicKey + 32), currentInstruction.data.slice(participant.makerOffset, participant.makerOffset + 32))
-        || bytes.slice(signature, signature + 64).every((value) => value === 0)) {
-      throw new Error(`Direct native evidence participant ${index} substitutes its Trading maker or zero signature`);
+    if (bytes.slice(signature, signature + ED25519_SIGNATURE_BYTES).every((value) => value === 0)) {
+      throw new Error(`Direct native evidence participant ${index} substitutes a zero signature`);
     }
   }
+}
+
+/** Refuse any top-level shape other than compute limit, adjacent Ed25519 evidence, then Trading. */
+export function validateDirectInlineInstructionSequenceV3(
+  instructions: ReadonlyArray<TransactionInstruction>,
+  expectedTradingProgram: PublicKey,
+): void {
+  if (instructions.length !== 4) throw new Error('Direct V3 requires exactly ComputeBudget, RequestHeapFrame, Ed25519, and Trading instructions');
+  const compute = instructions[0];
+  const heap = instructions[1];
+  const evidence = instructions[2];
+  const trading = instructions[3];
+  const expectedCompute = ComputeBudgetProgram.setComputeUnitLimit({ units: DIRECT_COMPUTE_UNIT_LIMIT_V3 });
+  if (compute === undefined || compute.keys.length !== 0
+      || !compute.programId.equals(expectedCompute.programId)
+      || !same(new Uint8Array(compute.data), new Uint8Array(expectedCompute.data))) {
+    throw new Error('Direct V3 first instruction is not SetComputeUnitLimit(1_400_000)');
+  }
+  const expectedHeap = ComputeBudgetProgram.requestHeapFrame({ bytes: DIRECT_HOT_HEAP_FRAME_BYTES_V3 });
+  if (heap === undefined || heap.keys.length !== 0
+      || !heap.programId.equals(expectedHeap.programId)
+      || !same(new Uint8Array(heap.data), new Uint8Array(expectedHeap.data))) {
+    throw new Error('Direct V3 second instruction is not RequestHeapFrame(65_536); a top-level submission without it is refused on chain');
+  }
+  if (evidence === undefined || trading === undefined
+      || !evidence.programId.equals(Ed25519Program.programId)
+      || !trading.programId.equals(expectedTradingProgram)) {
+    throw new Error('Direct V3 Ed25519 evidence is not immediately adjacent to Trading');
+  }
+  validateDirectNativeEvidenceInstructionV3(evidence, trading, DIRECT_INLINE_TRADING_INSTRUCTION_INDEX_V3, expectedTradingProgram);
 }
 
 function validateFixedFrame(route: DirectInlineHotRouteV3): void {
@@ -447,13 +547,44 @@ function validateFixedFrame(route: DirectInlineHotRouteV3): void {
       || route.fixedAccounts[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3]?.address !== SYSVAR_INSTRUCTIONS_PUBKEY.toBase58()) {
     throw new Error('hot fixed-account roles differ from the canonical V3 ABI');
   }
-  if (new Set(route.fixedAccounts.map((account) => account.address)).size !== route.fixedAccounts.length) {
-    throw new Error('hot fixed-account frame aliases two semantic roles');
-  }
   for (const [index, account] of route.fixedAccounts.entries()) {
     exactKey(account.address, `fixed account ${index}`);
     const expectedWritable = index === HOT_ROOT_ACCOUNT_V3;
     if (account.isSigner || account.isWritable !== expectedWritable) throw new Error(`fixed account ${index} has noncanonical signer/writable privilege`);
+  }
+  for (const [left, account] of route.fixedAccounts.entries()) {
+    for (let right = left + 1; right < route.fixedAccounts.length; right += 1) {
+      if (account.address !== route.fixedAccounts[right]?.address) continue;
+      if (!DIRECT_INLINE_SEALED_FIXED_ALIASES_V3.some(([raw, staging]) => raw === left && staging === right)) {
+        throw new Error(`hot fixed-account frame aliases non-sealed roles ${left} and ${right}`);
+      }
+    }
+  }
+  for (const [raw, staging] of DIRECT_INLINE_SEALED_FIXED_ALIASES_V3) {
+    if (route.fixedAccounts[raw]?.address !== route.fixedAccounts[staging]?.address) {
+      throw new Error(`hot sealed fixed roles ${raw}/${staging} do not carry the required execution alias`);
+    }
+  }
+  if (route.strategyAccounts.length !== 0
+      || route.runtimeAccounts.length !== DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3
+      || new Set(route.runtimeAccounts.map((account) => account.address)).size !== route.runtimeAccounts.length) {
+    throw new Error('hot route differs from the current no-strategy, 39-account physical runtime tail');
+  }
+  const payerAliases = route.runtimeAccounts.filter((account) => account.address === route.payer);
+  if (payerAliases.length !== 1 || payerAliases[0]?.isSigner !== true || payerAliases[0]?.isWritable !== true) {
+    throw new Error('hot route does not carry the sole payer as one writable runtime signer alias');
+  }
+  const crossAliases = new Map<number, number>(DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3);
+  for (const [runtimeIndex, entry] of route.runtimeAccounts.entries()) {
+    const expectedFixed = crossAliases.get(runtimeIndex);
+    const actualFixed = route.fixedAccounts.findIndex((fixed) => fixed.address === entry.address);
+    const expectedSigner = runtimeIndex === 1;
+    const expectedWritable = DIRECT_INLINE_RUNTIME_TAIL_WRITABLE_V3.includes(runtimeIndex as never);
+    const expectedExecutable = DIRECT_INLINE_RUNTIME_TAIL_EXECUTABLE_V3.includes(runtimeIndex as never);
+    if ((expectedFixed === undefined ? actualFixed !== -1 : route.fixedAccounts[expectedFixed]?.address !== entry.address)
+        || entry.isSigner !== expectedSigner || entry.isWritable !== expectedWritable || entry.executable !== expectedExecutable) {
+      throw new Error(`hot runtime tail account ${runtimeIndex} differs from the canonical physical role`);
+    }
   }
 }
 
@@ -647,7 +778,13 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     ],
     data: hotInstructionBytes as Buffer,
   });
-  const instructions: TransactionInstruction[] = [];
+  const instructions: TransactionInstruction[] = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: DIRECT_COMPUTE_UNIT_LIMIT_V3 }),
+    // Ahead of the evidence, never appended: the runtime clears return data at
+    // the start of every top-level instruction, so a trailing ComputeBudget
+    // instruction erases the commit-last ACK the execution just produced.
+    ComputeBudgetProgram.requestHeapFrame({ bytes: DIRECT_HOT_HEAP_FRAME_BYTES_V3 }),
+  ];
   const nativeEvidenceInstructionIndex = instructions.length;
   const tradingInstructionIndex = nativeEvidenceInstructionIndex + 1;
   const nativeEvidence = buildDirectNativeEvidenceInstructionV3(
@@ -662,6 +799,7 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
       || instructions[tradingInstructionIndex] !== trading) {
     throw new Error('Direct native evidence is not immediately adjacent to its current Trading instruction');
   }
+  validateDirectInlineInstructionSequenceV3(instructions, trading.programId);
   exactKey(input.route.recentBlockhash, 'recent blockhash');
   const transaction = new VersionedTransaction(new TransactionMessage({
     payerKey: exactKey(input.route.payer, 'payer'),
@@ -669,11 +807,20 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     instructions,
   }).compileToV0Message([...input.route.lookupTables]));
   const wireBytes = transaction.serialize();
-  if (wireBytes.length > PACKET_DATA_SIZE) throw new Error(`Direct V3 transaction is ${wireBytes.length} bytes, above the ${PACKET_DATA_SIZE}-byte packet bound`);
+  if (wireBytes.length > SOLANA_PACKET_BYTES_V1) throw new Error(`Direct V3 transaction is ${wireBytes.length} bytes, above the ${SOLANA_PACKET_BYTES_V1}-byte packet bound`);
   const requiredSigners = Object.freeze(transaction.message.staticAccountKeys
     .slice(0, transaction.message.header.numRequiredSignatures)
     .map((key) => key.toBase58()));
   if (requiredSigners.length !== 1 || requiredSigners[0] !== input.route.payer) throw new Error('Direct V3 message requires an unexpected transaction signer');
+  const loadedAddresses = transaction.message.addressTableLookups.reduce((sum, value) => sum + value.readonlyIndexes.length + value.writableIndexes.length, 0);
+  const tradingAccounts = transaction.message.compiledInstructions[tradingInstructionIndex]?.accountKeyIndexes.length;
+  if (transaction.message.staticAccountKeys.length !== 4
+      || loadedAddresses !== DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3
+      || transaction.message.staticAccountKeys.length + loadedAddresses !== DIRECT_INLINE_CURRENT_UNIQUE_MESSAGE_ACCOUNTS_V3
+      || tradingAccounts !== DIRECT_INLINE_CURRENT_TRADING_ACCOUNT_INDICES_V3
+      || wireBytes.length !== DIRECT_INLINE_CURRENT_WIRE_BYTES_V3) {
+    throw new Error('Direct V3 transaction differs from the current exact 4/57/61/78/1167 physical geometry');
+  }
   return Object.freeze({
     requestBytes,
     hotInstructionBytes,
@@ -688,6 +835,6 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     wireBytes,
     requiredSigners,
     preview,
-    loadedAddresses: transaction.message.addressTableLookups.reduce((sum, value) => sum + value.readonlyIndexes.length + value.writableIndexes.length, 0),
+    loadedAddresses,
   });
 }

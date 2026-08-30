@@ -3,8 +3,10 @@
 What you hold when you hold a dClutch claim, what it can and cannot do to
 you, and how to read what the protocol tells you.
 
-Nothing is tradeable yet — dClutch is not deployed. This is how trading
-works in the protocol as it runs today on a local test chain.
+Nothing is tradeable yet. Seven protocol programs are deployed on Solana
+devnet, but no devnet market is open for trading. This guide describes the
+trading path exercised on local test chains and in test harnesses while the
+first public test market is being prepared.
 
 ## What a claim is
 
@@ -47,6 +49,57 @@ the cell prices, exactly.
 
 No price feed watches your position along the way, because there is no
 position to liquidate. The only moment that matters is resolution.
+
+## Getting into a market
+
+Before you can hold claims in a market you need a **Position** in it. A
+Position is an account that belongs to you and holds your claim balances,
+alongside a collateral account that funds them. Both live at addresses
+worked out from the market and your own wallet, so nobody assigns you one
+and nobody can hand you someone else's — the addresses are yours before
+either account exists. Joining is what creates them.
+
+Today you join from the command line:
+
+```sh
+dclutch join --plan <market plan> --campaign-evidence <market evidence> \
+  --position-owner <your address> --position-owner-keypair <your key> \
+  --output <where to write the report>
+```
+
+Two things worth knowing before you run it.
+
+**It does not send anything unless you tell it to.** Without `--execute` it
+preflights: it reads the market, works out your addresses, builds the exact
+transaction, and writes a report — then stops. Run it, read what it says it
+will do, and only then run it again with `--execute`.
+
+**You need the market's own documents.** The plan and campaign evidence
+describe the market you are joining; they are published alongside a public
+market's evidence, or written by your own local run. You cannot join a
+market by address alone, and that is deliberate: what you sign should be
+checkable against something the market published, not assembled from a
+name.
+
+Against a devnet market you also have to say so out loud, by passing
+`--i-mean-devnet` with that cluster's genesis hash. A local chain needs no
+such acknowledgement, and passing one anyway is refused rather than
+guessed at.
+
+You can fund the Position as you join, with
+`--collateral-source-owner-keypair`, `--collateral-source-account` and
+`--collateral-quantity-atoms`. Give all three or none: a half-specified
+funding is refused instead of being interpreted. Leave them off and you
+join with a Position holding nothing, which is a perfectly good place to
+start.
+
+By default the fee payer is you. Name a different one with
+`--fee-payer-keypair` if somebody else is paying.
+
+The web app can show you where you stand in a market — whether you have a
+Position, what it holds, what joining would create — but it cannot build
+the admission transaction for you yet. That is a gap we intend to close,
+not a rule.
 
 ## How the market resolves
 

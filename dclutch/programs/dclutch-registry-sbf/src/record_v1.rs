@@ -2,19 +2,28 @@
 //!
 //! The selected Registry is the sole owner and PDA signer for finalized raw
 //! records. Publication principal comes directly from the initiating System
-//! wallet. The temporary cursor commits that same wallet as its only refund
-//! destination, so finalization does not depend on the retired permanent
-//! per-authority RentCredit design.
+//! wallet. The temporary cursor commits that same wallet as its refund
+//! destination for `Finalize` and for an early sponsor `Abort`, so finalization
+//! does not depend on the retired permanent per-authority RentCredit design.
+//!
+//! Bounded, and now provably so: `Begin` prepays a nonzero cleanup bounty into
+//! the cursor, and `Abort` (action 4) is the funded, permissionless reclamation
+//! that spends it. Before the cursor's `expiry_slot` only the committed sponsor
+//! may abort their own in-progress publication (the bounty is withheld). At or
+//! after expiry anyone may abort an abandoned record set, is paid the disclosed
+//! bounty, and returns the remaining rent to the sponsor — so a half-published
+//! record can never strand its accounts or its prepaid bounty. The verb lives
+//! in `dclutch-record-contract::prepare_abort_v1`; this module drives it.
 
 use core::convert::TryFrom;
 
 use dclutch_record_contract::{
-    AccountCloseV1, AccountId, AddressDerivationObligationV1, AppendPageV1, BeginRecordV1,
-    CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, FinalizeRecordV1, PageEnvelopeV1,
-    RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1, RawRecordValidationObligationV1,
-    RecordAdapterV1, RecordKeyV1, STAGING_CURSOR_BYTES_V1, STAGING_CURSOR_PDA_SEED_V1,
-    StagingCursorV1, StagingLivenessPolicyV1, prepare_append_page_v1, prepare_begin_v1,
-    prepare_finalize_v1,
+    AbortObservationV1, AbortRecordV1, AccountCloseV1, AccountId, AddressDerivationObligationV1,
+    AppendPageV1, BeginRecordV1, CANONICAL_RECORD_DEPLOYMENT_PROFILE_V1, FinalizeRecordV1,
+    PageEnvelopeV1, RAW_RECORD_PDA_SEED_V1, RawRecordValidationModeV1,
+    RawRecordValidationObligationV1, RecordAdapterV1, RecordKeyV1, STAGING_CURSOR_BYTES_V1,
+    STAGING_CURSOR_PDA_SEED_V1, StagingCursorV1, StagingLivenessPolicyV1, prepare_abort_v1,
+    prepare_append_page_v1, prepare_begin_v1, prepare_finalize_v1,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -34,6 +43,7 @@ use crate::RegistryError;
 pub(crate) const BEGIN_ACCOUNT_COUNT_V1: usize = 6;
 pub(crate) const APPEND_ACCOUNT_COUNT_V1: usize = 3;
 pub(crate) const FINALIZE_ACCOUNT_COUNT_V1: usize = 3;
+pub(crate) const ABORT_ACCOUNT_COUNT_V1: usize = 5;
 
 const _: () = assert!(RAW_RECORD_PDA_SEED_V1.len() <= 32);
 const _: () = assert!(STAGING_CURSOR_PDA_SEED_V1.len() <= 32);
@@ -53,6 +63,9 @@ pub(crate) fn dispatch(
         Some(3) => FinalizeRecordV1::decode(instruction_data)
             .map_err(map_record_error)
             .and_then(|request| process_finalize(program_id, accounts, request)),
+        Some(4) => AbortRecordV1::decode(instruction_data)
+            .map_err(map_record_error)
+            .and_then(|request| process_abort(program_id, accounts, request)),
         _ => Err(record_error()),
     }
 }
@@ -159,6 +172,56 @@ impl<'accounts, 'info> FinalizeFrame<'accounts, 'info> {
             return Err(record_error());
         }
         require_distinct(accounts)?;
+        Ok(frame)
+    }
+}
+
+struct AbortFrame<'accounts, 'info> {
+    raw: &'accounts AccountInfo<'info>,
+    cursor: &'accounts AccountInfo<'info>,
+    sponsor_wallet: &'accounts AccountInfo<'info>,
+    abort_actor: &'accounts AccountInfo<'info>,
+    clock: &'accounts AccountInfo<'info>,
+}
+
+impl<'accounts, 'info> AbortFrame<'accounts, 'info> {
+    fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, ProgramError> {
+        if accounts.len() != ABORT_ACCOUNT_COUNT_V1 {
+            return Err(record_error());
+        }
+        let frame = Self {
+            raw: account(accounts, 0)?,
+            cursor: account(accounts, 1)?,
+            sponsor_wallet: account(accounts, 2)?,
+            abort_actor: account(accounts, 3)?,
+            clock: account(accounts, 4)?,
+        };
+        require_privilege(frame.raw, false, true, false)?;
+        require_privilege(frame.cursor, false, true, false)?;
+        // Both wallets may also pay this transaction and so be signers after
+        // message privilege union; the sponsor identity is cursor-owned and the
+        // actor's signature is authenticated in `process_abort` only when the
+        // contract demands it (an early, pre-expiry sponsor Abort).
+        require_writable_system_wallet(frame.sponsor_wallet)?;
+        require_writable_system_wallet(frame.abort_actor)?;
+        require_clock_identity(frame.clock)?;
+        require_privilege(frame.clock, false, false, false)?;
+        // The sponsor wallet and the abort actor are the SAME account on an early
+        // sponsor Abort (the contract requires `abort_actor == sponsor` before
+        // expiry), so they are deliberately permitted to alias; every other pair
+        // must be distinct.
+        require_distinct(&[
+            frame.raw.clone(),
+            frame.cursor.clone(),
+            frame.sponsor_wallet.clone(),
+            frame.clock.clone(),
+        ])?;
+        require_distinct(&[
+            frame.raw.clone(),
+            frame.cursor.clone(),
+            frame.abort_actor.clone(),
+            frame.clock.clone(),
+        ])?;
         Ok(frame)
     }
 }
@@ -444,6 +507,159 @@ fn process_finalize(
     Ok(())
 }
 
+/// Permissionless, funded reclamation of an abandoned in-progress record.
+///
+/// This wires the record contract's `prepare_abort_v1` verb, which had a
+/// complete, tested implementation and no on-chain dispatcher: every `Begin`
+/// prepays a nonzero cleanup bounty into the cursor
+/// (`authenticate_begin` charges `cleanup_bounty_lamports`), and this is the
+/// only route in the tree that pays a lamport bounty to its own caller. Two
+/// shapes, both decided inside the contract:
+///
+/// - **Early** (`current_slot < cursor.expiry_slot`): only the committed sponsor
+///   may cancel their own publication. The contract returns
+///   `sponsor_signature_required`, the bounty is withheld (it exists to fund a
+///   *stranger's* later cleanup, not the sponsor's own abort), and every lamport
+///   returns to the sponsor. Here the actor and the sponsor wallet are the same
+///   account.
+/// - **Expired** (`current_slot >= cursor.expiry_slot`): permissionless. Anyone
+///   drives it, the disclosed bounty is paid to the actor, and the remaining
+///   rent returns to the committed sponsor. This is the liveness guarantee — an
+///   abandoned record set can always be reclaimed and never strands its rent or
+///   its prepaid bounty.
+#[inline(never)]
+fn process_abort(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    _request: AbortRecordV1,
+) -> Result<(), ProgramError> {
+    let frame = AbortFrame::parse(accounts)?;
+    require_live_record_accounts(program_id, frame.raw, frame.cursor)?;
+    let cursor = decode_cursor(frame.cursor)?;
+    require_canonical_record_addresses(program_id, cursor, frame.raw, frame.cursor)?;
+    let raw_length = u64::try_from(frame.raw.data_len()).map_err(|_| record_error())?;
+    // The cursor is the sole author of the sponsor refund identity; bind the
+    // frame's sponsor wallet to it before touching any lamports. Both are also
+    // re-checked inside `prepare_abort_v1` via the returned obligations.
+    if cursor.sponsor_rent_refund() != account_id(frame.sponsor_wallet.key)?
+        || raw_length != cursor.exact_length()
+    {
+        return Err(record_error());
+    }
+    let clock = Clock::from_account_info(frame.clock).map_err(|_| record_error())?;
+    let raw_lamports = frame.raw.lamports();
+    let cursor_lamports = frame.cursor.lamports();
+    let observation = AbortObservationV1::new(
+        account_id(frame.raw.key)?,
+        account_id(frame.cursor.key)?,
+        raw_length,
+        raw_lamports,
+        cursor_lamports,
+        clock.slot,
+        account_id(frame.abort_actor.key)?,
+    );
+    let transition = prepare_abort_v1(cursor, observation).map_err(map_record_error)?;
+    // Early Abort is the sponsor cancelling in-progress work: the contract only
+    // reaches `sponsor_signature_required` when the actor is the committed
+    // sponsor, and the SVM boundary must still see the signature. Expired
+    // cleanup is permissionless — no signer identity is required of the actor.
+    if transition.sponsor_signature_required() && !frame.abort_actor.is_signer {
+        return Err(record_error());
+    }
+    let raw_close = transition.raw_record_close();
+    let staging = transition.staging_close();
+    // Bind every contract-computed obligation to the exact SVM accounts.
+    if raw_close.account().to_bytes() != frame.raw.key.to_bytes()
+        || raw_close.full_lamport_refund().to_bytes() != frame.sponsor_wallet.key.to_bytes()
+        || raw_close.observed_lamports() != raw_lamports
+        || staging.account().to_bytes() != frame.cursor.key.to_bytes()
+        || staging.sponsor_recipient().to_bytes() != frame.sponsor_wallet.key.to_bytes()
+        || staging.cleanup_recipient().to_bytes() != frame.abort_actor.key.to_bytes()
+        || staging.observed_lamports() != cursor_lamports
+    {
+        return Err(record_error());
+    }
+    let aliased = frame.sponsor_wallet.key == frame.abort_actor.key;
+    let sponsor_before = frame.sponsor_wallet.lamports();
+    let actor_before = frame.abort_actor.lamports();
+    // Sponsor receives the full raw rent plus the cursor's sponsor split; the
+    // actor receives the bounty (zero on an early sponsor Abort).
+    let sponsor_credit = raw_lamports
+        .checked_add(staging.sponsor_refund_lamports())
+        .ok_or_else(record_error)?;
+    let actor_credit = staging.cleanup_bounty_lamports();
+
+    preflight_mutable(frame.raw)?;
+    preflight_mutable(frame.cursor)?;
+    preflight_lamports(frame.sponsor_wallet)?;
+    preflight_lamports(frame.abort_actor)?;
+
+    // Drain both program-owned PDAs to zero and return them to the System owner.
+    close_pda_to_zero(program_id, frame.raw)?;
+    close_pda_to_zero(program_id, frame.cursor)?;
+
+    if aliased {
+        // One account holds both roles (the early sponsor Abort, or an expired
+        // cleanup a sponsor runs for themselves): credit it the whole balance.
+        let total = sponsor_credit
+            .checked_add(actor_credit)
+            .ok_or_else(record_error)?;
+        let after = sponsor_before.checked_add(total).ok_or_else(record_error)?;
+        let mut lamports = frame
+            .sponsor_wallet
+            .try_borrow_mut_lamports()
+            .map_err(|_| record_error())?;
+        **lamports = after;
+    } else {
+        let sponsor_after = sponsor_before
+            .checked_add(sponsor_credit)
+            .ok_or_else(record_error)?;
+        let actor_after = actor_before
+            .checked_add(actor_credit)
+            .ok_or_else(record_error)?;
+        {
+            let mut lamports = frame
+                .sponsor_wallet
+                .try_borrow_mut_lamports()
+                .map_err(|_| record_error())?;
+            **lamports = sponsor_after;
+        }
+        {
+            let mut lamports = frame
+                .abort_actor
+                .try_borrow_mut_lamports()
+                .map_err(|_| record_error())?;
+            **lamports = actor_after;
+        }
+    }
+
+    // Postcheck exact conservation, both PDAs vacant, and the bounty landed.
+    let (expect_sponsor, expect_actor) = if aliased {
+        let total = sponsor_before
+            .checked_add(sponsor_credit)
+            .and_then(|value| value.checked_add(actor_credit))
+            .ok_or_else(record_error)?;
+        (total, total)
+    } else {
+        (
+            sponsor_before
+                .checked_add(sponsor_credit)
+                .ok_or_else(record_error)?,
+            actor_before
+                .checked_add(actor_credit)
+                .ok_or_else(record_error)?,
+        )
+    };
+    if frame.sponsor_wallet.lamports() != expect_sponsor
+        || frame.abort_actor.lamports() != expect_actor
+        || !is_vacant(frame.raw)
+        || !is_vacant(frame.cursor)
+    {
+        return Err(record_error());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AdapterLifecycle {
     Begin,
@@ -623,6 +839,38 @@ fn close_full_to_wallet(
     source.resize(0).map_err(|_| record_error())?;
     source.assign(&system_program::ID);
     if wallet.lamports() != wallet_after || !is_vacant(source) {
+        return Err(record_error());
+    }
+    Ok(())
+}
+
+fn require_writable_system_wallet(account: &AccountInfo<'_>) -> Result<(), ProgramError> {
+    if !account.is_writable
+        || account.executable
+        || account.owner != &system_program::ID
+        || !account.try_data_is_empty().map_err(|_| record_error())?
+    {
+        return Err(record_error());
+    }
+    Ok(())
+}
+
+fn close_pda_to_zero(
+    program_id: &Pubkey,
+    source: &AccountInfo<'_>,
+) -> Result<(), ProgramError> {
+    if source.owner != program_id {
+        return Err(record_error());
+    }
+    {
+        let mut source_lamports = source
+            .try_borrow_mut_lamports()
+            .map_err(|_| record_error())?;
+        **source_lamports = 0;
+    }
+    source.resize(0).map_err(|_| record_error())?;
+    source.assign(&system_program::ID);
+    if !is_vacant(source) {
         return Err(record_error());
     }
     Ok(())
@@ -1090,6 +1338,344 @@ mod tests {
         );
         assert_eq!(
             process_finalize(&registry, &[raw, stage, hostile], FinalizeRecordV1),
+            Err(record_error())
+        );
+    }
+
+    /// Build a still-`Building` cursor and its geometry, as an abandoned record
+    /// set looks between `Begin` and the page(s) that never came.
+    fn building_cursor(
+        registry: Pubkey,
+        sponsor: Pubkey,
+        content: &[u8],
+    ) -> (StagingCursorV1, Pubkey, Pubkey, u64, u64) {
+        let (request, begin_accounts) = begin_fixture(registry, sponsor, content);
+        let frame = BeginFrame::parse(&begin_accounts).expect("Begin frame");
+        let cursor = authenticate_begin(&registry, &frame, request)
+            .expect("Begin plan")
+            .cursor;
+        let raw_key = *begin_accounts.get(1).expect("raw role").key;
+        let cursor_key = *begin_accounts.get(2).expect("cursor role").key;
+        let raw_rent = Rent::default().minimum_balance(content.len());
+        let cursor_rent = Rent::default().minimum_balance(STAGING_CURSOR_BYTES_V1);
+        (cursor, raw_key, cursor_key, raw_rent, cursor_rent)
+    }
+
+    #[test]
+    fn abort_after_expiry_is_permissionless_and_pays_the_bounty_to_the_actor() {
+        let registry = Pubkey::new_unique();
+        let sponsor = Pubkey::new_unique();
+        let content = b"an abandoned in-progress record";
+        let (cursor, raw_key, cursor_key, raw_rent, cursor_rent) =
+            building_cursor(registry, sponsor, content);
+        // Begin charged cursor_rent plus the bounty (== cursor_rent) into the cursor.
+        let bounty = cursor.cleanup_bounty_lamports();
+        assert_eq!(bounty, cursor_rent);
+        let cursor_balance = cursor_rent + bounty;
+        let raw = account(
+            raw_key,
+            false,
+            true,
+            raw_rent,
+            vec![0; content.len()],
+            registry,
+            false,
+        );
+        let stage = account(
+            cursor_key,
+            false,
+            true,
+            cursor_balance,
+            cursor.to_bytes().to_vec(),
+            registry,
+            false,
+        );
+        let sponsor_before = 11;
+        let sponsor_wallet = account(
+            sponsor,
+            false,
+            true,
+            sponsor_before,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        // A stranger, not even a signer, strictly at/after expiry (slot 200 >= 101).
+        let actor_key = Pubkey::new_unique();
+        let actor_before = 7;
+        let actor = account(
+            actor_key,
+            false,
+            true,
+            actor_before,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let clock = account(
+            sysvar::clock::ID,
+            false,
+            false,
+            1,
+            clock_data(200),
+            sysvar::ID,
+            false,
+        );
+        process_abort(
+            &registry,
+            &[
+                raw.clone(),
+                stage.clone(),
+                sponsor_wallet.clone(),
+                actor.clone(),
+                clock,
+            ],
+            AbortRecordV1,
+        )
+        .expect("permissionless expired abort");
+        assert_eq!(actor.lamports(), actor_before + bounty);
+        assert_eq!(
+            sponsor_wallet.lamports(),
+            sponsor_before + raw_rent + cursor_rent
+        );
+        assert!(is_vacant(&raw));
+        assert!(is_vacant(&stage));
+
+        // A wrong sponsor wallet (not the cursor-committed refund) refuses.
+        let raw = account(
+            raw_key,
+            false,
+            true,
+            raw_rent,
+            vec![0; content.len()],
+            registry,
+            false,
+        );
+        let stage = account(
+            cursor_key,
+            false,
+            true,
+            cursor_balance,
+            cursor.to_bytes().to_vec(),
+            registry,
+            false,
+        );
+        let wrong_sponsor = account(
+            Pubkey::new_unique(),
+            false,
+            true,
+            0,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let actor = account(
+            Pubkey::new_unique(),
+            false,
+            true,
+            0,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let clock = account(
+            sysvar::clock::ID,
+            false,
+            false,
+            1,
+            clock_data(200),
+            sysvar::ID,
+            false,
+        );
+        assert_eq!(
+            process_abort(
+                &registry,
+                &[raw, stage, wrong_sponsor, actor, clock],
+                AbortRecordV1,
+            ),
+            Err(record_error())
+        );
+    }
+
+    #[test]
+    fn abort_before_expiry_requires_the_sponsor_signature_and_withholds_the_bounty() {
+        let registry = Pubkey::new_unique();
+        let sponsor = Pubkey::new_unique();
+        let content = b"a sponsor cancels their own work";
+        let (cursor, raw_key, cursor_key, raw_rent, cursor_rent) =
+            building_cursor(registry, sponsor, content);
+        let bounty = cursor.cleanup_bounty_lamports();
+        let cursor_balance = cursor_rent + bounty;
+        let sponsor_before = 5;
+
+        // The committed sponsor, signing, before expiry (slot 50 < 101): the same
+        // account is both the sponsor wallet and the abort actor. Cloning one
+        // AccountInfo into both slots shares its lamport cell, exactly as the
+        // runtime deduplicates a twice-passed account.
+        let raw = account(
+            raw_key,
+            false,
+            true,
+            raw_rent,
+            vec![0; content.len()],
+            registry,
+            false,
+        );
+        let stage = account(
+            cursor_key,
+            false,
+            true,
+            cursor_balance,
+            cursor.to_bytes().to_vec(),
+            registry,
+            false,
+        );
+        let sponsor_signed = account(
+            sponsor,
+            true,
+            true,
+            sponsor_before,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let clock = account(
+            sysvar::clock::ID,
+            false,
+            false,
+            1,
+            clock_data(50),
+            sysvar::ID,
+            false,
+        );
+        process_abort(
+            &registry,
+            &[
+                raw.clone(),
+                stage.clone(),
+                sponsor_signed.clone(),
+                sponsor_signed.clone(),
+                clock,
+            ],
+            AbortRecordV1,
+        )
+        .expect("early sponsor abort");
+        // No bounty is paid on an early abort; every lamport returns to sponsor.
+        assert_eq!(
+            sponsor_signed.lamports(),
+            sponsor_before + raw_rent + cursor_balance
+        );
+        assert!(is_vacant(&raw));
+        assert!(is_vacant(&stage));
+
+        // Same shape, but the sponsor did not sign: refused before any mutation.
+        let raw = account(
+            raw_key,
+            false,
+            true,
+            raw_rent,
+            vec![0; content.len()],
+            registry,
+            false,
+        );
+        let stage = account(
+            cursor_key,
+            false,
+            true,
+            cursor_balance,
+            cursor.to_bytes().to_vec(),
+            registry,
+            false,
+        );
+        let sponsor_unsigned = account(
+            sponsor,
+            false,
+            true,
+            sponsor_before,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let clock = account(
+            sysvar::clock::ID,
+            false,
+            false,
+            1,
+            clock_data(50),
+            sysvar::ID,
+            false,
+        );
+        assert_eq!(
+            process_abort(
+                &registry,
+                &[
+                    raw.clone(),
+                    stage.clone(),
+                    sponsor_unsigned.clone(),
+                    sponsor_unsigned,
+                    clock,
+                ],
+                AbortRecordV1,
+            ),
+            Err(record_error())
+        );
+        // Nothing moved: the record is still live.
+        assert!(!is_vacant(&raw));
+        assert!(!is_vacant(&stage));
+
+        // A stranger who is not the sponsor cannot abort before expiry, even
+        // signing: the contract refuses `AbortBeforeExpiry`.
+        let raw = account(
+            raw_key,
+            false,
+            true,
+            raw_rent,
+            vec![0; content.len()],
+            registry,
+            false,
+        );
+        let stage = account(
+            cursor_key,
+            false,
+            true,
+            cursor_balance,
+            cursor.to_bytes().to_vec(),
+            registry,
+            false,
+        );
+        let sponsor_wallet = account(
+            sponsor,
+            false,
+            true,
+            sponsor_before,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let stranger = account(
+            Pubkey::new_unique(),
+            true,
+            true,
+            0,
+            Vec::new(),
+            system_program::ID,
+            false,
+        );
+        let clock = account(
+            sysvar::clock::ID,
+            false,
+            false,
+            1,
+            clock_data(50),
+            sysvar::ID,
+            false,
+        );
+        assert_eq!(
+            process_abort(
+                &registry,
+                &[raw, stage, sponsor_wallet, stranger, clock],
+                AbortRecordV1,
+            ),
             Err(record_error())
         );
     }

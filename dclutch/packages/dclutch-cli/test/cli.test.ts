@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 import { decodeSession } from '../src/context';
 import { nameRefusals } from '../src/output';
-import { decodeWalkBook } from '../src/commands/walk';
-import { intentFromJson, parseRouteManifestFile } from '../src/commands/trade';
+import { decodeWalkBook, FAILURE_WALK_MUTATION_REFUSAL_V1 } from '../src/commands/walk';
+import { DIRECT_TRADE_MUTATION_REFUSAL_V1, tradeCommand } from '../src/commands/trade';
+import { run } from '../src/main';
 
 function key(byte: number): string {
   return new PublicKey(new Uint8Array(32).fill(byte)).toBase58();
@@ -79,44 +80,54 @@ describe('walk book', () => {
     ]) book[field] = key(2);
     expect(decodeWalkBook(book).market).toBe(key(2));
   });
+
+  it('refuses submission before reading a book or key until a durable walk journal exists', async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const missing = '/this/failure-walk-file-must-not-be-read.json';
+    const code = await run([
+      '--book', missing,
+      '--keypair', missing,
+      '--rpc', 'http://127.0.0.1:1/',
+      'walk',
+    ], {}, { out: (line) => out.push(line), err: (line) => err.push(line) });
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toEqual([`refused: ${FAILURE_WALK_MUTATION_REFUSAL_V1}`]);
+  });
 });
 
-describe('trade wire formats', () => {
-  it('round-trips a signed intent through its JSON file shape', () => {
-    const decoded = intentFromJson({
-      schema: 'dclutch-direct-intent-v1',
-      maker: key(3),
-      signature: 'ab'.repeat(64),
-      intent: {
-        side: 0, lifecycle: 0, outcome: 1, market: key(4),
-        generation: '1', nonce: '2', validFrom: '10', validThrough: '160',
-        maximumFill: '5', limitPrice: '400000', feeBasisPoints: 30, collateralAccount: key(5),
-      },
-    });
-    expect(decoded.intent.side).toBe(0);
-    expect(decoded.intent.maximumFill).toBe(5n);
-    expect(decoded.signature.length).toBe(64);
+describe('public Direct mutation boundary', () => {
+  it.each(['buy', 'sell'] as const)('%s has no context, key, signing, or RPC capability', async (action) => {
+    await expect(tradeCommand(action)).rejects.toThrow(`${action} refused: ${DIRECT_TRADE_MUTATION_REFUSAL_V1}`);
   });
 
-  it('refuses an intent whose numbers are not exact unsigned decimals', () => {
-    expect(() => intentFromJson({
-      schema: 'dclutch-direct-intent-v1',
-      maker: key(3),
-      signature: 'ab'.repeat(64),
-      intent: { side: 0, lifecycle: 0, outcome: 1, market: key(4), generation: '-1', nonce: '2', validFrom: '10', validThrough: '160', maximumFill: '5', limitPrice: '4', feeBasisPoints: 30, collateralAccount: key(5) },
-    })).toThrow(/generation/);
+  it.each(['buy', 'sell'] as const)('%s refuses before caller-named session, route, or key files are read', async (action) => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const missing = `/this/${action}-caller-file-must-not-be-read.json`;
+    const code = await run([
+      '--session', missing,
+      '--route', missing,
+      '--keypair', missing,
+      '--counter-keypair', missing,
+      '--rpc', 'http://127.0.0.1:1/',
+      action,
+    ], {}, { out: (line) => out.push(line), err: (line) => err.push(line) });
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toEqual([`refused: ${action} refused: ${DIRECT_TRADE_MUTATION_REFUSAL_V1}`]);
   });
 
-  it('parses the same route-manifest JSON the web workspace accepts', () => {
-    const manifest = parseRouteManifestFile(JSON.stringify({
-      payer: key(6),
-      fixedAccounts: [{ address: key(7), isSigner: false, isWritable: true }],
-      strategyAccounts: [],
-      runtimeAccounts: [{ address: key(8), isSigner: false, isWritable: false }],
-      lookupTables: [key(9)],
-    }));
-    expect(manifest.payer).toBe(key(6));
-    expect(manifest.fixedAccounts[0]?.isWritable).toBe(true);
-    expect(manifest.checkedInfrastructure).toBeNull();
+  it('help states the closed mutation boundary and never advertises submission', async () => {
+    const out: string[] = [];
+    const code = await run(['--help'], {}, { out: (line) => out.push(line), err: () => undefined });
+    expect(code).toBe(0);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain('buy                              disabled: refuses before context, keys, signing, or RPC access');
+    expect(out[0]).toContain('intent sell|buy                  authenticate a route and sign one off-chain Direct intent (--out; never submits)');
+    expect(out[0]).toContain('walk                             preview the funded failure walk (--dry-run required; submission disabled)');
+    expect(out[0]).not.toContain('cross a sell intent');
+    expect(out[0]).not.toContain('cross a buy intent');
   });
 });

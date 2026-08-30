@@ -15,7 +15,7 @@ fn key(tag: u8) -> Pubkey {
     Pubkey::new_from_array(bytes)
 }
 
-fn rent_sink(refund_owner: AccountKeyV3) -> lifecycle::SeriesLifecycleRentSinkV3 {
+fn rent_sink(refund_owner: AccountKeyV3) -> commit_plans::SeriesLifecycleRentSinkV3 {
     let market = [81; 32];
     let release = [82; 32];
     let credit = LifecycleRentCreditV2::new(
@@ -26,7 +26,7 @@ fn rent_sink(refund_owner: AccountKeyV3) -> lifecycle::SeriesLifecycleRentSinkV3
         4,
     )
     .expect("Rent V2");
-    lifecycle::SeriesLifecycleRentSinkV3::admit(
+    commit_plans::SeriesLifecycleRentSinkV3::admit(
         AccountKeyV3::new([83; 32]).expect("credit"),
         &credit.to_bytes(),
         AccountKeyV3::new(market).expect("Market"),
@@ -491,7 +491,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     assert_eq!(series.next_occurrence(), admitted.occurrence().occurrence());
 
     let ticket_state_key = key(72);
-    let (prepare, top_up, dust_refund) = lifecycle::plan_prepare(
+    let (prepare, top_up, dust_refund) = commit_plans::plan_prepare(
         admitted,
         admitted_ticket,
         series,
@@ -519,7 +519,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
         prepare.ticket_after()
     );
 
-    let expire = lifecycle::plan_expire(
+    let expire = commit_plans::plan_expire(
         admitted,
         admitted_ticket,
         ticket_state_key,
@@ -555,7 +555,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     assert!(expire.terminal_rent_sink().is_some());
     assert_eq!(expire.core_request(), None);
     assert_eq!(
-        lifecycle::plan_expire(
+        commit_plans::plan_expire(
             admitted,
             admitted_ticket,
             ticket_state_key,
@@ -566,7 +566,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
             u64::MAX,
             rent_sink(admitted_ticket.ticket().refund_owner()),
         ),
-        Err(lifecycle::LifecycleErrorV3::Replay)
+        Err(commit_plans::LifecycleErrorV3::Replay)
     );
 
     let (series_bytes, ticket_bytes) = expire
@@ -609,7 +609,7 @@ fn prepare_and_expire_commit_under_controller_without_fabricating_core() {
     );
     assert_eq!(
         expire.commit_after_ack(ack, core_program, request_digest, post_digest),
-        Err(lifecycle::LifecycleErrorV3::CoreAck)
+        Err(commit_plans::LifecycleErrorV3::CoreAck)
     );
 }
 

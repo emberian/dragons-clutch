@@ -19,12 +19,20 @@ pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAcc
 
 /// Canonical schema-bound CapabilityProgramSetV2 artifact construction.
 pub mod capability_program_set_v2;
+/// What a holder needs to find and redeem a claim-check.
+pub mod claim_check_v1;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
 pub mod dealer_equity_hot_v3;
+/// Lock-bounded Dealer checkpoint callers and crash-safe journal.
+pub mod dealer_scenario_checkpoint_v1;
 /// Chain-derived Dealer scenario exact-fill physical-account projection.
 pub mod dealer_scenario_hot_v4;
 /// Exact delegated-allowance Custody successor CPI construction.
 pub mod delegated_custody;
+/// Chain-derived unsigned Direct root retirement construction.
+pub mod direct_begin_retiring_v1;
+/// Canonical logical-to-physical routing and finalized poststate planning for Direct V3.
+pub mod direct_inline_route_v3;
 /// Chain-derived action-selected Direct V3 inline execution construction.
 pub mod direct_inline_v3;
 /// Exact unsigned signing material for the Direct V2 successor.
@@ -33,6 +41,10 @@ pub mod direct_successor;
 pub mod general_activation_v3;
 /// Chain-derived General V3 Hot execution and packet construction.
 pub mod general_hot_v3;
+/// Durable content-addressed caller construction over executable General V3.
+pub mod general_invocation_v1;
+/// Compile the seven General actions into one publishable, selectable release.
+pub mod general_selected_release_v1;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
 /// Shared authentication of Rent, Clock, and finalized-record observations.
@@ -52,6 +64,9 @@ pub mod provider_transport_v3 {
     pub use dclutch_provider_transport_v3_operator::*;
 }
 /// Packet-safe unsigned Rational terminal Bearer redemption construction.
+pub mod rational_selected_release_v1;
+pub mod structured_selected_release_v1;
+
 pub mod rational_terminal_v3;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.
 pub mod registry;
@@ -65,7 +80,13 @@ pub mod resolution_core_v3 {
 pub mod series_hot_v3;
 /// Compact projected-Market Series Consume instruction-data construction.
 pub mod series_projected_v2;
+/// Chain-derived Direct close and retirement replay-handoff construction.
+pub mod terminal_retirement_v1;
+/// Wallet-authorized Claims terminal payout and exact v0 routing construction.
+pub mod wallet_terminal_payout_v3;
 /// Chain-derived address-table lifecycle and versioned-message construction.
 pub mod versioned {
     pub use dclutch_versioned_message_operator::*;
 }
+/// Finalized devnet planning for wallet-authorized Claims Position admission.
+pub mod user_position_admission_v1;

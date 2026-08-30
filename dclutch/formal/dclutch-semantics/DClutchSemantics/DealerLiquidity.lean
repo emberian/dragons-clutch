@@ -289,6 +289,14 @@ def feeCustodyValid (state : State) : Bool :=
   | .retired => state.feeCustody = 0
   | _ => state.feeCustody = state.feePaid
 
+/-- Cranks the walk out of a state still costs.
+
+`retire` is reachable only through zero inventory, zero inventory only through
+`unwind`, and one `unwind` retires one whole coordinate for one `workReward`.
+So the exit costs exactly one crank per nonzero inventory coordinate. -/
+def unwindCranks (state : State) : Nat :=
+  (state.inventory.filter (fun quantity => quantity != 0)).length
+
 /-- Exhaustive executable state invariant. -/
 def valid (policy : Policy) (state : State) : Bool :=
   policy.valid && state.active.validFor policy &&
@@ -311,6 +319,15 @@ def valid (policy : Policy) (state : State) : Bool :=
     state.feePaid = feeDue policy state.feeBase &&
     feeCustodyValid state &&
     state.activeWorkRemaining ≤ state.active.workFunding &&
+    -- Exit affordability: a Dealer state may never hold more inventory than its
+    -- liveness vault can pay to unwind. Every transition revalidates its post
+    -- state (`execute?` answers `.postInvariantFailure` otherwise), so stating
+    -- it here is what makes `fill` unable to spend the reserve the terminal walk
+    -- needs and `activate` unable to swap in a candidate whose funding cannot
+    -- cover the inventory already standing. Without it the vault is a work
+    -- escrow checked only at creation, and the two writes that could refill it
+    -- (`schedulePost`, `activatePost`) are both unreachable outside `.open`.
+    unwindCranks state * state.active.workReward ≤ state.activeWorkRemaining &&
     pendingValid policy state &&
     state.livenessCustody = state.activeWorkRemaining + state.pendingWorkFunding &&
     phaseValid policy state
@@ -523,9 +540,15 @@ def unwindEconomicAccepts (policy : Policy) (state : State)
           (valueAt state.inventory unwind.outcome - unwind.quantity)
   | _ => false
 
+/-- One `unwind` retires one WHOLE coordinate.
+
+The equality, rather than `≤`, is what makes the terminal walk cost exactly
+`unwindCranks` cranks: a caller who could split a coordinate across calls would
+choose the walk's length, and a walk whose length its callers choose cannot be
+reserved for by `valid`'s exit-affordability conjunct. -/
 def unwindAccepts (policy : Policy) (state : State) (unwind : Unwind) : Bool :=
   0 < unwind.quantity && unwind.outcome < policy.outcomeCount &&
-    unwind.quantity ≤ valueAt state.inventory unwind.outcome &&
+    unwind.quantity = valueAt state.inventory unwind.outcome &&
     state.activeWorkRemaining ≥ state.active.workReward &&
     state.quoteCustody +
       DClutch.Economic.redemptionPayout unwind.economic.pre.phase

@@ -19,6 +19,7 @@ use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2,
     MarketIdentity as CoreMarketIdentity, Phase as CorePhase, Readiness as CoreReadiness,
+    StateBumpsV1,
 };
 use dclutch_product_runtime_v2::{
     ContentId as RuntimeProductContentId, PortfolioInputV2, ResultDomainInputV2,
@@ -50,9 +51,9 @@ use dclutch_resolution_receipt_test_caller_sbf::TestReceiptCallerError;
 use dclutch_source_contract::{
     CapacityEnvelope, ContentId as SourceContentId, PYTH_PROVIDER_EXTENSION_RELEASE_ID_V1,
     ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_SCHEMA_ID_V2, RecoveryAttemptV2,
-    RecoveryPolicyV2, RoundingBoundary, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+    RecoveryPolicyV2, RoundingBoundary, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceAccessProfile, SourceCapacityProfileV1,
-    SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
+    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
     StatisticKind, StatisticSpecV1, WindowKind, WindowSpecV1,
 };
 use solana_account::Account;
@@ -382,8 +383,10 @@ fn canonical_market(spec: MarketSpec) -> (Pubkey, Vec<u8>) {
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: core_identity([0xc3; 32]),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .expect("open sparse Core state");
@@ -920,7 +923,7 @@ impl Fixture {
         let recovery_policy_id = source_id(hash(&recovery_policy_bytes).to_bytes());
         let exhaust_allocation_id = recovery_policy_id.to_bytes();
         let failure_policy_release = source_id([0xb6; 32]);
-        let material = SourceMaterialV2::new(
+        let material = SourceMaterialV3::explicitly_unbounded(
             source_id(product_record_id),
             source_spec_id,
             window_id,
@@ -1011,7 +1014,7 @@ impl Fixture {
         let capability_manifest_id = hash(&capability_manifest_bytes).to_bytes();
         add_record(
             &mut test,
-            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
             material_id,
             material_bytes.to_vec(),
         );

@@ -1,16 +1,20 @@
-//! Executable, family-neutral Core-to-Trading activation boundary.
+//! Executable, family-neutral Core-to-Trading capability lifecycle boundary.
 //!
 //! The outer authenticates the current Core and Trading deployments, four
 //! finalized content records, and an interpreted account/effect profile. It
 //! does not dispatch on a capability kind. All physical mutation is projected
-//! first and committed only after the complete activation plan accepts.
+//! first and committed only after the complete activation or native-close plan
+//! accepts.
 //!
 //! The created root is `CapabilityRootHeaderV1 || <family tail>`. The outer owns
 //! the header and never decodes the tail; the tail is exactly the effect
 //! program's projected request buffer, whose width the descriptor pins to
 //! `root_state_bytes`. That keeps the family's initial state an artifact the
 //! family authors and the Market's manifest entry binds, with no family decoder
-//! and no kind branch on this path.
+//! and no kind branch on this path. Close requires a ProgramSet-selected
+//! descriptor, authenticates the existing root and exact Market RentCredit,
+//! leaves foreign dependency ledgers byte/lamport-identical, and never admits
+//! Realm/token custody without an ordered-vault adapter.
 
 extern crate alloc;
 
@@ -19,12 +23,14 @@ use core::cell::Ref;
 
 use dclutch_account_profile_contract::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountObservationV1, AccountProfileV1,
+    EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
     EFFECT_PERMISSION_WRITE_DATA, ProjectionRegistersV2, derive_effect_permissions,
     project_atomic as project_accounts_atomic,
 };
 use dclutch_capability_contract::{
-    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingDerivationV1, CapabilityManifestV1,
-    ContentId, FUNDING_STATE_BYTES, FundingCustodyObservationV1, FundingStateV1,
+    CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityFundingLedgerDerivationV2,
+    CapabilityManifestV1, ContentId, FundingLedgerCloseCustodyV2, FundingLedgerStatusV2,
+    FundingLedgerV2, manifest_entry_for_ledger_row_v2, validate_funding_ledger_masks_v2,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1, CapabilityProgramV1, CapabilityRegistersV2,
@@ -58,6 +64,7 @@ use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
 use dclutch_release_set_contract::ExecutionRoleV1;
+use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
     account_info::AccountInfo,
@@ -76,7 +83,8 @@ use solana_system_interface::instruction::{allocate, assign};
 use crate::{
     TradingSbfError,
     dispatch::{
-        TradingActivationAccountsV1, TradingActivationRequestV1, TradingFamilyContextV1,
+        TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2, TradingActivationAccountsV2,
+        TradingActivationRequestV2, TradingCloseRequestV2, TradingFamilyContextV1,
         authenticate_activation_program,
     },
 };
@@ -109,8 +117,15 @@ const MAX_RUNTIME_IDENTITIES_V2: usize = 32;
 const MAX_RUNTIME_ACCOUNTS_V2: usize = 64;
 const MAX_ROLE_REQUEST_BYTES_V2: usize = 2_048;
 
+/// Close-only runtime suffix index of the current Rent Program.
+const CLOSE_RENT_PROGRAM: usize = 0;
+/// Close-only runtime suffix index of the Market's writable RentCredit.
+const CLOSE_RENT_CREDIT: usize = 1;
+/// Fixed close-only accounts before any family validation observations.
+const CLOSE_RUNTIME_PREFIX_ACCOUNTS_V2: usize = 2;
+
 /// Domain for the activation poststate commitment in [`poststate_digest`].
-const ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V1: &[u8] = b"dclutch:activation-poststate:v1";
+const ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V2: &[u8] = b"dclutch:activation-poststate:v2";
 
 /// Which generation of capability release `selection.capability_release()` names.
 ///
@@ -175,6 +190,29 @@ fn select_release_generation(
     Err(TradingSbfError::Content.into())
 }
 
+/// Execute the versioned capability activation/close family selected by Core.
+///
+/// Unknown actions remain on the activation decoder and refuse; only the exact
+/// V1 Core close action enters the independently authenticated close route.
+#[inline(never)]
+pub fn process_capability_lifecycle(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    let envelope = CoreEffectEnvelopeV1::decode(
+        instruction_data
+            .get(..CORE_EFFECT_ENVELOPE_BYTES_V1)
+            .ok_or(TradingSbfError::Content)?,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if envelope.action() == CoreEffectActionV1::CloseCapability {
+        process_close(program_id, accounts, instruction_data)
+    } else {
+        process_activation(program_id, accounts, instruction_data)
+    }
+}
+
 /// Execute one Core-signed, data-defined capability activation.
 #[inline(never)]
 pub fn process_activation(
@@ -192,14 +230,14 @@ pub fn process_activation(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let request = TradingActivationRequestV1::decode(role_request_bytes)?;
+    let request = TradingActivationRequestV2::decode(role_request_bytes)?;
     envelope
         .validate_role_request(
             role_request_bytes.len(),
             identity(hash(role_request_bytes).to_bytes())?,
         )
         .map_err(|_| TradingSbfError::Content)?;
-    let framed = TradingActivationAccountsV1::parse(accounts, request.funding())?;
+    let framed = TradingActivationAccountsV2::parse(accounts, request.funding())?;
     let family_accounts = framed.family_accounts();
     let capability_release = request.selection().capability_release().to_bytes();
     let (generation, release_raw_coordinate) = select_release_generation(
@@ -489,6 +527,294 @@ pub fn process_activation(
     )
 }
 
+/// Execute one Core-signed, ProgramSet-versioned native capability close.
+///
+/// The authenticated descriptor/profile/transition authorizes the family's
+/// terminal state. The outer then owns the physical close: the selected
+/// one-row Trading ledger and composite root are the only debits, the exact
+/// Market RentCredit is the only credit, dependency ledgers are immutable, and
+/// Realm/token custody refuses until its ordered-vault adapter lands.
+#[inline(never)]
+pub fn process_close(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    let (envelope_bytes, role_request_bytes) = instruction_data
+        .split_at_checked(CORE_EFFECT_ENVELOPE_BYTES_V1)
+        .ok_or(TradingSbfError::Content)?;
+    let envelope =
+        CoreEffectEnvelopeV1::decode(envelope_bytes).map_err(|_| TradingSbfError::Content)?;
+    if envelope.action() != CoreEffectActionV1::CloseCapability
+        || envelope.target_role() != Role::Trading
+    {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let request = TradingCloseRequestV2::decode(role_request_bytes)?;
+    envelope
+        .validate_role_request(
+            role_request_bytes.len(),
+            identity(hash(role_request_bytes).to_bytes())?,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+    let framed = TradingActivationAccountsV2::parse(accounts, request.funding())?;
+    let family_accounts = framed.family_accounts();
+    let capability_release = request.selection().capability_release().to_bytes();
+    let (generation, release_raw_coordinate) = select_release_generation(
+        get(family_accounts, REGISTRY_PROGRAM)?.key,
+        get(family_accounts, RELEASE_RAW)?,
+        capability_release,
+    )?;
+    // A flat activation descriptor has no independent close selector. Never
+    // reinterpret it under a second action.
+    if generation != CapabilityReleaseGenerationV1::ProgramSet {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    let suffix = AuthenticatedSuffixV2::parse(program_id, family_accounts, generation)?;
+    let market_state = authenticate_market_and_caller(program_id, &framed, &suffix, envelope)?;
+    let rent = Rent::from_account_info(suffix.rent).map_err(|_| TradingSbfError::Content)?;
+
+    let release_data = suffix
+        .release_raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let release_staging_coordinate = finalized_staging_coordinate(
+        suffix.registry.key,
+        generation.release_schema(),
+        capability_release,
+    );
+    authenticate_finalized_record_against(
+        suffix.registry.key,
+        suffix.release_raw,
+        suffix.release_staging,
+        &rent,
+        capability_release,
+        &release_data,
+        release_raw_coordinate.0,
+        release_staging_coordinate.0,
+    )?;
+    let set_descriptor_data = authenticate_set_descriptor(
+        &suffix,
+        generation,
+        &rent,
+        capability_release,
+        release_data.as_ref(),
+        request.family_request(),
+    )?
+    .ok_or(TradingSbfError::UnsupportedContent)?;
+    let descriptor_id = content(hash(set_descriptor_data.as_ref()).to_bytes())?;
+    let descriptor = CapabilityProgramV1::decode(set_descriptor_data.as_ref())
+        .map_err(|_| TradingSbfError::Content)?;
+
+    let core_receipt = reauthenticate_role(
+        &suffix,
+        ExecutionRoleV1::Core,
+        suffix.core_program,
+        suffix.core_programdata,
+        market_state.identity.selected_release_set.to_bytes(),
+    )?;
+    if core_receipt.program().to_bytes() != suffix.core_program.key.to_bytes() {
+        return Err(TradingSbfError::Release.into());
+    }
+    let trading_receipt = reauthenticate_role(
+        &suffix,
+        ExecutionRoleV1::Trading,
+        suffix.trading_program,
+        suffix.trading_programdata,
+        market_state.identity.selected_release_set.to_bytes(),
+    )?;
+    let root_data = framed
+        .child_root()
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Root)?;
+    let root = CapabilityRootAccountV1::decode(&root_data, descriptor)
+        .map_err(|_| TradingSbfError::Root)?;
+    let root_header = root.header();
+    let context = TradingFamilyContextV1::authenticate(
+        program_id,
+        framed.child_root().key,
+        framed.child_root().owner,
+        &root_data,
+        trading_receipt,
+    )?;
+    require_close_selection(context, request, envelope)?;
+    drop(root_data);
+
+    let (expected_manifest_raw, _) = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            &context.selection().manifest().to_bytes(),
+        ],
+        suffix.registry.key,
+    );
+    if framed.manifest().key != &expected_manifest_raw
+        || framed.manifest().owner != suffix.registry.key
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let manifest_data = framed
+        .manifest()
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let (config_raw_coordinate, config_staging_coordinate) = finalized_record_coordinates(
+        suffix.registry.key,
+        descriptor.config_schema().to_bytes(),
+        context.selection().config().to_bytes(),
+    );
+    let config_data = suffix
+        .config_raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    authenticate_finalized_record_against(
+        suffix.registry.key,
+        suffix.config_raw,
+        suffix.config_staging,
+        &rent,
+        context.selection().config().to_bytes(),
+        &config_data,
+        config_raw_coordinate.0,
+        config_staging_coordinate.0,
+    )?;
+    let descriptor = authenticate_activation_program(
+        context,
+        descriptor_id,
+        &manifest_data,
+        set_descriptor_data.as_ref(),
+        &config_data,
+    )?;
+
+    let profile_data = suffix
+        .profile_raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    authenticate_finalized_record(
+        suffix.registry.key,
+        suffix.profile_raw,
+        suffix.profile_staging,
+        &rent,
+        ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
+        descriptor.account_profile().to_bytes(),
+        &profile_data,
+    )?;
+    let profile = AccountProfileV1::decode_selected(
+        descriptor.account_profile().to_bytes(),
+        hash(&profile_data).to_bytes(),
+        &profile_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    let effect_data = suffix
+        .effect_raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    authenticate_finalized_record(
+        suffix.registry.key,
+        suffix.effect_raw,
+        suffix.effect_staging,
+        &rent,
+        SCHEMA_RELEASE_ID,
+        descriptor.effect_schema().to_bytes(),
+        &effect_data,
+    )?;
+    let effect = EffectProgramV2::decode_selected(
+        descriptor.effect_schema().to_bytes(),
+        hash(&effect_data).to_bytes(),
+        &effect_data,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+
+    let credit = authenticate_close_rent_credit(&suffix, market_state, &rent)?;
+    // The Rent Program authenticates the credit's owner/PDA but is not a
+    // family runtime account: no CPI executes and no profile may grant it an
+    // effect. The RentCredit and any later validation observations are the
+    // descriptor-owned runtime suffix.
+    let close_runtime_accounts = suffix
+        .effect_accounts
+        .get(CLOSE_RENT_CREDIT..)
+        .ok_or(TradingSbfError::Content)?;
+    let runtime = RuntimeFrameV2::new_close(
+        &framed,
+        close_runtime_accounts,
+        request.selection().entry_index(),
+    )?;
+    let mut input_scalars = vec![0_u64; usize::from(profile.scalar_count())];
+    let mut input_identities = vec![[0_u8; 32]; usize::from(profile.identity_count())];
+    seed_common_registers(
+        &mut input_scalars,
+        &mut input_identities,
+        program_id,
+        &suffix,
+        envelope,
+        request,
+        descriptor,
+        framed.child_root().key,
+    )?;
+    *input_identities
+        .get_mut(usize::from(TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2))
+        .ok_or(TradingSbfError::Content)? = credit.key;
+    let mut projected_scalars = input_scalars.clone();
+    let mut projected_identities = input_identities.clone();
+    let mut projection_scratch_scalars = input_scalars.clone();
+    let mut projection_scratch_identities = input_identities.clone();
+    runtime.project_accounts(
+        profile,
+        &input_scalars,
+        &input_identities,
+        &mut projection_scratch_scalars,
+        &mut projection_scratch_identities,
+        &mut projected_scalars,
+        &mut projected_identities,
+    )?;
+    let mut transition_scratch_scalars = projected_scalars.clone();
+    let mut transition_scratch_identities = projected_identities.clone();
+    let mut transition_output_scalars = projected_scalars.clone();
+    let mut transition_output_identities = projected_identities.clone();
+    descriptor
+        .execute(CapabilityRegistersV2::new(
+            RegisterInput {
+                scalars: &projected_scalars,
+                identities: &projected_identities,
+            },
+            RegisterOutput {
+                scalars: &mut transition_scratch_scalars,
+                identities: &mut transition_scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut transition_output_scalars,
+                identities: &mut transition_output_identities,
+            },
+        ))
+        .map_err(|_| TradingSbfError::Transition)?;
+    let plan = runtime.prepare_close(
+        program_id,
+        profile,
+        effect,
+        &transition_output_scalars,
+        &transition_output_identities,
+        &manifest_data,
+        request,
+        &rent,
+        root_header,
+        framed.child_root().lamports(),
+        credit,
+    )?;
+    drop(effect_data);
+    drop(profile_data);
+    drop(config_data);
+    drop(set_descriptor_data);
+    drop(release_data);
+    drop(manifest_data);
+
+    commit_close(program_id, &framed, &suffix, &plan)?;
+    emit_ack_for_post(
+        program_id,
+        envelope,
+        envelope_bytes,
+        role_request_bytes,
+        plan.post_digest,
+    )
+}
+
 struct AuthenticatedSuffixV2<'accounts, 'info> {
     release_raw: &'accounts AccountInfo<'info>,
     release_staging: &'accounts AccountInfo<'info>,
@@ -659,7 +985,7 @@ fn require_authentication_accounts_distinct(
 
 fn authenticate_market_and_caller(
     program_id: &Pubkey,
-    framed: &TradingActivationAccountsV1<'_, '_>,
+    framed: &TradingActivationAccountsV2<'_, '_>,
     suffix: &AuthenticatedSuffixV2<'_, '_>,
     envelope: CoreEffectEnvelopeV1,
 ) -> Result<CoreState, ProgramError> {
@@ -702,6 +1028,27 @@ fn authenticate_market_and_caller(
     }
     let _ = program_id;
     Ok(state)
+}
+
+fn require_close_selection(
+    context: TradingFamilyContextV1,
+    request: TradingCloseRequestV2<'_>,
+    envelope: CoreEffectEnvelopeV1,
+) -> Result<(), ProgramError> {
+    let persisted = context.selection();
+    let proposed = request.selection();
+    if context.market() != envelope.market().to_bytes()
+        || context.generation() != envelope.generation()
+        || context.release_set().to_bytes() != envelope.release_set().to_bytes()
+        || persisted.entry_index() != proposed.entry_index()
+        || persisted.manifest() != proposed.manifest()
+        || persisted.kind() != proposed.kind()
+        || persisted.capability_release() != proposed.capability_release()
+        || persisted.config() != proposed.config()
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
 }
 
 fn reauthenticate_role<'info>(
@@ -760,6 +1107,72 @@ fn reauthenticate_role<'info>(
         return Err(TradingSbfError::Release.into());
     }
     Ok(receipt)
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedCloseRentCreditV2 {
+    key: [u8; 32],
+    pre_lamports: u64,
+}
+
+fn authenticate_close_rent_credit(
+    suffix: &AuthenticatedSuffixV2<'_, '_>,
+    market: CoreState,
+    rent: &Rent,
+) -> Result<AuthenticatedCloseRentCreditV2, ProgramError> {
+    if suffix.effect_accounts.len() < CLOSE_RUNTIME_PREFIX_ACCOUNTS_V2 {
+        return Err(TradingSbfError::Content.into());
+    }
+    let rent_program = get(suffix.effect_accounts, CLOSE_RENT_PROGRAM)?;
+    let credit_account = get(suffix.effect_accounts, CLOSE_RENT_CREDIT)?;
+    if rent_program.key == credit_account.key
+        || !rent_program.executable
+        || rent_program.is_writable
+        || credit_account.executable
+        || !credit_account.is_writable
+        || credit_account.owner != rent_program.key
+        || credit_account.data_len() != LIFECYCLE_RENT_CREDIT_BYTES_V2
+        || credit_account.key.to_bytes() != market.rent_beneficiary.to_bytes()
+        || !rent.is_exempt(credit_account.lamports(), LIFECYCLE_RENT_CREDIT_BYTES_V2)
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    // No Rent CPI occurs here. The immutable Market names the exact RentCredit,
+    // and that canonical record names its owner/PDA. Requiring ProgramData or a
+    // live-code receipt would add a mutable-code trust edge to a pure lamport
+    // credit operation without authenticating any additional persisted fact.
+    let data = credit_account
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    let credit = LifecycleRentCreditV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+    if credit.to_bytes().as_slice() != data.as_ref()
+        || credit.market().to_bytes() != market.identity.market_id.to_bytes()
+        || credit.release_set().to_bytes() != market.identity.selected_release_set.to_bytes()
+        || credit.generation() != market.identity.generation
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    let seeds = credit.pda_seeds();
+    let market_seed = seeds.market().to_bytes();
+    let generation_seed = seeds.generation();
+    let bump = [seeds.bump()];
+    let expected = Pubkey::create_program_address(
+        &[
+            seeds.domain(),
+            market_seed.as_slice(),
+            generation_seed.as_slice(),
+            &bump,
+        ],
+        rent_program.key,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if expected != *credit_account.key {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(AuthenticatedCloseRentCreditV2 {
+        key: credit_account.key.to_bytes(),
+        pre_lamports: credit_account.lamports(),
+    })
 }
 
 fn authenticate_vacant_root(
@@ -867,12 +1280,13 @@ fn authenticate_finalized_record(
 
 struct RuntimeFrameV2<'accounts, 'info> {
     accounts: Vec<&'accounts AccountInfo<'info>>,
-    funding_count: usize,
+    funding: Vec<&'accounts AccountInfo<'info>>,
+    close_selected_funding_index: Option<usize>,
 }
 
 impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
     fn new(
-        framed: &TradingActivationAccountsV1<'accounts, 'info>,
+        framed: &TradingActivationAccountsV2<'accounts, 'info>,
         effect_accounts: &'accounts [AccountInfo<'info>],
     ) -> Result<Self, ProgramError> {
         let count = 1_usize
@@ -888,7 +1302,50 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         accounts.extend(effect_accounts.iter());
         Ok(Self {
             accounts,
-            funding_count: framed.funding().len(),
+            funding: framed.funding().iter().collect(),
+            close_selected_funding_index: None,
+        })
+    }
+
+    /// Project a native close through only root, selected Trading ledger, and
+    /// RentCredit. All physical ledgers remain in `funding` for complete
+    /// dependency authentication and poststate commitments, but a foreign
+    /// dependency can never acquire a descriptor-owned runtime permission.
+    fn new_close(
+        framed: &TradingActivationAccountsV2<'accounts, 'info>,
+        effect_accounts: &'accounts [AccountInfo<'info>],
+        selected_entry_index: u16,
+    ) -> Result<Self, ProgramError> {
+        let selected_bit = 1_u16
+            .checked_shl(u32::from(selected_entry_index))
+            .ok_or(TradingSbfError::Content)?;
+        let mut selected = None;
+        for (index, account) in framed.funding().iter().enumerate() {
+            let data = account
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)?;
+            let ledger = FundingLedgerV2::decode(&data).map_err(|_| TradingSbfError::Content)?;
+            if ledger.selected_mask() & selected_bit != 0
+                && selected.replace((index, account)).is_some()
+            {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+        let (selected_index, selected_account) = selected.ok_or(TradingSbfError::Content)?;
+        let count = 2_usize
+            .checked_add(effect_accounts.len())
+            .ok_or(TradingSbfError::Content)?;
+        if count > MAX_RUNTIME_ACCOUNTS_V2 {
+            return Err(TradingSbfError::Content.into());
+        }
+        let mut accounts = Vec::with_capacity(count);
+        accounts.push(framed.child_root());
+        accounts.push(selected_account);
+        accounts.extend(effect_accounts.iter());
+        Ok(Self {
+            accounts,
+            funding: framed.funding().iter().collect(),
+            close_selected_funding_index: Some(selected_index),
         })
     }
 
@@ -961,7 +1418,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         scalars: &[u64],
         identities: &[[u8; 32]],
         manifest_bytes: &[u8],
-        request: TradingActivationRequestV1<'_>,
+        request: TradingActivationRequestV2<'_>,
         rent: &Rent,
         current_slot: u64,
         root_header: CapabilityRootHeaderV1,
@@ -1022,63 +1479,132 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             &mut output_request,
         )
         .map_err(|_| TradingSbfError::Content)?;
-        require_activation_local_effects(effect, scalars, identities, self.funding_count)?;
+        require_activation_local_effects(effect, scalars, identities, self.funding.len())?;
 
         let manifest =
             CapabilityManifestV1::decode(manifest_bytes).map_err(|_| TradingSbfError::Content)?;
         let manifest_id = content(request.selection().manifest().to_bytes())?;
-        let mut funding_after = Vec::with_capacity(self.funding_count);
-        for (index, account) in self
-            .accounts
-            .iter()
-            .enumerate()
-            .skip(1)
-            .take(self.funding_count)
-        {
-            if account.owner != program_id
-                || account.data_len() != FUNDING_STATE_BYTES
-                || profile
-                    .rule(u16::try_from(index).map_err(|_| TradingSbfError::Content)?)
-                    .map_err(|_| TradingSbfError::Content)?
-                    .effect_permissions()
-                    & EFFECT_PERMISSION_WRITE_DATA
-                    == 0
-            {
-                return Err(TradingSbfError::Content.into());
-            }
-            let bytes = account
+        let mut ledger_masks = Vec::with_capacity(self.funding.len());
+        let mut funding_after = Vec::with_capacity(self.funding.len());
+        let selected_entry_index = request.selection().entry_index();
+        let selected_bit = 1_u16
+            .checked_shl(u32::from(selected_entry_index))
+            .ok_or(TradingSbfError::Content)?;
+        let mut selected_present = false;
+        let mut selected_funding_index = None;
+        for (physical_index, account) in self.funding.iter().enumerate() {
+            let index = physical_index
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?;
+            let pre_bytes = account
                 .try_borrow_data()
                 .map_err(|_| TradingSbfError::Content)?;
-            let mut funding =
-                FundingStateV1::decode(&bytes).map_err(|_| TradingSbfError::Content)?;
-            let derivation = CapabilityFundingDerivationV1::new(
+            let ledger =
+                FundingLedgerV2::decode(&pre_bytes).map_err(|_| TradingSbfError::Content)?;
+            let authenticated = ledger
+                .authenticate(manifest_id, manifest)
+                .map_err(|_| TradingSbfError::Content)?;
+            let selected_mask = ledger.selected_mask();
+            let writes_data = profile
+                .rule(u16::try_from(index).map_err(|_| TradingSbfError::Content)?)
+                .map_err(|_| TradingSbfError::Content)?
+                .effect_permissions()
+                & EFFECT_PERMISSION_WRITE_DATA
+                != 0;
+            if require_funding_ledger_access(
+                program_id,
+                account.owner,
+                account.is_writable,
+                writes_data,
+                selected_mask,
+                selected_bit,
+            )? {
+                selected_funding_index =
+                    Some(index.checked_sub(1).ok_or(TradingSbfError::Content)?);
+            }
+            let derivation = CapabilityFundingLedgerDerivationV2::new(
+                account.owner.to_bytes(),
                 root_header.market(),
                 root_header.generation(),
                 manifest_id,
-                manifest,
-                funding,
+                ledger,
             )
             .map_err(|_| TradingSbfError::Content)?;
             let expected =
-                Pubkey::find_program_address(&derivation.seed_components(), program_id).0;
+                Pubkey::find_program_address(&derivation.seed_components(), account.owner).0;
             if expected != *account.key {
                 return Err(TradingSbfError::Content.into());
             }
-            let funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
-            let custody =
-                FundingCustodyObservationV1::native_only(account.lamports(), funding_rent)
-                    .map_err(|_| TradingSbfError::Content)?;
-            funding
-                .activate(manifest_id, manifest, custody, current_slot)
+            let ledger_rent = rent.minimum_balance(pre_bytes.len());
+            authenticated
+                .validate_native_custody(account.lamports(), ledger_rent, false)
                 .map_err(|_| TradingSbfError::Content)?;
-            let expected_lamports = funding_rent
-                .checked_add(funding.remaining().native_lamports_total())
+            let slot_count = ledger.slot_count();
+            let mut row_index = 0_u16;
+            while row_index < slot_count {
+                let entry_index = manifest_entry_for_ledger_row_v2(selected_mask, row_index)
+                    .map_err(|_| TradingSbfError::Content)?;
+                // Realm collateral requires one explicitly framed, quote-bound
+                // vault per row. The activation common frame currently carries
+                // only ledgers, so accepting such a row here would authenticate
+                // its native half while silently trusting an unobserved token
+                // account. Refuse until the descriptor ABI owns that exact map.
+                require_native_funding_row(
+                    manifest
+                        .entry(entry_index)
+                        .map_err(|_| TradingSbfError::Content)?
+                        .funding_quote()
+                        .realm_collateral(),
+                )?;
+                let slot = authenticated
+                    .slot(entry_index)
+                    .map_err(|_| TradingSbfError::Content)?;
+                if entry_index == selected_entry_index {
+                    selected_present = true;
+                } else if slot.status() != FundingLedgerStatusV2::Active
+                    || slot.activation_slot() == 0
+                {
+                    return Err(TradingSbfError::Content.into());
+                }
+                row_index = row_index.checked_add(1).ok_or(TradingSbfError::Content)?;
+            }
+            ledger_masks.push(selected_mask);
+            let mut ledger_post = pre_bytes.to_vec();
+            drop(pre_bytes);
+            if selected_mask & selected_bit != 0 {
+                FundingLedgerV2::activate_in_place(
+                    &mut ledger_post,
+                    manifest_id,
+                    manifest,
+                    selected_entry_index,
+                    current_slot,
+                )
+                .map_err(|_| TradingSbfError::Content)?;
+            }
+            let post = FundingLedgerV2::decode(&ledger_post)
+                .and_then(|value| value.authenticate(manifest_id, manifest))
+                .map_err(|_| TradingSbfError::Content)?;
+            let expected_lamports = ledger_rent
+                .checked_add(
+                    post.remaining_native_lamports_total()
+                        .map_err(|_| TradingSbfError::Content)?,
+                )
                 .ok_or(TradingSbfError::Content)?;
             if output_lamports.get(index).copied() != Some(expected_lamports) {
                 return Err(TradingSbfError::Content.into());
             }
-            funding_after.push(funding.to_bytes());
+            funding_after.push(ledger_post);
         }
+        validate_funding_ledger_masks_v2(
+            manifest.entry_count(),
+            request.funding().selected_mask(),
+            &ledger_masks,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        if !selected_present {
+            return Err(TradingSbfError::Content.into());
+        }
+        let selected_funding_index = selected_funding_index.ok_or(TradingSbfError::Content)?;
         let root_rent = rent.minimum_balance(
             descriptor
                 .root_account_bytes()
@@ -1110,17 +1636,382 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             output_lamports,
             root_data,
             funding_after,
+            selected_funding_index,
             post_digest,
         })
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_close(
+        &self,
+        program_id: &Pubkey,
+        profile: AccountProfileV1<'_>,
+        effect: EffectProgramV2<'_>,
+        scalars: &[u64],
+        identities: &[[u8; 32]],
+        manifest_bytes: &[u8],
+        request: TradingCloseRequestV2<'_>,
+        rent: &Rent,
+        root_header: CapabilityRootHeaderV1,
+        root_lamports: u64,
+        credit: AuthenticatedCloseRentCreditV2,
+    ) -> Result<NativeClosePlanV2, ProgramError> {
+        if usize::from(effect.account_count()) != self.accounts.len()
+            || effect.scalar_count() != profile.scalar_count()
+            || effect.identity_count() != profile.identity_count()
+            || effect.request_bytes() != 0
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        let account_inputs = self
+            .accounts
+            .iter()
+            .map(|account| AccountInput {
+                lamports: account.lamports(),
+                data_len: account.data_len(),
+            })
+            .collect::<Vec<_>>();
+        let mut permissions =
+            vec![dclutch_effect_kernel::v2::AccountPermission::read_only(); self.accounts.len()];
+        derive_effect_permissions(profile, &mut permissions)
+            .map_err(|_| TradingSbfError::Content)?;
+        let aliases = (0..self.accounts.len())
+            .map(|index| {
+                profile
+                    .rule(u16::try_from(index).map_err(|_| TradingSbfError::Content)?)
+                    .map(|rule| rule.alias_of())
+                    .map_err(|_| TradingSbfError::Content)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut scratch_lamports = vec![0_u64; self.accounts.len()];
+        let mut output_lamports = vec![0_u64; self.accounts.len()];
+        let mut scratch_request = Vec::new();
+        let mut output_request = Vec::new();
+        project_with_aliases_and_requests_atomic(
+            effect,
+            scalars,
+            identities,
+            &aliases,
+            &account_inputs,
+            &permissions,
+            &mut scratch_lamports,
+            &mut output_lamports,
+            &mut scratch_request,
+            &mut output_request,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        require_close_validation_effects(effect, scalars, identities)?;
+        if output_lamports
+            .iter()
+            .zip(account_inputs.iter())
+            .any(|(output, input)| *output != input.lamports)
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+
+        require_profile_permissions(
+            profile,
+            0,
+            EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
+        )?;
+        let credit_runtime_index = self
+            .accounts
+            .iter()
+            .position(|account| account.key.to_bytes() == credit.key)
+            .ok_or(TradingSbfError::Content)?;
+        require_profile_permissions(
+            profile,
+            credit_runtime_index,
+            EFFECT_PERMISSION_CREDIT_LAMPORTS,
+        )?;
+        if self
+            .accounts
+            .get(credit_runtime_index)
+            .is_none_or(|account| account.key.to_bytes() != credit.key)
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+
+        let manifest =
+            CapabilityManifestV1::decode(manifest_bytes).map_err(|_| TradingSbfError::Content)?;
+        let manifest_id = content(request.selection().manifest().to_bytes())?;
+        let selected_entry_index = request.selection().entry_index();
+        let selected_bit = 1_u16
+            .checked_shl(u32::from(selected_entry_index))
+            .ok_or(TradingSbfError::Content)?;
+        let mut ledger_masks = Vec::with_capacity(self.funding.len());
+        let mut funding_after = Vec::with_capacity(self.funding.len());
+        let mut selected_funding_index = None;
+        let mut selected_close = None;
+        for (physical_index, account) in self.funding.iter().enumerate() {
+            let pre_bytes = account
+                .try_borrow_data()
+                .map_err(|_| TradingSbfError::Content)?;
+            let ledger =
+                FundingLedgerV2::decode(&pre_bytes).map_err(|_| TradingSbfError::Content)?;
+            let authenticated = ledger
+                .authenticate(manifest_id, manifest)
+                .map_err(|_| TradingSbfError::Content)?;
+            let selected_mask = ledger.selected_mask();
+            let carries_selected = selected_mask & selected_bit != 0;
+            let writes_data = if carries_selected {
+                profile
+                    .rule(1)
+                    .map_err(|_| TradingSbfError::Content)?
+                    .effect_permissions()
+                    & EFFECT_PERMISSION_WRITE_DATA
+                    != 0
+            } else {
+                false
+            };
+            let selected = require_funding_ledger_access(
+                program_id,
+                account.owner,
+                account.is_writable,
+                writes_data,
+                selected_mask,
+                selected_bit,
+            )?;
+            let derivation = CapabilityFundingLedgerDerivationV2::new(
+                account.owner.to_bytes(),
+                root_header.market(),
+                root_header.generation(),
+                manifest_id,
+                ledger,
+            )
+            .map_err(|_| TradingSbfError::Content)?;
+            let expected =
+                Pubkey::find_program_address(&derivation.seed_components(), account.owner).0;
+            if expected != *account.key {
+                return Err(TradingSbfError::Content.into());
+            }
+            let exact_ledger_rent = rent.minimum_balance(pre_bytes.len());
+            authenticated
+                .validate_native_custody(account.lamports(), exact_ledger_rent, selected)
+                .map_err(|_| TradingSbfError::Content)?;
+            let slot_count = ledger.slot_count();
+            let mut row_index = 0_u16;
+            while row_index < slot_count {
+                let entry_index = manifest_entry_for_ledger_row_v2(selected_mask, row_index)
+                    .map_err(|_| TradingSbfError::Content)?;
+                require_native_funding_row(
+                    manifest
+                        .entry(entry_index)
+                        .map_err(|_| TradingSbfError::Content)?
+                        .funding_quote()
+                        .realm_collateral(),
+                )?;
+                let slot = authenticated
+                    .slot(entry_index)
+                    .map_err(|_| TradingSbfError::Content)?;
+                if slot.status() != FundingLedgerStatusV2::Active {
+                    return Err(TradingSbfError::Content.into());
+                }
+                row_index = row_index.checked_add(1).ok_or(TradingSbfError::Content)?;
+            }
+            ledger_masks.push(selected_mask);
+            if selected {
+                require_profile_permissions(
+                    profile,
+                    1,
+                    EFFECT_PERMISSION_DEBIT_LAMPORTS | EFFECT_PERMISSION_WRITE_DATA,
+                )?;
+                let mut post_bytes = pre_bytes.to_vec();
+                drop(pre_bytes);
+                let close = FundingLedgerV2::close_slot_in_place(
+                    &mut post_bytes,
+                    manifest_id,
+                    manifest,
+                    selected_entry_index,
+                    FundingLedgerCloseCustodyV2::native_only(
+                        account.lamports(),
+                        exact_ledger_rent,
+                        credit.key,
+                    )
+                    .map_err(|_| TradingSbfError::Content)?,
+                )
+                .map_err(|_| TradingSbfError::Content)?;
+                if !close.ledger_can_close()
+                    || close.expected_post_ledger_lamports() != 0
+                    || FundingLedgerV2::decode(&post_bytes)
+                        .and_then(|value| value.authenticate(manifest_id, manifest))
+                        .is_err()
+                {
+                    return Err(TradingSbfError::Content.into());
+                }
+                selected_funding_index = Some(physical_index);
+                selected_close = Some(close);
+                // The physical account closes, so no ledger bytes survive even
+                // though the logical tombstone was validated above.
+                funding_after.push(Vec::new());
+            } else {
+                funding_after.push(pre_bytes.to_vec());
+            }
+        }
+        validate_funding_ledger_masks_v2(
+            manifest.entry_count(),
+            request.funding().selected_mask(),
+            &ledger_masks,
+        )
+        .map_err(|_| TradingSbfError::Content)?;
+        let selected_funding_index = selected_funding_index.ok_or(TradingSbfError::Content)?;
+        if self.close_selected_funding_index != Some(selected_funding_index) {
+            return Err(TradingSbfError::Content.into());
+        }
+        let close = selected_close.ok_or(TradingSbfError::Content)?;
+        let exact_root_rent = rent.minimum_balance(
+            self.accounts
+                .first()
+                .ok_or(TradingSbfError::Content)?
+                .data_len(),
+        );
+        let root_surplus = root_lamports
+            .checked_sub(exact_root_rent)
+            .ok_or(TradingSbfError::Content)?;
+        let ledger_total = close
+            .remaining_native_lamports()
+            .checked_add(close.ledger_rent_lamports())
+            .and_then(|value| value.checked_add(close.ledger_lamport_donation()))
+            .ok_or(TradingSbfError::Content)?;
+        let selected_runtime_index = 1_usize;
+        if self
+            .accounts
+            .get(selected_runtime_index)
+            .zip(self.funding.get(selected_funding_index))
+            .is_none_or(|(runtime, physical)| {
+                runtime.key != physical.key || runtime.lamports() != ledger_total
+            })
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        let refund_total = exact_root_rent
+            .checked_add(root_surplus)
+            .and_then(|value| value.checked_add(ledger_total))
+            .ok_or(TradingSbfError::Content)?;
+        let credit_post_lamports = credit
+            .pre_lamports
+            .checked_add(refund_total)
+            .ok_or(TradingSbfError::Content)?;
+        let mut post_lamports = account_inputs
+            .iter()
+            .map(|input| input.lamports)
+            .collect::<Vec<_>>();
+        *post_lamports.get_mut(0).ok_or(TradingSbfError::Content)? = 0;
+        *post_lamports
+            .get_mut(selected_runtime_index)
+            .ok_or(TradingSbfError::Content)? = 0;
+        *post_lamports
+            .get_mut(credit_runtime_index)
+            .ok_or(TradingSbfError::Content)? = credit_post_lamports;
+        let post_digest = poststate_digest(&[], &funding_after, &post_lamports)?;
+        Ok(NativeClosePlanV2 {
+            selected_funding_index,
+            credit_pre_lamports: credit.pre_lamports,
+            credit_post_lamports,
+            remaining_native_principal: close.remaining_native_lamports(),
+            root_rent_lamports: exact_root_rent,
+            root_lamport_surplus: root_surplus,
+            ledger_rent_lamports: close.ledger_rent_lamports(),
+            ledger_lamport_surplus: close.ledger_lamport_donation(),
+            post_digest,
+        })
+    }
+}
+
+fn require_native_funding_row(
+    realm_collateral: Option<dclutch_capability_contract::RealmCollateralBindingV1>,
+) -> Result<(), ProgramError> {
+    if realm_collateral.is_some() {
+        return Err(TradingSbfError::UnsupportedContent.into());
+    }
+    Ok(())
+}
+
+/// Admit exactly one Trading-owned selected ledger and foreign readonly
+/// dependency ledgers. ManifestV1 has no per-entry controller field, so a
+/// Trading-owned ledger may not mix the selected row with dependency rows.
+fn require_funding_ledger_access(
+    trading_program: &Pubkey,
+    owner: &Pubkey,
+    writable: bool,
+    writes_data: bool,
+    selected_mask: u16,
+    selected_bit: u16,
+) -> Result<bool, ProgramError> {
+    let carries_selected = selected_mask & selected_bit != 0;
+    if carries_selected {
+        if selected_mask != selected_bit || owner != trading_program || !writable || !writes_data {
+            return Err(TradingSbfError::Content.into());
+        }
+        return Ok(true);
+    }
+    if owner == &system_program::ID || owner == trading_program || writable || writes_data {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(false)
 }
 
 #[derive(Clone)]
 struct ActivationPlanV2 {
     output_lamports: Vec<u64>,
     root_data: Vec<u8>,
-    funding_after: Vec<[u8; FUNDING_STATE_BYTES]>,
+    funding_after: Vec<Vec<u8>>,
+    selected_funding_index: usize,
     post_digest: Identity,
+}
+
+struct NativeClosePlanV2 {
+    selected_funding_index: usize,
+    credit_pre_lamports: u64,
+    credit_post_lamports: u64,
+    remaining_native_principal: u64,
+    root_rent_lamports: u64,
+    root_lamport_surplus: u64,
+    ledger_rent_lamports: u64,
+    ledger_lamport_surplus: u64,
+    post_digest: Identity,
+}
+
+fn require_profile_permissions(
+    profile: AccountProfileV1<'_>,
+    account_index: usize,
+    required: u8,
+) -> Result<(), ProgramError> {
+    let observed = profile
+        .rule(u16::try_from(account_index).map_err(|_| TradingSbfError::Content)?)
+        .map_err(|_| TradingSbfError::Content)?
+        .effect_permissions();
+    if observed & required != required {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(())
+}
+
+fn require_close_validation_effects(
+    effect: EffectProgramV2<'_>,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Result<(), ProgramError> {
+    let mut index = 0_u16;
+    while index < effect.instruction_count() {
+        match effect
+            .resolved_effect(index, scalars, identities)
+            .map_err(|_| TradingSbfError::Content)?
+        {
+            ResolvedEffect::RequireLamportsEq { .. }
+            | ResolvedEffect::InvokeRole { enabled: false, .. } => {}
+            ResolvedEffect::WriteScalar { .. }
+            | ResolvedEffect::WriteIdentity { .. }
+            | ResolvedEffect::WriteRequestScalar { .. }
+            | ResolvedEffect::WriteRequestIdentity { .. }
+            | ResolvedEffect::TransferLamports { .. }
+            | ResolvedEffect::InvokeRole { enabled: true, .. } => {
+                return Err(TradingSbfError::UnsupportedContent.into());
+            }
+        }
+        index = index.checked_add(1).ok_or(TradingSbfError::Content)?;
+    }
+    Ok(())
 }
 
 fn require_activation_local_effects(
@@ -1171,7 +2062,7 @@ fn seed_common_registers(
     program_id: &Pubkey,
     suffix: &AuthenticatedSuffixV2<'_, '_>,
     envelope: CoreEffectEnvelopeV1,
-    request: TradingActivationRequestV1<'_>,
+    request: TradingActivationRequestV2<'_>,
     descriptor: CapabilityProgramV1<'_>,
     root: &Pubkey,
 ) -> Result<(), ProgramError> {
@@ -1188,10 +2079,7 @@ fn seed_common_registers(
     // artifacts are authored against, so `activation_registers_v2` publishes them
     // and this is the one writer.
     for (slot, value) in [
-        (
-            ACTIVATION_ACTION_SCALAR_V2,
-            CoreEffectActionV1::ActivateCapability as u64,
-        ),
+        (ACTIVATION_ACTION_SCALAR_V2, envelope.action() as u64),
         (ACTIVATION_GENERATION_SCALAR_V2, envelope.generation()),
         (
             ACTIVATION_ENTRY_INDEX_SCALAR_V2,
@@ -1199,7 +2087,7 @@ fn seed_common_registers(
         ),
         (
             ACTIVATION_FUNDING_COUNT_SCALAR_V2,
-            u64::from(request.funding().funding_count()),
+            u64::from(request.funding().physical_count()),
         ),
         (
             ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2,
@@ -1275,7 +2163,7 @@ fn seed_common_registers(
 
 fn commit_activation<'accounts, 'info>(
     program_id: &Pubkey,
-    framed: &TradingActivationAccountsV1<'accounts, 'info>,
+    framed: &TradingActivationAccountsV2<'accounts, 'info>,
     suffix: &AuthenticatedSuffixV2<'accounts, 'info>,
     root_header: CapabilityRootHeaderV1,
     runtime: &RuntimeFrameV2<'_, '_>,
@@ -1306,9 +2194,11 @@ fn commit_activation<'accounts, 'info>(
     .map_err(|_| TradingSbfError::Commit)?;
 
     for (account, lamports) in runtime.accounts.iter().zip(plan.output_lamports.iter()) {
-        **account
-            .try_borrow_mut_lamports()
-            .map_err(|_| TradingSbfError::Commit)? = *lamports;
+        if account.lamports() != *lamports {
+            **account
+                .try_borrow_mut_lamports()
+                .map_err(|_| TradingSbfError::Commit)? = *lamports;
+        }
     }
     {
         let mut root = framed
@@ -1320,15 +2210,102 @@ fn commit_activation<'accounts, 'info>(
         }
         root.copy_from_slice(&plan.root_data);
     }
-    for (account, bytes) in framed.funding().iter().zip(plan.funding_after.iter()) {
-        let mut data = account
-            .try_borrow_mut_data()
-            .map_err(|_| TradingSbfError::Commit)?;
-        if data.len() != FUNDING_STATE_BYTES {
-            return Err(TradingSbfError::Commit.into());
-        }
-        data.copy_from_slice(bytes);
+    let selected_account = framed
+        .funding()
+        .get(plan.selected_funding_index)
+        .ok_or(TradingSbfError::Commit)?;
+    let selected_bytes = plan
+        .funding_after
+        .get(plan.selected_funding_index)
+        .ok_or(TradingSbfError::Commit)?;
+    let mut data = selected_account
+        .try_borrow_mut_data()
+        .map_err(|_| TradingSbfError::Commit)?;
+    if data.len() != selected_bytes.len() {
+        return Err(TradingSbfError::Commit.into());
     }
+    data.copy_from_slice(selected_bytes);
+    Ok(())
+}
+
+#[inline(never)]
+fn commit_close<'accounts, 'info>(
+    program_id: &Pubkey,
+    framed: &TradingActivationAccountsV2<'accounts, 'info>,
+    suffix: &AuthenticatedSuffixV2<'accounts, 'info>,
+    plan: &NativeClosePlanV2,
+) -> Result<(), ProgramError> {
+    let selected = framed
+        .funding()
+        .get(plan.selected_funding_index)
+        .ok_or(TradingSbfError::Commit)?;
+    let credit = get(suffix.effect_accounts, CLOSE_RENT_CREDIT)?;
+    if framed.child_root().owner != program_id
+        || selected.owner != program_id
+        || framed.child_root().lamports()
+            != plan
+                .root_rent_lamports
+                .checked_add(plan.root_lamport_surplus)
+                .ok_or(TradingSbfError::Commit)?
+        || selected.lamports()
+            != plan
+                .remaining_native_principal
+                .checked_add(plan.ledger_rent_lamports)
+                .and_then(|value| value.checked_add(plan.ledger_lamport_surplus))
+                .ok_or(TradingSbfError::Commit)?
+        || credit.lamports() != plan.credit_pre_lamports
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
+    framed
+        .child_root()
+        .try_borrow_mut_data()
+        .map_err(|_| TradingSbfError::Commit)?
+        .fill(0);
+    selected
+        .try_borrow_mut_data()
+        .map_err(|_| TradingSbfError::Commit)?
+        .fill(0);
+    {
+        let mut root_lamports = framed
+            .child_root()
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)?;
+        let mut selected_lamports = selected
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)?;
+        let mut credit_lamports = credit
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)?;
+        **root_lamports = 0;
+        **selected_lamports = 0;
+        **credit_lamports = plan.credit_post_lamports;
+    }
+    framed
+        .child_root()
+        .resize(0)
+        .map_err(|_| TradingSbfError::Commit)?;
+    selected.resize(0).map_err(|_| TradingSbfError::Commit)?;
+    framed.child_root().assign(&system_program::ID);
+    selected.assign(&system_program::ID);
+    if framed.child_root().owner != &system_program::ID
+        || framed.child_root().data_len() != 0
+        || framed.child_root().lamports() != 0
+        || selected.owner != &system_program::ID
+        || selected.data_len() != 0
+        || selected.lamports() != 0
+        || credit.lamports() != plan.credit_post_lamports
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
+    solana_program::msg!(
+        "Trading close native principal={} root_rent={} root_surplus={} ledger_rent={} ledger_surplus={}",
+        plan.remaining_native_principal,
+        plan.root_rent_lamports,
+        plan.root_lamport_surplus,
+        plan.ledger_rent_lamports,
+        plan.ledger_lamport_surplus,
+    );
     Ok(())
 }
 
@@ -1338,6 +2315,22 @@ fn emit_ack(
     envelope_bytes: &[u8],
     role_request: &[u8],
     plan: ActivationPlanV2,
+) -> Result<(), ProgramError> {
+    emit_ack_for_post(
+        program_id,
+        envelope,
+        envelope_bytes,
+        role_request,
+        plan.post_digest,
+    )
+}
+
+fn emit_ack_for_post(
+    program_id: &Pubkey,
+    envelope: CoreEffectEnvelopeV1,
+    envelope_bytes: &[u8],
+    role_request: &[u8],
+    post_digest: Identity,
 ) -> Result<(), ProgramError> {
     let envelope_len = u32::try_from(envelope_bytes.len()).map_err(|_| TradingSbfError::Content)?;
     let request_len = u32::try_from(role_request.len()).map_err(|_| TradingSbfError::Content)?;
@@ -1356,7 +2349,7 @@ fn emit_ack(
         envelope.market(),
         envelope.context(),
         identity(digest.to_bytes())?,
-        plan.post_digest,
+        post_digest,
         envelope.expected_resource_a_revision(),
         envelope.expected_resource_a_revision(),
         envelope.expected_resource_b_revision(),
@@ -1369,20 +2362,18 @@ fn emit_ack(
     Ok(())
 }
 
-/// Commit the exact activation poststate: root account, per-allocation funding
-/// states, and output lamports.
+/// Commit the exact activation poststate: root account, full subset-ledger
+/// bytes, and output lamports.
 ///
-/// Domain ‖ 0x00 ‖ u32_le(root len) ‖ u32_le(funding count) ‖ u32_le(lamport
-/// count) ‖ root ‖ funding… ‖ lamports…, matching the framing convention the
-/// rest of the protocol digests under.
+/// Domain ‖ 0x00 ‖ u32_le(root len) ‖ u32_le(ledger count) ‖ u32_le(lamport
+/// count) ‖ root ‖ (u32_le(ledger len) ‖ ledger)… ‖ lamports…. Ledger
+/// lengths are explicit because subset masks make physical widths independent.
 ///
 /// The three counts are ahead of the data on purpose. `hashv` concatenates its
 /// parts and frames nothing, so digesting a variable-length root, a variable
-/// number of fixed-width funding states, and a variable-length lamport
-/// encoding back to back committed only to their concatenation: a longer root
-/// with fewer funding states, or funding bytes re-read as lamports, produce the
-/// same digest as the honest split. There was also no domain, so the value was
-/// a bare SHA-256 of an unframed buffer.
+/// number of ledgers, and a variable-length lamport encoding back to back would
+/// commit only to their concatenation. Per-ledger lengths prevent bytes from
+/// being reinterpreted across subset-ledger boundaries.
 ///
 /// **This digest is currently verified by nobody.** It is carried as
 /// `CoreEffectAckV1::post_resource_digest`, and `CoreEffectAckV1::validate_for`
@@ -1392,7 +2383,7 @@ fn emit_ack(
 /// is named as such rather than treated as closed.
 fn poststate_digest(
     root: &[u8],
-    funding: &[[u8; FUNDING_STATE_BYTES]],
+    funding: &[Vec<u8>],
     lamports: &[u64],
 ) -> Result<Identity, ProgramError> {
     let root_len = u32::try_from(root.len())
@@ -1408,14 +2399,23 @@ fn poststate_digest(
         .iter()
         .flat_map(|value| value.to_le_bytes())
         .collect::<Vec<_>>();
-    let mut parts: Vec<&[u8]> = Vec::with_capacity(6 + funding.len());
-    parts.push(ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V1);
+    let ledger_lengths = funding
+        .iter()
+        .map(|bytes| {
+            u32::try_from(bytes.len())
+                .map(u32::to_le_bytes)
+                .map_err(|_| TradingSbfError::Content.into())
+        })
+        .collect::<Result<Vec<_>, ProgramError>>()?;
+    let mut parts: Vec<&[u8]> = Vec::with_capacity(6 + funding.len().saturating_mul(2));
+    parts.push(ACTIVATION_POSTSTATE_DIGEST_DOMAIN_V2);
     parts.push(&[0_u8]);
     parts.push(&root_len);
     parts.push(&funding_count);
     parts.push(&lamport_count);
     parts.push(root);
-    for bytes in funding {
+    for (length, bytes) in ledger_lengths.iter().zip(funding.iter()) {
+        parts.push(length);
         parts.push(bytes);
     }
     parts.push(&encoded_lamports);
@@ -1437,4 +2437,238 @@ fn get<'accounts, 'info>(
     accounts
         .get(index)
         .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+#[cfg(test)]
+mod funding_v2_tests {
+    use super::*;
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CompartmentFundingV1,
+        FundingAmountsV1, FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        RealmCollateralBindingV1, funding_ledger_bytes_v2,
+    };
+
+    #[test]
+    fn realm_backed_row_refuses_until_the_ordered_vault_adapter_exists() {
+        let realm = ContentId::new([1; 32]).expect("realm");
+        let release = ContentId::new([2; 32]).expect("release");
+        let binding = RealmCollateralBindingV1::new(realm, release, [3; 32], [4; 32], [5; 32])
+            .expect("binding");
+        assert_eq!(require_native_funding_row(None), Ok(()));
+        assert_eq!(
+            require_native_funding_row(Some(binding)),
+            Err(TradingSbfError::UnsupportedContent.into())
+        );
+    }
+
+    #[test]
+    fn direct_dependency_union_is_readonly_and_only_trading_selection_is_writable() {
+        let trading = Pubkey::new_from_array([7; 32]);
+        let resolution = Pubkey::new_from_array([8; 32]);
+        assert_eq!(
+            require_funding_ledger_access(&trading, &resolution, false, false, 0b0111, 0b1000),
+            Ok(false)
+        );
+        assert_eq!(
+            require_funding_ledger_access(&trading, &trading, true, true, 0b1000, 0b1000),
+            Ok(true)
+        );
+        for refused in [
+            require_funding_ledger_access(&trading, &resolution, true, false, 0b0111, 0b1000),
+            require_funding_ledger_access(&trading, &trading, false, false, 0b0111, 0b1000),
+            require_funding_ledger_access(&trading, &trading, true, true, 0b1100, 0b1000),
+        ] {
+            assert_eq!(refused, Err(TradingSbfError::Content.into()));
+        }
+    }
+
+    fn native_entry(seed: u8, dependencies: &[u8], rent_lamports: u64) -> CapabilityEntryV1 {
+        let mut dependency_slots = [0_u8; MAX_DEPENDENCIES_PER_CAPABILITY];
+        dependency_slots
+            .get_mut(..dependencies.len())
+            .expect("dependency width")
+            .copy_from_slice(dependencies);
+        let amounts = FundingAmountsV1::new(
+            CompartmentFundingV1::native_lamports(rent_lamports).expect("native rent"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("funding amounts");
+        CapabilityEntryV1::new(
+            ContentId::new([seed; 32]).expect("kind"),
+            ContentId::new([seed.wrapping_add(16); 32]).expect("release"),
+            ContentId::new([seed.wrapping_add(32); 32]).expect("config"),
+            ContentId::new([seed.wrapping_add(48); 32]).expect("capacity"),
+            ContentId::new([seed.wrapping_add(64); 32]).expect("schema"),
+            ContentId::new([seed.wrapping_add(80); 32]).expect("derivation"),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            u8::try_from(dependencies.len()).expect("dependency count"),
+            dependency_slots,
+            FundingQuoteV1::new(amounts, None).expect("native quote"),
+        )
+        .expect("entry")
+    }
+
+    #[test]
+    fn direct_v2_ledgers_activate_and_close_only_the_trading_selection() {
+        let entries = [
+            native_entry(1, &[], 11),
+            native_entry(2, &[], 12),
+            native_entry(3, &[], 13),
+            native_entry(4, &[0, 1, 2], 100),
+        ];
+        let mut manifest_bytes =
+            vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&entries, &mut manifest_bytes).expect("manifest");
+        let manifest = CapabilityManifestV1::decode(&manifest_bytes).expect("manifest");
+        let manifest_id = ContentId::new(hash(&manifest_bytes).to_bytes()).expect("manifest ID");
+        let market = [9_u8; 32];
+        let resolution = Pubkey::new_from_array([10; 32]);
+        let trading = Pubkey::new_from_array([11; 32]);
+        let generation = 7_u64;
+        let resolution_rent = 5_000_u64;
+        let trading_rent = 6_000_u64;
+
+        let mut resolution_bytes =
+            vec![0_u8; funding_ledger_bytes_v2(3).expect("Resolution ledger width")];
+        FundingLedgerV2::initialize(&mut resolution_bytes, manifest_id, manifest, 0b0111)
+            .expect("Resolution ledger");
+        for (entry_index, slot) in [(0_u16, 91_u64), (1, 92), (2, 93)] {
+            FundingLedgerV2::activate_in_place(
+                &mut resolution_bytes,
+                manifest_id,
+                manifest,
+                entry_index,
+                slot,
+            )
+            .expect("dependency activation");
+        }
+        let resolution_ledger = FundingLedgerV2::decode(&resolution_bytes)
+            .expect("Resolution ledger")
+            .authenticate(manifest_id, manifest)
+            .expect("Resolution authentication");
+        let resolution_derivation = CapabilityFundingLedgerDerivationV2::new(
+            resolution.to_bytes(),
+            market,
+            generation,
+            manifest_id,
+            resolution_ledger.ledger(),
+        )
+        .expect("Resolution derivation");
+        let resolution_key =
+            Pubkey::find_program_address(&resolution_derivation.seed_components(), &resolution).0;
+        assert_ne!(resolution_key, Pubkey::default());
+        resolution_ledger
+            .validate_native_custody(resolution_rent, resolution_rent, false)
+            .expect("Resolution custody");
+        for entry_index in 0_u16..3 {
+            let slot = resolution_ledger
+                .slot(entry_index)
+                .expect("dependency slot");
+            assert_eq!(slot.status(), FundingLedgerStatusV2::Active);
+            assert!(slot.activation_slot() > 0);
+        }
+
+        let mut trading_bytes =
+            vec![0_u8; funding_ledger_bytes_v2(1).expect("Trading ledger width")];
+        FundingLedgerV2::initialize(&mut trading_bytes, manifest_id, manifest, 0b1000)
+            .expect("Trading ledger");
+        let trading_ledger = FundingLedgerV2::decode(&trading_bytes)
+            .expect("Trading ledger")
+            .authenticate(manifest_id, manifest)
+            .expect("Trading authentication");
+        let trading_derivation = CapabilityFundingLedgerDerivationV2::new(
+            trading.to_bytes(),
+            market,
+            generation,
+            manifest_id,
+            trading_ledger.ledger(),
+        )
+        .expect("Trading derivation");
+        let trading_key =
+            Pubkey::find_program_address(&trading_derivation.seed_components(), &trading).0;
+        assert_ne!(trading_key, Pubkey::default());
+        trading_ledger
+            .validate_native_custody(trading_rent + 100, trading_rent, false)
+            .expect("Trading custody");
+        assert_eq!(
+            trading_ledger.slot(3).expect("selected slot").status(),
+            FundingLedgerStatusV2::Pending
+        );
+
+        let header = dclutch_market_core_codec::CapabilityFundingHeaderV2::new(2, 4, 0b1111)
+            .expect("funding header");
+        validate_funding_ledger_masks_v2(
+            manifest.entry_count(),
+            header.selected_mask(),
+            &[0b0111, 0b1000],
+        )
+        .expect("exact disjoint union");
+        assert_eq!(
+            require_funding_ledger_access(&trading, &resolution, false, false, 0b0111, 0b1000,),
+            Ok(false)
+        );
+        assert_eq!(
+            require_funding_ledger_access(&trading, &trading, true, true, 0b1000, 0b1000),
+            Ok(true)
+        );
+
+        let resolution_before = resolution_bytes.clone();
+        let trading_before = trading_bytes.clone();
+        let debit =
+            FundingLedgerV2::activate_in_place(&mut trading_bytes, manifest_id, manifest, 3, 100)
+                .expect("selected activation");
+        assert_eq!(debit.rent_lamports(), 100);
+        assert_eq!(resolution_bytes, resolution_before);
+        assert_ne!(trading_bytes, trading_before);
+        let trading_after = FundingLedgerV2::decode(&trading_bytes)
+            .expect("Trading poststate")
+            .authenticate(manifest_id, manifest)
+            .expect("Trading poststate authentication");
+        trading_after
+            .validate_native_custody(trading_rent, trading_rent, false)
+            .expect("Trading poststate custody");
+        assert_eq!(
+            trading_after.slot(3).expect("selected slot").status(),
+            FundingLedgerStatusV2::Active
+        );
+        assert_eq!(
+            trading_after
+                .slot(3)
+                .expect("selected slot")
+                .activation_slot(),
+            100
+        );
+
+        let close = FundingLedgerV2::close_slot_in_place(
+            &mut trading_bytes,
+            manifest_id,
+            manifest,
+            3,
+            FundingLedgerCloseCustodyV2::native_only(trading_rent + 7, trading_rent, [12; 32])
+                .expect("native close custody"),
+        )
+        .expect("selected close");
+        assert!(close.ledger_can_close());
+        assert_eq!(close.remaining_native_lamports(), 0);
+        assert_eq!(close.ledger_rent_lamports(), trading_rent);
+        assert_eq!(close.ledger_lamport_donation(), 7);
+        assert_eq!(close.expected_post_ledger_lamports(), 0);
+        assert_eq!(resolution_bytes, resolution_before);
+        assert_eq!(
+            FundingLedgerV2::decode(&trading_bytes)
+                .expect("closed Trading ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("closed Trading ledger authentication")
+                .slot(3)
+                .expect("closed slot")
+                .status(),
+            FundingLedgerStatusV2::Closed
+        );
+    }
 }

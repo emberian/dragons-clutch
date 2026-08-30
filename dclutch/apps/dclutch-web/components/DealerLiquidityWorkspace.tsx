@@ -139,7 +139,7 @@ export default function DealerLiquidityWorkspace() {
   async function signTransaction() {
     if (plan === null || inspection === null) return;
     try {
-      const next = await requestWalletTransactionSignatureV1(wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
+      const next = await requestWalletTransactionSignatureV1(new SolanaRpcClient(endpoint), wallets.handoff(endpoint), plan.transaction, inspection.route.payer);
       setSigned(next); setWalletStatus(next.complete ? 'Fee-payer signature complete. Nothing has been submitted.' : 'Wallet added its authorized signature; more signatures remain.');
     } catch (error) { setWalletStatus(`Refused: ${errorMessage(error)}`); }
   }

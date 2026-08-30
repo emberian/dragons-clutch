@@ -32,8 +32,12 @@ pub mod collection_v1;
 pub mod effect_artifacts_v3;
 /// The escrow's compartment authority and its physical balance discipline.
 pub mod escrow_v1;
+/// Exact request topology for GEN-SEVEN plus revised Consider and Candidate close.
+pub mod gen_seven_v1;
 /// Complete General Hot38 candidate register ABI for exact child packets.
 pub mod hot_candidate_v3;
+/// Durable content-addressed intent and optimistic replay for executable General V3.
+pub mod invocation_v1;
 /// Exact funded batch, candidate, page, abort, and terminal lifecycle.
 pub mod lifecycle;
 pub mod local_state_v3;
@@ -59,6 +63,8 @@ pub mod shadow_accelerator_v3;
 pub mod specialization;
 /// Action-selected nonroot state lifecycle artifacts.
 pub mod state_artifacts_v3;
+/// The one supported derivation for every General action-state PDA.
+pub mod state_seeds_v3;
 /// Action-selected TransitionVM programs for admitted General execution.
 pub mod transition_artifacts_v3;
 

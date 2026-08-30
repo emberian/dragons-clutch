@@ -22,7 +22,12 @@ pub const REALM_COLLATERAL_BINDING_BYTES: usize =
 pub const FUNDING_QUOTE_BYTES: usize = generated_abi::CAPABILITY_FUNDING_QUOTE_BYTES_V1;
 /// Exact mutable funding-state width.
 pub const FUNDING_STATE_BYTES: usize = generated_abi::CAPABILITY_FUNDING_STATE_BYTES_V1;
-
+/// Exact FundingLedgerV2 header width before its ordered manifest slots.
+pub const FUNDING_LEDGER_HEADER_BYTES_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_HEADER_BYTES_V2;
+/// Exact width of one manifest-indexed FundingLedgerV2 slot.
+pub const FUNDING_LEDGER_SLOT_BYTES_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_BYTES_V2;
 /// Canonical funding-quote magic.
 pub const FUNDING_QUOTE_MAGIC: [u8; 8] = generated_abi::CAPABILITY_FUNDING_QUOTE_MAGIC_V1;
 /// Implemented typed funding-quote schema.
@@ -47,6 +52,12 @@ pub const FUNDING_STATE_MAGIC: [u8; 8] = generated_abi::CAPABILITY_FUNDING_STATE
 pub const FUNDING_STATE_SCHEMA_VERSION: u16 =
     generated_abi::CAPABILITY_FUNDING_STATE_SCHEMA_VERSION_V1;
 
+/// Canonical FundingLedgerV2 magic.
+pub const FUNDING_LEDGER_MAGIC_V2: [u8; 8] = generated_abi::CAPABILITY_FUNDING_LEDGER_MAGIC_V2;
+/// Implemented FundingLedgerV2 schema.
+pub const FUNDING_LEDGER_SCHEMA_VERSION_V2: u16 =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SCHEMA_VERSION_V2;
+
 /// Adapter PDA seed domain for a manifest-selected funding-state account.
 pub const CAPABILITY_FUNDING_PDA_DOMAIN_V1: &[u8] = generated_abi::CAPABILITY_FUNDING_PDA_DOMAIN_V1;
 /// Adapter PDA seed domain for its token-signing funding authority.
@@ -55,6 +66,15 @@ pub const CAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1: &[u8] =
 /// Adapter PDA seed domain for its optional Realm-collateral vault.
 pub const CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1: &[u8] =
     generated_abi::CAPABILITY_FUNDING_VAULT_PDA_DOMAIN_V1;
+/// Adapter PDA seed domain for one controller-homogeneous subset ledger.
+pub const CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2: &[u8] =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2;
+/// Per-entry token-signing authority domain below one FundingLedgerV2.
+pub const CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2: &[u8] =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2;
+/// Optional per-entry Realm-vault domain below one FundingLedgerV2.
+pub const CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2: &[u8] =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2;
 
 const QUOTE_SCHEMA_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_QUOTE_SCHEMA_OFFSET_V1;
 const QUOTE_COLLATERAL_KIND_OFFSET: usize =
@@ -113,6 +133,44 @@ const STATE_ACTIVATION_SLOT_OFFSET: usize =
     generated_abi::CAPABILITY_FUNDING_STATE_ACTIVATION_SLOT_OFFSET_V1;
 const STATE_REMAINING_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_STATE_REMAINING_OFFSET_V1;
 const STATE_RELEASED_OFFSET: usize = generated_abi::CAPABILITY_FUNDING_STATE_RELEASED_OFFSET_V1;
+
+const LEDGER_SCHEMA_OFFSET_V2: usize = generated_abi::CAPABILITY_FUNDING_LEDGER_SCHEMA_OFFSET_V2;
+const LEDGER_SELECTED_MASK_OFFSET_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SELECTED_MASK_OFFSET_V2;
+const LEDGER_RESERVED_OFFSET_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2;
+const LEDGER_RESERVED_BYTES_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_HEADER_RESERVED_BYTES_V2;
+const LEDGER_MANIFEST_ID_OFFSET_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2;
+const LEDGER_SLOT_STATUS_OFFSET_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_STATUS_OFFSET_V2;
+const LEDGER_SLOT_RESERVED_OFFSET_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_RESERVED_OFFSET_V2;
+const LEDGER_SLOT_RESERVED_BYTES_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_RESERVED_BYTES_V2;
+const LEDGER_SLOT_ACTIVATION_SLOT_OFFSET_V2: usize =
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_ACTIVATION_SLOT_OFFSET_V2;
+const LEDGER_SLOT_REMAINING_OFFSETS_V2: [usize; 7] = [
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_RENT_OFFSET_V2,
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_CREATION_OFFSET_V2,
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_WORK_OFFSET_V2,
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_PROVIDER_OFFSET_V2,
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_BOUNTY_OFFSET_V2,
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_LIQUIDITY_OFFSET_V2,
+    generated_abi::CAPABILITY_FUNDING_LEDGER_SLOT_REMAINING_SERVICE_OFFSET_V2,
+];
+
+const FUNDING_COMPARTMENTS: [FundingCompartment; 7] = [
+    FundingCompartment::Rent,
+    FundingCompartment::Creation,
+    FundingCompartment::Work,
+    FundingCompartment::Provider,
+    FundingCompartment::Bounty,
+    FundingCompartment::Liquidity,
+    FundingCompartment::Service,
+];
+const FUNDING_LEDGER_MASK_BITS_V2: u16 = 16;
 
 /// Asset class of one funding compartment.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1332,6 +1390,1281 @@ impl FundingStateV1 {
     }
 }
 
+/// Return one exact FundingLedgerV2 account width for a selected-row count.
+///
+/// The bound is provisional profile-1 policy. The checked multiplication and
+/// addition are part of hostile decoding; callers never infer a partial final
+/// slot from a trailing byte span.
+pub fn funding_ledger_bytes_v2(slot_count: u16) -> Result<usize> {
+    if slot_count == 0 || usize::from(slot_count) > crate::MAX_CAPABILITIES {
+        return Err(Error::TooManyCapabilities);
+    }
+    FUNDING_LEDGER_HEADER_BYTES_V2
+        .checked_add(
+            usize::from(slot_count)
+                .checked_mul(FUNDING_LEDGER_SLOT_BYTES_V2)
+                .ok_or(Error::ArithmeticOverflow)?,
+        )
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+/// Return the exact number of physical rows selected by a nonzero mask.
+pub fn funding_ledger_slot_count_v2(selected_mask: u16) -> Result<u16> {
+    if selected_mask == 0 {
+        return Err(Error::InvalidDependency);
+    }
+    u16::try_from(selected_mask.count_ones()).map_err(|_| Error::ArithmeticOverflow)
+}
+
+/// Validate a required union and a canonical disjoint partition of it.
+///
+/// Each mask selects manifest indices, each selected index occurs in exactly
+/// one ledger, masks are ordered by their lowest selected index, and their union
+/// equals `required_union` exactly. Controller homogeneity is an adapter check
+/// because controller programs are owned by authenticated release/program-set
+/// artifacts rather than the manifest ABI.
+pub fn validate_funding_ledger_masks_v2(
+    manifest_entry_count: u16,
+    required_union: u16,
+    ledger_masks: &[u16],
+) -> Result<()> {
+    let valid_mask = manifest_valid_mask_v2(manifest_entry_count)?;
+    if required_union == 0 || required_union & !valid_mask != 0 || ledger_masks.is_empty() {
+        return Err(Error::InvalidDependency);
+    }
+    let mut observed_union = 0_u16;
+    let mut previous_lowest = None;
+    for &mask in ledger_masks {
+        if mask == 0 || mask & !valid_mask != 0 || mask & observed_union != 0 {
+            return Err(Error::InvalidDependency);
+        }
+        let lowest = mask.trailing_zeros();
+        if previous_lowest.is_some_and(|previous| previous >= lowest) {
+            return Err(Error::InvalidDependency);
+        }
+        previous_lowest = Some(lowest);
+        observed_union |= mask;
+    }
+    if observed_union != required_union {
+        return Err(Error::InvalidDependency);
+    }
+    Ok(())
+}
+
+/// Lifecycle state of one manifest-indexed FundingLedgerV2 slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum FundingLedgerStatusV2 {
+    /// The exact quote remains prepaid and activation has not run.
+    Pending = 0,
+    /// Activation ran once; Rent and Creation have been released.
+    Active = 1,
+    /// This logical entry has closed and retains no principal.
+    ///
+    /// The shared account remains until every slot is Closed, so closing one
+    /// entry cannot refund or destroy another entry's ledger rent.
+    Closed = 2,
+}
+
+impl FundingLedgerStatusV2 {
+    fn decode(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(Self::Pending),
+            1 => Ok(Self::Active),
+            2 => Ok(Self::Closed),
+            _ => Err(Error::UnknownFundingLedgerStatus),
+        }
+    }
+
+    const fn byte(self) -> u8 {
+        self as u8
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FundingLedgerRawSlotV2 {
+    status: FundingLedgerStatusV2,
+    activation_slot: u64,
+    remaining: [u64; 7],
+}
+
+impl FundingLedgerRawSlotV2 {
+    fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != FUNDING_LEDGER_SLOT_BYTES_V2 {
+            return Err(Error::InvalidLength);
+        }
+        require_zero(
+            bytes,
+            LEDGER_SLOT_RESERVED_OFFSET_V2,
+            LEDGER_SLOT_RESERVED_BYTES_V2,
+        )?;
+        let status =
+            FundingLedgerStatusV2::decode(read_byte(bytes, LEDGER_SLOT_STATUS_OFFSET_V2)?)?;
+        let activation_slot = read_u64(bytes, LEDGER_SLOT_ACTIVATION_SLOT_OFFSET_V2)?;
+        if status == FundingLedgerStatusV2::Pending && activation_slot != 0 {
+            return Err(Error::InvalidFundingStatus);
+        }
+        let mut remaining = [0_u64; 7];
+        for (value, offset) in remaining.iter_mut().zip(LEDGER_SLOT_REMAINING_OFFSETS_V2) {
+            *value = read_u64(bytes, offset)?;
+        }
+        Ok(Self {
+            status,
+            activation_slot,
+            remaining,
+        })
+    }
+
+    fn to_bytes(self) -> [u8; FUNDING_LEDGER_SLOT_BYTES_V2] {
+        let mut output = [0_u8; FUNDING_LEDGER_SLOT_BYTES_V2];
+        put_byte(
+            &mut output,
+            LEDGER_SLOT_STATUS_OFFSET_V2,
+            self.status.byte(),
+        );
+        put_u64(
+            &mut output,
+            LEDGER_SLOT_ACTIVATION_SLOT_OFFSET_V2,
+            self.activation_slot,
+        );
+        for (value, offset) in self
+            .remaining
+            .into_iter()
+            .zip(LEDGER_SLOT_REMAINING_OFFSETS_V2)
+        {
+            put_u64(&mut output, offset, value);
+        }
+        output
+    }
+}
+
+/// One fully authenticated logical funding slot.
+///
+/// `remaining` and `released` are typed values derived only after the exact
+/// ledger/manifest identity and sparse ascending-index mapping authenticate. Neither
+/// asset classes nor released totals are duplicated in mutable account data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFundingSlotV2 {
+    entry_index: u16,
+    status: FundingLedgerStatusV2,
+    activation_slot: u64,
+    remaining: FundingAmountsV1,
+    released: FundingAmountsV1,
+}
+
+impl AuthenticatedFundingSlotV2 {
+    /// Return the dense manifest entry index that owns this slot.
+    pub const fn entry_index(self) -> u16 {
+        self.entry_index
+    }
+
+    /// Return this slot's lifecycle status.
+    pub const fn status(self) -> FundingLedgerStatusV2 {
+        self.status
+    }
+
+    /// Return the accepted activation slot, or zero while Pending.
+    pub const fn activation_slot(self) -> u64 {
+        self.activation_slot
+    }
+
+    /// Return presently held typed semantic principal.
+    pub const fn remaining(self) -> FundingAmountsV1 {
+        self.remaining
+    }
+
+    /// Return typed released principal derived as immutable quote minus remaining.
+    pub const fn released(self) -> FundingAmountsV1 {
+        self.released
+    }
+}
+
+/// Hostile-decoded manifest-keyed ordered funding ledger.
+///
+/// This view deliberately exposes no slot values. Call [`Self::authenticate`]
+/// with the adapter-authenticated immutable manifest first; only the returned
+/// [`AuthenticatedFundingLedgerV2`] can derive asset classes or released
+/// principal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FundingLedgerV2<'ledger> {
+    bytes: &'ledger [u8],
+    manifest_content_id: ContentId,
+    selected_mask: u16,
+    slot_count: u16,
+}
+
+impl<'ledger> FundingLedgerV2<'ledger> {
+    /// Decode exact count, width, reserved bytes, statuses, and slot boundaries.
+    pub fn decode(bytes: &'ledger [u8]) -> Result<Self> {
+        if bytes.len() < FUNDING_LEDGER_HEADER_BYTES_V2 {
+            return Err(Error::InvalidLength);
+        }
+        if read_array::<8>(bytes, 0)? != FUNDING_LEDGER_MAGIC_V2 {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(bytes, LEDGER_SCHEMA_OFFSET_V2)? != FUNDING_LEDGER_SCHEMA_VERSION_V2 {
+            return Err(Error::UnsupportedSchema);
+        }
+        require_zero(bytes, LEDGER_RESERVED_OFFSET_V2, LEDGER_RESERVED_BYTES_V2)?;
+        let selected_mask = read_u16(bytes, LEDGER_SELECTED_MASK_OFFSET_V2)?;
+        let slot_count = funding_ledger_slot_count_v2(selected_mask)?;
+        if bytes.len() != funding_ledger_bytes_v2(slot_count)? {
+            return Err(Error::InvalidLength);
+        }
+        let result = Self {
+            bytes,
+            manifest_content_id: read_content_id(bytes, LEDGER_MANIFEST_ID_OFFSET_V2)?,
+            selected_mask,
+            slot_count,
+        };
+        let mut row_index = 0;
+        while row_index < slot_count {
+            result.raw_row(row_index)?;
+            row_index = row_index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(result)
+    }
+
+    /// Initialize exact Pending rows in selected manifest-index order.
+    ///
+    /// The composing adapter must already have authenticated
+    /// `manifest_content_id` as the content identity of `manifest.as_bytes()`.
+    /// The method refuses a zero or out-of-range mask and a buffer not exactly
+    /// `48 + 72 * popcount(selected_mask)` bytes.
+    pub fn initialize(
+        output: &mut [u8],
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        selected_mask: u16,
+    ) -> Result<()> {
+        validate_selected_mask_v2(manifest.entry_count(), selected_mask)?;
+        let slot_count = funding_ledger_slot_count_v2(selected_mask)?;
+        if output.len() != funding_ledger_bytes_v2(slot_count)? {
+            return Err(Error::InvalidLength);
+        }
+        output.fill(0);
+        copy_infallible(output, 0, &FUNDING_LEDGER_MAGIC_V2);
+        put_u16(
+            output,
+            LEDGER_SCHEMA_OFFSET_V2,
+            FUNDING_LEDGER_SCHEMA_VERSION_V2,
+        );
+        put_u16(output, LEDGER_SELECTED_MASK_OFFSET_V2, selected_mask);
+        copy_content_id(output, LEDGER_MANIFEST_ID_OFFSET_V2, manifest_content_id);
+        let mut row_index = 0;
+        while row_index < slot_count {
+            let entry_index = manifest_entry_for_ledger_row_v2(selected_mask, row_index)?;
+            let entry = manifest.entry(entry_index)?;
+            let quote = entry.funding_quote().amounts();
+            let mut remaining = [0_u64; 7];
+            for (value, compartment) in remaining.iter_mut().zip(FUNDING_COMPARTMENTS) {
+                *value = quote.compartment(compartment).amount();
+            }
+            write_ledger_row(
+                output,
+                row_index,
+                FundingLedgerRawSlotV2 {
+                    status: FundingLedgerStatusV2::Pending,
+                    activation_slot: 0,
+                    remaining,
+                },
+            )?;
+            row_index = row_index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        decode_funding_ledger_v2(output)?.authenticate(manifest_content_id, manifest)?;
+        Ok(())
+    }
+
+    /// Bind the decoded ledger to the exact immutable manifest and validate
+    /// every selected slot pointwise.
+    pub fn authenticate<'manifest>(
+        self,
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'manifest>,
+    ) -> Result<AuthenticatedFundingLedgerV2<'ledger, 'manifest>> {
+        if self.manifest_content_id != manifest_content_id {
+            return Err(Error::FundingBindingMismatch);
+        }
+        validate_selected_mask_v2(manifest.entry_count(), self.selected_mask)?;
+        let authenticated = AuthenticatedFundingLedgerV2 {
+            ledger: self,
+            manifest_content_id,
+            manifest,
+        };
+        let mut row_index = 0;
+        while row_index < self.slot_count {
+            authenticated.slot_by_row(row_index)?;
+            row_index = row_index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(authenticated)
+    }
+
+    /// Return the manifest content identity persisted in the header.
+    pub const fn manifest_content_id(self) -> ContentId {
+        self.manifest_content_id
+    }
+
+    /// Return the exact nonzero manifest-index selection persisted in the header.
+    pub const fn selected_mask(self) -> u16 {
+        self.selected_mask
+    }
+
+    /// Return the exact physical row count derived from the selected mask.
+    pub const fn slot_count(self) -> u16 {
+        self.slot_count
+    }
+
+    /// Borrow the exact canonical account bytes.
+    pub const fn as_bytes(self) -> &'ledger [u8] {
+        self.bytes
+    }
+
+    fn raw_slot(self, entry_index: u16) -> Result<FundingLedgerRawSlotV2> {
+        let row_index = funding_ledger_row_for_manifest_entry_v2(self.selected_mask, entry_index)?;
+        self.raw_row(row_index)
+    }
+
+    fn raw_row(self, row_index: u16) -> Result<FundingLedgerRawSlotV2> {
+        FundingLedgerRawSlotV2::decode(self.row_bytes(row_index)?)
+    }
+
+    fn row_bytes(self, row_index: u16) -> Result<&'ledger [u8]> {
+        if row_index >= self.slot_count {
+            return Err(Error::InvalidDependency);
+        }
+        let start = funding_ledger_slot_offset_v2(row_index)?;
+        subslice(self.bytes, start, FUNDING_LEDGER_SLOT_BYTES_V2)
+    }
+
+    fn slot_bytes(self, entry_index: u16) -> Result<&'ledger [u8]> {
+        let row_index = funding_ledger_row_for_manifest_entry_v2(self.selected_mask, entry_index)?;
+        self.row_bytes(row_index)
+    }
+
+    /// Activate exactly one Pending slot without touching any other slot.
+    pub fn activate_in_place(
+        bytes: &mut [u8],
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        entry_index: u16,
+        current_slot: u64,
+    ) -> Result<ActivationDebitV1> {
+        let (mut raw, debit) = {
+            let authenticated =
+                decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
+            let slot = authenticated.slot(entry_index)?;
+            if slot.status != FundingLedgerStatusV2::Pending {
+                return Err(Error::InvalidFundingStatus);
+            }
+            let entry = manifest.entry(entry_index)?;
+            if entry.activation_policy() == ActivationPolicy::PrepaidLazy
+                && current_slot > entry.activation_deadline_slot()
+            {
+                return Err(Error::ActivationDeadlineElapsed);
+            }
+            let quote = entry.funding_quote().amounts();
+            (
+                authenticated.ledger.raw_slot(entry_index)?,
+                ActivationDebitV1 {
+                    rent_lamports: quote.rent().amount(),
+                    creation_lamports: quote.creation().amount(),
+                },
+            )
+        };
+        raw.status = FundingLedgerStatusV2::Active;
+        raw.activation_slot = current_slot;
+        raw.remaining[0] = 0;
+        raw.remaining[1] = 0;
+        write_ledger_slot(bytes, entry_index, raw)?;
+        let post = decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
+        if post.slot(entry_index)?.status != FundingLedgerStatusV2::Active {
+            return Err(Error::InvalidFundingStatus);
+        }
+        Ok(debit)
+    }
+
+    /// Release one exact non-activation compartment from one Active slot.
+    pub fn release_in_place(
+        bytes: &mut [u8],
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        entry_index: u16,
+        compartment: FundingCompartment,
+        amount: u64,
+    ) -> Result<FundingReleasePlanV1> {
+        if amount == 0 {
+            return Err(Error::ZeroPrincipalRelease);
+        }
+        if matches!(
+            compartment,
+            FundingCompartment::Rent | FundingCompartment::Creation
+        ) {
+            return Err(Error::ActivationCompartmentRequired);
+        }
+        let (mut raw, asset_class, compartment_index) = {
+            let authenticated =
+                decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
+            let slot = authenticated.slot(entry_index)?;
+            if slot.status != FundingLedgerStatusV2::Active {
+                return Err(Error::InvalidFundingStatus);
+            }
+            let compartment_index = funding_compartment_index(compartment);
+            (
+                authenticated.ledger.raw_slot(entry_index)?,
+                slot.remaining().compartment(compartment).asset_class(),
+                compartment_index,
+            )
+        };
+        let remaining = raw
+            .remaining
+            .get_mut(compartment_index)
+            .ok_or(Error::InvalidDependency)?;
+        *remaining = remaining
+            .checked_sub(amount)
+            .ok_or(Error::InsufficientCompartmentPrincipal)?;
+        write_ledger_slot(bytes, entry_index, raw)?;
+        decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
+        Ok(FundingReleasePlanV1 {
+            compartment,
+            asset_class,
+            amount,
+        })
+    }
+
+    /// Close one Active logical slot with exact physical refund classification.
+    ///
+    /// The caller authenticates the immutable Market RentCredit and, when the
+    /// selected quote uses Realm collateral, the row's independently derived
+    /// authority and vault before constructing `custody`. One slot can never
+    /// authorize or discharge another row's token vault. Shared ledger Rent and
+    /// unsolicited lamports remain until the final selected slot closes.
+    pub fn close_slot_in_place(
+        bytes: &mut [u8],
+        manifest_content_id: ContentId,
+        manifest: CapabilityManifestV1<'_>,
+        entry_index: u16,
+        custody: FundingLedgerCloseCustodyV2,
+    ) -> Result<FundingLedgerEntryClosePlanV2> {
+        require_nonzero_identifier(&custody.native_rent_credit)?;
+        let (mut raw, slot, quote, aggregate_native_before) = {
+            let authenticated =
+                decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
+            let slot = authenticated.slot(entry_index)?;
+            if slot.status != FundingLedgerStatusV2::Active {
+                return Err(Error::InvalidFundingStatus);
+            }
+            (
+                authenticated.ledger.raw_slot(entry_index)?,
+                slot,
+                manifest.entry(entry_index)?.funding_quote(),
+                authenticated.remaining_native_lamports_total()?,
+            )
+        };
+        let required_ledger_lamports = custody
+            .exact_ledger_rent_lamports
+            .checked_add(aggregate_native_before)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let ledger_lamport_surplus = custody
+            .ledger_account_lamports
+            .checked_sub(required_ledger_lamports)
+            .ok_or(Error::UnderfundedPhysicalCustody)?;
+        let realm_close =
+            validate_ledger_slot_realm_close_v2(quote, slot.remaining(), custody.realm_collateral)?;
+        raw.status = FundingLedgerStatusV2::Closed;
+        raw.remaining = [0; 7];
+        write_ledger_slot(bytes, entry_index, raw)?;
+        let post = decode_funding_ledger_v2(bytes)?.authenticate(manifest_content_id, manifest)?;
+        let ledger_can_close = post.all_closed();
+        let remaining_native_lamports = slot.remaining().native_lamports_total();
+        let expected_post_ledger_lamports = if ledger_can_close {
+            0
+        } else {
+            custody
+                .ledger_account_lamports
+                .checked_sub(remaining_native_lamports)
+                .ok_or(Error::UnderfundedPhysicalCustody)?
+        };
+        Ok(FundingLedgerEntryClosePlanV2 {
+            native_rent_credit: custody.native_rent_credit,
+            remaining_native_lamports,
+            realm_token_beneficiary: realm_close.beneficiary,
+            remaining_realm_collateral: realm_close.remaining,
+            realm_collateral_donation: realm_close.donation,
+            vault_rent_lamports: realm_close.vault_rent,
+            vault_lamport_donation: realm_close.vault_donation,
+            ledger_rent_lamports: if ledger_can_close {
+                custody.exact_ledger_rent_lamports
+            } else {
+                0
+            },
+            ledger_lamport_donation: if ledger_can_close {
+                ledger_lamport_surplus
+            } else {
+                0
+            },
+            expected_post_ledger_lamports,
+            ledger_can_close,
+            // Carved only from rent this close LIBERATED, and so nonzero only
+            // on the final row close, where those two buckets are nonzero.
+            crank_reward: if ledger_can_close {
+                let liberated = custody
+                    .exact_ledger_rent_lamports
+                    .checked_add(ledger_lamport_surplus)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                // `min`, never a guarded subtraction: a close that liberates
+                // little pays little and is still admitted. A crank that can
+                // refuse for money is an unturned crank.
+                custody.crank_reward_cap.min(liberated)
+            } else {
+                0
+            },
+        })
+    }
+}
+
+/// Ledger view whose exact immutable manifest binding has authenticated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthenticatedFundingLedgerV2<'ledger, 'manifest> {
+    ledger: FundingLedgerV2<'ledger>,
+    manifest_content_id: ContentId,
+    manifest: CapabilityManifestV1<'manifest>,
+}
+
+impl<'ledger, 'manifest> AuthenticatedFundingLedgerV2<'ledger, 'manifest> {
+    /// Derive one typed slot selected at the requested manifest index.
+    pub fn slot(self, entry_index: u16) -> Result<AuthenticatedFundingSlotV2> {
+        let raw = self.ledger.raw_slot(entry_index)?;
+        let quote = self.manifest.entry(entry_index)?.funding_quote().amounts();
+        let (remaining, released) = derive_funding_amounts_v2(raw.remaining, quote)?;
+        match raw.status {
+            FundingLedgerStatusV2::Pending => {
+                if raw.activation_slot != 0
+                    || remaining != quote
+                    || released != FundingAmountsV1::default()
+                {
+                    return Err(Error::InvalidFundingStatus);
+                }
+            }
+            FundingLedgerStatusV2::Active => {
+                if remaining.rent().amount() != 0
+                    || remaining.creation().amount() != 0
+                    || released.rent() != quote.rent()
+                    || released.creation() != quote.creation()
+                {
+                    return Err(Error::FundingConservationMismatch);
+                }
+            }
+            FundingLedgerStatusV2::Closed => {
+                if remaining != FundingAmountsV1::default() || released != quote {
+                    return Err(Error::FundingConservationMismatch);
+                }
+            }
+        }
+        Ok(AuthenticatedFundingSlotV2 {
+            entry_index,
+            status: raw.status,
+            activation_slot: raw.activation_slot,
+            remaining,
+            released,
+        })
+    }
+
+    fn slot_by_row(self, row_index: u16) -> Result<AuthenticatedFundingSlotV2> {
+        let entry_index = manifest_entry_for_ledger_row_v2(self.ledger.selected_mask, row_index)?;
+        self.slot(entry_index)
+    }
+
+    /// Require one slot's state permits Market opening at `current_slot`.
+    pub fn validate_market_open(self, entry_index: u16, current_slot: u64) -> Result<()> {
+        let slot = self.slot(entry_index)?;
+        let entry = self.manifest.entry(entry_index)?;
+        match (entry.activation_policy(), slot.status()) {
+            (ActivationPolicy::RequiredAtFounding, FundingLedgerStatusV2::Pending) => {
+                Err(Error::FoundingCapabilityInactive)
+            }
+            (ActivationPolicy::PrepaidLazy, FundingLedgerStatusV2::Pending)
+                if current_slot > entry.activation_deadline_slot() =>
+            {
+                Err(Error::ActivationDeadlineElapsed)
+            }
+            (_, FundingLedgerStatusV2::Closed) => Err(Error::InvalidFundingStatus),
+            _ => Ok(()),
+        }
+    }
+
+    /// Return the checked sum of remaining native principal across selected rows.
+    pub fn remaining_native_lamports_total(self) -> Result<u64> {
+        let mut total = 0_u64;
+        let mut row_index = 0;
+        while row_index < self.ledger.slot_count {
+            total = total
+                .checked_add(
+                    self.slot_by_row(row_index)?
+                        .remaining()
+                        .native_lamports_total(),
+                )
+                .ok_or(Error::ArithmeticOverflow)?;
+            row_index = row_index.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        }
+        Ok(total)
+    }
+
+    /// Validate the one ledger account's Rent plus aggregate native custody.
+    ///
+    /// Per-entry semantic conservation was already checked pointwise by
+    /// authentication, so an equal-total cross-slot substitution still
+    /// refuses before this aggregate physical check.
+    pub fn validate_native_custody(
+        self,
+        account_lamports: u64,
+        exact_ledger_rent_lamports: u64,
+        admit_donations: bool,
+    ) -> Result<()> {
+        let expected = exact_ledger_rent_lamports
+            .checked_add(self.remaining_native_lamports_total()?)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if (admit_donations && account_lamports < expected)
+            || (!admit_donations && account_lamports != expected)
+        {
+            return Err(Error::PresentNativeLamportsMismatch);
+        }
+        Ok(())
+    }
+
+    /// Return true only after every selected entry has closed.
+    pub fn all_closed(self) -> bool {
+        let mut row_index = 0;
+        while row_index < self.ledger.slot_count {
+            if self
+                .slot_by_row(row_index)
+                .map(|slot| slot.status() != FundingLedgerStatusV2::Closed)
+                .unwrap_or(true)
+            {
+                return false;
+            }
+            row_index += 1;
+        }
+        true
+    }
+
+    /// Borrow one exact slot for selected-only mutation postconditions.
+    pub fn slot_bytes(self, entry_index: u16) -> Result<&'ledger [u8]> {
+        self.ledger.slot_bytes(entry_index)
+    }
+
+    /// Return the hostile-decoded ledger view.
+    pub const fn ledger(self) -> FundingLedgerV2<'ledger> {
+        self.ledger
+    }
+
+    /// Return the exact authenticated manifest content identity.
+    pub const fn manifest_content_id(self) -> ContentId {
+        self.manifest_content_id
+    }
+}
+
+/// Exact physical custody presented while closing one subset-ledger row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FundingLedgerCloseCustodyV2 {
+    ledger_account_lamports: u64,
+    exact_ledger_rent_lamports: u64,
+    native_rent_credit: [u8; 32],
+    realm_collateral: Option<RealmCollateralCustodyV1>,
+    crank_reward_cap: u64,
+}
+
+impl FundingLedgerCloseCustodyV2 {
+    /// Observe one native-only row and its shared physical ledger.
+    ///
+    /// Pays no crank. This is the unchanged shape every existing caller uses.
+    pub fn native_only(
+        ledger_account_lamports: u64,
+        exact_ledger_rent_lamports: u64,
+        native_rent_credit: [u8; 32],
+    ) -> Result<Self> {
+        Self::new(
+            ledger_account_lamports,
+            exact_ledger_rent_lamports,
+            native_rent_credit,
+            None,
+        )
+    }
+
+    /// Observe the same row while offering a capped reward to the crank.
+    ///
+    /// `crank_reward_cap` is chain-derived by the adapter -- a Rent minimum,
+    /// never a source literal (`docs/design/FUNDED_CRANK_V1.md` §3). Passing
+    /// zero is exactly [`Self::native_only`].
+    ///
+    /// **The reward is carved only from rent the crank LIBERATED**, never from
+    /// anyone's principal: see [`FundingLedgerEntryClosePlanV2::crank_reward`].
+    pub fn native_with_crank(
+        ledger_account_lamports: u64,
+        exact_ledger_rent_lamports: u64,
+        native_rent_credit: [u8; 32],
+        crank_reward_cap: u64,
+    ) -> Result<Self> {
+        let mut value = Self::new(
+            ledger_account_lamports,
+            exact_ledger_rent_lamports,
+            native_rent_credit,
+            None,
+        )?;
+        value.crank_reward_cap = crank_reward_cap;
+        Ok(value)
+    }
+
+    /// Observe one row's independently derived Realm vault.
+    pub fn with_realm_collateral(
+        ledger_account_lamports: u64,
+        exact_ledger_rent_lamports: u64,
+        native_rent_credit: [u8; 32],
+        realm_collateral: RealmCollateralCustodyV1,
+    ) -> Result<Self> {
+        Self::new(
+            ledger_account_lamports,
+            exact_ledger_rent_lamports,
+            native_rent_credit,
+            Some(realm_collateral),
+        )
+    }
+
+    fn new(
+        ledger_account_lamports: u64,
+        exact_ledger_rent_lamports: u64,
+        native_rent_credit: [u8; 32],
+        realm_collateral: Option<RealmCollateralCustodyV1>,
+    ) -> Result<Self> {
+        require_nonzero_identifier(&native_rent_credit)?;
+        if ledger_account_lamports < exact_ledger_rent_lamports {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        Ok(Self {
+            ledger_account_lamports,
+            exact_ledger_rent_lamports,
+            native_rent_credit,
+            realm_collateral,
+            crank_reward_cap: 0,
+        })
+    }
+
+    /// Return the chain-derived ceiling on this close's crank reward.
+    pub const fn crank_reward_cap(self) -> u64 {
+        self.crank_reward_cap
+    }
+
+    /// Return all lamports observed in the shared physical ledger.
+    pub const fn ledger_account_lamports(self) -> u64 {
+        self.ledger_account_lamports
+    }
+
+    /// Return the exact current Rent reserve for the ledger width.
+    pub const fn exact_ledger_rent_lamports(self) -> u64 {
+        self.exact_ledger_rent_lamports
+    }
+
+    /// Return the Market-authenticated native RentCredit.
+    pub const fn native_rent_credit(self) -> [u8; 32] {
+        self.native_rent_credit
+    }
+
+    /// Return the optional row-specific Realm custody observation.
+    pub const fn realm_collateral(self) -> Option<RealmCollateralCustodyV1> {
+        self.realm_collateral
+    }
+}
+
+/// Per-entry close plan. The adapter moves this principal, closes any
+/// per-entry Realm vault, and closes/refunds ledger rent only when
+/// [`Self::ledger_can_close`] is true.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FundingLedgerEntryClosePlanV2 {
+    native_rent_credit: [u8; 32],
+    remaining_native_lamports: u64,
+    remaining_realm_collateral: u64,
+    realm_token_beneficiary: Option<[u8; 32]>,
+    realm_collateral_donation: u64,
+    vault_rent_lamports: u64,
+    vault_lamport_donation: u64,
+    ledger_rent_lamports: u64,
+    ledger_lamport_donation: u64,
+    expected_post_ledger_lamports: u64,
+    ledger_can_close: bool,
+    crank_reward: u64,
+}
+
+impl FundingLedgerEntryClosePlanV2 {
+    /// Return the Market-authenticated RentCredit receiving every native
+    /// lamport this plan does not owe the crank.
+    pub const fn native_rent_credit(self) -> [u8; 32] {
+        self.native_rent_credit
+    }
+
+    /// Return the lamports owed to whoever turned this crank; zero unless a
+    /// reward cap was offered AND this close is the one that frees the ledger.
+    ///
+    /// **Carved only from rent this close liberated** -- the ledger's own Rent
+    /// reserve plus its surplus -- and never from `remaining_native_lamports`,
+    /// which is a depositor's principal. The crank is paid out of value its own
+    /// act released, so no participant is worse off than if it had never run:
+    /// unturned, that rent stays locked in the ledger and reaches nobody.
+    pub const fn crank_reward(self) -> u64 {
+        self.crank_reward
+    }
+
+    /// Return every native lamport the RentCredit is owed, net of the crank.
+    pub fn native_refund_total(self) -> Result<u64> {
+        self.native_gross_total()?
+            .checked_sub(self.crank_reward)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Return every native lamport leaving, before the crank is paid.
+    fn native_gross_total(self) -> Result<u64> {
+        self.ledger_sourced_total()?
+            .checked_add(self.vault_lamport_donation)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Return the native lamports sourced from the shared physical ledger.
+    ///
+    /// Deliberately excludes `vault_lamport_donation`, which leaves a *different
+    /// account* -- the row's Realm vault. Summing the two would make the ledger
+    /// conservation below off by exactly that donation.
+    fn ledger_sourced_total(self) -> Result<u64> {
+        self.remaining_native_lamports
+            .checked_add(self.ledger_rent_lamports)
+            .and_then(|value| value.checked_add(self.ledger_lamport_donation))
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Return the rent this close liberated, which is the crank's only source.
+    fn liberated_total(self) -> Result<u64> {
+        self.ledger_rent_lamports
+            .checked_add(self.ledger_lamport_donation)
+            .ok_or(Error::ArithmeticOverflow)
+    }
+
+    /// Refuse unless every native lamport leaving reaches exactly one recipient.
+    ///
+    /// **Not a tautology, and this is the one check worth having here.**
+    /// `close_slot_in_place` derives the buckets independently -- principal
+    /// from the slot's own remaining, rent from the observed Rent minimum,
+    /// surplus from a subtraction against the observed account balance -- so
+    /// this genuinely relates quantities that were computed apart. It also
+    /// pins the property a second recipient puts at risk: that the crank's
+    /// reward is *carved from* the refund rather than *added to* it, so the
+    /// close can never pay out more than the ledger actually held.
+    pub fn validate_native_conservation(self, observed_ledger_lamports: u64) -> Result<()> {
+        // The crank is paid only out of rent it liberated, never principal.
+        if self.crank_reward > self.liberated_total()? {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        // The reward is carved FROM the refund, never added TO it.
+        if self
+            .native_refund_total()?
+            .checked_add(self.crank_reward)
+            .ok_or(Error::ArithmeticOverflow)?
+            != self.native_gross_total()?
+        {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        // Every lamport the shared ledger held is either leaving or staying.
+        let accounted = self
+            .ledger_sourced_total()?
+            .checked_add(self.expected_post_ledger_lamports)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if accounted != observed_ledger_lamports {
+            return Err(Error::UnderfundedPhysicalCustody);
+        }
+        Ok(())
+    }
+
+    /// Return this entry's remaining native principal.
+    pub const fn remaining_native_lamports(self) -> u64 {
+        self.remaining_native_lamports
+    }
+
+    /// Return this entry's remaining Realm collateral.
+    pub const fn remaining_realm_collateral(self) -> u64 {
+        self.remaining_realm_collateral
+    }
+
+    /// Return the quote-authenticated Realm-token beneficiary, if applicable.
+    pub const fn realm_token_beneficiary(self) -> Option<[u8; 32]> {
+        self.realm_token_beneficiary
+    }
+
+    /// Return unsolicited same-mint tokens, classified only as a refund gift.
+    pub const fn realm_collateral_donation(self) -> u64 {
+        self.realm_collateral_donation
+    }
+
+    /// Return the row vault's exact Rent reserve, or zero without a vault.
+    pub const fn vault_rent_lamports(self) -> u64 {
+        self.vault_rent_lamports
+    }
+
+    /// Return unsolicited vault lamports routed to the native RentCredit.
+    pub const fn vault_lamport_donation(self) -> u64 {
+        self.vault_lamport_donation
+    }
+
+    /// Return physical ledger Rent refunded only by the final row close.
+    pub const fn ledger_rent_lamports(self) -> u64 {
+        self.ledger_rent_lamports
+    }
+
+    /// Return shared-ledger surplus classified only on final physical close.
+    pub const fn ledger_lamport_donation(self) -> u64 {
+        self.ledger_lamport_donation
+    }
+
+    /// Return exact shared-ledger lamports expected after this close.
+    pub const fn expected_post_ledger_lamports(self) -> u64 {
+        self.expected_post_ledger_lamports
+    }
+
+    /// Return whether every slot is now Closed and ledger rent may be refunded.
+    pub const fn ledger_can_close(self) -> bool {
+        self.ledger_can_close
+    }
+}
+
+/// Canonical PDA seed projection for one controller-owned subset ledger.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityFundingLedgerDerivationV2 {
+    controller_program: [u8; 32],
+    market: [u8; 32],
+    generation_le: [u8; 8],
+    manifest_content_id: [u8; 32],
+    selected_mask_le: [u8; 2],
+}
+
+impl CapabilityFundingLedgerDerivationV2 {
+    /// Bind controller, Market generation, manifest identity, and subset mask.
+    pub fn new(
+        controller_program: [u8; 32],
+        market: [u8; 32],
+        generation: u64,
+        manifest_content_id: ContentId,
+        ledger: FundingLedgerV2<'_>,
+    ) -> Result<Self> {
+        require_nonzero_identifier(&controller_program)?;
+        require_nonzero_identifier(&market)?;
+        if ledger.manifest_content_id() != manifest_content_id {
+            return Err(Error::FundingBindingMismatch);
+        }
+        Ok(Self {
+            controller_program,
+            market,
+            generation_le: generation.to_le_bytes(),
+            manifest_content_id: manifest_content_id.to_bytes(),
+            selected_mask_le: ledger.selected_mask().to_le_bytes(),
+        })
+    }
+
+    /// Return exact ordered PDA seed components.
+    pub fn seed_components(&self) -> [&[u8]; 6] {
+        [
+            CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2,
+            self.controller_program.as_slice(),
+            self.market.as_slice(),
+            self.generation_le.as_slice(),
+            self.manifest_content_id.as_slice(),
+            self.selected_mask_le.as_slice(),
+        ]
+    }
+}
+
+/// Per-entry token-signing authority below one FundingLedgerV2 account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityFundingLedgerAuthorityDerivationV2 {
+    ledger: [u8; 32],
+    entry_index_le: [u8; 2],
+}
+
+impl CapabilityFundingLedgerAuthorityDerivationV2 {
+    /// Bind authority to the ledger key and exact selected manifest index.
+    pub fn new(ledger: [u8; 32], entry_index: u16) -> Result<Self> {
+        require_nonzero_identifier(&ledger)?;
+        if usize::from(entry_index) >= crate::MAX_CAPABILITIES {
+            return Err(Error::InvalidDependency);
+        }
+        Ok(Self {
+            ledger,
+            entry_index_le: entry_index.to_le_bytes(),
+        })
+    }
+
+    /// Return exact ordered authority PDA seeds.
+    pub fn seed_components(&self) -> [&[u8]; 3] {
+        [
+            CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2,
+            self.ledger.as_slice(),
+            self.entry_index_le.as_slice(),
+        ]
+    }
+}
+
+/// Optional Realm-collateral vault below one per-entry ledger authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilityFundingLedgerVaultDerivationV2 {
+    funding_authority: [u8; 32],
+    token_program: [u8; 32],
+    mint: [u8; 32],
+}
+
+impl CapabilityFundingLedgerVaultDerivationV2 {
+    /// Construct exact vault seeds from one entry authority and quote binding.
+    pub fn new(funding_authority: [u8; 32], binding: RealmCollateralBindingV1) -> Result<Self> {
+        require_nonzero_identifier(&funding_authority)?;
+        Ok(Self {
+            funding_authority,
+            token_program: binding.token_program(),
+            mint: binding.mint(),
+        })
+    }
+
+    /// Return exact ordered vault PDA seeds.
+    pub fn seed_components(&self) -> [&[u8]; 4] {
+        [
+            CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2,
+            self.funding_authority.as_slice(),
+            self.token_program.as_slice(),
+            self.mint.as_slice(),
+        ]
+    }
+}
+
+fn decode_funding_ledger_v2(bytes: &[u8]) -> Result<FundingLedgerV2<'_>> {
+    FundingLedgerV2::decode(bytes)
+}
+
+/// Return the checked absolute byte offset of one dense ledger slot.
+pub fn funding_ledger_slot_offset_v2(entry_index: u16) -> Result<usize> {
+    FUNDING_LEDGER_HEADER_BYTES_V2
+        .checked_add(
+            usize::from(entry_index)
+                .checked_mul(FUNDING_LEDGER_SLOT_BYTES_V2)
+                .ok_or(Error::ArithmeticOverflow)?,
+        )
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+/// Map a selected manifest index to its ascending physical row.
+pub fn funding_ledger_row_for_manifest_entry_v2(
+    selected_mask: u16,
+    entry_index: u16,
+) -> Result<u16> {
+    if entry_index >= FUNDING_LEDGER_MASK_BITS_V2 {
+        return Err(Error::InvalidDependency);
+    }
+    let entry_bit = 1_u16
+        .checked_shl(u32::from(entry_index))
+        .ok_or(Error::InvalidDependency)?;
+    if selected_mask & entry_bit == 0 {
+        return Err(Error::InvalidDependency);
+    }
+    let lower_mask = entry_bit.checked_sub(1).ok_or(Error::ArithmeticOverflow)?;
+    u16::try_from((selected_mask & lower_mask).count_ones()).map_err(|_| Error::ArithmeticOverflow)
+}
+
+/// Map one physical row to its selected manifest index.
+pub fn manifest_entry_for_ledger_row_v2(selected_mask: u16, row_index: u16) -> Result<u16> {
+    let slot_count = funding_ledger_slot_count_v2(selected_mask)?;
+    if row_index >= slot_count {
+        return Err(Error::InvalidDependency);
+    }
+    let mut manifest_index = 0_u16;
+    let mut observed_row = 0_u16;
+    while manifest_index < FUNDING_LEDGER_MASK_BITS_V2 {
+        let bit = 1_u16
+            .checked_shl(u32::from(manifest_index))
+            .ok_or(Error::ArithmeticOverflow)?;
+        if selected_mask & bit != 0 {
+            if observed_row == row_index {
+                return Ok(manifest_index);
+            }
+            observed_row = observed_row
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
+        }
+        manifest_index = manifest_index
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+    }
+    Err(Error::InvalidDependency)
+}
+
+/// Return the checked absolute offset of one slot's remaining amount.
+pub fn funding_ledger_remaining_offset_v2(
+    entry_index: u16,
+    compartment: FundingCompartment,
+) -> Result<usize> {
+    let compartment_offset = LEDGER_SLOT_REMAINING_OFFSETS_V2
+        .get(funding_compartment_index(compartment))
+        .copied()
+        .ok_or(Error::InvalidDependency)?;
+    funding_ledger_slot_offset_v2(entry_index)?
+        .checked_add(compartment_offset)
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn funding_compartment_index(compartment: FundingCompartment) -> usize {
+    match compartment {
+        FundingCompartment::Rent => 0,
+        FundingCompartment::Creation => 1,
+        FundingCompartment::Work => 2,
+        FundingCompartment::Provider => 3,
+        FundingCompartment::Bounty => 4,
+        FundingCompartment::Liquidity => 5,
+        FundingCompartment::Service => 6,
+    }
+}
+
+fn write_ledger_row(output: &mut [u8], row_index: u16, slot: FundingLedgerRawSlotV2) -> Result<()> {
+    let selected_mask = read_u16(output, LEDGER_SELECTED_MASK_OFFSET_V2)?;
+    let slot_count = funding_ledger_slot_count_v2(selected_mask)?;
+    if row_index >= slot_count || output.len() != funding_ledger_bytes_v2(slot_count)? {
+        return Err(Error::InvalidLength);
+    }
+    let start = funding_ledger_slot_offset_v2(row_index)?;
+    let end = start
+        .checked_add(FUNDING_LEDGER_SLOT_BYTES_V2)
+        .ok_or(Error::ArithmeticOverflow)?;
+    output
+        .get_mut(start..end)
+        .ok_or(Error::InvalidLength)?
+        .copy_from_slice(&slot.to_bytes());
+    Ok(())
+}
+
+fn write_ledger_slot(
+    output: &mut [u8],
+    entry_index: u16,
+    slot: FundingLedgerRawSlotV2,
+) -> Result<()> {
+    let selected_mask = read_u16(output, LEDGER_SELECTED_MASK_OFFSET_V2)?;
+    let row_index = funding_ledger_row_for_manifest_entry_v2(selected_mask, entry_index)?;
+    write_ledger_row(output, row_index, slot)
+}
+
+fn manifest_valid_mask_v2(entry_count: u16) -> Result<u16> {
+    if entry_count == 0 || usize::from(entry_count) > crate::MAX_CAPABILITIES {
+        return Err(Error::TooManyCapabilities);
+    }
+    if entry_count == FUNDING_LEDGER_MASK_BITS_V2 {
+        return Ok(u16::MAX);
+    }
+    1_u16
+        .checked_shl(u32::from(entry_count))
+        .and_then(|exclusive_limit| exclusive_limit.checked_sub(1))
+        .ok_or(Error::ArithmeticOverflow)
+}
+
+fn validate_selected_mask_v2(entry_count: u16, selected_mask: u16) -> Result<()> {
+    let valid_mask = manifest_valid_mask_v2(entry_count)?;
+    if selected_mask == 0 || selected_mask & !valid_mask != 0 {
+        return Err(Error::InvalidDependency);
+    }
+    Ok(())
+}
+
+struct LedgerRealmCloseV2 {
+    beneficiary: Option<[u8; 32]>,
+    remaining: u64,
+    donation: u64,
+    vault_rent: u64,
+    vault_donation: u64,
+}
+
+fn validate_ledger_slot_realm_close_v2(
+    quote: FundingQuoteV1,
+    remaining: FundingAmountsV1,
+    realm_collateral: Option<RealmCollateralCustodyV1>,
+) -> Result<LedgerRealmCloseV2> {
+    match (quote.realm_collateral(), realm_collateral) {
+        (None, None) => Ok(LedgerRealmCloseV2 {
+            beneficiary: None,
+            remaining: 0,
+            donation: 0,
+            vault_rent: 0,
+            vault_donation: 0,
+        }),
+        (Some(binding), Some(realm)) => {
+            let observed = realm.observation();
+            if realm.realm_id() != binding.realm_id()
+                || realm.collateral_release_id() != binding.collateral_release_id()
+                || observed.token_program() != binding.token_program()
+                || observed.mint() != binding.mint()
+            {
+                return Err(Error::RealmCollateralBindingMismatch);
+            }
+            let required = remaining.realm_collateral_total();
+            let donation = observed
+                .token_amount()
+                .checked_sub(required)
+                .ok_or(Error::UnderfundedPhysicalCustody)?;
+            let vault_lamport_donation = observed
+                .account_lamports()
+                .checked_sub(observed.exact_rent_lamports())
+                .ok_or(Error::UnderfundedPhysicalCustody)?;
+            Ok(LedgerRealmCloseV2 {
+                beneficiary: Some(binding.refund_token_beneficiary()),
+                remaining: required,
+                donation,
+                vault_rent: observed.exact_rent_lamports(),
+                vault_donation: vault_lamport_donation,
+            })
+        }
+        (Some(_), None) => Err(Error::MissingRealmCollateralVault),
+        (None, Some(_)) => Err(Error::UnexpectedRealmCollateralVault),
+    }
+}
+
+fn derive_funding_amounts_v2(
+    raw_remaining: [u64; 7],
+    quote: FundingAmountsV1,
+) -> Result<(FundingAmountsV1, FundingAmountsV1)> {
+    let mut remaining = [CompartmentFundingV1::not_applicable(); 7];
+    let mut released = [CompartmentFundingV1::not_applicable(); 7];
+    for (((remaining_value, released_value), raw_value), compartment) in remaining
+        .iter_mut()
+        .zip(released.iter_mut())
+        .zip(raw_remaining)
+        .zip(FUNDING_COMPARTMENTS)
+    {
+        let quoted = quote.compartment(compartment);
+        let released_amount = quoted
+            .amount()
+            .checked_sub(raw_value)
+            .ok_or(Error::FundingConservationMismatch)?;
+        *remaining_value = allocation_or_na(quoted.asset_class(), raw_value)?;
+        *released_value = allocation_or_na(quoted.asset_class(), released_amount)?;
+    }
+    Ok((
+        FundingAmountsV1::new(
+            remaining[0],
+            remaining[1],
+            remaining[2],
+            remaining[3],
+            remaining[4],
+            remaining[5],
+            remaining[6],
+        )?,
+        FundingAmountsV1::new(
+            released[0],
+            released[1],
+            released[2],
+            released[3],
+            released[4],
+            released[5],
+            released[6],
+        )?,
+    ))
+}
+
 /// Canonical PDA seed projection for one program-owned funding-state account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CapabilityFundingDerivationV1 {
@@ -1720,6 +3053,99 @@ mod tests {
         CapabilityManifestV1::encode_into(&[entry], storage).expect("manifest")
     }
 
+    fn native_quote(
+        rent: u64,
+        creation: u64,
+        work: u64,
+        bounty: u64,
+        service: u64,
+    ) -> FundingQuoteV1 {
+        FundingQuoteV1::new(
+            FundingAmountsV1::new(
+                native(rent),
+                native(creation),
+                if work == 0 {
+                    CompartmentFundingV1::not_applicable()
+                } else {
+                    native(work)
+                },
+                CompartmentFundingV1::not_applicable(),
+                if bounty == 0 {
+                    CompartmentFundingV1::not_applicable()
+                } else {
+                    native(bounty)
+                },
+                CompartmentFundingV1::not_applicable(),
+                if service == 0 {
+                    CompartmentFundingV1::not_applicable()
+                } else {
+                    native(service)
+                },
+            )
+            .expect("native amounts"),
+            None,
+        )
+        .expect("native quote")
+    }
+
+    fn ledger_manifest<'a>(
+        storage: &'a mut [u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES],
+    ) -> CapabilityManifestV1<'a> {
+        let quotes = [
+            native_quote(10, 20, 30, 0, 0),
+            native_quote(11, 21, 0, 40, 0),
+            native_quote(12, 22, 0, 0, 50),
+        ];
+        let mut entries = [
+            CapabilityEntryV1::new(
+                id(1),
+                id(11),
+                id(21),
+                id(31),
+                id(41),
+                id(51),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quotes[0],
+            )
+            .expect("entry zero"),
+            CapabilityEntryV1::new(
+                id(2),
+                id(12),
+                id(22),
+                id(32),
+                id(42),
+                id(52),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quotes[1],
+            )
+            .expect("entry one"),
+            CapabilityEntryV1::new(
+                id(3),
+                id(13),
+                id(23),
+                id(33),
+                id(43),
+                id(53),
+                ActivationPolicy::RequiredAtFounding,
+                0,
+                0,
+                [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+                quotes[2],
+            )
+            .expect("entry two"),
+        ];
+        // The manifest constructor owns canonical kind order. Keep the local
+        // fixture explicit so a future quote edit cannot hide a reordered row.
+        entries.sort_by_key(|entry| entry.kind_id().to_bytes());
+        CapabilityManifestV1::encode_into(&entries, storage).expect("ledger manifest")
+    }
+
     fn realm_custody(token_amount: u64, state_lamports: u64) -> FundingCustodyObservationV1 {
         let observation = RealmCollateralVaultObservationV1::new(
             [50; 32],
@@ -2051,5 +3477,627 @@ mod tests {
         );
         assert_eq!(vault.seed_components()[2], [42; 32].as_slice());
         assert_eq!(vault.seed_components()[3], [43; 32].as_slice());
+    }
+
+    #[test]
+    fn funding_ledger_v2_has_exact_dynamic_width_and_manifest_derived_views() {
+        assert_eq!(funding_ledger_bytes_v2(1), Ok(120));
+        assert_eq!(funding_ledger_bytes_v2(3), Ok(264));
+        assert_eq!(funding_ledger_bytes_v2(4), Ok(336));
+        assert_eq!(funding_ledger_bytes_v2(16), Ok(1_200));
+        assert_eq!(funding_ledger_bytes_v2(0), Err(Error::TooManyCapabilities));
+        assert_eq!(funding_ledger_bytes_v2(17), Err(Error::TooManyCapabilities));
+
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut ledger_bytes = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut ledger_bytes, manifest_id, manifest, 0b111)
+            .expect("initialize");
+        let ledger = FundingLedgerV2::decode(&ledger_bytes).expect("decode");
+        assert_eq!(ledger.selected_mask(), 0b111);
+        assert_eq!(ledger.slot_count(), 3);
+        assert_eq!(ledger.manifest_content_id(), manifest_id);
+        let authenticated = ledger
+            .authenticate(manifest_id, manifest)
+            .expect("authenticate");
+        for index in 0..3 {
+            let slot = authenticated.slot(index).expect("slot");
+            assert_eq!(slot.entry_index(), index);
+            assert_eq!(slot.status(), FundingLedgerStatusV2::Pending);
+            assert_eq!(slot.activation_slot(), 0);
+            assert_eq!(
+                slot.remaining(),
+                manifest
+                    .entry(index)
+                    .expect("entry")
+                    .funding_quote()
+                    .amounts()
+            );
+            assert_eq!(slot.released(), FundingAmountsV1::default());
+        }
+        assert_eq!(authenticated.remaining_native_lamports_total(), Ok(216));
+        assert_eq!(
+            authenticated.validate_native_custody(316, 100, false),
+            Ok(())
+        );
+        assert_eq!(
+            authenticated.validate_native_custody(317, 100, false),
+            Err(Error::PresentNativeLamportsMismatch)
+        );
+        assert_eq!(
+            authenticated.validate_native_custody(317, 100, true),
+            Ok(())
+        );
+        assert_eq!(
+            ledger.authenticate(id(71), manifest),
+            Err(Error::FundingBindingMismatch)
+        );
+    }
+
+    #[test]
+    fn funding_ledger_v2_sparse_subset_rows_are_ordered_and_disjoint() {
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut bytes = [0_u8; 192];
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b101)
+            .expect("sparse subset");
+        let ledger = FundingLedgerV2::decode(&bytes).expect("decode sparse");
+        assert_eq!(ledger.selected_mask(), 0b101);
+        assert_eq!(ledger.slot_count(), 2);
+        assert_eq!(funding_ledger_row_for_manifest_entry_v2(0b101, 0), Ok(0));
+        assert_eq!(funding_ledger_row_for_manifest_entry_v2(0b101, 2), Ok(1));
+        assert_eq!(manifest_entry_for_ledger_row_v2(0b101, 0), Ok(0));
+        assert_eq!(manifest_entry_for_ledger_row_v2(0b101, 1), Ok(2));
+        let authenticated = ledger
+            .authenticate(manifest_id, manifest)
+            .expect("authenticate");
+        assert_eq!(authenticated.slot(0).expect("entry zero").entry_index(), 0);
+        assert_eq!(authenticated.slot(2).expect("entry two").entry_index(), 2);
+        assert_eq!(authenticated.slot(1), Err(Error::InvalidDependency));
+
+        let mut out_of_range = bytes;
+        put_u16(&mut out_of_range, LEDGER_SELECTED_MASK_OFFSET_V2, 0b1001);
+        let structurally_valid = FundingLedgerV2::decode(&out_of_range).expect("same-width mask");
+        assert_eq!(
+            structurally_valid.authenticate(manifest_id, manifest),
+            Err(Error::InvalidDependency)
+        );
+
+        assert_eq!(
+            validate_funding_ledger_masks_v2(3, 0b111, &[0b011, 0b100]),
+            Ok(())
+        );
+        assert_eq!(
+            validate_funding_ledger_masks_v2(3, 0b111, &[0b100, 0b011]),
+            Err(Error::InvalidDependency)
+        );
+        assert_eq!(
+            validate_funding_ledger_masks_v2(3, 0b111, &[0b101, 0b011]),
+            Err(Error::InvalidDependency)
+        );
+        assert_eq!(
+            validate_funding_ledger_masks_v2(3, 0b111, &[0b011]),
+            Err(Error::InvalidDependency)
+        );
+        assert_eq!(
+            validate_funding_ledger_masks_v2(3, 0b111, &[0b011, 0b1000]),
+            Err(Error::InvalidDependency)
+        );
+
+        let derivation =
+            CapabilityFundingLedgerDerivationV2::new([6; 32], [7; 32], 9, manifest_id, ledger)
+                .expect("derive sparse ledger");
+        assert_eq!(derivation.seed_components()[1], [6; 32].as_slice());
+        assert_eq!(
+            derivation.seed_components()[5],
+            0b101_u16.to_le_bytes().as_slice()
+        );
+    }
+
+    #[test]
+    fn funding_ledger_v2_hostile_structure_and_pointwise_quotes_refuse() {
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut bytes = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+
+        assert_eq!(
+            FundingLedgerV2::decode(bytes.get(..bytes.len() - 1).expect("short ledger")),
+            Err(Error::InvalidLength)
+        );
+        for (offset, value, expected) in [
+            (0, 0, Error::InvalidMagic),
+            (LEDGER_SCHEMA_OFFSET_V2, 1, Error::UnsupportedSchema),
+            (
+                LEDGER_RESERVED_OFFSET_V2,
+                1,
+                Error::NonCanonicalReservedBytes,
+            ),
+            (
+                funding_ledger_slot_offset_v2(1).expect("slot") + LEDGER_SLOT_RESERVED_OFFSET_V2,
+                1,
+                Error::NonCanonicalReservedBytes,
+            ),
+            (
+                funding_ledger_slot_offset_v2(1).expect("slot") + LEDGER_SLOT_STATUS_OFFSET_V2,
+                9,
+                Error::UnknownFundingLedgerStatus,
+            ),
+        ] {
+            let mut hostile = bytes;
+            *hostile.get_mut(offset).expect("hostile coordinate") = value;
+            assert_eq!(FundingLedgerV2::decode(&hostile), Err(expected));
+        }
+
+        let mut wrong_count = bytes;
+        put_u16(&mut wrong_count, LEDGER_SELECTED_MASK_OFFSET_V2, 0b1111);
+        assert_eq!(
+            FundingLedgerV2::decode(&wrong_count),
+            Err(Error::InvalidLength)
+        );
+
+        let mut pending_debit = bytes;
+        let work =
+            funding_ledger_remaining_offset_v2(0, FundingCompartment::Work).expect("work offset");
+        put_u64(&mut pending_debit, work, 29);
+        let decoded = FundingLedgerV2::decode(&pending_debit).expect("structural decode");
+        assert_eq!(
+            decoded.authenticate(manifest_id, manifest),
+            Err(Error::InvalidFundingStatus)
+        );
+
+        let mut above_quote = bytes;
+        put_u64(&mut above_quote, work, 31);
+        let decoded = FundingLedgerV2::decode(&above_quote).expect("structural decode");
+        assert_eq!(
+            decoded.authenticate(manifest_id, manifest),
+            Err(Error::FundingConservationMismatch)
+        );
+
+        let mut swapped = bytes;
+        let first: [u8; FUNDING_LEDGER_SLOT_BYTES_V2] = FundingLedgerV2::decode(&bytes)
+            .expect("ledger")
+            .slot_bytes(0)
+            .expect("first")
+            .try_into()
+            .expect("slot bytes");
+        let second: [u8; FUNDING_LEDGER_SLOT_BYTES_V2] = FundingLedgerV2::decode(&bytes)
+            .expect("ledger")
+            .slot_bytes(1)
+            .expect("second")
+            .try_into()
+            .expect("slot bytes");
+        let first_start = funding_ledger_slot_offset_v2(0).expect("first offset");
+        let second_start = funding_ledger_slot_offset_v2(1).expect("second offset");
+        swapped
+            .get_mut(first_start..first_start + FUNDING_LEDGER_SLOT_BYTES_V2)
+            .expect("first destination")
+            .copy_from_slice(&second);
+        swapped
+            .get_mut(second_start..second_start + FUNDING_LEDGER_SLOT_BYTES_V2)
+            .expect("second destination")
+            .copy_from_slice(&first);
+        let decoded = FundingLedgerV2::decode(&swapped).expect("structural decode");
+        assert!(decoded.authenticate(manifest_id, manifest).is_err());
+    }
+
+    #[test]
+    fn funding_ledger_v2_transitions_touch_only_the_selected_slot_and_refuse_replay() {
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut bytes = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+        let before = bytes;
+        let debit = FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, 1, 9)
+            .expect("activate selected slot");
+        assert_eq!(debit.rent_lamports(), 11);
+        assert_eq!(debit.creation_lamports(), 21);
+        let ledger = FundingLedgerV2::decode(&bytes).expect("post ledger");
+        let before_ledger = FundingLedgerV2::decode(&before).expect("pre ledger");
+        assert_eq!(ledger.slot_bytes(0), before_ledger.slot_bytes(0));
+        assert_eq!(ledger.slot_bytes(2), before_ledger.slot_bytes(2));
+        let activated = ledger
+            .authenticate(manifest_id, manifest)
+            .expect("post authenticate")
+            .slot(1)
+            .expect("slot");
+        assert_eq!(activated.status(), FundingLedgerStatusV2::Active);
+        assert_eq!(activated.activation_slot(), 9);
+        assert_eq!(activated.remaining().rent().amount(), 0);
+        assert_eq!(activated.released().rent().amount(), 11);
+
+        let replay_prestate = bytes;
+        assert_eq!(
+            FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, 1, 10),
+            Err(Error::InvalidFundingStatus)
+        );
+        assert_eq!(bytes, replay_prestate);
+
+        let release_prestate = bytes;
+        let release = FundingLedgerV2::release_in_place(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            1,
+            FundingCompartment::Bounty,
+            7,
+        )
+        .expect("release");
+        assert_eq!(release.amount(), 7);
+        assert_eq!(release.asset_class(), FundingAssetClassV1::NativeLamports);
+        let ledger = FundingLedgerV2::decode(&bytes).expect("release ledger");
+        let release_before = FundingLedgerV2::decode(&release_prestate).expect("release prestate");
+        assert_eq!(ledger.slot_bytes(0), release_before.slot_bytes(0));
+        assert_eq!(ledger.slot_bytes(2), release_before.slot_bytes(2));
+        let slot = ledger
+            .authenticate(manifest_id, manifest)
+            .expect("authenticate release")
+            .slot(1)
+            .expect("slot");
+        assert_eq!(slot.remaining().bounty().amount(), 33);
+        assert_eq!(slot.released().bounty().amount(), 7);
+
+        let insufficient_prestate = bytes;
+        assert_eq!(
+            FundingLedgerV2::release_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                1,
+                FundingCompartment::Bounty,
+                34,
+            ),
+            Err(Error::InsufficientCompartmentPrincipal)
+        );
+        assert_eq!(bytes, insufficient_prestate);
+    }
+
+    #[test]
+    fn funding_ledger_v2_close_tombstones_one_slot_and_refunds_rent_only_last() {
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut bytes = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+
+        for entry_index in 0..3 {
+            FundingLedgerV2::activate_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                entry_index,
+                9 + u64::from(entry_index),
+            )
+            .expect("activate");
+        }
+        let exact_rent = 100;
+        let donation = 5;
+        let native_rent_credit = [99; 32];
+        let mut ledger_lamports = exact_rent
+            + FundingLedgerV2::decode(&bytes)
+                .expect("activated ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("activated manifest")
+                .remaining_native_lamports_total()
+                .expect("native total")
+            + donation;
+        for entry_index in 0..3 {
+            let prestate = bytes;
+            let custody = FundingLedgerCloseCustodyV2::native_only(
+                ledger_lamports,
+                exact_rent,
+                native_rent_credit,
+            )
+            .expect("close custody");
+            let close = FundingLedgerV2::close_slot_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                entry_index,
+                custody,
+            )
+            .expect("close slot");
+            assert_eq!(close.ledger_can_close(), entry_index == 2);
+            assert_eq!(close.native_rent_credit(), native_rent_credit);
+            assert_eq!(
+                close.ledger_rent_lamports(),
+                if entry_index == 2 { 100 } else { 0 }
+            );
+            assert_eq!(
+                close.ledger_lamport_donation(),
+                if entry_index == 2 { 5 } else { 0 }
+            );
+            ledger_lamports = close.expected_post_ledger_lamports();
+            let before = FundingLedgerV2::decode(&prestate).expect("before");
+            let after = FundingLedgerV2::decode(&bytes).expect("after");
+            for other in 0..3 {
+                if other != entry_index {
+                    assert_eq!(after.slot_bytes(other), before.slot_bytes(other));
+                }
+            }
+            assert_eq!(
+                after
+                    .authenticate(manifest_id, manifest)
+                    .expect("authenticate")
+                    .slot(entry_index)
+                    .expect("closed slot")
+                    .status(),
+                FundingLedgerStatusV2::Closed
+            );
+        }
+        assert_eq!(ledger_lamports, 0);
+    }
+
+    #[test]
+    fn funding_ledger_v2_close_pays_a_capped_crank_only_from_rent_it_liberated() {
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut bytes = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 0b111).expect("initialize");
+        for entry_index in 0..3 {
+            FundingLedgerV2::activate_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                entry_index,
+                9 + u64::from(entry_index),
+            )
+            .expect("activate");
+        }
+        let exact_rent = 100_u64;
+        let donation = 5_u64;
+        let native_rent_credit = [99; 32];
+        let mut ledger_lamports = exact_rent
+            + FundingLedgerV2::decode(&bytes)
+                .expect("activated ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("activated manifest")
+                .remaining_native_lamports_total()
+                .expect("native total")
+            + donation;
+        // A cap far above what any close can liberate, to prove the `min` binds
+        // on the liberated total rather than on the cap.
+        let reward_cap = 10_000_u64;
+
+        for entry_index in 0..3 {
+            let observed = ledger_lamports;
+            let custody = FundingLedgerCloseCustodyV2::native_with_crank(
+                observed,
+                exact_rent,
+                native_rent_credit,
+                reward_cap,
+            )
+            .expect("close custody");
+            let close = FundingLedgerV2::close_slot_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                entry_index,
+                custody,
+            )
+            .expect("close slot");
+
+            // *** Paid only on the close that actually frees the ledger. ***
+            let final_close = entry_index == 2;
+            assert_eq!(close.ledger_can_close(), final_close);
+            if final_close {
+                // Liberated is rent + surplus == 105, under the 10_000 cap, so
+                // the crank takes all of it and NONE of anyone's principal.
+                assert_eq!(close.crank_reward(), exact_rent + donation);
+                assert!(
+                    close.crank_reward() <= close.ledger_rent_lamports()
+                        + close.ledger_lamport_donation(),
+                    "the reward must never reach principal"
+                );
+            } else {
+                assert_eq!(
+                    close.crank_reward(),
+                    0,
+                    "a non-final close liberates no rent and earns nothing"
+                );
+            }
+
+            // Conservation against the observed account, every close.
+            close
+                .validate_native_conservation(observed)
+                .expect("every ledger lamport is either leaving or staying");
+
+            // The reward is carved FROM the refund, never added TO it.
+            assert_eq!(
+                close.native_refund_total().expect("refund") + close.crank_reward(),
+                close.remaining_native_lamports()
+                    + close.vault_lamport_donation()
+                    + close.ledger_rent_lamports()
+                    + close.ledger_lamport_donation()
+            );
+
+            // *** NEGATIVE CONTROL: the conservation must actually discriminate.
+            // One lamport more or less in the observed account has to refuse,
+            // or the check is inert.
+            assert_eq!(
+                close.validate_native_conservation(observed + 1),
+                Err(Error::UnderfundedPhysicalCustody)
+            );
+            assert_eq!(
+                close.validate_native_conservation(observed - 1),
+                Err(Error::UnderfundedPhysicalCustody)
+            );
+
+            ledger_lamports = close.expected_post_ledger_lamports();
+        }
+        assert_eq!(ledger_lamports, 0);
+    }
+
+    #[test]
+    fn funding_ledger_v2_close_without_a_crank_is_byte_identical_to_what_it_was() {
+        // The compatibility control for the optional reward: `native_only` and
+        // `native_with_crank(.., 0)` must produce the same plan, so no existing
+        // caller observes any change at all.
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + 3 * CAPABILITY_ENTRY_BYTES];
+        let manifest = ledger_manifest(&mut manifest_storage);
+        let manifest_id = id(70);
+        let mut unpaid = [0_u8; 264];
+        FundingLedgerV2::initialize(&mut unpaid, manifest_id, manifest, 0b111).expect("initialize");
+        for entry_index in 0..3 {
+            FundingLedgerV2::activate_in_place(
+                &mut unpaid,
+                manifest_id,
+                manifest,
+                entry_index,
+                9 + u64::from(entry_index),
+            )
+            .expect("activate");
+        }
+        let mut zero_cap = unpaid;
+        let exact_rent = 100_u64;
+        let ledger_lamports = exact_rent
+            + FundingLedgerV2::decode(&unpaid)
+                .expect("ledger")
+                .authenticate(manifest_id, manifest)
+                .expect("manifest")
+                .remaining_native_lamports_total()
+                .expect("native total")
+            + 5;
+
+        for entry_index in 0..3 {
+            let a = FundingLedgerV2::close_slot_in_place(
+                &mut unpaid,
+                manifest_id,
+                manifest,
+                entry_index,
+                FundingLedgerCloseCustodyV2::native_only(ledger_lamports, exact_rent, [99; 32])
+                    .expect("custody"),
+            )
+            .expect("close");
+            let b = FundingLedgerV2::close_slot_in_place(
+                &mut zero_cap,
+                manifest_id,
+                manifest,
+                entry_index,
+                FundingLedgerCloseCustodyV2::native_with_crank(
+                    ledger_lamports,
+                    exact_rent,
+                    [99; 32],
+                    0,
+                )
+                .expect("custody"),
+            )
+            .expect("close");
+            assert_eq!(a, b, "a zero cap must be exactly the unpaid plan");
+            assert_eq!(a.crank_reward(), 0);
+            assert_eq!(
+                a.native_refund_total().expect("refund"),
+                a.remaining_native_lamports()
+                    + a.vault_lamport_donation()
+                    + a.ledger_rent_lamports()
+                    + a.ledger_lamport_donation(),
+                "with no crank the RentCredit is still owed every lamport"
+            );
+        }
+        assert_eq!(unpaid, zero_cap, "and the ledger bytes must match too");
+    }
+
+    #[test]
+    fn funding_ledger_v2_realm_close_requires_its_exact_row_vault() {
+        let entry = CapabilityEntryV1::new(
+            id(1),
+            id(11),
+            id(21),
+            id(31),
+            id(41),
+            id(51),
+            ActivationPolicy::RequiredAtFounding,
+            0,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            quote(),
+        )
+        .expect("realm entry");
+        let mut manifest_storage = [0_u8; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        let manifest = CapabilityManifestV1::encode_into(&[entry], &mut manifest_storage)
+            .expect("realm manifest");
+        let manifest_id = id(70);
+        let mut bytes = [0_u8; 120];
+        FundingLedgerV2::initialize(&mut bytes, manifest_id, manifest, 1).expect("initialize");
+        FundingLedgerV2::activate_in_place(&mut bytes, manifest_id, manifest, 0, 9)
+            .expect("activate");
+        let authenticated = FundingLedgerV2::decode(&bytes)
+            .expect("ledger")
+            .authenticate(manifest_id, manifest)
+            .expect("manifest");
+        let remaining_native = authenticated
+            .remaining_native_lamports_total()
+            .expect("native total");
+        let realm_remaining = authenticated
+            .slot(0)
+            .expect("realm row")
+            .remaining()
+            .realm_collateral_total();
+        let ledger_lamports = 100 + remaining_native + 5;
+        let missing_prestate = bytes;
+        assert_eq!(
+            FundingLedgerV2::close_slot_in_place(
+                &mut bytes,
+                manifest_id,
+                manifest,
+                0,
+                FundingLedgerCloseCustodyV2::native_only(ledger_lamports, 100, [99; 32])
+                    .expect("native observation"),
+            ),
+            Err(Error::MissingRealmCollateralVault)
+        );
+        assert_eq!(bytes, missing_prestate);
+
+        let realm = realm_custody(realm_remaining + 7, ledger_lamports)
+            .realm_collateral()
+            .expect("realm observation");
+        let close = FundingLedgerV2::close_slot_in_place(
+            &mut bytes,
+            manifest_id,
+            manifest,
+            0,
+            FundingLedgerCloseCustodyV2::with_realm_collateral(
+                ledger_lamports,
+                100,
+                [99; 32],
+                realm,
+            )
+            .expect("realm custody"),
+        )
+        .expect("realm close");
+        assert_eq!(close.realm_token_beneficiary(), Some([44; 32]));
+        assert_eq!(close.remaining_realm_collateral(), realm_remaining);
+        assert_eq!(close.realm_collateral_donation(), 7);
+        assert_eq!(close.vault_rent_lamports(), 150);
+        assert_eq!(close.vault_lamport_donation(), 50);
+        assert_eq!(close.ledger_rent_lamports(), 100);
+        assert_eq!(close.ledger_lamport_donation(), 5);
+        assert_eq!(close.expected_post_ledger_lamports(), 0);
+    }
+
+    #[test]
+    fn funding_ledger_v2_entry_authorities_do_not_collide_for_equal_mints() {
+        assert!(CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2.len() <= crate::SVM_MAX_PDA_SEED_BYTES);
+        assert!(
+            CAPABILITY_FUNDING_LEDGER_AUTHORITY_PDA_DOMAIN_V2.len()
+                <= crate::SVM_MAX_PDA_SEED_BYTES
+        );
+        assert!(
+            CAPABILITY_FUNDING_LEDGER_VAULT_PDA_DOMAIN_V2.len() <= crate::SVM_MAX_PDA_SEED_BYTES
+        );
+        let first =
+            CapabilityFundingLedgerAuthorityDerivationV2::new([7; 32], 0).expect("first authority");
+        let second = CapabilityFundingLedgerAuthorityDerivationV2::new([7; 32], 1)
+            .expect("second authority");
+        assert_ne!(first.seed_components()[2], second.seed_components()[2]);
+        assert_ne!(
+            CAPABILITY_FUNDING_LEDGER_PDA_DOMAIN_V2,
+            CAPABILITY_FUNDING_PDA_DOMAIN_V1
+        );
     }
 }

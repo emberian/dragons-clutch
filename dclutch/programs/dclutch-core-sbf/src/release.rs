@@ -77,6 +77,15 @@ impl RoleBatchAdmissions {
         })
     }
 
+    /// Return one Registry-authenticated release-set projection.
+    ///
+    /// The activation cache authenticates the complete immutable role map.
+    /// Callers that only need a controller identity do not need to re-present
+    /// that controller's Loader accounts as a second authority.
+    pub(crate) fn projected_binding(self, role: Role) -> Binding {
+        selected_binding(self.selected, role)
+    }
+
     /// Lower one exact Core/Claims/Resolution/Custody Registry batch into the
     /// shared fixed-memory retirement admission observation.
     pub(crate) fn retirement(self, state: CoreState) -> Result<RetirementAdmissions, CoreSbfError> {
@@ -108,33 +117,34 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
     if registry.is_signer || registry.is_writable || !registry.executable {
         return Err(CoreSbfError::AccountFrame);
     }
-    let (selected, cache_digest) = {
-        let bytes = cache.try_borrow_data().map_err(|_| CoreSbfError::Release)?;
-        let view = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
-            .map_err(|_| CoreSbfError::Release)?;
-        let expected_cache = Pubkey::find_program_address(
-            &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
-            registry.key,
-        )
-        .0;
-        if cache.key != &expected_cache
-            || cache.owner != registry.key
-            || cache.is_signer
-            || cache.is_writable
-            || cache.executable
-            || view
-                .execution_release_set_id()
-                .map_err(|_| CoreSbfError::Release)?
-                .to_bytes()
-                != release_set_id
-        {
-            return Err(CoreSbfError::Release);
-        }
-        (
-            release_projection(view)?,
-            ContentId::new(hash(&bytes).to_bytes()).map_err(|_| CoreSbfError::Release)?,
-        )
-    };
+    // One canonical PDA search and one hostile decode admit the cache; every
+    // role in the batch is then authenticated from this exact decoded view.
+    // The per-role slow path re-derived the same address and re-decoded the
+    // same bytes once per role, and the composed founding's flame put that
+    // duplication at ~228k CU of its Found leg alone - work the transaction
+    // pays five times over its child legs against a 1.4M ceiling.
+    let bytes = cache.try_borrow_data().map_err(|_| CoreSbfError::Release)?;
+    let view =
+        ActivatedExecutionReleaseSetViewV1::decode(&bytes).map_err(|_| CoreSbfError::Release)?;
+    let expected_cache =
+        Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set_id], registry.key).0;
+    if cache.key != &expected_cache
+        || cache.owner != registry.key
+        || cache.is_signer
+        || cache.is_writable
+        || cache.executable
+        || view
+            .execution_release_set_id()
+            .map_err(|_| CoreSbfError::Release)?
+            .to_bytes()
+            != release_set_id
+    {
+        return Err(CoreSbfError::Release);
+    }
+    let (selected, cache_digest) = (
+        release_projection(view)?,
+        ContentId::new(hash(&bytes).to_bytes()).map_err(|_| CoreSbfError::Release)?,
+    );
 
     let registry_roles = requested
         .iter()
@@ -159,17 +169,18 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
         // Every fact the batch receipt carried per role -- program identity,
         // ProgramData link, Loader ownership, executability, deployment slot,
         // artifact and semantic release, and the ELF digest under the release's
-        // own upgrade policy -- is established here against the same cache.
-        authenticate_activated_role_v1(
-            registry,
-            cache,
-            &release_set_id,
+        // own upgrade policy -- is established here against the same cache
+        // view the canonical search above admitted. This is the Registry's own
+        // Reauthenticate body; only the repeated search and decode are gone.
+        dclutch_registry_activation_auth_v1::authenticate_activated_role_in_cache_v1(
+            view,
             registry_role(entry.role),
             entry.program,
             entry.programdata,
         )
         .map_err(CoreSbfError::from)?;
     }
+    drop(bytes);
     Ok(RoleBatchAdmissions {
         registry: expected_registry,
         release_set_id: identity(release_set_id)?,
@@ -396,6 +407,10 @@ fn validate_release_accounts(
         || role_programdata.is_signer
         || role_programdata.is_writable
         || role_programdata.executable
+        // The slow per-role path refused an aliased Program/ProgramData pair in
+        // its own frame check; the in-cache path leaves that conjunct to its
+        // caller, so it lives here.
+        || role_program.key == role_programdata.key
     {
         return Err(CoreSbfError::AccountFrame);
     }

@@ -1,6 +1,7 @@
 'use client';
 
 import Nav from '@/components/Nav';
+import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { deploymentProgramLabelsV1, type DeploymentV1 } from '@/lib/deployments';
@@ -599,7 +600,7 @@ function ProgramCard({ card }: Readonly<{ card: ProtocolProgramCardV1 }>) {
       <p className="xp-node-address"><Jump view="account" value={card.address}>{compact(card.address, 10)}</Jump></p>
       <dl className="fact-list">
         {card.ownerLabel === null ? null : <div><dt>Loader</dt><dd>{card.ownerLabel}</dd></div>}
-        {card.deploymentSlot === null ? null : <div><dt>Deployed at slot</dt><dd>{card.deploymentSlot}</dd></div>}
+        {card.deploymentSlot === null ? null : <div><dt>First deployed at slot</dt><dd>{card.deploymentSlot}</dd></div>}
       </dl>
       <small className="xp-quiet"><Jump view="scan" value={card.address} title={`Scan the accounts ${roleTitle(card.role)} owns`}>scan its accounts →</Jump></small>
     </article>
@@ -885,13 +886,14 @@ export default function ChainExplorer() {
       <Nav current="/explorer" status="read-only projection" />
 
       <section className="xp-hero">
-        <p className="eyebrow">The protocol, live · no wallet, no setup</p>
+        <p className="eyebrow">Seven devnet programs, live · no wallet, no setup</p>
         <h1>Every record the protocol writes, decoded by its own schema.</h1>
         <p className="lede">
           The app knows its own deployment: the seven role programs below are the baked {deployment.label} manifest, read
           live. Layouts come from <code>lib/generated/</code> — the byte-gated modules the protocol emits from its Lean
           schemas, its Rust contracts and its route census. What the emission does not say, this page does not say either.
         </p>
+        <PublicDeploymentEvidence deployment={deployment} />
       </section>
 
       <form className="xp-chain" onSubmit={query.view === 'record' ? (event) => void runRecord(event) : submitSearch}>

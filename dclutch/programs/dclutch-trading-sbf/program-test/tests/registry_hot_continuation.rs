@@ -4,9 +4,16 @@
 //! the protocol 1.4M compute ceiling.  This test owns only transaction assembly
 //! and observations; Registry and Trading remain the executable authorities.
 
+use std::{env, fs, path::PathBuf};
+
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
-    hot_v3::{HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionEnvelopeV3},
+    hot_v3::{
+        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
+        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionAckV3,
+        HotExecutionEnvelopeV3,
+    },
 };
 use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_ACTION_OFFSET_V1, CAPABILITY_SEAL_DESCRIPTOR_DIGEST_OFFSET_V1,
@@ -21,7 +28,7 @@ use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
 use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_direct_codec::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
 use dclutch_registry_sbf::RegistryError;
-use dclutch_token_svm::TokenAccount;
+use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, TokenAccount};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::{Account, AccountSharedData};
 use solana_program::{
@@ -33,14 +40,14 @@ use solana_program::{
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::TransactionError;
-use solana_sdk_ids::system_program;
+use solana_sdk_ids::{bpf_loader, system_program};
 
 use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, DirectCase, Elves, RefusedExecution,
     Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses,
     direct_case, direct_case_v2, direct_case_v4, direct_registry_instructions, elves,
     fixture_substrate, legacy_registry_hot_instruction, program_test, registry_hot_instruction,
-    submit_v0,
+    start_with_substrate, submit_v0, submit_v0_observed,
 };
 
 // --- Named refusals ----------------------------------------------------------
@@ -70,6 +77,28 @@ const TRADING_TRANSITION_REFUSAL_CODE: u32 = TradingSbfError::Transition as u32;
 /// `TradingSbfError::NativeSignature`: instructions-sysvar or native-signature
 /// evidence was absent or not exact.
 const TRADING_NATIVE_SIGNATURE_REFUSAL_CODE: u32 = TradingSbfError::NativeSignature as u32;
+/// `TradingSbfError::Commit`: an invoked child or local poststate differed
+/// from the exact precomputed candidate after all authorized child effects.
+const TRADING_COMMIT_REFUSAL_CODE: u32 = TradingSbfError::Commit as u32;
+
+fn postjoin_hostile_elf(name: &str) -> Vec<u8> {
+    let directory =
+        PathBuf::from(env::var("POSTJOIN_SBF_OUT_DIR").expect("POSTJOIN_SBF_OUT_DIR is required"));
+    fs::read(directory.join(name)).expect("required postjoin hostile ELF")
+}
+
+fn install_postjoin_hostile_token(test: &mut ProgramTest, elf: Vec<u8>) {
+    test.add_account(
+        Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID),
+        Account {
+            lamports: Rent::default().minimum_balance(elf.len()).max(1),
+            data: elf,
+            owner: bpf_loader::ID,
+            executable: true,
+            rent_epoch: 0,
+        },
+    );
+}
 
 /// The custom program code the refusal carried, so a test can name it.
 fn refusal_code(error: &BanksClientError) -> Option<u32> {
@@ -224,7 +253,7 @@ async fn assert_registry_refusal(
     let addresses =
         canonical_lookup_addresses(core::slice::from_ref(&instruction), Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = activation_snapshot(&mut context, releases.activation).await;
     let refusal = submit_v0(&mut context, &[instruction], addresses, None, &[])
         .await
@@ -472,9 +501,10 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
-    let units = submit_v0(
+    let root_before = account(&mut context, direct.chain.root).await;
+    let execution = submit_v0_observed(
         &mut context,
         &instructions,
         addresses,
@@ -483,6 +513,7 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
     )
     .await
     .expect("Registry-authenticated Direct Hot execution");
+    let units = execution.compute_units_consumed;
     assert!(units > 0 && units <= COMPUTE_LIMIT);
 
     let root = account(&mut context, direct.chain.root).await;
@@ -510,6 +541,232 @@ async fn real_registry_executes_profile14_direct_hot_under_protocol_limit() {
         after, before,
         "successful Direct Hot left no material state change"
     );
+    let (producer, returned) = execution
+        .return_data
+        .expect("successful Hot execution must return commit-last evidence");
+    assert_eq!(producer, TRADING_PROGRAM_ID, "ACK producer substitution");
+    let ack = HotExecutionAckV3::decode(&returned).expect("canonical Hot ACK");
+    assert_eq!(ack.to_bytes().as_slice(), returned.as_slice());
+    let (envelope, family_request) =
+        HotExecutionEnvelopeV3::split_instruction(&direct.chain.hot_instruction.data)
+            .expect("canonical fixture Hot instruction");
+    assert_eq!(ack.release_set, envelope.release_set());
+    assert_eq!(ack.market, envelope.market());
+    assert_eq!(ack.generation, envelope.generation());
+    assert_eq!(ack.root, direct.chain.root.to_bytes());
+    assert_eq!(ack.request_digest, hash(family_request).to_bytes());
+    assert_eq!(ack.selected_program, direct.chain.descriptor_digest);
+    assert_eq!(ack.root_prestate_digest, hash(&root_before.data).to_bytes());
+    assert_eq!(ack.root_poststate_digest, hash(&root.data).to_bytes());
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SealedExecutionAliasHostile {
+    Partial,
+    WrongRaw,
+    SeventhAlias,
+    WritableRaw,
+}
+
+/// The Registry transparent-continuation prefix precedes the exact child Hot
+/// frame in the outer instruction assembled by `registry_hot_instruction`.
+const REGISTRY_HOT_CHILD_START: usize = 6;
+
+fn apply_sealed_execution_alias_hostile(
+    hostile: SealedExecutionAliasHostile,
+    outer: &mut Instruction,
+    direct: &DirectCase,
+) {
+    let child_meta = |index: usize| REGISTRY_HOT_CHILD_START + index;
+    match hostile {
+        SealedExecutionAliasHostile::Partial => {
+            let distinct_staging = direct
+                .chain
+                .capability_seal_accounts
+                .get(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3)
+                .expect("distinct descriptor staging")
+                .clone();
+            *outer
+                .accounts
+                .get_mut(child_meta(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3))
+                .expect("descriptor staging meta") = distinct_staging;
+        }
+        SealedExecutionAliasHostile::WrongRaw => {
+            let wrong = direct
+                .chain
+                .hot_instruction
+                .accounts
+                .get(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3)
+                .expect("account-profile raw")
+                .clone();
+            *outer
+                .accounts
+                .get_mut(child_meta(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3))
+                .expect("descriptor staging meta") = wrong;
+        }
+        SealedExecutionAliasHostile::SeventhAlias => {
+            let config_raw = direct
+                .chain
+                .hot_instruction
+                .accounts
+                .get(HOT_CONFIG_RAW_ACCOUNT_V3)
+                .expect("config raw")
+                .clone();
+            *outer
+                .accounts
+                .get_mut(child_meta(HOT_CONFIG_STAGING_ACCOUNT_V3))
+                .expect("config staging meta") = config_raw;
+        }
+        SealedExecutionAliasHostile::WritableRaw => {
+            outer
+                .accounts
+                .get_mut(child_meta(HOT_DESCRIPTOR_RAW_ACCOUNT_V3))
+                .expect("descriptor raw meta")
+                .is_writable = true;
+        }
+    }
+}
+
+/// The six duplicate metas are an exact, sealed execution shape rather than a
+/// general relaxation of Hot fixed-account distinctness. Exercise the real
+/// Registry and Trading ELFs for every boundary: an incomplete set, a staging
+/// coordinate pointed at the wrong raw record, a seventh duplicate outside the
+/// closed set, and a privilege escalation caused by message-key coalescing.
+/// Each refusal reaches Trading, carries the semantic Content code, and rolls
+/// back every tracked byte and lamport.
+#[tokio::test]
+async fn real_hot_refuses_noncanonical_sealed_execution_aliases_atomically() {
+    for hostile in [
+        SealedExecutionAliasHostile::Partial,
+        SealedExecutionAliasHostile::WrongRaw,
+        SealedExecutionAliasHostile::SeventhAlias,
+        SealedExecutionAliasHostile::WritableRaw,
+    ] {
+        let artifacts = elves();
+        let mut test = program_test(&artifacts);
+        let releases = add_release_waist(&mut test, &artifacts);
+        let direct = direct_case(&mut test, releases, &artifacts, false);
+        let mut instructions = direct_registry_instructions(releases, &direct);
+        apply_sealed_execution_alias_hostile(hostile, &mut instructions[2], &direct);
+        let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+        add_lookup_table(&mut test, &addresses);
+        let mut context = start_with_substrate(test, fixture_substrate()).await;
+        let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+        let refusal = submit_v0(
+            &mut context,
+            &instructions,
+            addresses,
+            Some(&direct.payer),
+            &[],
+        )
+        .await
+        .expect_err("noncanonical sealed execution aliases unexpectedly executed");
+        assert_refusal(&refusal, TRADING_CONTENT_REFUSAL_CODE);
+        assert!(
+            refusal.invoked(TRADING_PROGRAM_ID),
+            "{hostile:?} never reached Trading: {:#?}",
+            refusal.logs
+        );
+        let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+        assert_eq!(
+            after, before,
+            "{hostile:?} changed a tracked byte or lamport"
+        );
+    }
+}
+
+async fn assert_postjoin_hostile_rolls_back(
+    test: ProgramTest,
+    releases: Releases,
+    direct: DirectCase,
+    required_child: Pubkey,
+    expected_refusal: u32,
+) {
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    let mut test = test;
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    let refusal = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("hostile child poststate unexpectedly committed");
+    assert_refusal(&refusal, expected_refusal);
+    assert!(
+        refusal.invoked(CLAIMS_PROGRAM_ID),
+        "Claims did not commit before the postjoin refusal: {:#?}",
+        refusal.logs
+    );
+    assert!(
+        refusal.invoked(required_child),
+        "the hostile child was not invoked before the postjoin refusal: {:#?}",
+        refusal.logs
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_eq!(
+        after, before,
+        "postjoin refusal failed to roll back every tracked byte and lamport"
+    );
+}
+
+#[tokio::test]
+async fn nonselected_claims_supply_corruption_after_real_child_commit_rolls_back() {
+    let mut artifacts = elves();
+    artifacts.claims = postjoin_hostile_elf("dclutch_postjoin_claims_hostile_sbf.so");
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    assert_postjoin_hostile_rolls_back(
+        test,
+        releases,
+        direct,
+        CLAIMS_PROGRAM_ID,
+        TRADING_TRANSITION_REFUSAL_CODE,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn omitted_token_close_authority_corruption_after_real_custody_commit_rolls_back() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    install_postjoin_hostile_token(
+        &mut test,
+        postjoin_hostile_elf("dclutch_postjoin_token_hostile_sbf.so"),
+    );
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    assert_postjoin_hostile_rolls_back(
+        test,
+        releases,
+        direct,
+        CUSTODY_PROGRAM_ID,
+        TRADING_COMMIT_REFUSAL_CODE,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls_back() {
+    let mut artifacts = elves();
+    artifacts.custody = postjoin_hostile_elf("dclutch_postjoin_custody_hostile_sbf.so");
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    assert_postjoin_hostile_rolls_back(
+        test,
+        releases,
+        direct,
+        CUSTODY_PROGRAM_ID,
+        TRADING_TRANSITION_REFUSAL_CODE,
+    )
+    .await;
 }
 
 /// The journey's SHAPE wall, executed: a four-outcome market trades.
@@ -549,7 +806,7 @@ async fn a_four_outcome_market_trades_on_the_canonical_artifacts() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     let units = submit_v0(
         &mut context,
@@ -608,7 +865,7 @@ async fn trade_at_geometry(artifacts: &Elves, outcomes: u32) -> Result<u64, Refu
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     submit_v0(
         &mut context,
         &instructions,
@@ -651,21 +908,21 @@ fn a_geometry_that_does_not_fit_ran_out_of_compute(outcomes: u32, refusal: &Refu
 async fn the_family_trades_every_geometry_it_is_given() {
     let artifacts = elves();
     for outcomes in 2..=10_u32 {
-        match trade_at_geometry(&artifacts, outcomes).await {
-            Ok(units) => {
-                println!(
-                    "geometry: {outcomes} outcomes ({} cuts) traded at {units} CU",
-                    outcomes - 2
-                );
-                assert!(units > 0 && units <= COMPUTE_LIMIT);
-            }
-            Err(refusal) => {
-                a_geometry_that_does_not_fit_ran_out_of_compute(outcomes, &refusal);
-                panic!(
-                    "a {outcomes}-outcome market ran out of compute; the measured wall was 31 \
-                     outcomes and something has made the hot path much more expensive"
-                );
-            }
+        let execution = trade_at_geometry(&artifacts, outcomes).await;
+        if let Err(refusal) = &execution {
+            a_geometry_that_does_not_fit_ran_out_of_compute(outcomes, refusal);
+        }
+        assert!(
+            execution.is_ok(),
+            "a {outcomes}-outcome market ran out of compute; the measured wall was 31 outcomes \
+             and something has made the hot path much more expensive"
+        );
+        if let Ok(units) = execution {
+            println!(
+                "geometry: {outcomes} outcomes ({} cuts) traded at {units} CU",
+                outcomes - 2
+            );
+            assert!(units > 0 && units <= COMPUTE_LIMIT);
         }
     }
 }
@@ -739,7 +996,7 @@ async fn late_custody_refusal_rolls_back_registry_hot_claims_and_lifecycle() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     let refusal = submit_v0(
         &mut context,
@@ -781,7 +1038,7 @@ async fn corrupt_profile14_root_reserved_byte_refuses_without_mutation() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     corrupt_account_byte(
         &mut context,
         direct.chain.root,
@@ -863,7 +1120,7 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let prestate = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     submit_v0(
         &mut context,
@@ -929,13 +1186,8 @@ async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
 /// The account list is the hot fixed prefix with the root read-only and the
 /// seal writable, followed by the rent payer and the System Program.
 fn seal_instruction(direct: &DirectCase, action: u32, descriptor_digest: [u8; 32]) -> Instruction {
-    let mut accounts = direct
-        .chain
-        .hot_instruction
-        .accounts
-        .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
-        .expect("hot fixed prefix")
-        .to_vec();
+    let mut accounts = direct.chain.capability_seal_accounts.clone();
+    assert_eq!(accounts.len(), HOT_FIXED_ACCOUNT_COUNT_V3);
     for meta in accounts.iter_mut() {
         meta.is_writable = meta.pubkey == direct.chain.capability_seal;
         meta.is_signer = false;
@@ -985,7 +1237,7 @@ async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
     let addresses =
         canonical_lookup_addresses(core::slice::from_ref(&canonical), direct.payer.pubkey());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
 
     assert!(
         maybe_account(&mut context, direct.chain.capability_seal)
@@ -1032,7 +1284,7 @@ async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
     ];
     let addresses = canonical_lookup_addresses(&hostile, direct.payer.pubkey());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
 
     // The control is `the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects`:
     // the same fixture and the same instruction builder, differing only in the
@@ -1074,7 +1326,7 @@ async fn hot_refuses_a_missing_seal_and_a_seal_written_for_another_release() {
     let instructions = direct_registry_instructions(releases, &direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
-    let mut context = test.start_with_context().await;
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
     let refused = submit_v0(
         &mut context,
         &instructions,
@@ -1138,7 +1390,7 @@ async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
         let instructions = direct_registry_instructions(releases, &direct);
         let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
         add_lookup_table(&mut test, &addresses);
-        let mut context = test.start_with_context().await;
+        let mut context = start_with_substrate(test, fixture_substrate()).await;
         // The alteration is made THROUGH THE BANK, and this is not a style
         // choice. It used to be made against `direct.chain.accounts` after
         // `direct_case` returned -- and `direct_case` installs those accounts

@@ -27,8 +27,8 @@ use dclutch_resolution_codec::{
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
-    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
-    SourceMaterialV2, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
+    SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, SOURCE_SPEC_SCHEMA_ID_V1, STATISTIC_SPEC_SCHEMA_ID_V1,
+    SourceMaterialV3, SourceResolutionPhaseV1, SourceResolutionStateV2, SourceSpecV1,
     WINDOW_SPEC_SCHEMA_ID_V1, WindowSpecV1,
 };
 #[cfg(feature = "transaction-planning")]
@@ -92,7 +92,7 @@ pub struct ProviderSubmitSnapshotV3 {
     pub market: ObservedAccount,
     /// Current Runtime V2 Source state.
     pub source_state: ObservedAccount,
-    /// Finalized SourceMaterialV2 raw record.
+    /// Finalized `SourceMaterialV3` raw record.
     pub source_material: ObservedAccount,
     /// Finalized primary SourceSpec raw record.
     pub source_spec: ObservedAccount,
@@ -152,7 +152,7 @@ pub struct ProviderExecuteSnapshotV3 {
     pub lifecycle: ObservedAccount,
     /// Receiver-owned provider update.
     pub update: ObservedAccount,
-    /// Finalized SourceMaterialV2.
+    /// Finalized `SourceMaterialV3`.
     pub source_material: ObservedAccount,
     /// Finalized primary SourceSpec.
     pub source_spec: ObservedAccount,
@@ -266,10 +266,10 @@ pub fn build_provider_submit_v3(
     authenticate_raw(
         registry,
         &snapshot.source_material,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source.material_id().to_bytes(),
     )?;
-    let material = SourceMaterialV2::decode(&snapshot.source_material.data)
+    let material = SourceMaterialV3::decode(&snapshot.source_material.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
     authenticate_raw(
         registry,
@@ -380,7 +380,7 @@ pub fn build_provider_submit_v3(
     .0;
     let material_staging = staging(
         registry,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source.material_id().to_bytes(),
     );
     let source_staging = staging(
@@ -454,7 +454,7 @@ pub fn build_provider_submit_v3(
     })
 }
 
-/// Build the permissionless Core action that consumes one submitted provider update.
+/// Build the permissionless Core-caller action that consumes one submitted provider update.
 ///
 /// The only caller choices are resolver, positive terminal sequence, and the
 /// exact provider body already committed by the lifecycle. Market, Source,
@@ -515,10 +515,10 @@ pub fn build_provider_execute_v3(
     authenticate_raw(
         registry,
         &snapshot.source_material,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
         source.material_id().to_bytes(),
     )?;
-    let material = SourceMaterialV2::decode(&snapshot.source_material.data)
+    let material = SourceMaterialV3::decode(&snapshot.source_material.data)
         .map_err(|_| ProviderTransportOperatorErrorV3::Record)?;
     authenticate_raw(
         registry,
@@ -690,7 +690,7 @@ pub fn build_provider_execute_v3(
         AccountMeta::new_readonly(intent.resolver, true),
         AccountMeta::new(snapshot.source_state.key, false),
         AccountMeta::new(certificate, false),
-        AccountMeta::new(snapshot.market.key, false),
+        AccountMeta::new_readonly(snapshot.market.key, false),
         AccountMeta::new_readonly(activation, false),
         AccountMeta::new_readonly(infrastructure, false),
         AccountMeta::new_readonly(registry, false),
@@ -706,7 +706,7 @@ pub fn build_provider_execute_v3(
         raw_meta(&snapshot.source_material),
         staging_meta(
             registry,
-            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+            SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
             source.material_id().to_bytes(),
         ),
         raw_meta(&snapshot.source_spec),
@@ -907,7 +907,7 @@ pub fn compile_provider_submit_v0(
     compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
 }
 
-/// Compile one exact Core provider execution into an unsigned v0 message.
+/// Compile one exact Core-caller provider execution into an unsigned v0 message.
 ///
 /// The permissionless resolver is the fee payer and sole transaction signer;
 /// the Core caller PDA becomes a signer only inside the onchain CPI.
@@ -1064,6 +1064,7 @@ fn validate_execute_report(
         || request.market != core_request.market.to_bytes()
         || request.generation != core_request.generation
         || request.parent_request_digest != hash(core_bytes).to_bytes()
+        || request.caller_program != report.instruction.program_id.to_bytes()
         || account_key(accounts, 0)?
             != Pubkey::find_program_address(
                 &CallerAuthoritySeedsV1::from_bytes(
@@ -1126,7 +1127,7 @@ fn exact_reclaim_privileges(accounts: &[AccountMeta]) -> bool {
 fn exact_execute_privileges(accounts: &[AccountMeta]) -> bool {
     accounts.iter().enumerate().all(|(index, account)| {
         let expected_signer = index == 1;
-        let expected_writable = matches!(index, 2 | 3 | 4 | 37);
+        let expected_writable = matches!(index, 2 | 3 | 37);
         account.is_signer == expected_signer && account.is_writable == expected_writable
     })
 }
@@ -1292,7 +1293,7 @@ mod tests {
 
     fn execute_report() -> ProviderTransportReportV3 {
         let mut accounts = account_frame(PROVIDER_EXECUTE_ACCOUNT_COUNT_V3, 11);
-        for index in [2, 3, 4, 37] {
+        for index in [2, 3, 37] {
             accounts[index].is_writable = true;
         }
         accounts[1].is_signer = true;
@@ -1303,7 +1304,9 @@ mod tests {
                 .expect("market identity"),
         );
         let core_bytes = core.encode().expect("Core request");
-        let body = vec![0xa5; 64];
+        // The captured Pyth post_update instruction is 102 bytes including its
+        // 8-byte discriminator. Resolution transports the exact 94-byte body.
+        let body = vec![0xa5; 94];
         let request = ProviderExecutionRequestV3 {
             caller: ProviderCallerV3::Core,
             generation: 7,
@@ -1442,6 +1445,15 @@ mod tests {
     #[test]
     fn core_execution_requires_routing_and_only_the_resolver_signature() {
         let report = execute_report();
+        assert_eq!(PROVIDER_EXECUTE_ACCOUNT_COUNT_V3, 47);
+        assert_eq!(
+            report.instruction.accounts.len(),
+            PROVIDER_EXECUTE_ACCOUNT_COUNT_V3
+        );
+        assert!(distinct(&report.instruction.accounts));
+        assert_eq!(dclutch_market_core_codec::REQUEST_BYTES, 72);
+        assert_eq!(PROVIDER_EXECUTION_REQUEST_BYTES_V3, 608);
+        assert_eq!(report.instruction.data.len(), 774);
         assert_eq!(
             compile_provider_execute_v0(&report, Hash::new_from_array([7; 32]), &[]),
             Err(ProviderTransportTransactionErrorV3::Routing(
@@ -1460,8 +1472,12 @@ mod tests {
             vec![report.instruction.accounts[1].pubkey]
         );
         assert_eq!(plan.message.required_signatures, 1);
-        assert!(plan.message.loaded_addresses > 0);
-        assert!(plan.message.wire_bytes <= dclutch_versioned_message_operator::PACKET_DATA_BYTES);
+        assert_eq!(plan.message.loaded_addresses, 45);
+        assert_eq!(plan.message.wire_bytes, 1_072);
+        assert_eq!(
+            dclutch_versioned_message_operator::PACKET_DATA_BYTES - plan.message.wire_bytes,
+            160,
+        );
     }
 
     #[test]
@@ -1492,6 +1508,15 @@ mod tests {
         assert_eq!(
             compile_provider_execute_v0(&execute, Hash::new_from_array([7; 32]), &[]),
             Err(ProviderTransportTransactionErrorV3::Frame)
+        );
+
+        let mut direct_resolution = execute_report();
+        direct_resolution.instruction.program_id =
+            direct_resolution.instruction.accounts[15].pubkey;
+        assert_eq!(
+            compile_provider_execute_v0(&direct_resolution, Hash::new_from_array([7; 32]), &[],),
+            Err(ProviderTransportTransactionErrorV3::Frame),
+            "the unsigned caller PDA cannot bypass the Core wrapper through a top-level Resolution instruction",
         );
     }
 }

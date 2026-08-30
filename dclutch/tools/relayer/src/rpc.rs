@@ -349,6 +349,21 @@ impl RpcClient {
         Ok((blockhash, last_valid))
     }
 
+    /// Ask the selected finalized bank for the exact fee of one compiled message.
+    pub async fn get_fee_for_message(&self, message_base64: &str) -> Result<u64> {
+        let result = self
+            .call(
+                "getFeeForMessage",
+                json!([message_base64, { "commitment": "finalized" }]),
+                json!({ "message_base64_len": message_base64.len() }),
+            )
+            .await?;
+        result
+            .get("value")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| self.malformed("getFeeForMessage", "result carried no numeric value"))
+    }
+
     /// Submit a serialized transaction.
     ///
     /// Reaching this function at all requires passing

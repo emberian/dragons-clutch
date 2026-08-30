@@ -96,6 +96,7 @@ mod tests {
     };
 
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     fn id(value: u8) -> Identity {
         Identity::new([value; 32]).expect("nonzero identity")
@@ -151,8 +152,10 @@ mod tests {
                 generation: 1,
             },
             outstanding_capabilities: 0,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: id(38),
             terminal_receipt: Some(id(39)),
+            bumps: StateBumpsV1::UNRECORDED,
         }
     }
 

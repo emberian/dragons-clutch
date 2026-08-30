@@ -165,6 +165,9 @@ structure FoundingFrame where
   realm : Realm
   product : Product
   identity : MarketIdentity
+  /-- Canonical complete-set principal ceiling projected from Source policy.
+  `2^64 - 1` is the one explicit unbounded representation at the wire boundary. -/
+  principalCapSets : Nat
   coreAdmission : ExecutionRelease.Admission
   quote : FoundingQuote
   accounts : FoundingAccounts
@@ -190,6 +193,7 @@ def foundingAccepts (frame : FoundingFrame) : Bool :=
   frame.identity.realmId == frame.realm.realmId &&
   frame.identity.productRecordId == frame.product.productRecordId &&
   frame.identity.productId == frame.product.productId &&
+  0 < frame.principalCapSets && frame.principalCapSets < 2^64 &&
   frame.identity.executionReleaseSetId == frame.coreAdmission.selected.releaseSetId &&
   frame.identity.registryProgramId == frame.coreAdmission.marketRegistryProgram &&
   frame.coreAdmission.marketReleaseSetId == frame.identity.executionReleaseSetId &&
@@ -361,14 +365,71 @@ def seriesPermitExpiryAccepts
   observation.expiredTicketCandidateAuthenticated && observation.rentCreditAuthenticated &&
   permit.expirySlot < observation.currentSlot
 
-def seriesPermitExpiryRefund (observation : SeriesPermitExpiryObservation) : Nat :=
-  observation.account.lamports
+/-- The crank's reward for turning one expired-permit refund.
+
+Expiry is a *closing* route -- the permit account is drained and closed
+whatever happens -- so the reward is a capped slice of lamports that are
+already leaving: `min cap balance`. It is deliberately a `min` and not a
+guarded subtraction, because this must never *refuse* for want of funds: a
+crank that can refuse for money is an unturned crank, which is the same
+liveness defect arriving through the funding door. A thin permit simply pays
+a thin reward. See `docs/design/FUNDED_CRANK_V1.md`.
+
+`cap = 0` models the unfunded frame, in which no crank recipient is named and
+the RentCredit still receives every lamport. -/
+def seriesPermitExpiryCrankReward
+    (observation : SeriesPermitExpiryObservation) (rewardCap : Nat) : Nat :=
+  min rewardCap observation.account.lamports
+
+/-- Lamports delivered to the immutable RentCredit: everything the crank did
+not take. -/
+def seriesPermitExpiryRefund
+    (observation : SeriesPermitExpiryObservation) (rewardCap : Nat) : Nat :=
+  observation.account.lamports - seriesPermitExpiryCrankReward observation rewardCap
 
 theorem unexpired_series_permit_refund_refuses
     (permit : SeriesFoundingPermit) (observation : SeriesPermitExpiryObservation)
     (unexpired : observation.currentSlot ≤ permit.expirySlot) :
     seriesPermitExpiryAccepts permit observation = false := by
   simp [seriesPermitExpiryAccepts, Nat.not_lt_of_ge unexpired]
+
+/-- **Conservation.** Every lamport leaving the permit arrives at exactly one
+of the two recipients.
+
+This is not bookkeeping. `Nat` subtraction truncates, so the refund leg would
+silently read zero -- losing lamports with no error anywhere -- for any cap
+exceeding the balance, which is precisely the thin-permit case the `min`
+exists to serve. The theorem is what rules that out. -/
+theorem series_permit_expiry_conserves
+    (observation : SeriesPermitExpiryObservation) (rewardCap : Nat) :
+    seriesPermitExpiryCrankReward observation rewardCap
+      + seriesPermitExpiryRefund observation rewardCap
+      = observation.account.lamports := by
+  unfold seriesPermitExpiryCrankReward seriesPermitExpiryRefund
+  exact Nat.add_sub_cancel' (Nat.min_le_right _ _)
+
+/-- The crank can never take more than its cap. -/
+theorem series_permit_expiry_reward_is_capped
+    (observation : SeriesPermitExpiryObservation) (rewardCap : Nat) :
+    seriesPermitExpiryCrankReward observation rewardCap ≤ rewardCap :=
+  Nat.min_le_left _ _
+
+/-- The crank can never take more than the account actually held, so the
+refund leg is never driven negative and the route cannot overdraw. -/
+theorem series_permit_expiry_reward_within_balance
+    (observation : SeriesPermitExpiryObservation) (rewardCap : Nat) :
+    seriesPermitExpiryCrankReward observation rewardCap ≤ observation.account.lamports :=
+  Nat.min_le_right _ _
+
+/-- **The unfunded frame is unchanged.** With no crank named the RentCredit
+still receives every lamport, which is what lets the Rust route admit both a
+25-account and a 26-account frame without the older callers changing at all.
+The equation is the previous definition of `seriesPermitExpiryRefund`, so this
+theorem is also the compatibility proof for that edit. -/
+@[simp] theorem series_permit_expiry_unfunded_refunds_everything
+    (observation : SeriesPermitExpiryObservation) :
+    seriesPermitExpiryRefund observation 0 = observation.account.lamports := by
+  simp [seriesPermitExpiryRefund, seriesPermitExpiryCrankReward]
 
 /-! ## Persistent Core state -/
 
@@ -388,6 +449,7 @@ inductive Readiness where
 
 structure State where
   identity : MarketIdentity
+  principalCapSets : Nat
   rentBeneficiaryId : Identity
   phase : Phase
   readiness : Readiness
@@ -414,11 +476,13 @@ def childCountPhaseValid (state : State) : Bool :=
 /-- Complete executable invariant. -/
 def State.valid (state : State) : Bool :=
   state.identity.valid && state.rentBeneficiaryId != 0 &&
+  0 < state.principalCapSets && state.principalCapSets < 2^64 &&
   lifecyclePhaseValid state && terminalFieldsValid state && childCountPhaseValid state
 
 def initialState (frame : FoundingFrame) : State :=
   {
     identity := frame.identity
+    principalCapSets := frame.principalCapSets
     rentBeneficiaryId := frame.accounts.rentCreditId
     phase := .founding
     readiness := .prepaid

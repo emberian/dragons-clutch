@@ -31,19 +31,23 @@ cleanup**, which is how a finished campaign once left a validator with PPID 1
 holding the pinned port. It requires
 separately attested, actual Registry, Core, Claims, Trading, Resolution,
 Custody, and RentCredit ELFs under seven pairwise-distinct program IDs. It also
-loads the committed real Pyth router and receiver ELFs. Unlike
-`--upgradeable-program`, the prepared ProgramData accounts preserve the
-canonical fixed 45-byte Loader V3 metadata span: variant `3`, slot `0`,
-authority `None`, zero authority padding, then the exact ELF.
+loads the committed real Pyth router and receiver ELFs from four exact prepared
+Program/ProgramData account JSON files in the authenticated account directory.
+The launcher never uses `--upgradeable-program ... none`: Solana 4.0.2 encodes
+that spelling as option tag `1` plus the zero Pubkey, not immutable option tag
+`0`. The prepared ProgramData accounts preserve the canonical fixed 45-byte
+Loader V3 metadata span: variant `3`, slot `0`, authority `None`, zero authority
+padding, then the exact ELF.
 
 The standalone [`successor`](bootstrap/successor/README.md) package prepares a
 hash-pinned infrastructure plan containing all seven distinct ArtifactRelease
 bodies, the five-role execution release set, the captured local-Pyth release,
 and the exact expected 144-byte Core-owned Registry/Rent infrastructure
-profile. Genesis contains six immutable Loader programs plus an explicitly
-pre-init authority-bearing Core ProgramData account; Core is not recognized as
-the immutable release until its authority is revoked to `None`. Finalized
-Registry record bodies are the only other genesis fixtures.
+profile. Genesis contains six immutable dClutch Loader programs plus an
+explicitly pre-init authority-bearing Core ProgramData account, and the two
+immutable slot-zero Pyth provider Loader pairs; Core is not recognized as the
+immutable release until its authority is revoked to `None`. Finalized Registry
+record bodies are the only optional additional genesis fixtures.
 
 Core `d6d5f2d` now provides verifier-clean infrastructure-init and Found31. The
 remaining gate is one same-process supervisor retaining an ephemeral Core

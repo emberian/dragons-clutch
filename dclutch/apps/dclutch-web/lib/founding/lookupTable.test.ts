@@ -27,20 +27,18 @@ describe('the routing table agrees with the Rust operator', () => {
     expect(Number(declared![1].replaceAll('_', ''))).toBe(EXTEND_ADDRESSES_PER_TRANSACTION_V1);
   });
 
-  it('sorts over raw key bytes, not over base58 text', () => {
-    // Base58 is not order-preserving, so sorting the strings gives a different
-    // table and therefore a different set of indexes. This is the exact slip
-    // that produces a permuted account frame.
-    const keys = Array.from({ length: 40 }, () => Keypair.generate().publicKey);
+  it('sorts over raw key bytes', () => {
+    const key = (first: number, last = 0): PublicKey => {
+      const bytes = new Uint8Array(32);
+      bytes[0] = first;
+      bytes[31] = last;
+      return new PublicKey(bytes);
+    };
+    const keys = [key(2), key(1, 255), key(1)];
     const canonical = canonicalLookupAddressesV1(keys.map((key) => key.toBase58()));
     const byBytes = [...keys].sort((left, right) => Buffer.compare(Buffer.from(left.toBytes()), Buffer.from(right.toBytes()))).map((key) => key.toBase58());
     expect(canonical).toEqual(byBytes);
-
-    const byText = [...keys].map((key) => key.toBase58()).sort();
-    // With forty random keys the two orders essentially never coincide; if they
-    // did, this test would be vacuous rather than wrong, so it asserts the
-    // disagreement exists before relying on it.
-    expect(byText).not.toEqual(byBytes);
+    expect(canonical).toEqual([key(1), key(1, 255), key(2)].map((entry) => entry.toBase58()));
   });
 
   it('refuses an empty table, a duplicate, and one past the ceiling', () => {

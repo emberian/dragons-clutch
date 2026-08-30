@@ -24,7 +24,7 @@
  *   - an identity with no known schema pairing stays a digest, and says so.
  *
  * The schema pairings come from `lib/coreFound.ts`'s founding construction —
- * the seven records a Found31 publishes, in the order the Market's seeds take
+ * the records a Found37 publishes, in the order the Market's seeds take
  * them — and every schema identity is imported from `lib/generated/coreFound`.
  */
 import {
@@ -32,7 +32,7 @@ import {
   EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   REALM_SCHEMA_RELEASE_ID_V1,
-  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
 } from '../generated/coreFound';
 import { inspectMarketDetailV1, type MarketDetailV1 } from '../marketDetail';
 import { deriveFinalizedRecordAddressesV1 } from '../releaseRegistry';
@@ -104,9 +104,9 @@ const IDENTITY_SCHEMAS: ReadonlyArray<
   },
   {
     field: 'resolutionPolicyId',
-    schema: SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+    schema: SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     title: 'Source material',
-    summary: 'The resolution policy slot. A Found31 founding publishes the Source material record here.',
+    summary: 'The resolution policy slot. A Found37 founding publishes the Source material record here.',
   },
   {
     field: 'capabilityManifestId',

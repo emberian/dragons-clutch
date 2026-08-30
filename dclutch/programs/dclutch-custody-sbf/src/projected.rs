@@ -6,16 +6,17 @@ use core::convert::TryFrom;
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyReplayV1,
     CustodyVaultSeedsV1, PROJECTED_CUSTODY_ABORT_SOURCE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1,
+    PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2, PROJECTED_CUSTODY_LOCK_CLOSE_ACCOUNT_COUNT_V1,
     PROJECTED_CUSTODY_OPEN_HOARD_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_OPEN_SOURCE_ACCOUNT_COUNT_V1,
-    PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_STATE_BYTES_V1,
+    PROJECTED_CUSTODY_REALIZE_ACCOUNT_COUNT_V1, PROJECTED_CUSTODY_STATE_BYTES_V2,
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyError, ProjectedCustodyLockReceiptV1,
     ProjectedCustodyOperationV1, ProjectedCustodyReceiptV1, ProjectedCustodyRequestV1,
-    ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV1, ProjectedCustodyStateV1,
+    ProjectedCustodySourceReplaySeedsV1, ProjectedCustodyStateSeedsV2, ProjectedCustodyStateV2,
     normal_replay_from_realization_v1,
 };
 use dclutch_market_core_codec::{
-    Action, CoreState, Identity, ProjectFoundReceiptV1, ProjectFoundRequestV1, Request, STATE_BYTES,
+    Action, CoreState, Identity, PROJECT_FOUND_ACCOUNT_COUNT_V2, ProjectFoundReceiptV2,
+    ProjectFoundRequestV2, Request, STATE_BYTES,
 };
 use dclutch_registry_activation_auth_v1::authenticate_activated_role_v1;
 use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
@@ -49,7 +50,7 @@ const CALLER_PROGRAM: usize = 4;
 const CALLER_PROGRAMDATA: usize = 5;
 const RENT_CREDIT: usize = 6;
 
-const INITIALIZE_ACCOUNTS: usize = PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V1;
+const INITIALIZE_ACCOUNTS: usize = PROJECTED_CUSTODY_INITIALIZE_ACCOUNT_COUNT_V2;
 const INITIALIZE_CORE_PROGRAM: usize = 7;
 const INITIALIZE_PAYER: usize = 8;
 const INITIALIZE_RENT: usize = 9;
@@ -232,7 +233,7 @@ fn authenticate_common(
     if rent_credit.is_writable != terminal {
         return Err(CustodySbfError::AccountFrame.into());
     }
-    let state_seeds = ProjectedCustodyStateSeedsV1::from_request(request);
+    let state_seeds = ProjectedCustodyStateSeedsV2::from_request(request);
     if Pubkey::find_program_address(&state_seeds.as_slices(), program_id).0 != *state.key {
         return Err(CustodySbfError::Replay.into());
     }
@@ -240,7 +241,7 @@ fn authenticate_common(
         if state.owner != &system_program::ID || state.data_len() != 0 {
             return Err(CustodySbfError::Replay.into());
         }
-    } else if state.owner != program_id || state.data_len() != PROJECTED_CUSTODY_STATE_BYTES_V1 {
+    } else if state.owner != program_id || state.data_len() != PROJECTED_CUSTODY_STATE_BYTES_V2 {
         return Err(CustodySbfError::Replay.into());
     }
     let caller_seeds = ProjectedCustodyCallerSeedsV1::new(request, request_digest);
@@ -437,7 +438,7 @@ fn initialize(
         return Err(CustodySbfError::AccountFrame.into());
     }
     let found_accounts = accounts
-        .get(INITIALIZE_FOUND_START..INITIALIZE_FOUND_START + 31)
+        .get(INITIALIZE_FOUND_START..INITIALIZE_FOUND_START + PROJECT_FOUND_ACCOUNT_COUNT_V2)
         .ok_or(CustodySbfError::AccountFrame)?;
     if found_accounts
         .get(1)
@@ -453,7 +454,7 @@ fn initialize(
         request.generation,
         Identity::new(request.market).map_err(|_| CustodySbfError::Release)?,
     );
-    let projection_request = ProjectFoundRequestV1::new(found)
+    let projection_request = ProjectFoundRequestV2::new(found)
         .map_err(|_| CustodySbfError::Release)?
         .encode()
         .map_err(|_| CustodySbfError::Release)?;
@@ -476,19 +477,19 @@ fn initialize(
         return Err(CustodySbfError::Release.into());
     }
     let projection =
-        ProjectFoundReceiptV1::decode(&receipt_bytes).map_err(|_| CustodySbfError::Release)?;
+        ProjectFoundReceiptV2::decode(&receipt_bytes).map_err(|_| CustodySbfError::Release)?;
     projection
         .verify_found_request(
             hash(&found.encode().map_err(|_| CustodySbfError::Release)?).to_bytes(),
         )
         .map_err(|_| CustodySbfError::Release)?;
     let rent = Rent::from_account_info(rent_account).map_err(|_| CustodySbfError::Create)?;
-    let lamports = rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V1);
+    let lamports = rent.minimum_balance(PROJECTED_CUSTODY_STATE_BYTES_V2);
     if lamports != request.state_rent_lamports {
         return Err(CustodySbfError::Create.into());
     }
     let state_account = account(accounts, STATE)?;
-    let seeds = ProjectedCustodyStateSeedsV1::from_request(request);
+    let seeds = ProjectedCustodyStateSeedsV2::from_request(request);
     let bump = Pubkey::find_program_address(&seeds.as_slices(), program_id).1;
     let bump_seed = [bump];
     let [domain, market, release, role, context] = seeds.as_slices();
@@ -497,12 +498,12 @@ fn initialize(
         state_account,
         system,
         lamports,
-        PROJECTED_CUSTODY_STATE_BYTES_V1,
+        PROJECTED_CUSTODY_STATE_BYTES_V2,
         program_id,
         &[domain, market, release, role, context, &bump_seed],
     )?;
     let current_slot = Clock::get().map_err(|_| CustodySbfError::Create)?.slot;
-    let state = ProjectedCustodyStateV1::initialize(
+    let state = ProjectedCustodyStateV2::initialize(
         request,
         projection,
         producer.to_bytes(),
@@ -1882,7 +1883,7 @@ fn authenticate_source_frame(
 }
 
 fn account_key_for_projection(program_id: &Pubkey, request: ProjectedCustodyRequestV1) -> Pubkey {
-    let seeds = ProjectedCustodyStateSeedsV1::from_request(request);
+    let seeds = ProjectedCustodyStateSeedsV2::from_request(request);
     Pubkey::find_program_address(&seeds.as_slices(), program_id).0
 }
 
@@ -1934,11 +1935,11 @@ fn read_vault_amount(
         .map_err(|_| CustodySbfError::TokenState.into())
 }
 
-fn read_state(account: &AccountInfo<'_>) -> Result<ProjectedCustodyStateV1, ProgramError> {
+fn read_state(account: &AccountInfo<'_>) -> Result<ProjectedCustodyStateV2, ProgramError> {
     let data = account
         .try_borrow_data()
         .map_err(|_| CustodySbfError::Replay)?;
-    ProjectedCustodyStateV1::decode(&data).map_err(|_| CustodySbfError::Replay.into())
+    ProjectedCustodyStateV2::decode(&data).map_err(|_| CustodySbfError::Replay.into())
 }
 
 fn read_source_replay(account: &AccountInfo<'_>) -> Result<CustodyReplayV1, ProgramError> {
@@ -1950,7 +1951,7 @@ fn read_source_replay(account: &AccountInfo<'_>) -> Result<CustodyReplayV1, Prog
 
 fn commit_state(
     account: &AccountInfo<'_>,
-    state: &ProjectedCustodyStateV1,
+    state: &ProjectedCustodyStateV2,
 ) -> Result<(), ProgramError> {
     let bytes = state.encode().map_err(|_| CustodySbfError::Commit)?;
     let mut data = account
@@ -2166,7 +2167,10 @@ mod tests {
 
     #[test]
     fn every_projected_operation_has_one_exact_frame_width() {
-        assert_eq!(INITIALIZE_ACCOUNTS, INITIALIZE_FOUND_START + 31);
+        assert_eq!(
+            INITIALIZE_ACCOUNTS,
+            INITIALIZE_FOUND_START + PROJECT_FOUND_ACCOUNT_COUNT_V2
+        );
         assert_eq!(OPEN_ACCOUNTS, 15);
         assert_eq!(LOCK_ACCOUNTS, 14);
         assert_eq!(REFUND_ACCOUNTS, 14);

@@ -4,14 +4,8 @@
 //! ComputeBudget `RequestHeapFrame`, and this executable already owns an
 //! allocator that can use it: `entrypoint_adapter::admit_heap_frame_v1` reads
 //! the grant out of the instructions sysvar and lifts the bump ceiling to it.
-//! Two founding routes are on `declares_extended_heap_profile_v1`'s list and
-//! get exactly that.
-//!
-//! Hot is deliberately NOT on that list, and the reason recorded there is that
-//! its continuation packet has no room for the instruction. This test measures
-//! that reason instead of restating it, and pins the consequence: a Hot
-//! transaction may carry `RequestHeapFrame` and it changes nothing, because the
-//! route does not declare the profile.
+//! The founding routes are on `declares_extended_heap_profile_v1`'s list and
+//! get exactly that; since 2026-08-30 so is Hot, for the reason below.
 //!
 //! Two things make this test change, and both are the point:
 //!
@@ -23,27 +17,53 @@
 //! Either way the change is deliberate and visible here, rather than a
 //! doctrine living only in a doc comment.
 //!
-//! **The second one happened (W2p, 2026-08-27).** The Hot tail now executes to
-//! completion at the protocol default 32 KiB heap, so what this test asserts is
-//! success with the grant still inert. Hot stays off the extended-heap list and
-//! the packet assertion below still records why -- but nothing rides on it any
-//! more, which is the outcome the decision was holding out for.
+//! **BOTH HAVE NOW HAPPENED, and the file name is a fossil of the first.**
 //!
-//! # And the compute ceiling is now the wall, at one failure in twenty
+//! The second happened first (W2p, 2026-08-27): the Hot tail's heap demand was
+//! closed structurally, so the CONTINUATION route executes to completion at the
+//! protocol default and this test's refusal became success.
+//!
+//! The first happened on 2026-08-30, and the reason is the ROUTE rather than
+//! the tail. A caller who invokes Trading DIRECTLY -- which is how every public
+//! caller sends a Direct trade -- makes two Registry reauthentication CPIs a
+//! continuation never makes, and holds their frames against an allocator that
+//! never frees. Measured, that route exhausts 32 KiB in finalization. So Hot IS
+//! on the list now, and `DIRECT_HOT_HEAP_FRAME_BYTES_V1` is what a top-level
+//! transaction carries.
+//!
+//! What this test pins is the CONTINUATION route: that it executes at whatever
+//! heap ceiling it is handed, and that its packet still fits. If the wire
+//! assertion below ever moves, something did.
+//!
+//! # The compute ceiling is the wall, and this route is over it on most keys
+//!
+//! **This test is RED at the default seed and has been for weeks. Read
+//! `docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md` before
+//! changing anything here -- which route is production is an open ruling, and
+//! the answer determines whether this file is fixed, re-barred or retired.**
 //!
 //! Read the CU figure this prints as ONE DRAW, not as the number. The Hot path
 //! derives program addresses whose seeds include the fixture's maker keys, and
 //! `try_find_program_address` costs 1,500 CU per attempt, so the total is a
 //! function of how deep the bump search happens to go for the keys in play.
 //! `waist::fixture_keypair` pins those keys so this figure is reproducible;
-//! `DCLUTCH_FIXTURE_SEED=<n>` redraws them.
+//! `DCLUTCH_FIXTURE_SEED=<n>` redraws them. The Registry outer adds a SECOND
+//! independent bump draw of its own -- the admission PDA -- on top of those.
 //!
-//! Measured over seeds 0..=19 against ONE ELF
-//! (`14b22a31bb9cabf782047da15eee99ad4f7a1002d17a9f48c256137f6115a2c9`):
-//! nineteen succeeded, spanning 1,336,865 to 1,386,359 CU, and **seed 10 FAILED
-//! -- `exceeded CUs meter at BPF instruction`, 1,399,944 of 1,400,000.** The
-//! ceiling is not a margin this path has; it is a coin the makers' keys flip.
-//! 1,400,000 is also the runtime's maximum, so there is nothing to request.
+//! Measured at commit `3dde1b9c` over 32 pinned seeds, against ELFs built from
+//! that commit by `tools/ci/run.sh programs --commit HEAD` (Trading
+//! `aea436740301bc3ffb9268480037e787aef51eff1c7b3c5a8e02d7edd3393d08`):
+//! **13 pass, 19 fail**, passing draws spanning 1,382,675 to 1,397,675 CU with
+//! a worst passing margin of 2,325. Seed 0 -- the one this test runs by default
+//! -- is a failure: 1,399,794 of 1,399,850, `exceeded CUs meter at BPF
+//! instruction`. 1,400,000 is the runtime's maximum, so there is nothing to
+//! request.
+//!
+//! The same 32 seeds on the same ELFs through the TOP-LEVEL route
+//! (`direct_hot_top_level`) pass 31 of 32, and on all 13 seeds where both
+//! routes complete the continuation costs **exactly 35,127 CU more**. That is
+//! the measurement that makes this a route problem rather than a build, a host
+//! or a harness problem.
 //!
 //! The lane that met this spread before it was pinned recorded it as "codegen
 //! noise of +-20,000 CU between builds of the same source". It is not codegen:
@@ -79,11 +99,6 @@ const PACKET_LIMIT: usize = 1_232;
 /// is what `entrypoint_adapter::REQUEST_HEAP_FRAME_DISCRIMINANT` pins.
 fn request_heap_frame(bytes: u32) -> Instruction {
     compute_budget_instruction(1, &bytes.to_le_bytes())
-}
-
-/// `ComputeBudgetInstruction::SetComputeUnitLimit(units)`, hand-encoded.
-fn set_compute_unit_limit(units: u32) -> Instruction {
-    compute_budget_instruction(2, &units.to_le_bytes())
 }
 
 fn compute_budget_instruction(discriminant: u8, payload: &[u8]) -> Instruction {
@@ -141,7 +156,7 @@ fn budget_free_program_test(artifacts: &Elves) -> ProgramTest {
 }
 
 #[tokio::test]
-async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
+async fn the_continuation_route_is_unaffected_by_a_heap_grant_and_still_fits_its_packet() {
     let artifacts = elves();
     let mut test = budget_free_program_test(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
@@ -155,10 +170,9 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     // indices, so a prepended instruction shifts both and the transaction
     // refuses for an unrelated reason. The runtime scans the whole message for
     // ComputeBudget instructions, so trailing position costs nothing.
-    let mut instructions = Vec::with_capacity(canonical.len() + 2);
+    let mut instructions = Vec::with_capacity(canonical.len() + 1);
     instructions.extend(canonical);
     instructions.push(request_heap_frame(262_144));
-    instructions.push(set_compute_unit_limit(1_400_000));
 
     // Not `test.start_with_context()`: a pinned substrate's programs are not
     // visible at slot 1, and `direct_case` built the maker replays around this
@@ -184,11 +198,12 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     );
     // One signature plus its count byte: this transaction has a single signer.
     let wire = 1 + 64 + message.serialize().len();
-    assert!(
-        wire > PACKET_LIMIT,
-        "the packet fits now -- the recorded reason Hot is off the extended \
-         heap profile has expired and the decision should be revisited"
-    );
+    // The execution-only CapabilitySeal projection aliases its six exact
+    // staging coordinates to their authenticated raw coordinates. Each alias
+    // removes one loaded-account index without changing the instruction data
+    // or signer/static-key set: 1,212 - 6 = 1,206 bytes.
+    assert_eq!(wire, 1_206, "compact Hot plus heap-request wire changed");
+    assert!(wire <= PACKET_LIMIT);
 
     let transaction =
         VersionedTransaction::try_new(message, &[&direct.payer]).expect("signed transaction");
@@ -205,17 +220,20 @@ async fn a_requested_heap_frame_is_inert_for_hot_and_does_not_fit_its_packet() {
     // end and are released before the child walk -- so the whole question is
     // moot and this test's refusal has become success.
     //
-    // What it now pins is stronger than what it pinned before: the canonical
-    // Direct continuation EXECUTES TO COMPLETION at the protocol default 32
-    // KiB heap, with the `RequestHeapFrame(262_144)` above still inert. That
-    // is the same inertness as before -- Hot is not on
-    // `declares_extended_heap_profile_v1`'s list and the packet assertion
-    // above still says why it cannot be -- but now with nothing riding on it.
+    // The heap is not what fails here. The `RequestHeapFrame(262_144)` above is
+    // NOT inert on this route any more, and it is also not the problem: since
+    // `8ee544e4` put `DCLTHOT3` on `declares_extended_heap_profile_v1`'s list,
+    // and `registry/hot_continuation_v2::process` forwards the Hot bytes
+    // unchanged, the declaration cannot tell the two routes apart -- so Trading
+    // under a continuation scans the instructions sysvar and lifts its ceiling
+    // too. Measured cost of that on this route: +517 CU, on every seed. Drop
+    // the grant entirely and the same seeds still exhaust the meter.
     //
-    // If this ever becomes a refusal again, read the code before assuming a
+    // If this ever becomes a refusal, read the code before assuming a
     // regression in the heap: `TradingSbfError::Content` is the named heap
     // refusal, fail-closed and never an abort, and it is what a heap
-    // regression would produce.
+    // regression would produce. What this route actually hits is
+    // `ProgramFailedToComplete` -- the compute ceiling, not a refusal.
     if let Err(refusal) = processed.result {
         let TransactionError::InstructionError(_, InstructionError::Custom(code)) = refusal else {
             panic!("Hot refused outside its own error taxonomy: {refusal:?}");

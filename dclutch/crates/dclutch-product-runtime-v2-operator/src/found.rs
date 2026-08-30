@@ -7,32 +7,42 @@
 
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_market_core_codec::{
-    Action, Identity, MarketCoreStateSeedsV2, MarketIdentity, REQUEST_BYTES, Request, STATE_BYTES,
+    Action, FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3, Identity, MarketCoreStateSeedsV2,
+    MarketIdentity, REQUEST_BYTES, Request, STATE_BYTES,
 };
+use dclutch_product_payoff_v2_codec::{
+    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    runtime_v3::{ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3},
+};
+use dclutch_product_runtime_v2::ResultDomainV2;
 use dclutch_product_runtime_v2_admission::{
     AdmissionProjectionV2, AdmissionReceiptV2, FinalizedRecordCoordinateV2, PORTFOLIO_SCHEMA_ID_V2,
     PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2, admit_authenticated_records_v2,
 };
 use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1,
     ArtifactReleaseV1, DeploymentObservationV1, require_slot_pinned_release_v1,
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1,
-    ExecutionRoleBindingV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
+    ArtifactReleaseIdV1, ExecutionRoleBindingV1, ExecutionRoleV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    ProtocolInfrastructureProfileV1,
 };
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
 };
 use dclutch_source_contract::{
-    ContentId as SourceContentId, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2, SourceMaterialV2,
+    ContentId as SourceContentId, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, ManipulationFloorV1,
+    SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    SOURCE_SPEC_SCHEMA_ID_V1, SourceCapacityProfileV1, SourceMaterialV3, SourcePrincipalPolicyV1,
+    SourceSpecV1,
 };
 use solana_program::{
     account_info::AccountInfo,
-    hash::hash,
+    hash::{hash, hashv},
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     rent::Rent,
@@ -44,8 +54,8 @@ use crate::{
     AccountObservationV2, Error, FinalizedRecordObservationV2, Result, coordinate, digest,
 };
 
-/// Exact number of accounts in the Runtime V2 Core Found frame.
-pub const FOUND_ACCOUNT_COUNT_V2: usize = 31;
+/// Exact number of accounts in the Runtime V2 ordinary Core Found V3 frame.
+pub use dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3;
 
 /// One non-Product finalized raw/staging record observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,12 +84,18 @@ pub struct FoundProjectionStateV2<'a> {
     pub result_domain: FinalizedRecordObservationV2<'a>,
     /// Finalized Runtime V2 portfolio raw/staging pair.
     pub portfolio: FinalizedRecordObservationV2<'a>,
-    /// Finalized SourceMaterialV2 raw/staging pair.
+    /// Finalized Product-linked ProductBasisV3 raw/staging pair.
+    pub linked_basis: FinalizedRecordObservationV2<'a>,
+    /// Finalized SourceMaterialV3 raw/staging pair.
     pub source_material: FinalizedReferenceObservationV2<'a>,
+    /// Finalized SourceSpecV1 raw/staging pair selected by SourceMaterialV3.
+    pub source_spec: FinalizedReferenceObservationV2<'a>,
+    /// Finalized SourceCapacityProfileV1 pair selected by SourceSpecV1.
+    pub capacity_profile: FinalizedReferenceObservationV2<'a>,
+    /// Selected finalized ManipulationFloorV1 pair, or the canonical absent pair.
+    pub manipulation_floor: FinalizedReferenceObservationV2<'a>,
     /// Finalized capability-manifest raw/staging pair.
     pub capability_manifest: FinalizedReferenceObservationV2<'a>,
-    /// Finalized execution-release-set raw/staging pair.
-    pub execution_release_set: FinalizedReferenceObservationV2<'a>,
     /// Registry-owned activated release-set cache.
     pub activation_cache: AccountObservationV2<'a>,
     /// Exact executable Core program selected for Found.
@@ -123,12 +139,18 @@ pub struct FoundStateV2<'a> {
     pub result_domain: FinalizedRecordObservationV2<'a>,
     /// Finalized Runtime V2 portfolio raw/staging pair.
     pub portfolio: FinalizedRecordObservationV2<'a>,
-    /// Finalized SourceMaterialV2 raw/staging pair.
+    /// Finalized Product-linked ProductBasisV3 raw/staging pair.
+    pub linked_basis: FinalizedRecordObservationV2<'a>,
+    /// Finalized SourceMaterialV3 raw/staging pair.
     pub source_material: FinalizedReferenceObservationV2<'a>,
+    /// Finalized SourceSpecV1 raw/staging pair selected by SourceMaterialV3.
+    pub source_spec: FinalizedReferenceObservationV2<'a>,
+    /// Finalized SourceCapacityProfileV1 pair selected by SourceSpecV1.
+    pub capacity_profile: FinalizedReferenceObservationV2<'a>,
+    /// Selected finalized ManipulationFloorV1 pair, or the canonical absent pair.
+    pub manipulation_floor: FinalizedReferenceObservationV2<'a>,
     /// Finalized capability-manifest raw/staging pair.
     pub capability_manifest: FinalizedReferenceObservationV2<'a>,
-    /// Finalized execution-release-set raw/staging pair.
-    pub execution_release_set: FinalizedReferenceObservationV2<'a>,
     /// Registry-owned activated release-set cache.
     pub activation_cache: AccountObservationV2<'a>,
     /// Exact executable Core program selected for Found.
@@ -165,9 +187,12 @@ impl<'a> FoundStateV2<'a> {
             product: self.product,
             result_domain: self.result_domain,
             portfolio: self.portfolio,
+            linked_basis: self.linked_basis,
             source_material: self.source_material,
+            source_spec: self.source_spec,
+            capacity_profile: self.capacity_profile,
+            manipulation_floor: self.manipulation_floor,
             capability_manifest: self.capability_manifest,
-            execution_release_set: self.execution_release_set,
             activation_cache: self.activation_cache,
             core_program: self.core_program,
             core_programdata: self.core_programdata,
@@ -200,6 +225,8 @@ pub struct FoundProjectionV2 {
     pub observation_slot: u64,
     /// Exact Market rent top-up required from the payer.
     pub market_rent_top_up: u64,
+    /// Source-policy principal cap projected through the authenticated basis scale.
+    pub principal_cap_sets: u64,
 }
 
 /// Exact chain-derived Runtime V2 Core Found plan.
@@ -219,6 +246,8 @@ pub struct FoundInstructionPlanV2 {
     pub observation_slot: u64,
     /// Exact Market rent top-up required from the payer.
     pub market_rent_top_up: u64,
+    /// Source-policy principal cap projected through the authenticated basis scale.
+    pub principal_cap_sets: u64,
 }
 
 /// Reauthenticate one finalized Runtime V2 snapshot and construct Core Found.
@@ -254,7 +283,7 @@ pub fn build_found_instruction_v2(
         return Err(Error::InvalidRecord);
     }
     let accounts = found_metas(state);
-    if accounts.len() != FOUND_ACCOUNT_COUNT_V2 {
+    if accounts.len() != FOUND_ACCOUNT_COUNT_V3 {
         return Err(Error::AccountAuthority);
     }
     Ok(FoundInstructionPlanV2 {
@@ -269,6 +298,7 @@ pub fn build_found_instruction_v2(
         product: projection.product,
         observation_slot: projection.observation_slot,
         market_rent_top_up: projection.market_rent_top_up,
+        principal_cap_sets: projection.principal_cap_sets,
     })
 }
 
@@ -322,18 +352,101 @@ pub fn project_found_v2(
     )
     .map_err(|_| Error::InvalidRecord)?;
 
+    let linked_basis_digest = authenticate_product_record(
+        state.registry_program.key,
+        GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        state.linked_basis,
+    )?;
+    let basis =
+        ProductBasisV3::decode(state.linked_basis.raw.data).map_err(|_| Error::InvalidRecord)?;
+    let domain =
+        ResultDomainV2::decode(state.result_domain.raw.data).map_err(|_| Error::InvalidRecord)?;
+    let semantic = semantic_basis_preimage_v3(state.linked_basis.raw.data)
+        .map_err(|_| Error::InvalidRecord)?;
+    let semantic_basis_id = hashv(&[
+        SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic.prefix(),
+        semantic.suffix(),
+    ])
+    .to_bytes();
+    if linked_basis_digest.content_digest.to_bytes() != hash(state.linked_basis.raw.data).to_bytes()
+        || semantic_basis_id != product.join.liability_basis_id.to_bytes()
+        || basis.product_id() != product.join.product_id.to_bytes()
+        || basis.result_domain_id() != product.join.result_domain_id.to_bytes()
+        || basis.coordinate_domain_id() != domain.coordinate_domain_id().to_bytes()
+        || basis.result_unit_id() != domain.result_unit_id().to_bytes()
+        || basis.payout_scale() == 0
+    {
+        return Err(Error::CrossRecordMismatch);
+    }
+
     let source_digest = authenticate_reference(
         state.registry_program.key,
         state.source_material,
-        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2,
+        SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     )?;
-    SourceMaterialV2::decode(state.source_material.record.raw.data)
-        .and_then(|material| {
-            material.authenticate_product_record(SourceContentId::new(
-                product.product_record_digest.to_bytes(),
-            )?)
-        })
+    let material = SourceMaterialV3::decode(state.source_material.record.raw.data)
+        .map_err(|_| Error::InvalidRecord)?;
+    material
+        .authenticate_product_record(
+            SourceContentId::new(product.product_record_digest.to_bytes())
+                .map_err(|_| Error::InvalidRecord)?,
+        )
         .map_err(|_| Error::CrossRecordMismatch)?;
+    let source_spec_digest = authenticate_reference(
+        state.registry_program.key,
+        state.source_spec,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+    )?;
+    let source_spec = SourceSpecV1::decode(state.source_spec.record.raw.data)
+        .map_err(|_| Error::InvalidRecord)?;
+    let capacity_profile_digest = authenticate_reference(
+        state.registry_program.key,
+        state.capacity_profile,
+        SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1,
+    )?;
+    let capacity_profile = SourceCapacityProfileV1::decode(state.capacity_profile.record.raw.data)
+        .map_err(|_| Error::InvalidRecord)?;
+    let manipulation_floor = match material.principal_policy() {
+        SourcePrincipalPolicyV1::ExplicitlyUnbounded => {
+            authenticate_absent_optional_reference(
+                state.registry_program.key,
+                state.manipulation_floor,
+                MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+            )?;
+            None
+        }
+        SourcePrincipalPolicyV1::BoundedByFloor(_) => {
+            let floor_digest = authenticate_reference(
+                state.registry_program.key,
+                state.manipulation_floor,
+                MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+            )?;
+            let floor = ManipulationFloorV1::decode(state.manipulation_floor.record.raw.data)
+                .map_err(|_| Error::InvalidRecord)?;
+            Some((
+                SourceContentId::new(floor_digest.to_bytes()).map_err(|_| Error::InvalidRecord)?,
+                floor,
+            ))
+        }
+    };
+    let principal_cap_sets = material
+        .derive_principal_cap_sets(
+            SourceContentId::new(source_spec_digest.to_bytes())
+                .map_err(|_| Error::InvalidRecord)?,
+            source_spec,
+            SourceContentId::new(capacity_profile_digest.to_bytes())
+                .map_err(|_| Error::InvalidRecord)?,
+            capacity_profile,
+            manipulation_floor,
+            SourceContentId::new(*realm.collateral_mint()).map_err(|_| Error::InvalidRecord)?,
+            basis.payout_scale(),
+        )
+        .map_err(|_| Error::CrossRecordMismatch)?
+        .to_sets();
+    if principal_cap_sets == 0 {
+        return Err(Error::CrossRecordMismatch);
+    }
 
     let manifest_digest = authenticate_reference(
         state.registry_program.key,
@@ -343,17 +456,7 @@ pub fn project_found_v2(
     CapabilityManifestV1::decode(state.capability_manifest.record.raw.data)
         .map_err(|_| Error::InvalidRecord)?;
 
-    let release_set_digest = authenticate_reference(
-        state.registry_program.key,
-        state.execution_release_set,
-        EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
-    )?;
-    let release_set = ExecutionReleaseSetV1::decode(state.execution_release_set.record.raw.data)
-        .map_err(|_| Error::InvalidRecord)?;
-    if release_set.to_bytes().as_slice() != state.execution_release_set.record.raw.data {
-        return Err(Error::InvalidRecord);
-    }
-    authenticate_activation(state, release_set_digest.to_bytes(), release_set)?;
+    let release_set_digest = authenticate_activation(state)?;
     authenticate_infrastructure(state, &rent)?;
 
     let mut market_identity = MarketIdentity {
@@ -388,6 +491,7 @@ pub fn project_found_v2(
         product,
         observation_slot: slot,
         market_rent_top_up,
+        principal_cap_sets,
     })
 }
 
@@ -447,9 +551,11 @@ fn authenticate_record_rent_minima(state: FoundProjectionStateV2<'_>, rent: &Ren
         state.product,
         state.result_domain,
         state.portfolio,
+        state.linked_basis,
         state.source_material.record,
+        state.source_spec.record,
+        state.capacity_profile.record,
         state.capability_manifest.record,
-        state.execution_release_set.record,
         state.registry_artifact,
         state.rent_artifact,
     ];
@@ -485,11 +591,49 @@ fn authenticate_reference(
     Ok(coordinate.content_digest)
 }
 
+fn authenticate_absent_optional_reference(
+    registry: Pubkey,
+    reference: FinalizedReferenceObservationV2<'_>,
+    expected_schema: [u8; 32],
+) -> Result<()> {
+    if reference.schema_id != expected_schema {
+        return Err(Error::AccountAuthority);
+    }
+    let absent = [0_u8; 32];
+    let expected_raw = Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &expected_schema, &absent],
+        &registry,
+    )
+    .0;
+    let expected_staging = Pubkey::find_program_address(
+        &[STAGING_CURSOR_PDA_SEED_V1, &expected_schema, &absent],
+        &registry,
+    )
+    .0;
+    for (observation, expected) in [
+        (reference.record.raw, expected_raw),
+        (reference.record.staging, expected_staging),
+    ] {
+        if observation.key != expected
+            || observation.owner != system_program::ID
+            || observation.executable
+            || !observation.data.is_empty()
+        {
+            return Err(Error::AccountAuthority);
+        }
+    }
+    Ok(())
+}
+
 fn authenticate_activation(
     state: FoundProjectionStateV2<'_>,
-    release_set_digest: [u8; 32],
-    release_set: ExecutionReleaseSetV1,
-) -> Result<()> {
+) -> Result<dclutch_product_runtime_v2::ContentId> {
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(state.activation_cache.data)
+        .map_err(|_| Error::InvalidRecord)?;
+    let release_set_digest = activated
+        .execution_release_set_id()
+        .map_err(|_| Error::InvalidRecord)?
+        .to_bytes();
     let expected_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set_digest],
         &state.registry_program.key,
@@ -500,20 +644,9 @@ fn authenticate_activation(
     {
         return Err(Error::AccountAuthority);
     }
-    let activated = ActivatedExecutionReleaseSetViewV1::decode(state.activation_cache.data)
+    let release_set = activated
+        .release_set_projection()
         .map_err(|_| Error::InvalidRecord)?;
-    if activated
-        .execution_release_set_id()
-        .map_err(|_| Error::InvalidRecord)?
-        .to_bytes()
-        != release_set_digest
-        || activated
-            .release_set_projection()
-            .map_err(|_| Error::InvalidRecord)?
-            != release_set
-    {
-        return Err(Error::CrossRecordMismatch);
-    }
     let core = activated
         .role(ExecutionRoleV1::Core)
         .map_err(|_| Error::InvalidRecord)?;
@@ -529,7 +662,7 @@ fn authenticate_activation(
         return Err(Error::CrossRecordMismatch);
     }
     authenticate_current_deployment(state.core_program, state.core_programdata, release)?;
-    Ok(())
+    dclutch_product_runtime_v2::ContentId::new(release_set_digest).map_err(|_| Error::InvalidRecord)
 }
 
 fn authenticate_infrastructure(state: FoundProjectionStateV2<'_>, rent: &Rent) -> Result<()> {
@@ -703,7 +836,7 @@ fn decode_rent(account: AccountObservationV2<'_>) -> Result<Rent> {
 }
 
 fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
-    vec![
+    let accounts = vec![
         AccountMeta::new(state.payer.key, true),
         AccountMeta::new(state.market.key, false),
         AccountMeta::new_readonly(state.rent_credit.key, false),
@@ -716,12 +849,18 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
         AccountMeta::new_readonly(state.result_domain.staging.key, false),
         AccountMeta::new_readonly(state.portfolio.raw.key, false),
         AccountMeta::new_readonly(state.portfolio.staging.key, false),
+        AccountMeta::new_readonly(state.linked_basis.raw.key, false),
+        AccountMeta::new_readonly(state.linked_basis.staging.key, false),
         AccountMeta::new_readonly(state.source_material.record.raw.key, false),
         AccountMeta::new_readonly(state.source_material.record.staging.key, false),
+        AccountMeta::new_readonly(state.source_spec.record.raw.key, false),
+        AccountMeta::new_readonly(state.source_spec.record.staging.key, false),
+        AccountMeta::new_readonly(state.capacity_profile.record.raw.key, false),
+        AccountMeta::new_readonly(state.capacity_profile.record.staging.key, false),
+        AccountMeta::new_readonly(state.manipulation_floor.record.raw.key, false),
+        AccountMeta::new_readonly(state.manipulation_floor.record.staging.key, false),
         AccountMeta::new_readonly(state.capability_manifest.record.raw.key, false),
         AccountMeta::new_readonly(state.capability_manifest.record.staging.key, false),
-        AccountMeta::new_readonly(state.execution_release_set.record.raw.key, false),
-        AccountMeta::new_readonly(state.execution_release_set.record.staging.key, false),
         AccountMeta::new_readonly(state.activation_cache.key, false),
         AccountMeta::new_readonly(state.core_program.key, false),
         AccountMeta::new_readonly(state.core_programdata.key, false),
@@ -735,12 +874,19 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
         AccountMeta::new_readonly(state.rent_artifact.raw.key, false),
         AccountMeta::new_readonly(state.rent_artifact.staging.key, false),
         AccountMeta::new_readonly(state.rent_programdata.key, false),
-    ]
+    ];
+    debug_assert_eq!(
+        accounts
+            .get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
+            .map(|meta| meta.pubkey),
+        Some(state.capability_manifest.record.raw.key),
+    );
+    accounts
 }
 
 fn projection_accounts(
     state: FoundProjectionStateV2<'_>,
-) -> [AccountObservationV2<'_>; FOUND_ACCOUNT_COUNT_V2 - 1] {
+) -> [AccountObservationV2<'_>; FOUND_ACCOUNT_COUNT_V3 - 1] {
     [
         state.payer,
         state.market,
@@ -753,12 +899,18 @@ fn projection_accounts(
         state.result_domain.staging,
         state.portfolio.raw,
         state.portfolio.staging,
+        state.linked_basis.raw,
+        state.linked_basis.staging,
         state.source_material.record.raw,
         state.source_material.record.staging,
+        state.source_spec.record.raw,
+        state.source_spec.record.staging,
+        state.capacity_profile.record.raw,
+        state.capacity_profile.record.staging,
+        state.manipulation_floor.record.raw,
+        state.manipulation_floor.record.staging,
         state.capability_manifest.record.raw,
         state.capability_manifest.record.staging,
-        state.execution_release_set.record.raw,
-        state.execution_release_set.record.staging,
         state.activation_cache,
         state.core_program,
         state.core_programdata,

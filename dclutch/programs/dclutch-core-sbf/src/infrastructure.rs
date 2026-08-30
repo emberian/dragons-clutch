@@ -24,7 +24,7 @@ use solana_system_interface::instruction::{allocate, assign, transfer};
 
 use crate::{
     CoreSbfError,
-    frame::{FoundAccounts, InitializeInfrastructureAccounts},
+    frame::{FoundAccounts, InitializeInfrastructureAccounts, ProjectedFoundAccountsV2},
     records::authenticate_finalized_record,
 };
 
@@ -73,6 +73,29 @@ pub(crate) fn process_initialize(
 pub(crate) fn authenticate_found(
     program_id: &Pubkey,
     frame: &FoundAccounts<'_, '_>,
+    rent: &Rent,
+) -> Result<(), CoreSbfError> {
+    authenticate_profile(
+        program_id,
+        frame.infrastructure_profile,
+        frame.registry_artifact_raw,
+        frame.registry_artifact_staging,
+        frame.registry_program,
+        frame.registry_programdata,
+        frame.rent_artifact_raw,
+        frame.rent_artifact_staging,
+        frame.rent_program,
+        frame.rent_programdata,
+        rent,
+    )?;
+    Ok(())
+}
+
+/// Authenticate the same infrastructure root for the compact projected route.
+#[inline(never)]
+pub(crate) fn authenticate_projected_found(
+    program_id: &Pubkey,
+    frame: &ProjectedFoundAccountsV2<'_, '_>,
     rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     authenticate_profile(
@@ -162,21 +185,48 @@ pub(crate) fn authenticate_immutable_core_release(
     frame: &FoundAccounts<'_, '_>,
     release_set_id: [u8; 32],
 ) -> Result<(), CoreSbfError> {
+    authenticate_immutable_core_release_accounts(
+        frame.activation_cache,
+        frame.registry_program,
+        frame.core_program,
+        frame.core_programdata,
+        release_set_id,
+    )
+}
+
+/// Require the compact route's selected current Core artifact to remain pinned.
+pub(crate) fn authenticate_projected_immutable_core_release(
+    frame: &ProjectedFoundAccountsV2<'_, '_>,
+    release_set_id: [u8; 32],
+) -> Result<(), CoreSbfError> {
+    authenticate_immutable_core_release_accounts(
+        frame.activation_cache,
+        frame.registry_program,
+        frame.core_program,
+        frame.core_programdata,
+        release_set_id,
+    )
+}
+
+fn authenticate_immutable_core_release_accounts(
+    activation_cache: &AccountInfo<'_>,
+    registry_program: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    core_programdata: &AccountInfo<'_>,
+    release_set_id: [u8; 32],
+) -> Result<(), CoreSbfError> {
     use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
     use dclutch_release_set_contract::ExecutionRoleV1;
 
     let expected_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
-        frame.registry_program.key,
+        registry_program.key,
     )
     .0;
-    if frame.activation_cache.key != &expected_cache
-        || frame.activation_cache.owner != frame.registry_program.key
-    {
+    if activation_cache.key != &expected_cache || activation_cache.owner != registry_program.key {
         return Err(CoreSbfError::Infrastructure);
     }
-    let cache = frame
-        .activation_cache
+    let cache = activation_cache
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Infrastructure)?;
     let view = ActivatedExecutionReleaseSetViewV1::decode(&cache)
@@ -196,7 +246,7 @@ pub(crate) fn authenticate_immutable_core_release(
     // `release` comes from the Registry activation cache, which hashed this
     // artifact's complete ELF once before persisting it — the same admission
     // argument `dclutch-registry-sbf`'s role batch relies on.
-    require_pinned_deployment(frame.core_program, frame.core_programdata, release)
+    require_pinned_deployment(core_program, core_programdata, release)
 }
 
 fn authenticate_current_core_upgrade_authority(

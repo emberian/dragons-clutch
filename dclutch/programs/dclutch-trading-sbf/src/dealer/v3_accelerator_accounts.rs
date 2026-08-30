@@ -1255,6 +1255,8 @@ fn relative_account<'a, 'info>(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_market_core_codec::StateBumpsV1;
+
     use super::*;
 
     const fn id(tag: u8) -> [u8; 32] {
@@ -1347,8 +1349,10 @@ mod tests {
             terminal_winner: 0,
             identity,
             outstanding_capabilities: 1,
+            principal_cap_sets: u64::MAX,
             rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let expectation = CoreMarketExpectationV4 {
             market: key.to_bytes(),
@@ -1368,7 +1372,7 @@ mod tests {
     }
 
     /// Regression: selector 9 decoded the Core Market as the 232-byte
-    /// `MarketRoot` preimage while the chain stores the 352-byte `CoreState`
+    /// `MarketRoot` preimage while the chain stores the 360-byte `CoreState`
     /// header, so it refused on length before reading one join. The accelerator
     /// could never authenticate a real Market and the family campaign was
     /// representation-broken before it started.
@@ -1378,7 +1382,7 @@ mod tests {
 
         let (core_program, key, body, expectation) = live_core_market();
         assert_eq!(body.len(), STATE_BYTES);
-        assert_eq!(STATE_BYTES, 352);
+        assert_eq!(STATE_BYTES, 368);
         assert_eq!(
             authenticate_core_market_v4(&body, &key, &core_program, expectation),
             Ok(())
@@ -1495,8 +1499,10 @@ mod tests {
                 terminal_winner: 0,
                 identity,
                 outstanding_capabilities: 1,
+                principal_cap_sets: u64::MAX,
                 rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
                 terminal_receipt: receipt,
+                bumps: StateBumpsV1::UNRECORDED,
             }
             .encode()
             .expect("canonical state");

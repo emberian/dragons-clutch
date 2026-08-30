@@ -126,21 +126,27 @@ function decodeDirectConfig(bytes: Uint8Array): Readonly<{ priceScale: bigint; f
   return Object.freeze({ priceScale, feeBasisPoints, feeRecipient: new PublicKey(feeRecipient).toBase58() });
 }
 
-/**
- * The three walls between a signed intent and an executed fill, named by their
- * owners. These are protocol facts recorded by the journey campaign
- * (tools/gauntlet/journey/src/journey.rs) and the Direct program-test gate;
- * they are stated so a reader knows exactly what stands between this preview
- * and an execution, instead of a disabled button with no reason.
- */
-export const DIRECT_PACKET_WALL_V1: DirectTradeWallV1 = Object.freeze({
-  name: 'packet',
-  detail: 'A real trade does not fit the network’s message size yet. The trade itself is 4 bytes under the 1,232-byte limit, but it must also carry a compute-budget instruction, and with that it is 36 bytes over (1,268 > 1,232). Fixing this is protocol work on the Direct/Registry seam — nothing your browser or wallet can do differently.',
+/** Exact canonical budgeted packet measurement pinned by the real v0 gate. */
+export const DIRECT_PACKET_BUDGET_EVIDENCE_V1 = Object.freeze({
+  wireBytes: 1_204,
+  packetLimit: 1_232,
+  marginBytes: 28,
+  computeUnitLimit: 1_400_000,
 });
+
+/** Name a packet wall only when measured caller geometry actually exceeds it. */
+export function directPacketWallV1(wireBytes: number): DirectTradeWallV1 | null {
+  if (!Number.isSafeInteger(wireBytes) || wireBytes < 0) throw new Error('Direct packet measurement must be a nonnegative safe integer');
+  if (wireBytes <= DIRECT_PACKET_BUDGET_EVIDENCE_V1.packetLimit) return null;
+  return Object.freeze({
+    name: 'packet',
+    detail: `Your measured Direct transaction is ${wireBytes.toLocaleString('en-US')} bytes, above the network’s ${DIRECT_PACKET_BUDGET_EVIDENCE_V1.packetLimit.toLocaleString('en-US')}-byte limit. Reduce its account or instruction geometry before signing.`,
+  });
+}
 
 export const DIRECT_PRESTATE_WALL_V1: DirectTradeWallV1 = Object.freeze({
   name: 'prestate',
-  detail: 'Your wallet does not have a position on this market yet, and the instruction that would open one from a wallet does not exist yet — opening a position is itself a protected change, and today only the protocol’s own programs can make it. The pattern for the wallet version is already landed (ADR-0008 §7); shipping it is protocol work, not yours.',
+  detail: 'Your wallet does not have a Claims Position on this Market yet. A devnet admission command now exists, but this public client does not create or sign one and has no authenticated admission dossier for your distinct Token-2022 collateral account.',
 });
 
 /** Inspect everything the chain can say about Direct trading this Market. */
@@ -245,7 +251,8 @@ export async function inspectDirectTradeSpineV1(
         }
       }
     }
-    walls.push(DIRECT_PACKET_WALL_V1);
+    const packetWall = directPacketWallV1(DIRECT_PACKET_BUDGET_EVIDENCE_V1.wireBytes);
+    if (packetWall !== null) walls.push(packetWall);
 
     const tradable = market.phase === 'Open' && (rootExists ?? false);
     return Object.freeze({
@@ -271,7 +278,9 @@ export async function inspectDirectTradeSpineV1(
       walls: Object.freeze(walls),
       tradable,
       reason: tradable
-        ? `Direct entry ${directEntry.index} is founded and activated: immutable price scale ${config.priceScale}, fee ${config.feeBasisPoints} bps. Executing a fill still crosses the named walls below.`
+        ? walls.length === 0
+          ? `Direct entry ${directEntry.index} is founded and activated. Its canonical transaction includes the ${DIRECT_PACKET_BUDGET_EVIDENCE_V1.computeUnitLimit.toLocaleString('en-US')}-unit compute declaration and measures ${DIRECT_PACKET_BUDGET_EVIDENCE_V1.wireBytes.toLocaleString('en-US')} of ${DIRECT_PACKET_BUDGET_EVIDENCE_V1.packetLimit.toLocaleString('en-US')} bytes, leaving ${DIRECT_PACKET_BUDGET_EVIDENCE_V1.marginBytes} bytes.`
+          : `Direct entry ${directEntry.index} is founded and activated: immutable price scale ${config.priceScale}, fee ${config.feeBasisPoints} bps. Executing a fill still crosses the named walls below.`
         : `Direct entry ${directEntry.index} is founded (price scale ${config.priceScale}, fee ${config.feeBasisPoints} bps) and ${walls.length} named wall${walls.length === 1 ? '' : 's'} stand${walls.length === 1 ? 's' : ''} between a signed intent and an executed fill.`,
     });
   } catch (error) {

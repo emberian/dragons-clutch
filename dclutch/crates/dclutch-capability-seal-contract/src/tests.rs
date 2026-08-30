@@ -33,9 +33,14 @@ fn rows() -> [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1] {
     })
 }
 
+/// A bump these bodies are written under. Nothing here derives an address, so
+/// the only property that matters is that it is one a search could return.
+const CANONICAL_BUMP: u8 = 254;
+
 fn canonical() -> Vec<u8> {
     let mut bytes = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
-    SealedDescriptorClosureV1::encode(key(), rows(), &mut bytes).expect("canonical seal");
+    SealedDescriptorClosureV1::encode(key(), rows(), CANONICAL_BUMP, &mut bytes)
+        .expect("canonical seal");
     bytes
 }
 
@@ -45,6 +50,12 @@ fn canonical_seal_round_trips_and_pins_its_width() {
     let bytes = canonical();
     let decoded = SealedDescriptorClosureV1::decode(&bytes).expect("decode");
     assert_eq!(decoded.key(), Ok(key()));
+    assert_eq!(decoded.bump(), Ok(CANONICAL_BUMP));
+    // The bump took the FIRST of what were four reserved bytes, so the width
+    // and every offset after it are the ones already deployed.
+    assert_eq!(CAPABILITY_SEAL_BUMP_OFFSET_V1, 20);
+    assert_eq!(CAPABILITY_SEAL_RESERVED_OFFSET_V1, 21);
+    assert_eq!(CAPABILITY_SEAL_DESCRIPTOR_SCHEMA_OFFSET_V1, 24);
     decoded.require_key(key()).expect("same key");
     for (ordinal, role) in SealedRoleV1::canonical_order().into_iter().enumerate() {
         let row = decoded.row(role).expect("row");
@@ -75,7 +86,8 @@ fn the_descriptor_row_must_be_the_key_it_is_filed_under() {
 
 #[test]
 fn every_header_field_is_canonicality_checked() {
-    let cases: [(usize, u8, Error); 6] = [
+    let cases: [(usize, u8, Error); 7] = [
+        (CAPABILITY_SEAL_BUMP_OFFSET_V1, 0x00, Error::ZeroBump),
         (CAPABILITY_SEAL_MAGIC_OFFSET_V1, 0xff, Error::InvalidMagic),
         (
             CAPABILITY_SEAL_SCHEMA_VERSION_OFFSET_V1,
@@ -341,7 +353,7 @@ fn a_join_cannot_be_assembled_out_of_two_seals() {
         .expect("descriptor row");
     }
     let mut other_bytes = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
-    SealedDescriptorClosureV1::encode(other_key, other_rows, &mut other_bytes)
+    SealedDescriptorClosureV1::encode(other_key, other_rows, CANONICAL_BUMP, &mut other_bytes)
         .expect("second seal");
     let second = SealedDescriptorClosureV1::decode(&other_bytes).expect("decode");
 

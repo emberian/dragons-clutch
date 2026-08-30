@@ -48,7 +48,8 @@ use dclutch_claims_svm::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketInputV2,
         LiabilityBasisPositionInputV2, encode_liability_basis_market_into_v2,
-        encode_liability_basis_position_into_v2,
+        encode_liability_basis_position_into_v2, put_liability_basis_market_bump_v2,
+        put_liability_basis_position_bump_v2,
     },
     protocol_position_v2::ProtocolPositionSeedsV2,
     sparse_native_transfer_v1::{SparseNativeTransferInputV1, SparseNativeTransferV1},
@@ -74,6 +75,7 @@ use dclutch_direct_codec::{
 };
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_product_payoff_v2_codec::runtime_v3::{
@@ -124,7 +126,8 @@ use crate::{
 
 const GENERATION: u64 = 9;
 const PRICE_SCALE: u64 = 100;
-const FEE_BPS: u16 = 0;
+/// The immutable development-market fee profile: 50 basis points per side.
+const FEE_BPS: u16 = 50;
 const FILL: u64 = 10;
 const EXECUTION_PRICE: u64 = 50;
 const CLAIMS_MARKET_REVISION: u64 = 8;
@@ -185,6 +188,13 @@ pub struct DirectHotChainInputV5 {
 pub struct DirectHotChainFixtureV5 {
     /// Trading Hot instruction before Registry wrapping.
     pub hot_instruction: Instruction,
+    /// Exact distinct fixed prefix required by the write-once seal outer.
+    ///
+    /// The execution instruction aliases the six seal-authenticated staging
+    /// coordinates to their raw coordinates. Seal materialization must retain
+    /// both coordinates because it authenticates the Registry finalization
+    /// itself before persisting the closure.
+    pub capability_seal_accounts: Vec<AccountMeta>,
     /// Exact seller and buyer signed intent preimages.
     pub signed_messages: [[u8; 172]; 2],
     /// All accounts, including externally installed release-waist identities.
@@ -301,6 +311,8 @@ pub fn build_direct_hot_chain_fixture_v5(
         .iter()
         .map(|value| value.meta.clone())
         .collect::<Vec<_>>();
+    let capability_seal_accounts = metas.clone();
+    alias_sealed_execution_metas(&mut metas)?;
     metas.extend(runtime.iter().skip(5).map(|value| value.meta.clone()));
     let hot_instruction = Instruction {
         program_id: input.trading_program,
@@ -343,6 +355,7 @@ pub fn build_direct_hot_chain_fixture_v5(
         .collect();
     Ok(DirectHotChainFixtureV5 {
         hot_instruction,
+        capability_seal_accounts,
         signed_messages: [
             intents[0]
                 .signed_preimage()
@@ -366,6 +379,47 @@ pub fn build_direct_hot_chain_fixture_v5(
         capability_seal_bytes,
         descriptor_digest: artifacts.descriptor_id,
     })
+}
+
+fn alias_sealed_execution_metas(
+    metas: &mut [AccountMeta],
+) -> Result<(), DirectHotChainFixtureErrorV5> {
+    for (raw, staging) in [
+        (
+            HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+            HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+            HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
+            HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+        ),
+        (
+            HOT_TRANSITION_RAW_ACCOUNT_V3,
+            HOT_TRANSITION_STAGING_ACCOUNT_V3,
+        ),
+        (HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3),
+        (
+            HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+            HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+        ),
+    ] {
+        let raw = metas
+            .get(raw)
+            .ok_or(DirectHotChainFixtureErrorV5::Profile)?
+            .clone();
+        let staging = metas
+            .get_mut(staging)
+            .ok_or(DirectHotChainFixtureErrorV5::Profile)?;
+        if raw.is_signer || raw.is_writable || staging.is_signer || staging.is_writable {
+            return Err(DirectHotChainFixtureErrorV5::Profile);
+        }
+        *staging = raw;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -613,17 +667,18 @@ fn market_and_claims(
         terminal_winner: 0,
         identity,
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: core_identity(rent_credit.0.to_bytes())?,
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
     .to_vec();
-    let claims_market = Pubkey::find_program_address(
+    let (claims_market, claims_market_bump) = Pubkey::find_program_address(
         &[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()],
         &input.claims_program,
-    )
-    .0;
+    );
     let claims_input = LiabilityBasisMarketInputV2 {
         revision: CLAIMS_MARKET_REVISION,
         logical_market: market.to_bytes(),
@@ -640,6 +695,12 @@ fn market_and_claims(
     let mut claims_bytes = vec![0_u8; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + outcomes * 8];
     let supplies = vec![100_u64; outcomes];
     encode_liability_basis_market_into_v2(claims_input, &supplies, &mut claims_bytes)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    // The Claims founding route records these bumps when it creates the
+    // accounts, and the hot route's readers reproduce the addresses from them.
+    // A fixture that left them zero would stage accounts no deployment produces
+    // and would measure a route nobody runs.
+    put_liability_basis_market_bump_v2(&mut claims_bytes, claims_market_bump)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     // The seller holds the whole supply of the traded outcome, which is
     // coordinate zero of the Product tail at every geometry; the buyer holds
@@ -685,7 +746,7 @@ fn position(
 ) -> Result<(Pubkey, Vec<u8>), DirectHotChainFixtureErrorV5> {
     let seeds = ProtocolPositionSeedsV2::new(claims_market.to_bytes(), owner.to_bytes())
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
-    let account = Pubkey::find_program_address(&seeds.as_slices(), &claims_program).0;
+    let (account, bump) = Pubkey::find_program_address(&seeds.as_slices(), &claims_program);
     let mut bytes = vec![0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + balances.len() * 8];
     encode_liability_basis_position_into_v2(
         LiabilityBasisPositionInputV2 {
@@ -698,6 +759,8 @@ fn position(
         &mut bytes,
     )
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    put_liability_basis_position_bump_v2(&mut bytes, bump)
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     Ok((account, bytes))
 }
 
@@ -1064,23 +1127,31 @@ struct CustodyRegistersV3 {
     after_fee: u64,
 }
 
+fn direct_side_fee(gross: u64) -> Result<u64, DirectHotChainFixtureErrorV5> {
+    gross
+        .checked_mul(u64::from(FEE_BPS))
+        .and_then(|value| value.checked_div(u64::from(DIRECT_FEE_DENOMINATOR_V1)))
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)
+}
+
 fn custody_registers() -> Result<CustodyRegistersV3, DirectHotChainFixtureErrorV5> {
     let gross = FILL
         .checked_mul(EXECUTION_PRICE)
         .and_then(|value| value.checked_div(PRICE_SCALE))
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
-    let fee = gross
-        .checked_mul(u64::from(FEE_BPS))
-        .and_then(|value| value.checked_div(u64::from(DIRECT_FEE_DENOMINATOR_V1)))
-        .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+    // The market applies the same immutable integer rate independently to the
+    // seller and buyer sides. Keep the two floors explicit even though this
+    // symmetric fixture has the same gross on each side.
+    let seller_fee = direct_side_fee(gross)?;
+    let buyer_fee = direct_side_fee(gross)?;
     let seller_net = gross
-        .checked_sub(fee)
+        .checked_sub(seller_fee)
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
     let buyer_debit = gross
-        .checked_add(fee)
+        .checked_add(buyer_fee)
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
-    let combined_fee = fee
-        .checked_add(fee)
+    let combined_fee = seller_fee
+        .checked_add(buyer_fee)
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
     // `select_zero` leaves the enable register at its loaded constant unless the
     // tested register is zero. Reproduced here as the two booleans it computes.
@@ -1455,8 +1526,8 @@ fn fixed_hot_accounts(
         input.registry_program.to_bytes(),
     )
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
-    let capability_seal =
-        Pubkey::find_program_address(&seal_key.seeds().as_slices(), &input.trading_program).0;
+    let (capability_seal, capability_seal_bump) =
+        Pubkey::find_program_address(&seal_key.seeds().as_slices(), &input.trading_program);
     let seal_rows = [
         (SealedRoleV1::Descriptor, HOT_DESCRIPTOR_RAW_ACCOUNT_V3),
         (SealedRoleV1::LifecyclePolicy, HOT_LIFECYCLE_RAW_ACCOUNT_V3),
@@ -1495,8 +1566,13 @@ fn fixed_hot_accounts(
         .try_into()
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut capability_seal_bytes = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
-    SealedDescriptorClosureV1::encode(seal_key, seal_rows, &mut capability_seal_bytes)
-        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
+    SealedDescriptorClosureV1::encode(
+        seal_key,
+        seal_rows,
+        capability_seal_bump,
+        &mut capability_seal_bytes,
+    )
+    .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     set(
         &mut fixed,
         HOT_CAPABILITY_SEAL_ACCOUNT_V3,
@@ -2229,6 +2305,17 @@ mod tests {
     }
 
     #[test]
+    fn development_market_fee_is_fifty_basis_points_per_side_with_flooring() {
+        assert_eq!(FEE_BPS, 50);
+        assert_eq!(direct_side_fee(5).expect("small-gross fee"), 0);
+        let seller_fee = direct_side_fee(1_000).expect("seller fee");
+        let buyer_fee = direct_side_fee(1_000).expect("buyer fee");
+        assert_eq!(seller_fee, 5);
+        assert_eq!(buyer_fee, 5);
+        assert_eq!(seller_fee.checked_add(buyer_fee), Some(10));
+    }
+
+    #[test]
     fn complete_fixture_packs_one_profile13_authority() {
         let input = input();
         let rent = Rent::default();
@@ -2676,7 +2763,7 @@ pub mod via_builder {
         instruction_data.extend_from_slice(&request);
         let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
         encode_direct_headerless_registry_native_evidence_v4_atomic(
-            1,
+            2,
             &instruction_data,
             [[1_u8; 64]; 2],
             &mut evidence,
@@ -2988,7 +3075,7 @@ pub mod via_builder {
             clock_slot: input.clock_slot,
             generation: GENERATION,
             ed25519_evidence: Some(&evidence),
-            native_message_instruction_index: 1,
+            native_message_instruction_index: 2,
             externally_installed_extra: &externally_installed_extra,
             payer: input.payer,
         };
@@ -3045,8 +3132,17 @@ pub mod via_builder {
                 request_digest: authority.request_digest,
             };
         }
+        let capability_seal_accounts = bundle
+            .hot_instruction
+            .accounts
+            .get(..HOT_FIXED_ACCOUNT_COUNT_V3)
+            .ok_or(DirectHotChainFixtureErrorV5::Profile)?
+            .to_vec();
+        let mut hot_instruction = bundle.hot_instruction.clone();
+        alias_sealed_execution_metas(&mut hot_instruction.accounts)?;
         Ok(DirectHotChainFixtureV5 {
-            hot_instruction: bundle.hot_instruction,
+            hot_instruction,
+            capability_seal_accounts,
             signed_messages: [
                 intents[0]
                     .signed_preimage()
@@ -3126,6 +3222,10 @@ pub mod via_builder {
             assert_eq!(built.custody_routes, hand.custody_routes);
             assert_eq!(built.capability_seal, hand.capability_seal);
             assert_eq!(built.capability_seal_bytes, hand.capability_seal_bytes);
+            assert_eq!(
+                built.capability_seal_accounts,
+                hand.capability_seal_accounts
+            );
             assert_eq!(built.descriptor_digest, hand.descriptor_digest);
             assert_eq!(
                 built.hot_instruction.program_id,

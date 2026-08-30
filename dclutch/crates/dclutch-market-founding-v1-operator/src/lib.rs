@@ -1,10 +1,17 @@
-//! Artifact-derived construction for atomic generic Market founding.
+//! Artifact-derived construction for generic Market founding.
 //!
 //! This crate accepts the exact bytes of the Registry-selected founding
 //! artifact plus its selected content identity.  It emits the two Core child
 //! requests and their invocation-scoped Trading authorities.  Callers cannot
 //! separately supply release, Market, founder, custody, width, rent, or
 //! revision truth.
+//!
+//! The two stages it derives are the same whether they are dispatched by the
+//! composed `DCLTGMF3` route (both in one transaction) or the two-stage
+//! `DCLTGFP1`/`DCLTGMO1` routes (one each, joined by the Core-owned permit).
+//! The `Open` stage's request and its distinct Trading authority are emitted
+//! here so the second transaction can be constructed without re-deriving any
+//! artifact truth.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -73,8 +80,12 @@ pub struct GenericMarketFoundingPlanV1 {
     pub open_request_digest: ContentId,
     /// Trading PDA signing only the exact Found-and-permit request.
     pub found_authority: Pubkey,
+    /// Canonical invocation evidence for `found_authority`.
+    pub found_authority_bump: u8,
     /// Trading PDA signing only the exact final-Open request.
     pub open_authority: Pubkey,
+    /// Canonical invocation evidence for `open_authority`.
+    pub open_authority_bump: u8,
     /// Sole Core-owned Claims founding permit PDA.
     pub permit: Pubkey,
     /// Exact selected artifact identity retained for Hot provenance.
@@ -234,8 +245,10 @@ pub fn construct_generic_market_founding_plan_v1(
         .map_err(|_| GenericMarketFoundingOperatorErrorV1::ArtifactEncoding)?;
     let found_request_digest = content(hash(&found_request).to_bytes())?;
     let open_request_digest = content(hash(&open_request).to_bytes())?;
-    let found_authority = authority(found, found_request_digest, trading_program)?;
-    let open_authority = authority(open, open_request_digest, trading_program)?;
+    let (found_authority, found_authority_bump) =
+        authority(found, found_request_digest, trading_program)?;
+    let (open_authority, open_authority_bump) =
+        authority(open, open_request_digest, trading_program)?;
     if found_authority == open_authority {
         return Err(GenericMarketFoundingOperatorErrorV1::Derivation);
     }
@@ -251,7 +264,9 @@ pub fn construct_generic_market_founding_plan_v1(
         found_request_digest,
         open_request_digest,
         found_authority,
+        found_authority_bump,
         open_authority,
+        open_authority_bump,
         permit,
         artifact_id: selected.content_id,
     })
@@ -279,7 +294,7 @@ fn authority(
     request: GenericFoundingRequestV1,
     request_digest: ContentId,
     trading_program: Pubkey,
-) -> Result<Pubkey, GenericMarketFoundingOperatorErrorV1> {
+) -> Result<(Pubkey, u8), GenericMarketFoundingOperatorErrorV1> {
     let seeds = CallerAuthoritySeedsV1::new(
         content(request.release_set().to_bytes())?,
         request.market().to_bytes(),
@@ -288,7 +303,10 @@ fn authority(
         request_digest.to_bytes(),
     )
     .map_err(|_| GenericMarketFoundingOperatorErrorV1::Derivation)?;
-    Ok(Pubkey::find_program_address(&seeds.as_slices(), &trading_program).0)
+    Ok(Pubkey::find_program_address(
+        &seeds.as_slices(),
+        &trading_program,
+    ))
 }
 
 fn content(bytes: [u8; 32]) -> Result<ContentId, GenericMarketFoundingOperatorErrorV1> {
@@ -403,6 +421,45 @@ mod tests {
                 .expect("found"),
             selected.request()
         );
+        for (request, digest, address, bump) in [
+            (
+                selected.request(),
+                plan.found_request_digest,
+                plan.found_authority,
+                plan.found_authority_bump,
+            ),
+            (
+                open,
+                plan.open_request_digest,
+                plan.open_authority,
+                plan.open_authority_bump,
+            ),
+        ] {
+            let seeds = CallerAuthoritySeedsV1::new(
+                content(request.release_set().to_bytes()).expect("release set"),
+                request.market().to_bytes(),
+                ExecutionRoleV1::Trading,
+                request.context().to_bytes(),
+                digest.to_bytes(),
+            )
+            .expect("caller seeds");
+            let bump_seed = [bump];
+            let mut slices = seeds.as_slices().to_vec();
+            slices.push(&bump_seed);
+            assert_eq!(
+                Pubkey::create_program_address(&slices, &Pubkey::new_from_array([21; 32]))
+                    .expect("canonical bump reproduces authority"),
+                address,
+            );
+
+            let wrong_bump_seed = [bump.wrapping_add(1)];
+            *slices.last_mut().expect("bump seed") = &wrong_bump_seed;
+            if let Ok(hostile) =
+                Pubkey::create_program_address(&slices, &Pubkey::new_from_array([21; 32]))
+            {
+                assert_ne!(hostile, address);
+            }
+        }
     }
 
     #[test]

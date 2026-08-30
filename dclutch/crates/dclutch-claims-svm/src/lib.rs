@@ -9,6 +9,10 @@
 //! The vector tail is borrowed, exact-width, and never allocated.
 
 pub mod affine_batch_v2;
+pub mod claim_check_compaction_request_v1;
+pub mod claim_check_conservation_v1;
+pub mod claim_check_request_v1;
+pub mod claim_check_v1;
 pub mod composition_v3;
 pub mod custody_replay_v1;
 pub mod founding_v4;
@@ -20,6 +24,7 @@ pub mod market_closure_v1;
 pub mod product_basis_terminal_v3;
 pub mod protocol_position_v2;
 mod request_layout;
+pub mod retirement_checkpoint_handoff_v1;
 pub mod signed_delta_v3;
 pub mod sparse_native_transfer_v1;
 pub mod terminal_settlement_v3;

@@ -78,6 +78,11 @@ export type ActivityRequestV1 = Readonly<{
   programLabels?: ActivityRoleLabelsV1;
 }>;
 
+export type ActivityLinkQueryV1 =
+  | Readonly<{ kind: 'resolving' | 'manual' }>
+  | Readonly<{ kind: 'refused'; reason: string }>
+  | Readonly<{ kind: 'ready'; owner: string; marketAddresses: ReadonlyArray<string> }>;
+
 function canonical(value: string, field: string): string {
   let key: string;
   try {
@@ -87,6 +92,43 @@ function canonical(value: string, field: string): string {
   }
   if (key !== value) throw new Error(`${field} must be canonical base58 text`);
   return key;
+}
+
+/** Build one static-host-safe link that re-reads a wallet's live node history. */
+export function activityHrefV1(owner: string, marketAddresses: ReadonlyArray<string> = []): string {
+  const canonicalOwner = canonical(owner.trim(), 'owner address');
+  const markets = Object.freeze([...new Set(marketAddresses.map((address, index) => canonical(address.trim(), `Market address ${index + 1}`)))]);
+  if (markets.length > ACTIVITY_MAX_MARKETS) {
+    throw new Error(`activity link names ${markets.length} Markets, above the explicit ${ACTIVITY_MAX_MARKETS}-Market browser bound`);
+  }
+  const params = new URLSearchParams();
+  params.set('owner', canonicalOwner);
+  for (const market of markets) params.append('market', market);
+  return `/activity?${params.toString()}`;
+}
+
+/** Interpret an activity permalink without relying on a dynamic route. */
+export function activityLinkQueryV1(search: string | null): ActivityLinkQueryV1 {
+  if (search === null) return Object.freeze({ kind: 'resolving' });
+  const params = new URLSearchParams(search);
+  const owners = params.getAll('owner');
+  const markets = params.getAll('market');
+  if (owners.length === 0 && markets.length === 0) return Object.freeze({ kind: 'manual' });
+  if (owners.length !== 1) {
+    return Object.freeze({ kind: 'refused', reason: owners.length === 0
+      ? 'This activity link names Markets but no owner wallet.'
+      : 'This activity link supplies more than one owner wallet.' });
+  }
+  if (markets.length > ACTIVITY_MAX_MARKETS) {
+    return Object.freeze({ kind: 'refused', reason: `This activity link names more than ${ACTIVITY_MAX_MARKETS} Markets.` });
+  }
+  try {
+    const owner = canonical(owners[0].trim(), 'owner address');
+    const marketAddresses = Object.freeze([...new Set(markets.map((address, index) => canonical(address.trim(), `Market address ${index + 1}`)))]);
+    return Object.freeze({ kind: 'ready', owner, marketAddresses });
+  } catch (error) {
+    return Object.freeze({ kind: 'refused', reason: error instanceof Error ? error.message : 'This activity link is not usable.' });
+  }
 }
 
 /** The signed difference of two exact unsigned decimal lamport strings. */

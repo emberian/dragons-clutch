@@ -43,8 +43,8 @@ use crate::TradingSbfError;
 use super::{
     HotFrameV3, HotRoleAuthenticationV3, StaticRegisterOwnershipV5, account,
     authenticate_market_boxed_v3, authenticate_root_boxed_v3, borrow_finalized_record,
-    borrow_record_against, decode_capability_program_boxed_v3, decode_request_profile,
-    decode_selected_effect_v4, require_static_register_ownership_v5,
+    decode_capability_program_boxed_v3, decode_request_profile, decode_selected_effect_v4,
+    require_static_register_ownership_v5,
 };
 
 /// First account after the fixed hot prefix on the seal outer: the rent payer.
@@ -185,7 +185,11 @@ pub fn process_capability_seal_v1(
     if data.len() != CAPABILITY_SEAL_BYTES_V1 {
         return Err(TradingSbfError::Commit.into());
     }
-    SealedDescriptorClosureV1::encode(key, rows, &mut data).map_err(|_| TradingSbfError::Commit)?;
+    // The bump this act already derived to sign the account into existence is
+    // persisted with the verdict, so every later reader reproduces the address
+    // instead of searching for it. See `CAPABILITY_SEAL_BUMP_OFFSET_V1`.
+    SealedDescriptorClosureV1::encode(key, rows, bump, &mut data)
+        .map_err(|_| TradingSbfError::Commit)?;
     Ok(())
 }
 
@@ -377,6 +381,22 @@ fn seal_row_v1(
 /// with that derivation. It consumes nothing from the seal; every artifact the
 /// seal names is still bound to its own digest, live, by
 /// `borrow_finalized_record`.
+///
+/// # Why the seal's own bump is read rather than searched
+///
+/// The address is REPRODUCED from the bump the seal persists, not found. This
+/// is the argument `borrow_finalized_record_at` already makes in this module
+/// and it is not weakened here: a wrong bump reproduces a different address,
+/// which fails the equality against the account the frame supplied, and refuses.
+/// The bump is not caller input in any sense -- the seal is Trading-owned and
+/// write-once, its only writer is `process_capability_seal_v1` above, and that
+/// writer derives the bump canonically and can only write at the address that
+/// derivation names. So the byte is a memo of this program's own computation.
+///
+/// The seed set joins on `trading_semantic_release`, so this release addresses
+/// only seals written under itself; there is no older body for this reader to
+/// meet. That is also why persisting the bump needed no migration: an upgrade
+/// already moves every seal to a new, empty address that must be minted afresh.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn authenticate_capability_seal_v3<'a>(
@@ -398,9 +418,7 @@ pub(super) fn authenticate_capability_seal_v3<'a>(
     )
     .map_err(|_| TradingSbfError::Content)?;
     let seal = frame.capability_seal;
-    let expected = Pubkey::find_program_address(&key.seeds().as_slices(), program_id).0;
-    if seal.key != &expected
-        || seal.owner != program_id
+    if seal.owner != program_id
         || seal.is_signer
         || seal.is_writable
         || seal.executable
@@ -411,23 +429,35 @@ pub(super) fn authenticate_capability_seal_v3<'a>(
         return Err(TradingSbfError::Content.into());
     }
     let closure = SealedDescriptorClosureV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
+    let seeds = key.seeds();
+    let base = seeds.as_slices();
+    let bump_seed = [closure.bump().map_err(|_| TradingSbfError::Content)?];
+    let expected = Pubkey::create_program_address(
+        &[
+            base[0], base[1], base[2], base[3], base[4], base[5], &bump_seed,
+        ],
+        program_id,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if seal.key != &expected {
+        return Err(TradingSbfError::Content.into());
+    }
     closure
         .require_key(key)
         .map_err(|_| TradingSbfError::Content)?;
     Ok(closure)
 }
 
-/// Borrow one finalized record against the addresses a Trading seal derived.
+/// Borrow one live raw record against the finalized coordinates a Trading seal
+/// derived and persisted.
 ///
-/// The seal's row supplies the two canonical Registry addresses that
-/// `borrow_finalized_record` would otherwise re-derive with two
-/// `find_program_address` calls from the very same seeds under the very same
-/// Registry, which is a seed of the seal. Everything else is the identical
-/// conjunction, `hash(bytes) == digest` included: the row is honoured only
-/// after its `schema` and `content_digest` are required to equal the identities
-/// the authenticated descriptor names for this role. The caller mints the
-/// sealed token from the returned borrow, so the token can never name a range
-/// the caller did not just authenticate.
+/// Seal materialization authenticated the real raw/staging pair under the
+/// Market-selected Registry and wrote both coordinates into a write-once
+/// Trading-owned verdict. Sealed execution carries the raw account again in
+/// the staging slot; the exact alias is a wire-shape assertion, not a claim
+/// that a raw account is a vacant staging cursor. The live raw body is still
+/// reauthenticated by owner, privileges, rent, exact width, and complete-body
+/// digest before the sealed token is minted.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn borrow_sealed_record<'a, 'info>(
     frame: HotFrameV3<'_, 'info>,
@@ -440,18 +470,33 @@ pub(super) fn borrow_sealed_record<'a, 'info>(
     digest: [u8; 32],
 ) -> Result<core::cell::Ref<'a, [u8]>, ProgramError> {
     let row: SealedRecordRowV1 = closure.row(role).map_err(|_| TradingSbfError::Content)?;
-    if row.schema() != schema || row.content_digest() != digest {
+    if row.schema() != schema
+        || row.content_digest() != digest
+        || row.raw_record_account() != raw.key.to_bytes()
+        || row.staging_account() == row.raw_record_account()
+        || staging.key != raw.key
+        || staging.owner != raw.owner
+        || staging.is_signer != raw.is_signer
+        || staging.is_writable != raw.is_writable
+        || staging.executable != raw.executable
+    {
         return Err(TradingSbfError::Content.into());
     }
-    borrow_record_against(
-        frame,
-        raw,
-        staging,
-        rent,
-        digest,
-        Pubkey::new_from_array(row.raw_record_account()),
-        Pubkey::new_from_array(row.staging_account()),
-    )
+    let data = raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    if raw.owner != frame.registry.key
+        || raw.is_signer
+        || raw.is_writable
+        || raw.executable
+        || usize::try_from(row.exact_data_length()).map_err(|_| TradingSbfError::Content)?
+            != data.len()
+        || solana_program::hash::hash(&data).to_bytes() != digest
+        || !rent.is_exempt(raw.lamports(), data.len())
+    {
+        return Err(TradingSbfError::Content.into());
+    }
+    Ok(core::cell::Ref::map(data, |bytes| &**bytes))
 }
 
 /// Mint one sealed-artifact token for a record this invocation just borrowed.

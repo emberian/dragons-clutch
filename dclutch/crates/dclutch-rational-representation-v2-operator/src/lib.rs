@@ -16,8 +16,7 @@ use dclutch_claims_svm::{
         LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
     },
     product_basis_terminal_v3::{
-        ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3, TERMINAL_COORDINATE_BYTES_V2,
-        TERMINAL_COORDINATE_MAGIC_V2, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
+        ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
         encode_product_basis_terminal_signed_delta_v3,
     },
     protocol_position_v2::{ProtocolPositionClaimsCapabilitySeedsV2, ProtocolPositionSeedsV2},
@@ -57,7 +56,12 @@ use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_representation_composition_v3_kernel::{
     CompositionExposureBundleV3, CompositionExposureExecutionExpectedV3, RecordAdmissionV3,
 };
-use dclutch_token_svm::{AccountState, COption, Mint, TokenAccount, TokenProgram};
+use dclutch_resolution_codec::{
+    RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
+};
+use dclutch_token_svm::{
+    AccountState, COption, Mint, Token2022BehaviorProfileV2, TokenAccount, TokenProgram,
+};
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -237,9 +241,8 @@ pub struct TerminalObservationV2<'a> {
     pub quantity: u64,
     /// Finalized immutable Realm selected by Core.
     pub realm: FinalizedRecordObservationV2<'a>,
-    /// Finalized Core-owned terminal coordinate for an ordinary graded result;
-    /// the Core program placeholder pair for categorical or failure results.
-    pub terminal_coordinate: FinalizedRecordObservationV2<'a>,
+    /// Exact Resolution-owned certificate named by Core's terminal receipt.
+    pub terminal_certificate: ObservedAccountV2<'a>,
     /// Current Custody replay account.
     pub custody_replay: ObservedAccountV2<'a>,
     /// Realm-selected collateral Mint.
@@ -324,6 +327,8 @@ struct RoleProgramsV2 {
     core_programdata: Pubkey,
     custody: Pubkey,
     custody_programdata: Pubkey,
+    resolution: Pubkey,
+    resolution_programdata: Pubkey,
 }
 
 #[derive(Clone, Copy)]
@@ -867,6 +872,10 @@ fn authenticate_activation(
         .role(ExecutionRoleV1::Custody)
         .map_err(|_| Error::InvalidActivation)?
         .release();
+    let resolution = cache
+        .role(ExecutionRoleV1::Resolution)
+        .map_err(|_| Error::InvalidActivation)?
+        .release();
     Ok((
         RoleProgramsV2 {
             caller: Pubkey::new_from_array(caller.program().to_bytes()),
@@ -877,6 +886,8 @@ fn authenticate_activation(
             core_programdata: Pubkey::new_from_array(core.programdata()),
             custody: Pubkey::new_from_array(custody.program().to_bytes()),
             custody_programdata: Pubkey::new_from_array(custody.programdata()),
+            resolution: Pubkey::new_from_array(resolution.program().to_bytes()),
+            resolution_programdata: Pubkey::new_from_array(resolution.programdata()),
         },
         release.to_bytes(),
     ))
@@ -1130,6 +1141,26 @@ fn authenticate_actor_receipt(common: CommonV2<'_>) -> Result<()> {
     .map(|_| ())
 }
 
+/// Authenticate one receipt or shard Mint exactly as the chain will.
+///
+/// This used to call `Mint::parse`, which admits exactly 82 bytes. Both Mints
+/// it is ever handed carry the two required lifecycle extensions and are 238
+/// bytes, so 82 and 238 were disjoint and every builder behind this function
+/// refused before it could construct a transaction. A builder that cannot read
+/// the account the program reads is not stricter than the program; it is
+/// unreachable.
+///
+/// It now reads through the same profile the on-chain route uses
+/// (`rational_representation_v2::parse_behavior_mint`), so the wallet side and
+/// the program side admit the same bytes by construction rather than by two
+/// descriptions agreeing.
+///
+/// It reads the supply rather than pinning it, and that is the honest shape
+/// here: this builder is what *discovers* the supply and stages it into
+/// `expected_receipt_supply`, which the program then pins. An expected supply
+/// at this call could only be the number just read from these same bytes.
+/// `decimals` stays pinned locally because the behavior profile admits the full
+/// display-decimal domain while this family's claim Mints are whole units.
 fn authenticate_mint(
     observed: ObservedAccountV2<'_>,
     expected_key: Pubkey,
@@ -1139,12 +1170,15 @@ fn authenticate_mint(
     if observed.key != expected_key || observed.owner != token_program || observed.executable {
         return Err(Error::InvalidToken);
     }
-    let mint = Mint::parse(observed.data).map_err(|_| Error::InvalidToken)?;
-    if !mint.is_initialized
-        || mint.mint_authority != COption::Some(authority.to_bytes())
-        || mint.decimals != 0
-        || mint.freeze_authority != COption::None
-    {
+    let mint = Token2022BehaviorProfileV2::read_mint(
+        token_program.to_bytes(),
+        expected_key.to_bytes(),
+        observed.data,
+        authority.to_bytes(),
+    )
+    .map_err(|_| Error::InvalidToken)?
+    .mint();
+    if mint.decimals != 0 {
         return Err(Error::InvalidToken);
     }
     Ok(mint)
@@ -1373,81 +1407,64 @@ fn authenticate_terminal_scenario(
     common: CommonV2<'_>,
     terminal: TerminalObservationV2<'_>,
 ) -> Result<TerminalScenarioV3> {
-    if common.core.terminal_winner >= common.result_outcome_count {
-        return Err(Error::InvalidTerminal);
-    }
-    match common.representation_admission.basis_kind() {
-        BasisKindV3::CategoricalQ1 => {
-            require_terminal_coordinate_placeholders(common, terminal)?;
-            Ok(TerminalScenarioV3::Categorical(common.core.terminal_winner))
-        }
-        BasisKindV3::GradedExactComplement => {
-            let failure = common
-                .result_outcome_count
-                .checked_sub(1)
-                .ok_or(Error::InvalidTerminal)?;
-            if common.core.terminal_winner == failure {
-                require_terminal_coordinate_placeholders(common, terminal)?;
-                return Ok(TerminalScenarioV3::Failure);
-            }
-            let digest = common
-                .core
-                .terminal_receipt
-                .ok_or(Error::InvalidTerminal)?
-                .to_bytes();
-            authenticate_record(
-                terminal.terminal_coordinate,
-                common.roles.core,
-                TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-                digest,
-                common.observation.rent,
-            )?;
-            let bytes = terminal.terminal_coordinate.raw.data;
-            if bytes.len() != TERMINAL_COORDINATE_BYTES_V2
-                || bytes.get(..8) != Some(TERMINAL_COORDINATE_MAGIC_V2.as_slice())
-                || bytes.get(8..10) != Some(2_u16.to_le_bytes().as_slice())
-                || bytes
-                    .get(10..16)
-                    .is_none_or(|value| value.iter().any(|byte| *byte != 0))
-                || bytes
-                    .get(28..32)
-                    .is_none_or(|value| value.iter().any(|byte| *byte != 0))
-            {
-                return Err(Error::InvalidTerminal);
-            }
-            let numerator = i64::from_le_bytes(
-                bytes
-                    .get(16..24)
-                    .and_then(|value| value.try_into().ok())
-                    .ok_or(Error::InvalidTerminal)?,
-            );
-            let denominator = u32::from_le_bytes(
-                bytes
-                    .get(24..28)
-                    .and_then(|value| value.try_into().ok())
-                    .ok_or(Error::InvalidTerminal)?,
-            );
-            if denominator == 0 {
-                return Err(Error::InvalidTerminal);
-            }
-            Ok(TerminalScenarioV3::Rational {
-                numerator: i128::from(numerator),
-                denominator: u64::from(denominator),
-            })
-        }
-    }
-}
-
-fn require_terminal_coordinate_placeholders(
-    common: CommonV2<'_>,
-    terminal: TerminalObservationV2<'_>,
-) -> Result<()> {
-    if terminal.terminal_coordinate.raw.key != common.roles.core
-        || terminal.terminal_coordinate.staging.key != common.roles.core
+    let expected = common
+        .core
+        .terminal_receipt
+        .ok_or(Error::InvalidTerminal)?
+        .to_bytes();
+    let observed = terminal.terminal_certificate;
+    if common.core.terminal_winner >= common.result_outcome_count
+        || observed.key.to_bytes() != expected
+        || observed.owner != common.roles.resolution
+        || observed.executable
+        || observed.data.len() != RESOLUTION_CERTIFICATE_BYTES_V2
+        || !common
+            .observation
+            .rent
+            .is_exempt(observed.lamports, observed.data.len())
     {
         return Err(Error::InvalidTerminal);
     }
-    Ok(())
+    let certificate =
+        ResolutionCertificateV2::decode(observed.data).map_err(|_| Error::InvalidTerminal)?;
+    if certificate.receipt_account != expected
+        || certificate.market != common.core.identity.market_id.to_bytes()
+        || certificate.source_material != common.core.identity.resolution_policy.to_bytes()
+        || certificate.product_record_digest != common.core.identity.product_record.to_bytes()
+        || certificate.generation != common.core.identity.generation
+        || certificate.selector != common.core.terminal_winner
+        || certificate
+            .validate_terminal_product(
+                common.core.identity.product_record.to_bytes(),
+                common.result_outcome_count,
+            )
+            .is_err()
+    {
+        return Err(Error::InvalidTerminal);
+    }
+    match (
+        common.representation_admission.basis_kind(),
+        certificate.kind,
+    ) {
+        (
+            BasisKindV3::CategoricalQ1,
+            ResolutionCertificateKindV2::ResolutionSuccess
+            | ResolutionCertificateKindV2::ResolutionFailure,
+        ) => Ok(TerminalScenarioV3::Categorical(common.core.terminal_winner)),
+        (BasisKindV3::GradedExactComplement, ResolutionCertificateKindV2::ResolutionSuccess) => {
+            Ok(TerminalScenarioV3::Rational {
+                numerator: certificate.result_numerator,
+                denominator: certificate.result_denominator,
+            })
+        }
+        (BasisKindV3::GradedExactComplement, ResolutionCertificateKindV2::ResolutionFailure) => {
+            Ok(TerminalScenarioV3::Failure)
+        }
+        (
+            BasisKindV3::CategoricalQ1 | BasisKindV3::GradedExactComplement,
+            ResolutionCertificateKindV2::RecoveryAdvanced | ResolutionCertificateKindV2::Exhausted,
+        ) => Err(Error::InvalidTerminal),
+    }
 }
 
 fn evaluate_terminal_payout(
@@ -1898,8 +1915,9 @@ fn finish_instruction(
             AccountMeta::new_readonly(frame.derived.custody_caller_authority, false),
             AccountMeta::new_readonly(common.roles.custody, false),
             AccountMeta::new_readonly(common.roles.custody_programdata, false),
-            AccountMeta::new_readonly(frame.observation.terminal_coordinate.raw.key, false),
-            AccountMeta::new_readonly(frame.observation.terminal_coordinate.staging.key, false),
+            AccountMeta::new_readonly(frame.observation.terminal_certificate.key, false),
+            AccountMeta::new_readonly(common.roles.resolution, false),
+            AccountMeta::new_readonly(common.roles.resolution_programdata, false),
             AccountMeta::new_readonly(frame.observation.realm.raw.key, false),
             AccountMeta::new_readonly(frame.observation.realm.staging.key, false),
             AccountMeta::new(frame.derived.custody_replay, false),

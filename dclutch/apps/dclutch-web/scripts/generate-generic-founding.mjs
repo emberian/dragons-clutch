@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 
 const root = new URL('../../../', import.meta.url);
 const sources = Object.freeze({
@@ -8,6 +8,7 @@ const sources = Object.freeze({
   claims: readFileSync(new URL('crates/dclutch-claims-svm/src/founding_v5.rs', root), 'utf8'),
   client: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/market.rs', root), 'utf8'),
   clientRpc: readFileSync(new URL('tools/local-validator/bootstrap/successor/src/rpc.rs', root), 'utf8'),
+  coreFrame: readFileSync(new URL('programs/dclutch-core-sbf/src/frame.rs', root), 'utf8'),
 });
 const outputUrl = new URL('../lib/generated/genericFoundingV1.ts', import.meta.url);
 
@@ -69,11 +70,51 @@ function domain(source, name) {
   return match[1];
 }
 
-/** Read a private `const NAME: usize = <decimal>;` inside the route module. */
-function routeIndex(name) {
-  const match = sources.route.match(new RegExp(`\\nconst ${name}: usize = ([0-9]+);`));
-  if (!match) throw new Error(`missing Rust route index ${name}`);
-  return Number(match[1]);
+/**
+ * Rust visibility, which this emitter reads past rather than depending on.
+ *
+ * How widely a constant is exported says nothing about the wire. When the
+ * founding route was split into two outers the raw-request indices had to
+ * become `pub(crate)` so the new stage module could import them, and every
+ * emitter that matched a bare `const` stopped finding constants whose value had
+ * not changed by a single byte. An ABI mirror must key off the name and the
+ * value, never the keyword in front of them.
+ */
+const VISIBILITY = '(?:pub(?:\\((?:crate|super|self|in [a-z_:]+)\\))? )?';
+
+/** Resolve a plain `const NAME: usize = <decimal>;` from either Rust source. */
+function namedUsize(name) {
+  for (const key of ['route', 'codec']) {
+    const match = sources[key].match(new RegExp(`\\n${VISIBILITY}const ${name}: usize = ([0-9]+);`));
+    if (match) return Number(match[1]);
+  }
+  throw new Error(`missing Rust usize constant ${name}`);
+}
+
+/**
+ * Read a `const NAME: usize = …;` inside the route module.
+ *
+ * Literals first, then the one derived form the route uses: `NAMED ± k`, where
+ * NAMED is a frame count the codec publishes. Route indices started as bare
+ * numbers and are becoming derivations — `CORE_FOUND_TRADING_PROGRAM` is
+ * `GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1 - 2` — which is the better
+ * way to write them, so this reads them rather than asking Rust to go back to
+ * transcribed numbers. Same shape as `codecOffset` below, for the same reason:
+ * evaluating the expression keeps the emitter honest about which Rust it is
+ * reading, and `expected` refuses a silent drift if the form ever outgrows
+ * this parser.
+ */
+function routeIndex(name, expected) {
+  const literal = sources.route.match(new RegExp(`\\n${VISIBILITY}const ${name}: usize = ([0-9]+);`));
+  if (literal) return Number(literal[1]);
+  const expression = sources.route.match(new RegExp(`\\n${VISIBILITY}const ${name}: usize = ([^;]+);`));
+  if (!expression) throw new Error(`missing Rust route index ${name}`);
+  const derived = expression[1].trim().match(/^([A-Z0-9_]+) ([+-]) ([0-9]+)$/);
+  if (!derived) throw new Error(`unparsable Rust route index ${name}: ${expression[1].trim()}`);
+  const base = namedUsize(derived[1]);
+  const value = derived[2] === '+' ? base + Number(derived[3]) : base - Number(derived[3]);
+  if (expected !== undefined && value !== expected) throw new Error(`${name} evaluated to ${value}, not ${expected}`);
+  return value;
 }
 
 /** Read the codec's private layout offsets, which are expressions as often as literals. */
@@ -127,12 +168,13 @@ lines.push('//   crates/dclutch-custody-contract/src/projected.rs               
 lines.push('//   crates/dclutch-claims-svm/src/founding_v5.rs                    (Claims)');
 lines.push('//   tools/local-validator/bootstrap/successor/src/market.rs         (the frame width)');
 lines.push('');
-lines.push('/** Sole top-level DCLTGMF1 discriminator. The outer carries no other bytes. */');
-lines.push(`export const GENERIC_MARKET_FOUNDING_MAGIC_V1 = '${magic('route', 'GENERIC_MARKET_FOUNDING_MAGIC_V1')}' as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V1')} as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V1')} as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V1')} as const;`);
-lines.push(`export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V1')} as const;`);
+lines.push('/** Sole top-level DCLTGMF3 discriminator followed by five invocation-evidence bumps. */');
+lines.push(`export const GENERIC_MARKET_FOUNDING_MAGIC_V3 = '${magic('route', 'GENERIC_MARKET_FOUNDING_MAGIC_V3')}' as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_CALLER_BUMP_COUNT_V3')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_RAW_ACCOUNT_COUNT_V3')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_INSTRUCTIONS_SYSVAR_INDEX_V3')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3 = ${scalar('route', 'GENERIC_MARKET_FOUNDING_PREFIX_ACCOUNT_COUNT_V3')} as const;`);
 lines.push('');
 lines.push('/** Index of each readonly request account inside the frame prefix. */');
 for (const [name, index] of [['FOUND', routeIndex('FOUND_RAW')], ['LOCK', routeIndex('LOCK_RAW')], ['REALIZE', routeIndex('REALIZE_RAW')], ['CLAIMS', routeIndex('CLAIMS_RAW')]]) {
@@ -154,13 +196,14 @@ lines.push(' * The client pins it as one number so a stage-width change shows up
 lines.push(' * disagreement rather than as a silently wider frame; the assertion that the');
 lines.push(' * six widths above sum to it lives in `genericMarketFounding.test.ts`.');
 lines.push(' */');
-lines.push(`export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1 = ${scalar('client', 'GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V1')} as const;`);
+lines.push(`export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 = ${scalar('client', 'GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3')} as const;`);
+lines.push(`export const PROJECTED_FOUND_ACCOUNT_COUNT_V2 = ${scalar('coreFrame', 'PROJECTED_FOUND_ACCOUNT_COUNT_V2')} as const;`);
 lines.push('');
 lines.push('/** Exact distinct writable keys the outer requires, asserted by the client. */');
-lines.push('export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V1 = 11 as const;');
+lines.push(`export const GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3 = ${scalar('client', 'GENERIC_MARKET_FOUNDING_DISTINCT_WRITABLE_V3')} as const;`);
 lines.push('');
-lines.push('/** Agave `increase_tx_account_lock_limit`; the fee payer is the key outside the frame. */');
-lines.push('export const MAX_TX_ACCOUNT_LOCKS_V1 = 128 as const;');
+lines.push('/** Devnet transaction account-lock limit without the raise feature. */');
+lines.push('export const MAX_TX_ACCOUNT_LOCKS_V2 = 64 as const;');
 lines.push('');
 lines.push('/** Indexes into the Found stage that the route itself dereferences. */');
 lines.push(`export const CORE_FOUND_MARKET_INDEX_V1 = ${routeIndex('CORE_FOUND_MARKET')} as const;`);
@@ -221,9 +264,8 @@ lines.push('/**');
 lines.push(' * ComputeBudget declarations the reference client puts on every transaction.');
 lines.push(' *');
 lines.push(' * `bounded_instructions` owns these and refuses a caller-supplied duplicate.');
-lines.push(' * The default per-transaction ceiling is 200,000 CU and Found31 alone spends');
-lines.push(' * over a million, so a builder that omits the limit does not produce a slow');
-lines.push(' * transaction -- it produces one that cannot complete.');
+lines.push(' * The configured limit is part of the emitted bytes, not a performance claim.');
+lines.push(' * Current V2 routes require their own pass-count and 20-seed mean evidence.');
 lines.push(' */');
 lines.push(`export const SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT_V1 = ${scalar('clientRpc', 'SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT')} as const;`);
 lines.push(`export const REQUEST_HEAP_FRAME_DISCRIMINANT_V1 = ${scalar('clientRpc', 'REQUEST_HEAP_FRAME_DISCRIMINANT')} as const;`);
@@ -243,6 +285,17 @@ if (process.argv.includes('--check')) {
   }
   process.stdout.write('lib/generated/genericFoundingV1.ts matches its Rust sources\n');
 } else {
-  writeFileSync(outputUrl, emitted);
+  const temporaryUrl = new URL(`../lib/generated/.genericFoundingV1.ts.${process.pid}.tmp`, import.meta.url);
+  try {
+    writeFileSync(temporaryUrl, emitted, { flag: 'wx' });
+    const candidate = readFileSync(temporaryUrl, 'utf8');
+    if (!candidate.startsWith('// @generated by scripts/generate-generic-founding.mjs; do not edit.\n')
+        || !candidate.includes('export const GENERIC_MARKET_FOUNDING_FIXED_ACCOUNTS_V3 = 125 as const;')) {
+      throw new Error('generated generic-founding ABI failed header/width validation');
+    }
+    renameSync(temporaryUrl, outputUrl);
+  } finally {
+    rmSync(temporaryUrl, { force: true });
+  }
   process.stdout.write('wrote lib/generated/genericFoundingV1.ts\n');
 }

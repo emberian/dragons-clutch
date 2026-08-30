@@ -1,0 +1,727 @@
+//! Resolution-owned subset-ledger initialization before Core creates a Market.
+
+use alloc::{vec, vec::Vec};
+
+use dclutch_capability_contract::{
+    CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, ContentId as CapabilityContentId,
+    FundingLedgerV2, funding_ledger_bytes_v2,
+};
+use dclutch_market_core_codec::{
+    PROJECT_FOUND_ACCOUNT_COUNT_V2, PROJECT_FOUND_RECEIPT_BYTES_V2, ProjectFoundReceiptV2,
+};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_resolution_codec::{
+    PRE_MARKET_FUNDING_REQUEST_BYTES_V2, PRE_MARKET_FUNDING_REQUEST_MAGIC_V2,
+    PreMarketFundingReceiptV2, PreMarketFundingRequestV2, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    pre_market_funding_prestate_digest_v1,
+};
+use solana_program::{
+    account_info::AccountInfo,
+    entrypoint::ProgramResult,
+    hash::hash,
+    instruction::{AccountMeta, Instruction},
+    program::{get_return_data, invoke, invoke_signed, set_return_data},
+    pubkey::Pubkey,
+    rent::Rent,
+    sysvar::Sysvar,
+};
+use solana_sdk_ids::system_program;
+use solana_system_interface::instruction::{allocate, assign, transfer};
+
+use crate::{
+    RecordKind, ResolutionError, authenticate_finalized_record, cached_deployment_observation,
+};
+
+/// Fixed deployment-authenticated accounts before Core's ProjectFound frame.
+pub const PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1: usize = 7;
+/// Exact total account count for pre-Market subset-ledger initialization.
+pub const PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1: usize =
+    PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 + PROJECT_FOUND_ACCOUNT_COUNT_V2;
+
+const CALLER_AUTHORITY: usize = 0;
+const CALLER_PROGRAM: usize = 1;
+const CALLER_PROGRAMDATA: usize = 2;
+const RESOLUTION_PROGRAM: usize = 3;
+const RESOLUTION_PROGRAMDATA: usize = 4;
+const FUNDING_SOURCE: usize = 5;
+const LEDGER: usize = 6;
+const FOUND_START: usize = PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1;
+const FOUND_RENT_PROGRAM: usize = 3;
+const FOUND_RENT_CREDIT: usize = 2;
+const FOUND_MANIFEST_RAW: usize = 22;
+const FOUND_MANIFEST_STAGING: usize = 23;
+const FOUND_ACTIVATION_CACHE: usize = 24;
+const FOUND_CORE_PROGRAM: usize = 25;
+const FOUND_REGISTRY_PROGRAM: usize = 27;
+const FOUND_SYSTEM: usize = 28;
+
+/// Return whether bytes select the pre-Market subset-ledger initializer.
+pub fn is_pre_market_funding_v2(instruction_data: &[u8]) -> bool {
+    instruction_data.len() == PRE_MARKET_FUNDING_REQUEST_BYTES_V2
+        && instruction_data.get(..PRE_MARKET_FUNDING_REQUEST_MAGIC_V2.len())
+            == Some(PRE_MARKET_FUNDING_REQUEST_MAGIC_V2.as_slice())
+}
+
+/// Project the exact future Market and initialize its Resolution-owned ledger.
+pub fn process_pre_market_funding_v2(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    let request = PreMarketFundingRequestV2::decode(instruction_data)
+        .map_err(|_| ResolutionError::Instruction)?;
+    authenticate_frame(program_id, accounts, request)?;
+    let found = accounts
+        .get(FOUND_START..)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let core_program = found
+        .get(FOUND_CORE_PROGRAM)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let (receipt, project_found_receipt_digest) = project_found(core_program, found, request)?;
+    if project_found_receipt_digest != request.expected_project_found_receipt_digest {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    let exact_found = request
+        .project_found
+        .found
+        .encode()
+        .map_err(|_| ResolutionError::Instruction)?;
+    receipt
+        .verify_found_request(hash(&exact_found).to_bytes())
+        .map_err(|_| ResolutionError::MarketAuthority)?;
+    if receipt.market.to_bytes() != request.project_found.found.market.to_bytes()
+        || receipt.generation != request.project_found.found.generation
+    {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+
+    let manifest_raw = found
+        .get(FOUND_MANIFEST_RAW)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let manifest_staging = found
+        .get(FOUND_MANIFEST_STAGING)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let registry_program = found
+        .get(FOUND_REGISTRY_PROGRAM)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let system = found
+        .get(FOUND_SYSTEM)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let rent = Rent::get().map_err(|_| ResolutionError::Sysvar)?;
+    let manifest_data = manifest_raw
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::FinalizedRecord)?;
+    authenticate_finalized_record(
+        *registry_program.key,
+        manifest_raw,
+        manifest_staging,
+        &rent,
+        dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        request.manifest,
+        &manifest_data,
+        RecordKind::CapabilityManifest,
+    )?;
+    let manifest =
+        CapabilityManifestV1::decode(&manifest_data).map_err(|_| ResolutionError::Funding)?;
+    let (canonical_mask, native_principal) = resolution_funding_plan(manifest)?;
+    if canonical_mask != request.selected_mask {
+        return Err(ResolutionError::Funding.into());
+    }
+    authenticate_release_and_caller(
+        program_id,
+        accounts,
+        found,
+        instruction_data,
+        request,
+        receipt,
+    )?;
+
+    let manifest_id =
+        CapabilityContentId::new(request.manifest).map_err(|_| ResolutionError::Funding)?;
+    let width = funding_ledger_bytes_v2(3).map_err(|_| ResolutionError::Funding)?;
+    let mut ledger_bytes = vec![0_u8; width];
+    FundingLedgerV2::initialize(
+        &mut ledger_bytes,
+        manifest_id,
+        manifest,
+        request.selected_mask,
+    )
+    .map_err(|_| ResolutionError::Funding)?;
+    let funding_ledger =
+        FundingLedgerV2::decode(&ledger_bytes).map_err(|_| ResolutionError::Funding)?;
+    let exact_rent = rent.minimum_balance(width);
+    let target = exact_rent
+        .checked_add(native_principal)
+        .ok_or(ResolutionError::Arithmetic)?;
+    let funding_source = accounts
+        .get(FUNDING_SOURCE)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let ledger = accounts.get(LEDGER).ok_or(ResolutionError::AccountFrame)?;
+    let observed_dust =
+        authenticate_vacant_ledger(ledger, request.ledger, request.prestate_digest)?;
+    let (top_up, refund) = exact_dust_reconciliation(observed_dust, target);
+    require_funding_source(funding_source.lamports(), top_up)?;
+    if top_up != 0 {
+        invoke(
+            &transfer(funding_source.key, ledger.key, top_up),
+            &[funding_source.clone(), ledger.clone(), system.clone()],
+        )
+        .map_err(|_| ResolutionError::Funding)?;
+    }
+    let rent_credit = found
+        .get(FOUND_RENT_CREDIT)
+        .ok_or(ResolutionError::AccountFrame)?;
+    initialize_ledger(
+        program_id,
+        ledger,
+        receipt.market.to_bytes(),
+        receipt.generation,
+        manifest_id,
+        funding_ledger,
+        &ledger_bytes,
+        system,
+        rent_credit,
+        refund,
+    )?;
+    {
+        let mut output = ledger
+            .try_borrow_mut_data()
+            .map_err(|_| ResolutionError::OutputState)?;
+        if output.len() != ledger_bytes.len() || output.iter().any(|byte| *byte != 0) {
+            return Err(ResolutionError::OutputState.into());
+        }
+        output.copy_from_slice(&ledger_bytes);
+    }
+    if ledger.lamports() != target {
+        return Err(ResolutionError::Funding.into());
+    }
+    let receipt = PreMarketFundingReceiptV2 {
+        market: receipt.market.to_bytes(),
+        generation: receipt.generation,
+        manifest: request.manifest,
+        selected_mask: request.selected_mask,
+        ledger: request.ledger,
+        prestate_digest: request.prestate_digest,
+        poststate_digest: hash(&ledger_bytes).to_bytes(),
+        exact_rent_lamports: exact_rent,
+        exact_native_principal: native_principal,
+        found_request_digest: receipt.found_request_digest,
+        funding_source: request.funding_source,
+        rent_credit: rent_credit.key.to_bytes(),
+        project_found_receipt_digest,
+        observed_dust_lamports: observed_dust,
+        top_up_lamports: top_up,
+        refund_lamports: refund,
+        exact_post_lamports: target,
+    };
+    set_return_data(&receipt.encode().map_err(|_| ResolutionError::Instruction)?);
+    Ok(())
+}
+
+fn authenticate_frame(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: PreMarketFundingRequestV2,
+) -> ProgramResult {
+    if accounts.len() != PRE_MARKET_FUNDING_ACCOUNT_COUNT_V1 {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    let authority = accounts
+        .get(CALLER_AUTHORITY)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let caller = accounts
+        .get(CALLER_PROGRAM)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let caller_programdata = accounts
+        .get(CALLER_PROGRAMDATA)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let resolution_program = accounts
+        .get(RESOLUTION_PROGRAM)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let resolution_programdata = accounts
+        .get(RESOLUTION_PROGRAMDATA)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let funding = accounts
+        .get(FUNDING_SOURCE)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let ledger = accounts.get(LEDGER).ok_or(ResolutionError::AccountFrame)?;
+    if !authority.is_signer
+        || authority.is_writable
+        || authority.executable
+        || !caller.executable
+        || caller.is_signer
+        || caller.is_writable
+        || caller_programdata.is_signer
+        || caller_programdata.is_writable
+        || caller_programdata.executable
+        || resolution_program.key != program_id
+        || resolution_program.is_signer
+        || resolution_program.is_writable
+        || !resolution_program.executable
+        || resolution_programdata.is_signer
+        || resolution_programdata.is_writable
+        || resolution_programdata.executable
+        || !funding.is_signer
+        || !funding.is_writable
+        || funding.executable
+        || funding.key.to_bytes() != request.funding_source
+        || ledger.key.to_bytes() != request.ledger
+        || ledger.is_signer
+        || !ledger.is_writable
+        || ledger.executable
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    for prefix_index in 0..PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 {
+        let prefix = accounts
+            .get(prefix_index)
+            .ok_or(ResolutionError::AccountFrame)?;
+        if accounts
+            .iter()
+            .take(PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1)
+            .skip(
+                prefix_index
+                    .checked_add(1)
+                    .ok_or(ResolutionError::Arithmetic)?,
+            )
+            .any(|other| other.key == prefix.key)
+        {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
+    let found = accounts
+        .get(FOUND_START..)
+        .ok_or(ResolutionError::AccountFrame)?;
+    for (index, account) in found.iter().enumerate() {
+        if !found_outer_flags_are_canonical(index, account) {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
+    // Core's successful ProjectFound receipt is the semantic-owner proof that
+    // this exact ProjectFound36 slice has no internal aliases. Resolution must still
+    // own the outer flags because the CPI projection deliberately downgrades
+    // every child meta to readonly/non-signer. It also rejects every prefix
+    // alias and prefix-to-Found alias. Repeating Core's 666 internal pairwise
+    // comparisons here adds no independent authority.
+    for prefix_index in 0..PRE_MARKET_FUNDING_PREFIX_ACCOUNT_COUNT_V1 {
+        let prefix = accounts
+            .get(prefix_index)
+            .ok_or(ResolutionError::AccountFrame)?;
+        if found.iter().any(|account| account.key == prefix.key) {
+            return Err(ResolutionError::AccountFrame.into());
+        }
+    }
+    if accounts
+        .get(FOUND_START + FOUND_CORE_PROGRAM)
+        .ok_or(ResolutionError::AccountFrame)?
+        .key
+        == program_id
+        || accounts
+            .get(FOUND_START + FOUND_SYSTEM)
+            .ok_or(ResolutionError::AccountFrame)?
+            .key
+            != &system_program::ID
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    Ok(())
+}
+
+fn found_outer_flags_are_canonical(index: usize, account: &AccountInfo<'_>) -> bool {
+    let executable = matches!(
+        index,
+        FOUND_RENT_PROGRAM | FOUND_CORE_PROGRAM | FOUND_REGISTRY_PROGRAM | FOUND_SYSTEM
+    );
+    let writable = index == FOUND_RENT_CREDIT;
+    !account.is_signer && account.is_writable == writable && account.executable == executable
+}
+
+fn project_found(
+    core_program: &AccountInfo<'_>,
+    found: &[AccountInfo<'_>],
+    request: PreMarketFundingRequestV2,
+) -> Result<(ProjectFoundReceiptV2, [u8; 32]), solana_program::program_error::ProgramError> {
+    let metas: Vec<AccountMeta> = found
+        .iter()
+        .map(|account| AccountMeta::new_readonly(*account.key, false))
+        .collect();
+    let instruction = Instruction {
+        program_id: *core_program.key,
+        accounts: metas,
+        data: request
+            .project_found
+            .encode()
+            .map_err(|_| ResolutionError::Instruction)?
+            .to_vec(),
+    };
+    invoke(&instruction, found).map_err(|_| ResolutionError::MarketAuthority)?;
+    let (producer, bytes) = get_return_data().ok_or(ResolutionError::MarketAuthority)?;
+    if producer != *core_program.key || bytes.len() != PROJECT_FOUND_RECEIPT_BYTES_V2 {
+        return Err(ResolutionError::MarketAuthority.into());
+    }
+    let digest = hash(&bytes).to_bytes();
+    let receipt =
+        ProjectFoundReceiptV2::decode(&bytes).map_err(|_| ResolutionError::MarketAuthority)?;
+    Ok((receipt, digest))
+}
+
+fn resolution_funding_plan(
+    manifest: CapabilityManifestV1<'_>,
+) -> Result<(u16, u64), solana_program::program_error::ProgramError> {
+    let mut mask = 0_u16;
+    let mut native_principal = 0_u64;
+    for entry_index in 0_u16..manifest.entry_count() {
+        let entry = manifest
+            .entry(entry_index)
+            .map_err(|_| ResolutionError::Funding)?;
+        if entry.release_id().to_bytes() == RESOLUTION_CONTROLLER_RELEASE_ID_V7 {
+            let quote = entry.funding_quote();
+            if quote.realm_collateral().is_some() {
+                return Err(ResolutionError::Funding.into());
+            }
+            native_principal = native_principal
+                .checked_add(quote.native_lamports_total())
+                .ok_or(ResolutionError::Funding)?;
+            mask |= 1_u16 << entry_index;
+        }
+    }
+    if mask.count_ones() != 3 {
+        return Err(ResolutionError::Funding.into());
+    }
+    Ok((mask, native_principal))
+}
+
+fn authenticate_release_and_caller(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    found: &[AccountInfo<'_>],
+    exact_request: &[u8],
+    request: PreMarketFundingRequestV2,
+    receipt: ProjectFoundReceiptV2,
+) -> ProgramResult {
+    let cache = found
+        .get(FOUND_ACTIVATION_CACHE)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let registry = found
+        .get(FOUND_REGISTRY_PROGRAM)
+        .ok_or(ResolutionError::AccountFrame)?;
+    let data = cache
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    // Successful Core ProjectFound already authenticated this exact read-only
+    // cache's Registry owner and PDA against the receipt's release-set ID.
+    // Resolution re-decodes the unchanged bytes because it owns the Trading
+    // and Resolution role projections, but a second PDA syscall adds no fact.
+    if cache.owner != registry.key
+        || activated
+            .execution_release_set_id()
+            .map_err(|_| ResolutionError::ResolutionRelease)?
+            .to_bytes()
+            != receipt.release_set.to_bytes()
+    {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    let trading = activated
+        .role(ExecutionRoleV1::Trading)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let resolution = activated
+        .role(ExecutionRoleV1::Resolution)
+        .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let caller_program = accounts
+        .get(CALLER_PROGRAM)
+        .ok_or(ResolutionError::AccountFrame)?;
+    if trading.release().program().to_bytes() != caller_program.key.to_bytes()
+        || resolution.release().program().to_bytes() != program_id.to_bytes()
+        || resolution.release().semantic_release_id().to_bytes()
+            != RESOLUTION_CONTROLLER_RELEASE_ID_V7
+    {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    trading
+        .authenticate_current_deployment(cached_deployment_observation(
+            caller_program,
+            accounts
+                .get(CALLER_PROGRAMDATA)
+                .ok_or(ResolutionError::AccountFrame)?,
+            trading.release(),
+        )?)
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    resolution
+        .authenticate_current_deployment(cached_deployment_observation(
+            accounts
+                .get(RESOLUTION_PROGRAM)
+                .ok_or(ResolutionError::AccountFrame)?,
+            accounts
+                .get(RESOLUTION_PROGRAMDATA)
+                .ok_or(ResolutionError::AccountFrame)?,
+            resolution.release(),
+        )?)
+        .map_err(|_| ResolutionError::ResolutionDeployment)?;
+    // `decode` above accepts only the exact-width, canonical request encoding.
+    // Hash those caller-owned bytes directly: re-encoding here would duplicate
+    // validation and projection work without adding an independent fact.
+    let digest = hash(exact_request).to_bytes();
+    let seeds = CallerAuthoritySeedsV1::from_bytes(
+        receipt.release_set.to_bytes(),
+        receipt.market.to_bytes(),
+        ExecutionRoleV1::Trading,
+        request.manifest,
+        digest,
+    )
+    .map_err(|_| ResolutionError::ResolutionRelease)?;
+    let expected = Pubkey::find_program_address(&seeds.as_slices(), caller_program.key).0;
+    if accounts
+        .get(CALLER_AUTHORITY)
+        .ok_or(ResolutionError::AccountFrame)?
+        .key
+        != &expected
+    {
+        return Err(ResolutionError::ResolutionRelease.into());
+    }
+    Ok(())
+}
+
+fn prestate_digest(
+    ledger: &AccountInfo<'_>,
+) -> Result<[u8; 32], solana_program::program_error::ProgramError> {
+    let data_len = u64::try_from(ledger.data_len()).map_err(|_| ResolutionError::Arithmetic)?;
+    Ok(pre_market_funding_prestate_digest_v1(
+        ledger.key.to_bytes(),
+        ledger.owner.to_bytes(),
+        ledger.lamports(),
+        data_len,
+    ))
+}
+
+fn authenticate_vacant_ledger(
+    ledger: &AccountInfo<'_>,
+    expected_key: [u8; 32],
+    expected_digest: [u8; 32],
+) -> Result<u64, solana_program::program_error::ProgramError> {
+    if ledger.key.to_bytes() != expected_key
+        || ledger.owner != &system_program::ID
+        || ledger.executable
+        || ledger.data_len() != 0
+        || prestate_digest(ledger)? != expected_digest
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(ledger.lamports())
+}
+
+fn exact_dust_reconciliation(observed: u64, target: u64) -> (u64, u64) {
+    if observed < target {
+        (target - observed, 0)
+    } else {
+        (0, observed - target)
+    }
+}
+
+fn require_funding_source(observed_lamports: u64, exact_target: u64) -> ProgramResult {
+    if observed_lamports < exact_target {
+        Err(ResolutionError::Funding.into())
+    } else {
+        Ok(())
+    }
+}
+
+#[inline(always)]
+fn authenticate_ledger_address(
+    program_id: &Pubkey,
+    components: &[&[u8]],
+    observed: &Pubkey,
+) -> Result<u8, solana_program::program_error::ProgramError> {
+    let (expected, bump) = Pubkey::find_program_address(components, program_id);
+    if expected != *observed {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(bump)
+}
+
+fn initialize_ledger<'info>(
+    program_id: &Pubkey,
+    output: &AccountInfo<'info>,
+    market: [u8; 32],
+    generation: u64,
+    manifest_id: CapabilityContentId,
+    funding_ledger: FundingLedgerV2<'_>,
+    ledger_bytes: &[u8],
+    system: &AccountInfo<'info>,
+    rent_credit: &AccountInfo<'info>,
+    refund: u64,
+) -> ProgramResult {
+    let derivation = CapabilityFundingLedgerDerivationV2::new(
+        program_id.to_bytes(),
+        market,
+        generation,
+        manifest_id,
+        funding_ledger,
+    )
+    .map_err(|_| ResolutionError::Funding)?;
+    let components = derivation.seed_components();
+    let bump = authenticate_ledger_address(program_id, &components, output.key)?;
+    let bump_seed = [bump];
+    let [domain, controller, market, generation, manifest, mask] = components;
+    let signer: [&[u8]; 7] = [
+        domain, controller, market, generation, manifest, mask, &bump_seed,
+    ];
+    if refund != 0 {
+        invoke_signed(
+            &transfer(output.key, rent_credit.key, refund),
+            &[output.clone(), rent_credit.clone(), system.clone()],
+            &[&signer],
+        )
+        .map_err(|_| ResolutionError::Funding)?;
+    }
+    invoke_signed(
+        &allocate(
+            output.key,
+            u64::try_from(ledger_bytes.len()).map_err(|_| ResolutionError::Arithmetic)?,
+        ),
+        &[output.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| ResolutionError::OutputState)?;
+    invoke_signed(
+        &assign(output.key, program_id),
+        &[output.clone(), system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| ResolutionError::OutputState)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dclutch_market_core_codec::{Action, Identity, ProjectFoundRequestV2, Request};
+
+    #[test]
+    fn request_detector_is_version_and_width_exact() {
+        let request = PreMarketFundingRequestV2 {
+            project_found: ProjectFoundRequestV2::new(Request::administrative(
+                Action::Found,
+                7,
+                Identity::new([1; 32]).expect("market"),
+            ))
+            .expect("ProjectFound"),
+            manifest: [2; 32],
+            selected_mask: 0b111,
+            funding_source: [3; 32],
+            ledger: [4; 32],
+            prestate_digest: [5; 32],
+            expected_project_found_receipt_digest: [6; 32],
+        }
+        .encode()
+        .expect("request");
+        let decoded = PreMarketFundingRequestV2::decode(&request).expect("canonical request");
+        assert_eq!(decoded.encode().expect("canonical re-encoding"), request);
+        assert_eq!(
+            hash(&decoded.encode().expect("canonical digest bytes")),
+            hash(&request)
+        );
+        assert!(is_pre_market_funding_v2(&request));
+        assert!(!is_pre_market_funding_v2(&request[..request.len() - 1]));
+        let mut wrong = request;
+        wrong[0] ^= 1;
+        assert!(!is_pre_market_funding_v2(&wrong));
+        let mut noncanonical = request;
+        noncanonical[10] = 1;
+        assert!(PreMarketFundingRequestV2::decode(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn ledger_address_substitution_refuses_without_a_second_derivation() {
+        let program_id = Pubkey::new_from_array([9; 32]);
+        let first = [1_u8; 32];
+        let second = [2_u8; 8];
+        let components: [&[u8]; 3] = [b"dclutch/test-ledger", &first, &second];
+        let (expected, bump) = Pubkey::find_program_address(&components, &program_id);
+        assert_eq!(
+            authenticate_ledger_address(&program_id, &components, &expected),
+            Ok(bump)
+        );
+        let substituted = Pubkey::new_from_array([7; 32]);
+        assert_eq!(
+            authenticate_ledger_address(&program_id, &components, &substituted),
+            Err(ResolutionError::OutputState.into())
+        );
+    }
+
+    #[test]
+    fn outer_found_privilege_substitution_still_refuses_before_core_projection() {
+        let key = Pubkey::new_from_array([8; 32]);
+        let owner = Pubkey::new_from_array([7; 32]);
+        let mut lamports = 1_u64;
+        let mut data = [];
+        let mut account =
+            AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+        assert!(found_outer_flags_are_canonical(0, &account));
+        account.is_writable = true;
+        assert!(!found_outer_flags_are_canonical(0, &account));
+        account.is_writable = false;
+        account.is_signer = true;
+        assert!(!found_outer_flags_are_canonical(0, &account));
+        account.is_signer = false;
+        assert!(!found_outer_flags_are_canonical(
+            FOUND_CORE_PROGRAM,
+            &account
+        ));
+        account.is_writable = true;
+        account.executable = false;
+        assert!(found_outer_flags_are_canonical(FOUND_RENT_CREDIT, &account));
+        account.is_writable = false;
+        assert!(!found_outer_flags_are_canonical(
+            FOUND_RENT_CREDIT,
+            &account
+        ));
+    }
+
+    #[test]
+    fn replay_substitution_and_partial_funding_refuse() {
+        let key = Pubkey::new_from_array([1; 32]);
+        let mut lamports = 0_u64;
+        let mut data = [];
+        let owner = system_program::ID;
+        let exact = AccountInfo::new(&key, false, true, &mut lamports, &mut data, &owner, false);
+        let digest = prestate_digest(&exact).expect("prestate digest");
+        assert_eq!(
+            authenticate_vacant_ledger(&exact, key.to_bytes(), digest),
+            Ok(0)
+        );
+        assert_eq!(
+            authenticate_vacant_ledger(&exact, [2; 32], digest),
+            Err(ResolutionError::OutputState.into())
+        );
+        assert_eq!(
+            require_funding_source(99, 100),
+            Err(ResolutionError::Funding.into())
+        );
+        assert_eq!(exact_dust_reconciliation(90, 100), (10, 0));
+        assert_eq!(exact_dust_reconciliation(100, 100), (0, 0));
+        assert_eq!(exact_dust_reconciliation(110, 100), (0, 10));
+        assert_eq!(require_funding_source(100, 100), Ok(()));
+
+        let occupied_key = Pubkey::new_from_array([3; 32]);
+        let mut occupied_lamports = 1_u64;
+        let mut occupied_data = [0_u8; 1];
+        let occupied_owner = Pubkey::new_from_array([4; 32]);
+        let replay = AccountInfo::new(
+            &occupied_key,
+            false,
+            true,
+            &mut occupied_lamports,
+            &mut occupied_data,
+            &occupied_owner,
+            false,
+        );
+        let replay_digest = prestate_digest(&replay).expect("occupied digest");
+        assert_eq!(
+            authenticate_vacant_ledger(&replay, occupied_key.to_bytes(), replay_digest),
+            Err(ResolutionError::OutputState.into())
+        );
+    }
+}

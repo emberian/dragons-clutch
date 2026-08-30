@@ -31,6 +31,7 @@ use dclutch_product_runtime_v2_svm_reader::{
     authenticate_product_basis_v3,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -271,11 +272,20 @@ fn execute_authenticated(
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| AffineBatchSbfErrorV2::ClaimsState)?;
     authenticate_market(program_id, accounts, plan, market)?;
-    if !parent_authenticated {
-        authenticate_product_and_basis(accounts, plan, market)?;
+    let principal_cap_sets = if !parent_authenticated {
+        authenticate_product_and_basis(accounts, plan, market)?
     } else {
         authenticate_parent_product_digests(accounts, plan)?;
-    }
+        authenticate_core_market_v3(
+            accounts.core_market,
+            accounts.core_program,
+            accounts.registry,
+            market,
+            plan.product_record_digest(),
+            CorePhaseGateV3::Exactly(CorePhase::Open),
+        )?
+    };
+    admit_principal_growth(plan, &market_before, principal_cap_sets)?;
     let (mut market_candidate, mut position_candidates) =
         build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
@@ -511,7 +521,7 @@ fn authenticate_product_and_basis(
     accounts: &AffineBatchAccountsV2<'_, '_>,
     plan: AffineBatchPlanV2<'_>,
     market: MarketViewV2,
-) -> Result<(), ProgramError> {
+) -> Result<u64, ProgramError> {
     authenticate_runtime_product_basis_core_v3(
         accounts.registry,
         accounts.rent,
@@ -538,7 +548,7 @@ fn authenticate_product_and_basis(
         market,
         plan.product_record_digest(),
         plan.linked_basis_record_digest(),
-        CorePhase::Open,
+        CorePhaseGateV3::Exactly(CorePhase::Open),
     )
 }
 
@@ -562,13 +572,38 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     market: MarketViewV2,
     expected_product_record_digest: [u8; 32],
     expected_linked_basis_record_digest: [u8; 32],
-    expected_core_phase: CorePhase,
-) -> Result<(), ProgramError> {
+    phase_gate: CorePhaseGateV3,
+) -> Result<u64, ProgramError> {
     let rent =
         Rent::from_account_info(rent_account).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
+    authenticate_runtime_product_basis_core_with_rent_v3(
+        registry,
+        &rent,
+        core_market,
+        core_program,
+        product_frame,
+        market,
+        expected_product_record_digest,
+        expected_linked_basis_record_digest,
+        phase_gate,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
+    registry: &AccountInfo<'_>,
+    rent: &Rent,
+    core_market: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    product_frame: ProductRuntimeFrameV3<'_, '_>,
+    market: MarketViewV2,
+    expected_product_record_digest: [u8; 32],
+    expected_linked_basis_record_digest: [u8; 32],
+    phase_gate: CorePhaseGateV3,
+) -> Result<u64, ProgramError> {
     let runtime = authenticate_product_runtime_v2(
         registry.key,
-        &rent,
+        rent,
         expected_product_record_digest,
         None,
         ProductRuntimeFrameV2 {
@@ -579,7 +614,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     )
     .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     let product =
-        authenticate_product_basis_v3(registry.key, &rent, runtime, product_frame.linked_basis)
+        authenticate_product_basis_v3(registry.key, rent, runtime, product_frame.linked_basis)
             .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     if product.runtime.product_record.content_digest.to_bytes() != expected_product_record_digest
         || product.runtime.product_id.to_bytes() != market.product_instance_id
@@ -592,6 +627,78 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     {
         return Err(AffineBatchSbfErrorV2::ProductBasis.into());
     }
+    authenticate_core_market_v3(
+        core_market,
+        core_program,
+        registry,
+        market,
+        expected_product_record_digest,
+        phase_gate,
+    )
+}
+
+/// Which persisted Core phases a Claims route admits.
+///
+/// Most routes name exactly one phase. Redemption names two, and must: Core's
+/// `begin_retiring` is permissionless and refuses all signers
+/// (`programs/dclutch-core-sbf/src/begin_retiring.rs:57`), so while every
+/// redemption route demanded exact equality with `Phase::Terminal`, any
+/// stranger could end every holder's redemption right for one transaction fee
+/// -- and brick the Market doing it, because retirement needs zero outstanding
+/// supply (`market_closure_v1.rs:669-681`) and redemption is the only thing
+/// that drives supply to zero.
+///
+/// Two-phase tolerance is the documented intent rather than a relaxation. The
+/// transition's own codec doc reads "Begin retiring while retaining
+/// permissionless redemption"
+/// (`crates/dclutch-market-core-codec/src/generated.rs:1030`), it moves `phase`
+/// and nothing else -- `terminal_winner` and `terminal_receipt` both survive
+/// it (`:1041-1047`) -- and `phases_join` already admits
+/// `(CorePhase::Retiring, EconomicPhase::Retiring(w))`
+/// (`crate::phases_join`, `lib.rs:1204-1213`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CorePhaseGateV3 {
+    /// One phase, by equality. Every non-redemption route keeps this.
+    Exactly(CorePhase),
+    /// A resolved Market, whether or not retirement has begun.
+    ///
+    /// Named for the set it admits rather than for the routes that use it, so
+    /// a future phase cannot join it by the name staying plausible.
+    TerminalOrRetiring,
+}
+
+impl CorePhaseGateV3 {
+    /// Whether a persisted Core phase satisfies this gate.
+    ///
+    /// `TerminalOrRetiring` widens the phase and nothing else. `Retiring` is
+    /// reachable only from `Terminal` and carries the same `terminal_winner`,
+    /// and the payout derivation independently refuses a coordinate whose
+    /// supply or balance is already drained
+    /// (`product_basis_terminal_v3.rs:416-424`), so a holder admitted here is
+    /// paid exactly what the same holder was owed one phase earlier, once.
+    pub(crate) fn admits(self, phase: CorePhase) -> bool {
+        match self {
+            Self::Exactly(expected) => phase == expected,
+            Self::TerminalOrRetiring => {
+                matches!(phase, CorePhase::Terminal | CorePhase::Retiring)
+            }
+        }
+    }
+}
+
+/// Authenticate and return the sole Core-owned runtime principal cap.
+///
+/// Parent-authenticated Claims routes still call this boundary themselves:
+/// immutable Product bytes may be inherited from the parent, but a caller may
+/// never author or substitute the Market's persisted cap.
+pub(crate) fn authenticate_core_market_v3(
+    core_market: &AccountInfo<'_>,
+    core_program: &AccountInfo<'_>,
+    registry: &AccountInfo<'_>,
+    market: MarketViewV2,
+    expected_product_record_digest: [u8; 32],
+    phase_gate: CorePhaseGateV3,
+) -> Result<u64, ProgramError> {
     let core_data = core_market
         .try_borrow_data()
         .map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
@@ -608,7 +715,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     )
     .0;
     if expected_core != *core_market.key
-        || core.phase != expected_core_phase
+        || !phase_gate.admits(core.phase)
         || core.identity.market_id.to_bytes() != market.logical_market
         || core.identity.product_record.to_bytes() != expected_product_record_digest
         || core.identity.product_id.to_bytes() != market.product_instance_id
@@ -617,6 +724,37 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
         || core.identity.generation != market.generation
     {
         return Err(AffineBatchSbfErrorV2::ProductBasis.into());
+    }
+    Ok(core.principal_cap_sets)
+}
+
+/// Preflight every aggregate-credit row against Core's projected set cap.
+///
+/// Affine packets are canonical and duplicate-free by aggregate coordinate,
+/// so each positive aggregate delta names the exact complete-set growth for
+/// that outcome. This runs over the immutable prestate before any candidate or
+/// account byte is changed.
+fn admit_principal_growth(
+    plan: AffineBatchPlanV2<'_>,
+    market: &[u8],
+    principal_cap_sets: u64,
+) -> Result<(), ProgramError> {
+    let cap = MarketPrincipalCapSetsV1::read(principal_cap_sets);
+    for row_index in 0..plan.row_count() {
+        let row = plan
+            .row(row_index)
+            .map_err(|_| AffineBatchSbfErrorV2::Instruction)?;
+        let delta = row.aggregate_delta();
+        if delta.direction() != DeltaDirectionV2::Credit {
+            continue;
+        }
+        let offset = usize::try_from(row.outcome())
+            .ok()
+            .and_then(|outcome| outcome.checked_mul(SCALAR_BYTES))
+            .and_then(|relative| LIABILITY_BASIS_MARKET_HEADER_BYTES_V2.checked_add(relative))
+            .ok_or(AffineBatchSbfErrorV2::Candidate)?;
+        cap.admit_growth(read_u64(market, offset)?, delta.magnitude())
+            .map_err(|_| AffineBatchSbfErrorV2::Candidate)?;
     }
     Ok(())
 }
@@ -875,6 +1013,79 @@ mod tests {
         bytes
     }
 
+    fn aggregate_credit_plan_bytes(quantity: u64) -> Vec<u8> {
+        let positions = [AffineBatchPositionV2::new([7; 32], 4).expect("destination")];
+        let rows = [AffineBatchRowV2::new(
+            AffineBatchRowInputV2 {
+                source_present: false,
+                destination_present: true,
+                outcome: 0,
+                source_position_index: 0,
+                destination_position_index: 0,
+                aggregate_delta: delta(DeltaDirectionV2::Credit, quantity),
+                source_delta: delta(DeltaDirectionV2::Neutral, 0),
+                destination_delta: delta(DeltaDirectionV2::Credit, quantity),
+            },
+            1,
+            1,
+        )
+        .expect("complete-set credit")];
+        let mut bytes = vec![0; plan_bytes(1, 1).expect("width")];
+        AffineBatchPlanV2::encode_into(
+            AffineBatchPlanInputV2 {
+                caller_role: CallerRole::Trading,
+                release_set: [1; 32],
+                market: [2; 32],
+                request_id: [3; 32],
+                product_record_digest: [4; 32],
+                semantic_basis_id: [5; 32],
+                linked_basis_record_digest: [6; 32],
+                expected_market_revision: 3,
+                outcome_count: 1,
+            },
+            &positions,
+            &rows,
+            &mut bytes,
+        )
+        .expect("encode complete-set credit");
+        bytes
+    }
+
+    #[test]
+    fn aggregate_credit_cap_boundary_excess_and_overflow_preflight_without_mutation() {
+        let mut market = vec![0; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + SCALAR_BYTES];
+        put_u64(&mut market, LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, 7)
+            .expect("outstanding supply");
+        let before = market.clone();
+        let boundary_bytes = aggregate_credit_plan_bytes(3);
+        let boundary = AffineBatchPlanV2::decode(&boundary_bytes).expect("boundary plan");
+        assert_eq!(admit_principal_growth(boundary, &market, 10), Ok(()));
+        assert_eq!(market, before);
+
+        let excess_bytes = aggregate_credit_plan_bytes(4);
+        let excess = AffineBatchPlanV2::decode(&excess_bytes).expect("excess plan");
+        assert_eq!(
+            admit_principal_growth(excess, &market, 10),
+            Err(AffineBatchSbfErrorV2::Candidate.into())
+        );
+        assert_eq!(market, before, "cap refusal cannot mutate aggregate bytes");
+
+        put_u64(
+            &mut market,
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            u64::MAX,
+        )
+        .expect("maximum outstanding supply");
+        let overflow_before = market.clone();
+        let overflow_bytes = aggregate_credit_plan_bytes(1);
+        let overflow = AffineBatchPlanV2::decode(&overflow_bytes).expect("overflow plan");
+        assert_eq!(
+            admit_principal_growth(overflow, &market, u64::MAX),
+            Err(AffineBatchSbfErrorV2::Candidate.into())
+        );
+        assert_eq!(market, overflow_before);
+    }
+
     #[test]
     fn candidate_application_is_atomic_and_full_range() {
         let bytes = plan_bytes_fixture();
@@ -928,5 +1139,63 @@ mod tests {
             Some(AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
         );
         assert!(bytes.len() > AFFINE_BATCH_PLAN_HEADER_BYTES_V2);
+    }
+
+    const EVERY_PHASE: [CorePhase; 5] = [
+        CorePhase::Founding,
+        CorePhase::Open,
+        CorePhase::Terminal,
+        CorePhase::Retiring,
+        CorePhase::Retired,
+    ];
+
+    #[test]
+    fn a_settled_gate_admits_retiring_and_an_exact_gate_admits_nothing_new() {
+        // The redemption gate: exactly the two phases a resolved Market can be
+        // in while holders are still owed, and no others. `Retired` in
+        // particular stays out -- by then `market_closure_v1` has demanded zero
+        // outstanding supply, so there is nothing left to redeem.
+        for phase in EVERY_PHASE {
+            assert_eq!(
+                CorePhaseGateV3::TerminalOrRetiring.admits(phase),
+                matches!(phase, CorePhase::Terminal | CorePhase::Retiring),
+                "settled gate admitted the wrong phase: {phase:?}"
+            );
+        }
+        // Widening redemption must not have widened anything else. Every
+        // non-redemption route still names one phase and gets equality.
+        for expected in EVERY_PHASE {
+            for actual in EVERY_PHASE {
+                assert_eq!(
+                    CorePhaseGateV3::Exactly(expected).admits(actual),
+                    expected == actual,
+                    "exact gate {expected:?} drifted on {actual:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_settled_gate_is_exactly_the_pair_the_claims_phase_model_joins() {
+        // The gate is not an independent opinion about which phases redeem. It
+        // is the Core half of `phases_join`'s two winner-bearing pairs
+        // (`crate::phases_join`), which is the Claims phase model's own
+        // statement that a resolved Market keeps its winner across
+        // `begin_retiring`. If someone narrows the join, this fails rather than
+        // leaving redemption admitting a phase the model no longer joins.
+        for phase in EVERY_PHASE {
+            let joins_a_winner_bearing_claims_phase =
+                crate::phases_join(phase, 7, dclutch_economic_slice_kernel::Phase::Terminal(7))
+                    || crate::phases_join(
+                        phase,
+                        7,
+                        dclutch_economic_slice_kernel::Phase::Retiring(7),
+                    );
+            assert_eq!(
+                CorePhaseGateV3::TerminalOrRetiring.admits(phase),
+                joins_a_winner_bearing_claims_phase,
+                "the redemption gate and the phase model disagree on {phase:?}"
+            );
+        }
     }
 }

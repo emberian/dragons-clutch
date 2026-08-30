@@ -8,6 +8,7 @@ use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
+    delegated_custody_child_execution_digest_v3,
 };
 use dclutch_effect_kernel::{
     v2::FixedRole,
@@ -15,10 +16,7 @@ use dclutch_effect_kernel::{
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
-    account_info::AccountInfo,
-    hash::{hash, hashv},
-    program_error::ProgramError,
-    pubkey::Pubkey,
+    account_info::AccountInfo, hash::hash, program_error::ProgramError, pubkey::Pubkey,
 };
 
 use crate::child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4};
@@ -28,7 +26,6 @@ use crate::{
     hot_v3::{ChildInvocationBuffersV3, DowngradedEffectAccountsV3},
 };
 
-const CUSTODY_EXECUTION_DIGEST_DOMAIN_V3: &[u8] = b"dclutch:hot-custody-receipt:v3";
 const CUSTODY_REPLAY_FRAME_COORDINATE_V1: usize = 8;
 
 /// Immutable parent facts every projected Custody request must reproduce.
@@ -51,11 +48,8 @@ pub struct CustodyCompositionParentV3 {
 pub fn preflight_custody_route_v3<'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
-    route_index: u16,
-    invocation_index: u32,
+    invocation: ResolvedInvocationV3,
     tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     frame: &mut Vec<AccountInfo<'info>>,
@@ -65,11 +59,8 @@ pub fn preflight_custody_route_v3<'info>(
     let prepared = prepare(
         program_id,
         effect,
-        route_index,
-        invocation_index,
+        invocation,
         tail_count,
-        scalars,
-        identities,
         effect_accounts,
         request_bank,
         frame,
@@ -87,9 +78,8 @@ pub fn execute_custody_route_v3<'info>(
     effect: ProgramV3<'_>,
     route_index: u16,
     invocation_index: u32,
+    invocation: ResolvedInvocationV3,
     tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &[u8],
     prior_receipt: Option<&[u8]>,
@@ -107,11 +97,8 @@ pub fn execute_custody_route_v3<'info>(
     let prepared = prepare(
         program_id,
         effect,
-        route_index,
-        invocation_index,
+        invocation,
         tail_count,
-        scalars,
-        identities,
         effect_accounts,
         request_bank,
         &mut buffers.accounts,
@@ -132,6 +119,18 @@ pub fn execute_custody_route_v3<'info>(
         prior_receipt,
         ReceiptDeliveryV3::VerifiedOnly,
     )?;
+    // The caller authority Trading just derived, carried to the child so it
+    // reproduces the address instead of searching for it again. It goes AFTER
+    // the request because the digest those seeds end in covers the request
+    // only -- a bump inside it would change its own address. Custody's
+    // `split_caller_authority_bump_v1` reads it back, and its
+    // `the_caller_authority_digest_covers_the_request_prefix_only` pins the
+    // property this depends on.
+    buffers
+        .data
+        .try_reserve(1)
+        .map_err(|_| TradingSbfError::Content)?;
+    buffers.data.push(prepared.bump);
     buffers.push_callee(custody_program)?;
     let bump_seed = [prepared.bump];
     let [domain, release, market, role, context, digest] = prepared.authority_seeds.as_slices();
@@ -161,14 +160,12 @@ pub fn execute_custody_route_v3<'info>(
         prepared.request_digest,
         replay_digest,
     )?;
-    Ok(hashv(&[
-        CUSTODY_EXECUTION_DIGEST_DOMAIN_V3,
-        &route_index.to_le_bytes(),
-        &invocation_index.to_le_bytes(),
-        &prepared.request_digest,
+    Ok(delegated_custody_child_execution_digest_v3(
+        route_index,
+        invocation_index,
+        prepared.request_digest,
         &buffers.returned,
-    ])
-    .to_bytes())
+    ))
 }
 
 struct PreparedCustodyInvocationV3<'a> {
@@ -199,11 +196,8 @@ impl CustodyRequestKindV3 {
 fn prepare<'a, 'info>(
     program_id: &Pubkey,
     effect: ProgramV3<'_>,
-    route_index: u16,
-    invocation_index: u32,
+    invocation: ResolvedInvocationV3,
     tail_count: u32,
-    scalars: &[u64],
-    identities: &[[u8; 32]],
     effect_accounts: DowngradedEffectAccountsV3<'_, '_, 'info>,
     request_bank: &'a [u8],
     frame: &mut Vec<AccountInfo<'info>>,
@@ -222,15 +216,6 @@ fn prepare<'a, 'info>(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let invocation = effect
-        .resolved_invocation(
-            route_index,
-            invocation_index,
-            tail_count,
-            scalars,
-            identities,
-        )
-        .map_err(|_| TradingSbfError::Content)?;
     if invocation.role != FixedRole::Custody || invocation.borrowed_witness.is_some() {
         return Err(TradingSbfError::Content.into());
     }

@@ -102,14 +102,11 @@ describe('the kappa predicate names why it refused', () => {
 });
 
 describe('the kappa verdict states its own enforcement', () => {
-  it('always reports that no on-chain route applies it', () => {
-    // This is the field a UI must render beside the verdict. If kappa is ever
-    // wired into a founding route, this test is the thing that has to change,
-    // and its failure is the reminder to change the copy with it.
+  it('reports the current ProjectFound-to-Core enforcement boundary', () => {
     for (const principal of [1n, 4_654_518_500n, 4_654_518_501n]) {
-      expect(admitPrincipalCapacityV1(DEFAULT_CHAIN_STATE_CAPACITY_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1, principal).enforcement).toBe('off-chain-only');
+      expect(admitPrincipalCapacityV1(DEFAULT_CHAIN_STATE_CAPACITY_V1, BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1, principal).enforcement).toBe('projected-to-core');
     }
-    expect(admitPrincipalCapacityV1({ kind: 'unstated' }, 1n, 1n).enforcement).toBe('off-chain-only');
+    expect(admitPrincipalCapacityV1({ kind: 'unstated' }, 1n, 1n).enforcement).toBe('projected-to-core');
   });
 });
 

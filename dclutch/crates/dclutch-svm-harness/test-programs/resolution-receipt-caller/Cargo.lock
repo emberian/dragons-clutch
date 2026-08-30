@@ -57,7 +57,7 @@ dependencies = [
  "cc",
  "cfg-if",
  "constant_time_eq",
- "cpufeatures 0.3.0",
+ "cpufeatures 0.3.1",
 ]
 
 [[package]]
@@ -71,9 +71,9 @@ dependencies = [
 
 [[package]]
 name = "borsh"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a88b7ea17d208c4193f2c1e6de3c35fe71f98c96982d5ced308bdcc749ff6e1f"
+checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
 dependencies = [
  "borsh-derive",
  "bytes",
@@ -82,15 +82,15 @@ dependencies = [
 
 [[package]]
 name = "borsh-derive"
-version = "1.8.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8f347189c62a579b8cd5f80714efa178f52e461dc2e6d701d264f5ff22e566c"
+checksum = "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
 dependencies = [
  "once_cell",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn 2.0.119",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -180,9 +180,9 @@ dependencies = [
 
 [[package]]
 name = "cpufeatures"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
+checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
@@ -276,11 +276,20 @@ name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-core-contract",
+ "dclutch-sha256-adapter",
 ]
 
 [[package]]
 name = "dclutch-core-contract"
 version = "0.1.0"
+
+[[package]]
+name = "dclutch-market-core-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-release-set-contract",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-product-contract"
@@ -295,8 +304,19 @@ name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-release-set-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-core-contract",
+]
+
+[[package]]
 name = "dclutch-resolution-codec"
 version = "0.1.0"
+dependencies = [
+ "dclutch-market-core-codec",
+ "dclutch-sha256-adapter",
+]
 
 [[package]]
 name = "dclutch-resolution-receipt-test-caller-sbf"
@@ -307,6 +327,14 @@ dependencies = [
  "dclutch-resolution-codec",
  "dclutch-source-contract",
  "solana-program",
+]
+
+[[package]]
+name = "dclutch-sha256-adapter"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "solana-sha256-hasher",
 ]
 
 [[package]]

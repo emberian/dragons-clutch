@@ -2,6 +2,10 @@ import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 
 import { decodeBase64 } from './bytes';
 import {
+  decodeTransactionReturnDataV1,
+  type TransactionReturnDataObservationV1,
+} from './transactionReturnData';
+import {
   AccountProjection,
   classifyHeader,
   crossCheckBindings,
@@ -14,8 +18,12 @@ const MAX_RPC_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_PROGRAM_ACCOUNTS = 256;
 const MAX_REACQUIRED_ACCOUNTS = 128;
 const MAX_MULTIPLE_ACCOUNTS = 32;
-const SOLANA_PACKET_BYTES = 1_232;
 const RPC_TIMEOUT_MS = 15_000;
+
+/** Solana devnet's chain identity, not an endpoint-name heuristic. */
+export const SOLANA_DEVNET_GENESIS_HASH_V1 = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+const SOLANA_MAINNET_BETA_GENESIS_HASH_V1 = '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d';
+const SOLANA_TESTNET_GENESIS_HASH_V1 = '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY';
 
 export type RpcAccount = Readonly<{
   data: Uint8Array;
@@ -45,6 +53,12 @@ export type ConnectionFacts = Readonly<{
   genesisHash: string;
   solanaCore: string;
   featureSet: string | null;
+}>;
+
+export type MutationClusterAdmissionV1 = Readonly<{
+  endpoint: string;
+  genesisHash: string;
+  kind: 'devnet' | 'loopback-local-validator';
 }>;
 
 export type LatestBlockhashObservation = Readonly<{
@@ -87,6 +101,8 @@ export type TransactionMetaObservation = Readonly<{
   preBalances: ReadonlyArray<string>;
   postBalances: ReadonlyArray<string>;
   logMessages: ReadonlyArray<string>;
+  /** Exact final program return data, or explicit absence. */
+  returnData: TransactionReturnDataObservationV1 | null;
   transactionBytes: Uint8Array;
 }>;
 
@@ -113,8 +129,115 @@ function plain(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function canonicalGenesisHash(value: unknown): string {
+  const genesisHash = exactText(value, 'genesis hash', 96);
+  let canonical: string;
+  try {
+    canonical = new PublicKey(genesisHash).toBase58();
+  } catch {
+    throw new Error('getGenesisHash returned a noncanonical chain identity');
+  }
+  if (canonical !== genesisHash) throw new Error('getGenesisHash returned a noncanonical chain identity');
+  return genesisHash;
+}
+
+function isStrictLoopbackOrigin(endpoint: string): boolean {
+  const url = new URL(endpoint);
+  if (url.protocol !== 'http:'
+      || url.username !== ''
+      || url.password !== ''
+      || url.port === ''
+      || url.pathname !== '/'
+      || url.search !== ''
+      || url.hash !== '') return false;
+  const hostname = url.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (hostname === 'localhost' || hostname === '::1') return true;
+  const octets = hostname.split('.');
+  return octets.length === 4
+    && octets.every((octet) => /^(0|[1-9][0-9]{0,2})$/.test(octet) && Number(octet) <= 255)
+    && octets[0] === '127';
+}
+
+/**
+ * What a person reads when the node says no.
+ *
+ * The public devnet endpoint throttles hard, and a bounded program scan is
+ * exactly the shape it throttles first -- so "RPC HTTP status 429" is a
+ * message real readers of the public site will meet. It named the status and
+ * nothing they could act on. These say what happened and what to do; every
+ * other status keeps its number, because an unknown failure should not be
+ * dressed up as a understood one.
+ */
+export function httpFailureReasonV1(status: number): string {
+  if (status === 429) {
+    return 'the endpoint is rate-limiting this browser (HTTP 429). Public test-network endpoints throttle bulk reads; wait a few seconds and read again, or point the cluster picker at your own endpoint.';
+  }
+  if (status === 503 || status === 502 || status === 504) {
+    return `the endpoint is unavailable right now (HTTP ${status}). Nothing is wrong with the chain or with what you asked for; try again shortly.`;
+  }
+  return `RPC HTTP status ${status}`;
+}
+
+/**
+ * How many heavy reads this origin may have in flight against one endpoint.
+ *
+ * Measured against api.devnet.solana.com on 2026-08-29. The endpoint runs a
+ * rate budget with a burst allowance of roughly eight heavy reads: twelve
+ * sequential light reads pass, six sequential program scans pass, and twenty
+ * scans at concurrency two still return eleven 429s. Pacing reaches the same
+ * budget, only later.
+ *
+ * So be clear about what this bound is and is not for. It is NOT what makes
+ * the public site work: the market-discovery path is a plain sequential loop
+ * (marketDiscovery.ts, the `for (const address of addresses)` over markets),
+ * so it was never firing these in parallel and this gate does not speed it up
+ * or save it. What refuses that path is the NUMBER of round trips -- about
+ * four per market against ten markets -- and the fix for that is to hoist the
+ * per-market record reads out of the loop and read them in 32-address batches,
+ * not to throttle them.
+ *
+ * What this bound does is keep any OTHER caller from firing unbounded parallel
+ * reads at one endpoint and being refused by its own traffic, which is a thing
+ * that costs nothing to prevent and is invisible when it happens.
+ *
+ * Two, not one: sequential is demonstrably safe, so this keeps a little
+ * parallelism and still leaves margin. It bounds in-flight requests, never
+ * total ones, so nothing is dropped or retried -- a read that would have raced
+ * now simply waits its turn.
+ */
+export const MAX_IN_FLIGHT_READS_PER_ENDPOINT_V1 = 2;
+
+type EndpointGateV1 = { inFlight: number; waiting: Array<() => void> };
+
+const endpointGates = new Map<string, EndpointGateV1>();
+
+function gateForEndpointV1(endpoint: string): EndpointGateV1 {
+  const existing = endpointGates.get(endpoint);
+  if (existing !== undefined) return existing;
+  const created: EndpointGateV1 = { inFlight: 0, waiting: [] };
+  endpointGates.set(endpoint, created);
+  return created;
+}
+
+async function acquireEndpointSlotV1(endpoint: string): Promise<void> {
+  const gate = gateForEndpointV1(endpoint);
+  if (gate.inFlight < MAX_IN_FLIGHT_READS_PER_ENDPOINT_V1) {
+    gate.inFlight += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => gate.waiting.push(resolve));
+  gate.inFlight += 1;
+}
+
+function releaseEndpointSlotV1(endpoint: string): void {
+  const gate = gateForEndpointV1(endpoint);
+  gate.inFlight -= 1;
+  const next = gate.waiting.shift();
+  if (next !== undefined) next();
+}
+
 async function boundedJson(response: Response, maximumBytes = MAX_RPC_RESPONSE_BYTES): Promise<unknown> {
-  if (!response.ok) throw new Error(`RPC HTTP status ${response.status}`);
+  if (!response.ok) throw new Error(httpFailureReasonV1(response.status));
   const declared = response.headers.get('content-length');
   if (declared !== null && exactUnsigned(Number(declared), 'RPC Content-Length') > maximumBytes) throw new Error('RPC response exceeds the browser byte bound');
   const reader = response.body?.getReader();
@@ -188,9 +311,10 @@ export class SolanaRpcClient {
     this.endpoint = url.toString();
   }
 
-  private async request(method: string, params: ReadonlyArray<unknown>): Promise<unknown> {
+  async #request(method: string, params: ReadonlyArray<unknown>): Promise<unknown> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
+    await acquireEndpointSlotV1(this.endpoint);
     try {
       const init: PortableRequestInit = {
         method: 'POST',
@@ -217,11 +341,12 @@ export class SolanaRpcClient {
       throw error;
     } finally {
       clearTimeout(timeout);
+      releaseEndpointSlotV1(this.endpoint);
     }
   }
 
   async probe(): Promise<ConnectionFacts> {
-    const [versionRaw, genesisRaw] = await Promise.all([this.request('getVersion', []), this.request('getGenesisHash', [])]);
+    const [versionRaw, genesisRaw] = await Promise.all([this.#request('getVersion', []), this.#request('getGenesisHash', [])]);
     if (!plain(versionRaw)) throw new Error('getVersion returned an invalid result');
     return Object.freeze({
       endpoint: this.endpoint,
@@ -231,9 +356,37 @@ export class SolanaRpcClient {
     });
   }
 
+  /**
+   * Reacquire the chain's own identity before preparing or submitting a write.
+   *
+   * A non-loopback endpoint is admitted only by devnet's exact genesis hash;
+   * its hostname grants nothing. A fresh local validator has an unpredictable
+   * genesis hash, so its separate allowance requires a credential-free,
+   * explicit-port HTTP loopback origin. Known public production and test
+   * chains are refused even through loopback because that socket may be a
+   * tunnel. Call this again at every later mutation boundary; admissions are
+   * deliberately not cached.
+   */
+  async assertMutationCluster(): Promise<MutationClusterAdmissionV1> {
+    const genesisHash = canonicalGenesisHash(await this.#request('getGenesisHash', []));
+    if (genesisHash === SOLANA_MAINNET_BETA_GENESIS_HASH_V1) {
+      throw new Error('mutation refused: the endpoint reports Solana mainnet-beta genesis');
+    }
+    if (genesisHash === SOLANA_TESTNET_GENESIS_HASH_V1) {
+      throw new Error('mutation refused: the endpoint reports Solana testnet genesis');
+    }
+    if (genesisHash === SOLANA_DEVNET_GENESIS_HASH_V1) {
+      return Object.freeze({ endpoint: this.endpoint, genesisHash, kind: 'devnet' });
+    }
+    if (isStrictLoopbackOrigin(this.endpoint)) {
+      return Object.freeze({ endpoint: this.endpoint, genesisHash, kind: 'loopback-local-validator' });
+    }
+    throw new Error(`mutation refused: the endpoint reports an unknown non-devnet genesis ${genesisHash}`);
+  }
+
   async programHeaders(programId: string): Promise<Readonly<{ slot: string; accounts: ReadonlyArray<HeaderObservation> }>> {
     new PublicKey(programId);
-    const raw = await this.request('getProgramAccounts', [programId, {
+    const raw = await this.#request('getProgramAccounts', [programId, {
       commitment: 'finalized',
       encoding: 'base64',
       withContext: true,
@@ -251,11 +404,47 @@ export class SolanaRpcClient {
     return Object.freeze({ slot: String(exactUnsigned(raw.context.slot, 'program scan slot')), accounts: Object.freeze(accounts) });
   }
 
+  /**
+   * Every finalized account of one EXACT width owned by a program.
+   *
+   * Filtered server-side by `dataSize`, because the interesting fixed-width
+   * families (the 1288-byte Registry activation caches, one per cohort) are a
+   * handful of accounts inside a program that owns thousands of records. The
+   * unfiltered `programHeaders` scan would refuse such a program outright on
+   * the account bound, which is why this exists rather than a client-side
+   * filter over everything.
+   */
+  async programAccountsOfExactWidth(
+    programId: string,
+    dataLength: number,
+  ): Promise<Readonly<{ slot: string; accounts: ReadonlyArray<Readonly<{ address: string; account: RpcAccount }>> }>> {
+    new PublicKey(programId);
+    const width = exactUnsigned(dataLength, 'exact account width');
+    const raw = await this.#request('getProgramAccounts', [programId, {
+      commitment: 'finalized',
+      encoding: 'base64',
+      withContext: true,
+      filters: [{ dataSize: width }],
+    }]);
+    if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value)) throw new Error('getProgramAccounts did not return a finalized context and account array');
+    if (raw.value.length > MAX_PROGRAM_ACCOUNTS) throw new Error(`program scan found ${raw.value.length} accounts of width ${width}, above the explicit ${MAX_PROGRAM_ACCOUNTS}-account browser bound`);
+    const accounts = raw.value.map((entry, index) => {
+      if (!plain(entry)) throw new Error(`program account ${index} is malformed`);
+      const address = exactText(entry.pubkey, `program account ${index} address`, 64);
+      new PublicKey(address);
+      const account = parseAccount(entry.account, `program account ${index}`);
+      if (account.data.length !== width) throw new Error(`program account ${address} answered a ${width}-byte filter with ${account.data.length} bytes`);
+      return Object.freeze({ address, account });
+    });
+    if (new Set(accounts.map((account) => account.address)).size !== accounts.length) throw new Error('program scan repeated an account address');
+    return Object.freeze({ slot: String(exactUnsigned(raw.context.slot, 'program scan slot')), accounts: Object.freeze(accounts) });
+  }
+
   async accountInfo(address: string, minimumContextSlot?: string): Promise<AccountInfoObservation> {
     new PublicKey(address);
     const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
-    const raw = await this.request('getAccountInfo', [address, configuration]);
+    const raw = await this.#request('getAccountInfo', [address, configuration]);
     if (!plain(raw) || !plain(raw.context) || !('value' in raw)) throw new Error('getAccountInfo did not return a finalized context');
     return Object.freeze({
       slot: String(exactUnsigned(raw.context.slot, 'account observation slot')),
@@ -263,14 +452,22 @@ export class SolanaRpcClient {
     });
   }
 
-  async multipleAccounts(addresses: ReadonlyArray<string>, minimumContextSlot?: string): Promise<MultipleAccountObservation> {
+  private async multipleAccountsRead(
+    addresses: ReadonlyArray<string>,
+    minimumContextSlot?: string,
+    dataSlice?: Readonly<{ offset: number; length: number }>,
+  ): Promise<MultipleAccountObservation> {
     if (addresses.length === 0 || addresses.length > MAX_MULTIPLE_ACCOUNTS) throw new Error(`getMultipleAccounts requires 1..${MAX_MULTIPLE_ACCOUNTS} exact addresses`);
     const canonical = addresses.map((address) => new PublicKey(address).toBase58());
     if (canonical.some((address, index) => address !== addresses[index])) throw new Error('getMultipleAccounts addresses must be canonical base58 text');
     if (new Set(canonical).size !== canonical.length) throw new Error('getMultipleAccounts addresses must be distinct');
     const configuration: Record<string, unknown> = { commitment: 'finalized', encoding: 'base64' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
-    const raw = await this.request('getMultipleAccounts', [canonical, configuration]);
+    if (dataSlice !== undefined) configuration.dataSlice = {
+      offset: exactUnsigned(dataSlice.offset, 'account data-slice offset'),
+      length: exactUnsigned(dataSlice.length, 'account data-slice length'),
+    };
+    const raw = await this.#request('getMultipleAccounts', [canonical, configuration]);
     if (!plain(raw) || !plain(raw.context) || !Array.isArray(raw.value) || raw.value.length !== canonical.length) throw new Error('getMultipleAccounts did not return one finalized value per address');
     const slot = String(exactUnsigned(raw.context.slot, 'multiple-account observation slot'));
     // Bound the narrowed array to a const: property narrowing does not survive
@@ -282,14 +479,46 @@ export class SolanaRpcClient {
     });
   }
 
+  async multipleAccounts(addresses: ReadonlyArray<string>, minimumContextSlot?: string): Promise<MultipleAccountObservation> {
+    return this.multipleAccountsRead(addresses, minimumContextSlot);
+  }
+
+  /**
+   * Read one bounded byte window from each finalized account.
+   *
+   * Loader ProgramData accounts carry whole ELFs. A caller that only needs the
+   * 45-byte Loader header must not download those bodies or weaken the RPC
+   * client's four-MiB response refusal to make them fit.
+   */
+  async multipleAccountDataSlices(
+    addresses: ReadonlyArray<string>,
+    offset: number,
+    length: number,
+    minimumContextSlot?: string,
+  ): Promise<MultipleAccountObservation> {
+    const checkedOffset = exactUnsigned(offset, 'account data-slice offset');
+    const checkedLength = exactUnsigned(length, 'account data-slice length');
+    if (checkedOffset > 10_485_760 || checkedLength < 1 || checkedLength > 4_096 || checkedOffset + checkedLength > 10_485_760) {
+      throw new Error('account data slice is outside the bounded account profile');
+    }
+    return this.multipleAccountsRead(addresses, minimumContextSlot, { offset: checkedOffset, length: checkedLength });
+  }
+
   async finalizedSlot(): Promise<string> {
-    return String(exactUnsigned(await this.request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
+    return String(exactUnsigned(await this.#request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
+  }
+
+  /** Read the finalized block height used by recent-blockhash expiry. */
+  async blockHeight(minimumContextSlot?: string): Promise<string> {
+    const configuration: Record<string, unknown> = { commitment: 'finalized' };
+    if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
+    return String(exactUnsigned(await this.#request('getBlockHeight', [configuration]), 'finalized block height'));
   }
 
   async latestBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
     const configuration: Record<string, unknown> = { commitment: 'finalized' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');
-    const raw = await this.request('getLatestBlockhash', [configuration]);
+    const raw = await this.#request('getLatestBlockhash', [configuration]);
     if (!plain(raw) || !plain(raw.context) || !plain(raw.value)) throw new Error('getLatestBlockhash did not return a finalized context and value');
     const blockhash = exactText(raw.value.blockhash, 'recent blockhash', 64);
     new PublicKey(blockhash);
@@ -300,9 +529,15 @@ export class SolanaRpcClient {
     });
   }
 
+  /** Acquire a recent blockhash only after a fresh mutation-cluster check. */
+  async latestMutationBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
+    await this.assertMutationCluster();
+    return this.latestBlockhash(minimumContextSlot);
+  }
+
   async minimumBalanceForRentExemption(dataLength: number): Promise<RentExemptionObservation> {
     if (!Number.isSafeInteger(dataLength) || dataLength < 0 || dataLength > 10_485_760) throw new Error('rent data length is outside the bounded account profile');
-    const lamports = exactUnsigned(await this.request('getMinimumBalanceForRentExemption', [dataLength, { commitment: 'finalized' }]), 'rent-exempt lamports');
+    const lamports = exactUnsigned(await this.#request('getMinimumBalanceForRentExemption', [dataLength, { commitment: 'finalized' }]), 'rent-exempt lamports');
     return Object.freeze({ dataLength, lamports: String(lamports) });
   }
 
@@ -316,7 +551,7 @@ export class SolanaRpcClient {
   async signaturesForAddress(address: string, limit: number): Promise<ReadonlyArray<SignatureRecordObservation>> {
     new PublicKey(address);
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error('signature listing limit must be 1..50');
-    const raw = await this.request('getSignaturesForAddress', [address, { commitment: 'finalized', limit }]);
+    const raw = await this.#request('getSignaturesForAddress', [address, { commitment: 'finalized', limit }]);
     if (!Array.isArray(raw)) throw new Error('getSignaturesForAddress did not return an array');
     return Object.freeze(raw.map((entry, index) => {
       if (!plain(entry)) throw new Error(`signature record ${index} is malformed`);
@@ -339,7 +574,7 @@ export class SolanaRpcClient {
     for (const signature of signatures) {
       if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error('signature status polling requires canonical base58 signatures');
     }
-    const raw = await this.request('getSignatureStatuses', [signatures, { searchTransactionHistory: true }]);
+    const raw = await this.#request('getSignatureStatuses', [signatures, { searchTransactionHistory: true }]);
     if (!plain(raw) || !Array.isArray(raw.value) || raw.value.length !== signatures.length) {
       throw new Error('getSignatureStatuses did not return one status per signature');
     }
@@ -366,7 +601,7 @@ export class SolanaRpcClient {
   /** Read one finalized transaction with its balance movements and logs. */
   async transaction(signature: string): Promise<TransactionMetaObservation | null> {
     if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(signature)) throw new Error('transaction read requires one canonical base58 signature');
-    const raw = await this.request('getTransaction', [signature, {
+    const raw = await this.#request('getTransaction', [signature, {
       commitment: 'finalized',
       encoding: 'base64',
       maxSupportedTransactionVersion: 0,
@@ -404,32 +639,11 @@ export class SolanaRpcClient {
       logMessages: Object.freeze(Array.isArray(meta.logMessages)
         ? meta.logMessages.slice(0, 64).map((entry, index) => exactText(entry, `log message ${index}`, 512))
         : []),
+      returnData: decodeTransactionReturnDataV1(meta.returnData),
       transactionBytes: bytes,
     });
   }
 
-  /**
-   * Submit one caller-signed packet after an explicit user action.
-   *
-   * This method never signs, mutates, retries in a loop, or skips preflight.
-   */
-  async sendRawTransaction(bytes: Uint8Array): Promise<string> {
-    if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > SOLANA_PACKET_BYTES) {
-      throw new Error(`signed transaction must contain 1..${SOLANA_PACKET_BYTES} bytes`);
-    }
-    let binary = '';
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    const result = exactText(await this.request('sendTransaction', [btoa(binary), {
-      encoding: 'base64',
-      skipPreflight: false,
-      preflightCommitment: 'confirmed',
-      maxRetries: 3,
-    }]), 'transaction signature', 96);
-    if (result.length < 64 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(result)) {
-      throw new Error('sendTransaction returned a noncanonical base58 signature');
-    }
-    return result;
-  }
 }
 
 async function concurrentMap<T, U>(values: ReadonlyArray<T>, limit: number, mapper: (value: T) => Promise<U>): Promise<U[]> {

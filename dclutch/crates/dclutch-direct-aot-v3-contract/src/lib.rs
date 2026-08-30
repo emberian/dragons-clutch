@@ -163,9 +163,7 @@ fn execute_inline_candidate(
     require(read(scalars, SCALAR_EXECUTION_PRICE_V3)? <= read(scalars, SCALAR_PRICE_SCALE_V3)?)?;
     require(read(scalars, SCALAR_SELLER_FEE_BPS_V3)? == read(scalars, SCALAR_POLICY_FEE_BPS_V3)?)?;
     require(read(scalars, SCALAR_BUYER_FEE_BPS_V3)? == read(scalars, SCALAR_POLICY_FEE_BPS_V3)?)?;
-    require(
-        read(scalars, SCALAR_POLICY_FEE_BPS_V3)? <= read(scalars, SCALAR_FEE_DENOMINATOR_V3)?,
-    )?;
+    require(read(scalars, SCALAR_POLICY_FEE_BPS_V3)? <= read(scalars, SCALAR_FEE_DENOMINATOR_V3)?)?;
     let gross = mul_div_exact(
         read(scalars, SCALAR_FILL_V3)?,
         read(scalars, SCALAR_EXECUTION_PRICE_V3)?,

@@ -1,15 +1,18 @@
 'use client';
 
 import Nav from '@/components/Nav';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
 import {
   ACTIVITY_MAX_MARKETS,
+  activityHrefV1,
+  activityLinkQueryV1,
   inspectActivityV1,
   type ActivityEntryV1,
   type ActivityV1,
 } from '@/lib/activity';
+import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { parseMarketAddressListV1, shortAddressV1 } from '@/lib/marketDiscovery';
 import { parsePortfolioOwnerV1 } from '@/lib/portfolio';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
@@ -18,7 +21,20 @@ import { clusterNameV1 } from '@/lib/rpcDefault';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
-  | Readonly<{ kind: 'ready'; message: string; activity: ActivityV1; facts: ConnectionFacts }>;
+  | Readonly<{ kind: 'ready'; message: string; activity: ActivityV1; facts: ConnectionFacts; href: string }>;
+
+function subscribeToLocation(onChange: () => void): () => void {
+  window.addEventListener('popstate', onChange);
+  return () => window.removeEventListener('popstate', onChange);
+}
+
+function readSearch(): string {
+  return window.location.search;
+}
+
+function readServerSearch(): null {
+  return null;
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'the activity read refused without a usable reason';
@@ -56,13 +72,21 @@ export default function ActivityWorkspace() {
   const [claimsProgram, setClaimsProgram] = useDeploymentFieldV1((d) => d.programs.claims);
   const [coreProgram, setCoreProgram] = useDeploymentFieldV1((d) => d.programs.core);
   const [tradingProgram, setTradingProgram] = useDeploymentFieldV1((d) => d.programs.trading);
-  const [owner, setOwner] = useState('');
-  const [addressList, setAddressList] = useState('');
+  const search = useSyncExternalStore<string | null>(subscribeToLocation, readSearch, readServerSearch);
+  const linked = useMemo(() => activityLinkQueryV1(search), [search]);
+  const [ownerOverride, setOwnerOverride] = useState<string | null>(null);
+  const [addressListOverride, setAddressListOverride] = useState<string | null>(null);
+  const owner = ownerOverride ?? (linked.kind === 'ready' ? linked.owner : '');
+  // A link's own market list wins, then the public cut's market if one is
+  // named. Without that last fallback the launch page's "Read activity" call
+  // to action lands a reader on a form asking for a Market address they have
+  // no way to know -- at exactly the moment we most want them to succeed.
+  const addressList = addressListOverride
+    ?? (linked.kind === 'ready' ? linked.marketAddresses.join('\n') : (PUBLIC_DEVNET_CUT_V1.market ?? ''));
   const [state, setState] = useState<State>({ kind: 'idle', message: 'No signature history has been read.' });
   const activity = state.kind === 'ready' ? state.activity : null;
 
-  async function read(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const read = useCallback(async (nextOwner: string, marketAddresses: ReadonlyArray<string>) => {
     setState({ kind: 'loading', message: 'Reading this node’s finalized signature history for the owner and every derived Position address…' });
     try {
       const client = new SolanaRpcClient(endpoint);
@@ -72,15 +96,39 @@ export default function ActivityWorkspace() {
       if (claimsProgram !== '') programLabels[claimsProgram] = 'Claims (selected)';
       if (tradingProgram !== '') programLabels[tradingProgram] = 'Trading (selected)';
       const next = await inspectActivityV1(client, {
-        owner: parsePortfolioOwnerV1(owner),
+        owner: parsePortfolioOwnerV1(nextOwner),
         claimsProgramId: claimsProgram === '' ? null : claimsProgram,
-        marketAddresses: parseMarketAddressListV1(addressList),
+        marketAddresses,
         programLabels,
       });
-      setState({ kind: 'ready', activity: next, facts, message: next.reason });
+      const href = activityHrefV1(next.owner, marketAddresses);
+      window.history.replaceState(null, '', href);
+      setState({ kind: 'ready', activity: next, facts, message: next.reason, href });
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
+  }, [claimsProgram, coreProgram, endpoint, tradingProgram]);
+
+  const startedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (linked.kind === 'refused') {
+      queueMicrotask(() => setState({ kind: 'refused', message: `Refused: ${linked.reason}` }));
+      return;
+    }
+    if (linked.kind !== 'ready') return;
+    const key = `${endpoint}\0${linked.owner}\0${linked.marketAddresses.join('\0')}`;
+    if (startedRef.current === key) return;
+    startedRef.current = key;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void read(linked.owner, linked.marketAddresses);
+    });
+    return () => { cancelled = true; };
+  }, [endpoint, linked, read]);
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void read(owner, parseMarketAddressListV1(addressList));
   }
 
   return <main className="product-shell trade-v3-shell">
@@ -99,21 +147,22 @@ export default function ActivityWorkspace() {
       </aside>
     </section>
 
-    <form className="trade-v3-card route-card" onSubmit={(event) => void read(event)}>
+    <form className="trade-v3-card route-card" onSubmit={submit}>
       <header><span>01</span><div><h2>Owner, Markets, and the node to ask</h2><p>The owner address is watched directly. Naming Markets additionally watches the Claims Position derived for each — the same derivation the portfolio uses — so trades and redemptions that touched the Position but not the wallet still appear.</p></div></header>
       <div className="direct-form-grid">
         <label><span>RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label>
-        <label><span>Owner address · wallet or pasted</span><input required value={owner} onChange={(event) => setOwner(event.target.value.trim())} /></label>
+        <label><span>Owner address · wallet, pasted, or linked</span><input required value={owner} onChange={(event) => setOwnerOverride(event.target.value.trim())} /></label>
         <label><span>Claims program · required to derive Positions</span><input value={claimsProgram} onChange={(event) => setClaimsProgram(event.target.value.trim())} /></label>
         <label><span>Core program · label only</span><input value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
         <label><span>Trading program · label only</span><input value={tradingProgram} onChange={(event) => setTradingProgram(event.target.value.trim())} /></label>
       </div>
-      <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={(address) => setOwner(address)} />
-      <label><span>Market addresses · one per line, up to {ACTIVITY_MAX_MARKETS}</span><textarea rows={4} value={addressList} onChange={(event) => setAddressList(event.target.value)} /></label>
+      <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={(address) => setOwnerOverride(address)} />
+      <label><span>Market addresses · one per line, up to {ACTIVITY_MAX_MARKETS}</span><textarea rows={4} value={addressList} onChange={(event) => setAddressListOverride(event.target.value)} /></label>
       <div className="direct-actions">
         <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading node history…' : 'Read activity'}</button>
       </div>
       <p className="direct-status" aria-live="polite">{state.message}</p>
+      {state.kind === 'ready' && <div className="direct-actions"><a className="secondary-action" href={state.href}>Open this live view →</a><span className="direct-status">This link carries public addresses only. Opening it re-reads finalized node history; it does not preserve a snapshot.</span></div>}
     </form>
 
     <section className="trade-v3-card">

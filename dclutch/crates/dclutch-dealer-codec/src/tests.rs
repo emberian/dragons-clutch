@@ -21,6 +21,21 @@ fn policy() -> Policy {
 }
 
 fn candidate(candidate_id: Identity, revision: u64, valid_from: u64) -> [u8; CANDIDATE_BYTES] {
+    candidate_with_work(candidate_id, revision, valid_from, 100, 2)
+}
+
+/// The canonical fixture candidate with caller-chosen work economics.
+///
+/// The exit-affordability invariant is sized in `work_reward` per nonzero
+/// inventory coordinate, so a case that wants to sit on either side of the
+/// reserve has to be able to move the reward rate.
+fn candidate_with_work(
+    candidate_id: Identity,
+    revision: u64,
+    valid_from: u64,
+    work_funding: u64,
+    work_reward: u64,
+) -> [u8; CANDIDATE_BYTES] {
     let bids = [CurveBand {
         capacity: 100,
         price_numerator: 40,
@@ -50,8 +65,8 @@ fn candidate(candidate_id: Identity, revision: u64, valid_from: u64) -> [u8; CAN
             valid_from,
             expires_at: 2_000,
             quote_reserve_floor: 100,
-            work_funding: 100,
-            work_reward: 2,
+            work_funding,
+            work_reward,
             minimum_inventory: &minimum_inventory,
             maximum_inventory: &maximum_inventory,
             curves: &curves,
@@ -869,4 +884,259 @@ fn shape_canonical(action: Action) -> Request {
             ..base
         },
     }
+}
+
+/// The terminal state a market must walk out of, built through the real
+/// `EnterTerminal` transition rather than hand-stamped.
+fn terminal_state(active: &[u8; CANDIDATE_BYTES], work_remaining: u64) -> State {
+    let initial = State {
+        active_work_remaining: work_remaining,
+        liveness_custody: work_remaining,
+        ..initial_state()
+    };
+    execute(
+        initial,
+        Request {
+            actor_id: policy().market_id,
+            outcome: 0,
+            ..base_request(Action::EnterTerminal, initial)
+        },
+        active,
+        None,
+        None,
+    )
+    .expect("terminal")
+    .post
+}
+
+/// The wire — not the transition — is what forbids a zero-quantity economic
+/// action, and this test exists to pin WHERE the guard lives.
+///
+/// `DealerLiquidity.lean` states `0 < quantity` three times (`fillAccepts:457`,
+/// `unwindAccepts:527`, `liquidityChangeAccepts:559`). Reading only the
+/// transition functions makes it look as though the Rust transcribed it once,
+/// into `fill` (`lib.rs`, the `gross == 0 || quantity == 0` conjunct), and
+/// dropped it for `unwind` and the two liquidity routes. It did not:
+/// `Request::validate_shape` carries it for all four, so a zero-quantity packet
+/// is refused before any transition sees it.
+///
+/// That distinction is worth a test because the transition-level absence looks
+/// exactly like a live defect. If it were one it would be a serious one: a
+/// zero-quantity unwind moves no inventory and redeems nothing, but
+/// `Plan::push` no-ops on a zero amount, so the redemption and the hoard
+/// transfer would vanish and the `LivenessVault -> Executor` reward would be
+/// the only surviving transfer — a paid no-op, repeatable by anyone, draining
+/// the vault that funds the walk to zero inventory in a phase where no party
+/// can refill it. The wire is the only thing standing between that and the
+/// chain, so if this arm of `validate_shape` is ever relaxed, this test is the
+/// one that must go red first.
+#[test]
+fn the_wire_owns_the_zero_quantity_rule_for_every_economic_action() {
+    let state = initial_state();
+    for action in [
+        Action::Fill,
+        Action::Unwind,
+        Action::AddLiquidity,
+        Action::RemoveLiquidity,
+    ] {
+        let actor_id = match action {
+            Action::AddLiquidity | Action::RemoveLiquidity => policy().dealer_id,
+            _ => [0; 32],
+        };
+        let zero = Request {
+            action,
+            outcome: 0,
+            quantity: 0,
+            actor_id,
+            side: Side::TakerBuys,
+            ..base_request(action, state)
+        };
+        assert_eq!(
+            zero.to_bytes().map(|_| ()),
+            Err(Error::NonCanonicalPadding),
+            "{action:?} encoded a zero quantity"
+        );
+        // The same request with a real quantity encodes and decodes, so the
+        // refusal above is the quantity field and not some other padding rule
+        // this helper happened to violate.
+        let real = Request {
+            quantity: 10,
+            ..zero
+        };
+        let bytes = real.to_bytes().expect("a nonzero quantity encodes");
+        assert_eq!(Request::decode(&bytes), Ok(real));
+    }
+}
+
+/// An `Unwind` retires one whole coordinate, so the terminal walk is exactly
+/// one crank per nonzero coordinate.
+///
+/// Without the equality a caller chooses the walk's length, and a walk whose
+/// length its own callers choose cannot be reserved for — which is what the
+/// exit-affordability invariant has to be sized against.
+#[test]
+fn an_unwind_retires_one_whole_coordinate() {
+    let active = candidate(id(11), 1, 0);
+    let terminal = terminal_state(&active, 100);
+    assert_eq!(
+        execute(
+            terminal,
+            Request {
+                outcome: 0,
+                quantity: 49,
+                ..base_request(Action::Unwind, terminal)
+            },
+            &active,
+            None,
+            None,
+        ),
+        Err(Error::InventoryRisk)
+    );
+}
+
+/// A `Fill` may not spend the reserve its own exit needs.
+///
+/// The census reads R4 as "a vanished dealer bricks the market". The vanishing
+/// is the mild case: `fill` refuses only BELOW one `work_reward`, so the last
+/// admitted fill could legitimately leave the vault at zero, `EnterTerminal`
+/// carries that residue through unchanged, and the market arrives in Terminal
+/// unable to pay for the unwinds that reach zero inventory — with every party
+/// present and cooperative.
+///
+/// The boundary is pinned from both sides at the same fill, because a test that
+/// only shows the refusal cannot distinguish a reserve from an off-by-one.
+#[test]
+fn a_fill_may_not_spend_the_reserve_its_own_exit_needs() {
+    let active = candidate(id(11), 1, 0);
+    // Inventory is nonzero at both coordinates, so the walk out costs two
+    // cranks at `work_reward` 2 — a reserve of exactly 4.
+    let fill = |work_remaining: u64| {
+        let state = State {
+            active_work_remaining: work_remaining,
+            liveness_custody: work_remaining,
+            ..initial_state()
+        };
+        execute(
+            state,
+            Request {
+                quantity: 10,
+                ..base_request(Action::Fill, state)
+            },
+            &active,
+            None,
+            None,
+        )
+    };
+
+    // Six covers the fill's own crank and leaves the reserve intact.
+    let admitted = fill(6).expect("a fill that leaves the exit funded is admitted");
+    assert_eq!(admitted.post.active_work_remaining, 4);
+    // The fill moved inventory but did not retire a coordinate, so the walk
+    // still costs two cranks and four is exactly enough.
+    assert_eq!(admitted.post.inventory[..2], [40, 50]);
+
+    // Four leaves two after the fill's own crank, and two cannot pay for two
+    // unwinds. The vault has not underflowed and the fill is affordable on the
+    // old rule; what it cannot afford is the exit it would leave behind.
+    assert_eq!(fill(4), Err(Error::Underfunded));
+}
+
+/// A replacement candidate may not price the standing inventory out of its exit.
+///
+/// `activate` REPLACES the vault rather than adding to it and refunds the
+/// outgoing remainder to `DealerOwner`, and a candidate's only funding floor is
+/// one crank. So a dealer could schedule a candidate whose reward rate the
+/// standing inventory cannot afford, activate it, take the old vault back, and
+/// leave a market nobody can close. That is a deliberate, profitable,
+/// protocol-admitted brick — not an absence, and no quiescence timeout would
+/// catch it, because the dealer is present and acting.
+#[test]
+fn a_replacement_may_not_price_the_standing_inventory_out_of_its_exit() {
+    let active = candidate(id(11), 1, 0);
+    let initial = initial_state();
+    // Both candidates carry the same funding; only the reward rate differs, so
+    // the two cases cannot be told apart by any earlier gate.
+    let activate_with = |work_reward: u64| {
+        let next = candidate_with_work(id(12), 2, 20, 50, work_reward);
+        let scheduled = execute(
+            initial,
+            Request {
+                actor_id: policy().dealer_id,
+                replacement_candidate_id: id(12),
+                ..base_request(Action::ScheduleReplacement, initial)
+            },
+            &active,
+            None,
+            Some(&next),
+        )
+        .expect("schedule");
+        assert_eq!(scheduled.post.pending_work_funding, 50);
+        execute(
+            scheduled.post,
+            Request {
+                now: 20,
+                replacement_candidate_id: id(12),
+                ..base_request(Action::ActivateReplacement, scheduled.post)
+            },
+            &active,
+            Some(&next),
+            None,
+        )
+    };
+
+    // Two coordinates at 20 a crank is 40 against a 50 vault: affordable.
+    let admitted = activate_with(20).expect("an affordable replacement activates");
+    assert_eq!(admitted.post.active_work_remaining, 50);
+    assert_eq!(admitted.post.active_candidate_id, id(12));
+
+    // The same replacement at 30 a crank needs 60 against the same 50 vault.
+    // Every earlier gate is satisfied identically; only the exit is unaffordable.
+    assert_eq!(activate_with(30), Err(Error::Underfunded));
+}
+
+/// The whole point, stated as the walk: a reserve that is exactly enough.
+///
+/// R4's brick is closed by construction rather than by a force-exit verb. A
+/// state holding exactly the reserve — no slack anywhere — can still walk every
+/// coordinate to zero and reach `Retire`, and it ends with the vault at zero
+/// rather than short.
+#[test]
+fn the_exact_reserve_walks_the_whole_way_out_and_retires() {
+    let active = candidate(id(11), 1, 0);
+    // Two nonzero coordinates at `work_reward` 2: the reserve is 4, and this
+    // state holds 4 and nothing more.
+    let terminal = terminal_state(&active, 4);
+    assert_eq!(terminal.active_work_remaining, 4);
+
+    let mut state = terminal;
+    for outcome in [0, 1] {
+        state = execute(
+            state,
+            Request {
+                outcome,
+                quantity: 50,
+                ..base_request(Action::Unwind, state)
+            },
+            &active,
+            None,
+            None,
+        )
+        .expect("the reserve funds every coordinate of the walk")
+        .post;
+    }
+    assert_eq!(state.inventory[..2], [0, 0]);
+    assert_eq!(state.active_work_remaining, 0);
+
+    let retired = execute(
+        state,
+        Request {
+            now: 0,
+            ..base_request(Action::Retire, state)
+        },
+        &active,
+        None,
+        None,
+    )
+    .expect("retire is reachable");
+    assert_eq!(retired.post.phase, Phase::Retired);
 }

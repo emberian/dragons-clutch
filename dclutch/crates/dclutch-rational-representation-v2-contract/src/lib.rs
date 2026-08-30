@@ -121,7 +121,23 @@ pub use token_behavior_v2::{
 /// Claims PDA seed for one outcome's canonical shard Mint.
 pub const RATIONAL_SHARD_MINT_SEED_V2: &[u8] = b"dclutch:rational-shard-mint:v2";
 /// Claims PDA seed for one outcome's canonical Claims custody owner.
-pub const RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2: &[u8] = b"dclutch:rational-claims:v2";
+///
+/// RE-EXPORTED, not restated. This domain was declared twice with identical
+/// bytes and two wordings of one meaning -- here as the "Claims custody owner"
+/// and in `dclutch_claims_svm::protocol_position_v2` as the "rational
+/// capability owner" -- which is the duplicate-domain class the seam audit
+/// mechanizes. The PDA is Claims-owned and derived under the Claims program,
+/// and that crate also owns the seed ORDER via
+/// [`ProtocolPositionClaimsCapabilitySeedsV2::as_slices`], so it is the sole
+/// author and this is a name for what it declares.
+///
+/// Prefer [`ProtocolPositionClaimsCapabilitySeedsV2`] over this constant: a
+/// caller assembling the domain into a raw seed tuple by hand is a second
+/// author for the order, even when it agrees today.
+pub use dclutch_claims_svm::protocol_position_v2::{
+    PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2 as RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2,
+    ProtocolPositionClaimsCapabilitySeedsV2,
+};
 /// Claims PDA seed for one outcome's canonical closeable Structured custody account.
 pub const RATIONAL_STRUCTURED_CUSTODY_SEED_V2: &[u8] = b"dclutch:rational-structured:v2";
 /// Claims PDA seed for one holder's rational representation replay cursor.

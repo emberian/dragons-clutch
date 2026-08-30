@@ -1,23 +1,27 @@
 // @generated from canonical Rust/Lean-emitted Core Found ABIs; do not edit.
 // Regenerate with: npm run abi:found
 
-export const CORE_VERSION = 2 as const;
+export const CORE_VERSION = 3 as const;
 export const CORE_REQUEST_BYTES = 72 as const;
-export const CORE_STATE_BYTES = 352 as const;
+export const CORE_STATE_BYTES = 368 as const;
 export const CORE_ACTION_FOUND_TAG = 0 as const;
 export const LIFECYCLE_RENT_CREDIT_BYTES_V2 = 128 as const;
 export const CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2 = 128 as const;
 export const LIFECYCLE_RENT_SCHEMA_VERSION_V2 = 2 as const;
-export const CORE_FOUND_ACCOUNT_COUNT_V2 = 31 as const;
-export const CORE_FOUND_ACCOUNT_LABELS_V2 = Object.freeze(["payer","Market destination","RentCredit","Rent program","Realm raw","Realm staging","Product raw","Product staging","result domain raw","result domain staging","portfolio raw","portfolio staging","Source material raw","Source staging","capability manifest raw","capability staging","execution release set raw","release-set staging","activation cache","Core program","Core ProgramData","Registry program","Rent sysvar","System program","infrastructure profile","Registry artifact raw","Registry artifact staging","Registry ProgramData","Rent artifact raw","Rent artifact staging","Rent ProgramData"]) as ReadonlyArray<string>;
-export const CORE_FOUND_ACCOUNT_ROLES_V2 = Object.freeze([{"signer":true,"writable":true},{"signer":false,"writable":true},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false}]) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;
+export const CORE_FOUND_ACCOUNT_COUNT_V3 = 37 as const;
+export const CORE_FOUND_ACCOUNT_LABELS_V3 = Object.freeze(["payer","Market destination","RentCredit","Rent program","Realm raw","Realm staging","Product raw","Product staging","result domain raw","result domain staging","portfolio raw","portfolio staging","linked basis raw","linked basis staging","Source material raw","Source staging","Source spec raw","Source spec staging","capacity profile raw","capacity profile staging","manipulation floor raw","manipulation floor staging","capability manifest raw","capability staging","activation cache","Core program","Core ProgramData","Registry program","Rent sysvar","System program","infrastructure profile","Registry artifact raw","Registry artifact staging","Registry ProgramData","Rent artifact raw","Rent artifact staging","Rent ProgramData"]) as ReadonlyArray<string>;
+export const CORE_FOUND_ACCOUNT_ROLES_V3 = Object.freeze([{"signer":true,"writable":true},{"signer":false,"writable":true},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false},{"signer":false,"writable":false}]) as ReadonlyArray<Readonly<{ signer: boolean; writable: boolean }>>;
 export const CORE_REQUEST_MAGIC = Uint8Array.from([0x44, 0x43, 0x4c, 0x54, 0x43, 0x52, 0x51, 0x32]);
 export const MARKET_CORE_STATE_PDA_DOMAIN_V2 = Uint8Array.from([0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x2d, 0x63, 0x6f, 0x72, 0x65, 0x2f, 0x73, 0x74, 0x61, 0x74, 0x65, 0x2f, 0x76, 0x32]);
 export const PRODUCT_RECORD_SCHEMA_ID_V2 = Uint8Array.from([0xd9, 0xc3, 0x9f, 0xb6, 0x0c, 0x7d, 0xb7, 0x79, 0xa7, 0x84, 0x4d, 0xe7, 0x85, 0x05, 0x73, 0x8a, 0x58, 0x99, 0x26, 0x4f, 0x86, 0x83, 0xdb, 0x4c, 0x6a, 0xe6, 0x1c, 0x9e, 0xf0, 0xe3, 0xcf, 0xf8]);
 export const RESULT_DOMAIN_SCHEMA_ID_V2 = Uint8Array.from([0x39, 0x9c, 0xc5, 0x74, 0x0f, 0x62, 0x1e, 0xa5, 0xc3, 0x0f, 0x96, 0x0a, 0x14, 0xaf, 0x83, 0x9b, 0x0b, 0x5c, 0xfd, 0x58, 0xa9, 0x30, 0x5d, 0xcc, 0x09, 0xc6, 0x1f, 0xd1, 0x67, 0x81, 0xb7, 0xc2]);
 export const PORTFOLIO_SCHEMA_ID_V2 = Uint8Array.from([0x76, 0x70, 0x6d, 0xdf, 0x08, 0x91, 0x7b, 0xb3, 0xdf, 0x08, 0x6b, 0x8c, 0x65, 0x04, 0x92, 0x83, 0xbb, 0xab, 0x69, 0x75, 0x9c, 0x5b, 0x24, 0xb0, 0x75, 0x29, 0x7c, 0x47, 0x0f, 0xe3, 0xd6, 0x65]);
 export const REALM_SCHEMA_RELEASE_ID_V1 = Uint8Array.from([0x94, 0xfe, 0x1f, 0xd6, 0xd7, 0x25, 0x9f, 0x47, 0x50, 0x3d, 0x6a, 0xc5, 0x7e, 0xc7, 0xda, 0x78, 0xdc, 0x38, 0x06, 0xa5, 0xed, 0x49, 0x8f, 0xea, 0xe4, 0x3e, 0xd3, 0x78, 0x5b, 0x5d, 0x0c, 0x69]);
-export const SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V2 = Uint8Array.from([0x5d, 0x98, 0x9b, 0x8d, 0x65, 0xac, 0xbf, 0xee, 0x49, 0x70, 0x08, 0xdd, 0x08, 0x99, 0x41, 0xea, 0x7b, 0x45, 0x3f, 0x6c, 0x98, 0x2b, 0x59, 0xe7, 0xfa, 0x91, 0xf1, 0xcf, 0x5a, 0x3e, 0xff, 0xf2]);
+export const SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3 = Uint8Array.from([0x46, 0x41, 0x59, 0xe8, 0xe2, 0xe5, 0xd3, 0x18, 0x1b, 0x57, 0x6b, 0xb2, 0x21, 0x65, 0x65, 0x1d, 0x4c, 0xda, 0x0b, 0x54, 0xf5, 0x9d, 0x6f, 0xe0, 0xd1, 0xa4, 0x88, 0x2a, 0xb8, 0x18, 0xa3, 0xcc]);
+export const SOURCE_SPEC_SCHEMA_ID_V1 = Uint8Array.from([0xcc, 0xea, 0xf8, 0xdb, 0xc2, 0xac, 0x3a, 0xe8, 0x11, 0xb5, 0x22, 0x19, 0x72, 0x92, 0x9c, 0xf3, 0xfc, 0x34, 0x13, 0x72, 0x1b, 0x08, 0x0d, 0x56, 0x0f, 0xf9, 0x54, 0xb8, 0xab, 0x81, 0x86, 0xb6]);
+export const SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1 = Uint8Array.from([0x92, 0xfa, 0xdd, 0x2f, 0x51, 0x54, 0x82, 0xb7, 0x6e, 0x25, 0x55, 0x52, 0x4d, 0x57, 0x75, 0x3e, 0x61, 0xcd, 0x42, 0xde, 0x40, 0xa3, 0x98, 0xf9, 0x6a, 0x17, 0x28, 0xc6, 0x4f, 0x28, 0x4e, 0x01]);
+export const MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1 = Uint8Array.from([0x9c, 0x1d, 0xc9, 0x00, 0xe6, 0xb6, 0xbf, 0x2c, 0x7e, 0xf2, 0xfe, 0xbe, 0xbe, 0x2c, 0x0a, 0xa0, 0x85, 0x29, 0xaf, 0x8c, 0x44, 0xc4, 0xfd, 0x1d, 0x22, 0xab, 0xb7, 0x65, 0xb1, 0xda, 0x16, 0x00]);
+export const GRADED_BASIS_RECORD_SCHEMA_ID_V3 = Uint8Array.from([0x0b, 0x68, 0xd1, 0xa8, 0x31, 0xe9, 0xee, 0x4b, 0x7c, 0x7f, 0x04, 0x7f, 0x69, 0x82, 0xea, 0xde, 0x18, 0x01, 0xc7, 0x59, 0x68, 0xcd, 0x2e, 0x49, 0x8b, 0x76, 0x62, 0xe7, 0xee, 0x62, 0xd0, 0xe8]);
 export const CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1 = Uint8Array.from([0x6b, 0xce, 0xf7, 0xb2, 0x83, 0x67, 0xcb, 0x8d, 0x08, 0x97, 0x10, 0xba, 0x58, 0xe6, 0x84, 0x31, 0x2f, 0x43, 0x4c, 0x4b, 0xc4, 0x20, 0xee, 0xfd, 0x0f, 0x7a, 0x15, 0x0a, 0x90, 0x82, 0x88, 0xdf]);
 export const EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1 = Uint8Array.from([0x8b, 0xa3, 0xbc, 0x19, 0x7f, 0xea, 0xa1, 0x87, 0xa0, 0xa3, 0x92, 0x7b, 0x16, 0xb2, 0x5d, 0x83, 0x79, 0x2c, 0x5f, 0x33, 0x5a, 0xf2, 0x43, 0x39, 0xa5, 0x4c, 0x38, 0xcc, 0x07, 0x23, 0x03, 0x58]);
 export const ARTIFACT_RELEASE_SCHEMA_ID_V1 = Uint8Array.from([0xae, 0x19, 0xa6, 0x0d, 0xb5, 0x50, 0xb1, 0xa8, 0xa5, 0x1d, 0x46, 0x18, 0xc7, 0x7d, 0xea, 0x54, 0x21, 0x17, 0x4a, 0x2a, 0x85, 0x5e, 0xe6, 0x77, 0x89, 0x4f, 0xa9, 0x1b, 0x3c, 0xfd, 0x3b, 0x6c]);
@@ -28,7 +32,7 @@ export const LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2 = 0 as const;
 export const LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2 = 10 as const;
 export const LIFECYCLE_RENT_ACTION_CREATE_V2 = 1 as const;
 
-export const CORE_STATE_MAGIC = Uint8Array.from([0x44, 0x43, 0x4c, 0x54, 0x43, 0x4f, 0x52, 0x32]);
+export const CORE_STATE_MAGIC = Uint8Array.from([0x44, 0x43, 0x4c, 0x54, 0x43, 0x4f, 0x52, 0x33]);
 export const CORE_STATE_VERSION_OFFSET = 8 as const;
 export const CORE_STATE_PHASE_OFFSET = 10 as const;
 export const CORE_STATE_READINESS_OFFSET = 11 as const;
@@ -43,8 +47,9 @@ export const CORE_STATE_SELECTED_RELEASE_SET_OFFSET = 208 as const;
 export const CORE_STATE_REGISTRY_PROGRAM_OFFSET = 240 as const;
 export const CORE_STATE_GENERATION_OFFSET = 272 as const;
 export const CORE_STATE_OUTSTANDING_CAPABILITIES_OFFSET = 280 as const;
-export const CORE_STATE_RENT_BENEFICIARY_OFFSET = 288 as const;
-export const CORE_STATE_TERMINAL_RECEIPT_OFFSET = 320 as const;
+export const CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET = 288 as const;
+export const CORE_STATE_RENT_BENEFICIARY_OFFSET = 296 as const;
+export const CORE_STATE_TERMINAL_RECEIPT_OFFSET = 328 as const;
 export const CORE_PHASE_FOUNDING_TAG = 0 as const;
 export const CORE_PHASE_OPEN_TAG = 1 as const;
 export const CORE_PHASE_TERMINAL_TAG = 2 as const;

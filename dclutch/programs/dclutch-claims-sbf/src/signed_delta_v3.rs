@@ -30,6 +30,7 @@ use dclutch_claims_svm::{
 use dclutch_core_contract::ContentId;
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use solana_program::{
     account_info::AccountInfo,
     hash::{hash, hashv},
@@ -39,7 +40,9 @@ use solana_program::{
 };
 use solana_sdk_ids::sysvar;
 
-use super::affine_batch_v2::authenticate_runtime_product_basis_core_v3;
+use super::affine_batch_v2::{
+    CorePhaseGateV3, authenticate_core_market_v3, authenticate_runtime_product_basis_core_v3,
+};
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
     LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, MarketViewV2, PositionViewV2,
@@ -69,6 +72,33 @@ pub(crate) enum ParentAuthorityV3 {
     /// [`CallerRole::Claims`], where there is no caller program to derive a PDA
     /// under in the first place.
     PositionOwner([u8; 32]),
+    /// An enclosing Claims route already authenticated the exact external
+    /// caller PDA against its own family request before deriving this child.
+    ///
+    /// This is not a public submission mode: the enum and execution entry are
+    /// crate-private, and current-release authentication still runs before the
+    /// derived SignedDelta commits.
+    EnclosingClaimsRoute,
+    /// A permissionless claim-check compaction crank, past its deadline.
+    ///
+    /// Coordinate 0 is the caller and nothing more. That is the point: a right
+    /// only its beneficiary can exercise stalls when its beneficiary is absent,
+    /// and this is the mode that lets somebody else finish the work without
+    /// being able to take anything by doing so.
+    ///
+    /// The entitlement is not carried by the signature. It is proved before
+    /// this mode is ever selected, by the compaction route, which requires the
+    /// escrow's release-fixed deadline to have elapsed and DERIVES the payout's
+    /// recipient from the market's own aggregate rather than accepting one. A
+    /// caller therefore chooses only *whether* the crank turns, never where the
+    /// collateral lands.
+    ///
+    /// One thing the owner's signature was silently also proving is not proved
+    /// here: that the Position is wallet-held rather than owned by a Trading
+    /// record or a Claims capability PDA, neither of which can sign. The
+    /// compaction route replaces that inference with the persisted owner-kind
+    /// tag, read off the admission record and refused explicitly.
+    ClaimCheckCrank,
 }
 
 /// Exact already-authenticated parent request joined to one generated
@@ -231,7 +261,14 @@ pub(super) fn process(
     authenticate_privileges(program_id, &accounts, plan.caller_role())?;
     let packet_digest = hash(instruction_data).to_bytes();
     authenticate_authority(&accounts, plan, packet_digest)?;
-    let receipt = execute_authenticated(program_id, &accounts, plan, packet_digest, false)?;
+    let receipt = execute_authenticated(
+        program_id,
+        &accounts,
+        plan,
+        packet_digest,
+        false,
+        CorePhaseGateV3::Exactly(dclutch_market_core_codec::Phase::Open),
+    )?;
     set_return_data(&receipt.to_bytes());
     Ok(())
 }
@@ -243,6 +280,7 @@ pub(crate) fn execute_parent_authenticated(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
     parent: AuthenticatedSignedDeltaParentV3,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<SignedDeltaReceiptV3, ProgramError> {
     let plan = SignedDeltaPlanV3::decode(instruction_data)
         .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
@@ -255,6 +293,7 @@ pub(crate) fn execute_parent_authenticated(
         plan,
         hash(instruction_data).to_bytes(),
         true,
+        phase_gate,
     )
 }
 
@@ -282,6 +321,7 @@ fn execute_authenticated(
     plan: SignedDeltaPlanV3<'_>,
     packet_digest: [u8; 32],
     parent_authenticated: bool,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<SignedDeltaReceiptV3, ProgramError> {
     if !parent_authenticated {
         authenticate_releases(accounts, plan)?;
@@ -294,11 +334,21 @@ fn execute_authenticated(
     let market =
         MarketViewV2::decode(&market_before).map_err(|_| SignedDeltaSbfErrorV3::ClaimsState)?;
     authenticate_market(program_id, accounts, plan, market)?;
-    if parent_authenticated {
+    let principal_cap_sets = if parent_authenticated {
         authenticate_parent_product_digests(accounts, plan)?;
+        authenticate_core_market_v3(
+            accounts.core_market,
+            accounts.core_program,
+            accounts.registry,
+            market,
+            plan.product_record_digest(),
+            phase_gate,
+        )
+        .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
     } else {
-        authenticate_product_and_basis(accounts, plan, market)?;
-    }
+        authenticate_product_and_basis(accounts, plan, market, phase_gate)?
+    };
+    admit_principal_growth(plan, &market_before, principal_cap_sets)?;
     let (mut market_candidate, mut position_candidates) =
         build_candidates(program_id, accounts, plan, market, &market_before)?;
     drop(market_before);
@@ -488,12 +538,26 @@ fn authenticate_parent_authority(
                 return Err(SignedDeltaSbfErrorV3::Release.into());
             }
         }
+        // A crank is anybody, so the only thing asked of coordinate 0 is that
+        // somebody stood behind the transaction. Everything that makes the
+        // crank safe was proved before this mode could be selected.
+        (CallerRole::Claims, ParentAuthorityV3::ClaimCheckCrank) => {
+            if !accounts.authority.is_signer {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+        }
         // Role `Claims` has no caller program, and no other role may substitute
-        // an owner signature for its program's authority. Both crossings refuse.
+        // an owner signature for its program's authority. Nor may any other
+        // role borrow the compaction crank's relaxation: it is admissible only
+        // where the owner's own signature would otherwise have been required,
+        // and never as a way around a caller program's authority PDA.
         (CallerRole::Claims, ParentAuthorityV3::CallerProgramPda)
-        | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::PositionOwner(_)) => {
+        | (CallerRole::Claims, ParentAuthorityV3::EnclosingClaimsRoute)
+        | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::PositionOwner(_))
+        | (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::ClaimCheckCrank) => {
             return Err(SignedDeltaSbfErrorV3::Release.into());
         }
+        (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::EnclosingClaimsRoute) => {}
         (CallerRole::Core | CallerRole::Trading, ParentAuthorityV3::CallerProgramPda) => {
             let seeds = CallerAuthoritySeedsV1::new(
                 ContentId::new(parent.release_set).map_err(|_| SignedDeltaSbfErrorV3::Release)?,
@@ -534,18 +598,41 @@ fn authenticate_releases(
 ) -> Result<(), ProgramError> {
     let release_set = plan.release_set();
     // Core and Claims are authenticated for every role, at their own
-    // coordinates. The CALLER coordinates are only a third role when the caller
-    // actually is Trading: a Core caller passes its own program there and is
-    // already covered by the first entry, and a Claims caller has no external
-    // program at all -- so for `Claims` those two coordinates are pinned to this
-    // program instead, leaving nothing in the frame unauthenticated.
-    let caller_is_trading = plan.caller_role() == CallerRole::Trading;
-    if plan.caller_role() == CallerRole::Claims
-        && (accounts.caller_program.key != accounts.claims_program.key
-            || accounts.caller_programdata.key != accounts.claims_programdata.key)
-    {
-        return Err(SignedDeltaSbfErrorV3::Release.into());
-    }
+    // coordinates. The CALLER coordinates carry a third role only when the
+    // caller really is Trading; for the other two roles they must equal a
+    // coordinate this route already authenticates as exactly that role, and
+    // [`caller_coordinate`] says which.
+    //
+    // This is not bookkeeping. `authenticate_authority` derives this route's
+    // whole authority as a PDA under `accounts.caller_program` with
+    // `execution_role(caller_role)` in its seeds, so an unpinned caller
+    // coordinate is an unpinned authority. Role `Core` used to assert in a
+    // comment that it was "already covered by the first entry" and pin nothing:
+    // the first entry authenticates `core_program`, a DIFFERENT coordinate.
+    // Any executable program could sit at the caller coordinate and the
+    // authority the route demanded was a PDA under it -- which is exactly the
+    // signature no external submitter is supposed to be able to produce.
+    // `rational_representation_v2::authenticate_release_batch` already makes
+    // this pin for the same role; the three sibling routes never omitted it.
+    let caller_is_trading = match caller_coordinate(plan.caller_role()) {
+        CallerCoordinateV3::Caller => true,
+        CallerCoordinateV3::Core => {
+            if accounts.caller_program.key != accounts.core_program.key
+                || accounts.caller_programdata.key != accounts.core_programdata.key
+            {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+            false
+        }
+        CallerCoordinateV3::Claims => {
+            if accounts.caller_program.key != accounts.claims_program.key
+                || accounts.caller_programdata.key != accounts.claims_programdata.key
+            {
+                return Err(SignedDeltaSbfErrorV3::Release.into());
+            }
+            false
+        }
+    };
     let requested: [Option<RequestedRoleV3<'_, '_>>; 3] = [
         Some((
             ExecutionRoleV1::Core,
@@ -616,8 +703,9 @@ fn authenticate_product_and_basis(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
     market: MarketViewV2,
-) -> Result<(), ProgramError> {
-    Ok(authenticate_runtime_product_basis_core_v3(
+    phase_gate: CorePhaseGateV3,
+) -> Result<u64, ProgramError> {
+    authenticate_runtime_product_basis_core_v3(
         accounts.registry,
         accounts.rent,
         accounts.core_market,
@@ -643,9 +731,35 @@ fn authenticate_product_and_basis(
         market,
         plan.product_record_digest(),
         plan.linked_basis_record_digest(),
-        dclutch_market_core_codec::Phase::Open,
+        phase_gate,
     )
-    .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?)
+    .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis.into())
+}
+
+/// Preflight every positive aggregate delta against Core's set-denominated
+/// principal cap before any candidate or account byte is changed.
+fn admit_principal_growth(
+    plan: SignedDeltaPlanV3<'_>,
+    market: &[u8],
+    principal_cap_sets: u64,
+) -> Result<(), ProgramError> {
+    let cap = MarketPrincipalCapSetsV1::read(principal_cap_sets);
+    for outcome in 0..plan.claim_count() {
+        let delta = plan
+            .aggregate_delta(outcome)
+            .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
+        if delta.direction() != DeltaDirectionV3::Credit {
+            continue;
+        }
+        let offset = usize::try_from(outcome)
+            .ok()
+            .and_then(|outcome| outcome.checked_mul(SCALAR_BYTES))
+            .and_then(|relative| LIABILITY_BASIS_MARKET_HEADER_BYTES_V2.checked_add(relative))
+            .ok_or(SignedDeltaSbfErrorV3::Candidate)?;
+        cap.admit_growth(read_u64(market, offset)?, delta.magnitude())
+            .map_err(|_| SignedDeltaSbfErrorV3::Candidate)?;
+    }
+    Ok(())
 }
 
 /// Rejoin the exact Product and ProductBasisV3 raw digests already
@@ -804,6 +918,36 @@ fn commit_candidates(
     Ok(())
 }
 
+/// Which coordinate of the frame must hold the caller program for one role.
+///
+/// The authority for this route is a PDA under whatever sits at the caller
+/// coordinate, seeded with `execution_role(role)`. So that coordinate must hold
+/// the program the Registry authenticated for exactly that role -- either
+/// because the caller coordinates are themselves authenticated as a third role
+/// ([`Self::Caller`], only Trading), or because they are pinned to the
+/// coordinate that already is ([`Self::Core`], [`Self::Claims`]).
+///
+/// Being an enum rather than a pair of `if`s is the point: there is no variant
+/// meaning "unpinned and unauthenticated", which is what role `Core` silently
+/// was, and a fourth role cannot be added without choosing one of these.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallerCoordinateV3 {
+    /// The caller coordinates carry their own third Registry-authenticated role.
+    Caller,
+    /// The caller coordinates must equal the Core program coordinates.
+    Core,
+    /// The caller coordinates must equal the Claims program coordinates.
+    Claims,
+}
+
+const fn caller_coordinate(role: CallerRole) -> CallerCoordinateV3 {
+    match role {
+        CallerRole::Core => CallerCoordinateV3::Core,
+        CallerRole::Claims => CallerCoordinateV3::Claims,
+        CallerRole::Trading => CallerCoordinateV3::Caller,
+    }
+}
+
 const fn execution_role(role: CallerRole) -> ExecutionRoleV1 {
     match role {
         CallerRole::Core => ExecutionRoleV1::Core,
@@ -852,6 +996,62 @@ mod tests {
         DeltaDirectionV3, PositionDeltaInputV3, PositionDeltaV3, SIGNED_DELTA_PLAN_MAGIC_V3,
         SignedDeltaPlanInputV3, SignedDeltaPositionV3, SignedDeltaV3, plan_bytes,
     };
+
+    /// Every caller role's coordinate is authenticated as that same role.
+    ///
+    /// The expectation here is derived from the AUTHORITY side --
+    /// `execution_role`, the role that actually goes into the seeds the
+    /// authority PDA is derived with -- and never from the pin under test, so
+    /// this cannot agree with a wrong pin by construction. Under the code this
+    /// replaced, `Core` was pinned to nothing and added no Registry entry, so
+    /// its coordinate was authenticated as no role at all and this assertion
+    /// had no true branch to take.
+    ///
+    /// Read as one sentence: whatever program the authority is derived under
+    /// must be a program the Registry authenticated for exactly the role in
+    /// that authority's seeds.
+    #[test]
+    fn every_caller_role_coordinate_is_authenticated_as_that_role() {
+        for role in [CallerRole::Core, CallerRole::Claims, CallerRole::Trading] {
+            let authenticated_as = match caller_coordinate(role) {
+                // The caller coordinates are themselves the third Registry
+                // entry, which `authenticate_releases` requests as Trading.
+                CallerCoordinateV3::Caller => ExecutionRoleV1::Trading,
+                // Or they are pinned equal to a coordinate the route always
+                // authenticates, as the role that entry is requested under.
+                CallerCoordinateV3::Core => ExecutionRoleV1::Core,
+                CallerCoordinateV3::Claims => ExecutionRoleV1::Claims,
+            };
+            assert_eq!(
+                authenticated_as,
+                execution_role(role),
+                "the authority for {role:?} is derived under a program \
+                 authenticated as {authenticated_as:?}, not as its own role"
+            );
+        }
+    }
+
+    /// Only Trading brings an external program to the caller coordinates.
+    ///
+    /// This is the fact that makes the third Registry entry conditional. If a
+    /// future role were given [`CallerCoordinateV3::Caller`] without also being
+    /// requested as its own role, the assertion above would fail; if it were
+    /// given a pin, this one records that it brings no new program.
+    #[test]
+    fn only_a_trading_caller_carries_a_program_of_its_own() {
+        assert_eq!(
+            caller_coordinate(CallerRole::Trading),
+            CallerCoordinateV3::Caller
+        );
+        assert_eq!(
+            caller_coordinate(CallerRole::Core),
+            CallerCoordinateV3::Core
+        );
+        assert_eq!(
+            caller_coordinate(CallerRole::Claims),
+            CallerCoordinateV3::Claims
+        );
+    }
 
     fn delta(direction: DeltaDirectionV3, magnitude: u64) -> SignedDeltaV3 {
         SignedDeltaV3::new(direction, magnitude).expect("delta")
@@ -908,6 +1108,76 @@ mod tests {
         )
         .expect("encode");
         bytes
+    }
+
+    fn aggregate_credit_plan_bytes(quantity: u64) -> Vec<u8> {
+        let positions = [SignedDeltaPositionV3::new([7; 32], 4).expect("destination")];
+        let aggregates = [delta(DeltaDirectionV3::Credit, quantity)];
+        let rows = [PositionDeltaV3::new(
+            PositionDeltaInputV3 {
+                position_index: 0,
+                outcome: 0,
+                delta: delta(DeltaDirectionV3::Credit, quantity),
+            },
+            1,
+            1,
+        )
+        .expect("complete-set credit")];
+        let mut bytes = vec![0; plan_bytes(1, 1, 1).expect("width")];
+        SignedDeltaPlanV3::encode_into(
+            SignedDeltaPlanInputV3 {
+                caller_role: CallerRole::Trading,
+                release_set: [1; 32],
+                market: [2; 32],
+                request_id: [3; 32],
+                product_record_digest: [4; 32],
+                semantic_basis_id: [5; 32],
+                linked_basis_record_digest: [6; 32],
+                expected_market_revision: 3,
+                claim_count: 1,
+            },
+            &positions,
+            &aggregates,
+            &rows,
+            &mut bytes,
+        )
+        .expect("encode complete-set credit");
+        bytes
+    }
+
+    #[test]
+    fn aggregate_credit_cap_boundary_excess_and_overflow_preflight_without_mutation() {
+        let mut market = vec![0; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + SCALAR_BYTES];
+        put_u64(&mut market, LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, 7)
+            .expect("outstanding supply");
+        let before = market.clone();
+        let boundary_bytes = aggregate_credit_plan_bytes(3);
+        let boundary = SignedDeltaPlanV3::decode(&boundary_bytes).expect("boundary plan");
+        assert_eq!(admit_principal_growth(boundary, &market, 10), Ok(()));
+        assert_eq!(market, before);
+
+        let excess_bytes = aggregate_credit_plan_bytes(4);
+        let excess = SignedDeltaPlanV3::decode(&excess_bytes).expect("excess plan");
+        assert_eq!(
+            admit_principal_growth(excess, &market, 10),
+            Err(SignedDeltaSbfErrorV3::Candidate.into())
+        );
+        assert_eq!(market, before, "cap refusal cannot mutate aggregate bytes");
+
+        put_u64(
+            &mut market,
+            LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+            u64::MAX,
+        )
+        .expect("maximum outstanding supply");
+        let overflow_before = market.clone();
+        let overflow_bytes = aggregate_credit_plan_bytes(1);
+        let overflow = SignedDeltaPlanV3::decode(&overflow_bytes).expect("overflow plan");
+        assert_eq!(
+            admit_principal_growth(overflow, &market, u64::MAX),
+            Err(SignedDeltaSbfErrorV3::Candidate.into())
+        );
+        assert_eq!(market, overflow_before);
     }
 
     #[test]

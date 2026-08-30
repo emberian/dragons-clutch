@@ -1,16 +1,46 @@
 # tools/gauntlet/hot-cu — the Hot tail's compute, measured twenty times
 
 ```sh
-tools/gauntlet/hot-cu/run-hot-cu.sh                  # working tree, seeds 0..19
-tools/gauntlet/hot-cu/run-hot-cu.sh --commit HEAD    # a CLEAN revision — see below
-tools/gauntlet/hot-cu/run-hot-cu.sh --seeds 40
-tools/gauntlet/hot-cu/run-hot-cu.sh --substrate slot-pinned        # decision 0012's arm
-tools/gauntlet/hot-cu/run-hot-cu.sh --elf-dir /somewhere/deploy   # skip the build
+tools/gauntlet/hot-cu/run-hot-cu.sh \
+  --checked-gate /absolute/candidate/CHECKED_UPGRADE_GATE.json \
+  --checked-gate-sha256 <separately-recorded-sha256>
+
+# Development instruments are explicit probes and never produce M-61:
+tools/gauntlet/hot-cu/run-hot-cu.sh --probe                  # working tree
+tools/gauntlet/hot-cu/run-hot-cu.sh --probe --commit HEAD    # clean revision
+tools/gauntlet/hot-cu/run-hot-cu.sh --probe --seeds 40
+tools/gauntlet/hot-cu/run-hot-cu.sh --probe --elf-dir /somewhere/deploy
 ```
 
-**If the number is going to be quoted at a revision, pass `--commit`.** This is
-a shared checkout, and under M-61 a changed artifact byte is not a rounding
-error — it redraws every seed.
+Release M-61 accepts exactly one input shape: an out-of-band SHA-256 for a
+canonical all-thirteen checked gate and exactly twenty seeds. The runner
+reauthenticates that gate and the per-link provenance descriptors for Registry,
+Trading, Core, Claims, and Custody before and after the sweep. It archives the
+gate's source revision, reproduces its source-tree digest, compiles the harness
+from that archive, and gives the fixture the exact five canonical gate ELF
+paths. It does not copy or rename them.
+
+An arbitrary `--elf-dir`, `--trading-elf`, working tree, `--commit`, or seed
+count is still useful for diagnosis, but now requires `--probe`. Probe JSON sets
+`m61_eligible=false` and `mean_cu=null`; a complete probe writes only
+`probe_mean_cu`. A single draw therefore cannot look like the required 20-seed
+mean.
+
+`--trading-elf` is the exact final-Direct handoff. It copies the supplied
+regular, non-symlink file into a work-local overlay under the canonical
+`dclutch_trading_sbf.so` name and leaves the seven support ELFs unchanged. The
+runner prints and records the override digest separately. This does not claim
+the file belongs to `--repo` or `--commit`; a digest alone is an identity, not
+build provenance. It remains a probe even if the file later happens to match a
+release ELF.
+
+Both SBF builds and the ProgramTest sweep run `--locked --offline`. A stale
+root or nested lock is a refusal, not an implicit dependency-graph update.
+The bounded option/refusal checks are:
+
+```sh
+bash tools/gauntlet/hot-cu/test-run-hot-cu-cli.sh
+```
 
 The first run of this script found fifteen files dirty from other lanes, two of
 them (`core-sbf/src/resolution.rs` and a `Cargo.lock` dependency addition)
@@ -18,8 +48,9 @@ inside the fixture's dependency closure. Building the same commit from a clean
 archive then produced **byte-identical** artifacts, so on that occasion nothing
 moved. That is the useful shape of the lesson: the dirty tree is not
 automatically a wrong measurement, and it is not automatically a right one
-either. **The digest settles it, and only the digest.** Sweep with `--commit`,
-or build both ways and compare `shasum -a 256` before quoting.
+either. A digest distinguishes bytes but does not attribute them. Only the
+checked gate plus the per-link source/build/frame provenance attributes the
+exact ELF that release M-61 consumes.
 
 ## What it measures
 
@@ -60,7 +91,7 @@ So the script prints, itself, at the end of every run:
 
 ```
 PASS 20/20
-MEAN 1,3xx,xxx CU   (over the 20 seeds that completed, of 1,400,000)
+MEAN 1,3xx,xxx CU   (over all 20 requested seeds, of 1,400,000)
 MIN  …
 MAX  …
 SPREAD …  ~ n bump-search iterations at 1,500 CU each
@@ -90,9 +121,12 @@ without the digest it was drawn against does not mean anything, and M-61 asks
 for the digest beside any margin precisely because the pairing is what makes the
 number checkable.
 
-`MEAN`, `MIN` and `MAX` are over the seeds that **completed**. A seed that
-exhausts the meter has no figure to average — the pass count is what carries it.
-That split is the other half of why the rule asks for two numbers.
+`MEAN`, `MIN` and `MAX` exist only when **every requested seed completed**. A
+failed seed has no figure, and averaging only the survivors changes the sample:
+`PASS 19/20` therefore prints no mean and writes JSON `null` for all three
+statistics. The pass count carries a partial run; its individual completed
+figures remain in the logs for diagnosis. This prevents a 19-seed survivor
+average from being quoted as the required 20-seed mean.
 
 Pinning `waist::fixture_keypair` to the seed makes a single figure
 **reproducible**. It does not make it **meaningful**: on a real chain the makers
@@ -185,9 +219,9 @@ pinned slot — swept the same way, against the same ELF. That variant now exist
 ## The three substrate arms, and the only number that is a signal
 
 ```sh
-tools/gauntlet/hot-cu/run-hot-cu.sh --commit <rev> --substrate immutable
-tools/gauntlet/hot-cu/run-hot-cu.sh --commit <rev> --substrate immutable-pinned
-tools/gauntlet/hot-cu/run-hot-cu.sh --commit <rev> --substrate slot-pinned
+tools/gauntlet/hot-cu/run-hot-cu.sh --probe --commit <rev> --substrate immutable
+tools/gauntlet/hot-cu/run-hot-cu.sh --probe --commit <rev> --substrate immutable-pinned
+tools/gauntlet/hot-cu/run-hot-cu.sh --probe --commit <rev> --substrate slot-pinned
 ```
 
 Pass the **same `--commit`** to all three. The second and third runs reuse the
@@ -391,7 +425,7 @@ under the shared `target/`: parallel lanes share this working tree.
 | `logs/build-*.log` | per-program build logs, where the frame-diagnostic count is read |
 | `sweep/<substrate>/seed<N>.log` | the full `--nocapture` log for one seed |
 | `sweep/<substrate>/observed-cu.txt` | one CU figure per completed seed |
-| `summary-<substrate>.json` | `dclutch-hot-cu-sweep-v1`: pass/fail, mean/min/max, the ELF digest, the substrate |
+| `summary-<substrate>.json` | `dclutch-hot-cu-sweep-v2`: pass/fail, all-seeds-completed, nullable mean/min/max, the ELF digest, the substrate |
 
 Logs and summaries are keyed by substrate because comparing arms means holding
 three sweeps at once, and a shared directory would blend them — the `rm -f` that

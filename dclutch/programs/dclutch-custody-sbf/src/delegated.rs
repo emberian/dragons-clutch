@@ -3,11 +3,9 @@
 use super::*;
 
 use dclutch_custody_contract::{
-    DELEGATED_CUSTODY_RECEIPT_BYTES_V2, DelegatedAllowanceObservationV2, DelegatedCustodyReceiptV2,
-    DelegatedCustodyRequestV2,
+    DELEGATED_CUSTODY_RECEIPT_BYTES_V2, DelegatedAllowanceObservationV2,
+    DelegatedCustodyPoststateFactsV2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
 };
-
-const DELEGATED_POSTSTATE_DOMAIN_V2: &[u8] = b"dclutch:custody-delegated-poststate:v2";
 
 /// Decode and authenticate the distinct successor outside the V1 dispatcher frame.
 #[inline(never)]
@@ -15,13 +13,24 @@ pub(super) fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
+    caller_authority_bump: Option<u8>,
 ) -> ProgramResult {
     let request = DelegatedCustodyRequestV2::decode(instruction_data)
         .map_err(|_| CustodySbfError::Instruction)?;
     let custody = request.custody;
     require_account_count(accounts, custody.operation, false)?;
+    // `instruction_data` is the request, with any carried caller-authority bump
+    // already split off by `split_caller_authority_bump_v1`, so this digest is
+    // still taken over exactly the request the parent hashed.
     let request_digest = hash(instruction_data).to_bytes();
-    let market = authenticate_common_frame(program_id, accounts, custody, request_digest, None)?;
+    let market = authenticate_common_frame(
+        program_id,
+        accounts,
+        custody,
+        request_digest,
+        None,
+        caller_authority_bump,
+    )?;
     let realm = authenticate_realm(program_id, accounts, custody, market)?;
     execute_transfer(program_id, accounts, request, request_digest, realm)
 }
@@ -63,7 +72,7 @@ fn execute_token_effect(
     let authority = account(accounts, 12)?;
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, custody, realm)?;
-    validate_custody_authority(program_id, authority, custody)?;
+    let authority_bump = validate_custody_authority(program_id, authority, custody)?;
     if request.delegate_before != authority.key.to_bytes()
         || source.key.to_bytes() != custody.source
         || destination.key.to_bytes() != custody.destination
@@ -89,7 +98,7 @@ fn execute_token_effect(
     {
         return Err(CustodySbfError::TokenState.into());
     }
-    invoke_exact_transfer(transfer_accounts, custody, before.decimals, program_id)?;
+    invoke_exact_transfer(transfer_accounts, custody, before.decimals, authority_bump)?;
     let after = authenticate_transfer_accounts(transfer_accounts, custody, realm.profile, false)?;
     let after_allowance = read_delegate(source, token_program, realm.profile)?;
     if before.source.checked_sub(custody.amount) != Some(after.source)
@@ -118,7 +127,7 @@ fn commit_delegated(
     outcome: TransferOutcome,
 ) -> ProgramResult {
     let custody = request.custody;
-    let poststate = delegated_poststate_commitment(request_digest, outcome);
+    let poststate = delegated_poststate_commitment(request_digest, outcome)?;
     let replay = read_replay(account(accounts, REPLAY)?)?;
     let next = replay
         .advance(custody, request_digest, poststate)
@@ -192,20 +201,24 @@ fn read_delegate(
     })
 }
 
-fn delegated_poststate_commitment(request_digest: [u8; 32], outcome: TransferOutcome) -> [u8; 32] {
-    hashv(&[
-        DELEGATED_POSTSTATE_DOMAIN_V2,
-        &request_digest,
-        &outcome.source,
-        &outcome.destination,
-        &outcome.before.source.to_le_bytes(),
-        &outcome.after.source.to_le_bytes(),
-        &outcome.before.destination.to_le_bytes(),
-        &outcome.after.destination.to_le_bytes(),
-        &outcome.allowance_before.delegate,
-        &outcome.allowance_before.amount.to_le_bytes(),
-        &outcome.allowance_after.delegate,
-        &outcome.allowance_after.amount.to_le_bytes(),
-    ])
+fn delegated_poststate_commitment(
+    request_digest: [u8; 32],
+    outcome: TransferOutcome,
+) -> Result<[u8; 32], ProgramError> {
+    let preimage = DelegatedCustodyPoststateFactsV2 {
+        request_digest,
+        source: outcome.source,
+        destination: outcome.destination,
+        source_before: outcome.before.source,
+        source_after: outcome.after.source,
+        destination_before: outcome.before.destination,
+        destination_after: outcome.after.destination,
+        delegate_before: outcome.allowance_before.delegate,
+        allowance_before: outcome.allowance_before.amount,
+        delegate_after: outcome.allowance_after.delegate,
+        allowance_after: outcome.allowance_after.amount,
+    }
     .to_bytes()
+    .map_err(|_| CustodySbfError::Postcondition)?;
+    Ok(hash(&preimage).to_bytes())
 }

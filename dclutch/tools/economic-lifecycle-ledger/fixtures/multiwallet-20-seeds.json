@@ -1,0 +1,59 @@
+{
+  "schema": "dclutch-model-based-multiwallet-seed-contract-v1",
+  "sourceAuthority": [
+    "tools/release/private-validator-lifecycle/run.py::named_seed",
+    "crates/dclutch-direct-codec/src/successor.rs::consume_nonce_v2",
+    "crates/dclutch-direct-codec/src/successor.rs::settle_inline_ordinary_v2",
+    "tools/economic-lifecycle-ledger/ledger.py"
+  ],
+  "sourceFixtures": [
+    {
+      "consumer": "private",
+      "path": "tools/economic-lifecycle-ledger/fixtures/private-canonical.json",
+      "sha256": "9db9ed0690d9272efd7a68a66d587eb862a04212fbac69d86e832a3accdc6f4c"
+    },
+    {
+      "consumer": "activity-v3",
+      "path": "tools/economic-lifecycle-ledger/fixtures/activity-v3-canonical.json",
+      "sha256": "a018a4012ffe981482e67e24958cfefcc4f2ff296802ac02626b6d425e61aacd"
+    }
+  ],
+  "seedDomain": "dclutch/private-validator-lifecycle/named-seed/v1\u0000",
+  "base": {
+    "wallets": ["ash", "birch", "cobalt", "dahlia"],
+    "collateralAtomsPerAccount": "25000",
+    "completeSetAtoms": {
+      "ash": "1000",
+      "birch": "700",
+      "cobalt": "400",
+      "dahlia": "250"
+    },
+    "feeBasisPointsPerSide": 50,
+    "feeDenominator": "10000",
+    "priceScaleAtoms": "1000",
+    "cutDenominator": "100",
+    "cuts": ["12000", "18000"]
+  },
+  "seeds": [
+    {"name": "seed-01", "profile": "baseline-crossed-owner", "winnerCase": "below-first"},
+    {"name": "seed-02", "profile": "seller-future-nonce", "winnerCase": "at-first"},
+    {"name": "seed-03", "profile": "buyer-future-nonce", "winnerCase": "below-second"},
+    {"name": "seed-04", "profile": "duplicate-ticket", "winnerCase": "at-second"},
+    {"name": "seed-05", "profile": "simultaneous-seller", "winnerCase": "above-second"},
+    {"name": "seed-06", "profile": "simultaneous-buyer", "winnerCase": "failure"},
+    {"name": "seed-07", "profile": "seller-account-switch", "winnerCase": "below-first"},
+    {"name": "seed-08", "profile": "buyer-account-switch", "winnerCase": "at-first"},
+    {"name": "seed-09", "profile": "foreign-account-refusal", "winnerCase": "below-second"},
+    {"name": "seed-10", "profile": "winner-below-first", "winnerCase": "below-first"},
+    {"name": "seed-11", "profile": "winner-at-first", "winnerCase": "at-first"},
+    {"name": "seed-12", "profile": "winner-below-second", "winnerCase": "below-second"},
+    {"name": "seed-13", "profile": "winner-at-second", "winnerCase": "at-second"},
+    {"name": "seed-14", "profile": "winner-above-second", "winnerCase": "above-second"},
+    {"name": "seed-15", "profile": "winner-provider-failure", "winnerCase": "failure"},
+    {"name": "seed-16", "profile": "fee-floor-below", "winnerCase": "below-first"},
+    {"name": "seed-17", "profile": "fee-floor-at", "winnerCase": "at-first"},
+    {"name": "seed-18", "profile": "direct-replay", "winnerCase": "below-second"},
+    {"name": "seed-19", "profile": "partial-payout-resume", "winnerCase": "at-second"},
+    {"name": "seed-20", "profile": "retirement-before-zero", "winnerCase": "failure"}
+  ]
+}

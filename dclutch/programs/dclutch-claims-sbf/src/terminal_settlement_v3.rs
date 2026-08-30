@@ -38,9 +38,9 @@
 //! encumbrance — there is none to bypass.
 
 // Every private phase is reachable only after `process` proves the one exact
-// 35-account frame. Fixed indexing below therefore cannot observe a short
+// 36-account frame. Fixed indexing below therefore cannot observe a short
 // untrusted slice and keeps the SBF frame materially smaller than a duplicated
-// 35-reference view.
+// 36-reference view.
 #![allow(clippy::indexing_slicing)]
 
 extern crate alloc;
@@ -52,16 +52,14 @@ use dclutch_claims_svm::{
     liability_basis_state_v2::LiabilityBasisMarketViewV2,
     product_basis_terminal_v3::{
         ProductClaimsTerminalAdmissionV3, ProductClaimsTerminalInputV3,
-        TERMINAL_COORDINATE_BYTES_V2, TERMINAL_COORDINATE_MAGIC_V2,
-        TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, encode_product_claims_terminal_signed_delta_v3,
+        encode_product_claims_terminal_signed_delta_v3,
     },
     signed_delta_v3::{SignedDeltaV3, plan_bytes},
     terminal_settlement_v3::{
         TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 as ACCOUNT_COUNT,
         TERMINAL_SETTLEMENT_CANDIDATE_DOMAIN_V3,
+        TERMINAL_SETTLEMENT_CERTIFICATE_ACCOUNT_V3 as CERTIFICATE,
         TERMINAL_SETTLEMENT_COLLATERAL_MINT_ACCOUNT_V3 as COLLATERAL_MINT,
-        TERMINAL_SETTLEMENT_COORDINATE_ACCOUNT_V3 as COORDINATE,
-        TERMINAL_SETTLEMENT_COORDINATE_STAGING_ACCOUNT_V3 as COORDINATE_STAGING,
         TERMINAL_SETTLEMENT_CUSTODY_AUTHORITY_ACCOUNT_V3 as CUSTODY_AUTHORITY,
         TERMINAL_SETTLEMENT_CUSTODY_CALLER_ACCOUNT_V3 as CUSTODY_CALLER,
         TERMINAL_SETTLEMENT_CUSTODY_PROGRAM_ACCOUNT_V3 as CUSTODY_PROGRAM,
@@ -72,6 +70,8 @@ use dclutch_claims_svm::{
         TERMINAL_SETTLEMENT_REALM_ACCOUNT_V3 as REALM,
         TERMINAL_SETTLEMENT_REALM_STAGING_ACCOUNT_V3 as REALM_STAGING,
         TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3 as RECIPIENT,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAM_ACCOUNT_V3 as RESOLUTION_PROGRAM,
+        TERMINAL_SETTLEMENT_RESOLUTION_PROGRAMDATA_ACCOUNT_V3 as RESOLUTION_PROGRAMDATA,
         TERMINAL_SETTLEMENT_TOKEN_POSTSTATE_DOMAIN_V3,
         TERMINAL_SETTLEMENT_TOKEN_PROGRAM_ACCOUNT_V3 as TOKEN_PROGRAM,
         TerminalSettlementReceiptInputV3, TerminalSettlementReceiptV3, TerminalSettlementRequestV3,
@@ -81,16 +81,14 @@ use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
-};
-use dclutch_product_payoff_v2_codec::runtime_v3::BasisKindV3;
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_representation_composition_v3_kernel::{
     COMPOSITION_EXPOSURE_SCHEMA_ID_V3, RecordAdmissionV3,
 };
@@ -108,6 +106,7 @@ use solana_sdk_ids::system_program;
 
 use super::{
     ClaimsSbfError,
+    affine_batch_v2::CorePhaseGateV3,
     liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2,
     rational_terminal_v3::{
         RationalTerminalFrameV3, TerminalCustodyInputV3, execute_terminal_custody_v3,
@@ -115,6 +114,9 @@ use super::{
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
         authenticate_parent_releases, execute_parent_authenticated,
+    },
+    terminal_certificate_v3::{
+        TerminalCertificateFrameV3, authenticate_terminal_certificate_scenario_v3,
     },
 };
 
@@ -129,8 +131,112 @@ pub(super) fn process(
     let request = TerminalSettlementRequestV3::decode(instruction_data)
         .map_err(|_| ClaimsSbfError::Instruction)?;
     let request_digest = hash(instruction_data).to_bytes();
-    let prepared = authenticate_and_prepare(program_id, accounts, &request, request_digest)?;
-    execute(program_id, accounts, &request, request_digest, prepared)
+    let authority = parent_authority(request.input());
+    let prepared =
+        authenticate_and_prepare(program_id, accounts, &request, request_digest, authority)?;
+    let receipt = execute(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        prepared,
+        authority,
+    )?;
+    set_return_data(&receipt.to_bytes());
+    Ok(())
+}
+
+/// Execute a chain-derived terminal request from an enclosing Claims family route.
+///
+/// The outer route authenticates its own exact family-request PDA here; the
+/// derived terminal request remains separately hashed and evidenced in the
+/// returned terminal receipt. No public terminal submission can select this
+/// mode.
+pub(crate) fn execute_enclosing_authenticated(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: TerminalSettlementRequestV3,
+    outer_context: [u8; 32],
+    outer_request_digest: [u8; 32],
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
+    if accounts.len() != ACCOUNT_COUNT || request.input().caller_role != CallerRole::Trading {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let input = request.input();
+    let seeds = CallerAuthoritySeedsV1::new(
+        dclutch_core_contract::ContentId::new(input.release_set)
+            .map_err(|_| ClaimsSbfError::Authority)?,
+        input.market,
+        ExecutionRoleV1::Trading,
+        outer_context,
+        outer_request_digest,
+    )
+    .map_err(|_| ClaimsSbfError::Authority)?;
+    if !accounts[0].is_signer
+        || accounts[0].key != &Pubkey::find_program_address(&seeds.as_slices(), accounts[14].key).0
+        || input.parent_context != outer_request_digest
+    {
+        return Err(ClaimsSbfError::Authority.into());
+    }
+    let request_bytes = request.to_bytes();
+    let request_digest = hash(&request_bytes).to_bytes();
+    let prepared = authenticate_and_prepare(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        ParentAuthorityV3::EnclosingClaimsRoute,
+    )?;
+    execute(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        prepared,
+        ParentAuthorityV3::EnclosingClaimsRoute,
+    )
+}
+
+/// Execute one terminal settlement on behalf of an absent holder.
+///
+/// The compaction crank's entry, and the whole of what it changes is the proof
+/// carried at coordinate 0. Every other authentication in this module runs
+/// unaltered: the same aggregate join, the same Core phase gate, the same
+/// Custody replay cursor, the same payout derivation, the same receipt.
+///
+/// That is deliberate and it is the architecture. Compaction pays what the
+/// holder's own redemption would have paid because it *is* the holder's own
+/// redemption, executed by somebody else into an escrow only the holder can
+/// open. A compaction that re-derived the payout could pay a different number
+/// than redemption and pass its own tests; one that calls this cannot.
+///
+/// Not a public submission mode: the entry is crate-private and the caller must
+/// have proved the deadline and derived the recipient first.
+pub(crate) fn execute_claim_check_compaction(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    request: TerminalSettlementRequestV3,
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
+    if accounts.len() != ACCOUNT_COUNT || request.input().caller_role != CallerRole::Claims {
+        return Err(ClaimsSbfError::Accounts.into());
+    }
+    let request_bytes = request.to_bytes();
+    let request_digest = hash(&request_bytes).to_bytes();
+    let prepared = authenticate_and_prepare(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        ParentAuthorityV3::ClaimCheckCrank,
+    )?;
+    execute(
+        program_id,
+        accounts,
+        &request,
+        request_digest,
+        prepared,
+        ParentAuthorityV3::ClaimCheckCrank,
+    )
 }
 
 struct PreparedTerminalSettlementV3 {
@@ -146,9 +252,10 @@ fn authenticate_and_prepare(
     accounts: &[AccountInfo<'_>],
     request: &TerminalSettlementRequestV3,
     request_digest: [u8; 32],
+    authority: ParentAuthorityV3,
 ) -> Result<Box<PreparedTerminalSettlementV3>, ProgramError> {
     let input = (*request).input();
-    authenticate_extra_privileges(program_id, accounts, input)?;
+    authenticate_extra_privileges(program_id, accounts, input, authority)?;
     let aggregate_bytes = accounts[1]
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
@@ -214,14 +321,19 @@ fn authenticate_and_prepare(
         COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
         input.exposure_digest,
     )?;
-    let scenario = terminal_scenario(
+    let scenario = authenticate_terminal_certificate_scenario_v3(
+        TerminalCertificateFrameV3 {
+            registry: &accounts[13],
+            cache: &accounts[12],
+            resolution_program: &accounts[RESOLUTION_PROGRAM],
+            resolution_programdata: &accounts[RESOLUTION_PROGRAMDATA],
+            certificate: &accounts[CERTIFICATE],
+            rent: &accounts[10],
+        },
+        input.release_set,
+        core,
         runtime.basis_kind,
         runtime.runtime.outcome_count,
-        core,
-        &accounts[18],
-        &accounts[10],
-        &accounts[COORDINATE],
-        &accounts[COORDINATE_STAGING],
     )?;
     let exposure_bytes = accounts[EXPOSURE_RAW]
         .try_borrow_data()
@@ -324,7 +436,8 @@ fn execute(
     request: &TerminalSettlementRequestV3,
     request_digest: [u8; 32],
     prepared: Box<PreparedTerminalSettlementV3>,
-) -> Result<(), ProgramError> {
+    authority: ParentAuthorityV3,
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
     let input = (*request).input();
     let signed_accounts = Vec::from(&accounts[..SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3 + 1]);
     authenticate_parent_releases(program_id, &signed_accounts, &prepared.packet)?;
@@ -334,12 +447,20 @@ fn execute(
         &prepared.packet,
         AuthenticatedSignedDeltaParentV3 {
             caller_role: input.caller_role,
-            authority: parent_authority(input),
+            authority,
             release_set: input.release_set,
             market: input.market,
             parent_context: input.parent_context,
             parent_request_digest: request_digest,
         },
+        // A terminal settlement necessarily runs on a resolved Market, so the
+        // enclosed signed delta must expect a settled phase. Expecting Open
+        // here is unsatisfiable: CoreState only carries the terminal receipt
+        // this route requires once the Market has left Open. It admits
+        // Retiring as well as Terminal because `begin_retiring` is
+        // permissionless, and a redemption that refused there would hand any
+        // stranger the power to end this holder's claim.
+        CorePhaseGateV3::TerminalOrRetiring,
     )?;
     let packet_digest = hash(&prepared.packet).to_bytes();
     if signed_receipt.packet_digest() != packet_digest
@@ -439,23 +560,22 @@ fn execute(
 fn emit_receipt(
     request: TerminalSettlementRequestV3,
     evidence: Box<TerminalSettlementReceiptInputV3>,
-) -> Result<(), ProgramError> {
+) -> Result<TerminalSettlementReceiptV3, ProgramError> {
     let receipt = TerminalSettlementReceiptV3::new(request, *evidence)
         .map_err(|_| ClaimsSbfError::Receipt)?;
-    set_return_data(&receipt.to_bytes());
-    Ok(())
+    Ok(receipt)
 }
 
 fn authenticate_extra_privileges(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     input: dclutch_claims_svm::terminal_settlement_v3::TerminalSettlementRequestInputV3,
+    authority: ParentAuthorityV3,
 ) -> Result<(), ProgramError> {
     for index in [
         EXPOSURE_RAW,
         EXPOSURE_STAGING,
-        COORDINATE,
-        COORDINATE_STAGING,
+        CERTIFICATE,
         REALM,
         REALM_STAGING,
         COLLATERAL_MINT,
@@ -470,6 +590,12 @@ fn authenticate_extra_privileges(
         || accounts[CUSTODY_CALLER].is_writable
         || !accounts[CUSTODY_PROGRAM].executable
         || accounts[CUSTODY_PROGRAM].is_writable
+        || !accounts[RESOLUTION_PROGRAM].executable
+        || accounts[RESOLUTION_PROGRAM].is_signer
+        || accounts[RESOLUTION_PROGRAM].is_writable
+        || accounts[RESOLUTION_PROGRAMDATA].executable
+        || accounts[RESOLUTION_PROGRAMDATA].is_signer
+        || accounts[RESOLUTION_PROGRAMDATA].is_writable
         || !accounts[CUSTODY_REPLAY].is_writable
         || !accounts[HOARD].is_writable
         || !accounts[RECIPIENT].is_writable
@@ -495,7 +621,18 @@ fn authenticate_extra_privileges(
     // are both program-derived addresses with no key, so neither can produce
     // this proof -- which is why the route needs no owner-kind tag to tell a
     // wallet-held Position from resting inventory or a capability shard.
-    if input.caller_role == CallerRole::Claims && accounts[0].key.to_bytes() != input.owner {
+    //
+    // The one exception is the permissionless compaction crank, and it is an
+    // exception to WHO signs rather than to whether anyone does. Coordinate 0
+    // is then the cranker, who is anybody; what entitles the crank is the
+    // elapsed deadline and the derived recipient, both proved by
+    // `claim_check_compaction_v1` before this mode can be selected. The
+    // wallet-held proof the owner's signature was also silently carrying is
+    // replaced there by the persisted owner-kind tag, not dropped.
+    if input.caller_role == CallerRole::Claims
+        && !matches!(authority, ParentAuthorityV3::ClaimCheckCrank)
+        && accounts[0].key.to_bytes() != input.owner
+    {
         return Err(ClaimsSbfError::Accounts.into());
     }
     Ok(())
@@ -522,7 +659,7 @@ fn authenticate_core(
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     let core = CoreState::decode(&bytes).map_err(|_| ClaimsSbfError::Identity)?;
-    if core.phase != CorePhase::Terminal
+    if !CorePhaseGateV3::TerminalOrRetiring.admits(core.phase)
         || accounts[11].key
             != &Pubkey::find_program_address(
                 &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
@@ -538,67 +675,6 @@ fn authenticate_core(
         return Err(ClaimsSbfError::Identity.into());
     }
     Ok(core)
-}
-
-fn terminal_scenario(
-    kind: BasisKindV3,
-    outcome_count: u32,
-    core: CoreState,
-    core_program: &AccountInfo<'_>,
-    rent: &AccountInfo<'_>,
-    coordinate: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-) -> Result<dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3, ProgramError>
-{
-    use dclutch_rational_representation_v2_kernel::product_v3::TerminalScenarioV3;
-    match kind {
-        BasisKindV3::CategoricalQ1 => {
-            placeholders(rent, coordinate, staging)?;
-            Ok(TerminalScenarioV3::Categorical(core.terminal_winner))
-        }
-        BasisKindV3::GradedExactComplement => {
-            let failure = outcome_count
-                .checked_sub(1)
-                .ok_or(ClaimsSbfError::Identity)?;
-            if core.terminal_winner == failure {
-                placeholders(rent, coordinate, staging)?;
-                return Ok(TerminalScenarioV3::Failure);
-            }
-            let digest = core
-                .terminal_receipt
-                .ok_or(ClaimsSbfError::Identity)?
-                .to_bytes();
-            let rent_value = Rent::from_account_info(rent).map_err(|_| ClaimsSbfError::Accounts)?;
-            authenticate_finalized_record(
-                coordinate,
-                staging,
-                core_program.key,
-                &rent_value,
-                TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2,
-                digest,
-            )?;
-            let bytes = coordinate
-                .try_borrow_data()
-                .map_err(|_| ClaimsSbfError::Accounts)?;
-            if bytes.len() != TERMINAL_COORDINATE_BYTES_V2
-                || array::<8>(&bytes, 0)? != TERMINAL_COORDINATE_MAGIC_V2
-                || u16::from_le_bytes(array(&bytes, 8)?) != 2
-                || bytes[10..16].iter().any(|byte| *byte != 0)
-                || bytes[28..32].iter().any(|byte| *byte != 0)
-            {
-                return Err(ClaimsSbfError::Identity.into());
-            }
-            let numerator = i64::from_le_bytes(array(&bytes, 16)?);
-            let denominator = u32::from_le_bytes(array(&bytes, 24)?);
-            if denominator == 0 {
-                return Err(ClaimsSbfError::Identity.into());
-            }
-            Ok(TerminalScenarioV3::Rational {
-                numerator: i128::from(numerator),
-                denominator: u64::from(denominator),
-            })
-        }
-    }
 }
 
 fn authenticate_finalized_record(
@@ -809,8 +885,9 @@ fn shared_frame<'accounts, 'info>(
         position: &accounts[20],
         custody_caller_authority: &accounts[CUSTODY_CALLER],
         custody_program: &accounts[CUSTODY_PROGRAM],
-        coordinate: &accounts[COORDINATE],
-        coordinate_staging: &accounts[COORDINATE_STAGING],
+        terminal_certificate: &accounts[CERTIFICATE],
+        resolution_program: &accounts[RESOLUTION_PROGRAM],
+        resolution_programdata: &accounts[RESOLUTION_PROGRAMDATA],
         realm: &accounts[REALM],
         realm_staging: &accounts[REALM_STAGING],
         custody_replay: &accounts[CUSTODY_REPLAY],
@@ -827,20 +904,4 @@ const fn record<'accounts, 'info>(
     staging: &'accounts AccountInfo<'info>,
 ) -> FinalizedRecordFrameV2<'accounts, 'info> {
     FinalizedRecordFrameV2 { raw, staging }
-}
-fn placeholders(
-    rent: &AccountInfo<'_>,
-    raw: &AccountInfo<'_>,
-    staging: &AccountInfo<'_>,
-) -> Result<(), ProgramError> {
-    if raw.key != rent.key || staging.key != rent.key {
-        return Err(ClaimsSbfError::Identity.into());
-    }
-    Ok(())
-}
-fn array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], ProgramError> {
-    bytes
-        .get(offset..offset.checked_add(N).ok_or(ClaimsSbfError::Identity)?)
-        .and_then(|value| value.try_into().ok())
-        .ok_or_else(|| ClaimsSbfError::Identity.into())
 }

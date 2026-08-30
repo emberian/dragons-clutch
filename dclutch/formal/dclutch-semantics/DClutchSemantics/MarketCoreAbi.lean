@@ -2,32 +2,51 @@ import DClutchSemantics.AbiSchema
 import DClutchSemantics.MarketCore
 
 /-!
-# Fixed Market Core physical ABI V2
+# Fixed Market Core physical ABI V3
 
-The fixed 352-byte header contains only lifecycle and immutable Market identity
-references. The Product-owned outcome count remains runtime data, while all
+The fixed 368-byte header contains only lifecycle, the immutable Market identity,
+the source-projected complete-set principal ceiling
+references, and the canonical PDA bumps recorded at founding. The Product-owned
+outcome count remains runtime data, while all
 mutable claim vectors and Hoard principal belong exclusively to the Claims
 aggregate deterministically derived by the selected Claims program. Source/Resolution exclusively owns
 action funding, work balances, and closure. Core stores neither parallel child
 ledger nor economic tail and therefore introduces no semantic N ceiling.
 Offsets are specialized from field data rather than maintained by hand.
+
+## The bump tail
+
+The founding is the only party that ever derives the Market state address and
+the Realm record pair from seeds it has already authenticated; every later
+reader repeats those searches at 1,500 compute units per rejected candidate.
+The three bump bytes let a reader reproduce the address directly instead. A
+zero byte means the founding recorded no bump, and its reader searches — so the
+tail is a pure superset and no bump is ever an authority: a wrong bump
+reproduces a different address and refuses.
+
+The reserved bytes are slack for the bumps not yet carried. They exist because
+the census that motivated this tail found every other carrier on the route
+already full, and widening this account costs a re-founding rather than a
+patch.
 -/
 
 namespace DClutch.MarketCoreAbi
 
 open DClutch.AbiSchema
 
-def stateMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x4f, 0x52, 0x32]
+def stateMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x4f, 0x52, 0x33]
 def requestMagic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x43, 0x52, 0x51, 0x32]
-def version : Nat := 2
+def version : Nat := 3
 
 inductive StateField where
   | magic | version | phase | readiness | terminalWinner
   | marketId | identityRealm | productRecord | productId
   | resolutionPolicy | capabilityManifest | selectedReleaseSet | registryProgram | generation
   | outstandingCapabilities
+  | principalCapSets
   | rentBeneficiary
   | terminalReceipt
+  | marketBump | realmRawRecordBump | realmStagingRecordBump | reservedBumps
   deriving DecidableEq, Repr
 
 def stateSchema : List (FieldSpec StateField) := [
@@ -40,8 +59,12 @@ def stateSchema : List (FieldSpec StateField) := [
   ⟨.selectedReleaseSet, .bytes 32⟩, ⟨.registryProgram, .bytes 32⟩,
   ⟨.generation, .u64⟩,
   ⟨.outstandingCapabilities, .u64⟩,
+  ⟨.principalCapSets, .u64⟩,
   ⟨.rentBeneficiary, .bytes 32⟩,
-  ⟨.terminalReceipt, .bytes 32⟩
+  ⟨.terminalReceipt, .bytes 32⟩,
+  ⟨.marketBump, .u8⟩,
+  ⟨.realmRawRecordBump, .u8⟩, ⟨.realmStagingRecordBump, .u8⟩,
+  ⟨.reservedBumps, .reserved 5⟩
 ]
 
 def stateLayout : List (PlacedField StateField) := specialize stateSchema
@@ -61,13 +84,48 @@ def rustName : StateField → String
   | .selectedReleaseSet => "STATE_SELECTED_RELEASE_SET_OFFSET"
   | .registryProgram => "STATE_REGISTRY_PROGRAM_OFFSET" | .generation => "STATE_GENERATION_OFFSET"
   | .outstandingCapabilities => "STATE_OUTSTANDING_CAPABILITIES_OFFSET"
+  | .principalCapSets => "STATE_PRINCIPAL_CAP_SETS_OFFSET"
   | .rentBeneficiary => "STATE_RENT_BENEFICIARY_OFFSET"
   | .terminalReceipt => "STATE_TERMINAL_RECEIPT_OFFSET"
+  | .marketBump => "STATE_MARKET_BUMP_OFFSET"
+  | .realmRawRecordBump => "STATE_REALM_RAW_RECORD_BUMP_OFFSET"
+  | .realmStagingRecordBump => "STATE_REALM_STAGING_RECORD_BUMP_OFFSET"
+  | .reservedBumps => "STATE_RESERVED_BUMPS_OFFSET"
 
 end StateField
 
-theorem state_schema_width : stateBytes = 352 := by native_decide
+theorem state_schema_width : stateBytes = 368 := by native_decide
 theorem state_schema_unique : (stateSchema.map fun field => field.name).Nodup := by native_decide
+
+/-- Regression witness for every persisted state offset.  It is here to pin one
+property the bump tail depends on: the tail is an append, so every field that
+existed at 360 bytes still begins exactly where it began.  A widening that
+displaced a field would be a silent reinterpretation of live account bytes;
+this theorem makes it a red row instead. -/
+theorem state_coordinates : coordinates stateLayout = [
+    (.magic, 0, 8),
+    (.version, 8, 2),
+    (.phase, 10, 1),
+    (.readiness, 11, 1),
+    (.terminalWinner, 12, 4),
+    (.marketId, 16, 32),
+    (.identityRealm, 48, 32),
+    (.productRecord, 80, 32),
+    (.productId, 112, 32),
+    (.resolutionPolicy, 144, 32),
+    (.capabilityManifest, 176, 32),
+    (.selectedReleaseSet, 208, 32),
+    (.registryProgram, 240, 32),
+    (.generation, 272, 8),
+    (.outstandingCapabilities, 280, 8),
+    (.principalCapSets, 288, 8),
+    (.rentBeneficiary, 296, 32),
+    (.terminalReceipt, 328, 32),
+    (.marketBump, 360, 1),
+    (.realmRawRecordBump, 361, 1),
+    (.realmStagingRecordBump, 362, 1),
+    (.reservedBumps, 363, 5)
+  ] := by native_decide
 theorem state_fields_disjoint : stateLayout.Pairwise Before := specializeFrom_pairwise 0 stateSchema
 theorem state_fields_bounded (placed : PlacedField StateField) (member : placed ∈ stateLayout) :
     placed.offset + placed.spec.kind.byteWidth ≤ stateBytes := by

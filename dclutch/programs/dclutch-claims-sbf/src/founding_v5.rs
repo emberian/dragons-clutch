@@ -35,6 +35,7 @@ use dclutch_market_core_codec::{
 use dclutch_product_runtime_v2_svm_reader::{FinalizedRecordFrameV2, ProductRuntimeFrameV3};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_source_contract::MarketPrincipalCapSetsV1;
 use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_program::{
     account_info::AccountInfo,
@@ -44,18 +45,21 @@ use solana_program::{
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
-    sysvar::SysvarSerialize,
+    sysvar::Sysvar,
 };
-use solana_sdk_ids::{system_program, sysvar};
+use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
-use super::{
-    affine_batch_v2::authenticate_runtime_product_basis_core_v3, authenticate_activated_role,
+use super::affine_batch_v2::{
+    CorePhaseGateV3, authenticate_runtime_product_basis_core_with_rent_v3,
 };
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2, MarketViewV2,
     encode_liability_basis_market_v2, encode_liability_basis_position_v2, vector_width,
+};
+use dclutch_claims_svm::liability_basis_state_v2::{
+    put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
 };
 
 pub use dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_V5;
@@ -81,22 +85,21 @@ const RESULT_RECORD: usize = 12;
 const RESULT_STAGING: usize = 13;
 const PORTFOLIO_RECORD: usize = 14;
 const PORTFOLIO_STAGING: usize = 15;
-const RENT: usize = 16;
-const SYSTEM: usize = 17;
-const CORE_MARKET: usize = 18;
-const CACHE: usize = 19;
-const REGISTRY: usize = 20;
-const CLAIMS_PROGRAM: usize = 21;
-const CLAIMS_PROGRAMDATA: usize = 22;
-const CORE_PROGRAM: usize = 23;
-const CORE_PROGRAMDATA: usize = 24;
-const TRADING_PROGRAM: usize = 25;
-const TRADING_PROGRAMDATA: usize = 26;
-const CUSTODY_PROGRAM: usize = 27;
-const CUSTODY_PROGRAMDATA: usize = 28;
-const FOUNDER: usize = 29;
-const RENT_CREDIT: usize = 30;
-const RENT_PROGRAM: usize = 31;
+const SYSTEM: usize = 16;
+const CORE_MARKET: usize = 17;
+const CACHE: usize = 18;
+const REGISTRY: usize = 19;
+const CLAIMS_PROGRAM: usize = 20;
+const CLAIMS_PROGRAMDATA: usize = 21;
+const CORE_PROGRAM: usize = 22;
+const CORE_PROGRAMDATA: usize = 23;
+const TRADING_PROGRAM: usize = 24;
+const TRADING_PROGRAMDATA: usize = 25;
+const CUSTODY_PROGRAM: usize = 26;
+const CUSTODY_PROGRAMDATA: usize = 27;
+const FOUNDER: usize = 28;
+const RENT_CREDIT: usize = 29;
+const RENT_PROGRAM: usize = 30;
 
 /// Stable FoundingV5 adapter refusal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,7 +165,6 @@ struct FoundingAccounts<'accounts, 'info> {
     result_staging: &'accounts AccountInfo<'info>,
     portfolio_record: &'accounts AccountInfo<'info>,
     portfolio_staging: &'accounts AccountInfo<'info>,
-    rent: &'accounts AccountInfo<'info>,
     system: &'accounts AccountInfo<'info>,
     core_market: &'accounts AccountInfo<'info>,
     cache: &'accounts AccountInfo<'info>,
@@ -202,7 +204,6 @@ impl<'accounts, 'info> FoundingAccounts<'accounts, 'info> {
             result_staging: account(accounts, RESULT_STAGING)?,
             portfolio_record: account(accounts, PORTFOLIO_RECORD)?,
             portfolio_staging: account(accounts, PORTFOLIO_STAGING)?,
-            rent: account(accounts, RENT)?,
             system: account(accounts, SYSTEM)?,
             core_market: account(accounts, CORE_MARKET)?,
             cache: account(accounts, CACHE)?,
@@ -237,6 +238,7 @@ pub fn process(
     let lock_receipt_digest = decoded.lock_receipt_digest;
     let projected_receipt_digest = decoded.projected_receipt_digest;
     let accounts = FoundingAccounts::parse(account_infos)?;
+    let rent = Rent::get().map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
     authenticate_privileges(program_id, accounts, &request)?;
     authenticate_authority(accounts, &request, request_digest)?;
     authenticate_releases(accounts, &request)?;
@@ -255,8 +257,8 @@ pub fn process(
         &projected_receipt,
         projected_receipt_digest,
     )?;
-    let market = authenticate_product_core(program_id, accounts, &request, custody_context)?;
-    authenticate_rent_and_vacancy(program_id, accounts, &request, market)?;
+    let market = authenticate_product_core(program_id, accounts, &request, custody_context, &rent)?;
+    authenticate_rent_and_vacancy(program_id, accounts, &request, market, &rent)?;
 
     let candidates =
         build_candidates_boxed(program_id, accounts, &request, market, request_digest)?;
@@ -339,6 +341,14 @@ struct FoundingCandidates {
     aggregate: Vec<u8>,
     position: Vec<u8>,
     admission: [u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2],
+    /// The two PDA bumps this route both SIGNS with and RECORDS in the bodies.
+    ///
+    /// Derived once, in `build_candidates_boxed`, because the bump has to be in
+    /// the candidate before `build_receipt` hashes it and before `allocate_all`
+    /// signs with it -- and deriving it twice would put back one of the searches
+    /// persisting it exists to remove.
+    aggregate_bump: u8,
+    position_bump: u8,
 }
 
 struct DecodedFounding {
@@ -376,7 +386,6 @@ fn authenticate_privileges(
         || !accounts.rent_program.executable
         || accounts.system.key != &system_program::ID
         || !accounts.system.executable
-        || accounts.rent.key != &sysvar::rent::ID
     {
         return Err(ClaimsFoundingSbfErrorV5::Accounts.into());
     }
@@ -393,7 +402,6 @@ fn authenticate_privileges(
         accounts.result_staging,
         accounts.portfolio_record,
         accounts.portfolio_staging,
-        accounts.rent,
         accounts.system,
         accounts.core_market,
         accounts.cache,
@@ -624,6 +632,11 @@ fn authenticate_releases(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
 ) -> Result<(), ProgramError> {
+    // One canonical cache search admits the first role and returns the bump
+    // witness; the remaining roles reproduce the address from it instead of
+    // each paying the 256-way search again. Same checks, one search - the
+    // composed founding runs this batch against a 1.4M ceiling it exhausts.
+    let mut bump = None;
     for (role, program, programdata) in [
         (
             ExecutionRoleV1::Claims,
@@ -646,15 +659,34 @@ fn authenticate_releases(
             accounts.custody_programdata,
         ),
     ] {
-        let receipt = authenticate_activated_role(
-            accounts.registry,
-            accounts.cache,
-            role,
-            program,
-            programdata,
-            &request.release_set(),
-        )
-        .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+        let receipt = match bump {
+            None => {
+                let (receipt, witness) =
+                    dclutch_registry_activation_auth_v1::authenticate_activated_role_and_bump_v1(
+                        accounts.registry,
+                        accounts.cache,
+                        &request.release_set(),
+                        role,
+                        program,
+                        programdata,
+                    )
+                    .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?;
+                bump = Some(witness);
+                receipt
+            }
+            Some(witness) => {
+                dclutch_registry_activation_auth_v1::authenticate_activated_role_with_bump_v1(
+                    accounts.registry,
+                    accounts.cache,
+                    &request.release_set(),
+                    witness,
+                    role,
+                    program,
+                    programdata,
+                )
+                .map_err(|_| ClaimsFoundingSbfErrorV5::Release)?
+            }
+        };
         if receipt.execution_release_set_id().as_bytes() != &request.release_set() {
             return Err(ClaimsFoundingSbfErrorV5::Release.into());
         }
@@ -733,6 +765,7 @@ fn authenticate_product_core(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     custody_context: [u8; 32],
+    rent: &Rent,
 ) -> Result<MarketViewV2, ProgramError> {
     if accounts.core_market.key.to_bytes() != request.market()
         || accounts.core_market.owner != accounts.core_program.key
@@ -746,6 +779,9 @@ fn authenticate_product_core(
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
     let core = CoreState::decode(&core_data).map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     drop(core_data);
+    MarketPrincipalCapSetsV1::read(core.principal_cap_sets)
+        .admit_growth(0, request.quantity())
+        .map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     let market = MarketViewV2 {
         claim_count: request.claim_count(),
         revision: request.post_aggregate_revision(),
@@ -766,9 +802,9 @@ fn authenticate_product_core(
         custody_context,
         generation: request.generation(),
     };
-    authenticate_runtime_product_basis_core_v3(
+    authenticate_runtime_product_basis_core_with_rent_v3(
         accounts.registry,
-        accounts.rent,
+        rent,
         accounts.core_market,
         accounts.core_program,
         ProductRuntimeFrameV3 {
@@ -792,7 +828,7 @@ fn authenticate_product_core(
         market,
         request.product_record_digest(),
         request.linked_basis_record_digest(),
-        CorePhase::Founding,
+        CorePhaseGateV3::Exactly(CorePhase::Founding),
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     let aggregate_seeds = ClaimsFoundingAggregateSeedsV5::new(request.market())
@@ -812,9 +848,8 @@ fn authenticate_rent_and_vacancy(
     accounts: FoundingAccounts<'_, '_>,
     request: &ClaimsFoundingRequestV5,
     market: MarketViewV2,
+    rent: &Rent,
 ) -> Result<(), ProgramError> {
-    let rent =
-        Rent::from_account_info(accounts.rent).map_err(|_| ClaimsFoundingSbfErrorV5::Rent)?;
     let aggregate_width = vector_width(
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
         request.claim_count(),
@@ -919,6 +954,48 @@ fn build_candidates_boxed(
     market: MarketViewV2,
     request_digest: [u8; 32],
 ) -> Result<Box<FoundingCandidates>, ProgramError> {
+    let (mut aggregate, mut position) = build_liability_candidates(accounts, request, market)?;
+    let admission = build_admission_candidate(program_id, accounts, request)?;
+    if request_digest == [0; 32] {
+        return Err(ClaimsFoundingSbfErrorV5::Receipt.into());
+    }
+    // Each account records the bump its own creator derived, so every later
+    // reader reproduces the address instead of searching for it. This is the
+    // ONLY derivation of either bump on this route: `allocate_all` signs with
+    // what is recorded here.
+    let aggregate_bump = Pubkey::find_program_address(
+        &ClaimsFoundingAggregateSeedsV5::new(request.market())
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Allocation)?
+            .as_slices(),
+        program_id,
+    )
+    .1;
+    let position_bump = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), request.founder())
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Allocation)?
+            .as_slices(),
+        program_id,
+    )
+    .1;
+    put_liability_basis_market_bump_v2(&mut aggregate, aggregate_bump)
+        .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    put_liability_basis_position_bump_v2(&mut position, position_bump)
+        .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    Ok(Box::new(FoundingCandidates {
+        aggregate,
+        position,
+        admission,
+        aggregate_bump,
+        position_bump,
+    }))
+}
+
+#[inline(never)]
+fn build_liability_candidates(
+    accounts: FoundingAccounts<'_, '_>,
+    request: &ClaimsFoundingRequestV5,
+    market: MarketViewV2,
+) -> Result<(Vec<u8>, Vec<u8>), ProgramError> {
     let count = usize::try_from(request.claim_count())
         .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
     let quantities = vec![request.quantity(); count];
@@ -947,6 +1024,15 @@ fn build_candidates_boxed(
         &quantities,
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    Ok((aggregate, position))
+}
+
+#[inline(never)]
+fn build_admission_candidate(
+    program_id: &Pubkey,
+    accounts: FoundingAccounts<'_, '_>,
+    request: &ClaimsFoundingRequestV5,
+) -> Result<[u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2], ProgramError> {
     let admission_request = ProtocolPositionRequestV2 {
         action: ProtocolPositionActionV2::Admit,
         owner_kind: ProtocolPositionOwnerKindV2::User,
@@ -989,14 +1075,7 @@ fn build_candidates_boxed(
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?
     .to_state_bytes()
     .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
-    if request_digest == [0; 32] {
-        return Err(ClaimsFoundingSbfErrorV5::Receipt.into());
-    }
-    Ok(Box::new(FoundingCandidates {
-        aggregate,
-        position,
-        admission,
-    }))
+    Ok(admission)
 }
 
 #[inline(never)]
@@ -1014,6 +1093,7 @@ fn allocate_all(
         accounts.system,
         candidates.aggregate.len(),
         &aggregate.as_slices(),
+        Some(candidates.aggregate_bump),
     )?;
     let position =
         ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), request.founder())
@@ -1024,6 +1104,7 @@ fn allocate_all(
         accounts.system,
         candidates.position.len(),
         &position.as_slices(),
+        Some(candidates.position_bump),
     )?;
     let admission =
         ProtocolPositionAdmissionSeedsV2::new(accounts.aggregate.key.to_bytes(), request.founder())
@@ -1034,6 +1115,9 @@ fn allocate_all(
         accounts.system,
         candidates.admission.len(),
         &admission.as_slices(),
+        // The admission record has no reserved byte to carry a bump, so it
+        // still searches. It is not on the hot route.
+        None,
     )
 }
 
@@ -1044,8 +1128,16 @@ fn allocate_one<'info>(
     system: &AccountInfo<'info>,
     width: usize,
     seeds: &[&[u8]],
+    // The bump already derived for this address, where the body records one.
+    // Signing with it rather than searching again is the same act: the runtime
+    // will only produce a signature for the address these seeds and this bump
+    // name, and the allocation is checked against the account it lands on.
+    derived: Option<u8>,
 ) -> Result<(), ProgramError> {
-    let bump = [Pubkey::find_program_address(seeds, program_id).1];
+    let bump = [match derived {
+        Some(bump) => bump,
+        None => Pubkey::find_program_address(seeds, program_id).1,
+    }];
     let mut signer = Vec::with_capacity(seeds.len() + 1);
     signer.extend_from_slice(seeds);
     signer.push(&bump);

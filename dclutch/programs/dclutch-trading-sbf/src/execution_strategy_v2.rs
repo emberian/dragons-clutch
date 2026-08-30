@@ -8,11 +8,12 @@
 //! module is read-only: it grants no accelerator state or effect write authority.
 
 use dclutch_capability_program_contract::v4::{
-    CapabilityProgramV4, SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+    CAPABILITY_PROGRAM_V4_BYTES, CapabilityProgramV4,
+    SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2,
+    AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2, CertificateArtifactBindingV2,
     EXECUTION_STRATEGY_ADMISSION_BYTES_V2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
@@ -196,6 +197,59 @@ pub fn authenticate_execution_strategy_v2(
         selected_capability_program_schema,
         capability_program_id,
     )?;
+    authenticate_selected_execution_strategy_v2(
+        context,
+        capability_program_id,
+        &capability_program,
+        registry_program.key,
+        &rent,
+        accounts,
+    )
+}
+
+/// Authenticate one strategy after Hot has spent a CapabilitySeal token for
+/// the selected descriptor.
+///
+/// The first two account slots are the execution-only raw/raw alias. The Hot
+/// caller has already authenticated the exact Registry coordinate, body
+/// digest, width, rent and seal row before reaching this crate-private entry;
+/// this boundary re-decodes the same borrowed body and requires it to equal the
+/// supplied descriptor. Every strategy-owned record and deployment retains the
+/// ordinary fully-distinct finalized-record authentication below.
+#[inline(never)]
+pub(crate) fn authenticate_execution_strategy_from_sealed_capability_v2(
+    context: TradingFamilyContextV1,
+    capability_program_id: ContentId,
+    capability_program: &CapabilityProgramV4,
+    registry_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+    accounts: &[AccountInfo<'_>],
+) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
+    let rent = authenticate_common_frame_with_sealed_capability_alias(
+        registry_program,
+        rent_sysvar,
+        accounts,
+        capability_program,
+    )?;
+    authenticate_selected_execution_strategy_v2(
+        context,
+        capability_program_id,
+        capability_program,
+        registry_program.key,
+        &rent,
+        accounts,
+    )
+}
+
+#[inline(never)]
+fn authenticate_selected_execution_strategy_v2(
+    context: TradingFamilyContextV1,
+    capability_program_id: ContentId,
+    capability_program: &CapabilityProgramV4,
+    registry_program: &Pubkey,
+    rent: &Rent,
+    accounts: &[AccountInfo<'_>],
+) -> Result<AuthenticatedExecutionStrategyV2, TradingSbfError> {
     capability_program
         .validate_persisted_selection(context.selection())
         .map_err(|_| TradingSbfError::Content)?;
@@ -209,14 +263,14 @@ pub fn authenticate_execution_strategy_v2(
 
     let strategy_program_id = capability_program.strategy().program();
     let strategy = authenticate_strategy_program(
-        registry_program.key,
-        &rent,
+        registry_program,
+        rent,
         account(accounts, STRATEGY_RAW)?,
         account(accounts, STRATEGY_STAGING)?,
         strategy_program_id,
     )?;
     strategy
-        .validate_descriptor_selection_v4(strategy_program_id, capability_program)
+        .validate_descriptor_selection_v4(strategy_program_id, *capability_program)
         .map_err(|_| TradingSbfError::Content)?;
 
     match strategy.disposition() {
@@ -224,7 +278,7 @@ pub fn authenticate_execution_strategy_v2(
             require_exact_account_count(accounts, INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2)?;
             Ok(AuthenticatedExecutionStrategyV2 {
                 capability_program_id,
-                capability_program,
+                capability_program: *capability_program,
                 strategy_program_id,
                 strategy,
                 certificate_program_id: None,
@@ -236,20 +290,20 @@ pub fn authenticate_execution_strategy_v2(
             })
         }
         StrategyDispositionV2::ShadowAot => authenticate_shadow_aot(
-            registry_program.key,
-            &rent,
+            registry_program,
+            rent,
             accounts,
             capability_program_id,
-            capability_program,
+            *capability_program,
             strategy_program_id,
             strategy,
         ),
         StrategyDispositionV2::AdmittedAot => authenticate_admitted_aot(
-            registry_program.key,
-            &rent,
+            registry_program,
+            rent,
             accounts,
             capability_program_id,
-            capability_program,
+            *capability_program,
             strategy_program_id,
             strategy,
         ),
@@ -286,19 +340,24 @@ fn authenticate_shadow_aot(
             authenticated_interpreter_artifacts(capability_program, strategy),
         )
         .map_err(|_| TradingSbfError::Content)?;
-    let artifact_release_id = certificate.artifact_release();
-    let artifact_release = authenticate_pinned_artifact(
+    // Shadow AOT accepts either binding. The exact-release one is re-checked
+    // against the Certificate below; the semantic one is joined inside
+    // authenticate_pinned_artifact, against the record it selected.
+    let binding = certificate.artifact_binding();
+    let (artifact_release_id, artifact_release) = authenticate_pinned_artifact(
         registry_program,
         rent,
         account(accounts, SHADOW_ARTIFACT_RAW)?,
         account(accounts, SHADOW_ARTIFACT_STAGING)?,
-        artifact_release_id,
+        binding,
         account(accounts, SHADOW_ACCELERATOR_PROGRAM)?,
         account(accounts, SHADOW_ACCELERATOR_PROGRAMDATA)?,
     )?;
-    certificate
-        .validate_artifact(artifact_release_id)
-        .map_err(|_| TradingSbfError::Content)?;
+    if let CertificateArtifactBindingV2::Release(_) = binding {
+        certificate
+            .validate_artifact(artifact_release_id)
+            .map_err(|_| TradingSbfError::Content)?;
+    }
     Ok(AuthenticatedExecutionStrategyV2 {
         capability_program_id,
         capability_program,
@@ -344,13 +403,19 @@ fn authenticate_admitted_aot(
         account(accounts, ADMITTED_ADMISSION_STAGING)?,
         admission_program_id,
     )?;
-    let artifact_release_id = certificate.artifact_release();
-    let artifact_release = authenticate_pinned_artifact(
+    // Admitted AOT takes the exact-release binding and nothing else. Admission
+    // is a statement about one built artifact, so a semantically bound
+    // Certificate is refused here rather than silently admitting every build of
+    // that source -- this call is the enforcement, not a comment about it.
+    let artifact_release_id = certificate
+        .artifact_release()
+        .map_err(|_| TradingSbfError::Content)?;
+    let (_, artifact_release) = authenticate_pinned_artifact(
         registry_program,
         rent,
         account(accounts, ADMITTED_ARTIFACT_RAW)?,
         account(accounts, ADMITTED_ARTIFACT_STAGING)?,
-        artifact_release_id,
+        CertificateArtifactBindingV2::Release(artifact_release_id),
         account(accounts, ADMITTED_ACCELERATOR_PROGRAM)?,
         account(accounts, ADMITTED_ACCELERATOR_PROGRAMDATA)?,
     )?;
@@ -494,36 +559,88 @@ fn authenticate_admission(
     ExecutionStrategyAdmissionV2::decode(&data).map_err(|_| TradingSbfError::Content)
 }
 
+/// Authenticate the accelerator's ArtifactRelease under whichever binding the
+/// Certificate declares, and join the two.
+///
+/// Both bindings end at the same two facts, and neither skips one:
+///
+/// * the record is a Registry-finalized `ArtifactReleaseV1` -- its content
+///   digest derives the raw and staging PDAs, so the address proves the bytes;
+/// * that record's `elf_digest` equals a hash of the live programdata, checked
+///   by `authenticate_current_deployment` on every call.
+///
+/// They differ only in which fact the Certificate itself supplies. A `Release`
+/// binding names the record's exact content identity, so the record is selected
+/// by the Certificate. A `Semantic` binding names a source-derived
+/// `semantic_release_id`, so the record is selected by its own content -- which
+/// the PDA derivation and the Registry's ownership already make load-bearing --
+/// and the Certificate is joined to it by the semantic equality instead.
+///
+/// The semantic binding exists because a Certificate naming an exact
+/// `ArtifactReleaseV1` cannot be authored for an accelerator whose ELF embeds
+/// that Certificate: its identity would have to contain the digest of the bytes
+/// it is compiled into. Measured, not argued, in `23eed7df`. Widening to every
+/// build of one exact source is the deliberate price, and the deployment hash
+/// above is what keeps it from widening any further than that.
 #[allow(clippy::too_many_arguments)]
 fn authenticate_pinned_artifact(
     registry_program: &Pubkey,
     rent: &Rent,
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
-    expected: ArtifactReleaseIdV1,
+    binding: CertificateArtifactBindingV2,
     accelerator_program: &AccountInfo<'_>,
     accelerator_programdata: &AccountInfo<'_>,
-) -> Result<ArtifactReleaseV1, TradingSbfError> {
+) -> Result<(ArtifactReleaseIdV1, ArtifactReleaseV1), TradingSbfError> {
     let data = raw
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Content)?;
     if data.len() != ARTIFACT_RELEASE_BYTES_V1 {
         return Err(TradingSbfError::Content);
     }
+    // For a Release binding this is the Certificate's own pin, exactly as
+    // before. For a Semantic binding the record identifies itself, and
+    // authenticate_finalized_record's own `hash(bytes) == digest` check is then
+    // trivially true -- the address derivation below it is what makes the bytes
+    // load-bearing, and the semantic equality further down is the real join.
+    let digest = match binding {
+        CertificateArtifactBindingV2::Release(expected) => expected.to_bytes(),
+        CertificateArtifactBindingV2::Semantic(_) => hash(&data).to_bytes(),
+    };
     authenticate_finalized_record(
         registry_program,
         rent,
         raw,
         staging,
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
-        expected.to_bytes(),
+        digest,
         &data,
     )?;
     let release = ArtifactReleaseV1::decode(&data).map_err(|_| TradingSbfError::Content)?;
     require_slot_pinned_release_v1(release).map_err(|_| TradingSbfError::Content)?;
+    if let CertificateArtifactBindingV2::Semantic(_) = binding {
+        certificate_semantic_join(binding, release)?;
+    }
+    let artifact_release_id =
+        ArtifactReleaseIdV1::decode(&digest).map_err(|_| TradingSbfError::Content)?;
     drop(data);
     authenticate_current_deployment(release, accelerator_program, accelerator_programdata)?;
-    Ok(release)
+    Ok((artifact_release_id, release))
+}
+
+/// Join a semantically bound Certificate to the release record it selected.
+fn certificate_semantic_join(
+    binding: CertificateArtifactBindingV2,
+    release: ArtifactReleaseV1,
+) -> Result<(), TradingSbfError> {
+    match binding {
+        CertificateArtifactBindingV2::Semantic(semantic)
+            if semantic == release.semantic_release_id() =>
+        {
+            Ok(())
+        }
+        _ => Err(TradingSbfError::Content),
+    }
 }
 
 /// Reauthenticate one current Loader V3 deployment by hashing its exact ELF.
@@ -598,6 +715,71 @@ fn authenticate_common_frame(
         }
     }
     Rent::from_account_info(rent_sysvar).map_err(|_| TradingSbfError::Content)
+}
+
+#[inline(never)]
+fn authenticate_common_frame_with_sealed_capability_alias(
+    registry_program: &AccountInfo<'_>,
+    rent_sysvar: &AccountInfo<'_>,
+    accounts: &[AccountInfo<'_>],
+    capability_program: &CapabilityProgramV4,
+) -> Result<Rent, TradingSbfError> {
+    if accounts.len() < INTERPRETED_STRATEGY_ACCOUNT_COUNT_V2
+        || registry_program.is_signer
+        || registry_program.is_writable
+        || !registry_program.executable
+        || rent_sysvar.key != &sysvar::rent::ID
+        || rent_sysvar.owner != &sysvar::ID
+        || rent_sysvar.is_signer
+        || rent_sysvar.is_writable
+        || rent_sysvar.executable
+    {
+        return Err(TradingSbfError::Content);
+    }
+    let raw = account(accounts, CAPABILITY_RAW)?;
+    let alias = account(accounts, CAPABILITY_STAGING)?;
+    if raw.key != alias.key
+        || raw.owner != registry_program.key
+        || raw.owner != alias.owner
+        || raw.is_signer
+        || raw.is_writable
+        || raw.executable
+        || raw.is_signer != alias.is_signer
+        || raw.is_writable != alias.is_writable
+        || raw.executable != alias.executable
+    {
+        return Err(TradingSbfError::Content);
+    }
+    let rent = Rent::from_account_info(rent_sysvar).map_err(|_| TradingSbfError::Content)?;
+    let data = raw
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Content)?;
+    if data.len() != CAPABILITY_PROGRAM_V4_BYTES
+        || !rent.is_exempt(raw.lamports(), data.len())
+        || CapabilityProgramV4::decode(&data).map_err(|_| TradingSbfError::Content)?
+            != *capability_program
+    {
+        return Err(TradingSbfError::Content);
+    }
+    drop(data);
+    for (index, current) in accounts.iter().enumerate() {
+        if current.key == registry_program.key
+            || current.key == rent_sysvar.key
+            || accounts
+                .get(index.saturating_add(1)..)
+                .ok_or(TradingSbfError::Content)?
+                .iter()
+                .enumerate()
+                .any(|(offset, other)| {
+                    let right = index.saturating_add(offset).saturating_add(1);
+                    current.key == other.key
+                        && !(index == CAPABILITY_RAW && right == CAPABILITY_STAGING)
+                })
+        {
+            return Err(TradingSbfError::Content);
+        }
+    }
+    Ok(rent)
 }
 
 fn authenticate_finalized_record(

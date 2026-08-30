@@ -21,6 +21,9 @@ dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract" }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel" }
+dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }
+dclutch-fractional-claim-kernel = { path = "../../crates/dclutch-fractional-claim-kernel" }
+dclutch-fractional-claims-kernel = { path = "../../crates/dclutch-fractional-claims-kernel" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-contract = { path = "../../crates/dclutch-product-contract" }
 dclutch-product-payoff-v2-codec = { path = "../../crates/dclutch-product-payoff-v2-codec" }
@@ -31,6 +34,7 @@ dclutch-rational-representation-v2-kernel = { path = "../../crates/dclutch-ratio
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-representation-composition-v3-kernel = { path = "../../crates/dclutch-representation-composition-v3-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
@@ -38,6 +42,8 @@ dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+dclutch-sha256-adapter = { path = "../../crates/dclutch-sha256-adapter" }
+dclutch-source-contract = { path = "../../crates/dclutch-source-contract" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"

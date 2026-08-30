@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { LIVE, liveRpcAccount, mutate } from '@/fixtures/liveOpenMarket';
+import { currentCoreMarketV3, LIVE, liveRpcAccount, mutate } from '@/fixtures/liveOpenMarket';
 import { sha256 } from '../bytes';
-import { REALM_SCHEMA_RELEASE_ID_V1 } from '../generated/coreFound';
+import { CORE_STATE_GENERATION_OFFSET, CORE_STATE_MAGIC, REALM_SCHEMA_RELEASE_ID_V1 } from '../generated/coreFound';
 import { deriveFinalizedRecordAddressesV1 } from '../releaseRegistry';
 import type { RpcAccount, SolanaRpcClient } from '../rpc';
 import { inspectAccount } from './account';
@@ -38,13 +38,13 @@ function one(address: string, account: RpcAccount): Map<string, RpcAccount> {
 describe('the account view over live chain bytes', () => {
   it('decodes the Market and reproduces its address from its own seeds', async () => {
     const result = await inspectAccount(
-      client(one(LIVE.market.address, liveRpcAccount(LIVE.market))),
+      client(one(LIVE.market.address, liveRpcAccount(LIVE.market, { data: currentCoreMarketV3() }))),
       { address: LIVE.market.address },
     );
     expect(result.status).toBe('found');
     if (result.status !== 'found') return;
     const account = result.account;
-    expect(account.header).toBe('DCLTCOR2');
+    expect(account.header).toBe(new TextDecoder().decode(CORE_STATE_MAGIC));
     expect(account.decoded?.spec.name).toBe('Market Core state');
     expect(account.decoded?.widthCheck.ok).toBe(true);
     expect(account.owner).toBe(LIVE.programs.core);
@@ -104,7 +104,7 @@ describe('the account view over live chain bytes', () => {
   it('reports a derivation MISMATCH when one field of the real bytes is changed', async () => {
     // Mutating the generation moves the address the seeds derive; the account
     // still sits where it did. Silence here would hide a real disagreement.
-    const tampered = mutate(LIVE.market.data, 272, new Uint8Array([0xff, 0, 0, 0, 0, 0, 0, 0]));
+    const tampered = mutate(currentCoreMarketV3(), CORE_STATE_GENERATION_OFFSET, new Uint8Array([0xff, 0, 0, 0, 0, 0, 0, 0]));
     const result = await inspectAccount(
       client(one(LIVE.market.address, liveRpcAccount(LIVE.market, { data: tampered }))),
       { address: LIVE.market.address },
@@ -115,7 +115,7 @@ describe('the account view over live chain bytes', () => {
   });
 
   it('refuses to guess a layout for an unrecognized magic', async () => {
-    const foreign = mutate(LIVE.market.data, 0, new TextEncoder().encode('DCLTZZZ9'));
+    const foreign = mutate(currentCoreMarketV3(), 0, new TextEncoder().encode('DCLTZZZ9'));
     const result = await inspectAccount(
       client(one(LIVE.market.address, liveRpcAccount(LIVE.market, { data: foreign }))),
       { address: LIVE.market.address },
@@ -130,7 +130,7 @@ describe('the account view over live chain bytes', () => {
 
   it('reports rent as a number, not a verdict it invented', async () => {
     const result = await inspectAccount(
-      client(one(LIVE.market.address, liveRpcAccount(LIVE.market))),
+      client(one(LIVE.market.address, liveRpcAccount(LIVE.market, { data: currentCoreMarketV3() }))),
       { address: LIVE.market.address },
     );
     if (result.status !== 'found') throw new Error(result.reason);
@@ -146,7 +146,7 @@ describe('the account view over live chain bytes', () => {
   });
 
   it('labels the owner only when the runtime owns it or the reader named it', async () => {
-    const accounts = one(LIVE.market.address, liveRpcAccount(LIVE.market));
+    const accounts = one(LIVE.market.address, liveRpcAccount(LIVE.market, { data: currentCoreMarketV3() }));
     const unnamed = await inspectAccount(client(accounts), { address: LIVE.market.address });
     if (unnamed.status !== 'found') throw new Error(unnamed.reason);
     expect(unnamed.account.ownerLabel).toBeNull();

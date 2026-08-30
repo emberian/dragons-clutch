@@ -20,8 +20,8 @@ use dclutch_claims_svm::{
 };
 use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_VAULT_PDA_DOMAIN_V1, CallerRoleV1, CompartmentV1,
-    CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, DelegatedCustodyReceiptV2,
-    OperationV1, ReceiptEvidenceV1,
+    CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+    DelegatedCustodyReceiptV2, OperationV1, ReceiptEvidenceV1,
 };
 use dclutch_direct_codec::{
     intent_v2::CompactIntentV2,
@@ -42,7 +42,7 @@ use dclutch_direct_codec::{
 };
 use dclutch_market_core_codec::{
     Binding, CoreMarketViewV1, CoreReferenceObservationV1, CoreState, Identity, MarketIdentity,
-    Phase, Product, Readiness, Realm, ReleaseSet,
+    Phase, Product, Readiness, Realm, ReleaseSet, StateBumpsV1,
 };
 use solana_program::hash::{hash, hashv};
 use solana_program::pubkey::Pubkey;
@@ -109,8 +109,10 @@ fn core_market_view(outcome_count: u32) -> CoreMarketViewV1 {
             generation: 4,
         },
         outstanding_capabilities: 0,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(90),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     CoreMarketViewV1::authenticate(
         state,
@@ -1997,8 +1999,33 @@ fn existing_inline_participants(
     let coordinates = DirectCoordinatesV1::new(id(1), 4).expect("coordinates");
     let seller_seeds = MakerReplaySeedsV1::new(coordinates, id(2)).expect("seller seeds");
     let buyer_seeds = MakerReplaySeedsV1::new(coordinates, id(3)).expect("buyer seeds");
-    let (seller_key, seller_bump) = derive_pda(id(10), &seller_seeds.as_slices());
-    let (buyer_key, buyer_bump) = derive_pda(id(10), &buyer_seeds.as_slices());
+    let seller_bump = derive_pda(id(10), &seller_seeds.as_slices()).1;
+    let buyer_bump = derive_pda(id(10), &buyer_seeds.as_slices()).1;
+    existing_inline_participants_at(seller_intent, buyer_intent, seller_bump, buyer_bump)
+}
+
+/// The same existing participants with caller-chosen persisted maker bumps.
+///
+/// Canonical bumps reproduce `existing_inline_participants`; hostile bumps
+/// model a replay state whose persisted bump does not match the canonical
+/// derivation the context authenticated.
+fn existing_inline_participants_at(
+    seller_intent: CompactIntentV2,
+    buyer_intent: CompactIntentV2,
+    seller_bump: u8,
+    buyer_bump: u8,
+) -> (
+    DirectRootStateV1,
+    InlineParticipantV2,
+    InlineParticipantV2,
+    [u8; 32],
+    [u8; 32],
+) {
+    let coordinates = DirectCoordinatesV1::new(id(1), 4).expect("coordinates");
+    let seller_seeds = MakerReplaySeedsV1::new(coordinates, id(2)).expect("seller seeds");
+    let buyer_seeds = MakerReplaySeedsV1::new(coordinates, id(3)).expect("buyer seeds");
+    let seller_key = derive_pda(id(10), &seller_seeds.as_slices()).0;
+    let buyer_key = derive_pda(id(10), &buyer_seeds.as_slices()).0;
     let seller_nonce_zero = AuthenticatedCompactIntentV2::from_adjacent_ed25519(
         id(2),
         CompactIntentV2 {
@@ -2221,7 +2248,9 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
     assert_eq!(plan.buyer_delegated_after, 0);
     assert_eq!(plan.seller_destination_after, 48);
     assert_eq!(plan.fee_destination_after, 44);
-    let net = plan.custody[0].expect("seller net");
+    let net =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
+            .expect("seller net");
     assert_eq!(net.request.custody.amount, 18);
     assert_eq!(net.request.custody.expected_revision, 7);
     assert_eq!(net.request.custody.semantic.transfer_index, 0);
@@ -2238,7 +2267,9 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
     assert_eq!(net.request.allowance_before, 22);
     assert_eq!(net.request.allowance_after, 4);
     assert_eq!(net.delegated_after, 4);
-    let fee = plan.custody[1].expect("combined fee");
+    let fee =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1)
+            .expect("combined fee");
     assert_eq!(fee.request.custody.amount, 4);
     assert_eq!(fee.request.custody.expected_revision, 8);
     assert_eq!(fee.request.custody.semantic.transfer_index, 1);
@@ -2338,7 +2369,9 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
         Err(DirectPhysicalError::Postcondition)
     );
 
-    let net = plan.custody[0].expect("net");
+    let net =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
+            .expect("net");
     let request_bytes = net.request.encode().expect("request");
     let poststate = id(78);
     let custody_receipt = CustodyReceiptV1::new(
@@ -2383,6 +2416,102 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
         verify_inline_custody_receipt_v2(net, &custody_receipt, id(79), net.delegated_after + 1,),
         Err(DirectPhysicalError::Postcondition)
     );
+}
+
+#[test]
+fn inline_effect_partition_is_exhaustive_ordered_and_inactive_safe() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let plan = prepare_inline_ordinary_physical_v2(
+        direct,
+        context,
+        inline_lifecycle_plans(direct, context),
+        collateral,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("inline physical plan");
+    let net =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
+            .expect("seller net");
+    let fee =
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1)
+            .expect("combined fee");
+    let mut bank = [0xa5_u8; DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3];
+    bank.get_mut(..DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2)
+        .expect("Claims bank")
+        .copy_from_slice(&claims_output);
+    for (slot, effect) in [(1_usize, net), (2_usize, fee)] {
+        let start =
+            DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2 + slot * DELEGATED_CUSTODY_REQUEST_BYTES_V2;
+        let end = start + DELEGATED_CUSTODY_REQUEST_BYTES_V2;
+        bank.get_mut(start..end)
+            .expect("Custody slot")
+            .copy_from_slice(&effect.request.encode().expect("Custody request"));
+    }
+    let dispatch = DirectInlineEffectDispatchV2 {
+        custody_slots: [1, 2],
+        custody_count: 2,
+        child_dispatch_writable: [false, true, true, false],
+    };
+    verify_inline_effect_partition_physical_v2(direct, context, collateral, &bank, dispatch)
+        .expect("canonical partition");
+
+    // Inactive bytes remain Effect-owned and are not a second typed oracle.
+    let mut inactive_changed = bank;
+    inactive_changed[DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2] ^= 0xff;
+    verify_inline_effect_partition_physical_v2(
+        direct,
+        context,
+        collateral,
+        &inactive_changed,
+        dispatch,
+    )
+    .expect("inactive raw bytes do not affect candidate arithmetic");
+
+    let mut active_changed = bank;
+    active_changed[DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2 + DELEGATED_CUSTODY_REQUEST_BYTES_V2] ^= 1;
+    assert_eq!(
+        verify_inline_effect_partition_physical_v2(
+            direct,
+            context,
+            collateral,
+            &active_changed,
+            dispatch,
+        ),
+        Err(DirectPhysicalError::Postcondition)
+    );
+    for hostile in [
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [2, 1],
+            ..dispatch
+        },
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [1, 1],
+            child_dispatch_writable: [false, true, false, false],
+            ..dispatch
+        },
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [1, 0],
+            custody_count: 1,
+            child_dispatch_writable: [false, true, false, false],
+        },
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [0, 1],
+            child_dispatch_writable: [true, true, false, false],
+            ..dispatch
+        },
+        DirectInlineEffectDispatchV2 {
+            child_dispatch_writable: [true, true, true, false],
+            ..dispatch
+        },
+    ] {
+        assert_eq!(
+            verify_inline_effect_partition_physical_v2(direct, context, collateral, &bank, hostile,),
+            Err(DirectPhysicalError::Postcondition)
+        );
+    }
 }
 
 #[test]
@@ -2568,6 +2697,302 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             &mut claims_output,
         ),
         Err(DirectPhysicalError::State)
+    );
+    assert_eq!(claims_output, before);
+}
+
+fn create_maker_replay_key(program: [u8; 32], maker: [u8; 32], bump: u8) -> Option<[u8; 32]> {
+    let coordinates = DirectCoordinatesV1::new(id(1), 4).expect("coordinates");
+    let seeds = MakerReplaySeedsV1::new(coordinates, maker).expect("maker seeds");
+    let [domain, market, generation, maker_seed] = seeds.as_slices();
+    Pubkey::create_program_address(
+        &[domain, market, generation, maker_seed, &[bump]],
+        &Pubkey::new_from_array(program),
+    )
+    .ok()
+    .map(|key| key.to_bytes())
+}
+
+/// The canonical bump, one on-curve (invalid) bump, and the highest
+/// valid-but-noncanonical bump for one maker replay coordinate.
+fn maker_replay_bump_spectrum(program: [u8; 32], maker: [u8; 32]) -> (u8, u8, u8) {
+    let coordinates = DirectCoordinatesV1::new(id(1), 4).expect("coordinates");
+    let seeds = MakerReplaySeedsV1::new(coordinates, maker).expect("maker seeds");
+    let canonical = derive_pda(program, &seeds.as_slices()).1;
+    let invalid = (0..=255u8)
+        .find(|&bump| bump != canonical && create_maker_replay_key(program, maker, bump).is_none())
+        .expect("an on-curve bump exists in 256 candidates");
+    let noncanonical = (0..canonical)
+        .rev()
+        .find(|&bump| create_maker_replay_key(program, maker, bump).is_some())
+        .expect("a valid bump exists below the canonical one");
+    (canonical, invalid, noncanonical)
+}
+
+#[test]
+fn inline_maker_root_reproduction_refuses_bump_and_coordinate_hostiles() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let before = claims_output;
+    // Positive control: the canonical fixture passes, so every refusal below
+    // is attributable to its single hostile delta.
+    prepare_inline_ordinary_physical_v2(
+        direct,
+        context,
+        inline_lifecycle_plans(direct, context),
+        collateral,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("canonical fixture");
+    claims_output = before;
+
+    let seller_intent = inline_compact(0, 1, 1, id(30));
+    let buyer_intent = inline_compact(1, 1, 1, id(31));
+    let (canonical, invalid, noncanonical) = maker_replay_bump_spectrum(id(10), id(2));
+    let (_, _, buyer_noncanonical) = maker_replay_bump_spectrum(id(10), id(3));
+    let buyer_canonical = direct.buyer.maker_replay;
+    let MakerReplayObservationV1::Existing(buyer_state) = buyer_canonical else {
+        unreachable!("fixture buyer is existing")
+    };
+
+    // Wrong stored bump: the persisted seller bump is on-curve for these
+    // seeds, so reproduction has no address at all. The lifecycle plans are
+    // built FROM the hostile settlement, so they agree with the stored bump
+    // and the refusal is the maker-root reproduction itself.
+    let (root, seller, buyer, _, _) =
+        existing_inline_participants_at(seller_intent, buyer_intent, invalid, buyer_state.bump());
+    let hostile = InlineOrdinaryInputV2 {
+        root,
+        seller,
+        buyer,
+        ..direct
+    };
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            hostile,
+            context,
+            inline_lifecycle_plans(hostile, context),
+            collateral,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+    assert_eq!(claims_output, before);
+
+    // Valid-but-noncanonical stored bump: reproduction succeeds but lands on
+    // a DIFFERENT off-curve address than the authenticated canonical account,
+    // so exact key equality refuses. Both sides, independently.
+    let wrong_key = create_maker_replay_key(id(10), id(2), noncanonical).expect("valid bump");
+    assert_ne!(wrong_key, context.seller_maker_root);
+    assert_ne!(canonical, noncanonical);
+    for (seller_bump, buyer_bump) in [
+        (noncanonical, buyer_state.bump()),
+        (canonical, buyer_noncanonical),
+    ] {
+        let (root, seller, buyer, _, _) =
+            existing_inline_participants_at(seller_intent, buyer_intent, seller_bump, buyer_bump);
+        let hostile = InlineOrdinaryInputV2 {
+            root,
+            seller,
+            buyer,
+            ..direct
+        };
+        assert_eq!(
+            prepare_inline_ordinary_physical_v2(
+                hostile,
+                context,
+                inline_lifecycle_plans(hostile, context),
+                collateral,
+                &mut claims_scratch,
+                &mut claims_output,
+            ),
+            Err(DirectPhysicalError::Binding)
+        );
+        assert_eq!(claims_output, before);
+    }
+
+    // Maker / market / generation coordinate substitution and plain account
+    // substitution: the context carries a REAL canonical PDA of substituted
+    // coordinates (or an arbitrary account), the plans agree with the context,
+    // and reproduction from the authenticated coordinates refuses each one.
+    let other_maker = derive_pda(
+        id(10),
+        &MakerReplaySeedsV1::new(
+            DirectCoordinatesV1::new(id(1), 4).expect("coordinates"),
+            id(4),
+        )
+        .expect("substituted maker seeds")
+        .as_slices(),
+    )
+    .0;
+    let other_market = derive_pda(
+        id(10),
+        &MakerReplaySeedsV1::new(
+            DirectCoordinatesV1::new(id(2), 4).expect("coordinates"),
+            id(2),
+        )
+        .expect("substituted market seeds")
+        .as_slices(),
+    )
+    .0;
+    let other_generation = derive_pda(
+        id(10),
+        &MakerReplaySeedsV1::new(
+            DirectCoordinatesV1::new(id(1), 5).expect("coordinates"),
+            id(2),
+        )
+        .expect("substituted generation seeds")
+        .as_slices(),
+    )
+    .0;
+    for substituted in [other_maker, other_market, other_generation, id(60)] {
+        let hostile_context = DirectInlinePhysicalContextV2 {
+            seller_maker_root: substituted,
+            ..context
+        };
+        assert_eq!(
+            prepare_inline_ordinary_physical_v2(
+                direct,
+                hostile_context,
+                inline_lifecycle_plans(direct, hostile_context),
+                collateral,
+                &mut claims_scratch,
+                &mut claims_output,
+            ),
+            Err(DirectPhysicalError::Binding)
+        );
+        assert_eq!(claims_output, before);
+    }
+
+    // Swapped maker accounts: each key is individually a canonical Trading
+    // PDA, both plans agree with the context, and both reproductions refuse.
+    let swapped = DirectInlinePhysicalContextV2 {
+        seller_maker_root: context.buyer_maker_root,
+        buyer_maker_root: context.seller_maker_root,
+        ..context
+    };
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            direct,
+            swapped,
+            inline_lifecycle_plans(direct, swapped),
+            collateral,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+    assert_eq!(claims_output, before);
+}
+
+#[test]
+fn inline_first_use_refuses_wrong_plan_bump_and_noncanonical_vacancy() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let before = claims_output;
+    let (canonical, _, noncanonical) = maker_replay_bump_spectrum(id(10), id(2));
+    let buyer_bump = maker_replay_bump_spectrum(id(10), id(3)).0;
+    let funded_collateral = DirectInlineCollateralFrameV2 {
+        buyer_source: DirectExternalDebitV2 {
+            delegated_amount: 22,
+            ..collateral.buyer_source
+        },
+        ..collateral
+    };
+    let first_use_at = |seller_bump: u8| InlineOrdinaryInputV2 {
+        root: DirectRootStateV1::new(),
+        seller: InlineParticipantV2 {
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
+                seller_bump,
+                0,
+            )),
+            first_use: Some(MakerReplayFirstUseV1 {
+                rent_owner: id(90),
+                rent_principal: 100,
+            }),
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                id(2),
+                CompactIntentV2 {
+                    nonce: 0,
+                    ..direct.seller.authenticated.intent()
+                },
+            )
+            .expect("first seller"),
+        },
+        buyer: InlineParticipantV2 {
+            maker_replay: MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
+                buyer_bump, 0,
+            )),
+            first_use: Some(MakerReplayFirstUseV1 {
+                rent_owner: id(91),
+                rent_principal: 100,
+            }),
+            authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                id(3),
+                CompactIntentV2 {
+                    nonce: 0,
+                    ..direct.buyer.authenticated.intent()
+                },
+            )
+            .expect("first buyer"),
+        },
+        ..direct
+    };
+
+    // Positive control at the canonical vacancy bump.
+    let canonical_first = first_use_at(canonical);
+    prepare_inline_ordinary_physical_v2(
+        canonical_first,
+        context,
+        inline_lifecycle_plans(canonical_first, context),
+        funded_collateral,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("canonical first use");
+    claims_output = before;
+
+    // Wrong first-use PLAN bump: the creation plan disagrees with the
+    // vacancy's persisted bump and the lifecycle check refuses before any
+    // derivation happens.
+    let mut wrong_plan = inline_lifecycle_plans(canonical_first, context);
+    let StateLifecyclePlanV3::Create(seller_create) = wrong_plan.seller_maker else {
+        unreachable!("seller create")
+    };
+    wrong_plan.seller_maker = StateLifecyclePlanV3::Create(CreateStatePlanV3 {
+        bump: noncanonical,
+        ..seller_create
+    });
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            canonical_first,
+            context,
+            wrong_plan,
+            funded_collateral,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::State)
+    );
+    assert_eq!(claims_output, before);
+
+    // Valid-but-noncanonical vacancy bump with an AGREEING creation plan: the
+    // lifecycle check passes and the maker-root reproduction refuses.
+    let noncanonical_first = first_use_at(noncanonical);
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            noncanonical_first,
+            context,
+            inline_lifecycle_plans(noncanonical_first, context),
+            funded_collateral,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
     );
     assert_eq!(claims_output, before);
 }

@@ -13,6 +13,7 @@
 use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, STATE_BYTES,
+    StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -295,8 +296,10 @@ pub fn compile_product_lbv2_fixture_v2(
         terminal_winner: 0,
         identity: core_identity,
         outstanding_capabilities: 1,
+        principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(input.source_owner.to_bytes())?,
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .map_err(|_| FixtureError::State)?;

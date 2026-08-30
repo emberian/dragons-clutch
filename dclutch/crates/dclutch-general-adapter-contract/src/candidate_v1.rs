@@ -51,21 +51,31 @@ use crate::runtime_width::{CandidateV2, PageV2, VerifiedCandidateV2, verified_ca
 /// Exact width of one General candidate submission record.
 pub const GENERAL_CANDIDATE_BYTES_V1: usize = 224;
 
-/// Canonical PDA seed domain for one candidate submission record.
-pub const GENERAL_CANDIDATE_PDA_DOMAIN_V1: &[u8] = b"dclutch-general-candidate-v1";
-/// Canonical PDA seed domain for one immutable candidate page.
-pub const GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1: &[u8] = b"dclutch-general-page-v1";
+// The candidate and candidate-page seed domains are the crate root's to state.
+//
+// Each was declared twice with DIFFERENT BYTES: the root said
+// `dclutch:general-candidate:v1` and this module said
+// `dclutch-general-candidate-v1`, and for the page the two definitions did not
+// even share a name -- root `GENERAL_PAGE_PDA_DOMAIN_V1` against a local
+// `GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1` -- which is why the collision survived
+// the grep that found the first one. Neither had a consumer, so the divergence
+// cost nothing yet and was free to remove; the moment the submission route and
+// the settlement half each picked a definition, the two halves would have
+// derived DIFFERENT addresses for the same record and every cross-half
+// authentication would have refused an account that was, by its own module's
+// account, canonical. Re-exported rather than restated so this module keeps its
+// import path while the root remains the single author of the bytes.
+pub use crate::{
+    GENERAL_CANDIDATE_PDA_DOMAIN_V1, GENERAL_PAGE_PDA_DOMAIN_V1 as GENERAL_CANDIDATE_PAGE_DOMAIN_V1,
+};
+
 /// Canonical PDA seed domain for one candidate's streamed verifier cursor.
+///
+/// Unlike the two above this one has no counterpart in the root table, so it is
+/// a sole statement rather than a second one and stays here with its own
+/// assertion.
 pub const GENERAL_VERIFIER_PDA_DOMAIN_V1: &[u8] = b"dclutch-general-verifier-v1";
 
-const _: () = assert!(
-    GENERAL_CANDIDATE_PDA_DOMAIN_V1.len() <= 32,
-    "GENERAL_CANDIDATE_PDA_DOMAIN_V1 must fit one Solana PDA seed"
-);
-const _: () = assert!(
-    GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1.len() <= 32,
-    "GENERAL_CANDIDATE_PAGE_PDA_DOMAIN_V1 must fit one Solana PDA seed"
-);
 const _: () = assert!(
     GENERAL_VERIFIER_PDA_DOMAIN_V1.len() <= 32,
     "GENERAL_VERIFIER_PDA_DOMAIN_V1 must fit one Solana PDA seed"

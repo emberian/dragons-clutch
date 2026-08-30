@@ -40,11 +40,19 @@ dealer-family = [
 families = [
     "series-family",
     "dealer-family",
-    "dep:dclutch-direct-codec",
 ]
-# Test-only real-SBF profile that measures the common outer without linking
-# family modules whose separate physical adapters are still under review.
-outer-only = []
+# Test-only real-SBF profile that measures the common Hot outer without linking
+# the Series, Dealer, or Direct family adapters. The common outer still owns
+# the fixed Claims/Custody child composers and Token-2022 poststate verifier,
+# so their dependency closure must remain explicit here rather than being
+# inherited accidentally from the production `families` feature.
+outer-only = [
+    "dep:dclutch-claims-svm",
+    "dep:dclutch-custody-contract",
+    "dep:dclutch-rational-representation-v2-lifecycle-contract",
+    "dep:dclutch-rational-representation-v2-contract",
+    "dep:dclutch-token-svm",
+]
 
 [dependencies]
 dclutch-account-profile-contract = { path = "../../crates/dclutch-account-profile-contract" }
@@ -55,10 +63,11 @@ dclutch-claims-svm = { path = "../../crates/dclutch-claims-svm", optional = true
 dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../crates/dclutch-custody-contract", optional = true }
 dclutch-dealer-codec = { path = "../../crates/dclutch-dealer-codec", optional = true }
-dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec", optional = true }
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
 dclutch-economic-slice-kernel = { path = "../../crates/dclutch-economic-slice-kernel", optional = true }
 dclutch-effect-kernel = { path = "../../crates/dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../../crates/dclutch-execution-strategy-contract", features = ["alloc"] }
+dclutch-fractional-claim-contract = { path = "../../crates/dclutch-fractional-claim-contract" }
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-product-runtime-v2 = { path = "../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-svm-reader = { path = "../../crates/dclutch-product-runtime-v2-svm-reader" }
@@ -66,6 +75,7 @@ dclutch-rational-representation-v2-lifecycle-contract = { path = "../../crates/d
 dclutch-rational-representation-v2-contract = { path = "../../crates/dclutch-rational-representation-v2-contract", optional = true }
 dclutch-refusal-registry = { path = "../../crates/dclutch-refusal-registry" }
 dclutch-registry-svm = { path = "../../crates/dclutch-registry-svm" }
+dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
 dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
 dclutch-record-contract = { path = "../../crates/dclutch-record-contract" }
 dclutch-request-profile-contract = { path = "../../crates/dclutch-request-profile-contract" }
@@ -74,9 +84,11 @@ dclutch-resolution-codec = { path = "../../crates/dclutch-resolution-codec" }
 dclutch-rent-contract = { path = "../../crates/dclutch-rent-contract" }
 dclutch-realm-contract = { path = "../../crates/dclutch-realm-contract", optional = true }
 dclutch-series-v3-kernel = { path = "../../crates/dclutch-series-v3-kernel" }
+dclutch-sha256-adapter = { path = "../../crates/dclutch-sha256-adapter" }
 dclutch-shadow-accelerator-auth-v4 = { path = "../../crates/dclutch-shadow-accelerator-auth-v4" }
 dclutch-transition-vm = { path = "../../crates/dclutch-transition-vm" }
 dclutch-token-svm = { path = "../../crates/dclutch-token-svm", optional = true }
+dclutch-user-position-admission-contract = { path = "../../crates/dclutch-user-position-admission-contract" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-instructions-sysvar = "=3.0.1"
 solana-sdk-ids = "=3.1.0"

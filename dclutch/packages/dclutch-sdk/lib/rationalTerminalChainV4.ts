@@ -1,48 +1,30 @@
-import { ascii, hex, requireZero, slice, u16 } from './bytes';
+import { PublicKey } from '@solana/web3.js';
+
+import { hex } from './bytes';
 import * as Hot from './generated/directInlineV3';
+import { RESOLUTION_CERTIFICATE_BYTES_V2 } from './generated/resolutionCertificateV2';
 import { inspectRationalCapabilityCommonV4 } from './rationalCapabilityChainV4';
 import {
   acquireRationalHotAccountsV4,
-  authenticateFinalizedRationalHotRecordV4,
   authenticateRationalProductBasisRecordV3,
+  type RationalHotCoreViewV3,
   type RationalHotRpcV4,
 } from './rationalRetireReceiptV4';
 import {
   evaluateRationalTerminalPayoutV3,
   type RationalTerminalPayoutV3,
 } from './rationalTerminalHotV3';
-import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
+import {
+  bindTerminalResolutionCertificateV2,
+  decodeResolutionCertificateV2,
+  type ResolutionCertificateV2,
+} from './resolutionCertificateV2';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const RATIONAL_TERMINAL_HOT_REQUEST_SCHEMA_ID_V3 = Uint8Array.from([
   0x8b,0xab,0xcd,0x90,0x65,0xc6,0x52,0x25,0x32,0xe2,0x6c,0x60,0x63,0x61,0x56,0x72,
   0x4f,0x7f,0x6c,0xfc,0xfb,0xa2,0x60,0x82,0x75,0x86,0x27,0xc4,0x9c,0xdc,0x80,0x3b,
 ]);
-const TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2 = Uint8Array.from([
-  0xa8,0x66,0x06,0x2a,0xe7,0x6d,0x3d,0xc3,0xa7,0xc7,0xce,0xe5,0x34,0x0a,0xc9,0xe4,
-  0x1f,0x20,0x22,0x69,0xcb,0x23,0xe9,0xb7,0x04,0x61,0xb0,0x16,0xf1,0x8d,0x5f,0x61,
-]);
-
-function readI64(bytes: Uint8Array, offset: number): bigint {
-  const value = slice(bytes, offset, 8);
-  return new DataView(value.buffer, value.byteOffset, value.byteLength).getBigInt64(0, true);
-}
-
-function readU32(bytes: Uint8Array, offset: number): number {
-  const value = slice(bytes, offset, 4);
-  return new DataView(value.buffer, value.byteOffset, value.byteLength).getUint32(0, true);
-}
-
-function decodeTerminalCoordinateV2(bytes: Uint8Array): Readonly<{ numerator: bigint; denominator: bigint }> {
-  if (bytes.length !== 32 || ascii(bytes, 0, 8) !== 'DCLTRC02' || u16(bytes, 8) !== 2) {
-    throw new Error('terminal coordinate has the wrong exact V2 ABI');
-  }
-  requireZero(bytes, 10, 6, 'terminal coordinate header'); requireZero(bytes, 28, 4, 'terminal coordinate tail');
-  const denominator = BigInt(readU32(bytes, 24));
-  if (denominator === 0n) throw new Error('terminal coordinate denominator is zero');
-  return Object.freeze({ numerator: readI64(bytes, 16), denominator });
-}
-
 export type RationalTerminalReadinessV4 = Readonly<{
   observedSlot: string;
   market: string;
@@ -58,11 +40,59 @@ export type RationalTerminalReadinessV4 = Readonly<{
   selectedOutcome: number;
   rawQuantity: bigint;
   rawShardBurn: bigint;
-  terminalCoordinate: Readonly<{ numerator: bigint; denominator: bigint }> | null;
+  terminalCertificateAddress: string;
+  terminalCertificate: ResolutionCertificateV2;
   payout: RationalTerminalPayoutV3;
   executionStatus: 'blocked';
   refusal: string;
 }>;
+
+/**
+ * Authenticate Core's current terminal receipt as one direct Resolution-owned
+ * certificate account. Keeping this join separate makes it adversarially
+ * testable without rebuilding the unrelated Capability/Product graph.
+ */
+export async function authenticateCoreTerminalResolutionCertificateV4(
+  client: RationalHotRpcV4,
+  input: Readonly<{
+    observedSlot: string;
+    marketAddress: string;
+    market: RationalHotCoreViewV3;
+    resolutionProgram: string;
+    outcomeCount: number;
+  }>,
+): Promise<Readonly<{
+  observedSlot: string;
+  address: string;
+  certificate: ResolutionCertificateV2;
+}>> {
+  if (input.market.phase !== 'Terminal' || input.market.readiness !== 'Consumed') {
+    throw new Error('ResolutionCertificateV2 authentication requires the current terminal Core lifecycle');
+  }
+  const address = new PublicKey(input.market.terminalReceipt).toBase58();
+  const observation = await acquireRationalHotAccountsV4(client, [address], input.observedSlot);
+  const account = observation.accounts.get(address);
+  if (account === null || account === undefined) throw new Error('Core terminal ResolutionCertificateV2 is absent');
+  if (account.owner !== input.resolutionProgram || account.executable
+      || account.data.length !== RESOLUTION_CERTIFICATE_BYTES_V2) {
+    throw new Error('Core terminal receipt is not exact Resolution-owned ResolutionCertificateV2 state');
+  }
+  const rent = await client.minimumBalanceForRentExemption(RESOLUTION_CERTIFICATE_BYTES_V2);
+  if (BigInt(account.lamports) < BigInt(rent.lamports)) throw new Error('ResolutionCertificateV2 is below its current exact rent minimum');
+  const certificate = bindTerminalResolutionCertificateV2(
+    decodeResolutionCertificateV2(account.data),
+    {
+      receiptAccount: new PublicKey(address).toBytes(),
+      market: new PublicKey(input.marketAddress).toBytes(),
+      sourceMaterial: input.market.resolutionPolicy,
+      productRecordDigest: input.market.productRecord,
+      generation: input.market.generation,
+      selector: input.market.terminalWinner,
+      outcomeCount: input.outcomeCount,
+    },
+  );
+  return Object.freeze({ observedSlot: observation.slot, address, certificate });
+}
 
 /**
  * Read the complete immutable Product/representation terminal semantics.
@@ -101,16 +131,19 @@ export async function inspectRationalTerminalReadinessV4(
   });
   if (input.selectedOutcome >= admitted.basis.width) throw new Error('selected representation outcome is outside Product basis K');
   if (common.market.terminalWinner >= common.product.outcomeCount) throw new Error('Core terminal winner is outside Product result N');
-  let terminalCoordinate: Readonly<{ numerator: bigint; denominator: bigint }> | null = null;
-  let observedSlot = common.observedSlot;
-  if (admitted.basis.kind === 'graded-exact-complement'
-      && common.market.terminalWinner !== common.product.outcomeCount - 1) {
-    const addresses = deriveFinalizedRecordAddressesV1(common.coreProgram, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, common.market.terminalReceipt);
-    const observation = await acquireRationalHotAccountsV4(client, [addresses.record, addresses.staging], common.observedSlot);
-    const raw = await authenticateFinalizedRationalHotRecordV4(client, observation.accounts, common.coreProgram,
-      addresses.record, addresses.staging, TERMINAL_COORDINATE_SCHEMA_RELEASE_ID_V2, common.market.terminalReceipt, 'Core terminal coordinate');
-    terminalCoordinate = decodeTerminalCoordinateV2(raw.data); observedSlot = observation.slot;
-  }
+  const terminal = await authenticateCoreTerminalResolutionCertificateV4(client, {
+    observedSlot: common.observedSlot,
+    marketAddress: common.marketAddress,
+    market: common.market,
+    resolutionProgram: common.activation.resolution,
+    outcomeCount: common.product.outcomeCount,
+  });
+  const terminalCertificateAddress = terminal.address;
+  const terminalCertificate = terminal.certificate;
+  const terminalCoordinate = admitted.basis.kind === 'graded-exact-complement'
+      && terminalCertificate.kind === 'resolution-success'
+    ? Object.freeze({ numerator: terminalCertificate.resultNumerator, denominator: terminalCertificate.resultDenominator })
+    : null;
   const payout = evaluateRationalTerminalPayoutV3({
     basis: admitted.basis.bytes, resultOutcomeCount: common.product.outcomeCount,
     terminalWinner: common.market.terminalWinner, selectedOutcome: input.selectedOutcome,
@@ -118,14 +151,17 @@ export async function inspectRationalTerminalReadinessV4(
   });
   const rawShardBurn = common.descriptor.denominator * input.rawQuantity;
   if (rawShardBurn > MAX_U64) throw new Error('terminal raw shard burn exceeds u64::MAX');
-  return Object.freeze({ observedSlot, market: common.marketAddress, generation: common.market.generation,
+  const refusal = payout.scenario === 'graded-rational'
+    ? 'The deployed Claims terminal_settlement_v3 still derives an impossible Registry coordinate from Core terminal_receipt. This client authenticates the real ResolutionCertificateV2 and refuses submission until a Claims Upgrade consumes that certificate directly.'
+    : 'The browser authenticates the canonical ResolutionCertificateV2, but has no binding to the canonical Rust SignedDeltaV3/Custody emitter. It will not reconstruct that authority or request digest in TypeScript.';
+  return Object.freeze({ observedSlot: terminal.observedSlot, market: common.marketAddress, generation: common.market.generation,
     actor: common.actor, descriptorId: common.descriptorId, capabilityDigest: common.capabilitySelection.digest,
     basisDigest: admitted.digest, semanticBasisId: admitted.semanticBasisId,
     resultOutcomeCount: common.product.outcomeCount, representationWidth: admitted.basis.width,
     terminalWinner: common.market.terminalWinner, selectedOutcome: input.selectedOutcome,
-    rawQuantity: input.rawQuantity, rawShardBurn, terminalCoordinate, payout,
+    rawQuantity: input.rawQuantity, rawShardBurn, terminalCertificateAddress, terminalCertificate, payout,
     executionStatus: 'blocked',
-    refusal: 'Positive and exact-zero terminal execution are SBF-tested, but the browser has no binding to the canonical Rust SignedDeltaV3/Custody emitter. It will not reconstruct that authority or request digest in TypeScript.',
+    refusal,
   });
 }
 
@@ -133,5 +169,6 @@ export function rationalTerminalReadinessSummaryV4(value: RationalTerminalReadin
   return Object.freeze({ market: value.market, descriptor: hex(value.descriptorId), basis: hex(value.basisDigest),
     widths: `K=${value.representationWidth} claims over N=${value.resultOutcomeCount} terminal results`,
     result: `${value.payout.scenario} · winner ${value.terminalWinner} · claim ${value.selectedOutcome}`,
+    certificate: `${value.terminalCertificate.kind} · ${value.terminalCertificate.resultNumerator.toString()}/${value.terminalCertificate.resultDenominator.toString()}`,
     economics: `${value.rawShardBurn.toString()} shard atoms → ${value.payout.rawPayout.toString()} collateral atoms${value.payout.losing ? ' (exact zero)' : ''}` });
 }

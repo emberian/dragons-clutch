@@ -1,5 +1,15 @@
 import raw from './live-open-market.json';
 
+import {
+  CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET,
+  CORE_STATE_RENT_BENEFICIARY_OFFSET,
+  CORE_STATE_TERMINAL_RECEIPT_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_VERSION,
+} from '../lib/generated/coreFound';
+
 /**
  * The first locally OPEN dClutch Market, as bytes.
  *
@@ -70,4 +80,43 @@ export function mutate(source: Uint8Array, offset: number, replacement: Uint8Arr
   if (typeof replacement === 'number') copy[offset] = replacement;
   else copy.set(replacement, offset);
   return copy;
+}
+
+/** Exact width of the recorded superseded Core V2 account. */
+const LEGACY_CORE_V2_STATE_BYTES = 352;
+
+/**
+ * Test-only current Core envelope over the recorded Market's unchanged seeds.
+ *
+ * The captured chain account is the superseded 352-byte Core V2 generation and
+ * stays byte-for-byte intact as historical evidence. Current reader tests need
+ * a current-width Core V3 account, but no current public Market has been
+ * recorded yet. This helper performs the exact V2-to-V3 physical migration:
+ * everything before the new principal cap is preserved, the cap is inserted,
+ * and the existing rent beneficiary and terminal receipt move eight bytes
+ * later. Every byte past the terminal receipt is left zero, which is what the
+ * current state means by an unrecorded bump and a canonical reserved span.
+ * It is synthetic parser support, never presented as chain evidence.
+ */
+export function currentCoreMarketV3(principalCapSets: bigint = 500_000_000n): Uint8Array {
+  const source = LIVE.market.data;
+  if (source.length !== LEGACY_CORE_V2_STATE_BYTES) throw new Error('the recorded Core V2 fixture has an unexpected width');
+  if (principalCapSets <= 0n || principalCapSets > 0xffff_ffff_ffff_ffffn) {
+    throw new Error('the current Core fixture principal cap must be a nonzero u64');
+  }
+  const legacyRentBeneficiaryOffset = source.length - 64;
+  const legacyTerminalReceiptOffset = source.length - 32;
+  if (legacyRentBeneficiaryOffset !== CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET) {
+    throw new Error('the recorded Core V2 fixture does not meet the V3 insertion boundary');
+  }
+
+  const current = new Uint8Array(CORE_STATE_BYTES);
+  current.set(source.slice(0, legacyRentBeneficiaryOffset));
+  current.set(CORE_STATE_MAGIC, 0);
+  const view = new DataView(current.buffer);
+  view.setUint16(CORE_STATE_VERSION_OFFSET, CORE_VERSION, true);
+  view.setBigUint64(CORE_STATE_PRINCIPAL_CAP_SETS_OFFSET, principalCapSets, true);
+  current.set(source.slice(legacyRentBeneficiaryOffset, legacyTerminalReceiptOffset), CORE_STATE_RENT_BENEFICIARY_OFFSET);
+  current.set(source.slice(legacyTerminalReceiptOffset), CORE_STATE_TERMINAL_RECEIPT_OFFSET);
+  return current;
 }

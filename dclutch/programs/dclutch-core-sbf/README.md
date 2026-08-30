@@ -43,7 +43,7 @@ authority, finalize/activate the immutable Core artifact, then Found.
 
 ## Found frame
 
-Found has exactly 31 pairwise-distinct accounts, in this order:
+Found has exactly 37 pairwise-distinct accounts, in this order:
 
 1. payer (signer, writable)
 2. vacant/dust-prefunded Market PDA (writable)
@@ -57,30 +57,36 @@ Found has exactly 31 pairwise-distinct accounts, in this order:
 10. result-domain finalized cursor
 11. Product-selected portfolio raw record
 12. portfolio finalized cursor
-13. compact SourceMaterialV2 raw record
-14. SourceMaterialV2 finalized cursor
-15. capability manifest raw record
-16. capability manifest finalized cursor
-17. execution ReleaseSet raw record
-18. execution ReleaseSet finalized cursor
-19. current Registry activation cache
-20. this Core program
-21. immutable Core ProgramData
-22. Registry program
-23. Rent sysvar
-24. System program
-25. immutable Core infrastructure profile
-26. Registry ArtifactRelease raw record
-27. Registry ArtifactRelease finalized cursor
-28. Registry ProgramData
-29. Rent ArtifactRelease raw record
-30. Rent ArtifactRelease finalized cursor
-31. Rent ProgramData
+13. Product-linked basis raw record
+14. linked-basis finalized cursor
+15. `SourceMaterialV3` raw record
+16. Source-material finalized cursor
+17. primary SourceSpec raw record
+18. SourceSpec finalized cursor
+19. SourceCapacityProfile raw record
+20. capacity-profile finalized cursor
+21. selected ManipulationFloor raw record, or the canonical absent coordinate
+22. manipulation-floor finalized cursor
+23. capability manifest raw record
+24. capability manifest finalized cursor
+25. current Registry activation cache
+26. this Core program
+27. current Core ProgramData
+28. Registry program
+29. Rent sysvar
+30. System program
+31. Core infrastructure profile
+32. Registry ArtifactRelease raw record
+33. Registry ArtifactRelease finalized cursor
+34. Registry ProgramData
+35. Rent ArtifactRelease raw record
+36. Rent ArtifactRelease finalized cursor
+37. Rent ProgramData
 
 All accounts after the first two are read-only. Core authenticates every raw
 record, its dust-tolerant empty system-owned finalized cursor, all cross-record
 identities, the Market PDA, and the canonical RentCredit before transferring
-only the exact missing rent, allocating, assigning, and writing the 352-byte
+only the exact missing rent, allocating, assigning, and writing the 360-byte
 state. Trust is ordered: authenticate the Core-owned infrastructure profile;
 directly reauthenticate its immutable Registry and Rent artifacts/current
 Loader deployments; observe the selected release-set digest; reauthenticate
@@ -90,11 +96,14 @@ to the profiled Rent program. The state and its PDA persist the exact Registry
 program used at Found; every later release reauthentication rejects a
 substituted Registry before CPI.
 
-The 208-byte SourceMaterialV2 owns only Source policy links and the selected
-Product-record content digest. Core requires that digest to equal the root of
-the independently authenticated Product/domain/portfolio graph; neither the
-Source record nor the Found request may supply stable Product, result-domain,
-portfolio, basis, release, or outcome-width facts.
+The exact 240-byte `SourceMaterialV3` owns the Source policy links, the selected
+Product-record content digest, and one explicit principal policy: either one
+authenticated ManipulationFloor identity or deliberate unboundedness. Core
+requires its Product digest to equal the root of the independently
+authenticated Product/domain/portfolio graph and authenticates the adjacent
+SourceSpec, capacity profile, and selected floor graph. Neither the Source
+record nor the Found request may supply parallel Product, result-domain,
+portfolio, basis, release, outcome-width, or principal-cap facts.
 
 ## Series Consume frame
 
@@ -172,21 +181,21 @@ Product Runtime V2 graph and commits `Open+Consumed -> Terminal`;
 `CloseFund` authenticates the closure/funding projection but does not by itself
 complete Core retirement.
 
-All four actions share accounts 0 through 15: caller authority, Market,
+All four actions share accounts 0 through 13: caller authority, Market,
 activation cache, Registry, Core program/ProgramData, Resolution
-program/ProgramData, SourceMaterialV2 raw/staging, capability manifest
-raw/staging, Source state, and the ordered recovery/exhaustion/failure
-FundingStates. Their exact tails are:
+program/ProgramData, `SourceMaterialV3` raw/staging, capability manifest
+raw/staging, Source state, and the single Resolution-owned three-row funding
+ledger. Their exact tails are:
 
-- Create (20 total): Rent, System, RecoveryPolicyV2 raw/staging.
-- Verify (21 total): beneficiary, Clock, Rent, RecoveryPolicyV2 raw/staging.
-- Admit (24 total): terminal certificate, Rent, then Product, result-domain,
+- Create (18 total): Rent, System, RecoveryPolicyV2 raw/staging.
+- Verify (19 total): beneficiary, Clock, Rent, RecoveryPolicyV2 raw/staging.
+- Admit (22 total): terminal certificate, Rent, then Product, result-domain,
   and portfolio raw/staging pairs.
-- Close (24 total): terminal certificate, closure receipt, beneficiary, Clock,
+- Close (22 total): terminal certificate, closure receipt, beneficiary, Clock,
   Rent, System, then RecoveryPolicyV2 raw/staging.
 
 Create, Verify, and Close independently authenticate the exact Product-free
-496-byte RecoveryPolicyV2 selected by SourceMaterialV2 and require its sole
+496-byte RecoveryPolicyV2 selected by `SourceMaterialV3` and require its sole
 admitted attempt plus the Source/recovery/failure identities to select the
 same three manifest funding entries. Admit instead reauthenticates the complete
 Product graph and derives the native `u32` outcome count; no caller count or
