@@ -1026,3 +1026,304 @@ async fn an_ordinary_redemption_survives_the_compaction_deadlines_warp() {
         "a holder's own redemption must not stop working merely because time passed"
     );
 }
+
+// ---------------------------------------------------------------- redemption
+
+use dclutch_claims_svm::claim_check_request_v1::RedeemClaimCheckRequestV1;
+use dclutch_claims_svm::claim_check_v1::{
+    CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, ClaimCheckRedemptionRoleV1,
+};
+
+/// Build the seven-account redemption frame from its own declared spec.
+///
+/// The privileges are read off `ClaimCheckRedemptionRoleV1`, not restated here,
+/// so the test cannot pass a frame the route's own spec would reject.
+fn redeem_instruction(
+    fixture: &Fixture,
+    holder: Pubkey,
+    holder_tokens: Pubkey,
+    overrides: RedeemOverrides,
+) -> Instruction {
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let aggregate = fixture.aggregate;
+    let request = RedeemClaimCheckRequestV1 {
+        aggregate: aggregate.to_bytes(),
+        owner: overrides.owner.unwrap_or(holder.to_bytes()),
+    }
+    .new()
+    .expect("redeem request");
+    let addresses = [
+        overrides.holder.unwrap_or(holder),
+        claim_check_address(aggregate, holder.to_bytes()),
+        escrow_address(aggregate),
+        vault_address(aggregate),
+        holder_tokens,
+        terminal.collateral_mint,
+        TOKEN_PROGRAM_ID,
+    ];
+    let accounts = ClaimCheckRedemptionRoleV1::frame()
+        .iter()
+        .zip(addresses)
+        .map(|(role, address)| {
+            let (signer, writable) = role.privileges();
+            if writable {
+                AccountMeta::new(address, signer)
+            } else {
+                AccountMeta::new_readonly(address, signer)
+            }
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(accounts.len(), CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1);
+    Instruction {
+        program_id: CLAIMS_PROGRAM_ID,
+        accounts,
+        data: request.to_bytes().expect("redeem bytes").to_vec(),
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct RedeemOverrides {
+    holder: Option<Pubkey>,
+    owner: Option<[u8; 32]>,
+}
+
+/// Run a market all the way to a compacted claim-check, then hand back the
+/// holder's keypair and token account.
+async fn compact_for_a_sleeping_holder(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> Pubkey {
+    create_claims_custody_replay(context, fixture).await;
+    plant_admission(context, fixture).await;
+    let cranker = context.payer.pubkey();
+    open_and_elapse(context, fixture).await;
+    let prestate = wallet_payout_prestate(context, fixture, fixture.actor_position).await;
+    let instruction = compaction_instruction(fixture, cranker, &prestate);
+    let addresses = lookup_addresses(cranker, fixture.actor.pubkey(), &[instruction.clone()]);
+    let (table, _) =
+        create_live_lookup_table(context, &addresses, "claims claim-check: pre-redemption").await;
+    let result = submit_compaction(context, instruction, table, &addresses, "pre-redemption").await;
+    assert!(result.accepted, "the compaction must commit");
+    fixture
+        .terminal_accounts
+        .expect("terminal fixture")
+        .recipient
+}
+
+/// THE HOLDER COMES BACK, AND IS PAID FROM A MARKET THAT NO LONGER RUNS.
+///
+/// The sentence census R3 says is impossible. Nobody redeemed in time, a
+/// stranger compacted the position, and the holder still walks away with their
+/// collateral — owner-signed, out of seven accounts, none of which is the
+/// market's.
+#[tokio::test]
+async fn a_sleeping_holder_is_paid_from_a_claim_check_long_after_the_crank() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let holder_tokens = compact_for_a_sleeping_holder(&mut context, &fixture).await;
+    let holder = fixture.actor.pubkey();
+
+    let record = ClaimCheckV1::decode(
+        &observed(
+            &mut context,
+            claim_check_address(fixture.aggregate, holder.to_bytes()),
+        )
+        .await
+        .data,
+    )
+    .expect("claim-check decodes");
+    let owed = record.entitlement_atoms;
+    assert!(owed > 0, "the holder is owed something");
+    let tokens_before = token_amount(&observed(&mut context, holder_tokens).await);
+    let lamports_before = observed(&mut context, holder).await.lamports;
+
+    let instruction =
+        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default());
+    let result = submit_holder_signed(
+        &mut context,
+        &fixture,
+        instruction,
+        "claims claim-check: the sleeping holder redeems",
+    )
+    .await;
+    if !result.accepted {
+        eprintln!("redeem refusal logs:\n{}", result.logs.join("\n"));
+    }
+    assert!(result.accepted, "the holder must be paid");
+
+    // Paid exactly what the claim-check promised.
+    assert_eq!(
+        token_amount(&observed(&mut context, holder_tokens).await),
+        tokens_before + owed
+    );
+    // The vault gave up exactly that, and the escrow's count went to zero.
+    assert_eq!(
+        token_amount(&observed(&mut context, vault_address(fixture.aggregate)).await),
+        0,
+        "the vault holds nothing once its last claim-check is redeemed"
+    );
+    let escrow = ClaimCheckEscrowV1::decode(
+        &observed(&mut context, escrow_address(fixture.aggregate))
+            .await
+            .data,
+    )
+    .expect("escrow decodes");
+    assert_eq!(escrow.outstanding_claim_checks, 0);
+    assert!(escrow.is_settled());
+    // The record is gone and its rent went home with the holder.
+    assert!(
+        maybe_observed(
+            &mut context,
+            claim_check_address(fixture.aggregate, holder.to_bytes())
+        )
+        .await
+        .is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
+        "a redeemed claim-check keeps nothing"
+    );
+    assert!(observed(&mut context, holder).await.lamports > lamports_before);
+}
+
+/// NOBODY BUT THE HOLDER CAN REDEEM, AND THE RECORD SURVIVES THE ATTEMPT.
+#[tokio::test]
+async fn a_stranger_cannot_redeem_another_holders_claim_check() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let holder_tokens = compact_for_a_sleeping_holder(&mut context, &fixture).await;
+    let holder = fixture.actor.pubkey();
+    let stranger = context.payer.pubkey();
+    assert_ne!(stranger, holder);
+
+    let before = observed(
+        &mut context,
+        claim_check_address(fixture.aggregate, holder.to_bytes()),
+    )
+    .await;
+    let instruction = redeem_instruction(
+        &fixture,
+        holder,
+        holder_tokens,
+        RedeemOverrides {
+            holder: Some(stranger),
+            owner: Some(holder.to_bytes()),
+        },
+    );
+    // Signed by the stranger alone: a real, well-formed attempt.
+    let result = submit_opener_signed(
+        &mut context,
+        instruction,
+        "claims claim-check: a stranger tries to redeem",
+    )
+    .await;
+    assert_refused_with(&result, 0x5621, "a non-holder redemption");
+    let after = observed(
+        &mut context,
+        claim_check_address(fixture.aggregate, holder.to_bytes()),
+    )
+    .await;
+    assert_eq!(
+        after.data, before.data,
+        "the refused redemption moved no byte of the claim-check"
+    );
+    assert_eq!(
+        token_amount(&observed(&mut context, vault_address(fixture.aggregate)).await),
+        ClaimCheckV1::decode(&before.data)
+            .expect("claim-check decodes")
+            .entitlement_atoms,
+        "and took nothing from the vault"
+    );
+}
+
+/// A CLAIM-CHECK REDEEMS EXACTLY ONCE, AND ITS OWN ABSENCE IS THE PROOF.
+///
+/// There is no cursor and no counter to get wrong: the second attempt finds no
+/// account to decode.
+#[tokio::test]
+async fn a_claim_check_cannot_be_redeemed_twice() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let holder_tokens = compact_for_a_sleeping_holder(&mut context, &fixture).await;
+    let holder = fixture.actor.pubkey();
+    let instruction =
+        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default());
+
+    let first = submit_holder_signed(
+        &mut context,
+        &fixture,
+        instruction.clone(),
+        "claims claim-check: first redemption",
+    )
+    .await;
+    assert!(first.accepted, "the first redemption must commit");
+    let paid = token_amount(&observed(&mut context, holder_tokens).await);
+
+    let second = submit_holder_signed(
+        &mut context,
+        &fixture,
+        instruction,
+        "claims claim-check: a second redemption",
+    )
+    .await;
+    assert!(!second.accepted, "a claim-check pays exactly once");
+    assert_eq!(
+        token_amount(&observed(&mut context, holder_tokens).await),
+        paid,
+        "and the second attempt paid nothing"
+    );
+}
+
+/// Send one holder-signed transaction: the holder pays its own fee and signs.
+async fn submit_holder_signed(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    instruction: Instruction,
+    label: &str,
+) -> Submission {
+    let blockhash = context
+        .get_new_latest_blockhash()
+        .await
+        .expect("a distinct redemption blockhash");
+    let transaction = Transaction::new_signed_with_payer(
+        &[instruction],
+        Some(&fixture.actor.pubkey()),
+        &[&fixture.actor],
+        blockhash,
+    );
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let wire_bytes = 1 + transaction.signatures.len() * 64 + transaction.message_data().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("redemption processing");
+    let accepted = processed.result.is_ok();
+    let failure = processed.result.err().map(|error| format!("{error:?}"));
+    let (logs, compute_units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    Submission {
+        accepted,
+        compute_units,
+        wire_bytes,
+        logs,
+    }
+}

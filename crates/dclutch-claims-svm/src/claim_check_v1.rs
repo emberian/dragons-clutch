@@ -1016,6 +1016,72 @@ mod tests {
     }
 
     #[test]
+    fn the_redemption_frame_contains_nothing_the_market_takes_with_it() {
+        // The assertion is on the SPEC, not on an inspection of the route. A
+        // later edit that reaches for an aggregate, a Core state, a basis or
+        // graph record, a Hoard or a Custody replay cursor has to add a role
+        // here and answer `survives_retirement` for it, and the honest answer
+        // fails this test.
+        for role in ClaimCheckRedemptionRoleV1::frame() {
+            assert!(
+                role.survives_retirement(),
+                "{role:?} does not outlive the market and cannot be in this frame"
+            );
+        }
+    }
+
+    #[test]
+    fn the_redemption_frame_is_pinned_exactly() {
+        // Width and order are both load-bearing: the route indexes this frame,
+        // and a silent insertion would shift every account after it.
+        assert_eq!(
+            ClaimCheckRedemptionRoleV1::frame(),
+            [
+                ClaimCheckRedemptionRoleV1::Holder,
+                ClaimCheckRedemptionRoleV1::ClaimCheckRecord,
+                ClaimCheckRedemptionRoleV1::Escrow,
+                ClaimCheckRedemptionRoleV1::Vault,
+                ClaimCheckRedemptionRoleV1::HolderTokens,
+                ClaimCheckRedemptionRoleV1::CollateralMint,
+                ClaimCheckRedemptionRoleV1::TokenProgram,
+            ]
+        );
+        assert_eq!(
+            ClaimCheckRedemptionRoleV1::frame().len(),
+            CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1
+        );
+    }
+
+    #[test]
+    fn exactly_one_account_signs_and_it_is_the_person_being_paid() {
+        // GREEN-SELF stated as arithmetic: no third party stands between a
+        // holder and their collateral, and there is no second signature for
+        // anyone to be induced to provide.
+        let signers: usize = ClaimCheckRedemptionRoleV1::frame()
+            .iter()
+            .filter(|role| role.privileges().0)
+            .count();
+        assert_eq!(signers, 1);
+        assert!(ClaimCheckRedemptionRoleV1::Holder.privileges().0);
+        assert!(ClaimCheckRedemptionRoleV1::Holder.privileges().1);
+        // Nothing the route only reads is writable.
+        for role in [
+            ClaimCheckRedemptionRoleV1::CollateralMint,
+            ClaimCheckRedemptionRoleV1::TokenProgram,
+        ] {
+            assert_eq!(role.privileges(), (false, false));
+        }
+    }
+
+    #[test]
+    fn a_redemption_frame_is_far_smaller_than_the_compaction_that_made_it() {
+        // The residue claim, as a number. A crank needs the whole market; a
+        // holder coming back needs seven accounts and none of the market's.
+        assert_eq!(CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, 7);
+        assert!(CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 < 36);
+    }
+
+    #[test]
     fn the_five_wire_magics_are_pairwise_distinct() {
         let magics = [
             CLAIM_CHECK_OPEN_MAGIC_V1,
@@ -1026,6 +1092,89 @@ mod tests {
         ];
         for (index, left) in magics.iter().enumerate() {
             assert!(!magics.iter().skip(index + 1).any(|right| right == left));
+        }
+    }
+}
+
+/// Exact claim-check redemption frame width.
+pub const CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1: usize = 7;
+
+/// One account role in the claim-check redemption frame.
+///
+/// This frame is the point of the whole design, so it is declared rather than
+/// left implicit. What a holder touches when they finally come back is a market
+/// that no longer exists: the aggregate closed, the Core state closed, the
+/// linked basis and composition graph records closed, the Hoard emptied and
+/// closed, the Custody replay cursor gone. A redemption route that needed any
+/// of them would not be a claim-check; it would be a promise that stops working
+/// the moment the thing it depends on is cleaned up.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaimCheckRedemptionRoleV1 {
+    /// The holder, who signs and is paid. The only signer this frame admits.
+    Holder,
+    /// The claim-check record, closed into the holder.
+    ClaimCheckRecord,
+    /// The per-market escrow, whose outstanding count this redemption retires.
+    Escrow,
+    /// The escrow vault, debited by exactly the record's entitlement.
+    Vault,
+    /// The holder's own token account, credited.
+    HolderTokens,
+    /// The collateral mint, for a checked transfer.
+    CollateralMint,
+    /// The collateral token program.
+    TokenProgram,
+}
+
+impl ClaimCheckRedemptionRoleV1 {
+    /// The exact ordered frame.
+    #[must_use]
+    pub const fn frame() -> [Self; CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1] {
+        [
+            Self::Holder,
+            Self::ClaimCheckRecord,
+            Self::Escrow,
+            Self::Vault,
+            Self::HolderTokens,
+            Self::CollateralMint,
+            Self::TokenProgram,
+        ]
+    }
+
+    /// Whether an account in this role still exists after the market retires.
+    ///
+    /// **Every role in [`Self::frame`] must answer `true`, and a test enforces
+    /// it.** The method exists so that adding an account to this route is not a
+    /// silent act: a later edit must state, here, whether the thing it is
+    /// reaching for outlives the market. The honest answer for an aggregate, a
+    /// Core state, a basis or graph record, a Hoard or a Custody replay cursor
+    /// is `false`, and the test fails on it. Answering `true` for one of those
+    /// would be a deliberate false statement rather than an oversight, which is
+    /// the most a type can do about it.
+    #[must_use]
+    pub const fn survives_retirement(self) -> bool {
+        match self {
+            // Created by compaction, or independent of the market entirely.
+            Self::Holder
+            | Self::ClaimCheckRecord
+            | Self::Escrow
+            | Self::Vault
+            | Self::HolderTokens
+            | Self::CollateralMint
+            | Self::TokenProgram => true,
+        }
+    }
+
+    /// Exact privileges this role carries.
+    #[must_use]
+    pub const fn privileges(self) -> (bool, bool) {
+        match self {
+            // signer, writable
+            Self::Holder => (true, true),
+            Self::ClaimCheckRecord | Self::Escrow | Self::Vault | Self::HolderTokens => {
+                (false, true)
+            }
+            Self::CollateralMint | Self::TokenProgram => (false, false),
         }
     }
 }

@@ -383,6 +383,17 @@ fn process_remaining_instruction(
             instruction_data,
         );
     }
+    // Redemption and escrow close share one magic and separate by action, so
+    // the dispatcher reads the action rather than the magic alone.
+    if instruction_data.get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.len())
+        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.as_slice())
+    {
+        return claim_check_redemption_v1::process_redemption(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
 
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
     // reachable solely for the current Trading General child-packet builder
