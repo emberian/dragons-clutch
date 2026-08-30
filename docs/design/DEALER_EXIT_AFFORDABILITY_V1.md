@@ -372,11 +372,18 @@ Custody ELF, ~200-300 lines, one new route, and four hostiles.
   sleeping LP share blocks obligation close. This is R3's shape in the Dealer
   family — a sleeping holder blocking retirement — and it should be ruled with
   R3, not separately, because the two want the same terminal-value policy.
-- **The family's one-command runner does not run the family's own program-test.**
-  `run-program-test.sh` covers the accelerator campaign only; the Dealer
-  transition machine's real-ELF campaign is
-  `programs/dclutch-dealer-sbf/program-test/tests/family.rs`, reachable only
-  through `tools/gauntlet/dealer/run-dealer.sh`. Two runners, one family.
+- **The family has two runners, and only one of them is advertised.** This is
+  not architectural debt — the split is deliberate and both halves earn their
+  keep. `run-program-test.sh` builds six ELFs and runs the accepted
+  checkpoint/reserve/commit/deliver campaign (31 tests across four targets);
+  `tools/gauntlet/dealer/run-dealer.sh` builds five, gates on the toolchain
+  reporting zero frame diagnostics, runs the Dealer program's own real-ELF
+  refusal campaign (`programs/dclutch-dealer-sbf/program-test/tests/family.rs`),
+  then folds evidence, checks witnesses and files a census observation. Only the
+  second one ever loads `dclutch_dealer_sbf.so`. The debt is documentary: the
+  campaign write-up presents `run-program-test.sh` as *the* one-command
+  reproduction for the Dealer family, and a reader taking that at face value
+  never builds the Dealer program at all.
 - **No accepted Dealer transition is executed against a real ELF anywhere.**
   `family.rs` says so in its own header: it is evidence for the authentication
   prefix, and *"NOT evidence that any Dealer action commits"*. So Rulings 1 and 2
