@@ -1,12 +1,12 @@
 {
   "census_retention": {
     "bytes_bound": 3716160,
-    "bytes_on_disk": 963723,
+    "bytes_on_disk": 1025659,
     "bytes_per_observation": 3871,
     "dropped_observations": 0,
     "files": 2,
     "keep_files": 2,
-    "observations": 125,
+    "observations": 133,
     "removed_files": 1,
     "window": 480
   },
@@ -15,7 +15,7 @@
     "rpc_url": "https://devnet.helius-rpc.com/?<redacted>"
   },
   "cycles": {
-    "run": 125,
+    "run": 133,
     "target": null
   },
   "halt_reason": null,
@@ -24,28 +24,41 @@
     "backoff_seconds": 0.0,
     "budget_seconds": 325.0,
     "cadence_seconds": 20.0,
-    "expected_next_update_by": "2026-08-30T17:42:19+00:00",
+    "expected_next_update_by": "2026-08-30T17:49:00+00:00",
     "grace_seconds": 300.0,
     "jitter_fraction": 0.25,
     "note": "A living run rewrites this file every cycle. If your clock is past expected_next_update_by, no process is writing here any more -- read that and not the halted flag, which a run killed outright never gets to set. EXIT.json records how a run ended when it was able to; its absence past this instant means the run could not say."
   },
   "last_reconciliation": {
-    "checked_at": "2026-08-30T17:36:54+00:00",
+    "checked_at": "2026-08-30T17:43:34+00:00",
     "ok": true,
-    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000125.json"
+    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000133.json"
   },
   "market": {
     "address": "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq"
   },
   "mode": "sustain",
   "schema": "dclutch-load-simulator-status-v1",
-  "started_at": "2026-08-30T17:36:28+00:00",
+  "started_at": "2026-08-30T17:42:40+00:00",
   "stopping": false,
   "trades": {
     "landed": 0,
     "signatures": []
   },
   "trades_attempted": false,
-  "updated_at": "2026-08-30T17:36:54+00:00",
-  "wallets": []
+  "updated_at": "2026-08-30T17:43:35+00:00",
+  "wallets": [
+    {
+      "address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",
+      "role": "participant",
+      "sol_lamports": 7077240,
+      "source": "staged"
+    },
+    {
+      "address": "GcE6LWbduoATDgK8jsGyj2i8ywV37fcAYABKCmKgttDz",
+      "role": "participant",
+      "sol_lamports": 7082240,
+      "source": "staged"
+    }
+  ]
 }
