@@ -2,6 +2,7 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import { type DeploymentV1 } from '@/lib/deployments';
@@ -26,6 +27,7 @@ import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
 import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
+import { SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
 
 type State =
   | Readonly<{ kind: 'loading' | 'refused'; message: string }>
@@ -102,6 +104,14 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
       <div><dt>Realm content ID</dt><dd title={card.identity.realmId}>{card.identity.realmId.slice(0, 16)}…</dd></div>
       <div><dt>Finalized observed slot</dt><dd>{card.observedSlot}</dd></div>
     </dl>
+    {/* FE-CHART mount: the issuance split, drawn from the same supply vector
+        the facts row above states exactly. */}
+    {card.liability.status === 'bound' && <SupplyShareStrip
+      supplies={card.liability.supplyAtoms}
+      outcomes={editorial?.outcomes ?? null}
+      caption={SUPPLY_SHARE_MEANING_V1}
+      emptyReason="No claims have been issued on this market yet, so there is no split to draw."
+    />}
     <p className="market-hoard-note">Supplies are the exact claim liabilities the Market&apos;s Claims aggregate records. They are not liquidity, TVL, or a balance available to any participant.</p>
     {card.hoard.status === 'derived'
       ? <p className="market-hoard-note">Hoard principal <strong>{card.hoard.principalAtoms}</strong> atoms{card.hoard.mintDisplayDecimals === null ? '' : ` · the mint prints ${card.hoard.mintDisplayDecimals} display decimals, which never scale this figure`}, held by this Market&apos;s Custody transfer authority at <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>, in the Custody namespace the Claims aggregate records.</p>
@@ -331,7 +341,7 @@ export default function MarketDiscoveryWorkspace() {
       <div>
         <p className="eyebrow">Markets on {deployment.label} · finalized reads only</p>
         <h1>Every market on devnet.<br /><em>Read live, or not at all.</em></h1>
-        <p>The markets that are open come first, because they are the ones you can do something with. Everything else this deployment holds — foundings that were started and never finished, and markets from an older version of the protocol that this build cannot decode — is counted and named below rather than dropped. Each card shows only what the chain actually says: what phase the market is in and who it commits to, how many claims exist and what is holding them, what it is collateralized in, and what the market is allowed to do. There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.</p>
+        <p>The markets that are open come first, because they are the ones you can do something with. Everything else this deployment holds — foundings that were started and never finished, and markets from an older version of the protocol that this build cannot decode — is counted and named below rather than dropped. Each card shows only what the chain actually says: what phase the market is in and who it commits to, how many claims exist and what is holding them, what it is collateralized in, and what the market is allowed to do. There is no volume, price, odds, probability, or yield here, because the chain does not store any of those. What it does store is how many claims of each outcome have been issued, so each card draws that split for exactly what it is — where the issued claims sit, never a forecast.</p>
       </div>
       <aside>
         <span>Provenance</span>
@@ -373,6 +383,7 @@ export default function MarketDiscoveryWorkspace() {
     <footer className="product-footer">
       <span>Chain-derived phase, atoms, and refusals only</span>
       <span>No volume · no odds · no probability · no yield</span>
+      <span>Issuance shares are issuance, not odds</span>
     </footer>
   </main>;
 }
