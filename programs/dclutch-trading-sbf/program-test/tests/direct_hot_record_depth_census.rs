@@ -58,13 +58,19 @@ const ATTEMPT_COST_CU: u32 = 1_500;
 /// widely as the one that found movement.
 const CENSUS_SEEDS: u64 = 32;
 
-/// The record classes the Direct Hot route authenticates by SEARCHING.
+/// The record classes whose depth this census reports.
 ///
 /// Deliberately not every record on the route. The manifest, program-set and
 /// config records are absent because they do NOT search: `borrow_finalized_record_at`
 /// reads them at the bumps `SelectedRecordBumpsV1` carries in the Market root.
 /// The six sealed artifacts are absent because `borrow_sealed_record` reads
-/// coordinates the seal persisted. What is left is what still pays.
+/// coordinates the seal persisted.
+///
+/// [`CARRIED_TODAY`] says which of the rest still SEARCH. A row that no longer
+/// searches keeps its place, because its depth is the measurement and the
+/// measurement is what proves the conversion was worth making -- but the table
+/// says so in its own column rather than leaving a reader to infer a cost the
+/// route stopped paying.
 const SEARCHED_RECORD_SCHEMAS: [(&str, [u8; 32]); 6] = [
     ("product", PRODUCT_RECORD_SCHEMA_ID_V2),
     ("result-domain", RESULT_DOMAIN_SCHEMA_ID_V2),
@@ -73,6 +79,15 @@ const SEARCHED_RECORD_SCHEMAS: [(&str, [u8; 32]); 6] = [
     ("realm", REALM_SCHEMA_RELEASE_ID_V1),
     ("exec-strategy", EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
 ];
+
+/// Records the route now reads at a CARRIED bump rather than by searching.
+///
+/// The realm pair left the searching class when `CoreState` began recording the
+/// two bumps its founding derived: Custody's `authenticate_realm` reproduces
+/// both instead of walking down from 255, once per Custody invocation and so
+/// twice per canonical trade. It is the largest single row in this table and it
+/// is the one that is already banked.
+const CARRIED_TODAY: [&str; 1] = ["realm"];
 
 /// One record's canonical coordinate, as the route would have to search for it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -187,6 +202,7 @@ fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
 
     let mut searched = 0_u32;
     let mut carried = 0_u32;
+    let mut banked = 0_u32;
     // The capability seal is not a finalized record, but it is the same CLASS
     // of cost and it belongs in the same table: one search, on an address whose
     // seeds are a descriptor digest, an action selector, the Trading SEMANTIC
@@ -198,14 +214,14 @@ fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
     // full: the seal now records its own bump in the first of its four reserved
     // bytes, and `authenticate_capability_seal_v3` reproduces the address from
     // it. This row is what that saving actually was, on this build.
-    println!("RECDEPTH\trecord\traw_bump\tstaging_bump\tsearch_cu\tcarried_cu\tsaving_cu");
+    println!("RECDEPTH\trecord\traw_bump\tstaging_bump\tsearch_cu\tcarried_cu\tsaving_cu\tstatus");
     {
         let seal_search = attempts(seal_bump) * ATTEMPT_COST_CU;
         let seal_carried = ATTEMPT_COST_CU;
         searched += seal_search;
         carried += seal_carried;
         println!(
-            "RECDEPTH\tcapability-seal\t{seal_bump}\t-\t{seal_search}\t{seal_carried}\t{}",
+            "RECDEPTH\tcapability-seal\t{seal_bump}\t-\t{seal_search}\t{seal_carried}\t{}\tCARRIED",
             seal_search.saturating_sub(seal_carried),
         );
     }
@@ -218,16 +234,25 @@ fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
         let carry = carried_cost_cu() * invocations;
         searched += search;
         carried += carry;
+        let status = if CARRIED_TODAY.contains(name) {
+            banked += search.saturating_sub(carry);
+            "CARRIED"
+        } else {
+            "SEARCHES"
+        };
         println!(
-            "RECDEPTH\t{name}\t{}\t{}\t{search}\t{carry}\t{}",
+            "RECDEPTH\t{name}\t{}\t{}\t{search}\t{carry}\t{}\t{status}",
             depth.raw_bump,
             depth.staging_bump,
             search.saturating_sub(carry),
         );
     }
     println!(
-        "RECDEPTH TOTAL searched {searched} CU, carried {carried} CU, SAVING {} CU per transaction",
+        "RECDEPTH TOTAL if every row searched: {searched} CU; if every row carried: {carried} CU; \
+         the difference is {} CU per transaction, of which {banked} is ALREADY BANKED by the rows \
+         marked CARRIED and {} is still on the table",
         searched.saturating_sub(carried),
+        searched.saturating_sub(carried).saturating_sub(banked),
     );
 
     // The seal's seeds carry no participant key either, so its depth must be as
