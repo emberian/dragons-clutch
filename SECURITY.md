@@ -60,9 +60,6 @@ demonstration.
 
 ## Reporting a vulnerability
 
-<!-- contact ruled by ember 2026-08-30: security@ember.software
-     (candidate reasoning preserved in git history at 5a693ab3) -->
-
 **Email `security@ember.software`.**
 
 Please include:
