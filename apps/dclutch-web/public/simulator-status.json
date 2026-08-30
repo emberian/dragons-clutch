@@ -1,12 +1,12 @@
 {
   "census_retention": {
     "bytes_bound": 3716160,
-    "bytes_on_disk": 1025659,
+    "bytes_on_disk": 3340517,
     "bytes_per_observation": 3871,
     "dropped_observations": 0,
     "files": 2,
     "keep_files": 2,
-    "observations": 133,
+    "observations": 432,
     "removed_files": 1,
     "window": 480
   },
@@ -15,7 +15,7 @@
     "rpc_url": "https://devnet.helius-rpc.com/?<redacted>"
   },
   "cycles": {
-    "run": 133,
+    "run": 432,
     "target": null
   },
   "halt_reason": null,
@@ -24,15 +24,15 @@
     "backoff_seconds": 0.0,
     "budget_seconds": 325.0,
     "cadence_seconds": 20.0,
-    "expected_next_update_by": "2026-08-30T17:49:00+00:00",
+    "expected_next_update_by": "2026-08-30T19:56:24+00:00",
     "grace_seconds": 300.0,
     "jitter_fraction": 0.25,
     "note": "A living run rewrites this file every cycle. If your clock is past expected_next_update_by, no process is writing here any more -- read that and not the halted flag, which a run killed outright never gets to set. EXIT.json records how a run ended when it was able to; its absence past this instant means the run could not say."
   },
   "last_reconciliation": {
-    "checked_at": "2026-08-30T17:43:34+00:00",
+    "checked_at": "2026-08-30T19:50:58+00:00",
     "ok": true,
-    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000133.json"
+    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000432.json"
   },
   "market": {
     "address": "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq"
@@ -46,7 +46,7 @@
     "signatures": []
   },
   "trades_attempted": false,
-  "updated_at": "2026-08-30T17:43:35+00:00",
+  "updated_at": "2026-08-30T19:50:59+00:00",
   "wallets": [
     {
       "address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",

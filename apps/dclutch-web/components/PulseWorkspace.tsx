@@ -4,18 +4,23 @@ import { useEffect, useState } from 'react';
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
+import LawBand from '@/components/charts/LawBand';
 import NumberStrip, { type NumberStripStatV1 } from '@/components/charts/NumberStrip';
 import Sparkline from '@/components/charts/Sparkline';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
 import { marketEditorialV1 } from '@/lib/marketRegistry';
 import {
+  conservationLawRowsV1,
+  conservationReadingV1,
   everyLineFlatV1,
   holdingsReadingV1,
   isCompleteSetV1,
   issuedSupplyLinesV1,
+  lawBandCyclesV1,
   NO_SERIES_SENTENCE_V1,
   readSimulatorSeriesV1,
   SERIES_RECORD_CAVEAT_V1,
+  simulatorHeartbeatV1,
   simulatorSeriesSpanV1,
   type SimulatorSeriesReadV1,
   type SimulatorSeriesV1,
@@ -91,6 +96,144 @@ function beatFor(read: SimulatorReadV1 | null): SimulatorBeatV1 | null {
 }
 
 /**
+ * What each law is FOR, in this site's words rather than the census's.
+ *
+ * Kept apart from anything the census wrote and rendered as the gloss it is.
+ * The census's own sentence about what a law FOUND travels beside it verbatim;
+ * these say what the law is asking, which is the part a stranger needs and the
+ * part no chain stores. Names follow tools/gauntlet/journey/src/ledger.rs.
+ */
+const LAW_GLOSSES: Readonly<Record<string, string>> = Object.freeze({
+  L1: 'collateral closure — every collateral atom that exists is sitting in an account this census watches',
+  L2: 'declared vault movement — the market’s vault moved by exactly what was declared, and by nothing else',
+  L3: 'supply agreement — what the positions hold adds up, outcome by outcome, to what the market issued',
+  L4: 'full collateralisation — the vault holds at least what the worst outcome could be asked to pay',
+  L5: 'stage delta — tracked collateral changed between two readings by exactly the declared amount',
+  L6: 'rent conservation — lamports leaving a closed protocol account are accounted for',
+  L7: 'lamport accounting — the fee payer’s balance moved by exactly the fees paid',
+});
+
+/**
+ * THE HEARTBEAT: the two quantities on this page that are actually moving.
+ *
+ * The census this page draws signs nothing, so it spends nothing, so every
+ * quantity it observes about the MARKET holds still — and it should, because a
+ * market nobody has traded is a market whose numbers have no business
+ * changing. Drawing only those is how a truthful record ends up looking like a
+ * dead one.
+ *
+ * These two are moving the whole time and neither belongs to the simulator:
+ * the chain advanced between one reading and the next, and the run took real
+ * wall-clock seconds to come back. Together they are the answer to the only
+ * question a stranger is really asking here.
+ *
+ * Two figures, not one. Slots and seconds are different dimensions at
+ * different magnitudes, and putting them on one pair of axes would be a
+ * dual-axis chart with the scale chosen to make a shape.
+ */
+export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | null }>) {
+  if (read === null) return <p className="direct-status">Looking for a recorded run…</p>;
+  if (read.kind === 'absent') return <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>;
+  if (read.kind === 'refused') {
+    return <p className="market-refusal">Refused: a recorded run was published here, and it did not decode — {read.reason}</p>;
+  }
+  const series = read.series;
+  const heartbeat = simulatorHeartbeatV1(series);
+  const span = simulatorSeriesSpanV1(series);
+  if (heartbeat === null || span === null) {
+    return <p className="market-empty">Only one cycle was recorded, and a rate needs two readings to be measured between.</p>;
+  }
+
+  const stats: ReadonlyArray<NumberStripStatV1> = Object.freeze([
+    Object.freeze({
+      label: 'Chain slots covered',
+      value: span.slotsCovered,
+      detail: `slot ${span.firstSlot} to ${span.lastSlot}, read finalized at each end`,
+    }),
+    Object.freeze({
+      label: 'Measured slot rate',
+      value: heartbeat.measuredSlotRate === null ? null : `${heartbeat.measuredSlotRate}/s`,
+      detail: heartbeat.measuredSlotRate === null
+        ? 'the run did not record enough instants to divide by'
+        : 'those slots over the run’s own recorded seconds — measured here, not a published constant',
+    }),
+    Object.freeze({
+      label: 'Ledger checks held',
+      value: String(span.checksHeld),
+      detail: span.checksBroken === 0
+        ? 'and none broke, across every cycle drawn below'
+        : `and ${span.checksBroken} did not hold — see the band below`,
+    }),
+  ]);
+
+  return <>
+    {/* FE-CHART mount: three counts that are all derived, all exact, and all
+        about the chain rather than about the robot. */}
+    <NumberStrip
+      stats={stats}
+      provenance={`Derived from ${span.cycles} recorded cycles in ${series.censusFile}. Slots and seconds are the run's own readings; the rate is the one divided by the other.`}
+    />
+
+    {/* FE-CHART mount: how far the chain moved between two readings. */}
+    <Sparkline
+      lines={[heartbeat.slotAdvance]}
+      xLabels={heartbeat.xLabels}
+      unit="slots"
+      caption="Slots the chain advanced between one reading and the next. This is the chain's own clock as this run observed it — a tall column is a long wait between readings, not a fast chain."
+      emptyReason={NO_SERIES_SENTENCE_V1}
+    />
+
+    {heartbeat.cadence === null
+      ? <p className="market-empty">Some cycles did not record when they happened, so the cadence between them cannot be drawn without guessing.</p>
+      : <>
+        <h3 className="detail-subhead">How often it came back</h3>
+        {/* FE-CHART mount: the run's own rhythm, and its stalls. */}
+        <Sparkline
+          lines={[heartbeat.cadence]}
+          xLabels={heartbeat.xLabels}
+          unit="seconds"
+          caption="Wall-clock seconds between consecutive readings. The spikes are real: a run that stalls and resumes says so here rather than smoothing it away."
+          emptyReason={NO_SERIES_SENTENCE_V1}
+        />
+        <p className="slot-clock-note">
+          Shortest interval {heartbeat.shortestGapSeconds} seconds, longest {heartbeat.longestGapSeconds}, across {heartbeat.intervals} intervals.
+        </p>
+      </>}
+  </>;
+}
+
+/**
+ * Every named conservation law, cycle by cycle.
+ *
+ * This replaced a sparkline of how MANY checks held. That number was true and
+ * it was the wrong shape: it drew a line through a count that sits at six, and
+ * a reader learned neither which laws those were nor what any of them
+ * compared. The census recorded both all along.
+ */
+export function ConservationLaws({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
+  const rows = conservationLawRowsV1(series);
+  const cycles = lawBandCyclesV1(series);
+  const reading = conservationReadingV1(series);
+  if (rows.length === 0) {
+    return <p className="market-empty">
+      This capture was taken before the laws were recorded by name, so it carries their counts and not their identities.
+    </p>;
+  }
+  return <>
+    {reading === null ? null : <p className="direct-status">{reading}</p>}
+    {/* FE-CHART mount: a status band, not a line — a verdict is a state, and a
+        line through states invents an ordering between them. */}
+    <LawBand
+      rows={rows}
+      cycles={cycles}
+      glosses={LAW_GLOSSES}
+      caption="Each row is one conservation law; each column is one cycle boundary the run checked it at. Open the table for what every law asks and what it found at the newest cycle."
+      emptyReason={NO_SERIES_SENTENCE_V1}
+    />
+  </>;
+}
+
+/**
  * The run drawn against time.
  *
  * The counts above are the run's present tense; this is its past, and it is
@@ -117,10 +260,6 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
   const editorial = series.market === null ? null : marketEditorialV1(series.market);
   const supplyLines = issuedSupplyLinesV1(series, editorial?.outcomes ?? null);
   const xLabels = series.points.map((point) => `cycle ${point.cycle}`);
-  const checkLines = [Object.freeze({
-    label: 'checks that held',
-    values: Object.freeze(series.points.map((point) => String(point.checksHeld))),
-  })];
 
   const covered = span.minutesCovered === null
     ? `${span.slotsCovered} slots of chain`
@@ -151,16 +290,6 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
 
-    <h3 className="detail-subhead">The ledger check, cycle by cycle</h3>
-    {/* FE-CHART mount: how many conservation laws held at each boundary. A law
-        that does not apply at a boundary is neither held nor broken, so the
-        count moves when the market's own shape changes, not only on failure. */}
-    <Sparkline
-      lines={checkLines}
-      xLabels={xLabels}
-      caption="Conservation laws that held at each cycle boundary. A law that does not apply at a boundary is not counted here as either holding or failing, which is why this number can rise as a market takes shape."
-      emptyReason={NO_SERIES_SENTENCE_V1}
-    />
   </>;
 }
 
@@ -296,12 +425,24 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>What the run looked like over time</h2><p>Every other chart on this site draws one moment. This one draws the run: one point per cycle, from the run&apos;s own records, with the claim counts on top and whether the ledger still added up underneath.</p></div></header>
+      <header><span>02</span><div><h2>The heartbeat</h2><p>Two things move between one reading and the next, and neither of them belongs to us: how far the chain got, and how long we took to come back. This is the part of the record that answers whether anything is on the other end of the line.</p></div></header>
+      <Heartbeat read={series} />
+    </section>
+
+    <section className="trade-v3-card">
+      <header><span>03</span><div><h2>Every law, at every boundary</h2><p>Seven conservation laws are re-checked after each cycle — that the collateral is all still somewhere we can name, that the positions add up to the issued supply, that the vault covers the worst outcome it could be asked to pay. Each row is one law; each column is one cycle.</p></div></header>
+      {series !== null && series.kind === 'loaded'
+        ? <ConservationLaws series={series.series} />
+        : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
+    </section>
+
+    <section className="trade-v3-card">
+      <header><span>04</span><div><h2>What the run looked like over time</h2><p>Every other chart on this site draws one moment. This one draws the run: one point per cycle, from the run&apos;s own records.</p></div></header>
       <RecordedCycles read={series} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
+      <header><span>05</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
       {status === null || status.lastReconciliation === null
         ? <p className="market-empty">No check has been read. When a run publishes here, its most recent conservation verdict appears in this spot — pass or fail, with its timestamp.</p>
         : <p className="direct-status">
@@ -313,14 +454,14 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>Who is in this market</h2><p>Every position on the market and every account holding its collateral, as of the last recorded cycle. This is the table a prediction market usually calls a leaderboard; it is not called that here, because ordering one position ranks nothing. The first trade changes that by itself.</p></div></header>
+      <header><span>06</span><div><h2>Who is in this market</h2><p>Every position on the market and every account holding its collateral, as of the last recorded cycle. This is the table a prediction market usually calls a leaderboard; it is not called that here, because ordering one position ranks nothing. The first trade changes that by itself.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <WhoIsHolding series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>05</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
+      <header><span>07</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
       {status === null
         ? <p className="market-empty">{NO_SIMULATOR_SENTENCE_V1}</p>
         : <>

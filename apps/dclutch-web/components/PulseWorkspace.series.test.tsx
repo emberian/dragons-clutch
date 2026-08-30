@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import published from '@/public/simulator-series.json';
 import example from '@/fixtures/simulator-status.example.json';
 import { marketEditorialV1 } from '@/lib/marketRegistry';
-import { holdingsReadingV1, isCompleteSetV1, parseSimulatorSeriesV1 } from '@/lib/simulatorSeries';
+import { holdingsReadingV1, isCompleteSetV1, lawBandCyclesV1, parseSimulatorSeriesV1 } from '@/lib/simulatorSeries';
 import { parseSimulatorStatusV1 } from '@/lib/simulatorStatus';
 
 import PulseWorkspace, { RecordedCycles, WhoIsHolding } from './PulseWorkspace';
@@ -28,7 +28,7 @@ describe('the pulse surface, with a recorded run', () => {
   it('draws the run against time, which no other chart on this site does', () => {
     expect(html).toContain('What the run looked like over time');
     expect(html).toContain('<polyline');
-    expect(html).toContain('cycle 1');
+    expect(html).toContain(`cycle ${series.points[0].cycle}`);
   });
 
   it('says in numbers what the drawn window covers, instead of in adjectives', () => {
@@ -45,7 +45,58 @@ describe('the pulse surface, with a recorded run', () => {
   it('reports the ledger checks across every drawn cycle, and whether they held', () => {
     expect(html).toContain('the ledger was re-checked');
     expect(html).toContain('held every time');
-    expect(html).toContain('The ledger check, cycle by cycle');
+  });
+
+  /**
+   * The heartbeat exists because everything ELSE on this page is honestly
+   * still. A census-only run signs nothing, so the market's quantities have no
+   * business moving — and a page that draws only those reads as a dead one
+   * while the chain underneath it is plainly alive. These pin that the two
+   * moving quantities are actually on the page, and that the rate beside them
+   * is presented as measured rather than as a constant somebody looked up.
+   */
+  it('draws the two quantities that are actually moving', () => {
+    expect(html).toContain('The heartbeat');
+    expect(html).toContain('slots the chain advanced');
+    expect(html).toContain('seconds between recordings');
+    expect(html).toContain('Chain slots covered');
+  });
+
+  it('says the slot rate was measured here rather than looked up', () => {
+    expect(html).toContain('Measured slot rate');
+    expect(html).toContain('measured here, not a published constant');
+  });
+
+  /**
+   * The law band replaced a sparkline of how MANY checks held. The count was
+   * true and shapeless; what a reader needs is which law and what it compared.
+   */
+  it('gives every conservation law its name, its verdict and its own sentence', () => {
+    expect(html).toContain('Every law, at every boundary');
+    for (const id of series.lawIds) expect(html).toContain(`>${id}<`);
+    // The census writes its sentences with real comparison operators in them
+    // ("Hoard ... >= worst outcome ..."), which is exactly the phrasing worth
+    // showing and exactly what markup escaping touches. Escape, never soften.
+    const escaped = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    for (const law of series.laws) expect(html).toContain(escaped(law.detail));
+  });
+
+  it('carries the law verdicts in words and glyphs, never in color alone', () => {
+    expect(html).toContain('did not apply');
+    expect(html).toContain('did not hold');
+    // Every column of the band says its own verdict in words, so a reader who
+    // separates neither hue still gets the answer for every cycle drawn.
+    for (const cycle of lawBandCyclesV1(series)) expect(html).toContain(`cycle ${cycle} — `);
+  });
+
+  /**
+   * A law's gloss is this site's editorial about what the law ASKS; the
+   * sentence beside it is the census's about what it FOUND. The page must
+   * never be the author of the second one.
+   */
+  it('keeps this site’s gloss on a law apart from the census’s own finding', () => {
+    expect(html).toContain('is this site&#x27;s gloss on what that law is for');
+    expect(html).toContain('full collateralisation');
   });
 
   /**
