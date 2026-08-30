@@ -19,6 +19,8 @@ pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAcc
 
 /// Canonical schema-bound CapabilityProgramSetV2 artifact construction.
 pub mod capability_program_set_v2;
+/// What a holder needs to find and redeem a claim-check.
+pub mod claim_check_v1;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
 pub mod dealer_equity_hot_v3;
 /// Lock-bounded Dealer checkpoint callers and crash-safe journal.
