@@ -13,6 +13,24 @@
 
 /// Canonical hot instruction magic.
 pub const HOT_EXECUTION_MAGIC_V3: [u8; 8] = *b"DCLTHOT3";
+
+/// Heap frame a TOP-LEVEL Hot submission must request, in bytes.
+///
+/// A caller who invokes Trading directly makes two Registry reauthentication
+/// CPIs that a Registry continuation never makes, and holds their frames and
+/// receipts against a bump allocator that never frees. That route's peak does
+/// not fit the protocol default 32,768, so it declares an extended heap
+/// profile and the transaction must carry a ComputeBudget `RequestHeapFrame`
+/// for this many bytes; Trading refuses by name -- not by running out of
+/// memory -- if the grant did not arrive.
+///
+/// A continuation submission carries NO grant and must not: it fits the
+/// default, and its packet has four spare bytes of the v0 ceiling anyway.
+///
+/// The value is a measured requirement plus margin, not a guess, and it must
+/// stay a multiple of 1,024 and at most 262,144 for the runtime to honour it.
+/// See `docs/evidence/` for the measurement and the margin it leaves.
+pub const DIRECT_HOT_HEAP_FRAME_BYTES_V1: u32 = 65_536;
 /// Canonical hot instruction schema version.
 pub const HOT_EXECUTION_VERSION_V3: u16 = 3;
 /// Canonical family-neutral hot instruction physical profile.

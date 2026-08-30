@@ -46,7 +46,8 @@ fn refusal_code(error: &BanksClientError) -> Option<u32> {
 use dclutch_direct_hot_program_test_support::waist::{
     COMPUTE_LIMIT, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
     canonical_lookup_addresses, direct_case, direct_top_level_instructions, elves,
-    fixture_substrate, program_test, start_with_substrate, submit_v0_observed,
+    fixture_substrate, program_test_without_forced_budget, start_with_substrate,
+    submit_v0_observed,
 };
 
 async fn account_snapshots(
@@ -88,12 +89,12 @@ async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
 #[tokio::test]
 async fn a_top_level_submission_no_longer_refuses_as_release() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
     let instructions = direct_top_level_instructions(&direct);
     assert_eq!(
-        instructions[2].program_id, TRADING_PROGRAM_ID,
+        instructions[3].program_id, TRADING_PROGRAM_ID,
         "this test must submit to Trading directly, not through an outer",
     );
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
@@ -141,7 +142,7 @@ async fn a_top_level_submission_no_longer_refuses_as_release() {
 #[tokio::test]
 async fn direct_inline_ordinary_executes_when_submitted_top_level_to_trading() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
     let instructions = direct_top_level_instructions(&direct);
@@ -149,7 +150,7 @@ async fn direct_inline_ordinary_executes_when_submitted_top_level_to_trading() {
     // The invoked program is Trading itself. If this ever becomes the Registry
     // the test has quietly turned back into the continuation test.
     assert_eq!(
-        instructions[2].program_id, TRADING_PROGRAM_ID,
+        instructions[3].program_id, TRADING_PROGRAM_ID,
         "this test must submit to Trading directly, not through an outer",
     );
 

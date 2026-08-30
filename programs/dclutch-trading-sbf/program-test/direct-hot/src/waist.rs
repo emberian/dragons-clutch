@@ -22,7 +22,8 @@ use crate::{
     fixture::{DirectHotChainFixtureV5, DirectHotChainInputV5, build_direct_hot_chain_fixture_v5},
 };
 use dclutch_capability_program_contract::hot_v3::{
-    HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+    HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
     HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
     HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
     HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
@@ -967,7 +968,7 @@ pub fn direct_registry_instructions(releases: Releases, direct: &DirectCase) -> 
 /// the Hot data it wraps -- so the makers sign the same message either way, at
 /// the same instruction index. Nothing about the makers' intent changes with
 /// the route; only who is invoked first does.
-pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 3] {
+pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 4] {
     let signatures = [
         direct.makers[0]
             .sign_message(&direct.chain.signed_messages[0])
@@ -980,9 +981,26 @@ pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 3] {
             .try_into()
             .expect("buyer signature width"),
     ];
+    // The heap grant rides AHEAD of the evidence, and the Hot instruction is
+    // therefore at index 3 rather than 2. Both positions are forced, and by
+    // opposite constraints:
+    //
+    // - it cannot go last. The runtime clears return data at the start of every
+    //   top-level instruction, so a trailing ComputeBudget instruction erases
+    //   the commit-last ACK the Hot execution just produced -- the transaction
+    //   succeeds and its evidence is gone.
+    // - it cannot go silently in front either. The native-signature evidence
+    //   names the index it expects to find the signed Hot instruction at, so
+    //   moving Hot means re-encoding the evidence for its new index. That is
+    //   what this does, rather than leaving a stale 2 behind.
+    //
+    // The continuation route carries no such instruction and must not: it fits
+    // the protocol default. This route makes two Registry reauthentication CPIs
+    // the other never makes and holds their frames against an allocator that
+    // never frees.
     let mut evidence = [0_u8; DIRECT_NATIVE_EVIDENCE_BYTES_V3];
     encode_direct_headerless_registry_native_evidence_v4_atomic(
-        2,
+        3,
         &direct.chain.hot_instruction.data,
         signatures,
         &mut evidence,
@@ -999,6 +1017,15 @@ pub fn direct_top_level_instructions(direct: &DirectCase) -> [Instruction; 3] {
                         .expect("compute limit width")
                         .to_le_bytes(),
                 );
+                data
+            },
+        },
+        Instruction {
+            program_id: compute_budget::ID,
+            accounts: Vec::new(),
+            data: {
+                let mut data = vec![1];
+                data.extend_from_slice(&DIRECT_HOT_HEAP_FRAME_BYTES_V1.to_le_bytes());
                 data
             },
         },
@@ -1274,6 +1301,32 @@ impl RefusedExecution {
 
 pub fn program_test(artifacts: &Elves) -> ProgramTest {
     program_test_v2(artifacts, fixture_substrate())
+}
+
+/// The same substrate WITHOUT a forced compute budget.
+///
+/// `set_compute_max_units` makes solana-program-test install one fixed budget
+/// and ignore the transaction's own ComputeBudget instructions -- including
+/// `RequestHeapFrame`. A route that must be exercised WITH its heap grant
+/// therefore cannot use `program_test`: the sysvar still shows the request, the
+/// adapter authenticates it and lifts its ceiling, and the runtime maps the
+/// default anyway, so the first scratch write lands outside the mapping and the
+/// run dies on an access violation that looks like a program bug and is not.
+/// That cost this lane an hour; it is a harness fact and it is named here now.
+pub fn program_test_without_forced_budget(artifacts: &Elves) -> ProgramTest {
+    let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
+    let substrate = fixture_substrate();
+    for (name, id, elf) in [
+        ("dclutch_registry_sbf", REGISTRY_PROGRAM_ID, &artifacts.registry),
+        ("dclutch_trading_sbf", TRADING_PROGRAM_ID, &artifacts.trading),
+        ("dclutch_core_sbf", CORE_PROGRAM_ID, &artifacts.core),
+        ("dclutch_claims_sbf", CLAIMS_PROGRAM_ID, &artifacts.claims),
+        ("dclutch_custody_sbf", CUSTODY_PROGRAM_ID, &artifacts.custody),
+    ] {
+        add_program_v2(&mut test, name, id, elf, substrate);
+    }
+    test
 }
 
 pub fn program_test_v2(artifacts: &Elves, substrate: FixtureSubstrateV1) -> ProgramTest {

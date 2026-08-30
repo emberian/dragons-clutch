@@ -3363,6 +3363,11 @@ fn reauthenticate_top_level_root_roles_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<(AuthenticatedRoleReceiptV1, AuthenticatedChildProgramsV3), ProgramError> {
+    // Before the two CPIs, not after: this route's peak exceeds the protocol
+    // default heap, and the two reauthentication frames are the first thing it
+    // spends that budget on. Refusing here costs a caller who forgot the grant
+    // one comparison instead of a million compute units and an unnamed abort.
+    crate::entrypoint_adapter::require_extended_heap_admitted_v1()?;
     let core_receipt = reauthenticate_role(
         frame,
         ExecutionRoleV1::Core,
@@ -3389,13 +3394,7 @@ fn reauthenticate_top_level_root_roles_v3(
 fn authenticate_continuation_root_roles_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
-) -> Result<
-    (
-        AuthenticatedRoleReceiptV1,
-        AuthenticatedChildProgramsV3,
-    ),
-    ProgramError,
-> {
+) -> Result<(AuthenticatedRoleReceiptV1, AuthenticatedChildProgramsV3), ProgramError> {
     let (trading_receipt, claims, custody) =
         authenticate_accelerator_activation_v4(frame, envelope)?;
     Ok((
