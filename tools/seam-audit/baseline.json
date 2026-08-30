@@ -2,8 +2,7 @@
   "findings": {
     "DOMAIN_BYTES_COLLIDE": {
       "CLAIMS_FOUNDING_AGGREGATE_SEED_V4\tCLAIMS_FOUNDING_AGGREGATE_SEED_V5\tCLAIMS_MARKET_SEED_V2\tLIABILITY_BASIS_MARKET_SEED_V2": "confirmed-defect",
-      "GENERAL_ACCELERATOR_CALLER_AUTHORITY_SEED_V1\tGENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1": "benign-distinct-programs",
-      "PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2\tRATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2": "confirmed-defect"
+      "GENERAL_ACCELERATOR_CALLER_AUTHORITY_SEED_V1\tGENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1": "benign-distinct-programs"
     },
     "DOMAIN_NAME_BYTES_DISAGREE": {
       "crates/dclutch-claims-svm\tCLAIMS_FOUNDING_AGGREGATE_SEED_V4": "confirmed-defect",
@@ -42,6 +41,7 @@
       "LIABILITY_BASIS_MARKET_SEED_V2\tcrates/dclutch-operator/src/wallet_terminal_payout_v3.rs": "debt-derivation-restatement",
       "LIABILITY_BASIS_MARKET_SEED_V2\tprograms/dclutch-claims-sbf/program-test/affine-batch/src/lib.rs": "debt-derivation-restatement",
       "LIABILITY_BASIS_MARKET_SEED_V2\tprograms/dclutch-claims-sbf/src/affine_batch_v2.rs": "debt-derivation-restatement",
+      "LIABILITY_BASIS_MARKET_SEED_V2\tprograms/dclutch-claims-sbf/src/claim_check_compaction_v1.rs": "debt-derivation-restatement",
       "LIABILITY_BASIS_MARKET_SEED_V2\tprograms/dclutch-claims-sbf/src/market_closure_v1.rs": "debt-derivation-restatement",
       "LIABILITY_BASIS_MARKET_SEED_V2\tprograms/dclutch-claims-sbf/src/protocol_position_v2.rs": "debt-derivation-restatement",
       "LIABILITY_BASIS_MARKET_SEED_V2\tprograms/dclutch-claims-sbf/src/rational_lifecycle_v2.rs": "debt-derivation-restatement",
@@ -83,7 +83,6 @@
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\ttools/local-validator/bootstrap/successor/src/release_capture.rs": "debt-derivation-restatement",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\ttools/local-validator/bootstrap/successor/src/runtime.rs": "debt-derivation-restatement",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\ttools/local-validator/bootstrap/successor/src/upgrade.rs": "debt-derivation-restatement",
-      "RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2\tcrates/dclutch-rational-lifecycle-hot-v3/src/compact_operator_v4.rs": "debt-derivation-restatement",
       "RATIONAL_SHARD_MINT_SEED_V2\tcrates/dclutch-rational-lifecycle-hot-v3/src/compact_operator_v4.rs": "debt-derivation-restatement",
       "RATIONAL_SHARD_MINT_SEED_V2\tcrates/dclutch-rational-representation-v2-operator/src/lib.rs": "debt-derivation-restatement",
       "RATIONAL_SHARD_MINT_SEED_V2\tprograms/dclutch-claims-sbf/program-test/rational-lifecycle/tests/lifecycle.rs": "debt-derivation-restatement",
@@ -131,6 +130,7 @@
       "RAW_RECORD_PDA_SEED_V1\tprograms/dclutch-claims-sbf/program-test/fractional-atomic/tests/fractional_atomic.rs": "debt-derivation-restatement",
       "RAW_RECORD_PDA_SEED_V1\tprograms/dclutch-claims-sbf/program-test/protocol-position/tests/lifecycle.rs": "debt-derivation-restatement",
       "RAW_RECORD_PDA_SEED_V1\tprograms/dclutch-claims-sbf/program-test/rational-lifecycle/tests/lifecycle.rs": "debt-derivation-restatement",
+      "RAW_RECORD_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/claim_check_compaction_v1.rs": "debt-derivation-restatement",
       "RAW_RECORD_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/rational_representation_v2.rs": "debt-derivation-restatement",
       "RAW_RECORD_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/rational_terminal_v3.rs": "debt-derivation-restatement",
       "RAW_RECORD_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/terminal_settlement_v3.rs": "debt-derivation-restatement",
@@ -209,6 +209,7 @@
       "STAGING_CURSOR_PDA_SEED_V1\tprograms/dclutch-claims-sbf/program-test/fractional-atomic/tests/fractional_atomic.rs": "debt-derivation-restatement",
       "STAGING_CURSOR_PDA_SEED_V1\tprograms/dclutch-claims-sbf/program-test/protocol-position/tests/lifecycle.rs": "debt-derivation-restatement",
       "STAGING_CURSOR_PDA_SEED_V1\tprograms/dclutch-claims-sbf/program-test/rational-lifecycle/tests/lifecycle.rs": "debt-derivation-restatement",
+      "STAGING_CURSOR_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/claim_check_compaction_v1.rs": "debt-derivation-restatement",
       "STAGING_CURSOR_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/rational_representation_v2.rs": "debt-derivation-restatement",
       "STAGING_CURSOR_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/rational_terminal_v3.rs": "debt-derivation-restatement",
       "STAGING_CURSOR_PDA_SEED_V1\tprograms/dclutch-claims-sbf/src/terminal_settlement_v3.rs": "debt-derivation-restatement",
@@ -252,8 +253,14 @@
       "STAGING_CURSOR_PDA_SEED_V1\ttools/local-validator/bootstrap/successor/src/upgrade.rs": "debt-derivation-restatement"
     },
     "PRIVILEGE_PIN_UNEXEMPTED": {
+      "crates/dclutch-operator/src/direct_begin_retiring_v1.rs\tassemble_plan": "hazard-privilege-pin",
       "crates/dclutch-rational-lifecycle-hot-v3/src/operator.rs\tvalidate_child_frame": "hazard-privilege-pin",
       "crates/dclutch-relay-contract/src/frame.rs\tvalidate_relay_frame_v1": "hazard-privilege-pin",
+      "crates/dclutch-resolution-core-v3-operator/src/lib.rs\tbuild_resolution_activate_fund_v1": "hazard-privilege-pin",
+      "crates/dclutch-resolution-core-v3-operator/src/lib.rs\tbuild_resolution_direct_close_fund_v1": "hazard-privilege-pin",
+      "crates/dclutch-resolution-core-v3-operator/src/lib.rs\texact_close_frame": "hazard-privilege-pin",
+      "crates/dclutch-resolution-core-v3-operator/src/lib.rs\tvalidate_funding_frame": "hazard-privilege-pin",
+      "crates/dclutch-resolution-core-v3-operator/src/lib.rs\tvalidate_resolution_close_fund_report_v3": "hazard-privilege-pin",
       "crates/dclutch-resolution-core-v3-operator/src/provider_finalized_projection_v3.rs\trequire_frame": "hazard-privilege-pin",
       "crates/dclutch-source-contract/src/lib.rs\tvalidate_source_frame_v1": "hazard-privilege-pin",
       "programs/dclutch-claims-sbf/src/affine_batch_v2.rs\tauthenticate_frame_spec": "hazard-privilege-pin",
@@ -262,20 +269,27 @@
       "programs/dclutch-claims-sbf/src/protocol_position_v2.rs\tauthenticate_parent_close_frame_spec": "hazard-privilege-pin",
       "programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs\tauthenticate_privileges": "hazard-privilege-pin",
       "programs/dclutch-core-sbf/src/execute_provider_v3.rs\tvalidate_outer_frame": "hazard-privilege-pin",
+      "programs/dclutch-core-sbf/src/resolution.rs\tvalidate_outer_frame": "hazard-privilege-pin",
       "programs/dclutch-core-sbf/src/retirement_replay_handoff_v1.rs\trequire_frame": "hazard-privilege-pin",
       "programs/dclutch-custody-sbf/src/dealer_reservation_v1.rs\trequire_activation_frame": "hazard-privilege-pin",
       "programs/dclutch-custody-sbf/src/lib.rs\trequire_account_count": "hazard-privilege-pin",
       "programs/dclutch-custody-sbf/src/retirement_replay_handoff_v1.rs\trequire_frame": "hazard-privilege-pin",
       "programs/dclutch-resolution-proof-sbf/src/core_effect.rs\tauthenticate_common_frame": "hazard-privilege-pin",
+      "programs/dclutch-resolution-proof-sbf/src/lib.rs\tvalidate_frame": "hazard-privilege-pin",
       "programs/dclutch-resolution-proof-sbf/src/pre_market_funding_abort_v1.rs\tauthenticate_frame": "hazard-privilege-pin",
       "programs/dclutch-resolution-proof-sbf/src/provider_instruction_v3.rs\tauthenticate_privileges": "hazard-privilege-pin",
       "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs\tauthenticate_reclaim_privileges": "hazard-privilege-pin",
       "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs\tauthenticate_submit_privileges": "hazard-privilege-pin",
       "programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs\tauthenticate_capture_frame": "hazard-privilege-pin",
+      "programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs\tauthenticate_cleanup_frame": "hazard-privilege-pin",
       "programs/dclutch-resolution-proof-sbf/src/sponsored_push_v1.rs\tauthenticate_settle_frame": "hazard-privilege-pin",
+      "programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs\trequire_commit_claims_privileges_v1": "hazard-privilege-pin",
+      "programs/dclutch-trading-sbf/src/direct_begin_retiring_v1.rs\tparse": "hazard-privilege-pin",
       "programs/dclutch-trading-sbf/src/direct_replay_setup_v1.rs\tauthenticate_top_frame": "hazard-privilege-pin",
       "programs/dclutch-trading-sbf/src/execution_strategy_v2.rs\tauthenticate_common_frame_with_sealed_capability_alias": "hazard-privilege-pin",
-      "programs/dclutch-trading-sbf/src/user_position_admission_v1.rs\tauthenticate_outer_frame_v1": "hazard-privilege-pin"
+      "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs\tauthenticate_expired_checkpoint_v1": "hazard-privilege-pin",
+      "programs/dclutch-trading-sbf/src/user_position_admission_v1.rs\tauthenticate_outer_frame_v1": "hazard-privilege-pin",
+      "tools/local-validator/bootstrap/successor/src/direct_hot_route_manifest.rs\tproject_manifest_document_v3": "hazard-privilege-pin"
     },
     "SEED_DOMAIN_UNASSERTED": {
       "crates/dclutch-capability-contract\tCAPABILITY_FUNDING_AUTHORITY_PDA_DOMAIN_V1": "debt-seed-guard",
@@ -292,6 +306,9 @@
       "crates/dclutch-claims-svm\tCLAIMS_FOUNDING_AGGREGATE_SEED_V4": "debt-seed-guard",
       "crates/dclutch-claims-svm\tCLAIMS_FOUNDING_AGGREGATE_SEED_V5": "debt-seed-guard",
       "crates/dclutch-claims-svm\tCLAIMS_POSITION_PDA_DOMAIN_V1": "debt-seed-guard",
+      "crates/dclutch-claims-svm\tCLAIM_CHECK_ESCROW_SEED_V1": "debt-seed-guard",
+      "crates/dclutch-claims-svm\tCLAIM_CHECK_SEED_V1": "debt-seed-guard",
+      "crates/dclutch-claims-svm\tCLAIM_CHECK_VAULT_SEED_V1": "debt-seed-guard",
       "crates/dclutch-claims-svm\tLIABILITY_BASIS_MARKET_SEED_V2": "debt-seed-guard",
       "crates/dclutch-claims-svm\tPROTOCOL_POSITION_ADMISSION_SEED_V2": "debt-seed-guard",
       "crates/dclutch-claims-svm\tPROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2": "debt-seed-guard",
@@ -307,7 +324,6 @@
       "crates/dclutch-product-payoff-v2-svm\tPAYOFF_CERTIFICATE_PDA_DOMAIN_V2": "debt-seed-guard",
       "crates/dclutch-product-runtime-v2-admission\tADMISSION_RECEIPT_PDA_DOMAIN_V2": "debt-seed-guard",
       "crates/dclutch-pyth-svm\tSOL_USD_FEED_ID": "debt-seed-guard",
-      "crates/dclutch-rational-representation-v2-contract\tRATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2": "debt-seed-guard",
       "crates/dclutch-rational-representation-v2-contract\tRATIONAL_RECEIPT_MINT_SEED_V2": "debt-seed-guard",
       "crates/dclutch-rational-representation-v2-contract\tRATIONAL_REPLAY_SEED_V2": "debt-seed-guard",
       "crates/dclutch-rational-representation-v2-contract\tRATIONAL_SHARD_MINT_SEED_V2": "debt-seed-guard",
@@ -317,7 +333,6 @@
       "crates/dclutch-realm-contract\tPOSITION_PDA_DOMAIN_V1": "debt-seed-guard",
       "crates/dclutch-realm-contract\tREALM_PDA_DOMAIN_V1": "debt-seed-guard",
       "crates/dclutch-realm-contract\tREALM_SCHEMA_RELEASE_ID_V1": "debt-seed-guard",
-      "crates/dclutch-registry-contract\tACTIVATION_PDA_DOMAIN_V1": "debt-seed-guard",
       "crates/dclutch-registry-contract\tARTIFACT_RELEASE_SCHEMA_ID_V1": "debt-seed-guard",
       "crates/dclutch-relay-contract\tRELAYED_RECORD_PDA_DOMAIN_V1": "debt-seed-guard",
       "crates/dclutch-relay-contract\tRELAYED_SET_DIGEST_DOMAIN_V1": "debt-seed-guard",
@@ -365,17 +380,14 @@
       "programs/dclutch-trading-sbf/src/outer.rs\tparse": "hazard-signer-census",
       "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs\tauthenticate_expired_checkpoint_v1": "confirmed-defect",
       "programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs\tparse": "hazard-signer-census",
-      "tools/local-validator/bootstrap/successor/src/flagship_resolution.rs\tcore_terminal_accept_report": "hazard-signer-census",
-      "tools/local-validator/bootstrap/successor/src/market.rs\tauthenticate_generic_found_and_permit_lock_census_v3": "hazard-signer-census",
-      "tools/local-validator/bootstrap/successor/src/market.rs\tauthenticate_generic_market_founding_lock_census_v3": "hazard-signer-census",
-      "tools/local-validator/bootstrap/successor/src/market.rs\tauthenticate_generic_market_open_frame_v1": "hazard-signer-census",
-      "tools/local-validator/bootstrap/successor/src/terminal_sequence.rs\tauthenticate_lookup_infrastructure_planned_journal_v1": "hazard-signer-census"
+      "tools/local-validator/bootstrap/successor/src/flagship_resolution.rs\tcore_terminal_accept_report": "hazard-signer-census"
     },
     "UNSET_GUARD_PRESENT": {
       "crates/dclutch-account-profile-contract/src/lib.rs": "inventory-guard-present",
       "crates/dclutch-account-profile-contract/src/lifecycle_v3.rs": "inventory-guard-present",
       "crates/dclutch-bearer-v2-operator/src/hot_terminal_v3.rs": "inventory-guard-present",
       "crates/dclutch-bearer-v2-operator/src/hot_transaction_v3.rs": "inventory-guard-present",
+      "crates/dclutch-bearer-v2-operator/src/open_release_v1.rs": "inventory-guard-present",
       "crates/dclutch-bearer-v2-operator/src/open_selected_transaction_v3.rs": "inventory-guard-present",
       "crates/dclutch-bearer-v2-operator/src/open_selected_v3.rs": "inventory-guard-present",
       "crates/dclutch-bearer-v2-operator/src/open_structured_transaction_v3.rs": "inventory-guard-present",
@@ -387,6 +399,7 @@
       "crates/dclutch-capability-program-contract/src/set_v2.rs": "inventory-guard-present",
       "crates/dclutch-claims-representation-codec/src/lib.rs": "inventory-guard-present",
       "crates/dclutch-claims-svm/src/affine_batch_v2.rs": "inventory-guard-present",
+      "crates/dclutch-claims-svm/src/claim_check_v1.rs": "inventory-guard-present",
       "crates/dclutch-claims-svm/src/composition_v3.rs": "inventory-guard-present",
       "crates/dclutch-claims-svm/src/founding_v4.rs": "inventory-guard-present",
       "crates/dclutch-claims-svm/src/founding_v5.rs": "inventory-guard-present",
@@ -429,6 +442,7 @@
       "crates/dclutch-fractional-claim-contract/src/root.rs": "inventory-guard-present",
       "crates/dclutch-fractional-claim-kernel/src/abi.rs": "inventory-guard-present",
       "crates/dclutch-fractional-claim-kernel/src/exposure_v2.rs": "inventory-guard-present",
+      "crates/dclutch-fractional-claim-kernel/src/selection_config_v1.rs": "inventory-guard-present",
       "crates/dclutch-fractional-claim-kernel/src/terms_encode.rs": "inventory-guard-present",
       "crates/dclutch-fractional-claim-kernel/src/transition.rs": "inventory-guard-present",
       "crates/dclutch-fractional-claim-operator/src/artifacts.rs": "inventory-guard-present",
@@ -651,5 +665,6 @@
       "programs/dclutch-trading-sbf/src/hot_v3.rs\tapply_lifecycle_creates_v3": "hazard-unset-pin"
     }
   },
+  "measured_commit": "fd8cad393fd6ead08a9417e8c3742b857eb4ce76",
   "schema": "dclutch-seam-audit-v1"
 }
