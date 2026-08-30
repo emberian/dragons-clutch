@@ -136,7 +136,10 @@ use dclutch_product_runtime_v2_svm_reader::{
     ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1};
+use dclutch_registry_contract::{
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
+    ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1,
+};
 use dclutch_registry_svm::{
     AuthenticatedRoleReceiptV1, RegistryInstructionV1,
     continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
@@ -1381,17 +1384,54 @@ fn require_activation_cache_account_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<ActivationCacheAuthenticatedV1, ProgramError> {
-    let expected_cache = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, &envelope.release_set()],
-        frame.registry.key,
-    )
-    .0;
-    if frame.activation_cache.key != &expected_cache
-        || frame.activation_cache.owner != frame.registry.key
+    if frame.activation_cache.owner != frame.registry.key
         || frame.activation_cache.is_signer
         || frame.activation_cache.is_writable
         || frame.activation_cache.executable
+        || frame.activation_cache.data_len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
     {
+        return Err(TradingSbfError::Release.into());
+    }
+    // The cache carries its own bump, so this REPRODUCES the address instead of
+    // walking down from 255. Only the seed the account contributes is that one
+    // byte; the release set is still the envelope's, so the address this checks
+    // against is still the one THIS market selected and not one the account
+    // named for itself. A wrong byte reproduces a different address and refuses
+    // at the equality below, and only the Registry writes the byte -- see
+    // `ACTIVATION_CACHE_BUMP_OFFSET_V1`. Zero means a cache written before the
+    // byte existed, and falls back to the search this used to always do.
+    let carried = {
+        let bytes = frame
+            .activation_cache
+            .try_borrow_data()
+            .map_err(|_| TradingSbfError::Release)?;
+        let bump = *bytes
+            .get(ACTIVATION_CACHE_BUMP_OFFSET_V1)
+            .ok_or(TradingSbfError::Release)?;
+        (bump != 0).then_some(bump)
+    };
+    let expected_cache = match carried {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    ACTIVATION_PDA_DOMAIN_V1,
+                    &envelope.release_set(),
+                    &bump_seed,
+                ],
+                frame.registry.key,
+            )
+            .map_err(|_| TradingSbfError::Release)?
+        }
+        None => {
+            Pubkey::find_program_address(
+                &[ACTIVATION_PDA_DOMAIN_V1, &envelope.release_set()],
+                frame.registry.key,
+            )
+            .0
+        }
+    };
+    if frame.activation_cache.key != &expected_cache {
         return Err(TradingSbfError::Release.into());
     }
     Ok(ActivationCacheAuthenticatedV1(()))
@@ -7840,7 +7880,16 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             trading_program: program_id.to_bytes(),
                         },
                     )?)?;
-                    caller_bumps.record_wire_bytes(invocation.request_len);
+                    // Plus the one byte `execute_custody_route_v3` appends: the
+                    // caller-authority bump the child reads instead of
+                    // searching. Sized here so the walk's single wire buffer is
+                    // still bought exactly once.
+                    caller_bumps.record_wire_bytes(
+                        invocation
+                            .request_len
+                            .checked_add(1)
+                            .ok_or(TradingSbfError::Content)?,
+                    );
                     #[cfg(not(any(
                         feature = "families",
                         feature = "series-family",
