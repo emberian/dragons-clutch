@@ -314,11 +314,18 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             .map_err(|error| Error::new(format!("founded Market: {error:?}")))?;
     let generation = market_state.identity.generation;
     let rent_beneficiary = Pubkey::new_from_array(market_state.rent_beneficiary.to_bytes());
-    if market_state.identity.resolution_policy.to_bytes() != facts.material_digest {
-        return Err(Error::new(
-            "the founded Market's resolution policy is not the compiled relayed material",
-        ));
-    }
+    // The Market's resolution policy is the digest of the source material the
+    // campaign PUBLISHED, and that is deliberately not the digest `relayed.rs`
+    // compiled. The market compiler rebuilds the manipulation floor with the
+    // market's own coordinates, and one of them is the collateral mint --
+    // created at run time, unknowable to any compiler. So a market whose floor
+    // is bounded can never publish the compiler's `material_digest`, and
+    // comparing the two could never hold for this family. Every record
+    // identity below is therefore read off the FOUNDED MARKET, and the ties
+    // back to what this campaign compiled are made on the fields the market
+    // compiler does not rewrite: the source spec, and the absence of a
+    // recovery policy.
+    let published_material = market_state.identity.resolution_policy.to_bytes();
 
     let founder_wallet = pubkey(
         &session
@@ -503,21 +510,46 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     let material_pair = RecordPairV1::derive(
         registry_program,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-        facts.material_digest,
+        published_material,
     );
     let material_account = session
         .rpc
         .required_account(material_pair.raw, "SourceMaterialV3 record")?;
     let material = SourceMaterialV3::decode(&material_account.data)
         .map_err(|error| Error::new(format!("SourceMaterialV3: {error:?}")))?;
+    // The two facts the market compiler does NOT rewrite, so they still tie
+    // the founded market back to the graph this campaign compiled.
+    if material.primary_source_spec().to_bytes() != facts.source_spec_digest {
+        return Err(Error::new(
+            "the founded Market's source material does not name the relayed source spec",
+        ));
+    }
     if material.recovery_policy().is_some() {
         return Err(Error::new(
             "the relayed vertical requires a no-recovery SourceMaterialV3",
         ));
     }
+    // The floor the market published, not the floor the compiler proposed: the
+    // rebuild replaces the template's source spec, adapter config and
+    // collateral unit with the market's own.
+    let published_floor = crate::market::record_identity(
+        &session
+            .rpc
+            .required_account(
+                pubkey(
+                    &session
+                        .accounts
+                        .get("manipulation_floor_record")
+                        .ok_or_else(|| Error::new("no manipulation_floor_record evidence"))?
+                        .address,
+                )?,
+                "published ManipulationFloorV1 record",
+            )?
+            .data,
+    );
     match material.principal_policy() {
         SourcePrincipalPolicyV1::BoundedByFloor(floor)
-            if floor.to_bytes() == facts.manipulation_floor_digest => {}
+            if floor.to_bytes() == published_floor => {}
         _ => {
             return Err(Error::new(
                 "the relayed SourceMaterialV3 does not select the published manipulation floor",
@@ -527,7 +559,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     let manifest_pair = RecordPairV1::derive(
         registry_program,
         dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-        crate::market::record_identity(&facts.manifest_bytes),
+        market_state.identity.capability_manifest.to_bytes(),
     );
 
     let create_snapshot = fund_snapshot(
