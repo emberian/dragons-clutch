@@ -27,6 +27,8 @@ export type MarketEditorialEntryV1 = Readonly<{
   question: string;
   /** Editorial names for the outcome cells, index-ordered, or null. */
   outcomes: ReadonlyArray<string> | null;
+  /** How the question settles, in words — the design, not a promise. */
+  resolution: string | null;
   /** What happened to this market, told once, kindly, and honestly. */
   story: string | null;
 }>;
@@ -61,7 +63,7 @@ function entry(value: unknown, field: string): MarketEditorialEntryV1 {
   const root = object(value, field);
   const keys = Object.keys(root);
   for (const key of keys) {
-    if (!['title', 'question', 'outcomes', 'story'].includes(key)) throw new Error(`${field} has an unknown field: ${key}`);
+    if (!['title', 'question', 'outcomes', 'resolution', 'story'].includes(key)) throw new Error(`${field} has an unknown field: ${key}`);
   }
   const title = prose(root.title, `${field} title`);
   const question = prose(root.question, `${field} question`);
@@ -70,8 +72,9 @@ function entry(value: unknown, field: string): MarketEditorialEntryV1 {
     if (!Array.isArray(root.outcomes) || root.outcomes.length === 0) throw new Error(`${field} outcomes must be a non-empty array or null`);
     outcomes = Object.freeze(root.outcomes.map((label, index) => prose(label, `${field} outcome ${index}`)));
   }
+  const resolution = root.resolution === undefined || root.resolution === null ? null : prose(root.resolution, `${field} resolution`);
   const story = root.story === undefined || root.story === null ? null : prose(root.story, `${field} story`);
-  return Object.freeze({ title, question, outcomes, story });
+  return Object.freeze({ title, question, outcomes, resolution, story });
 }
 
 /** Parse the shipped editorial registry, refusing shapes it does not know. */

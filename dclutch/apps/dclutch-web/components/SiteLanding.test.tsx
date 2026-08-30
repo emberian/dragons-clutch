@@ -39,6 +39,11 @@ describe('the front door', () => {
     expect(html).toContain('will tell you plainly that there is not one yet');
   });
 
+  it('offers the faucet to a reader who wants to try it, right beside the nothing-for-sale fact', () => {
+    expect(html).toContain('https://faucet.solana.com');
+    expect(html).toContain('devnet SOL is free from the');
+  });
+
   it('carries the key art with a described image and an honest caption', () => {
     expect(html).toContain('/art/dragons-clutch-key-art-v1-1672w.webp');
     expect(html).toContain('claw cradling a glowing, faceted gem');
