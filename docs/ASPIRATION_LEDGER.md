@@ -238,7 +238,12 @@ A gen-1 audit lane measured against it and returned: *"the current tree
 implements much of the middle, but not the compiler-shaped entrance or a real
 public exit."* That verdict is still accurate for gen-3.
 
-### M-4. The B-spline requirement: caught once by ember, regressed silently in the successor
+### M-4. The B-spline requirement: caught once by ember, proved in the successor and never connected
+
+*(Heading corrected 2026-08-30 — it read "regressed silently in the
+successor", which the dated amendment at the end of this section refutes.
+Corrected here rather than only below, because what other documents quote is
+the heading.)*
 
 This is the sharpest single finding in the audit, because it is a named ember
 requirement that was dropped, restored on his personal intervention, and then
@@ -273,6 +278,62 @@ successor design that is defensible on its merits, recorded in one table cell,
 never surfaced to him as a substitution, and whose first slice is not wired to
 anything. `O-013` is a decision about a *basis*; it is not a decision about
 *"'5 fixed bands' is really not good enough."*
+
+**AMENDED 2026-08-30 (FRONTIER-2). The "zero files" line above is now
+categorically false, and the correction changes what ember should be asked.**
+Re-measured at HEAD, excluding `target/` and Markdown: `spline` (case
+-insensitive) matches **17 code and Lean files**, and `Bernstein` matches
+three. The B-spline development exists in gen-3 and is substantial:
+
+| | LOC | theorems | `sorry` |
+|---|---:|---:|---:|
+| `DClutchSemantics/LiabilityBasisV2.lean` | 1,828 | 101 | 0 |
+| `LiabilityBasisV2Spline.lean` | 1,140 | 50 | 0 |
+| `LiabilityBasisV2SplineAbi.lean` | 403 | 17 | 0 |
+| `LiabilityBasisV2SplineExamples.lean` | 262 | — | 0 |
+| `LiabilityBasisV2PriceGate.lean` | 753 | 37 | 0 |
+| `LiabilityBasisV2PriceGateAbi.lean` | 452 | 13 | 0 |
+| `LiabilityBasisV2PriceGateExamples.lean` | 343 | 3 | 0 |
+| **total** | **5,181** | **221** | **0** |
+
+plus `crates/dclutch-liability-basis-v2-kernel` (4,491 LOC) with `spline.rs`
+— *"Degree-one through degree-three B-spline liability bases"*, integer de
+Boor, no floating point — a Lean-emitted `generated_spline.rs` and
+`generated_price_gate.rs`, and three byte-identity guards
+(`check-generated.sh`, `check-generated-spline.sh`,
+`check-generated-price-gate.sh`).
+
+**Three corrections follow, and the third is the one to put in front of him.**
+
+1. **"Regressed silently" is the wrong verb.** The requirement was not
+   dropped; it was *proved and not connected*. The measurement that produced
+   "zero files" searched a vocabulary (`bspline`, `BSpline`, `Bernstein`) that
+   the successor does not use for its own module names, and it ran before the
+   spline and price-gate modules landed. A vocabulary search is not a
+   capability measurement, and this row is the cost of confusing them.
+2. **Shaped payoffs already ship on the live wire.** `BasisKindV3`
+   (`crates/dclutch-product-payoff-v2-codec/src/runtime_v3.rs:105`) admits
+   `GradedExactComplement` alongside `CategoricalQ1`, and `BasisShapeV3`
+   (`:131`) carries `Constant`, `RampUp`, `RampDown` and `Tent` over
+   runtime-width knots. **Ramps and tents are not a proposal — a Market can
+   select them today**, under a certified categorical projection with a
+   componentwise integer error bound. "5 fixed bands" is not what ships.
+3. **The unreached capability is curvature — degrees 2 and 3 — and the reason
+   it is unreached is not a missing field.** It is that the tree contains
+   **two independent evaluators of one nominal format**: the live handwritten
+   `ProductBasisV3` over record magic `DCLTPAY3`, and the Lean-emitted kernel
+   over `DCLTLBV2`/`DCLTLNK2`, a record family
+   `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:11-27` says in its
+   own words was *"deleted as dead on both ends."* Unifying them is a
+   wire-format decision, not an edit. See
+   [`design/BASIS_ABI_UNIFICATION_V1.md`](design/BASIS_ABI_UNIFICATION_V1.md).
+
+**So the question to ask ember is not "we dropped your B-spline requirement,
+should we restore it?"** It is: *ramps and tents ship today; degrees 2–3 are
+proved, byte-guarded and implemented in a kernel nothing calls; connecting
+them means ruling on which of two evaluators is the authority for the
+protocol's wire. Is curvature worth that, and when?* That is a question he can
+answer. The original framing is one he would have had to correct first.
 
 ### M-5. Two CFTC filings have no submission confirmation, and one was due today
 
