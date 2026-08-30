@@ -79,6 +79,9 @@ def load_config(path: Path) -> dict:
         raise Refusal(f"bootstrap_bin is not executable: {body['bootstrap_bin']}")
     if "mainnet" in rpc:
         raise Refusal("mainnet is refused unconditionally")
+    trade_mode = (body.get("trade") or {}).get("mode")
+    if trade_mode not in ("local", "devnet", "none"):
+        raise Refusal("trade.mode must be local, devnet, or none")
     return body
 
 
@@ -129,6 +132,9 @@ class Simulator:
         )
         self.signatures: list = []
         self.trades_landed = 0
+        # A market can be worth watching before it can be traded: the census
+        # half needs only a cluster and the market's own accounts.
+        self.census_only = (config.get("trade") or {}).get("mode") == "none"
         self.prior_census: Optional[Path] = None
         # Resume: adopt the newest already-finalized census as --prior.
         census_dir = self.work / "census"
@@ -427,6 +433,9 @@ class Simulator:
             halted=halted,
             halt_reason=halt_reason,
             stopping=stopping,
+            # Said out loud so a reader never has to infer "zero trades" from
+            # an empty list: this run is not attempting any.
+            extra={"trades_attempted": not self.census_only},
         )
 
     def run(self) -> int:
@@ -456,18 +465,24 @@ class Simulator:
             journal.record(simcore.PHASE_PLANNED, plan)
             try:
                 journal.record(simcore.PHASE_EXECUTING, plan)
-                out = self.produce_session(cycle)
-                completion = self.pulse_session(cycle, out)
                 sigs = []
-                for mutation in completion.get("mutations", []) or []:
-                    sig = mutation.get("signature")
-                    if sig:
-                        sigs.append(sig)
-                if completion.get("signature"):
-                    sigs.append(completion["signature"])
-                if self.execute and not completion.get("preflight"):
-                    self.trades_landed += 1
-                self.signatures.extend(s for s in sigs if s not in self.signatures)
+                if self.census_only:
+                    # No trade is attempted, so none is reported. The cycle is
+                    # still a real cycle: it reads the market off the cluster
+                    # and reconciles it against the conservation laws.
+                    pass
+                else:
+                    out = self.produce_session(cycle)
+                    completion = self.pulse_session(cycle, out)
+                    for mutation in completion.get("mutations", []) or []:
+                        sig = mutation.get("signature")
+                        if sig:
+                            sigs.append(sig)
+                    if completion.get("signature"):
+                        sigs.append(completion["signature"])
+                    if self.execute and not completion.get("preflight"):
+                        self.trades_landed += 1
+                    self.signatures.extend(s for s in sigs if s not in self.signatures)
                 recon = self.run_census(cycle)
                 journal.record(
                     simcore.PHASE_FINALIZED, plan,
