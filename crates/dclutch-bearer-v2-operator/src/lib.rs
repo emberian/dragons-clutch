@@ -17,6 +17,8 @@ mod hot_effect_v3;
 mod hot_terminal_v3;
 mod hot_transaction_v3;
 mod open_capability_set_v3;
+mod open_lifecycle_policy_v5;
+mod open_release_v1;
 mod open_selected_transaction_v3;
 mod open_selected_v3;
 mod open_structured_transaction_v3;
@@ -55,6 +57,15 @@ pub use open_capability_set_v3::{
     RationalOpenCapabilityProgramSetV3, build_rational_open_capability_program_set_v3,
     build_rational_open_capability_program_set_v6,
     validate_rational_open_capability_program_set_v3,
+};
+pub use open_lifecycle_policy_v5::{
+    OPEN_CAPABILITY_LIFECYCLE_POLICY_BYTES_V5, encode_open_capability_lifecycle_policy_v5,
+};
+pub use open_release_v1::{
+    OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1, OPEN_CAPABILITY_SELECTED_ACTIONS_V1,
+    OpenCapabilityActionArtifactBytesV1, OpenCapabilityArtifactReleaseBytesV1,
+    OpenCapabilityArtifactSelectionV1, OpenCapabilityJoinedReleaseV1,
+    authenticate_open_capability_release_v1,
 };
 pub use open_selected_transaction_v3::{
     ConstructedHotOpenSelectedV3, RationalOpenSelectedHotInstructionV3,
