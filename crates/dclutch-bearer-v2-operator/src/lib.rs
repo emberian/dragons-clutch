@@ -61,6 +61,12 @@ pub use open_capability_set_v3::{
 pub use open_lifecycle_policy_v5::{
     OPEN_CAPABILITY_LIFECYCLE_POLICY_BYTES_V5, encode_open_capability_lifecycle_policy_v5,
 };
+/// The action a caller must name to select one of this crate's five builders.
+///
+/// Re-exported because every public bundle-input struct here carries an `action`
+/// field of this type: without this line a caller cannot construct one without
+/// depending on a crate this API never mentions.
+pub use dclutch_rational_representation_v2_contract::RepresentationActionV2;
 pub use open_release_v1::{
     OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1, OPEN_CAPABILITY_SELECTED_ACTIONS_V1,
     OpenCapabilityActionArtifactBytesV1, OpenCapabilityArtifactReleaseBytesV1,

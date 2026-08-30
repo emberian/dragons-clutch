@@ -63,6 +63,7 @@ pub mod provider_transport_v3 {
 }
 /// Packet-safe unsigned Rational terminal Bearer redemption construction.
 pub mod rational_selected_release_v1;
+pub mod structured_selected_release_v1;
 
 pub mod rational_terminal_v3;
 /// Chain-derived unsigned Registry activation and reauthentication workflows.
