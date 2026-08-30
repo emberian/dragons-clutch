@@ -92,6 +92,15 @@ pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES
 /// Direct Hot cannot execute within Solana's default transaction CU allocation.
 pub const DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
 
+/// Neither can the capability seal, which authenticates one finalized registry
+/// proof and hashes one record body per role before writing the closure. It
+/// took 789,336 CU on public devnet over the four-entry Direct release set, so
+/// the 200,000 default was never going to hold it, and the cost grows with the
+/// set. It declares the same ceiling as Hot rather than that reading plus a
+/// guessed margin: both are one-shot composed routes where a limit set too low
+/// is a transaction that can never be replayed.
+pub const DIRECT_SEAL_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
+
 /// One exact detached maker signature and its canonical signed intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SignedDirectIntentV3 {

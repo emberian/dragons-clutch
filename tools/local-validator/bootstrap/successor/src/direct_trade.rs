@@ -4190,12 +4190,16 @@ fn authenticate_direct_history_v1<'a>(
 }
 
 fn parse_direct_return_data_v1(meta: &Value) -> Result<(Option<String>, Option<String>)> {
-    let Some(return_data) = meta.get("returnData") else {
-        return Err(refusal("finalized Direct meta omitted returnData"));
-    };
-    if return_data.is_null() {
+    // A transaction that set no return data is reported either as an explicit
+    // null or with the key left out entirely, depending on the RPC - devnet
+    // omits it. The two encode one fact, so both read as "no return data", and
+    // requiring the key would refuse every transaction whose programs simply
+    // never called set_return_data. Nothing is conceded by accepting the
+    // absence: a caller who wanted to hide return data could send the null
+    // just as easily, and each stage separately pins whether it expects any.
+    let Some(return_data) = meta.get("returnData").filter(|value| !value.is_null()) else {
         return Ok((None, None));
-    }
+    };
     let producer = return_data
         .get("programId")
         .and_then(Value::as_str)
@@ -6494,10 +6498,42 @@ mod tests {
         direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
         direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
         journal_state_sha256, refresh_direct_journal_digest_v1, require_unique_json_v1, usage,
-        verify_expected_direct_poststates_v1, write_direct_journal_v1,
+        parse_direct_return_data_v1, verify_expected_direct_poststates_v1, write_direct_journal_v1,
     };
     use crate::cluster::ExpectedClusterV1;
     use dclutch_operator::{Finality, Observation, ObservedAccount};
+
+    /// An omitted `returnData` and an explicit null carry the same fact, and
+    /// devnet sends the omission. Everything past that stays exact.
+    #[test]
+    fn absent_and_null_return_data_read_alike_and_malformed_bodies_refuse() {
+        let none = (None, None);
+        assert_eq!(
+            parse_direct_return_data_v1(&json!({"fee": 5000})).expect("absent"),
+            none
+        );
+        assert_eq!(
+            parse_direct_return_data_v1(&json!({"returnData": null})).expect("null"),
+            none
+        );
+        let body = BASE64.encode([1_u8, 2, 3]);
+        assert_eq!(
+            parse_direct_return_data_v1(
+                &json!({"returnData": {"programId": "prog", "data": [body, "base64"]}})
+            )
+            .expect("present"),
+            (Some("prog".to_owned()), Some(body))
+        );
+        for malformed in [
+            json!({"returnData": {"data": [BASE64.encode([1_u8]), "base64"]}}),
+            json!({"returnData": {"programId": "prog"}}),
+            json!({"returnData": {"programId": "prog", "data": [BASE64.encode([1_u8])]}}),
+            json!({"returnData": {"programId": "prog", "data": [BASE64.encode([1_u8]), "hex"]}}),
+            json!({"returnData": {"programId": "prog", "data": ["!not base64!", "base64"]}}),
+        ] {
+            assert!(parse_direct_return_data_v1(&malformed).is_err());
+        }
+    }
 
     #[test]
     fn usage_exposes_exact_owned_loopback_direct_executor() {

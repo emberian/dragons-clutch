@@ -997,9 +997,19 @@ pub fn compile_direct_inline_capability_seal_routed_v0_v3(
     {
         return Err(DirectInlineRoutedTransactionErrorV3::LookupTable);
     }
+    // The seal walks every role's record - authenticating the finalized
+    // registry proof and hashing the body of each - before it writes the
+    // closure, so like Hot it does not fit Solana's default allocation and
+    // must declare its own.
+    let instructions = [
+        solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
+            crate::direct_inline_v3::DIRECT_SEAL_COMPUTE_UNIT_LIMIT_V1,
+        ),
+        plan.instruction.clone(),
+    ];
     let message = compile_v0_message(
         plan.payer,
-        core::slice::from_ref(&plan.instruction),
+        &instructions,
         recent_blockhash,
         plan.observation,
         core::slice::from_ref(lookup_table),
@@ -1007,7 +1017,7 @@ pub fn compile_direct_inline_capability_seal_routed_v0_v3(
     .map_err(DirectInlineRoutedTransactionErrorV3::Routing)?;
     require_direct_inline_devnet_account_locks_v3(
         &message,
-        core::slice::from_ref(&plan.instruction),
+        &instructions,
         plan.payer,
         lookup_table.key,
         &table,
