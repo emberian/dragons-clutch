@@ -78,6 +78,17 @@ pub const STRUCTURED_SELECTED_PUBLICATION_MAGIC_V1: [u8; 8] = *b"DCSTPB01";
 /// Implemented Structured publication version.
 pub const STRUCTURED_SELECTED_PUBLICATION_VERSION_V1: u16 = 1;
 
+/// Largest representation width one Structured release can dispatch.
+///
+/// The bound belongs to the open RequestProfile V1 artifact -- its 1,312-byte
+/// ceiling over a 29-operation prefix plus eight operations per row -- and is
+/// restated here as this compiler's own published limit because
+/// [`structured_selected_release_v1`] is what refuses a wider one. A caller
+/// should not need a second crate edge to learn the bound this function
+/// enforces.
+pub const STRUCTURED_MAXIMUM_REPRESENTATION_WIDTH_V1: u32 =
+    RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3;
+
 /// Execution role that owns every Structured commit.
 ///
 /// Structured's open actions are dispatched by Trading like every other selected

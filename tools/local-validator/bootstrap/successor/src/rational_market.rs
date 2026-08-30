@@ -35,6 +35,7 @@ use dclutch_operator::rational_selected_release_v1::{
 use sha2::{Digest as _, Sha256};
 use solana_sdk::pubkey::Pubkey;
 
+use crate::selected_capability::market_realm_identity_v1;
 use crate::{Error, Result};
 
 /// One record the Registry must finalize for a selected Rational release.
@@ -98,30 +99,6 @@ pub(crate) fn rational_selected_closure_v1(
         publication,
         records,
     })
-}
-
-/// The immutable Realm identity a Market over this collateral Mint will carry.
-///
-/// Recomputed here exactly as `compile_market_bodies` builds it, because the
-/// Rational config must bind the same Realm the founded Market will. The
-/// canonical collateral adapter, Token program and authority policies are the
-/// market compiler's, not choices made here.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn market_realm_identity_v1(collateral_mint: Pubkey) -> Result<[u8; 32]> {
-    use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input};
-    use dclutch_token_svm::{CollateralAdapterReleaseV1, TOKEN_2022_PROGRAM_ID};
-
-    let adapter = CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer();
-    let realm = RealmV1::new(RealmV1Input {
-        token_program: TOKEN_2022_PROGRAM_ID,
-        collateral_mint: collateral_mint.to_bytes(),
-        collateral_adapter_release_id: Sha256::digest(adapter.to_bytes()).into(),
-        mint_authority_policy: MintAuthorityPolicy::RequireAbsent,
-        freeze_authority_policy: FreezeAuthorityPolicy::RequireAbsent,
-    })
-    .map_err(|error| Error::new(format!("canonical collateral Realm: {error:?}")))?
-    .to_bytes();
-    Ok(Sha256::digest(realm).into())
 }
 
 /// The complete capability-root width the closure's own descriptor names.
