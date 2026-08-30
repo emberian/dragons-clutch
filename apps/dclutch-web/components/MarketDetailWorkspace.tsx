@@ -28,6 +28,7 @@ import MarketTradePanel from '@/components/MarketTradePanel';
 import RefusedMarketStory from '@/components/RefusedMarketStory';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
+import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -104,25 +105,32 @@ function FundingQuote({ funding }: Readonly<{ funding: CapabilityFundingQuoteV1 
   </div>;
 }
 
-function CapabilityEntry({ badge }: Readonly<{ badge: MarketCapabilityBadgeV1 }>) {
+type SlotClockPropsV1 = Readonly<{ clock?: SlotClockV1 | null; nowMs?: number | null }>;
+
+function deadlinePhrase(deadline: string | null, clock: SlotClockV1 | null | undefined, nowMs: number | null | undefined): string {
+  if (deadline === null || clock === undefined || clock === null || nowMs === undefined || nowMs === null) return '';
+  return ` · ${deadlineMomentPhraseV1(clock, deadline, nowMs)}`;
+}
+
+function CapabilityEntry({ badge, clock, nowMs }: Readonly<{ badge: MarketCapabilityBadgeV1 }> & SlotClockPropsV1) {
   return <details className="capability-drawer">
     <summary>
       <span className={`capability-badge${badge.recognized ? ' recognized' : ''}`}>{badge.label}</span>
-      <small>entry {badge.index} · {badge.activation === 'deadline' ? `activation deadline slot ${badge.deadline}` : 'immediate activation'}</small>
+      <small>entry {badge.index} · {badge.activation === 'deadline' ? `activation deadline slot ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}` : 'immediate activation'}</small>
     </summary>
     <dl className="detail-facts">
       <ContentId label="Kind ID" value={badge.kindId} />
       <ContentId label="Release / program-set ID" value={badge.programSetId} />
       <ContentId label="Config ID" value={badge.configId} />
       <Fact label="Activation policy" value={badge.activation} />
-      <Fact label="Activation deadline slot" value={badge.deadline ?? 'none — activation is immediate'} />
+      <Fact label="Activation deadline slot" value={badge.deadline === null ? 'none — activation is immediate' : `${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}`} />
       <Fact label="Depends on entries" value={badge.dependencies.length === 0 ? 'none' : badge.dependencies.join(', ')} />
     </dl>
     <FundingQuote funding={badge.funding} />
   </details>;
 }
 
-function Capabilities({ capabilities }: Readonly<{ capabilities: MarketCapabilityManifestV1 }>) {
+function Capabilities({ capabilities, clock, nowMs }: Readonly<{ capabilities: MarketCapabilityManifestV1 }> & SlotClockPropsV1) {
   if (capabilities.status !== 'authenticated') {
     return <p className="market-capability-refusal">
       <span>{capabilities.status === 'unread' ? 'capabilities unread' : 'capabilities refused'}</span>
@@ -135,7 +143,7 @@ function Capabilities({ capabilities }: Readonly<{ capabilities: MarketCapabilit
       <Fact label="Registry record" value={capabilities.recordAddress} />
       <Fact label="Entries" value={String(capabilities.badges.length)} />
     </dl>
-    <div className="capability-drawers">{capabilities.badges.map((badge) => <CapabilityEntry key={badge.index} badge={badge} />)}</div>
+    <div className="capability-drawers">{capabilities.badges.map((badge) => <CapabilityEntry key={badge.index} badge={badge} clock={clock} nowMs={nowMs} />)}</div>
   </>;
 }
 
@@ -165,9 +173,26 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
   const refused = card !== null && card.status === 'refused' ? card : null;
+  // Wall-clock layer: measured slot-rate clock plus a ticking now, both
+  // absent until they can be true — see MarketDiscoveryWorkspace.
+  const [clock, setClock] = useState<SlotClockV1 | null>(null);
+  const [nowMs, setNowMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setNowMs(Date.now());
+    });
+    const tick = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(tick);
+    };
+  }, []);
 
   const read = useCallback(async () => {
     setState({ kind: 'loading', message: 'Reading this Market, the Realm record and capability manifest it commits to, and the Claims aggregate holding its liabilities, behind one finalized floor…' });
+    setClock(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -179,6 +204,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         address,
       });
       setState({ kind: 'ready', detail: next, facts, message: next.reason });
+      setClock(await readSlotClockV1(client, next.floorSlot));
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
@@ -236,10 +262,11 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       <p className="direct-status" aria-live="polite">{state.message}</p>
       {state.kind === 'ready' && <div className="trade-v3-evidence">
         <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
-        <article><span>Finalized floor</span><strong>{state.detail.floorSlot}</strong><small>one observation epoch for every section</small></article>
+        <article><span>Finalized floor</span><strong>{state.detail.floorSlot}</strong><small>{clock === null ? 'one observation epoch for every section' : `read at ${new Date(clock.observedAtMs).toLocaleTimeString()} · one observation epoch for every section`}</small></article>
         <article><span>Core program</span><strong>{shortAddressV1(state.detail.coreProgramId, 6)}</strong><small>owner of these bytes</small></article>
         <article><span>Capability source</span><strong>{state.detail.registryProgramId === null ? 'not selected' : shortAddressV1(state.detail.registryProgramId, 6)}</strong><small>{state.detail.registryProgramId === null ? 'manifest unread' : 'manifest authenticated by content'}</small></article>
       </div>}
+      {clock !== null && <p className="slot-clock-note">{slotClockCaveatV1(clock)}</p>}
     </section>
 
     <section className="trade-v3-card">
@@ -366,7 +393,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       <header><span>04</span><div><h2>Capabilities</h2><p>A capability exists only if this Market&apos;s own authenticated manifest lists it. Each entry opens to its exact identities, activation policy, dependency list, and immutable funding quote — quoted in seven segregated compartments with separate native-lamport and Realm-collateral totals, never merged into one number.</p></div><SectionProvenance provenance={capabilityProvenance} /></header>
       {decoded === null
         ? <p className="market-empty">No capability manifest identity exists to authenticate, because no Market root has been decoded.</p>
-        : <Capabilities capabilities={decoded.capabilities} />}
+        : <Capabilities capabilities={decoded.capabilities} clock={clock} nowMs={nowMs} />}
     </section>}
 
     {decoded !== null && <JoinPanel
