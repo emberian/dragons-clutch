@@ -333,6 +333,31 @@ fix is days if v1 survives, zero if it does not.**
 > promise, and I could not do that and the spline measurement in one lane
 > without doing one of them badly. **This is the cheapest unlanded row in this
 > document; it is genuinely minutes for someone with 0005 already open.**
+>
+> **STATUS: LANDED — `e5005be6` (FRONTIER-2, 2026-08-30).** Both rows written
+> as `P-006` (seal rent permanently unreclaimable) and `P-007` (seal byte
+> layout hand-authored, not Lean-emitted), each against measurement at HEAD
+> rather than against 0005's prose. Two findings the row's own estimate did not
+> contain, both of which change the sizing of the follow-on work:
+>
+> 1. **The rent leak scales with the release cadence, not the Market count.**
+>    `trading_semantic_release` is the fourth PDA seed, and `0005:280` says a
+>    Trading upgrade *"does not invalidate a seal so much as stop addressing
+>    it"* — so every Trading release permanently strands the rent of every seal
+>    written under its predecessor, across all descriptors × actions. That is
+>    why the deferral in `0005:303-305` was defensible when written and gets
+>    less so with each release. Each seal is 968 bytes (152-byte header + six
+>    136-byte rows), ≈ 0.00763 SOL.
+> 2. **The hand-authored layout has three authors, not one.**
+>    `programs/dclutch-trading-sbf` depends on the crate, `hot_v3/seal.rs:72`
+>    writes it on chain, and `apps/dclutch-web/lib/directHotChain.ts` and
+>    `packages/dclutch-sdk/lib/directHotChain.ts` both derive seal accounts
+>    against the same offsets — a persisted on-chain layout with no
+>    byte-identity gate, in a crate directory holding only `Cargo.toml` and
+>    `src/` against 14 `check-generated.sh` guards elsewhere in `crates/`. So
+>    `P-007` is not merely a provenance nicety: it is this project's signature
+>    defect class (two authors for one fact) in miniature, and it is the same
+>    class as §2's spline problem at a size someone can actually close.
 
 ### 3.6 The artifact bridge is frozen at day one
 
@@ -501,6 +526,23 @@ excluding each crate's own manifest):
 | `dclutch-representation-composition-v3-kernel` | 3,306 | **17**, incl. `programs/dclutch-claims-sbf` | **GENUINELY WIRED** |
 
 **So it is one kernel, not four.** The headline should be retired.
+
+**STATUS: LANDED — `711b8959` (FRONTIER-2, 2026-08-30).** The headline is
+retired at all three sites that carried it: `ASPIRATION_LEDGER.md`'s summary
+line, M-9's dated amendment (with the full re-measurement table), and the
+archaeology's A.4 row that re-inherited it. Two things the re-measurement
+found that this section's table does not say:
+
+- **F-5's count is 17, not 8.** `dclutch-representation-composition-v3-kernel`
+  has eighteen referring manifests. M-9's table says eight. It was true when
+  written; the tree kept wiring and the row did not — which is this document's
+  own meta-finding, landing on the document that generated it.
+- **M-9 refuted its own headline in its own body and left the headline
+  standing.** The Structured caller landed 08-27 and M-9 recorded it two
+  paragraphs *below* the table that still said four. That is the failure mode
+  worth naming: a row can be amended honestly and still propagate its original
+  claim, because what travels is the headline, not the amendment. The fix that
+  actually works is editing the sentence other documents quote.
 
 ### 4.1 `dclutch-liability-basis-v2-kernel` — the only true orphan
 
