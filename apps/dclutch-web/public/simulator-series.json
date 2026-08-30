@@ -1,13 +1,49 @@
 {
   "schema": "dclutch-simulator-series-v1",
-  "captured_at": "2026-08-30T16:40:07+00:00",
+  "captured_at": "2026-08-30T17:02:13+00:00",
+  "positions": [
+    {
+      "label": "founder",
+      "address": "4YSPmPTzbPHMRWHqZEprvN96VSDtP9R6iWZ42b69kGB4",
+      "lamports": "2004480",
+      "claims": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "total_claims": "2000000000"
+    }
+  ],
+  "collateral_holders": [
+    {
+      "label": "hoard",
+      "address": "HziNn98ALVyKaJDGA3F7KroSXjBqNR9xAHG5r1nXjmLB",
+      "atoms": "500000000"
+    },
+    {
+      "label": "wallet",
+      "address": "BYZN5acKw7Lp41RnyFgdB9Ef6UHnJdv3nwqrZTnWqaUL",
+      "atoms": "499998600"
+    },
+    {
+      "label": "p1",
+      "address": "FfbeqwBHa3FNW4sCXTPg4AUQoyQhu4ATR4vZMK7ve4LP",
+      "atoms": "700"
+    },
+    {
+      "label": "p2",
+      "address": "9nQbgMxgtiDBVQt1DvGrmbccq8o2PWaRxW6jMHDNQEhE",
+      "atoms": "700"
+    }
+  ],
   "cluster": "devnet",
   "market": "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq",
   "mode": "sustain",
   "outcome_count": 4,
-  "cycles_recorded": 99,
+  "cycles_recorded": 123,
   "points_omitted_before": 0,
-  "census_file": "cycle-000099.json",
+  "census_file": "cycle-000123.json",
   "points": [
     {
       "cycle": 1,
@@ -1581,6 +1617,390 @@
       "cycle": 99,
       "slot": "490504244",
       "recorded_at": "2026-08-30T16:40:00+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 100,
+      "slot": "490504372",
+      "recorded_at": "2026-08-30T16:40:22+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 101,
+      "slot": "490504512",
+      "recorded_at": "2026-08-30T16:40:45+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 102,
+      "slot": "490504676",
+      "recorded_at": "2026-08-30T16:41:12+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 103,
+      "slot": "490504810",
+      "recorded_at": "2026-08-30T16:41:34+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 104,
+      "slot": "490504985",
+      "recorded_at": "2026-08-30T16:42:03+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 105,
+      "slot": "490505143",
+      "recorded_at": "2026-08-30T16:42:29+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 106,
+      "slot": "490505319",
+      "recorded_at": "2026-08-30T16:42:58+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 107,
+      "slot": "490505461",
+      "recorded_at": "2026-08-30T16:43:22+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 108,
+      "slot": "490505621",
+      "recorded_at": "2026-08-30T16:43:48+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 109,
+      "slot": "490505798",
+      "recorded_at": "2026-08-30T16:44:18+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 110,
+      "slot": "490505927",
+      "recorded_at": "2026-08-30T16:44:39+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 111,
+      "slot": "490506105",
+      "recorded_at": "2026-08-30T16:45:08+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 112,
+      "slot": "490506262",
+      "recorded_at": "2026-08-30T16:45:35+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 113,
+      "slot": "490506397",
+      "recorded_at": "2026-08-30T16:45:57+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 114,
+      "slot": "490506575",
+      "recorded_at": "2026-08-30T16:46:26+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 115,
+      "slot": "490506734",
+      "recorded_at": "2026-08-30T16:46:52+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 116,
+      "slot": "490506875",
+      "recorded_at": "2026-08-30T16:47:16+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 117,
+      "slot": "490507058",
+      "recorded_at": "2026-08-30T16:47:46+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 118,
+      "slot": "490507210",
+      "recorded_at": "2026-08-30T16:48:12+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 119,
+      "slot": "490507357",
+      "recorded_at": "2026-08-30T16:48:36+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 120,
+      "slot": "490507512",
+      "recorded_at": "2026-08-30T16:49:02+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 121,
+      "slot": "490507664",
+      "recorded_at": "2026-08-30T16:49:27+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 122,
+      "slot": "490507827",
+      "recorded_at": "2026-08-30T16:50:12+00:00",
+      "supply": [
+        "500000000",
+        "500000000",
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 123,
+      "slot": "490508093",
+      "recorded_at": "2026-08-30T16:50:39+00:00",
       "supply": [
         "500000000",
         "500000000",

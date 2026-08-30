@@ -4,10 +4,10 @@ import { describe, expect, it } from 'vitest';
 import published from '@/public/simulator-series.json';
 import example from '@/fixtures/simulator-status.example.json';
 import { marketEditorialV1 } from '@/lib/marketRegistry';
-import { parseSimulatorSeriesV1 } from '@/lib/simulatorSeries';
+import { holdingsReadingV1, isCompleteSetV1, parseSimulatorSeriesV1 } from '@/lib/simulatorSeries';
 import { parseSimulatorStatusV1 } from '@/lib/simulatorStatus';
 
-import PulseWorkspace, { RecordedCycles } from './PulseWorkspace';
+import PulseWorkspace, { RecordedCycles, WhoIsHolding } from './PulseWorkspace';
 
 /**
  * The time axis, on the surface that owns it.
@@ -82,6 +82,92 @@ describe('the pulse surface, with a recorded run', () => {
     for (const forbidden of ['volume', 'Volume', 'odds', 'probability', 'Probability', 'TVL', 'APR', 'APY', '$', 'price', 'Price']) {
       expect(remainder).not.toContain(forbidden);
     }
+  });
+});
+
+/**
+ * The table a prediction market usually calls a leaderboard.
+ *
+ * Today the record holds one founding position and two funded participants who
+ * have not traded, so there is nothing to rank — and the risk is entirely that
+ * the page implies a contest anyway. These pin the two honesty rules: a
+ * ranking of one is never presented as a ranking, and holding the token a
+ * market settles in is never presented as holding a claim on its answer.
+ */
+describe('who is in the market', () => {
+  const html = renderToStaticMarkup(<WhoIsHolding series={series} />);
+
+  it('lists every position with its exact claims, largest first', () => {
+    for (const position of series.positions) {
+      expect(html).toContain(position.label);
+      expect(html).toContain(`<td>${position.totalClaims}</td>`);
+    }
+  });
+
+  it('refuses to call a single position a ranking', () => {
+    if (series.positions.length !== 1) return;
+    expect(html).toContain('There is nothing here to rank yet.');
+    expect(html).not.toContain('leaderboard');
+    expect(html).not.toContain('rank 1');
+  });
+
+  it('names a complete set for what it is, because it is the same whatever happens', () => {
+    if (!series.positions.every(isCompleteSetV1)) return;
+    expect(html).toContain('complete set');
+    expect(html).toContain('worth the same whatever the answer turns out to be');
+  });
+
+  it('never lets holding collateral read as holding a claim on the answer', () => {
+    expect(html).toContain('A holder of collateral is not a holder of claims');
+    expect(html).toContain('only a position holds claims on the answer');
+  });
+
+  it('marks the operator’s labels and this site’s gloss as what they each are', () => {
+    expect(html).toContain('own labels, not anything the chain stores');
+    expect(html).toContain('the market’s own vault');
+  });
+});
+
+describe('what may be said about who holds what', () => {
+  const base = parseSimulatorSeriesV1(published);
+  const position = (label: string, claims: ReadonlyArray<string>) => ({
+    label,
+    address: null,
+    lamports: null,
+    claims,
+    total_claims: claims.reduce((sum, atoms) => sum + BigInt(atoms), 0n).toString(),
+  });
+  const withPositions = (positions: ReadonlyArray<unknown>) => parseSimulatorSeriesV1({
+    ...(published as Record<string, unknown>),
+    positions,
+  });
+
+  it('says there is nobody to list when no position was recorded', () => {
+    const reading = holdingsReadingV1(withPositions([]));
+    expect(reading.rankable).toBe(false);
+    expect(reading.sentence).toContain('nobody to list');
+  });
+
+  it('says one position cannot be ranked', () => {
+    const reading = holdingsReadingV1(base);
+    expect(reading.positionCount).toBe(1);
+    expect(reading.rankable).toBe(false);
+  });
+
+  /**
+   * The moment this becomes a leaderboard is the moment somebody trades. It
+   * still refuses to call a claim count a score.
+   */
+  it('becomes an ordering once more than one position exists, and still is not a score', () => {
+    const reading = holdingsReadingV1(withPositions([position('a', ['3', '1']), position('b', ['1', '1'])]));
+    expect(reading.positionCount).toBe(2);
+    expect(reading.rankable).toBe(true);
+    expect(reading.sentence).toContain('not a score and not a return');
+  });
+
+  it('recognises a complete set, and an uneven position as not one', () => {
+    expect(holdingsReadingV1(withPositions([position('a', ['5', '5', '5'])])).allComplete).toBe(true);
+    expect(holdingsReadingV1(withPositions([position('a', ['5', '4', '5'])])).allComplete).toBe(false);
   });
 });
 

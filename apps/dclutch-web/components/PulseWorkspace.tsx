@@ -10,12 +10,15 @@ import { marketDetailHrefV1 } from '@/lib/marketHref';
 import { marketEditorialV1 } from '@/lib/marketRegistry';
 import {
   everyLineFlatV1,
+  holdingsReadingV1,
+  isCompleteSetV1,
   issuedSupplyLinesV1,
   NO_SERIES_SENTENCE_V1,
   readSimulatorSeriesV1,
   SERIES_RECORD_CAVEAT_V1,
   simulatorSeriesSpanV1,
   type SimulatorSeriesReadV1,
+  type SimulatorSeriesV1,
 } from '@/lib/simulatorSeries';
 import {
   NO_SIMULATOR_SENTENCE_V1,
@@ -161,6 +164,59 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
   </>;
 }
 
+/**
+ * Who is standing in the market, and what each of them holds.
+ *
+ * This is the surface a prediction market would normally call a leaderboard,
+ * and calling it that today would be the lie: the record shows one founding
+ * position and two funded participants who have not traded, so an ordering of
+ * it ranks nothing. It is still worth showing — who is in a market before
+ * anything happens is a real thing to know, and it is the exact table that
+ * becomes a leaderboard on its own the first time somebody trades.
+ *
+ * The labels are the operator's, from the run's own configuration. The gloss
+ * on what a label means is this site's editorial and is marked as such, the
+ * same way market names are.
+ */
+export function WhoIsHolding({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
+  const reading = holdingsReadingV1(series);
+  if (reading.positionCount === 0 && series.collateralHolders.length === 0) {
+    return <p className="market-empty">{reading.sentence}</p>;
+  }
+  return <>
+    <p className="direct-status">{reading.sentence}</p>
+    {reading.positionCount > 0 && <div className="viz-table-scroll">
+      <table className="holders-table">
+        <thead><tr><th>Position</th><th>Address</th><th>Claims held, per outcome · raw u64</th><th>Total claims</th></tr></thead>
+        <tbody>
+          {series.positions.map((position) => <tr key={position.label}>
+            <td>{position.label}{isCompleteSetV1(position) ? ' · complete set' : ''}</td>
+            <td title={position.address ?? undefined}>{position.address === null ? 'not recorded' : `${position.address.slice(0, 8)}…${position.address.slice(-4)}`}</td>
+            <td>{position.claims.join(' · ')}</td>
+            <td>{position.totalClaims}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>}
+    {series.collateralHolders.length > 0 && <>
+      <h3 className="detail-subhead">The collateral, and who is holding it</h3>
+      <div className="viz-table-scroll">
+        <table className="holders-table">
+          <thead><tr><th>Account</th><th>Address</th><th>Collateral atoms · raw u64</th></tr></thead>
+          <tbody>
+            {series.collateralHolders.map((holder) => <tr key={holder.label}>
+              <td>{holder.label}{holder.label === 'hoard' ? ' · the market’s own vault' : ''}</td>
+              <td title={holder.address ?? undefined}>{holder.address === null ? 'not recorded' : `${holder.address.slice(0, 8)}…${holder.address.slice(-4)}`}</td>
+              <td>{holder.atoms}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      <p className="market-editorial-note">The account names are the run operator&apos;s own labels, not anything the chain stores; the note that the hoard is the market&apos;s vault is this site&apos;s. Every address and every figure beside them is read from the chain. A holder of collateral is not a holder of claims: these accounts hold the token the market settles in, and only a position holds claims on the answer.</p>
+    </>}
+  </>;
+}
+
 export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<{
   /** Test seam: a settled read. The page itself always fetches. */
   preloaded?: SimulatorReadV1;
@@ -257,7 +313,14 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
+      <header><span>04</span><div><h2>Who is in this market</h2><p>Every position on the market and every account holding its collateral, as of the last recorded cycle. This is the table a prediction market usually calls a leaderboard; it is not called that here, because ordering one position ranks nothing. The first trade changes that by itself.</p></div></header>
+      {series !== null && series.kind === 'loaded'
+        ? <WhoIsHolding series={series.series} />
+        : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
+    </section>
+
+    <section className="trade-v3-card">
+      <header><span>05</span><div><h2>The wallets and their trades</h2><p>The wallets are ordinary accounts, funded in the open; the signatures are real transactions you can look up yourself.</p></div></header>
       {status === null
         ? <p className="market-empty">{NO_SIMULATOR_SENTENCE_V1}</p>
         : <>

@@ -147,9 +147,48 @@ function main() {
     }
   }
 
+  // Who is holding what, as of the newest observation only.
+  //
+  // The labels are the OPERATOR'S, supplied in the run's census config, and
+  // they cross into the artifact exactly as written — this script does not get
+  // to decide that `hoard` means the market's vault or that `p1` is a person.
+  // Whatever a label means is said on the page, beside the number, where a
+  // reader can see it is a gloss rather than a chain fact.
+  const newest = observations[observations.length - 1];
+  const accounts = newest.accounts ?? {};
+  const addressFor = (label) => (accounts[label]?.address ?? null);
+  const lamportsFor = (label) => (accounts[label] === undefined ? null : exact(accounts[label].lamports, `accounts ${label} lamports`));
+
+  const positions = Object.entries(newest.position_balances ?? {})
+    .map(([label, claims]) => ({
+      label,
+      address: addressFor(label),
+      lamports: lamportsFor(label),
+      claims: claims.map((atoms, cell) => exact(atoms, `position ${label} claim ${cell}`)),
+    }))
+    .map((entry) => ({
+      ...entry,
+      total_claims: entry.claims.reduce((sum, atoms) => sum + BigInt(atoms), 0n).toString(),
+    }))
+    .sort((left, right) => (BigInt(right.total_claims) === BigInt(left.total_claims)
+      ? left.label.localeCompare(right.label)
+      : (BigInt(right.total_claims) > BigInt(left.total_claims) ? 1 : -1)));
+
+  const collateralHolders = Object.entries(newest.token_atoms ?? {})
+    .map(([label, atoms]) => ({
+      label,
+      address: addressFor(label),
+      atoms: exact(atoms, `token_atoms ${label}`),
+    }))
+    .sort((left, right) => (BigInt(right.atoms) === BigInt(left.atoms)
+      ? left.label.localeCompare(right.label)
+      : (BigInt(right.atoms) > BigInt(left.atoms) ? 1 : -1)));
+
   const series = {
     schema: SERIES_SCHEMA,
     captured_at: new Date().toISOString().replace(/\.\d{3}Z$/, '+00:00'),
+    positions,
+    collateral_holders: collateralHolders,
     cluster: status.cluster?.label ?? null,
     market: status.market?.address ?? null,
     mode: status.mode,

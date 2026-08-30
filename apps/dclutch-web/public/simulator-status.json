@@ -4,15 +4,15 @@
     "rpc_url": "https://devnet.helius-rpc.com/?<redacted>"
   },
   "cycles": {
-    "run": 99,
+    "run": 123,
     "target": null
   },
   "halt_reason": null,
   "halted": false,
   "last_reconciliation": {
-    "checked_at": "2026-08-30T16:40:00+00:00",
+    "checked_at": "2026-08-30T16:50:39+00:00",
     "ok": true,
-    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000099.json"
+    "output": "/private/tmp/dclutch-sim-devnet-market18/census/cycle-000123.json"
   },
   "market": {
     "address": "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq"
@@ -26,7 +26,7 @@
     "signatures": []
   },
   "trades_attempted": false,
-  "updated_at": "2026-08-30T16:40:01+00:00",
+  "updated_at": "2026-08-30T16:50:41+00:00",
   "wallets": [
     {
       "address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",

@@ -60,9 +60,38 @@ export type SimulatorSeriesPointV1 = Readonly<{
   checksInapplicable: number;
 }>;
 
+/**
+ * One holder of claims, at the newest recorded cycle.
+ *
+ * `label` is the OPERATOR'S word from the run's census configuration, not a
+ * name this site chose and not anything the chain stores. It is rendered as
+ * the label it is, and any gloss on what a particular label means is the
+ * surface's editorial, said beside it.
+ */
+export type SimulatorPositionV1 = Readonly<{
+  label: string;
+  address: string | null;
+  lamports: string | null;
+  /** Claim atoms held per outcome, ordered by claim index. */
+  claims: ReadonlyArray<string>;
+  /** Every claim atom this position holds, across all outcomes. */
+  totalClaims: string;
+}>;
+
+/** One token account holding the market's collateral, at the newest cycle. */
+export type SimulatorCollateralHolderV1 = Readonly<{
+  label: string;
+  address: string | null;
+  atoms: string;
+}>;
+
 export type SimulatorSeriesV1 = Readonly<{
   schema: typeof SIMULATOR_SERIES_SCHEMA_V1;
   capturedAt: string;
+  /** Claim holders, largest total first. Empty when the capture recorded none. */
+  positions: ReadonlyArray<SimulatorPositionV1>;
+  /** Collateral token accounts, largest first. Empty when none were recorded. */
+  collateralHolders: ReadonlyArray<SimulatorCollateralHolderV1>;
   cluster: 'local' | 'devnet';
   /** The Market every point describes, or null when the run named none. */
   market: string | null;
@@ -154,9 +183,33 @@ export function parseSimulatorSeriesV1(value: unknown): SimulatorSeriesV1 {
       throw new Error(`point ${index} does not come after the point before it`);
     }
   }
+  // Holders are optional: a capture taken before this app recorded them is a
+  // capture with none, which is a true thing to say and not a decode failure.
+  const positions = !Array.isArray(root.positions) ? Object.freeze([]) : Object.freeze(root.positions.map((entry, index) => {
+    const body = object(entry, `position ${index}`);
+    if (!Array.isArray(body.claims)) throw new Error(`position ${index} claims must be one list`);
+    return Object.freeze({
+      label: text(body.label, `position ${index} label`),
+      address: body.address === null || body.address === undefined ? null : address(body.address, `position ${index} address`),
+      lamports: body.lamports === null || body.lamports === undefined ? null : atoms(body.lamports, `position ${index} lamports`),
+      claims: Object.freeze(body.claims.map((entry_, cell) => atoms(entry_, `position ${index} claim ${cell}`))),
+      totalClaims: atoms(body.total_claims, `position ${index} total_claims`),
+    });
+  }));
+  const collateralHolders = !Array.isArray(root.collateral_holders) ? Object.freeze([]) : Object.freeze(root.collateral_holders.map((entry, index) => {
+    const body = object(entry, `collateral holder ${index}`);
+    return Object.freeze({
+      label: text(body.label, `collateral holder ${index} label`),
+      address: body.address === null || body.address === undefined ? null : address(body.address, `collateral holder ${index} address`),
+      atoms: atoms(body.atoms, `collateral holder ${index} atoms`),
+    });
+  }));
+
   return Object.freeze({
     schema: SIMULATOR_SERIES_SCHEMA_V1,
     capturedAt: instant(root.captured_at, 'captured_at'),
+    positions,
+    collateralHolders,
     cluster,
     market: root.market === null || root.market === undefined ? null : address(root.market, 'market'),
     mode,
@@ -224,6 +277,59 @@ export function issuedSupplyLinesV1(
 /** True when every value on every line is the same value. */
 export function everyLineFlatV1(lines: ReadonlyArray<SimulatorSeriesLineV1>): boolean {
   return lines.every((line) => line.values.every((value) => value === line.values[0]));
+}
+
+/** True when a position holds the same number of claims on every outcome. */
+export function isCompleteSetV1(position: SimulatorPositionV1): boolean {
+  return position.claims.length > 0 && position.claims.every((amount) => amount === position.claims[0]);
+}
+
+export type HoldingsReadingV1 = Readonly<{
+  positionCount: number;
+  /** Whether ordering these positions is a ranking at all. */
+  rankable: boolean;
+  /** Every recorded position holds one claim of every outcome. */
+  allComplete: boolean;
+  /** One plain sentence: what this list is, and what it is not. */
+  sentence: string;
+}>;
+
+/**
+ * What may honestly be said about who holds this market's claims.
+ *
+ * A leaderboard is a ranking, and a ranking of one is not one. This exists so
+ * a surface cannot accidentally imply competition where the record shows a
+ * single founding position and nobody who has traded — the table is worth
+ * showing either way, because who is standing in a market before anything
+ * happens is a real thing to know, but it must not be dressed as a contest.
+ */
+export function holdingsReadingV1(series: SimulatorSeriesV1): HoldingsReadingV1 {
+  const positions = series.positions;
+  const allComplete = positions.length > 0 && positions.every(isCompleteSetV1);
+  if (positions.length === 0) {
+    return Object.freeze({
+      positionCount: 0,
+      rankable: false,
+      allComplete: false,
+      sentence: 'No position was recorded on this market, so there is nobody to list.',
+    });
+  }
+  if (positions.length === 1) {
+    return Object.freeze({
+      positionCount: 1,
+      rankable: false,
+      allComplete,
+      sentence: allComplete
+        ? 'One position exists, and it holds the same number of claims on every outcome — a complete set, which is worth the same whatever the answer turns out to be. There is nothing here to rank yet.'
+        : 'One position exists on this market, so there is nothing here to rank yet.',
+    });
+  }
+  return Object.freeze({
+    positionCount: positions.length,
+    rankable: true,
+    allComplete,
+    sentence: `${positions.length} positions, ordered by the total claims each holds. That is a count of claims held, not a score and not a return.`,
+  });
 }
 
 export type SimulatorSeriesSpanV1 = Readonly<{
