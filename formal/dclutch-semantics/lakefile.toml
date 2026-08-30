@@ -191,6 +191,10 @@ name = "emit-product-basis-v3-abi-rust"
 root = "EmitProductBasisV3AbiRust"
 
 [[lean_exe]]
+name = "emit-product-basis-v3-corpus-rust"
+root = "EmitProductBasisV3CorpusRust"
+
+[[lean_exe]]
 name = "emit-product-graded-basis-admission-v3-abi-rust"
 root = "EmitProductGradedBasisAdmissionV3AbiRust"
 

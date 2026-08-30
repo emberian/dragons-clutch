@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity guard actually re-runs and compares, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines, shell scripts, `package.json` scripts and Rust integration tests, and never runs Lean.
 
-**73 generated files from 71 emitters. 58 guarded (56 emitters), 15 unguarded (15 emitters).**
+**74 generated files from 72 emitters. 59 guarded (57 emitters), 15 unguarded (15 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -44,6 +44,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-market-core-codec/tests/capability_funding_header_v2.rs` | cargo-test | `EmitCapabilityFundingHeaderV2Rust.lean` |
 | `crates/dclutch-market-core-codec/tests/series_found_ack_v2_generator_fresh.rs` | cargo-test | `EmitSeriesCoreFoundAckV2Rust.lean` |
 | `crates/dclutch-product-payoff-codec/check.sh` | shell | `EmitProductPayoffRust.lean`, `EmitProductPayoffTranslationCorpus.lean` |
+| `crates/dclutch-product-payoff-v2-codec/check-generated-basis-corpus-v3.sh` | shell | `EmitProductBasisV3CorpusRust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/check-generated-runtime-v3.sh` | shell | `EmitProductBasisV3AbiRust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/check-generated-v3.sh` | shell | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
 | `crates/dclutch-product-runtime-v2/check-generated.sh` | shell | `EmitProductRuntimeV2Rust.lean` |
@@ -110,6 +111,7 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-product-payoff-codec/src/generated.rs` | `EmitProductPayoffRust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs` | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
 | `crates/dclutch-product-payoff-v2-codec/src/generated_runtime_v3.rs` | `EmitProductBasisV3AbiRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/tests/generated/basis_corpus_v3.rs` | `EmitProductBasisV3CorpusRust.lean` |
 | `crates/dclutch-product-runtime-v2/src/generated.rs` | `EmitProductRuntimeV2Rust.lean` |
 | `crates/dclutch-rational-representation-v2-contract/src/generated_hot_v3.rs` | `EmitRationalTerminalHotV3Rust.lean` |
 | `crates/dclutch-rational-representation-v2-contract/tests/support/generated_rational_cross_domain_v3.rs` | `EmitRationalCrossDomainV3Rust.lean` |
