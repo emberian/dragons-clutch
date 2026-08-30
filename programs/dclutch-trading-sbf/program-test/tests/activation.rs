@@ -58,7 +58,7 @@ use dclutch_general_config_contract::{
 };
 use dclutch_market_core_codec::{
     CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2,
-    MarketIdentity, Phase, Readiness, Role,
+    MarketIdentity, Phase, Readiness, Role, StateBumpsV1,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
@@ -1101,6 +1101,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         // derived from the immutable identity below.
         rent_beneficiary: identity([0x26; 32]),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     let market = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(state.identity).as_slices(),

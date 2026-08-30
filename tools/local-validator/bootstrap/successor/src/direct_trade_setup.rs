@@ -19,7 +19,7 @@ use dclutch_direct_codec::{
     },
     successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
+use dclutch_market_core_codec::{CoreState, Phase as CorePhase, StateBumpsV1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::{
     hash::{hash, hashv},
@@ -646,6 +646,7 @@ mod tests {
             principal_cap_sets: 1,
             rent_beneficiary: Identity::new(refund.to_bytes()).expect("refund"),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         }
     }
 

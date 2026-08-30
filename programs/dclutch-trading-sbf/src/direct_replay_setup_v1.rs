@@ -537,6 +537,7 @@ mod tests {
     use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
 
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     fn identity(tag: u8) -> Identity {
         Identity::new([tag; 32]).expect("identity")
@@ -562,6 +563,7 @@ mod tests {
             principal_cap_sets: 1_000,
             rent_beneficiary: identity(10),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let request = DirectReplaySetupRequestV1 {
             market: state.identity.market_id.to_bytes(),

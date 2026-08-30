@@ -48,7 +48,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase,
-    Readiness, Request,
+    Readiness, Request, StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -918,6 +918,7 @@ fn core_market(
         principal_cap_sets: u64::MAX,
         rent_beneficiary: semantic_identity(market_rent_credit().to_bytes()),
         terminal_receipt: terminal_receipt.map(semantic_identity),
+        bumps: StateBumpsV1::UNRECORDED,
     };
     (market, state.encode().expect("Core state").to_vec())
 }

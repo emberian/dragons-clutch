@@ -1222,7 +1222,7 @@ mod tests {
         // CoreState V3 added the source-projected principal cap and grew from
         // 352 to 360 bytes. Coordinate 23 is the semantic join that makes that
         // clean break part of this content-addressed AccountProfile.
-        assert_eq!(CORE_STATE_BYTES, 360);
+        assert_eq!(CORE_STATE_BYTES, 368);
         assert_eq!(
             profile.rule(false, 23).expect("Core state").data_length(),
             width(CORE_STATE_BYTES).expect("Core state width")

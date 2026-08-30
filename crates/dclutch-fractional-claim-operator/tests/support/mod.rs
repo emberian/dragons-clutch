@@ -20,7 +20,7 @@ use dclutch_fractional_claim_operator::{
     build_fractional_finalized_artifact_bundle_v1, prepare_fractional_chain_artifacts_v1,
 };
 use dclutch_market_core_codec::{
-    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
 use dclutch_product_runtime_v2::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
@@ -208,6 +208,7 @@ impl FractionalChainFixtureV1 {
             principal_cap_sets: u64::MAX,
             rent_beneficiary: identity_bytes(rent_beneficiary),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         }
         .encode()
         .expect("canonical Open Market");

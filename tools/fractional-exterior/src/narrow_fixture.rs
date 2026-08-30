@@ -24,6 +24,7 @@
 use dclutch_claims_svm::protocol_position_v2::ProtocolPositionSeedsV2;
 use dclutch_market_core_codec::{
     CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, STATE_BYTES,
+    StateBumpsV1,
 };
 
 use dclutch_product_payoff_v2_codec::{
@@ -361,6 +362,7 @@ pub fn compile_narrow_fixture_v2(input: NarrowFixtureInputV2) -> Result<NarrowFi
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(input.rent_beneficiary.to_bytes())?,
         terminal_receipt,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .map_err(|_| NarrowFixtureError::State)?;

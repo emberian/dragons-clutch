@@ -9,7 +9,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    Readiness, Request,
+    Readiness, Request, StateBumpsV1,
 };
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
@@ -375,6 +375,7 @@ fn fixture() -> (ProgramTest, Fixture) {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     add_account(
         &mut test,

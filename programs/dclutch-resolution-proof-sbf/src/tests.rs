@@ -10,6 +10,7 @@ use dclutch_core_contract::ContentId as CoreContentId;
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2,
     MarketIdentity as CoreMarketIdentity, Phase as CorePhase, Readiness as CoreReadiness,
+    StateBumpsV1,
 };
 use dclutch_product_contract::{
     ContentId as ProductContentId,
@@ -895,6 +896,7 @@ fn fixture() -> Fixture {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: core_identity([0xc3; 32]),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .expect("open sparse Core state");

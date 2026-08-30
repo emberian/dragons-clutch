@@ -1343,6 +1343,7 @@ mod tests {
     use dclutch_market_core_codec::{MarketIdentity, Readiness};
 
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     fn account(
         key: Pubkey,
@@ -1614,6 +1615,7 @@ mod tests {
             principal_cap_sets: u64::MAX,
             rent_beneficiary: semantic_id(16)?,
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         })
     }
 

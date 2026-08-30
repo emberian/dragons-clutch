@@ -27,7 +27,7 @@ use dclutch_claims_svm::{
     protocol_position_v2::ProtocolPositionAdmissionV2,
 };
 use dclutch_custody_contract::CustodyAuthoritySeedsV1;
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
+use dclutch_market_core_codec::{CoreState, Phase as CorePhase, StateBumpsV1};
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     user_position_admission_v1::{
@@ -6107,6 +6107,7 @@ mod tests {
             principal_cap_sets: u64::MAX,
             rent_beneficiary: id(0x35),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         }
         .encode()
         .expect("Open Market");

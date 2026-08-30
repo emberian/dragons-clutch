@@ -10,7 +10,7 @@ use dclutch_market_core_codec::{
     SERIES_FOUNDING_PERMIT_BYTES_V1, SERIES_FOUNDING_PERMIT_PDA_DOMAIN_V1,
     SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreAckV1, SeriesCoreActionV1,
     SeriesCoreCallerSeedsV1, SeriesCoreRequestV1, SeriesFoundingPermitV1,
-    SeriesPermitExpiryRequestV1,
+    SeriesPermitExpiryRequestV1, StateBumpsV1,
 };
 use dclutch_release_set_contract::{CALLER_AUTHORITY_PDA_DOMAIN_V1, ExecutionRoleV1};
 
@@ -748,6 +748,7 @@ fn core_state_for_view() -> CoreState {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: id(66),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
 }
 

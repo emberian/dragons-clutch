@@ -6,6 +6,37 @@ use solana_sdk_ids::system_program;
 
 use crate::CoreSbfError;
 
+/// Canonical bumps of one finalized record's raw/staging PDA pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RecordPdaBumpsV1 {
+    pub(crate) raw: u8,
+    pub(crate) staging: u8,
+}
+
+/// Derive one record's canonical raw/staging pair and the bumps that reach it.
+pub(crate) fn derive_record_pdas(
+    registry_program: &Pubkey,
+    schema: [u8; 32],
+    digest: [u8; 32],
+) -> (Pubkey, Pubkey, RecordPdaBumpsV1) {
+    let (raw, raw_bump) = Pubkey::find_program_address(
+        &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+        registry_program,
+    );
+    let (staging, staging_bump) = Pubkey::find_program_address(
+        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+        registry_program,
+    );
+    (
+        raw,
+        staging,
+        RecordPdaBumpsV1 {
+            raw: raw_bump,
+            staging: staging_bump,
+        },
+    )
+}
+
 /// Authenticate one exact finalized headerless record and its finalized cursor absence.
 ///
 /// Nonzero lamports on the vacant System-owned staging PDA are accepted as
@@ -20,6 +51,31 @@ pub(crate) fn authenticate_finalized_record<'a>(
     expected_digest: [u8; 32],
     bytes: &'a [u8],
 ) -> Result<&'a [u8], CoreSbfError> {
+    let (bytes, _) = authenticate_finalized_record_with_bumps(
+        registry_program,
+        raw,
+        staging,
+        rent,
+        schema,
+        expected_digest,
+        bytes,
+    )?;
+    Ok(bytes)
+}
+
+/// Authenticate one finalized record and return the bumps the derivation used.
+///
+/// The search is the authentication, so a caller that needs to persist the
+/// canonical bumps takes them from here rather than repeating the search.
+pub(crate) fn authenticate_finalized_record_with_bumps<'a>(
+    registry_program: &Pubkey,
+    raw: &AccountInfo<'_>,
+    staging: &AccountInfo<'_>,
+    rent: &Rent,
+    schema: [u8; 32],
+    expected_digest: [u8; 32],
+    bytes: &'a [u8],
+) -> Result<(&'a [u8], RecordPdaBumpsV1), CoreSbfError> {
     if raw.owner != registry_program
         || raw.executable
         || raw.is_signer
@@ -29,16 +85,8 @@ pub(crate) fn authenticate_finalized_record<'a>(
     {
         return Err(CoreSbfError::FinalizedRecord);
     }
-    let expected_raw = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, &schema, &expected_digest],
-        registry_program,
-    )
-    .0;
-    let expected_staging = Pubkey::find_program_address(
-        &[STAGING_CURSOR_PDA_SEED_V1, &schema, &expected_digest],
-        registry_program,
-    )
-    .0;
+    let (expected_raw, expected_staging, bumps) =
+        derive_record_pdas(registry_program, schema, expected_digest);
     if raw.key != &expected_raw
         || staging.key != &expected_staging
         || staging.owner != &system_program::ID
@@ -49,7 +97,7 @@ pub(crate) fn authenticate_finalized_record<'a>(
     {
         return Err(CoreSbfError::FinalizedRecord);
     }
-    Ok(bytes)
+    Ok((bytes, bumps))
 }
 
 /// Hash hostile bytes and authenticate the corresponding canonical record PDA.
@@ -60,8 +108,16 @@ pub(crate) fn authenticate_content_addressed_record<'a>(
     rent: &Rent,
     schema: [u8; 32],
     bytes: &'a [u8],
-) -> Result<([u8; 32], &'a [u8]), CoreSbfError> {
+) -> Result<([u8; 32], &'a [u8], RecordPdaBumpsV1), CoreSbfError> {
     let digest = hash(bytes).to_bytes();
-    authenticate_finalized_record(registry_program, raw, staging, rent, schema, digest, bytes)?;
-    Ok((digest, bytes))
+    let (bytes, bumps) = authenticate_finalized_record_with_bumps(
+        registry_program,
+        raw,
+        staging,
+        rent,
+        schema,
+        digest,
+        bytes,
+    )?;
+    Ok((digest, bytes, bumps))
 }

@@ -28,7 +28,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
-    REQUEST_BYTES, Readiness, Request,
+    REQUEST_BYTES, Readiness, Request, StateBumpsV1,
 };
 use dclutch_market_open_v1_operator::{
     RegistryOpenMarketContinuationStateV1, build_registry_open_market_continuation_v1,
@@ -1013,6 +1013,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     test.add_account(
         market,

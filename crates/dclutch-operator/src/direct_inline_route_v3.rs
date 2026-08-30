@@ -3175,8 +3175,9 @@ mod tests {
             compile_direct_inline_request_v3,
         },
     };
-    use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
     use crate::direct_inline_v3::DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1;
+    use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     fn key(byte: u8) -> Pubkey {
         Pubkey::new_from_array([byte; 32])
@@ -3847,6 +3848,7 @@ mod tests {
             principal_cap_sets: 100,
             rent_beneficiary: Identity::new(route.payer.key.to_bytes()).expect("beneficiary"),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         };
         route.fixed.market.key = market_key;
         route.fixed.market.owner = core.program.key;

@@ -5,7 +5,7 @@ use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, Capa
 use dclutch_market_core_codec::{
     Action, Admission, CoreState, FoundingAccounts, FoundingFrame, FoundingQuote,
     MarketCoreStateSeedsV2, MarketIdentity, Product, ProjectFoundReceiptV2, Realm, Request, Role,
-    STATE_BYTES, VacantAccount, found,
+    STATE_BYTES, StateBumpsV1, VacantAccount, found,
 };
 use dclutch_product_runtime_v2_svm_reader::{
     AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
@@ -43,12 +43,15 @@ use crate::{
         authenticate_projected_immutable_core_release,
     },
     product_runtime_v2::{authenticate_product_runtime_v2, project_core_product_v2},
-    records::authenticate_content_addressed_record,
+    records::{RecordPdaBumpsV1, authenticate_content_addressed_record, derive_record_pdas},
     release::{authenticate_role, identity},
 };
 
 struct References {
     realm_id: [u8; 32],
+    /// Canonical bumps of the Registry record pair naming `realm_id`. Custody
+    /// re-derives that pair on every transfer; persisting them lets it stop.
+    realm_record_bumps: RecordPdaBumpsV1,
     collateral_mint: [u8; 32],
     token_program: [u8; 32],
     collateral_release: [u8; 32],
@@ -437,6 +440,11 @@ fn plan_found(
                 executable: false,
             },
         },
+        bumps: StateBumpsV1 {
+            market: StateBumpsV1::record(bump),
+            realm_raw_record: StateBumpsV1::record(references.realm_record_bumps.raw),
+            realm_staging_record: StateBumpsV1::record(references.realm_record_bumps.staging),
+        },
     };
     let result = found(request, semantic_frame).map_err(|_| CoreSbfError::Transition)?;
     Ok(CreationPlan {
@@ -461,7 +469,7 @@ fn authenticate_references(
     if realm_data.len() != REALM_BYTES {
         return Err(CoreSbfError::Reference);
     }
-    let (realm_id, realm_bytes) = authenticate_content_addressed_record(
+    let (realm_id, realm_bytes, realm_record_bumps) = authenticate_content_addressed_record(
         registry,
         frame.realm_raw,
         frame.realm_staging,
@@ -511,7 +519,7 @@ fn authenticate_references(
     if resolution_data.len() != SOURCE_MATERIAL_V3_BYTES {
         return Err(CoreSbfError::Reference);
     }
-    let (resolution_policy_id, resolution_bytes) = authenticate_content_addressed_record(
+    let (resolution_policy_id, resolution_bytes, _) = authenticate_content_addressed_record(
         registry,
         frame.resolution_raw,
         frame.resolution_staging,
@@ -588,7 +596,7 @@ fn authenticate_references(
         .manifest_raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    let (manifest_id, manifest_bytes) = authenticate_content_addressed_record(
+    let (manifest_id, manifest_bytes, _) = authenticate_content_addressed_record(
         registry,
         frame.manifest_raw,
         frame.manifest_staging,
@@ -601,6 +609,7 @@ fn authenticate_references(
     Ok((
         References {
             realm_id,
+            realm_record_bumps,
             collateral_mint: *realm.collateral_mint(),
             token_program: *realm.token_program(),
             collateral_release: *realm.collateral_adapter_release_id(),
@@ -627,6 +636,11 @@ fn authenticate_projected_references(
         return Err(CoreSbfError::Reference);
     }
     let registry = frame.registry_program.key;
+    // The projected authority carries the Realm identity but not its record
+    // accounts, so this path derives the pair rather than reusing a search it
+    // never made. It is paid once here and saved on every later Custody read.
+    let (_, _, realm_record_bumps) =
+        derive_record_pdas(registry, REALM_SCHEMA_RELEASE_ID_V1, authority.realm_id);
     let runtime = Box::new(authenticate_product_runtime_v2(
         registry,
         rent,
@@ -653,7 +667,7 @@ fn authenticate_projected_references(
         .manifest_raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::FinalizedRecord)?;
-    let (manifest_id, manifest_bytes) = authenticate_content_addressed_record(
+    let (manifest_id, manifest_bytes, _) = authenticate_content_addressed_record(
         registry,
         frame.manifest_raw,
         frame.manifest_staging,
@@ -666,6 +680,7 @@ fn authenticate_projected_references(
     Ok((
         References {
             realm_id: authority.realm_id,
+            realm_record_bumps,
             collateral_mint: authority.collateral_mint,
             token_program: authority.token_program,
             collateral_release: authority.collateral_release,
@@ -719,7 +734,7 @@ fn authenticate_source_record<T, E>(
     if data.len() != expected_width {
         return Err(CoreSbfError::Reference);
     }
-    let (digest, bytes) =
+    let (digest, bytes, _) =
         authenticate_content_addressed_record(registry, raw, staging, rent, schema, &data)?;
     let identity = SourceContentId::new(digest).map_err(|_| CoreSbfError::Reference)?;
     let value = decode(bytes).map_err(|_| CoreSbfError::Reference)?;

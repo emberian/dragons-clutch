@@ -50,7 +50,7 @@ use dclutch_market_core_codec::{
     FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
     Identity, MarketCoreStateSeedsV2, MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2, Phase,
     ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness, Request,
-    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1, StateBumpsV1,
     generic_founding_funding_list_id_v1,
 };
 use dclutch_market_founding_v1_operator::{
@@ -8493,6 +8493,7 @@ fn derive_founding_outer_v1(
         principal_cap_sets: coordinates.principal_cap_sets,
         rent_beneficiary: identity_of(coordinates.credit.to_bytes())?,
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     let market_state_bytes = market_state
         .encode()

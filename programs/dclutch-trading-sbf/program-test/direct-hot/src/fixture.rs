@@ -74,6 +74,7 @@ use dclutch_direct_codec::{
 };
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_product_payoff_v2_codec::runtime_v3::{
@@ -668,6 +669,7 @@ fn market_and_claims(
         principal_cap_sets: u64::MAX,
         rent_beneficiary: core_identity(rent_credit.0.to_bytes())?,
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?

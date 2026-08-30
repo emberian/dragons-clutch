@@ -48,6 +48,7 @@ use dclutch_direct_codec::{
 use dclutch_market_core_codec::{
     Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
     Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, Request, Role, STATE_BYTES,
+    StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3;
 use dclutch_product_runtime_v2::{
@@ -606,6 +607,7 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x75; 32]),
         terminal_receipt: Some(identity([0x77; 32])),
+        bumps: StateBumpsV1::UNRECORDED,
     };
     let market = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
@@ -999,6 +1001,7 @@ fn build_begin_retiring_campaign() -> (ProgramTest, Vec<BeginRetiringRoute>, [u8
             principal_cap_sets: u64::MAX,
             rent_beneficiary: identity([0xd0_u8.wrapping_add(seed); 32]),
             terminal_receipt: Some(identity([0xe0_u8.wrapping_add(seed); 32])),
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let market = Pubkey::find_program_address(
             &MarketCoreStateSeedsV2::new(state.identity).as_slices(),

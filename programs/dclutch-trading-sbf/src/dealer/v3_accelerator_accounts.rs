@@ -1255,6 +1255,8 @@ fn relative_account<'a, 'info>(
 
 #[cfg(test)]
 mod tests {
+    use dclutch_market_core_codec::StateBumpsV1;
+
     use super::*;
 
     const fn id(tag: u8) -> [u8; 32] {
@@ -1350,6 +1352,7 @@ mod tests {
             principal_cap_sets: u64::MAX,
             rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let expectation = CoreMarketExpectationV4 {
             market: key.to_bytes(),
@@ -1379,7 +1382,7 @@ mod tests {
 
         let (core_program, key, body, expectation) = live_core_market();
         assert_eq!(body.len(), STATE_BYTES);
-        assert_eq!(STATE_BYTES, 360);
+        assert_eq!(STATE_BYTES, 368);
         assert_eq!(
             authenticate_core_market_v4(&body, &key, &core_program, expectation),
             Ok(())
@@ -1499,6 +1502,7 @@ mod tests {
                 principal_cap_sets: u64::MAX,
                 rent_beneficiary: Identity::new(id(0xa9)).expect("rent beneficiary"),
                 terminal_receipt: receipt,
+                bumps: StateBumpsV1::UNRECORDED,
             }
             .encode()
             .expect("canonical state");

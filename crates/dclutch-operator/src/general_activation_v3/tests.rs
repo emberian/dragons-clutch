@@ -27,7 +27,7 @@ use dclutch_capability_program_contract::{
     CapabilityProgramV1, initialize_root_account_v1,
 };
 use dclutch_general_config_contract::v3::GeneralConfigV3Input;
-use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
+use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness, StateBumpsV1};
 
 use super::*;
 
@@ -193,6 +193,7 @@ fn fixture(phase: Phase, entries: &[CapabilityEntryV1]) -> Fixture {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x28; 32]),
         terminal_receipt,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     let market_key = Pubkey::find_program_address(
         &MarketCoreStateSeedsV2::new(core.identity).as_slices(),

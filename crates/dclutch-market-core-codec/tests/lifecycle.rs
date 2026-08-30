@@ -7,7 +7,7 @@ use dclutch_market_core_codec::{
     CollateralObservation, CoreState, Error, FoundingAccounts, FoundingFrame, FoundingQuote,
     Holder, Identity, MarketIdentity, Phase, Product, REQUEST_BYTES, Readiness, Realm,
     ReleaseReceipt, ReleaseSet, Representation, Request, RetirementAdmissions, Role, STATE_BYTES,
-    SeriesOpenObservation, TerminalReceipt, VacantAccount, activate_capability_child,
+    SeriesOpenObservation, StateBumpsV1, TerminalReceipt, VacantAccount, activate_capability_child,
     admit_terminal, begin_retiring, close_capability_child, found, open_market, open_series_market,
     redeem_terminal, retire, split_complete_set, verify_readiness,
 };
@@ -142,6 +142,7 @@ fn founding_frame(outcome_count: u32, market_lamports: u64) -> FoundingFrame {
             rent_credit: id(46),
             market: vacant(id(40), market_lamports),
         },
+        bumps: StateBumpsV1::UNRECORDED,
     }
 }
 
@@ -271,7 +272,7 @@ fn terminal_state(outcome_count: u32, selector: u32) -> CoreState {
 
 #[test]
 fn sparse_state_and_request_schema_are_fresh_and_hostile_decodable() {
-    assert_eq!(STATE_BYTES, 360);
+    assert_eq!(STATE_BYTES, 368);
     assert_eq!(REQUEST_BYTES, 72);
     assert_eq!(ACTION_VERIFY_READINESS_TAG, 1);
     assert_eq!(ACTION_ACTIVATE_CAPABILITY_TAG, 8);
@@ -789,4 +790,64 @@ fn retirement_requires_all_child_closures_and_returns_only_core_lamports() {
         Ok(123)
     );
     assert_eq!(state.phase, Phase::Retired);
+}
+
+#[test]
+fn the_bump_tail_is_an_append_whose_zero_is_a_search() {
+    let recorded = StateBumpsV1 {
+        market: Some(254),
+        realm_raw_record: Some(253),
+        realm_staging_record: Some(251),
+    };
+    let mut frame = founding_frame(3, 7);
+    frame.bumps = recorded;
+    let carried = found(Request::administrative(Action::Found, 7, id(40)), frame)
+        .expect("found succeeds")
+        .state;
+    assert_eq!(carried.bumps, recorded);
+
+    // The tail is an append: recording bumps moves the last eight bytes and
+    // nothing before them, so no live field is reinterpreted by the widening.
+    let searching = found(
+        Request::administrative(Action::Found, 7, id(40)),
+        founding_frame(3, 7),
+    )
+    .expect("found succeeds")
+    .state;
+    let carried_bytes = carried.encode().expect("state encodes");
+    let searching_bytes = searching.encode().expect("state encodes");
+    assert_eq!(carried_bytes[..360], searching_bytes[..360]);
+    assert_eq!(carried_bytes[360..], [254, 253, 251, 0, 0, 0, 0, 0]);
+    assert_eq!(searching_bytes[360..], [0; 8]);
+    assert_eq!(CoreState::decode(&carried_bytes), Ok(carried));
+
+    // A zeroed tail is what a founding that recorded nothing writes, and it
+    // decodes to the search rather than to a refusal.
+    assert_eq!(
+        CoreState::decode(&searching_bytes)
+            .expect("zero tail decodes")
+            .bumps,
+        StateBumpsV1::UNRECORDED
+    );
+    assert_eq!(StateBumpsV1::record(0), None);
+    assert_eq!(StateBumpsV1::record(255), Some(255));
+
+    // Zero is the unrecorded encoding, so it is not a representable bump: a
+    // state claiming it would not survive its own round trip.
+    let mut uncanonical = carried;
+    uncanonical.bumps.market = Some(0);
+    assert_eq!(uncanonical.encode(), Err(Error::InvalidPhase));
+
+    // The reserved span is enforced, so the next widening meets a refusal
+    // rather than a silent reinterpretation.
+    let mut nonzero_reserved = searching_bytes;
+    nonzero_reserved[367] = 1;
+    assert_eq!(
+        CoreState::decode(&nonzero_reserved),
+        Err(Error::NonzeroReserved)
+    );
+    assert_eq!(
+        CoreState::decode(&searching_bytes[..360]),
+        Err(Error::InvalidLength)
+    );
 }

@@ -42,7 +42,7 @@ use dclutch_direct_codec::{
 };
 use dclutch_market_core_codec::{
     Binding, CoreMarketViewV1, CoreReferenceObservationV1, CoreState, Identity, MarketIdentity,
-    Phase, Product, Readiness, Realm, ReleaseSet,
+    Phase, Product, Readiness, Realm, ReleaseSet, StateBumpsV1,
 };
 use solana_program::hash::{hash, hashv};
 use solana_program::pubkey::Pubkey;
@@ -112,6 +112,7 @@ fn core_market_view(outcome_count: u32) -> CoreMarketViewV1 {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(90),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     CoreMarketViewV1::authenticate(
         state,
