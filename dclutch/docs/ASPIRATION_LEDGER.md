@@ -1713,7 +1713,8 @@ larger (an npm tree gen-1 never had).
 
 ## G-5. Upgrade posture — the one decision gen-1 explicitly deferred to ember, with no successor
 
-`docs/decisions/ADOPTED_2026-08-20.md` has a section with exactly one entry:
+`dragons-clutch/archive/gen1/docs/decisions/ADOPTED_2026-08-20.md` has a
+section with exactly one entry:
 
 > ## Deferred with the tension named
 > - **Reference-deployment upgrade posture**: the report recommended

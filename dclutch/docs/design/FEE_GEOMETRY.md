@@ -66,7 +66,7 @@ of range — not a fix). The report's sharpest line on why it matters:
 > fee plane treats as nothing.
 
 So ember adopted, by delegation on the weakest-choice principle
-(`dragons-clutch/docs/decisions/ADOPTED_2026-08-20.md:52-56`):
+(`dragons-clutch/archive/gen1/docs/decisions/ADOPTED_2026-08-20.md:52-56`):
 
 > **Fee base: the composite `kappa*G + kappa'*R` SHAPE is selected**; both
 > rates remain undecided; every byte stays FeeBaseV1::None until the

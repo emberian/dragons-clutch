@@ -21,9 +21,11 @@ import {
   type MarketListingV1,
 } from '@/lib/marketDiscovery';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
+import { fallbackMarketTitleV1, marketEditorialV1 } from '@/lib/marketRegistry';
 import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
+import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
 
 type State =
   | Readonly<{ kind: 'loading' | 'refused'; message: string }>
@@ -37,7 +39,15 @@ function plural(count: number, one: string, many: string): string {
   return count === 1 ? one : many;
 }
 
-function CapabilityBadges({ capabilities }: Readonly<{ capabilities: MarketCapabilityManifestV1 }>) {
+/** Renders a deadline slot's wall-clock phrase once a clock is measured. */
+type SlotClockPropsV1 = Readonly<{ clock?: SlotClockV1 | null; nowMs?: number | null }>;
+
+function deadlinePhrase(badgeDeadline: string | null, clock: SlotClockV1 | null | undefined, nowMs: number | null | undefined): string {
+  if (badgeDeadline === null || clock === undefined || clock === null || nowMs === undefined || nowMs === null) return '';
+  return ` · ${deadlineMomentPhraseV1(clock, badgeDeadline, nowMs)}`;
+}
+
+function CapabilityBadges({ capabilities, clock, nowMs }: Readonly<{ capabilities: MarketCapabilityManifestV1 }> & SlotClockPropsV1) {
   if (capabilities.status !== 'authenticated') {
     return <p className="market-capability-refusal">
       <span>{capabilities.status === 'unread' ? 'capabilities unread' : 'capabilities refused'}</span>
@@ -48,13 +58,13 @@ function CapabilityBadges({ capabilities }: Readonly<{ capabilities: MarketCapab
     {capabilities.badges.map((badge) => (
       <span key={badge.index} className={`capability-badge${badge.recognized ? ' recognized' : ''}`} title={`kind ${badge.kindId}`}>
         {badge.label}
-        <small>{badge.activation === 'deadline' ? `deadline ${badge.deadline}` : 'immediate'}{badge.dependencies.length > 0 ? ` · after ${badge.dependencies.join(', ')}` : ''}</small>
+        <small>{badge.activation === 'deadline' ? `deadline ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}` : 'immediate'}{badge.dependencies.length > 0 ? ` · after ${badge.dependencies.join(', ')}` : ''}</small>
       </span>
     ))}
   </div>;
 }
 
-function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
+function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCardV1 }> & SlotClockPropsV1) {
   if (card.status === 'refused') {
     return <article className="market-discovery-card refused">
       <div className="market-card-top"><span className="provenance-chip refused">{provenanceChipV1(card.provenance)}</span><span className="phase-chip">no phase</span></div>
@@ -63,12 +73,19 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
       <p className="market-observation">Finalized observation slot {card.observedSlot}</p>
     </article>;
   }
+  // The name is the one editorial fact on the card: the chain stores no
+  // titles, so a market the registry knows gets its registered name and
+  // question, and one it does not gets a generated label that says exactly
+  // what it is instead of pretending to a name.
+  const editorial = marketEditorialV1(card.address);
   return <article className="market-discovery-card">
     <div className="market-card-top">
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
       <span className={`phase-chip phase-${card.phase.toLowerCase()}`}>{card.phase}</span>
     </div>
-    <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{shortAddressV1(card.address, 10)}</Anchor></h3>
+    <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{editorial === null ? fallbackMarketTitleV1(card.phase, card.address) : editorial.title}</Anchor></h3>
+    {editorial !== null && <p className="market-question">{editorial.question}</p>}
+    <p className="market-card-address" title={card.address}>{shortAddressV1(card.address, 10)}</p>
     <dl className="market-card-facts">
       <div><dt>Generation</dt><dd>{card.generation}</dd></div>
       <div><dt>Founding readiness</dt><dd>{card.readiness}</dd></div>
@@ -92,7 +109,7 @@ function MarketCard({ card }: Readonly<{ card: MarketDiscoveryCardV1 }>) {
     <p className="market-observation"><Anchor href={marketDetailHrefV1(card.address)}>Open this Market field by field →</Anchor></p>
     {card.collateral.status !== 'bound' && <p className="market-refusal">{card.collateral.reason}</p>}
     {card.liability.status !== 'bound' && <p className="market-refusal">{card.liability.reason}</p>}
-    <CapabilityBadges capabilities={card.capabilities} />
+    <CapabilityBadges capabilities={card.capabilities} clock={clock} nowMs={nowMs} />
     <ul className="market-bindings">
       {card.bindings.map((check) => (
         <li key={check.label} className={check.ok ? 'check-pass' : 'check-fail'}>
@@ -159,10 +176,12 @@ export function HistoricalMarketAccounts({
 export function RestOfTheRecord({
   listing,
   incompatible,
+  clock,
+  nowMs,
 }: Readonly<{
   listing: MarketListingV1;
   incompatible: ReadonlyArray<IncompatibleMarketAccountV1>;
-}>) {
+}> & SlotClockPropsV1) {
   const founding = listing.founding.length;
   const settled = listing.settled.length;
   const unreadable = listing.unreadable.length;
@@ -177,7 +196,7 @@ export function RestOfTheRecord({
       title={`${settled} market${plural(settled, '', 's')} past ${plural(settled, 'its', 'their')} answer`}
       note="resolved, retiring, or retired"
     >
-      <div className="market-card-grid">{listing.settled.map((card) => <MarketCard key={card.address} card={card} />)}</div>
+      <div className="market-card-grid">{listing.settled.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
 
     {founding > 0 && <ListingGroup
@@ -191,14 +210,14 @@ export function RestOfTheRecord({
         nothing to trade against {plural(founding, 'it', 'them')}, not because {plural(founding, 'it is', 'they are')} something
         to be quiet about.
       </p>
-      <div className="market-card-grid">{listing.founding.map((card) => <MarketCard key={card.address} card={card} />)}</div>
+      <div className="market-card-grid">{listing.founding.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
 
     {unreadable > 0 && <ListingGroup
       title={`${unreadable} account${plural(unreadable, '', 's')} that refused to decode`}
       note="enumerated as current · each carries its exact reason"
     >
-      <div className="market-card-grid">{listing.unreadable.map((card) => <MarketCard key={card.address} card={card} />)}</div>
+      <div className="market-card-grid">{listing.unreadable.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
 
     <HistoricalMarketAccounts accounts={incompatible} />
@@ -238,9 +257,28 @@ export default function MarketDiscoveryWorkspace() {
   const deployment = useDeploymentV1();
   const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading the finalized market list…' });
   const discovery = state.kind === 'ready' ? state.discovery : null;
+  // The wall-clock layer: a slot-rate clock measured after each read, and a
+  // ticking "now". Both start absent, so the server-rendered document and the
+  // first client render carry no time strings at all — every estimate appears
+  // only once it can actually be estimated.
+  const [clock, setClock] = useState<SlotClockV1 | null>(null);
+  const [nowMs, setNowMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setNowMs(Date.now());
+    });
+    const tick = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(tick);
+    };
+  }, []);
 
   const load = useCallback(async () => {
     setState({ kind: 'loading', message: `Reading every ${deployment.label} market: one bounded finalized scan of the Core program, then every Market root, its Realm record, its Claims liability aggregate, and its capability manifest behind one finalized floor…` });
+    setClock(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -254,6 +292,10 @@ export default function MarketDiscoveryWorkspace() {
         enumeration: enumeration.mode === 'program-scan' ? enumeration : undefined,
       });
       setState({ kind: 'ready', discovery: next, facts, message: next.reason });
+      // After the content is on screen: measure the cluster's slot rate so
+      // deadline slots can carry a wall-clock phrase. Display-only, so its
+      // failure mode is the labelled nominal-rate assumption, never an error.
+      setClock(await readSlotClockV1(client, next.floorSlot));
     } catch (error) {
       setState({ kind: 'refused', message: `Refused: ${errorMessage(error)}` });
     }
@@ -301,7 +343,7 @@ export default function MarketDiscoveryWorkspace() {
     <section className="trade-v3-card">
       <header>
         <span>01</span>
-        <div><h2>The markets that are open</h2><p>One card per market that has finished founding, enumerated from the Core program itself — no index, no curation of which facts you see. A card is either read or refused; it is never partly invented. Claim counts come from the accounts that actually hold the claims, in raw units.</p></div>
+        <div><h2>The markets that are open</h2><p>One card per market that has finished founding, enumerated from the Core program itself — no index, no curation of which facts you see. A card is either read or refused; it is never partly invented. Claim counts come from the accounts that actually hold the claims, in raw units. The name and question at the top of a card are this site&apos;s editorial — the chain stores no names; everything else on the card is read from the chain.</p></div>
         <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read the chain'}</button></div>
       </header>
       {state.kind === 'refused'
@@ -310,22 +352,23 @@ export default function MarketDiscoveryWorkspace() {
       {discovery !== null && listing !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
-          <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>one observation epoch for every card</small></article>
+          <article><span>Finalized floor</span><strong>{discovery.floorSlot}</strong><small>{clock === null ? 'one observation epoch for every card' : `read at ${new Date(clock.observedAtMs).toLocaleTimeString()} · one observation epoch for every card`}</small></article>
           <article><span>Open now</span><strong>{listing.open.length}</strong><small>{asideCount} further account{plural(asideCount, '', 's')} named below</small></article>
           <article><span>Core program</span><strong>{shortAddressV1(deployment.programs.core, 6)}</strong><small>{deployment.cluster === 'devnet' ? 'DEPLOY-1 permanent address' : 'the active deployment'}</small></article>
         </div>
         <p className="direct-status">{discovery.enumeration.note}</p>
+        {clock !== null && <p className="slot-clock-note">{slotClockCaveatV1(clock)}</p>}
         {discovery.enumeration.mode === 'refused' && <p className="market-refusal">{discovery.enumeration.reason}</p>}
         {discovery.cards.length === 0
           ? discovery.enumeration.mode === 'refused' ? null : <EmptyMarkets deployment={deployment} enumeration={discovery.enumeration} />
           : listing.open.length === 0
             ? <p className="market-empty">Nothing on this deployment has finished founding yet. Every market it holds is named below, at the stage it actually reached.</p>
-            : <div className="market-card-grid">{listing.open.map((card) => <MarketCard key={card.address} card={card} />)}</div>}
+            : <div className="market-card-grid">{listing.open.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>}
       </>}
     </section>
 
     {discovery !== null && listing !== null && state.kind === 'ready'
-      && <RestOfTheRecord listing={listing} incompatible={incompatible} />}
+      && <RestOfTheRecord listing={listing} incompatible={incompatible} clock={clock} nowMs={nowMs} />}
 
     <footer className="product-footer">
       <span>Chain-derived phase, atoms, and refusals only</span>

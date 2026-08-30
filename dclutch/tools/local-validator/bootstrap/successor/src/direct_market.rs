@@ -11,6 +11,7 @@ use dclutch_capability_contract::CapabilityManifestV1;
 use dclutch_capability_program_contract::{CapabilityProgramV1, v4::CapabilityProgramV4};
 use dclutch_custody_contract::CustodyReplayLayoutV1;
 use dclutch_direct_codec::{
+    activation_bundle_v1::DirectActivationBundleV1,
     begin_retiring_bundle_v1::DirectBeginRetiringBundleV1,
     execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
     native_close_bundle_v1::DirectNativeCloseBundleV1,
@@ -827,6 +828,9 @@ pub(crate) fn attach_direct_market_capability_v1(
         native_close_account_profile_hex: hex(&release.native_close.account_profile),
         native_close_effect_hex: hex(&release.native_close.effect),
         native_close_descriptor_hex: hex(&release.native_close.descriptor),
+        activation_account_profile_hex: hex(&release.activation.account_profile),
+        activation_effect_hex: hex(&release.activation.effect),
+        activation_descriptor_hex: hex(&release.activation.descriptor),
         program_set_hex: hex(&release.program_set),
         activation_deadline_slot: compiler.activation_deadline_slot,
         root_rent_minimum_lamports: compiler.root_rent_minimum_lamports,
@@ -987,6 +991,21 @@ pub(crate) fn direct_publication_records_v1(
             &release.native_close.descriptor,
         ),
         record(
+            "direct_activation_account_profile_record",
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1(),
+            &release.activation.account_profile,
+        ),
+        record(
+            "direct_activation_effect_record",
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_effect_schema_v1(),
+            &release.activation.effect,
+        ),
+        record(
+            "direct_activation_descriptor_record",
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_descriptor_schema_v1(),
+            &release.activation.descriptor,
+        ),
+        record(
             "direct_program_set_record",
             dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
             &release.program_set,
@@ -1079,11 +1098,26 @@ fn decode_direct_release_v1(
         effect: begin_effect,
         descriptor: begin_descriptor,
     };
+    let activation_descriptor = decode_hex(&payload.activation_descriptor_hex)?;
+    let activation_program = CapabilityProgramV1::decode(&activation_descriptor)
+        .map_err(|error| Error::new(format!("Direct activation descriptor: {error:?}")))?;
+    let activation_account_profile = decode_hex(&payload.activation_account_profile_hex)?;
+    let activation_effect = decode_hex(&payload.activation_effect_hex)?;
+    let activation = DirectActivationBundleV1 {
+        account_profile_id: Sha256::digest(&activation_account_profile).into(),
+        effect_id: Sha256::digest(&activation_effect).into(),
+        descriptor_id: Sha256::digest(&activation_descriptor).into(),
+        account_profile: activation_account_profile,
+        transition: activation_program.transition_program().bytes().to_vec(),
+        effect: activation_effect,
+        descriptor: activation_descriptor,
+    };
     let program_set = decode_hex(&payload.program_set_hex)?;
     let release = DirectInlineOrdinaryLifecycleProgramSetV1 {
         ordinary,
         begin_retiring,
         native_close,
+        activation,
         program_set_id: Sha256::digest(&program_set).into(),
         program_set,
     };
@@ -1278,6 +1312,7 @@ mod tests {
 
     use dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2;
     use dclutch_direct_codec::{
+        activation_bundle_v1::DIRECT_ACTIVATION_SELECTOR_V1,
         native_close_bundle_v1::DIRECT_NATIVE_CLOSE_SELECTOR_V1,
         retirement_v1::DIRECT_BEGIN_RETIRING_SELECTOR_V1,
     };
@@ -2241,7 +2276,7 @@ mod tests {
         let second = release([0x52; 32]);
         assert_ne!(first.program_set_id, second.program_set_id);
         let set = CapabilityProgramSetV2::decode(&first.program_set).expect("ProgramSetV2");
-        assert_eq!(set.entry_count(), 3);
+        assert_eq!(set.entry_count(), 4);
         assert_eq!(set.entry(0).expect("ordinary selector").selector(), 1);
         assert_eq!(
             set.entry(1).expect("begin-retiring selector").selector(),
@@ -2250,6 +2285,10 @@ mod tests {
         assert_eq!(
             set.entry(2).expect("native-close selector").selector(),
             DIRECT_NATIVE_CLOSE_SELECTOR_V1
+        );
+        assert_eq!(
+            set.entry(3).expect("activation selector").selector(),
+            DIRECT_ACTIVATION_SELECTOR_V1
         );
         assert_eq!(
             dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1,
@@ -2277,7 +2316,7 @@ mod tests {
             },
         )
         .expect("publication closure");
-        assert_eq!(publication.len(), 19);
+        assert_eq!(publication.len(), 22);
         let labels = publication
             .iter()
             .map(|record| record.label)

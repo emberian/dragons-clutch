@@ -11,8 +11,10 @@
 //! vacant root so the created account is rent-exempt.
 //!
 //! This is the artifact whose absence left every founded Direct market
-//! unactivatable — the eighth `CapabilityProgramSetV2` entry named in
-//! `docs/OMISSION_INDEX.md`. Nothing about the root layout is restated here: the
+//! unactivatable — the Direct family's own instance of the missing activation
+//! ProgramSet entry `docs/OMISSION_INDEX.md` records (there for General's
+//! seven-action set; here it is Direct's fourth entry). Nothing about the root
+//! layout is restated here: the
 //! magic and the version/phase/reserved header word are read out of
 //! `DirectRootStateV1::new().encode()` and loaded as transition constants, so a
 //! layout change moves this artifact with it or refuses.
@@ -72,7 +74,11 @@ use crate::{
 ///
 /// Direct executable action selectors occupy the low namespace; begin-retiring
 /// is `0xffff_ff00` and native-close `0xffff_ff01`. Activation takes the next
-/// reserved high selector and cannot alias any executable action.
+/// reserved high selector and cannot alias any executable action. It is
+/// numerically equal to `DIRECT_TOKEN_SETUP_SELECTOR_V1`, which lives in a
+/// different namespace entirely (Trading top-level instruction routing,
+/// disambiguated by magic and width) - the same accepted precedent as
+/// native-close sharing its value with the replay-setup route.
 pub const DIRECT_ACTIVATION_SELECTOR_V1: u32 = 0xffff_ff02;
 /// Exact activation selector-request width; the selector is canonical `u32` at 12.
 pub const DIRECT_ACTIVATION_REQUEST_BYTES_V1: usize = 16;

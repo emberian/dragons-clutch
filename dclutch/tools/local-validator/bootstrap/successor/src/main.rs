@@ -9,6 +9,7 @@ mod aggregate_retirement_exterior;
 mod aggregate_retirement_journal;
 mod campaign;
 mod cluster;
+mod direct_capability_activation;
 mod direct_hot_route_manifest;
 mod direct_market;
 mod direct_trade;
@@ -182,6 +183,11 @@ fn run() -> Result<()> {
         }
         Some(command) if command == direct_hot_route_manifest::HOT_ROUTE_MANIFEST_COMMAND_V3 => {
             direct_hot_route_manifest::run_hot_route_manifest(arguments.collect())
+        }
+        Some(command)
+            if command == direct_capability_activation::DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1 =>
+        {
+            direct_capability_activation::run(arguments.collect())
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
@@ -1598,6 +1604,7 @@ fn usage() {
     println!("{}", direct_trade_producer::devnet_direct_usage());
     println!("{}", direct_hot_route_manifest::checked_execution_release_usage());
     println!("{}", direct_hot_route_manifest::hot_route_manifest_usage());
+    println!("{}", direct_capability_activation::usage());
     println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \

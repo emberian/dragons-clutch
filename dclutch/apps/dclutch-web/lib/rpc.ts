@@ -534,6 +534,25 @@ export class SolanaRpcClient {
     return String(exactUnsigned(await this.request('getSlot', [{ commitment: 'finalized' }]), 'finalized slot'));
   }
 
+  /**
+   * The cluster's own wall-clock stamp for one slot, in unix seconds, or null.
+   *
+   * Null covers every way the node can decline — a skipped slot, history the
+   * node no longer retains, or a transport refusal — because every caller of
+   * this read is estimating for display and must fall back to a labelled
+   * assumption rather than distinguish absences. Nothing that gates a write
+   * may depend on this method.
+   */
+  async blockTime(slot: string): Promise<string | null> {
+    try {
+      const raw = await this.request('getBlockTime', [exactUnsigned(Number(slot), 'block time slot')]);
+      if (raw === null) return null;
+      return String(exactUnsigned(raw, 'block time'));
+    } catch {
+      return null;
+    }
+  }
+
   async latestBlockhash(minimumContextSlot?: string): Promise<LatestBlockhashObservation> {
     const configuration: Record<string, unknown> = { commitment: 'finalized' };
     if (minimumContextSlot !== undefined) configuration.minContextSlot = exactUnsigned(Number(minimumContextSlot), 'minimum context slot');

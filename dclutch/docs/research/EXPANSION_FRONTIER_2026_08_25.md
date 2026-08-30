@@ -153,7 +153,29 @@ must not be assumed by a later lane.
   exactly what `Basis` is. It has no Lean, which is the part worth adding here.
   See `ASPIRATION_LEDGER.md` `G-1` and the eclipse scorecard's correction
   section. A transplant needs a `docs/compost/` manifest.
+
+  **CORRECTED 2026-08-30 (FRONTIER): the Lean now exists; the trigger's
+  precondition is MET and the trigger itself still has not fired.**
+  `formal/dclutch-semantics/DClutchSemantics/LiabilityBasisV2PriceGate.lean`
+  (753 lines) landed with `LiabilityBasisV2PriceGateAbi.lean`,
+  `LiabilityBasisV2PriceGateExamples.lean`, the emitter
+  `EmitLiabilityBasisV2PriceGateRust.lean`, the Rust side
+  `crates/dclutch-liability-basis-v2-kernel/src/{price_gate.rs,generated_price_gate.rs}`
+  and the byte-identity gate `check-generated-price-gate.sh`. So "there is no
+  degree ≥ 2 price-plane gate" is no longer the blocker — **the gate is proved
+  and unconsumed, exactly like everything else in this row.** The paragraph
+  above is retained rather than rewritten because its *rule* is unchanged and
+  binding: no Market descriptor may select degree ≥ 2 without admission
+  through this gate. What changed is that satisfying the rule is now a wiring
+  job rather than a proof job.
 - **The kernel still has no consumer**, so `M-8` is unchanged by this slice.
+  **Re-measured 2026-08-30 (FRONTIER): still exactly true, and it is now the
+  ONLY kernel of which it is true** — `dclutch-liability-basis-v2-kernel` has
+  one dependency edge in the whole workspace and it is the root `Cargo.toml`
+  member list. Note carefully that this is a statement about the *kernel
+  crate*, not about the *capability*: shaped payoffs at degree ≤ 1 ship on the
+  live wire through `BasisKindV3::GradedExactComplement`, by a separate
+  implementation. See `docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §2.
 
 `docs/research/BSPLINE_ECLIPSE_SCORECARD_2026_08_27.md` compares the result
 against generation one axis by axis, including where generation one is still

@@ -69,6 +69,28 @@ Flagging (the review list, never a mechanical guess):
   - Any license expression this tool does not recognize as unambiguously
     permissive (the allowlist is stated below and is deliberately small).
 
+The SPDX operators are read as the licence grant's own logic rather than
+matched as letters: ``AND`` conjoins obligations, so every arm must be
+permissive; ``OR`` is a choice offered to the licensee, so one fully
+permissive arm suffices. That is why ``MIT OR Apache-2.0 OR
+LGPL-2.1-or-later`` is not a review item (a permissive arm is on the table
+and no obligation is compelled) while ``Apache-2.0 AND LGPL-3.0-or-later``
+still is (both sets of terms apply, and no choice is on offer). An
+expression the evaluator cannot parse is never cleared -- it falls through
+to the substring markers and gets flagged.
+
+Closing a flag is a human act, and this tool records it as one.
+``REVIEWED_ALLOWANCES`` holds the decisions that have actually been made:
+each entry names what it covers, the reason it was decided that way, and the
+evidence it rested on, and the generated ``SBOM.md`` renders them under
+"Reviewed and allowed" with the rows beneath each. A ruling therefore moves
+a row out of the open queue and into the visible record -- it never deletes
+it, and it never touches ``NOTICES.md``, because reviewing an attribution
+obligation does not discharge it. Every allowance is pinned to the exact
+license expression that was read (for a ``LicenseRef-file:`` row, that means
+pinned to the file's ``sha256``), so a dependency that changes its license
+on an upgrade stops matching and returns to the queue on its own.
+
 Flagging never fails the gate by itself -- gen-1's own SBOM was PASS with
 three flagged families outstanding, and a review queue that also reds the
 build stops getting reviewed and starts getting silenced. What fails the
@@ -147,6 +169,122 @@ COPYLEFT_MARKERS = (
     "CDLA",
     "EUPL",
 )
+
+
+# ------------------------------------------------- SPDX expression semantics
+
+
+class SpdxParseError(Exception):
+    """The expression is not a shape this evaluator understands.
+
+    Raised, never swallowed into a permissive answer: an expression this tool
+    cannot parse is an expression this tool has not cleared, and the caller
+    falls back to flagging it for a human.
+    """
+
+
+def _spdx_tokens(expression: str) -> list[str]:
+    # `/` is the pre-SPDX dual-license separator Cargo's own docs used to
+    # document ("MIT/Apache-2.0" meaning either, at the licensee's choice) --
+    # a real, historical, unambiguous convention, tokenized as OR.
+    normalized = expression.replace("/", " OR ")
+    raw = re.findall(r"\(|\)|[^()\s]+", normalized)
+    tokens: list[str] = []
+    for token in raw:
+        if token in ("(", ")") or token in ("OR", "AND"):
+            tokens.append(token)
+            continue
+        # `WITH` binds a license to one exception as a single compound unit
+        # ("Apache-2.0 WITH LLVM-exception" is one atom, not two), so it is
+        # folded into the atom being built rather than treated as an operator.
+        if token == "WITH" or (tokens and tokens[-1] not in ("(", ")", "OR", "AND")):
+            if not tokens or tokens[-1] in ("(", ")", "OR", "AND"):
+                raise SpdxParseError(f"dangling {token!r} in {expression!r}")
+            tokens[-1] = f"{tokens[-1]} {token}"
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def _spdx_parse_or(tokens: list[str], pos: int) -> tuple[object, int]:
+    node, pos = _spdx_parse_and(tokens, pos)
+    arms = [node]
+    while pos < len(tokens) and tokens[pos] == "OR":
+        node, pos = _spdx_parse_and(tokens, pos + 1)
+        arms.append(node)
+    return (("OR", arms) if len(arms) > 1 else arms[0]), pos
+
+
+def _spdx_parse_and(tokens: list[str], pos: int) -> tuple[object, int]:
+    node, pos = _spdx_parse_atom(tokens, pos)
+    arms = [node]
+    while pos < len(tokens) and tokens[pos] == "AND":
+        node, pos = _spdx_parse_atom(tokens, pos + 1)
+        arms.append(node)
+    return (("AND", arms) if len(arms) > 1 else arms[0]), pos
+
+
+def _spdx_parse_atom(tokens: list[str], pos: int) -> tuple[object, int]:
+    if pos >= len(tokens):
+        raise SpdxParseError("expression ends where a license was expected")
+    token = tokens[pos]
+    if token == "(":
+        node, pos = _spdx_parse_or(tokens, pos + 1)
+        if pos >= len(tokens) or tokens[pos] != ")":
+            raise SpdxParseError("unbalanced parenthesis")
+        return node, pos + 1
+    if token in (")", "OR", "AND"):
+        raise SpdxParseError(f"unexpected {token!r} where a license was expected")
+    return ("ID", token), pos + 1
+
+
+def parse_spdx(expression: str):
+    tokens = _spdx_tokens(expression)
+    if not tokens:
+        raise SpdxParseError("empty license expression")
+    node, pos = _spdx_parse_or(tokens, 0)
+    if pos != len(tokens):
+        raise SpdxParseError(f"trailing tokens in {expression!r}")
+    return node
+
+
+def satisfiable_permissively(expression: str) -> bool:
+    """Can this expression be satisfied by permissive terms alone?
+
+    The SPDX operators are not decoration, they are the licence grant's own
+    logic, and this tool evaluates them as such:
+
+      - ``AND`` conjoins obligations. Every arm's terms apply simultaneously,
+        so the expression is permissive only if *every* arm is
+        (``Apache-2.0 AND LGPL-3.0-or-later`` is NOT -- the LGPL genuinely
+        applies, and no choice is on offer).
+      - ``OR`` is a choice offered to the licensee. If *any* arm is entirely
+        permissive, that arm is available and the permissive terms are the
+        ones we may take (``MIT OR Apache-2.0 OR LGPL-2.1-or-later`` IS --
+        the flag fired only because the expression *mentions* a copyleft
+        family it also lets us decline).
+
+    An expression this evaluator cannot parse returns ``False`` -- not
+    cleared, flagged for a human. Ember's ruling that opened this rule also
+    carried a preference worth recording: this repository is itself
+    ``AGPL-3.0-or-later``, so where an ``OR`` offers a copyleft arm we are
+    free to *take* the less permissive one; nothing here obliges the
+    permissive arm, it only establishes that no obligation is forced on us.
+    """
+    try:
+        node = parse_spdx(expression)
+    except SpdxParseError:
+        return False
+
+    def evaluate(n) -> bool:
+        kind, payload = n
+        if kind == "ID":
+            return payload in PERMISSIVE_ALLOWLIST
+        if kind == "AND":
+            return all(evaluate(arm) for arm in payload)
+        return any(evaluate(arm) for arm in payload)
+
+    return evaluate(node)
 
 
 @dataclass(frozen=True, order=True)
@@ -562,28 +700,375 @@ def dedupe_rows(rows: list[Row]) -> list[Row]:
     return sorted(best.values())
 
 
-def flag_row(row: Row) -> str | None:
+PERMISSIVE_ARM_NOTE = (
+    "permissive arm available under the expression's own `OR` (tool rule, "
+    "not a per-package judgment)"
+)
+
+
+# --------------------------------------------------- recorded human rulings
+
+
+@dataclass(frozen=True)
+class Allowance:
+    """One recorded human license decision: what it covers, and why.
+
+    An allowance never *hides* a row. It moves it out of the open review
+    queue and into the "Reviewed and allowed" section of the generated
+    ``SBOM.md``, carrying this reason with it, so the artifact shows a
+    decision that was made rather than a question that was dropped. Notices
+    are unaffected: an attribution obligation does not end because we
+    reviewed it, so every row here still appears in ``NOTICES.md``.
+
+    ``license_exprs`` is matched EXACTLY, and that is the ratchet. A
+    dependency that changes its license on an upgrade stops matching, falls
+    back to the mechanical flag, and returns to the queue -- which is the
+    whole point of recording the decision against the licence we actually
+    read rather than against a package name.
+    """
+
+    key: str
+    title: str
+    ruling: str
+    evidence: str
+    license_exprs: tuple[str, ...]
+    ecosystems: tuple[str, ...] = ()
+    names: tuple[str, ...] = ()
+    name_prefixes: tuple[str, ...] = ()
+
+    def scoped_to_packages(self) -> bool:
+        return bool(self.names or self.name_prefixes)
+
+    def matches(self, row: Row) -> bool:
+        if row.license not in self.license_exprs:
+            return False
+        if self.ecosystems and row.ecosystem not in self.ecosystems:
+            return False
+        if not self.scoped_to_packages():
+            return True
+        return row.name in self.names or any(
+            row.name.startswith(prefix) for prefix in self.name_prefixes
+        )
+
+
+# The verification behind the build-time-only ground, run as its own piece of
+# work rather than taken on the ruling's word -- and it corrected the ruling's
+# premise, which is why it is recorded at this length instead of asserted.
+BUILD_TIME_ONLY_EVIDENCE = (
+    "Verified 2026-08-30, in four independent parts, and the first part "
+    "*corrected* the premise rather than confirming it. "
+    "**(1) Declaration — partly negative, stated plainly.** All seven "
+    "packages live in one npm tree, `apps/dclutch-web`; none is a direct "
+    "dependency of anything first-party. Most arrive `dev:true` "
+    "(`lightningcss` via `@tailwindcss/postcss` and `vite`; `satori`, "
+    "`@resvg/resvg-wasm` and `@vercel/og` via `vinext`). But `sharp` arrives "
+    "on TWO edges, and one is production-reachable: `next` (a `dependencies` "
+    "entry) pulls it through `optionalDependencies`. 14 of the 55 rows ride "
+    "that chain. So the lockfile section does NOT carry this classification, "
+    "and the claim does not rest on it. "
+    "**(2) Use — the load-bearing part.** There are zero first-party imports "
+    "of any of the seven, by substring sweep (not merely import-form) across "
+    "the web app's `app/`, `components/`, `lib/`, `scripts/`, `fixtures/` and "
+    "root configs, and across `packages/`, `tools/`, `crates/`, `programs/` "
+    "and `docs/`; the only hits repository-wide are this tool's own generated "
+    "catalogs. The supporting negatives are what make that conclusive: the "
+    "web app has no `route.*` files at all, no `opengraph-image`/`icon`/"
+    "`twitter-image` convention routes, no `next/image` or `<Image` usage "
+    "anywhere, and no `images` key in `next.config.ts`. Neither the OG "
+    "rendering stack nor Next's image optimizer has an entry point to be "
+    "called through. "
+    "**(3) Distribution — decisive for the OG stack.** The deployed artifact "
+    "is a static export served by GitHub Pages: the Pages workflow builds "
+    "with `DCLUTCH_PAGES_EXPORT=1` (`next.config.ts` sets `output: 'export'`) "
+    "and hands the prerendered client output to `tools/genref/render-site.mjs`, "
+    "which itself imports only `node:fs`, `node:path` and `node:url`. Pages "
+    "serves files, not a runtime; there is no request-time server for a "
+    "server-side image route to run on, and no such route exists to run. "
+    "**(4) Absence from the shipped bundle — measured, not inferred.** The "
+    "built output on disk was grepped directly: `dist/client` (78 files) and "
+    "`dist/server` (130 files) contain no occurrence of any of the seven "
+    "package names, nor of their distinctive runtime symbols "
+    "(`yoga-wasm`, `opentype`, `initWasm`, `Resvg`, `vips_`, `@img/`), nor of "
+    "the strings `Mozilla Public License`, `MPL-2.0` or `LGPL`; `find dist "
+    "-name '*.wasm'` returns nothing, so the `resvg`/`yoga` wasm blobs never "
+    "shipped. The clean *server* bundle matters as much as the client one, "
+    "since the export's HTML is prerendered from it. "
+    "**Caveat, not smoothed over:** that `dist/` was the default "
+    "worker-compatible build, not literally the `DCLUTCH_PAGES_EXPORT=1` "
+    "artifact (no build was run for this check). It is the same client graph "
+    "from the same sources and the export adds prerendered HTML derived from "
+    "the equally-clean server bundle — but that last step is inference rather "
+    "than measurement, and parts (2) and (3) are what the classification "
+    "actually rests on. "
+    "**Why these rows exist at all:** this tool walks the entire lockfile "
+    "`packages` map with no `dev`/`optional` filter, reporting the full "
+    "install closure rather than the shipped closure. That is deliberate — "
+    "an SBOM that quietly omitted what a developer's machine resolves would "
+    "be a worse instrument — and it is the mechanical reason a build-time "
+    "tool appears in a license review queue."
+)
+
+
+REVIEWED_ALLOWANCES: tuple[Allowance, ...] = (
+    Allowance(
+        key="mpl-unmodified",
+        title="MPL-2.0, used unmodified",
+        ruling=(
+            "MPL-2.0 is file-level copyleft: its reciprocity attaches to the "
+            "*licensed files themselves*, and is triggered by modifying them. "
+            "This repository consumes every dependency below as published, "
+            "through its public interface, without patching or vendoring a "
+            "single MPL-covered source file -- so there is no modified file to "
+            "reciprocate and no obligation reaches this repository's own "
+            "sources. Allowed for unmodified use; the notice obligation is "
+            "unaffected and every row below is still listed in `NOTICES.md`."
+        ),
+        evidence=(
+            "No MPL-covered dependency is vendored or patch-applied: all "
+            "resolve from their registry with a lockfile checksum (`cargo` "
+            "rows) or a lockfile integrity hash (`npm` rows), recorded in "
+            "the dependency tables in this file."
+        ),
+        license_exprs=("MPL-2.0", "MPL-2.0+"),
+    ),
+    Allowance(
+        key="mpl-build-time",
+        title="MPL-2.0, used unmodified AND build-time only",
+        ruling=(
+            "The MPL-2.0 unmodified-use ground above applies to these in full "
+            "and would be sufficient on its own. They are recorded separately "
+            "because a second, independent ground also holds: these packages "
+            "run only while the site is being built and their code is never "
+            "shipped to a browser, so the distribution question the copyleft "
+            "analysis turns on does not arise for them at all."
+        ),
+        evidence=BUILD_TIME_ONLY_EVIDENCE,
+        license_exprs=("MPL-2.0",),
+        ecosystems=("npm",),
+        names=("satori", "@resvg/resvg-wasm", "@vercel/og", "lightningcss"),
+        name_prefixes=("lightningcss-",),
+    ),
+    Allowance(
+        key="lgpl",
+        title="LGPL-3.0 (the general ruling)",
+        ruling=(
+            "This is the LGPL ruling for the repository as a whole; the "
+            "`@img/sharp-*` rows it also covers are attributed below to the "
+            "narrower `sharp / libvips` entry, which says something more "
+            "specific about them, so the rows listed here are the ones this "
+            "ground carries *alone*. "
+            "Ruled not a concern. Two facts carry it. First, this repository "
+            "is itself `AGPL-3.0-or-later` -- a strictly stronger copyleft "
+            "than the LGPL -- so an LGPL dependency imposes no term this "
+            "project's own license does not already impose on it, and there "
+            "is no license conflict to resolve. Second, the LGPL's own design "
+            "point is exactly this use: linking against a library without "
+            "the library's terms reaching the linking work, provided the "
+            "library is replaceable, which it is here (all rows below are "
+            "unmodified upstream builds resolved by checksum)."
+        ),
+        evidence=(
+            "The `@img/sharp-*` rows are per-platform prebuilt libvips "
+            "binaries for one build-time image pipeline -- see the "
+            "build-time-only verification recorded under "
+            "`sharp-build-time` below, which covers them on an independent "
+            "second ground. `rpc-websockets` is deliberately NOT covered by "
+            "that verification and rests on the AGPL/LGPL compatibility "
+            "ground alone: it is a runtime transitive dependency of "
+            "`@solana/web3.js`, it is `LGPL-3.0-only` rather than a dual, "
+            "and it is used unmodified through its public API. Recorded as a "
+            "lead rather than a second ground: the same 2026-08-30 sweep "
+            "found no trace of it in the built client bundle either (no "
+            "`rpc-websockets`, `CommonClient` or `WebSocketBrowserImpl` "
+            "symbols; the only surviving `@solana/*` module id is "
+            "`@solana/errors`), which is consistent with first-party code "
+            "importing value-level pieces of `@solana/web3.js` but never "
+            "`Connection`, the type that owns the websocket. That is not "
+            "claimed as settled — `vite.config.ts` still aliases "
+            "`rpc-websockets` to its browser build, i.e. the configuration "
+            "anticipates bundling it, so a future import of `Connection` "
+            "would ship it without anything here changing."
+        ),
+        license_exprs=(
+            "LGPL-3.0-or-later",
+            "LGPL-3.0-only",
+            "Apache-2.0 AND LGPL-3.0-or-later",
+            "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
+        ),
+    ),
+    Allowance(
+        key="sharp-build-time",
+        title="sharp / libvips, build-time only",
+        ruling=(
+            "Covered by the LGPL ruling above; recorded separately for the "
+            "independent second ground, which is the stronger one: the sharp "
+            "image pipeline and its per-platform libvips binaries execute "
+            "only during the site build and no part of them is served to a "
+            "browser."
+        ),
+        evidence=BUILD_TIME_ONLY_EVIDENCE,
+        license_exprs=(
+            "LGPL-3.0-or-later",
+            "Apache-2.0 AND LGPL-3.0-or-later",
+            "Apache-2.0 AND LGPL-3.0-or-later AND MIT",
+        ),
+        ecosystems=("npm",),
+        name_prefixes=("@img/sharp-",),
+    ),
+    Allowance(
+        key="cdla-permissive",
+        title="CDLA-Permissive-2.0",
+        ruling=(
+            "Permissive by construction and correctly named: the Community "
+            "Data License Agreement's Permissive variant grants use and "
+            "redistribution of the data, with or without modification, and "
+            "imposes no reciprocity on anything -- the only condition it "
+            "carries is that the text travels with the data. It is on this "
+            "tool's review list only because `CDLA` is in `COPYLEFT_MARKERS`, "
+            "which deliberately catches the whole CDLA family rather than "
+            "distinguishing Permissive from Sharing by substring. Allowed as "
+            "an allowlist extension, not a risk accepted."
+        ),
+        evidence=(
+            "Carried by `webpki-roots` and `webpki-root-certs` 1.0.9, which "
+            "are the Mozilla CA root certificate set repackaged as Rust data "
+            "-- the CDLA is doing its intended job here, licensing a data "
+            "table rather than code."
+        ),
+        license_exprs=("CDLA-Permissive-2.0",),
+    ),
+    Allowance(
+        key="bzip2",
+        title="bzip2-1.0.6",
+        ruling=(
+            "A BSD-style permissive license: use, modification and "
+            "redistribution in source or binary form, conditioned only on "
+            "retaining the notice and disclaimer, with no reciprocity and no "
+            "source-offer obligation. It is on the review list only because "
+            "the permissive allowlist had no entry for it. Allowed as an "
+            "allowlist extension."
+        ),
+        evidence=(
+            "Carried by `libbz2-rs-sys`, a Rust reimplementation of the "
+            "bzip2 compression library, resolved from the registry by "
+            "checksum and used unmodified."
+        ),
+        license_exprs=("bzip2-1.0.6",),
+    ),
+    Allowance(
+        key="caniuse-data",
+        title="CC-BY-4.0 on a browser-support data table",
+        ruling=(
+            "Allowed for this package, scoped to it deliberately. CC-BY-4.0 "
+            "grants redistribution and adaptation for any purpose, "
+            "commercial included, conditioned on attribution -- which "
+            "`NOTICES.md` provides mechanically. The scope is narrow on "
+            "purpose: CC-BY on a *data table* is unremarkable, whereas "
+            "CC-BY appearing on *code* is a genuinely different question "
+            "(the Creative Commons licenses are not written for software, "
+            "and CC itself recommends against that use). A future package "
+            "arriving under CC-BY-4.0 should therefore be flagged and read, "
+            "not swept in by this entry."
+        ),
+        evidence=(
+            "`caniuse-lite` is the compiled caniuse browser-support "
+            "database consumed by browserslist during the build -- a data "
+            "table, not executable library code."
+        ),
+        license_exprs=("CC-BY-4.0",),
+        ecosystems=("npm",),
+        names=("caniuse-lite",),
+    ),
+    Allowance(
+        key="solana-config-interface",
+        title="solana-config-interface: license-file-only, verified stock Apache-2.0",
+        ruling=(
+            "Not a license judgment but a resolved identity. The crate "
+            "declares `license-file = \"LICENSE\"` and no SPDX `license` "
+            "field, which is the entire reason this tool could not classify "
+            "it -- the tool never guesses a license from text, so it "
+            "digest-pinned the file and asked for eyes. The eyes read it: it "
+            "is the stock Apache License 2.0. Allowed on that reading, which "
+            "is a fact rather than a call."
+        ),
+        evidence=(
+            "The file the tool hashed was read in full: 176 lines, the "
+            "unmodified Apache License 2.0, ending at \"END OF TERMS AND "
+            "CONDITIONS\" with no appendix and no appended terms, and "
+            "byte-identical to the LICENSE shipped under other crates in the "
+            "registry. The `sha256` in the license expression below is that "
+            "same file, so this allowance is pinned to the bytes that were "
+            "read: if the file ever changes, the digest changes, this entry "
+            "stops matching, and the row returns to the review queue."
+        ),
+        license_exprs=(
+            "LicenseRef-file:LICENSE:sha256="
+            "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9",
+        ),
+        ecosystems=("cargo",),
+        names=("solana-config-interface",),
+    ),
+)
+
+
+def find_allowance(row: Row) -> Allowance | None:
+    """The most specific recorded ruling covering this row, if any.
+
+    Package-scoped allowances win over license-level ones, so a row that a
+    broad ruling already covers is still attributed to the narrower entry
+    that says something more precise about it.
+    """
+    matches = [a for a in REVIEWED_ALLOWANCES if a.matches(row)]
+    if not matches:
+        return None
+    matches.sort(key=lambda a: (not a.scoped_to_packages(), a.key))
+    return matches[0]
+
+
+def mechanical_flag(row: Row) -> str | None:
+    """What this tool can say about a row without a human having ruled.
+
+    Order matters. The expression's own semantics are evaluated *before* the
+    substring markers, because ``MIT OR Apache-2.0 OR LGPL-2.1-or-later``
+    merely mentions a family it also lets us decline; reading the operators
+    is strictly more accurate than matching the letters. The markers remain
+    as the backstop for everything the evaluator does not clear.
+    """
     if row.license.startswith("LicenseRef-file:"):
         return "license-file-only: SPDX identity unresolved, needs human eyes"
     if row.source.startswith("path+"):
         return None  # our own declared license is never a review item
+    if satisfiable_permissively(row.license):
+        return None
     if any(marker in row.license for marker in COPYLEFT_MARKERS):
         return "copyleft or copyleft-adjacent license on a third-party dependency"
-    # `/` is the pre-SPDX dual-license separator Cargo's own docs used to
-    # document ("MIT/Apache-2.0" meaning either, at the licensee's choice) --
-    # a real, historical, unambiguous convention, split alongside the SPDX
-    # OR/AND top-level keywords. WITH is deliberately not a split point: it
-    # binds a license to one exception as a single compound unit ("Apache-2.0
-    # WITH LLVM-exception" is one atom, not two), and the allowlist already
-    # carries that exact compound string where it applies.
-    atoms = [
-        a.strip()
-        for a in re.split(r"\s+(?:OR|AND)\s+|\s*/\s*|[()]", row.license)
-        if a.strip()
-    ]
-    if atoms and all(a in PERMISSIVE_ALLOWLIST for a in atoms):
-        return None
     return "unrecognized license expression, not on the permissive allowlist"
+
+
+def cleared_by_permissive_arm(row: Row) -> bool:
+    """Did the `OR` rule, and only the `OR` rule, clear this row?
+
+    Reported rather than silent. These are exactly the rows the substring
+    markers would flag and the expression's own operators do not, and a
+    reader who sees `LGPL` in a license column deserves to find the reason
+    it was not a question rather than have to re-derive it.
+    """
+    if row.source.startswith("path+") or row.license.startswith("LicenseRef-file:"):
+        return False
+    return any(marker in row.license for marker in COPYLEFT_MARKERS) and (
+        satisfiable_permissively(row.license)
+    )
+
+
+def review_row(row: Row) -> tuple[str | None, Allowance | None]:
+    """(open flag, recorded ruling) for one row -- at most one is ever set."""
+    flag = mechanical_flag(row)
+    if flag is None:
+        return None, None
+    allowance = find_allowance(row)
+    if allowance is not None:
+        return None, allowance
+    return flag, None
 
 
 # --------------------------------------------------------------- notices
@@ -644,8 +1129,16 @@ def write_sbom(
     unique = dedupe_rows(rows)
     cargo_rows = [r for r in unique if r.ecosystem == "cargo"]
     npm_rows = [r for r in unique if r.ecosystem == "npm"]
-    flagged = [(r, flag_row(r)) for r in unique]
-    flagged = [(r, why) for r, why in flagged if why]
+    reviewed = [(r, *review_row(r)) for r in unique]
+    flagged = [(r, why) for r, why, _ in reviewed if why]
+    allowed: dict[str, list[Row]] = {}
+    for r, _, allowance in reviewed:
+        if allowance is not None:
+            allowed.setdefault(allowance.key, []).append(r)
+    arm_cleared = sorted(
+        (r for r in unique if cleared_by_permissive_arm(r)),
+        key=lambda r: (r.ecosystem, r.name, r.version),
+    )
 
     lines: list[str] = []
     lines.append("<!-- @generated by tools/sbom/sbom_check.py -- do not hand-edit -->")
@@ -662,10 +1155,12 @@ def write_sbom(
         "`tools/gauntlet` — see `tools/sbom/README.md`)."
     )
     lines.append("")
+    allowed_total = sum(len(v) for v in allowed.values())
     lines.append(
         f"**{len(coverage)} manifests, {len(unique)} unique dependency rows "
         f"({len(cargo_rows)} cargo, {len(npm_rows)} npm), "
-        f"{len(flagged)} flagged for human review.**"
+        f"{len(flagged)} flagged for human review, "
+        f"{allowed_total} reviewed and allowed.**"
     )
     lines.append("")
 
@@ -687,7 +1182,11 @@ def write_sbom(
         "needs a human license call, not this tool's. A flagged row does not "
         "fail `--verify` by itself (gen-1's precedent: 36 manifests PASS with "
         "three flagged families outstanding) — the flag is the deliverable, "
-        "not a defect in the SBOM."
+        "not a defect in the SBOM, and a review queue that also reds the "
+        "build stops getting reviewed and starts getting silenced. When this "
+        "section is empty it means the queue was *answered*, not suppressed: "
+        "the answers are in [Reviewed and allowed](#reviewed-and-allowed), "
+        "one entry per decision, each carrying its reason and its evidence."
     )
     lines.append("")
     if flagged:
@@ -696,8 +1195,79 @@ def write_sbom(
         for r, why in sorted(flagged, key=lambda t: (t[0].ecosystem, t[0].name, t[0].version)):
             lines.append(f"| {r.ecosystem} | `{r.name}` | {r.version} | `{r.license}` | {why} |")
     else:
-        lines.append("None.")
+        lines.append("None outstanding.")
     lines.append("")
+
+    lines.append("## Reviewed and allowed")
+    lines.append("")
+    lines.append(
+        "Rows the mechanical rules above flagged and a human then ruled on. "
+        "Each ruling is recorded once, with the reason it was made and the "
+        "evidence it rested on, and the rows it covers are listed under it — "
+        "a decision that was made, not a question that was dropped. Nothing "
+        "here is exempt from attribution: every row below still appears in "
+        "`NOTICES.md`, because reviewing an obligation does not discharge it. "
+        "Each entry is pinned to the exact license expression that was read, "
+        "so a dependency that changes its license on an upgrade stops "
+        "matching and returns to the queue above."
+    )
+    lines.append("")
+    if allowed:
+        for allowance in REVIEWED_ALLOWANCES:
+            covered = allowed.get(allowance.key)
+            if not covered:
+                continue
+            lines.append(f"### {allowance.title}")
+            lines.append("")
+            lines.append(f"**Ruling.** {allowance.ruling}")
+            lines.append("")
+            lines.append(f"**Evidence.** {allowance.evidence}")
+            lines.append("")
+            lines.append(f"Covers {len(covered)} row(s):")
+            lines.append("")
+            lines.append("| Ecosystem | Name | Version | License |")
+            lines.append("|---|---|---|---|")
+            for r in sorted(covered, key=lambda t: (t.ecosystem, t.name, t.version)):
+                lines.append(f"| {r.ecosystem} | `{r.name}` | {r.version} | `{r.license}` |")
+            lines.append("")
+    else:
+        lines.append("None.")
+        lines.append("")
+
+    unused = [a for a in REVIEWED_ALLOWANCES if not allowed.get(a.key)]
+    if unused:
+        lines.append(
+            "One or more recorded rulings no longer match any row in the "
+            "closure. An allowance that covers nothing is stale — the "
+            "dependency was dropped, or its license changed — and should be "
+            "removed rather than left to accumulate: "
+            + ", ".join(f"`{a.key}`" for a in unused)
+            + "."
+        )
+        lines.append("")
+
+    if arm_cleared:
+        lines.append("### Cleared by the permissive-arm rule (no human call needed)")
+        lines.append("")
+        lines.append(
+            "Not a ruling and not an exception — a consequence of reading the "
+            "license expression's own operators. Each row below names a "
+            "copyleft family inside an `OR`, and an `OR` is a choice offered "
+            "to the licensee: a fully permissive arm is on the table, so no "
+            "copyleft obligation is forced on this repository and there is "
+            "nothing for a human to decide. Listed anyway, because a reader "
+            "who sees `GPL` in a license column deserves to find the reason "
+            "it was not a question. (This repository is itself "
+            "`AGPL-3.0-or-later`, so where such an arm exists we remain free "
+            "to take the *less* permissive one — the rule establishes that "
+            "no obligation is compelled, not which arm we prefer.)"
+        )
+        lines.append("")
+        lines.append("| Ecosystem | Name | Version | License |")
+        lines.append("|---|---|---|---|")
+        for r in arm_cleared:
+            lines.append(f"| {r.ecosystem} | `{r.name}` | {r.version} | `{r.license}` |")
+        lines.append("")
 
     def dep_table(title: str, table_rows: list[Row]) -> None:
         lines.append(f"## {title}")

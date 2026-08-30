@@ -5,6 +5,10 @@ costs orientation: read it first, then `AGENTS.md`, `PROJECT_METHOD.md`,
 `docs/OMISSION_INDEX.md`. It records the current cycle, active lanes, and
 gates. It is not release evidence.
 
+`docs/INTENT.md` is the other half of that orientation and reads before all of
+them: this file is what execution has found, INTENT is what the project is
+*for*, in ember's own recoverable words. It is a DRAFT FOR EMBER'S EDIT.
+
 ## Standing decisions (2026-08-26, with ember)
 
 - Local-first for several cycles. **Devnet deploy-and-recycle is deferred**
@@ -1176,3 +1180,17 @@ sccache/workspace consolidation (waits for cold gates).
   when a selected release exists (every checked release to date shipped the
   empty fail-closed series-shadow ELF as a signed artifact) — post-freeze,
   with the seam-audit gate wire-in.
+- **EMBER RULINGS 2026-08-30 (~10:20 EDT), binding:**
+  Q1: no superseded-cache carve-out EVER (option b rejected outright); devnet
+  stranding accepted meanwhile; the real fix is design (a) — release-set
+  lineage/re-point migration — chartered as a proper design. Cohort-7 may
+  proceed. Q3: option (c) ratified — perpetual CLAIM, not perpetual account:
+  post-deadline compaction to a durable claim-check; market accounts close;
+  the holder's right survives redeemable forever. No arbitrary actor may
+  insert arbitrary delays into protocol operations. Q6: CloseReplay gated on
+  the terminal receipt, shaped by Q3(c). Licenses: all five questions ruled
+  (MPL/LGPL/permissive/dual-arm allowed — the project is AGPL; the OG-image
+  and CSS tool stack is build-time only per ember; solana-config-interface
+  allowlisted as stock Apache-2.0) — the 69-row SBOM queue closes
+  mechanically. CFTC 1388: deliberately unfiled ("nothing unique to say
+  about perps") — never re-raise.

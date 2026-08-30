@@ -3,7 +3,7 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify` (also wired into `tools/gauntlet` — see `tools/sbom/README.md`).
 
-**51 manifests, 2055 unique dependency rows (1229 cargo, 826 npm), 69 flagged for human review.**
+**51 manifests, 2055 unique dependency rows (1229 cargo, 826 npm), 0 flagged for human review, 67 reviewed and allowed.**
 
 ## Counts by license
 
@@ -63,79 +63,177 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 
 ## Flagged for review
 
-Never a mechanical guess, never silently classified: every row below needs a human license call, not this tool's. A flagged row does not fail `--verify` by itself (gen-1's precedent: 36 manifests PASS with three flagged families outstanding) — the flag is the deliverable, not a defect in the SBOM.
+Never a mechanical guess, never silently classified: every row below needs a human license call, not this tool's. A flagged row does not fail `--verify` by itself (gen-1's precedent: 36 manifests PASS with three flagged families outstanding) — the flag is the deliverable, not a defect in the SBOM, and a review queue that also reds the build stops getting reviewed and starts getting silenced. When this section is empty it means the queue was *answered*, not suppressed: the answers are in [Reviewed and allowed](#reviewed-and-allowed), one entry per decision, each carrying its reason and its evidence.
 
-| Ecosystem | Name | Version | License | Reason |
-|---|---|---|---|---|
-| cargo | `bitmaps` | 3.2.1 | `MPL-2.0+` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `imbl` | 7.0.1 | `MPL-2.0+` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `imbl-sized-chunks` | 0.1.3 | `MPL-2.0+` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `libbz2-rs-sys` | 0.2.5 | `bzip2-1.0.6` | unrecognized license expression, not on the permissive allowlist |
-| cargo | `r-efi` | 5.3.0 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `r-efi` | 6.0.0 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `solana-config-interface` | 2.0.0 | `LicenseRef-file:LICENSE:sha256=a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9` | license-file-only: SPDX identity unresolved, needs human eyes |
-| cargo | `webpki-root-certs` | 1.0.9 | `CDLA-Permissive-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `webpki-roots` | 0.24.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `webpki-roots` | 0.25.4 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| cargo | `webpki-roots` | 1.0.9 | `CDLA-Permissive-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-darwin-arm64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-darwin-arm64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-darwin-x64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-darwin-x64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-arm` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-arm` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-arm64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-arm64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-ppc64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-ppc64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-riscv64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-riscv64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-s390x` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-s390x` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-x64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linux-x64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linuxmusl-arm64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linuxmusl-arm64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linuxmusl-x64` | 1.3.1 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-libvips-linuxmusl-x64` | 1.3.3 | `LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-wasm32` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later AND MIT` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-wasm32` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later AND MIT` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-win32-arm64` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-win32-arm64` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-win32-ia32` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-win32-ia32` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-win32-x64` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@img/sharp-win32-x64` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@resvg/resvg-wasm` | 2.4.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `@vercel/og` | 0.8.6 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `axe-core` | 4.13.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `caniuse-lite` | 1.0.30001810 | `CC-BY-4.0` | unrecognized license expression, not on the permissive allowlist |
-| npm | `lightningcss` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-android-arm64` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-android-arm64` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-darwin-arm64` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-darwin-arm64` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-darwin-x64` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-darwin-x64` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-freebsd-x64` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-freebsd-x64` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-arm-gnueabihf` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-arm-gnueabihf` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-arm64-gnu` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-arm64-gnu` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-arm64-musl` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-arm64-musl` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-x64-gnu` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-x64-gnu` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-x64-musl` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-linux-x64-musl` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-win32-arm64-msvc` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-win32-arm64-msvc` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-win32-x64-msvc` | 1.31.1 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `lightningcss-win32-x64-msvc` | 1.33.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `rpc-websockets` | 9.3.9 | `LGPL-3.0-only` | copyleft or copyleft-adjacent license on a third-party dependency |
-| npm | `satori` | 0.16.0 | `MPL-2.0` | copyleft or copyleft-adjacent license on a third-party dependency |
+None outstanding.
+
+## Reviewed and allowed
+
+Rows the mechanical rules above flagged and a human then ruled on. Each ruling is recorded once, with the reason it was made and the evidence it rested on, and the rows it covers are listed under it — a decision that was made, not a question that was dropped. Nothing here is exempt from attribution: every row below still appears in `NOTICES.md`, because reviewing an obligation does not discharge it. Each entry is pinned to the exact license expression that was read, so a dependency that changes its license on an upgrade stops matching and returns to the queue above.
+
+### MPL-2.0, used unmodified
+
+**Ruling.** MPL-2.0 is file-level copyleft: its reciprocity attaches to the *licensed files themselves*, and is triggered by modifying them. This repository consumes every dependency below as published, through its public interface, without patching or vendoring a single MPL-covered source file -- so there is no modified file to reciprocate and no obligation reaches this repository's own sources. Allowed for unmodified use; the notice obligation is unaffected and every row below is still listed in `NOTICES.md`.
+
+**Evidence.** No MPL-covered dependency is vendored or patch-applied: all resolve from their registry with a lockfile checksum (`cargo` rows) or a lockfile integrity hash (`npm` rows), recorded in the dependency tables in this file.
+
+Covers 6 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| cargo | `bitmaps` | 3.2.1 | `MPL-2.0+` |
+| cargo | `imbl` | 7.0.1 | `MPL-2.0+` |
+| cargo | `imbl-sized-chunks` | 0.1.3 | `MPL-2.0+` |
+| cargo | `webpki-roots` | 0.24.0 | `MPL-2.0` |
+| cargo | `webpki-roots` | 0.25.4 | `MPL-2.0` |
+| npm | `axe-core` | 4.13.0 | `MPL-2.0` |
+
+### MPL-2.0, used unmodified AND build-time only
+
+**Ruling.** The MPL-2.0 unmodified-use ground above applies to these in full and would be sufficient on its own. They are recorded separately because a second, independent ground also holds: these packages run only while the site is being built and their code is never shipped to a browser, so the distribution question the copyleft analysis turns on does not arise for them at all.
+
+**Evidence.** Verified 2026-08-30, in four independent parts, and the first part *corrected* the premise rather than confirming it. **(1) Declaration — partly negative, stated plainly.** All seven packages live in one npm tree, `apps/dclutch-web`; none is a direct dependency of anything first-party. Most arrive `dev:true` (`lightningcss` via `@tailwindcss/postcss` and `vite`; `satori`, `@resvg/resvg-wasm` and `@vercel/og` via `vinext`). But `sharp` arrives on TWO edges, and one is production-reachable: `next` (a `dependencies` entry) pulls it through `optionalDependencies`. 14 of the 55 rows ride that chain. So the lockfile section does NOT carry this classification, and the claim does not rest on it. **(2) Use — the load-bearing part.** There are zero first-party imports of any of the seven, by substring sweep (not merely import-form) across the web app's `app/`, `components/`, `lib/`, `scripts/`, `fixtures/` and root configs, and across `packages/`, `tools/`, `crates/`, `programs/` and `docs/`; the only hits repository-wide are this tool's own generated catalogs. The supporting negatives are what make that conclusive: the web app has no `route.*` files at all, no `opengraph-image`/`icon`/`twitter-image` convention routes, no `next/image` or `<Image` usage anywhere, and no `images` key in `next.config.ts`. Neither the OG rendering stack nor Next's image optimizer has an entry point to be called through. **(3) Distribution — decisive for the OG stack.** The deployed artifact is a static export served by GitHub Pages: the Pages workflow builds with `DCLUTCH_PAGES_EXPORT=1` (`next.config.ts` sets `output: 'export'`) and hands the prerendered client output to `tools/genref/render-site.mjs`, which itself imports only `node:fs`, `node:path` and `node:url`. Pages serves files, not a runtime; there is no request-time server for a server-side image route to run on, and no such route exists to run. **(4) Absence from the shipped bundle — measured, not inferred.** The built output on disk was grepped directly: `dist/client` (78 files) and `dist/server` (130 files) contain no occurrence of any of the seven package names, nor of their distinctive runtime symbols (`yoga-wasm`, `opentype`, `initWasm`, `Resvg`, `vips_`, `@img/`), nor of the strings `Mozilla Public License`, `MPL-2.0` or `LGPL`; `find dist -name '*.wasm'` returns nothing, so the `resvg`/`yoga` wasm blobs never shipped. The clean *server* bundle matters as much as the client one, since the export's HTML is prerendered from it. **Caveat, not smoothed over:** that `dist/` was the default worker-compatible build, not literally the `DCLUTCH_PAGES_EXPORT=1` artifact (no build was run for this check). It is the same client graph from the same sources and the export adds prerendered HTML derived from the equally-clean server bundle — but that last step is inference rather than measurement, and parts (2) and (3) are what the classification actually rests on. **Why these rows exist at all:** this tool walks the entire lockfile `packages` map with no `dev`/`optional` filter, reporting the full install closure rather than the shipped closure. That is deliberate — an SBOM that quietly omitted what a developer's machine resolves would be a worse instrument — and it is the mechanical reason a build-time tool appears in a license review queue.
+
+Covers 27 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| npm | `@resvg/resvg-wasm` | 2.4.0 | `MPL-2.0` |
+| npm | `@vercel/og` | 0.8.6 | `MPL-2.0` |
+| npm | `lightningcss` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-android-arm64` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-android-arm64` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-darwin-arm64` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-darwin-arm64` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-darwin-x64` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-darwin-x64` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-freebsd-x64` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-freebsd-x64` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-linux-arm-gnueabihf` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-linux-arm-gnueabihf` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-linux-arm64-gnu` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-linux-arm64-gnu` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-linux-arm64-musl` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-linux-arm64-musl` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-linux-x64-gnu` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-linux-x64-gnu` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-linux-x64-musl` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-linux-x64-musl` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-win32-arm64-msvc` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-win32-arm64-msvc` | 1.33.0 | `MPL-2.0` |
+| npm | `lightningcss-win32-x64-msvc` | 1.31.1 | `MPL-2.0` |
+| npm | `lightningcss-win32-x64-msvc` | 1.33.0 | `MPL-2.0` |
+| npm | `satori` | 0.16.0 | `MPL-2.0` |
+
+### LGPL-3.0 (the general ruling)
+
+**Ruling.** This is the LGPL ruling for the repository as a whole; the `@img/sharp-*` rows it also covers are attributed below to the narrower `sharp / libvips` entry, which says something more specific about them, so the rows listed here are the ones this ground carries *alone*. Ruled not a concern. Two facts carry it. First, this repository is itself `AGPL-3.0-or-later` -- a strictly stronger copyleft than the LGPL -- so an LGPL dependency imposes no term this project's own license does not already impose on it, and there is no license conflict to resolve. Second, the LGPL's own design point is exactly this use: linking against a library without the library's terms reaching the linking work, provided the library is replaceable, which it is here (all rows below are unmodified upstream builds resolved by checksum).
+
+**Evidence.** The `@img/sharp-*` rows are per-platform prebuilt libvips binaries for one build-time image pipeline -- see the build-time-only verification recorded under `sharp-build-time` below, which covers them on an independent second ground. `rpc-websockets` is deliberately NOT covered by that verification and rests on the AGPL/LGPL compatibility ground alone: it is a runtime transitive dependency of `@solana/web3.js`, it is `LGPL-3.0-only` rather than a dual, and it is used unmodified through its public API. Recorded as a lead rather than a second ground: the same 2026-08-30 sweep found no trace of it in the built client bundle either (no `rpc-websockets`, `CommonClient` or `WebSocketBrowserImpl` symbols; the only surviving `@solana/*` module id is `@solana/errors`), which is consistent with first-party code importing value-level pieces of `@solana/web3.js` but never `Connection`, the type that owns the websocket. That is not claimed as settled — `vite.config.ts` still aliases `rpc-websockets` to its browser build, i.e. the configuration anticipates bundling it, so a future import of `Connection` would ship it without anything here changing.
+
+Covers 1 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| npm | `rpc-websockets` | 9.3.9 | `LGPL-3.0-only` |
+
+### sharp / libvips, build-time only
+
+**Ruling.** Covered by the LGPL ruling above; recorded separately for the independent second ground, which is the stronger one: the sharp image pipeline and its per-platform libvips binaries execute only during the site build and no part of them is served to a browser.
+
+**Evidence.** Verified 2026-08-30, in four independent parts, and the first part *corrected* the premise rather than confirming it. **(1) Declaration — partly negative, stated plainly.** All seven packages live in one npm tree, `apps/dclutch-web`; none is a direct dependency of anything first-party. Most arrive `dev:true` (`lightningcss` via `@tailwindcss/postcss` and `vite`; `satori`, `@resvg/resvg-wasm` and `@vercel/og` via `vinext`). But `sharp` arrives on TWO edges, and one is production-reachable: `next` (a `dependencies` entry) pulls it through `optionalDependencies`. 14 of the 55 rows ride that chain. So the lockfile section does NOT carry this classification, and the claim does not rest on it. **(2) Use — the load-bearing part.** There are zero first-party imports of any of the seven, by substring sweep (not merely import-form) across the web app's `app/`, `components/`, `lib/`, `scripts/`, `fixtures/` and root configs, and across `packages/`, `tools/`, `crates/`, `programs/` and `docs/`; the only hits repository-wide are this tool's own generated catalogs. The supporting negatives are what make that conclusive: the web app has no `route.*` files at all, no `opengraph-image`/`icon`/`twitter-image` convention routes, no `next/image` or `<Image` usage anywhere, and no `images` key in `next.config.ts`. Neither the OG rendering stack nor Next's image optimizer has an entry point to be called through. **(3) Distribution — decisive for the OG stack.** The deployed artifact is a static export served by GitHub Pages: the Pages workflow builds with `DCLUTCH_PAGES_EXPORT=1` (`next.config.ts` sets `output: 'export'`) and hands the prerendered client output to `tools/genref/render-site.mjs`, which itself imports only `node:fs`, `node:path` and `node:url`. Pages serves files, not a runtime; there is no request-time server for a server-side image route to run on, and no such route exists to run. **(4) Absence from the shipped bundle — measured, not inferred.** The built output on disk was grepped directly: `dist/client` (78 files) and `dist/server` (130 files) contain no occurrence of any of the seven package names, nor of their distinctive runtime symbols (`yoga-wasm`, `opentype`, `initWasm`, `Resvg`, `vips_`, `@img/`), nor of the strings `Mozilla Public License`, `MPL-2.0` or `LGPL`; `find dist -name '*.wasm'` returns nothing, so the `resvg`/`yoga` wasm blobs never shipped. The clean *server* bundle matters as much as the client one, since the export's HTML is prerendered from it. **Caveat, not smoothed over:** that `dist/` was the default worker-compatible build, not literally the `DCLUTCH_PAGES_EXPORT=1` artifact (no build was run for this check). It is the same client graph from the same sources and the export adds prerendered HTML derived from the equally-clean server bundle — but that last step is inference rather than measurement, and parts (2) and (3) are what the classification actually rests on. **Why these rows exist at all:** this tool walks the entire lockfile `packages` map with no `dev`/`optional` filter, reporting the full install closure rather than the shipped closure. That is deliberate — an SBOM that quietly omitted what a developer's machine resolves would be a worse instrument — and it is the mechanical reason a build-time tool appears in a license review queue.
+
+Covers 28 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| npm | `@img/sharp-libvips-darwin-arm64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-darwin-arm64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-darwin-x64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-darwin-x64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-arm` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-arm` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-arm64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-arm64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-ppc64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-ppc64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-riscv64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-riscv64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-s390x` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-s390x` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-x64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linux-x64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linuxmusl-arm64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linuxmusl-arm64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linuxmusl-x64` | 1.3.1 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-libvips-linuxmusl-x64` | 1.3.3 | `LGPL-3.0-or-later` |
+| npm | `@img/sharp-wasm32` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later AND MIT` |
+| npm | `@img/sharp-wasm32` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later AND MIT` |
+| npm | `@img/sharp-win32-arm64` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later` |
+| npm | `@img/sharp-win32-arm64` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later` |
+| npm | `@img/sharp-win32-ia32` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later` |
+| npm | `@img/sharp-win32-ia32` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later` |
+| npm | `@img/sharp-win32-x64` | 0.35.2 | `Apache-2.0 AND LGPL-3.0-or-later` |
+| npm | `@img/sharp-win32-x64` | 0.35.4 | `Apache-2.0 AND LGPL-3.0-or-later` |
+
+### CDLA-Permissive-2.0
+
+**Ruling.** Permissive by construction and correctly named: the Community Data License Agreement's Permissive variant grants use and redistribution of the data, with or without modification, and imposes no reciprocity on anything -- the only condition it carries is that the text travels with the data. It is on this tool's review list only because `CDLA` is in `COPYLEFT_MARKERS`, which deliberately catches the whole CDLA family rather than distinguishing Permissive from Sharing by substring. Allowed as an allowlist extension, not a risk accepted.
+
+**Evidence.** Carried by `webpki-roots` and `webpki-root-certs` 1.0.9, which are the Mozilla CA root certificate set repackaged as Rust data -- the CDLA is doing its intended job here, licensing a data table rather than code.
+
+Covers 2 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| cargo | `webpki-root-certs` | 1.0.9 | `CDLA-Permissive-2.0` |
+| cargo | `webpki-roots` | 1.0.9 | `CDLA-Permissive-2.0` |
+
+### bzip2-1.0.6
+
+**Ruling.** A BSD-style permissive license: use, modification and redistribution in source or binary form, conditioned only on retaining the notice and disclaimer, with no reciprocity and no source-offer obligation. It is on the review list only because the permissive allowlist had no entry for it. Allowed as an allowlist extension.
+
+**Evidence.** Carried by `libbz2-rs-sys`, a Rust reimplementation of the bzip2 compression library, resolved from the registry by checksum and used unmodified.
+
+Covers 1 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| cargo | `libbz2-rs-sys` | 0.2.5 | `bzip2-1.0.6` |
+
+### CC-BY-4.0 on a browser-support data table
+
+**Ruling.** Allowed for this package, scoped to it deliberately. CC-BY-4.0 grants redistribution and adaptation for any purpose, commercial included, conditioned on attribution -- which `NOTICES.md` provides mechanically. The scope is narrow on purpose: CC-BY on a *data table* is unremarkable, whereas CC-BY appearing on *code* is a genuinely different question (the Creative Commons licenses are not written for software, and CC itself recommends against that use). A future package arriving under CC-BY-4.0 should therefore be flagged and read, not swept in by this entry.
+
+**Evidence.** `caniuse-lite` is the compiled caniuse browser-support database consumed by browserslist during the build -- a data table, not executable library code.
+
+Covers 1 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| npm | `caniuse-lite` | 1.0.30001810 | `CC-BY-4.0` |
+
+### solana-config-interface: license-file-only, verified stock Apache-2.0
+
+**Ruling.** Not a license judgment but a resolved identity. The crate declares `license-file = "LICENSE"` and no SPDX `license` field, which is the entire reason this tool could not classify it -- the tool never guesses a license from text, so it digest-pinned the file and asked for eyes. The eyes read it: it is the stock Apache License 2.0. Allowed on that reading, which is a fact rather than a call.
+
+**Evidence.** The file the tool hashed was read in full: 176 lines, the unmodified Apache License 2.0, ending at "END OF TERMS AND CONDITIONS" with no appendix and no appended terms, and byte-identical to the LICENSE shipped under other crates in the registry. The `sha256` in the license expression below is that same file, so this allowance is pinned to the bytes that were read: if the file ever changes, the digest changes, this entry stops matching, and the row returns to the review queue.
+
+Covers 1 row(s):
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| cargo | `solana-config-interface` | 2.0.0 | `LicenseRef-file:LICENSE:sha256=a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9` |
+
+### Cleared by the permissive-arm rule (no human call needed)
+
+Not a ruling and not an exception — a consequence of reading the license expression's own operators. Each row below names a copyleft family inside an `OR`, and an `OR` is a choice offered to the licensee: a fully permissive arm is on the table, so no copyleft obligation is forced on this repository and there is nothing for a human to decide. Listed anyway, because a reader who sees `GPL` in a license column deserves to find the reason it was not a question. (This repository is itself `AGPL-3.0-or-later`, so where such an arm exists we remain free to take the *less* permissive one — the rule establishes that no obligation is compelled, not which arm we prefer.)
+
+| Ecosystem | Name | Version | License |
+|---|---|---|---|
+| cargo | `r-efi` | 5.3.0 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` |
+| cargo | `r-efi` | 6.0.0 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` |
 
 ## Cargo dependencies
 

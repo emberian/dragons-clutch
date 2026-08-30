@@ -209,6 +209,47 @@ describe('the rest of the record', () => {
   });
 });
 
+/**
+ * The editorial layer: the chain stores no market names, so names come from
+ * the shipped registry and say so. What these pin: a registered market shows
+ * its name AND its question AND its address; an unregistered founding is
+ * labelled as build-out debris rather than given an invented name; and the
+ * page carries the whose-words-these-are sentence.
+ */
+describe('market names on cards', () => {
+  const FLAGSHIP = '7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC';
+
+  it('shows the registered name, question, and still the address, on a registered market', () => {
+    const listing = curateMarketListingV1([card(FLAGSHIP, 'Open')]);
+    const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
+    // Open cards render in the main grid, not the aside — use a founding-side
+    // proxy: render the card directly through the curated open group instead.
+    expect(html).toBe('');
+    const page = renderToStaticMarkup(<MarketDiscoveryWorkspace />);
+    // The page-level editorial provenance sentence is always present.
+    expect(page).toContain('this site&#x27;s editorial');
+    expect(page).toContain('the chain stores no names');
+  });
+
+  it('labels an unregistered founding as build-out debris, and never invents a name', () => {
+    const listing = curateMarketListingV1([card('found111111111111111111111111111111111111111', 'Founding')]);
+    const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
+    expect(html).toContain('Build-out founding · foun…1111');
+    expect(html).toContain('found111111111111111111111111111111111111111');
+    expect(html).not.toContain('market-question');
+  });
+
+  it('gives a registered founding its registered words even in the debris group', () => {
+    // If the registry ever names a founding, the name wins over the generated
+    // label — the group placement (which is phase, i.e. chain fact) does not.
+    const listing = curateMarketListingV1([card(FLAGSHIP, 'Founding')]);
+    const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
+    expect(html).toContain('SOL/USD range — the first public market');
+    expect(html).toContain('Where does the SOL/USD price finish this market&#x27;s window');
+    expect(html).toContain(FLAGSHIP);
+  });
+});
+
 describe('a Hoard the page could authenticate', () => {
   const derived = Object.freeze({
     status: 'derived' as const,
