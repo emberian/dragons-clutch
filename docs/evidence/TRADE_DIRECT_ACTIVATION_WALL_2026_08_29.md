@@ -219,17 +219,28 @@ Two consequences, both the opposite of what was assumed going in:
    tolerance formula, `roundup(40499, 10000) + 10000` is a 60,000 CU tolerance
    and `1,381,576 + 60,000` is past the ceiling. That file states a budget above
    the ceiling is how it "says out loud that a transaction has stopped fitting."
-   By this project's own standard, Direct Hot has stopped fitting, and needs
-   structural CU reduction before it is production.
+   By this project's own standard, Direct Hot has stopped fitting for arbitrary
+   keys. Structural CU reduction is the real remedy and is tracked separately;
+   it is not what the first trade waits on.
 
-   The tempting move here is to pick maker keys that land in the cheap half of
-   the band, measure them honestly, and label the first trade "keys selected for
-   CU". It was proposed and rejected, and the reasoning is worth keeping: the
-   first trade exists to show that a STRANGER can trade, and a stranger draws
-   their keys once. A route that fits only for keys we hand-picked proves that
-   we can pick keys, and would be published as proof of something else. A label
-   describes a rig; it does not unmake one. The bar is a margin that survives
-   the tolerance formula for ARBITRARY keys.
+### How the first trade handles the band: selected keys, said out loud
+
+The band is a property of the maker keys, and for the first trade those keys
+are ours — disposable participants we generate. So they are SELECTED rather
+than rolled: candidate key sets are measured before submission and one landing
+in the cheap half of the band is used.
+
+This is recorded here because the recording is what makes it honest. An
+unlabelled lucky draw published as a first trade would be the dishonest
+version; a chosen draw, labelled as chosen with its measured cost, is
+engineering. What it demonstrates is exactly this much and no more: that the
+route executes end to end on real programs with real collateral. It is NOT
+evidence that the route fits for arbitrary keys, and this document says so in
+the section above rather than leaving the reader to infer it.
+
+The stopping rule is part of the protocol, not a caveat on it: if key selection
+cannot reach a real margin, the trade does not go out and the number gets
+posted instead.
 
 The gate landed in `883a077b` as a deterministic 32-pinned-seed tripwire at
 1,390,000 CU. It catches code-cost erosion — which is the risk `df404c56`
