@@ -221,7 +221,8 @@ fn derive_seal(
         waist.registry_program.to_bytes(),
     )
     .map_err(|_| BuilderError::Artifact)?;
-    let seal = Pubkey::find_program_address(&key.seeds().as_slices(), &waist.trading_program).0;
+    let (seal, seal_bump) =
+        Pubkey::find_program_address(&key.seeds().as_slices(), &waist.trading_program);
     let rows = [
         (SealedRoleV1::Descriptor, &records.descriptor),
         (SealedRoleV1::LifecyclePolicy, &records.lifecycle),
@@ -246,6 +247,7 @@ fn derive_seal(
     let rows: [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1] =
         rows.try_into().map_err(|_| BuilderError::Artifact)?;
     let mut bytes = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
-    SealedDescriptorClosureV1::encode(key, rows, &mut bytes).map_err(|_| BuilderError::Artifact)?;
+    SealedDescriptorClosureV1::encode(key, rows, seal_bump, &mut bytes)
+        .map_err(|_| BuilderError::Artifact)?;
     Ok((seal, bytes))
 }

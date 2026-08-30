@@ -11,9 +11,9 @@ use crate::{
     Observation, ObservedAccount,
     direct_inline_v3::{
         AuthenticatedDirectHotChainV4, CheckedHotOuterReleaseV3,
-        DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1, DirectInlineHotReportV3,
-        DirectInlineHotStateV3, DirectInlineHotTransactionPlanV3, ObservedAccountMetaV3,
-        SignedDirectIntentV3, authenticate_direct_hot_chain_v4, compile_direct_inline_request_v3,
+        DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1, DirectInlineHotReportV3, DirectInlineHotStateV3,
+        DirectInlineHotTransactionPlanV3, ObservedAccountMetaV3, SignedDirectIntentV3,
+        authenticate_direct_hot_chain_v4, compile_direct_inline_request_v3,
         validate_direct_hot_instruction_sequence_v4,
     },
     observation::{FinalizedRecordProof, authenticate_finalized_record, decode_rent},
@@ -829,11 +829,10 @@ pub fn build_direct_inline_capability_seal_v3(
         fixed.registry_program.key.to_bytes(),
     )
     .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
-    let seal = Pubkey::find_program_address(
+    let (seal, seal_bump) = Pubkey::find_program_address(
         &key.seeds().as_slices(),
         &authentication.programs.trading_program,
-    )
-    .0;
+    );
     if fixed.capability_seal.key != seal || fixed.capability_seal.executable {
         return Err(DirectInlineRouteErrorV3::Seal);
     }
@@ -890,7 +889,7 @@ pub fn build_direct_inline_capability_seal_v3(
         )?,
     ];
     let mut expected_body = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
-    SealedDescriptorClosureV1::encode(key, rows, &mut expected_body)
+    SealedDescriptorClosureV1::encode(key, rows, seal_bump, &mut expected_body)
         .map_err(|_| DirectInlineRouteErrorV3::Seal)?;
 
     let mut accounts = authenticated
@@ -3167,6 +3166,7 @@ mod tests {
         project_direct_inline_sealed_execution_physical_v3,
         project_direct_inline_sealed_execution_report_v3, verify_direct_inline_capability_seal_v3,
     };
+    use crate::direct_inline_v3::DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1;
     use crate::{
         Finality, Observation, ObservedAccount,
         direct_inline_v3::{
@@ -3175,7 +3175,6 @@ mod tests {
             compile_direct_inline_request_v3,
         },
     };
-    use crate::direct_inline_v3::DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1;
     use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
     use dclutch_market_core_codec::StateBumpsV1;
 

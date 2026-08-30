@@ -808,7 +808,7 @@ export async function authenticateDirectCapabilitySealV1(
       || u16(seal.data, 12) !== 6 || u16(seal.data, 14) !== 0x00ff || readU32(seal.data, 16) !== 1) {
     throw new Error('Direct capability seal has the wrong exact owner, header, or width');
   }
-  requireZero(seal.data, 20, 4, 'Direct capability seal header');
+  requireZero(seal.data, 21, 3, 'Direct capability seal header');
   const tradingRelease = hexIdentity(tradingSemanticRelease, 'Trading semantic release');
   if (!same(slice(seal.data, 24, 32), descriptorSchema)
       || !same(slice(seal.data, 56, 32), descriptorDigest)
@@ -818,7 +818,7 @@ export async function authenticateDirectCapabilitySealV1(
   }
   const action = new Uint8Array(4);
   new DataView(action.buffer).setUint32(0, 1, true);
-  const [derived] = PublicKey.findProgramAddressSync([
+  const [derived, derivedBump] = PublicKey.findProgramAddressSync([
     CAPABILITY_SEAL_PDA_DOMAIN_V1,
     descriptorSchema,
     descriptorDigest,
@@ -827,6 +827,11 @@ export async function authenticateDirectCapabilitySealV1(
     key(registryProgram, 'Registry program').toBytes(),
   ], key(tradingProgram, 'Trading program'));
   if (derived.toBase58() !== coordinate.address) throw new Error('Direct capability seal is not the canonical Trading PDA');
+  // Byte 20 is the seal's own canonical bump, which Trading persists so that on-chain
+  // readers reproduce this address instead of searching for it. A client that searches
+  // anyway can therefore check the persisted byte against its own answer, which is a
+  // stronger statement than the zero this offset used to have to be.
+  if (seal.data[20] !== derivedBump) throw new Error('Direct capability seal does not carry its own canonical bump');
   if (records.length !== 6) throw new Error('Direct capability seal expectation has another row count');
   for (const [ordinal, record] of records.entries()) {
     const row = CAPABILITY_SEAL_HEADER_BYTES_V1 + ordinal * CAPABILITY_SEAL_ROW_BYTES_V1;
