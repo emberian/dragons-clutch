@@ -272,7 +272,7 @@ lane_board_help() {
 usage: lane.sh board <text...>
 
 Appends a timestamped, lane-attributed entry to the cross-lane wave board
-(default /private/tmp/dclutch-wave-board.md; override with
+(default /private/tmp/dclutch-wave2-board.md; override with
 $DCLUTCH_BOARD_FILE, mainly for tests). Requires $DCLUTCH_LANE to be set;
 refuses otherwise, so every entry can be traced back to the lane that wrote
 it.
@@ -303,7 +303,7 @@ lane_cmd_board() {
   fi
 
   local text="$*"
-  local board_file="${DCLUTCH_BOARD_FILE:-/private/tmp/dclutch-wave-board.md}"
+  local board_file="${DCLUTCH_BOARD_FILE:-/private/tmp/dclutch-wave2-board.md}"
   local ts
   ts="$(date '+%Y-%m-%d %H:%M %Z')"
 

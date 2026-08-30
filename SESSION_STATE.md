@@ -89,7 +89,7 @@ land and the measured worst clears ~1,353,000.
 | HEAPRED | `a41fbc198c5a2207c` | diagnose red `hot_heap_frame_is_inert` + fix-or-retire evidence for the Registry outer composition (ruling stays ember's) |
 | CI-2 | `a8abf0f1f1f6b761a` | DONE — `tools/ci/run.sh` tiered runner (6d599ef8) + `.github/workflows/rust.yml` (2c4a0473, committed NOT pushed); five gates proven red-and-prerequisite-missing with distinct exit codes; `emission_guard.py` exit-code defect fixed. Its margin-gate red at `8d3ca1f9` (worst seed 8 CU under budget, next seed over) independently confirms the CU wall. Its bisect handoff to CUCUT is deliberately DROPPED: while the rebuild lottery is live, bisecting per-commit CU bisects a hash draw, not a regression — the fix is the carry wave. Queued sizes it named: 4 more program-test suites in CI (~afternoon, mechanical — resume CI-2 when a build lane frees); pre-commit hook left OFF (would override ember's global `core.hooksPath`) — ember's call. |
 | MEMBRANE | `a5e9b10376d59fbf3` | DONE — Structured crossed the membrane end to end (compiler `DCSTPB01`, kind-pinning authenticator, seam module, founded market `HEanNZ1e…o2Xg` verified from chain, 491/491). Rational verified (SEL-SEAM had built it). General hot commit half NOT built: **wall #22 is family-wide** (activation demands V1-schema descriptor at `outer.rs` `authenticate…`, every family's ProgramSet stamps V4) — sound refusal, bricking risk. Findings: founding "flake" is ZFS (`/tank` kills it, ext4 clean); open-family fixture lifecycle policy parks its only plan at `action: u32::MAX` (dead plan that reads as a design — queued fix). Left a validator on hbox `127.0.0.1:29300` holding the founded market + verifier at `tools/local-validator/verify-selected-capability-binding.py`. |
-| SERIESFIX | `abee54822c4a029c5` | main's red test: operator `series_projected_v2` fixture is stale against wire commit `8f579821` (Series Consume register bank grew derivation fields; only trading-sbf side was updated). Scoped to the one operator file; diagnosing against COMMITTED state because series/* is mid-edit in the shared tree (STORY-2, unconfirmed). |
+| SERIESFIX | `abee54822c4a029c5` | DONE — `3f2663b2`, 8/8 green. The stale half was the caller-supplied register bank (5→7 scalars, 1→6 identities per `8f579821`), not the artifact bytes; no assertion changed; the bank is now sized from the exported count constants so the next widening is a compile error. Deliberately did NOT make `route_commitments` author the projected slots (single-author rule; fail-closed to `Artifact`). |
 | STORY-2 | `ae1b54b8aaee446db` | graduation wall (Core `0x3003`, identity linkage, evidence `/tank/dregg-build/story-walk3/run.log` on hbox); relayer public submission run; story-page truthfulness. No report yet. |
 
 ## PENDING EMBER DECISIONS
@@ -135,6 +135,13 @@ live lever, not an inheritance.
 - **Disk**: the volume hit 100% twice and stopped every lane. Root cause was
   the simulator's O(N²) census (now bounded to a constant 3,716,160 B) plus
   ~373G of stale lane scratch. Clean up worktrees and target dirs.
+- **One board**: `/private/tmp/dclutch-wave2-board.md`. `lane.sh board`
+  defaulted to the wave-1 board until ~14:32 (fixed); twelve 2026-08-30
+  entries (TRADE-2 ×8, CUCUT ×2, SERIESFIX ×2) were relocated to wave2 and
+  the old board carries a closure pointer.
+- **Timestamps**: stamp via `date '+%H:%M %Z'`, never from memory — the
+  pre-compact orchestrator's "15:50–16:50 EDT" stamps were ~2h ahead of
+  wall clock (file headers above inherit that drift).
 
 ## THE ORCHESTRATOR'S OWN ERROR, RECORDED
 
