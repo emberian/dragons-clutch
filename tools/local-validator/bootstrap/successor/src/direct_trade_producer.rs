@@ -2586,7 +2586,7 @@ fn derive_capability_seal_v1(
 /// constants. Both coordinates are self-verifying: the raw record address is
 /// the Registry PDA of (schema, content digest), so a wrong schema or body
 /// cannot resolve.
-fn resolved_record_v1(
+pub(crate) fn resolved_record_v1(
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
     campaign: &campaign::CampaignTerminalEvidenceV1,
@@ -2862,7 +2862,7 @@ fn require_distinct_v1(keys: &[Pubkey]) -> Result<()> {
     Ok(())
 }
 
-fn read_keypair_v1(path: &Path, label: &str) -> Result<Keypair> {
+pub(crate) fn read_keypair_v1(path: &Path, label: &str) -> Result<Keypair> {
     Ok(Keypair::new_from_array(campaign::read_keypair_file(
         path, label,
     )?))
