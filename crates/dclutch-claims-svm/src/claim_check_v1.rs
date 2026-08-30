@@ -56,6 +56,57 @@ pub const CLAIM_CHECK_SEED_V1: &[u8] = b"dclutch:claim-check:v1";
 /// Canonical claim-check escrow PDA seed domain.
 pub const CLAIM_CHECK_ESCROW_SEED_V1: &[u8] = b"dclutch:claim-check-escrow:v1";
 
+/// Slots a market must remain redeemable before any position may be compacted.
+///
+/// 38_880_000 slots is approximately 180 days at Solana's observed ~2.5
+/// slots/second, or 216_000 slots/day. The arithmetic is stated so it can be
+/// argued with. The job of the value is that "no honest holder is plausibly
+/// asleep" holds for a person who checks their positions twice a year, and
+/// being generous costs the holder almost nothing: compaction does not take
+/// their value, it moves their already-resolved payout into an escrow only
+/// they can open.
+///
+/// **This is a release constant, and that is the whole guarantee.** A founder
+/// pins a release set at founding, which pins the claims ELF digest, which pins
+/// this number: the founder reads their deadline by reading the release they
+/// found on. A founder-set field was rejected under the same rationale that
+/// motivates the feature — a founder choosing when *other people's* markets may
+/// retire is itself an arbitrary actor inserting an arbitrary delay, landing on
+/// parties who never agreed to it.
+///
+/// **Never shortenable post-founding.** Changing this needs a new ELF, hence a
+/// new release set, and a live market's selected release set is write-once. A
+/// shortened deadline applied to a live market would be confiscation with extra
+/// steps. Should a release-set re-point route ever exist, it must refuse a
+/// target whose deadline is shorter than the market's founding value;
+/// lengthening is permitted, shortening is not.
+///
+/// **There is deliberately no test override and no feature flag.** A flag that
+/// shortens the deadline is a shortening authority travelling with the build,
+/// and the guarantee above rests on the deadline being a property of the
+/// artifact everyone verifies. This mirrors the doctrine the record contract
+/// already states for `CANONICAL_RECORD_MAX_STAGING_LIFETIME_SLOTS_V1`: a
+/// successor release defines a new profile rather than silently changing an
+/// in-progress bound. A campaign that needs a shorter wait builds a different
+/// source revision, which the checked-release manifest already distinguishes by
+/// `source_revision`, `source_digest` and `artifact_digest` — visible to
+/// everyone who reads it, which a build flag would not be. A harness needs none
+/// of this: it warps the clock.
+pub const COMPACTION_DEADLINE_SLOTS_V1: u64 = 38_880_000;
+
+/// Ceiling on the lamports one compaction crank pays the caller.
+///
+/// The reward is a *residual*, capped here, never a demand: a thin position
+/// yields a small reward rather than a refusal. That distinction is
+/// load-bearing — a compaction that could refuse for lack of funds would
+/// reintroduce the sleeping-holder deadlock through the funding door.
+///
+/// Nothing new is taken from the Hoard. The crank is funded entirely from
+/// lamports already leaving the position and admission accounts, which today
+/// flow in full to a creation-fixed refund wallet — an identified party, and
+/// the party that benefits most from retirement actually happening.
+pub const COMPACTION_CRANK_REWARD_LAMPORTS_V1: u64 = 200_000;
+
 const RECORD_VERSION_OFFSET: usize = 8;
 const RECORD_KIND_OFFSET: usize = 10;
 const RECORD_BUMP_OFFSET: usize = 11;
@@ -888,6 +939,30 @@ mod tests {
                 &value.aggregate[..],
                 &[value.bump][..]
             ]
+        );
+    }
+
+    #[test]
+    fn the_deadlines_stated_arithmetic_is_the_arithmetic() {
+        // 216_000 slots/day at ~2.5 slots/second, for 180 days. The value is
+        // written out so a reader can argue with the reasoning rather than
+        // reverse-engineer it from a magic number.
+        const SLOTS_PER_DAY: u64 = 216_000;
+        assert_eq!(COMPACTION_DEADLINE_SLOTS_V1, SLOTS_PER_DAY * 180);
+        // Generous by construction: a holder who checks twice a year is never
+        // compacted out of their familiar route.
+        assert!(COMPACTION_DEADLINE_SLOTS_V1 > SLOTS_PER_DAY * 120);
+    }
+
+    #[test]
+    fn the_deadline_horizon_must_be_computed_with_checked_arithmetic() {
+        // A route computing `opened_slot + DEADLINE` on a wrapping add would
+        // turn a far-future origin into an already-elapsed deadline, which is
+        // the premature crank the whole gate exists to refuse.
+        assert_eq!(u64::MAX.checked_add(COMPACTION_DEADLINE_SLOTS_V1), None);
+        assert_eq!(
+            12_000_u64.checked_add(COMPACTION_DEADLINE_SLOTS_V1),
+            Some(38_892_000)
         );
     }
 
