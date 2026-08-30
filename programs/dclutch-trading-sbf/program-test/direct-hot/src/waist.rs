@@ -23,12 +23,11 @@ use crate::{
 };
 use dclutch_capability_program_contract::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
-    HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-    HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
-    HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
-    HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
-    HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-    HOT_TRANSITION_STAGING_ACCOUNT_V3,
+    HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+    HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3,
+    HOT_FIXED_ACCOUNT_COUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
+    HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3, HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3,
+    HOT_TRANSITION_RAW_ACCOUNT_V3, HOT_TRANSITION_STAGING_ACCOUNT_V3,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_direct_codec::native_evidence_v3::{
@@ -39,7 +38,7 @@ use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
+    initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use dclutch_registry_svm::continuation_v1::{
     REGISTRY_CONTINUATION_REQUEST_BYTES_V1, RegistryContinuationRequestV1,
@@ -535,13 +534,17 @@ pub fn add_release_waist_v2(
         )
         .expect("activate exact role");
     }
-    ActivatedExecutionReleaseSetV1::decode(&cache).expect("complete activation cache");
-    let activation_digest = hash(&cache).to_bytes();
-    let activation = Pubkey::find_program_address(
+    let (activation, activation_bump) = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
         &REGISTRY_PROGRAM_ID,
-    )
-    .0;
+    );
+    // The real Registry records this at activation, and the six readers of the
+    // cache reproduce the address from it instead of searching. A fixture that
+    // left it zero would stage an account no deployment produces and would
+    // measure a route nobody runs.
+    put_activation_cache_bump_v1(&mut cache, activation_bump).expect("activation cache bump");
+    ActivatedExecutionReleaseSetV1::decode(&cache).expect("complete activation cache");
+    let activation_digest = hash(&cache).to_bytes();
     test.add_account(
         activation,
         Account {
@@ -1356,11 +1359,23 @@ pub fn program_test_without_forced_budget(artifacts: &Elves) -> ProgramTest {
     test.prefer_bpf(true);
     let substrate = fixture_substrate();
     for (name, id, elf) in [
-        ("dclutch_registry_sbf", REGISTRY_PROGRAM_ID, &artifacts.registry),
-        ("dclutch_trading_sbf", TRADING_PROGRAM_ID, &artifacts.trading),
+        (
+            "dclutch_registry_sbf",
+            REGISTRY_PROGRAM_ID,
+            &artifacts.registry,
+        ),
+        (
+            "dclutch_trading_sbf",
+            TRADING_PROGRAM_ID,
+            &artifacts.trading,
+        ),
         ("dclutch_core_sbf", CORE_PROGRAM_ID, &artifacts.core),
         ("dclutch_claims_sbf", CLAIMS_PROGRAM_ID, &artifacts.claims),
-        ("dclutch_custody_sbf", CUSTODY_PROGRAM_ID, &artifacts.custody),
+        (
+            "dclutch_custody_sbf",
+            CUSTODY_PROGRAM_ID,
+            &artifacts.custody,
+        ),
     ] {
         add_program_v2(&mut test, name, id, elf, substrate);
     }

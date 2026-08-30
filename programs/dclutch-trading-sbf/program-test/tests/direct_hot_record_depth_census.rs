@@ -32,15 +32,16 @@
 
 use solana_program::{hash::hash, pubkey::Pubkey};
 
+use dclutch_capability_seal_contract::CAPABILITY_SEAL_BUMP_OFFSET_V1;
 use dclutch_direct_hot_program_test_support::waist::{
     REGISTRY_PROGRAM_ID, add_release_waist, direct_case, elves, program_test_without_forced_budget,
     with_fixture_seed,
 };
+use dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
 use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
-use dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 
@@ -131,13 +132,14 @@ fn locate(accounts: &[(Pubkey, Vec<u8>, Pubkey)], schema: [u8; 32]) -> Option<Re
 fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
     let artifacts = elves();
     let mut sweep: Vec<(u64, Vec<(&str, RecordDepth)>)> = Vec::new();
+    let mut seal_bumps: Vec<(u64, u8)> = Vec::new();
 
     for seed in 0..CENSUS_SEEDS {
-        let accounts = with_fixture_seed(seed, || {
+        let (accounts, seal) = with_fixture_seed(seed, || {
             let mut test = program_test_without_forced_budget(&artifacts);
             let releases = add_release_waist(&mut test, &artifacts);
             let direct = direct_case(&mut test, releases, &artifacts, false);
-            direct
+            let accounts = direct
                 .chain
                 .accounts
                 .iter()
@@ -148,8 +150,19 @@ fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
                         installed.account.owner,
                     )
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            // The seal's persisted bump IS the canonical one: the fixture
+            // records what the mint would have signed with. Reading it back is
+            // therefore the depth, without restating the seed projection here.
+            let seal_bump = direct
+                .chain
+                .capability_seal_bytes
+                .get(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+                .copied()
+                .expect("the staged seal carries its own bump");
+            (accounts, seal_bump)
         });
+        seal_bumps.push((seed, seal));
 
         let mut found = Vec::new();
         for (name, schema) in SEARCHED_RECORD_SCHEMAS {
@@ -168,10 +181,34 @@ fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
     }
 
     let (_, first) = sweep.first().expect("the census ran at least one seed");
+    let (_, seal_bump) = *seal_bumps
+        .first()
+        .expect("the census ran at least one seed");
 
     let mut searched = 0_u32;
     let mut carried = 0_u32;
+    // The capability seal is not a finalized record, but it is the same CLASS
+    // of cost and it belongs in the same table: one search, on an address whose
+    // seeds are a descriptor digest, an action selector, the Trading SEMANTIC
+    // release id and the Registry program. None of those is a participant key
+    // and none is an ELF digest, so like the records above -- and unlike the
+    // activation cache -- its depth is a constant of the deployment.
+    //
+    // It is the only constant-seeded search on this route whose carrier was not
+    // full: the seal now records its own bump in the first of its four reserved
+    // bytes, and `authenticate_capability_seal_v3` reproduces the address from
+    // it. This row is what that saving actually was, on this build.
     println!("RECDEPTH\trecord\traw_bump\tstaging_bump\tsearch_cu\tcarried_cu\tsaving_cu");
+    {
+        let seal_search = attempts(seal_bump) * ATTEMPT_COST_CU;
+        let seal_carried = ATTEMPT_COST_CU;
+        searched += seal_search;
+        carried += seal_carried;
+        println!(
+            "RECDEPTH\tcapability-seal\t{seal_bump}\t-\t{seal_search}\t{seal_carried}\t{}",
+            seal_search.saturating_sub(seal_carried),
+        );
+    }
     for (name, depth) in first {
         // The realm record is authenticated once inside EACH of the two Custody
         // CPIs, so its pair is paid twice per transaction. Every other record
@@ -192,6 +229,19 @@ fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
         "RECDEPTH TOTAL searched {searched} CU, carried {carried} CU, SAVING {} CU per transaction",
         searched.saturating_sub(carried),
     );
+
+    // The seal's seeds carry no participant key either, so its depth must be as
+    // still as the records'. It is checked separately because it is not a
+    // record and does not have a raw/staging pair.
+    for (seed, observed) in &seal_bumps {
+        assert_eq!(
+            *observed, seal_bump,
+            "seed {seed} drew a different capability-seal bump than seed 0. The seal's \
+             address is [domain, descriptor schema, descriptor digest, action, Trading \
+             semantic release, Registry] and contains NO participant key, so this cannot \
+             happen from a key draw."
+        );
+    }
 
     // The claim. Every seed redraws the payer and both makers; not one of them
     // is a seed of any record address, so not one depth may move.
