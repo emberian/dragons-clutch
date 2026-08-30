@@ -110,7 +110,19 @@ export const DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3 = 39 as const;
 export const DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3 = 57 as const;
 export const DIRECT_INLINE_CURRENT_UNIQUE_MESSAGE_ACCOUNTS_V3 = 61 as const;
 export const DIRECT_INLINE_CURRENT_TRADING_ACCOUNT_INDICES_V3 = 78 as const;
-export const DIRECT_INLINE_CURRENT_WIRE_BYTES_V3 = 1_159 as const;
+export const DIRECT_INLINE_CURRENT_WIRE_BYTES_V3 = 1_167 as const;
+/**
+ * Heap frame a TOP-LEVEL Direct submission must request.
+ *
+ * Mirrors DIRECT_HOT_HEAP_FRAME_BYTES_V1 in the capability program contract.
+ * A caller invoking Trading directly makes two Registry reauthentication CPIs
+ * that a Registry continuation never makes, and holds their frames against an
+ * allocator that never frees; Trading refuses by name -- TradingSbfError
+ * HeapFrame, 0x4008 -- when the grant did not arrive.
+ */
+export const DIRECT_HOT_HEAP_FRAME_BYTES_V3 = 65_536 as const;
+/** Index of the Trading instruction in a signed top-level Direct transaction. */
+export const DIRECT_INLINE_TRADING_INSTRUCTION_INDEX_V3 = 3 as const;
 /** Exact named-route tail joins, before the six fixed seal aliases project. */
 export const DIRECT_INLINE_NAMED_RUNTIME_FIXED_ALIASES_V3 = Object.freeze([
   [8, 37], [9, 31], [10, 32], [11, 33], [12, 35], [13, 28], [14, 0],
@@ -500,22 +512,29 @@ export function validateDirectInlineInstructionSequenceV3(
   instructions: ReadonlyArray<TransactionInstruction>,
   expectedTradingProgram: PublicKey,
 ): void {
-  if (instructions.length !== 3) throw new Error('Direct V3 requires exactly ComputeBudget, Ed25519, and Trading instructions');
+  if (instructions.length !== 4) throw new Error('Direct V3 requires exactly ComputeBudget, RequestHeapFrame, Ed25519, and Trading instructions');
   const compute = instructions[0];
-  const evidence = instructions[1];
-  const trading = instructions[2];
+  const heap = instructions[1];
+  const evidence = instructions[2];
+  const trading = instructions[3];
   const expectedCompute = ComputeBudgetProgram.setComputeUnitLimit({ units: DIRECT_COMPUTE_UNIT_LIMIT_V3 });
   if (compute === undefined || compute.keys.length !== 0
       || !compute.programId.equals(expectedCompute.programId)
       || !same(new Uint8Array(compute.data), new Uint8Array(expectedCompute.data))) {
     throw new Error('Direct V3 first instruction is not SetComputeUnitLimit(1_400_000)');
   }
+  const expectedHeap = ComputeBudgetProgram.requestHeapFrame({ bytes: DIRECT_HOT_HEAP_FRAME_BYTES_V3 });
+  if (heap === undefined || heap.keys.length !== 0
+      || !heap.programId.equals(expectedHeap.programId)
+      || !same(new Uint8Array(heap.data), new Uint8Array(expectedHeap.data))) {
+    throw new Error('Direct V3 second instruction is not RequestHeapFrame(65_536); a top-level submission without it is refused on chain');
+  }
   if (evidence === undefined || trading === undefined
       || !evidence.programId.equals(Ed25519Program.programId)
       || !trading.programId.equals(expectedTradingProgram)) {
     throw new Error('Direct V3 Ed25519 evidence is not immediately adjacent to Trading');
   }
-  validateDirectNativeEvidenceInstructionV3(evidence, trading, 2, expectedTradingProgram);
+  validateDirectNativeEvidenceInstructionV3(evidence, trading, DIRECT_INLINE_TRADING_INSTRUCTION_INDEX_V3, expectedTradingProgram);
 }
 
 function validateFixedFrame(route: DirectInlineHotRouteV3): void {
@@ -761,6 +780,10 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
   });
   const instructions: TransactionInstruction[] = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: DIRECT_COMPUTE_UNIT_LIMIT_V3 }),
+    // Ahead of the evidence, never appended: the runtime clears return data at
+    // the start of every top-level instruction, so a trailing ComputeBudget
+    // instruction erases the commit-last ACK the execution just produced.
+    ComputeBudgetProgram.requestHeapFrame({ bytes: DIRECT_HOT_HEAP_FRAME_BYTES_V3 }),
   ];
   const nativeEvidenceInstructionIndex = instructions.length;
   const tradingInstructionIndex = nativeEvidenceInstructionIndex + 1;
@@ -796,7 +819,7 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
       || transaction.message.staticAccountKeys.length + loadedAddresses !== DIRECT_INLINE_CURRENT_UNIQUE_MESSAGE_ACCOUNTS_V3
       || tradingAccounts !== DIRECT_INLINE_CURRENT_TRADING_ACCOUNT_INDICES_V3
       || wireBytes.length !== DIRECT_INLINE_CURRENT_WIRE_BYTES_V3) {
-    throw new Error('Direct V3 transaction differs from the current exact 4/57/61/78/1159 physical geometry');
+    throw new Error('Direct V3 transaction differs from the current exact 4/57/61/78/1167 physical geometry');
   }
   return Object.freeze({
     requestBytes,
