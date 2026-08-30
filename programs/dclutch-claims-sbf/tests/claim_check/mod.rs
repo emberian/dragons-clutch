@@ -1327,3 +1327,113 @@ async fn submit_holder_signed(
         logs,
     }
 }
+
+// -------------------------------------------------------------- escrow close
+
+use dclutch_claims_svm::claim_check_request_v1::CloseClaimCheckEscrowRequestV1;
+
+fn close_escrow_instruction(
+    fixture: &Fixture,
+    caller: Pubkey,
+    caller_tokens: Pubkey,
+) -> Instruction {
+    let terminal = fixture.terminal_accounts.expect("terminal fixture");
+    let request = CloseClaimCheckEscrowRequestV1 {
+        aggregate: fixture.aggregate.to_bytes(),
+    }
+    .new()
+    .expect("close request");
+    Instruction {
+        program_id: CLAIMS_PROGRAM_ID,
+        accounts: Vec::from([
+            AccountMeta::new(caller, true),
+            AccountMeta::new(escrow_address(fixture.aggregate), false),
+            AccountMeta::new(vault_address(fixture.aggregate), false),
+            // The residue destination. Structurally never written today: the
+            // terminal executor's exact-equality check means no transfer fee
+            // can survive it, so the vault is empty by the time its last
+            // claim-check is redeemed.
+            AccountMeta::new(caller_tokens, false),
+            AccountMeta::new_readonly(terminal.collateral_mint, false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+        ]),
+        data: request.to_bytes().expect("close bytes").to_vec(),
+    }
+}
+
+/// THE RESIDUE SHRINKS TO ZERO, AND THE LAST REDEMPTION IS WHAT ALLOWS IT.
+///
+/// The design's honest claim is not that compaction leaves nothing -- an escrow
+/// and a vault survive for as long as anybody is owed -- but that what survives
+/// is proportional to unredeemed claims and SELF-LIQUIDATING. This is the last
+/// clause of that sentence, and the test that makes it true rather than hopeful.
+#[tokio::test]
+async fn the_escrow_closes_once_its_last_claim_check_is_redeemed() {
+    let (test, fixture) = fixture(true);
+    let mut context = test.start_with_context().await;
+    let holder_tokens = compact_for_a_sleeping_holder(&mut context, &fixture).await;
+    let holder = fixture.actor.pubkey();
+    let caller = context.payer.pubkey();
+    let escrow = escrow_address(fixture.aggregate);
+    let vault = vault_address(fixture.aggregate);
+
+    // While a claim-check is live, the escrow holds somebody's collateral and
+    // closing it would be taking their money.
+    let premature = submit_opener_signed(
+        &mut context,
+        close_escrow_instruction(&fixture, caller, holder_tokens),
+        "claims claim-check: close with a live claim-check",
+    )
+    .await;
+    assert_refused_with(&premature, 0x5625, "an escrow still owing somebody");
+    assert!(
+        maybe_observed(&mut context, escrow).await.is_some(),
+        "the refused close left the escrow standing"
+    );
+
+    // The holder comes back.
+    let redeemed = submit_holder_signed(
+        &mut context,
+        &fixture,
+        redeem_instruction(&fixture, holder, holder_tokens, RedeemOverrides::default()),
+        "claims claim-check: the last redemption",
+    )
+    .await;
+    assert!(redeemed.accepted, "the holder must be paid");
+
+    let escrow_lamports = observed(&mut context, escrow).await.lamports;
+    let vault_lamports = observed(&mut context, vault).await.lamports;
+    let caller_before = observed(&mut context, caller).await.lamports;
+
+    let closed = submit_opener_signed(
+        &mut context,
+        close_escrow_instruction(&fixture, caller, holder_tokens),
+        "claims claim-check: the escrow closes",
+    )
+    .await;
+    if !closed.accepted {
+        eprintln!("close refusal logs:\n{}", closed.logs.join("\n"));
+    }
+    assert!(closed.accepted, "a settled escrow must close");
+
+    // Nothing of the market survives. This is the residue reaching zero.
+    for gone in [escrow, vault] {
+        assert!(
+            maybe_observed(&mut context, gone)
+                .await
+                .is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
+            "a closed escrow keeps nothing"
+        );
+    }
+    // And both rents funded the caller, which is why this crank needs no escrow
+    // of its own.
+    let caller_after = observed(&mut context, caller).await.lamports;
+    assert!(
+        caller_after > caller_before,
+        "the closer is paid out of the rent it recovered"
+    );
+    assert!(
+        caller_after <= caller_before + escrow_lamports + vault_lamports,
+        "and paid no more than the two accounts actually held"
+    );
+}

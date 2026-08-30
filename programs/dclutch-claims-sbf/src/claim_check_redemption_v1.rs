@@ -26,7 +26,9 @@ use core::convert::TryInto;
 use dclutch_claims_svm::claim_check_conservation_v1::{
     ClaimCheckRedemptionObservationV1, ClaimCheckRedemptionPlanV1, ClaimCheckRedemptionPostV1,
 };
-use dclutch_claims_svm::claim_check_request_v1::RedeemClaimCheckRequestV1;
+use dclutch_claims_svm::claim_check_request_v1::{
+    CloseClaimCheckEscrowRequestV1, RedeemClaimCheckRequestV1,
+};
 use dclutch_claims_svm::claim_check_v1::{
     CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, ClaimCheckEscrowSeedsV1, ClaimCheckEscrowV1,
     ClaimCheckRedemptionRoleV1, ClaimCheckSeedsV1, ClaimCheckV1,
@@ -282,6 +284,187 @@ fn mint_decimals(mint: &AccountInfo<'_>) -> Result<u8, ProgramError> {
     data.get(44)
         .copied()
         .ok_or_else(|| ClaimCheckRedemptionSbfErrorV1::Accounts.into())
+}
+
+/// The caller, who closes the escrow and is paid the rent for doing it.
+pub const CLOSE_CALLER_ACCOUNT_V1: usize = 0;
+/// The escrow record being closed.
+pub const CLOSE_ESCROW_ACCOUNT_V1: usize = 1;
+/// The escrow vault being closed.
+pub const CLOSE_VAULT_ACCOUNT_V1: usize = 2;
+/// The caller's token account, receiving any residue the vault still holds.
+pub const CLOSE_CALLER_TOKENS_ACCOUNT_V1: usize = 3;
+/// The collateral mint.
+pub const CLOSE_MINT_ACCOUNT_V1: usize = 4;
+/// The collateral token program.
+pub const CLOSE_TOKEN_PROGRAM_ACCOUNT_V1: usize = 5;
+/// Exact escrow-close frame width.
+pub const CLOSE_CLAIM_CHECK_ESCROW_ACCOUNT_COUNT_V1: usize = 6;
+
+/// Close one fully redeemed escrow, permissionlessly.
+///
+/// This is what makes the residue self-liquidating rather than merely small.
+/// The design's honest claim is that a compacted market leaves one escrow, one
+/// vault and one claim-check per unredeemed holder -- and that this shrinks to
+/// zero, with the last redemption enabling the close. This route is the last
+/// clause of that sentence.
+///
+/// The gate is the escrow's own outstanding count, not a deadline. An escrow
+/// still holding a live claim-check is holding collateral for somebody who has
+/// not come back, and closing it would be taking their money. That it can stay
+/// open forever is the ruling working as intended: the claim survives, and
+/// collateral has to be somewhere.
+///
+/// It needs no escrow of its own because both accounts' rent, plus any residue
+/// the vault still holds, funds whoever turns it.
+pub fn process_escrow_close(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != CLOSE_CLAIM_CHECK_ESCROW_ACCOUNT_COUNT_V1 {
+        return Err(ClaimCheckRedemptionSbfErrorV1::Accounts.into());
+    }
+    let request = CloseClaimCheckEscrowRequestV1::decode(instruction_data)
+        .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Identity)?;
+    let at = |index: usize| {
+        accounts
+            .get(index)
+            .ok_or(ClaimCheckRedemptionSbfErrorV1::Accounts)
+    };
+    let caller = at(CLOSE_CALLER_ACCOUNT_V1)?;
+    let escrow_account = at(CLOSE_ESCROW_ACCOUNT_V1)?;
+    let vault = at(CLOSE_VAULT_ACCOUNT_V1)?;
+    let caller_tokens = at(CLOSE_CALLER_TOKENS_ACCOUNT_V1)?;
+    let mint = at(CLOSE_MINT_ACCOUNT_V1)?;
+    let token_program = at(CLOSE_TOKEN_PROGRAM_ACCOUNT_V1)?;
+
+    if !caller.is_signer
+        || !caller.is_writable
+        || !escrow_account.is_writable
+        || !vault.is_writable
+        || !caller_tokens.is_writable
+        || mint.is_writable
+        || token_program.is_writable
+        || escrow_account.owner != program_id
+    {
+        return Err(ClaimCheckRedemptionSbfErrorV1::Accounts.into());
+    }
+
+    let escrow = ClaimCheckEscrowV1::decode(
+        &escrow_account
+            .try_borrow_data()
+            .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Accounts)?,
+    )
+    .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Identity)?;
+    if escrow_account.key
+        != &Pubkey::find_program_address(
+            &ClaimCheckEscrowSeedsV1::new(request.aggregate)
+                .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Identity)?
+                .as_slices(),
+            program_id,
+        )
+        .0
+        || escrow.aggregate != request.aggregate
+        || escrow.vault != vault.key.to_bytes()
+        || escrow.collateral_mint != mint.key.to_bytes()
+    {
+        return Err(ClaimCheckRedemptionSbfErrorV1::Identity.into());
+    }
+
+    // The one gate. An escrow with a live claim-check is somebody's collateral.
+    if !escrow.is_settled() {
+        return Err(ClaimCheckRedemptionSbfErrorV1::Vault.into());
+    }
+
+    let signer = escrow
+        .signer_seeds()
+        .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Identity)?;
+    let [domain, aggregate, bump] = signer.as_slices();
+
+    // Residue rather than refusal. A transfer-fee mint can leave atoms behind
+    // that no claim-check promises; sweeping them to the caller is what stops a
+    // rounding remainder from pinning an empty escrow open forever. Today the
+    // terminal executor's exact-equality check means this is always zero, so
+    // this branch is insurance, not a code path with a bill attached.
+    let residue = token_balance(vault)?;
+    if residue != 0 {
+        invoke_signed(
+            &token_instruction::transfer_checked(
+                token_program.key,
+                vault.key,
+                mint.key,
+                caller_tokens.key,
+                escrow_account.key,
+                &[],
+                residue,
+                mint_decimals(mint)?,
+            )
+            .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Conservation)?,
+            &[
+                vault.clone(),
+                mint.clone(),
+                caller_tokens.clone(),
+                escrow_account.clone(),
+                token_program.clone(),
+            ],
+            &[&[domain, aggregate, bump]],
+        )
+        .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Conservation)?;
+    }
+
+    let caller_before = caller.lamports();
+    let vault_lamports = vault.lamports();
+    invoke_signed(
+        &token_instruction::close_account(
+            token_program.key,
+            vault.key,
+            caller.key,
+            escrow_account.key,
+            &[],
+        )
+        .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Conservation)?,
+        &[
+            vault.clone(),
+            caller.clone(),
+            escrow_account.clone(),
+            token_program.clone(),
+        ],
+        &[&[domain, aggregate, bump]],
+    )
+    .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Conservation)?;
+
+    let escrow_lamports = escrow_account.lamports();
+    {
+        let mut escrow_balance = escrow_account
+            .try_borrow_mut_lamports()
+            .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Accounts)?;
+        let mut caller_balance = caller
+            .try_borrow_mut_lamports()
+            .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Accounts)?;
+        **escrow_balance = 0;
+        **caller_balance = caller_balance
+            .checked_add(escrow_lamports)
+            .ok_or(ClaimCheckRedemptionSbfErrorV1::Conservation)?;
+    }
+    escrow_account
+        .resize(0)
+        .map_err(|_| ClaimCheckRedemptionSbfErrorV1::Accounts)?;
+    escrow_account.assign(&system_program::ID);
+
+    // Everything both accounts held reached the caller, and nothing was
+    // stranded in an account about to be left at zero length.
+    if escrow_account.lamports() != 0
+        || !vault.data_is_empty()
+        || caller.lamports()
+            != caller_before
+                .checked_add(vault_lamports)
+                .and_then(|value| value.checked_add(escrow_lamports))
+                .ok_or(ClaimCheckRedemptionSbfErrorV1::Conservation)?
+    {
+        return Err(ClaimCheckRedemptionSbfErrorV1::Receipt.into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

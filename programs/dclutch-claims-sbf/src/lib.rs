@@ -388,11 +388,22 @@ fn process_remaining_instruction(
     if instruction_data.get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.len())
         == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.as_slice())
     {
-        return claim_check_redemption_v1::process_redemption(
-            program_id,
-            accounts,
+        return match dclutch_claims_svm::claim_check_request_v1::claim_check_action_of(
             instruction_data,
-        );
+        ) {
+            Ok(dclutch_claims_svm::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow) => {
+                claim_check_redemption_v1::process_escrow_close(
+                    program_id,
+                    accounts,
+                    instruction_data,
+                )
+            }
+            _ => claim_check_redemption_v1::process_redemption(
+                program_id,
+                accounts,
+                instruction_data,
+            ),
+        };
     }
 
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
