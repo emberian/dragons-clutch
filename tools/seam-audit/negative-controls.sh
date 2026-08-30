@@ -46,6 +46,8 @@ CONTROLS=(
   "live|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|projected_custody_bootstrap_v1.rs.authenticate_expired_checkpoint_v1|SEAM_AUDIT #13b, unfixed: a blanket signer refusal over a frame the builder puts the fee payer in, so an expired founding can never be unwound"
   "live|HEAD|DOMAIN_DUP|DOMAIN_BYTES_COLLIDE|CLAIMS_FOUNDING_AGGREGATE_SEED_V4|unfixed: the V4 and V5 founding aggregate domains are byte-identical, so the version bump lives in the name and not in the address"
   "synthetic|HEAD|UNSET_PIN|UNSET_GUARD_PRESENT|series/kernel_adapter.rs|no 2026-08-29 defect exists for this class; the bar is that deleting a live unset-pubkey guard is noticed"
+  "silent|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|terminal_sequence.rs.authenticate_lookup_infrastructure_planned_journal_v1|not a refusal at all: both is_signer reads classify the coordinate into TerminalAddressClassV1::InlineSigner and no Err is reachable, so reporting it as an always-refuses frame was the reader mistaking a read for a rejection"
+  "silent|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|direct_hot_route_manifest.rs.project_manifest_document_v3|refuses the fee payer being named in the frame at all, one line below the census, so the harm this class states -- dead for any builder that pays with an account it also names -- is refused in place by its own error code"
 )
 
 pass=0
@@ -75,6 +77,26 @@ for control in "${CONTROLS[@]}"; do
       else
         echo "FAIL ${code} (live)"
         echo "     0 findings at HEAD, want >0 for a documented unfixed defect"
+        fail=$((fail + 1))
+      fi
+      echo "     ${story}"
+      echo
+      continue
+      ;;
+    silent)
+      # The mirror of `live`, and it needs its own kind for the same reason
+      # `live` does: a reader that fires on code which has closed the hole in
+      # place is not stricter, it is wrong, and a class nobody can trust gets
+      # switched off. Both of these sites were reported by the reader this
+      # replaced, so the control fails against it.
+      here="$(report "${ROOT}" "${class}" | grep -cE "^${code}.*${needle}" || true)"
+      if [ "${here}" -eq 0 ]; then
+        echo "PASS ${code} (silent)"
+        echo "     stays silent at HEAD on a site that closed the hole in place"
+        pass=$((pass + 1))
+      else
+        echo "FAIL ${code} (silent)"
+        echo "     ${here} findings at HEAD, want 0 -- the reader is crying wolf"
         fail=$((fail + 1))
       fi
       echo "     ${story}"

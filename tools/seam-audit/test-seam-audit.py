@@ -26,8 +26,12 @@ from seam_audit import (  # noqa: E402
     decode_rust_byte_string,
 )
 from seam_rules import (  # noqa: E402
+    _BLANKET_SIGNER_REFUSAL,
+    _PAYER_CARVE_OUT,
+    _censuses_signers,
     _code_mask,
     _decode_value,
+    _guarded_block,
     _identifier,
     _name_tokens,
     _scan_functions,
@@ -200,6 +204,78 @@ class RoleTokens(unittest.TestCase):
         wanted = _name_tokens("CLAIMS_FOUNDING_AGGREGATE_SEED_V4")
         carried = _value_tokens(b"dclutch:lbv2:market")
         self.assertFalse(set(wanted) & set(carried))
+
+
+class SignerCensus(unittest.TestCase):
+    """What separates a dead frame from a frame that proved it is not one.
+
+    Both cases here are taken from the tree rather than invented, because the
+    reader was wrong about both of them and a paraphrase would have let it stay
+    wrong: `terminal_sequence.rs` was reported for a read that is not a
+    refusal, and `direct_hot_route_manifest.rs` for a census that refuses the
+    fee payer by key one line further down.
+    """
+
+    REFUSES = """
+        for (index, value) in accounts.iter().enumerate() {
+            if value.is_signer {
+                return Err(TradingSbfError::Content.into());
+            }
+        }
+    """
+
+    CLASSIFIES = """
+        let classes = instruction.accounts.iter().map(|meta| {
+            if meta.is_signer {
+                TerminalAddressClassV1::InlineSigner
+            } else {
+                TerminalAddressClassV1::LookupStable
+            }
+        });
+    """
+
+    def test_a_refusal_is_a_census(self):
+        self.assertTrue(_censuses_signers(self.REFUSES))
+
+    def test_a_classification_is_not_a_refusal(self):
+        # The whole finding at `authenticate_lookup_infrastructure_planned_
+        # journal_v1`: the flag is copied into an enum and no Err is reachable.
+        self.assertFalse(_censuses_signers(self.CLASSIFIES))
+        # And the control: the reader this replaced *did* fire here, which is
+        # why the register carried that site as a hazard. Without this line the
+        # test above passes against a reader that never worked.
+        self.assertTrue(_BLANKET_SIGNER_REFUSAL.search(self.CLASSIFIES))
+
+    def test_the_guarded_block_stops_at_its_own_brace(self):
+        # A refusal *after* the if-block must not count as inside it.
+        body = "if value.is_signer {\n let x = 1;\n }\n return Err(e);"
+        self.assertNotIn("Err", _guarded_block(body, 0))
+        self.assertFalse(_censuses_signers(body))
+
+    def test_an_unbalanced_body_stays_reported(self):
+        # Fail toward reporting: an unparseable body is still a finding.
+        self.assertTrue(_censuses_signers("if value.is_signer { return Err(e);"))
+
+    def test_a_payer_carve_out_is_the_harm_statements_negation(self):
+        # `project_manifest_document_v3` refuses the payer being named in the
+        # frame at all, so "dead for any builder that pays with an account it
+        # also names" cannot happen here.
+        self.assertTrue(_PAYER_CARVE_OUT.search("if meta.account.key == payer {"))
+        self.assertTrue(_PAYER_CARVE_OUT.search("any(|meta| meta.pubkey == payer)"))
+
+    def test_the_live_control_has_no_carve_out(self):
+        # SEAM_AUDIT #13b, which the exemption must not silence: it refuses
+        # every signer and exempts nothing, and its builder places the payer
+        # at FUNDING_ABORT_FUNDING_SOURCE.
+        thirteen_b = """
+            for (index, value) in accounts.iter().enumerate() {
+                if value.is_signer || value.is_writable != writable {
+                    return Err(TradingSbfError::Content.into());
+                }
+            }
+        """
+        self.assertTrue(_censuses_signers(thirteen_b))
+        self.assertIsNone(_PAYER_CARVE_OUT.search(thirteen_b))
 
 
 class GateSemantics(unittest.TestCase):

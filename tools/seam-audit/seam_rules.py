@@ -1065,6 +1065,74 @@ _PRIVILEGE_EXEMPTION = re.compile(
     r"|writability_is_free|_writability_"
 )
 
+# The signer half's exemption, and it is the *harm statement's own negation*.
+#
+# This reader's complaint is precise: a blanket signer refusal is dead "for any
+# builder that pays with an account it also names".  A function that refuses
+# the payer being named in the frame at all has closed exactly that hole, in
+# code, one line from the census -- so the harm cannot occur and the site is
+# not a finding.
+#
+# That the writability half already honours an in-place exemption
+# (``_PRIVILEGE_EXEMPTION``, and the README says so: "the presence of any
+# exemption is what keeps a site off this list") while the signer half honoured
+# none was an asymmetry in the reader rather than a fact about the code.
+#
+# It does not weaken the live control.  SEAM_AUDIT #13b
+# (``authenticate_expired_checkpoint_v1``) has no carve-out of any kind, and
+# its builder *places the campaign payer* at ``FUNDING_ABORT_FUNDING_SOURCE``;
+# that is what a site looks like when the answer is yes.
+_PAYER_CARVE_OUT = re.compile(
+    r"\.key\s*==\s*[a-z_]*payer|[a-z_]*payer\s*==\s*[a-z_.]*\.key"
+    r"|\.pubkey\s*==\s*[a-z_]*payer|[a-z_]*payer\s*==\s*[a-z_.]*\.pubkey"
+    r"|is_signer\s*!=\s*\("
+)
+
+# Tokens that make a branch a refusal rather than a classification.
+_REFUSAL_TOKEN = re.compile(r"return\s+Err|Err\(|refusal\(|bail!|Error::|_ERROR")
+
+
+def _guarded_block(body: str, start: int) -> str:
+    """The balanced ``{ .. }`` block that opens at or after ``start``.
+
+    Returns the whole remainder when the braces do not balance, which keeps the
+    caller's test conservative: an unparseable body is still reported.
+    """
+
+    open_at = body.find("{", start)
+    if open_at < 0:
+        return body[start:]
+    depth = 0
+    for index in range(open_at, len(body)):
+        char = body[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return body[open_at : index + 1]
+    return body[open_at:]
+
+
+def _censuses_signers(body: str) -> bool:
+    """Whether this body *refuses* on a blanket signer read.
+
+    The ``if x.is_signer {`` spelling is not by itself a refusal.  It is also
+    how a builder *classifies* a coordinate it is about to emit --
+    ``terminal_sequence.rs`` maps it straight into
+    ``TerminalAddressClassV1::InlineSigner`` and returns no error at all -- and
+    reporting that as an always-refuses frame is the reader mistaking a read
+    for a rejection.  So the ``if`` form has to reach a refusal in its own
+    guarded block; the ``.any(..)`` form is already a predicate inside one.
+    """
+
+    for match in _BLANKET_SIGNER_REFUSAL.finditer(body):
+        if match.group(0).lstrip().startswith("if"):
+            if not _REFUSAL_TOKEN.search(_guarded_block(body, match.start())):
+                continue
+        return True
+    return False
+
 
 def class_privilege(survey: Survey) -> list[Finding]:
     """SEAM_AUDIT #13b and the FAMS principle behind it.
@@ -1100,7 +1168,7 @@ def class_privilege(survey: Survey) -> list[Finding]:
         body = function.text
         if not _FRAME_LOOP.search(body):
             continue
-        if _BLANKET_SIGNER_REFUSAL.search(body):
+        if _censuses_signers(body) and not _PAYER_CARVE_OUT.search(body):
             findings.append(
                 Finding(
                     code="TRANSACTION_LEVEL_SIGNER_CENSUS",
@@ -1116,7 +1184,13 @@ def class_privilege(survey: Survey) -> list[Finding]:
                     ),
                 )
             )
-            continue
+        # No `continue`: the two halves are separate facts about the same
+        # frame, and a function can carry both.  Skipping the writability test
+        # once the signer test fired made the class silently under-report --
+        # twelve sites had a pin finding hidden behind a signer finding, so
+        # fixing the signer half made them surface as if they were new.  A gate
+        # that reports one defect per function is a gate that hides the second
+        # one behind the first, which is this tool's own subject matter.
         if "is_writable !=" in body and not _PRIVILEGE_EXEMPTION.search(body):
             findings.append(
                 Finding(

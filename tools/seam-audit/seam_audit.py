@@ -59,6 +59,24 @@ Usage:
     tools/seam-audit/seam_audit.py --report        # the register, all findings
     tools/seam-audit/seam_audit.py --class SEED_LEN --report
     tools/seam-audit/seam_audit.py --root <dir>    # audit another checkout
+    tools/seam-audit/seam_audit.py --commit <rev>  # audit a committed tree
+
+Which tree gets read is deliberately **not** the same for the two modes, and
+the asymmetry is the point:
+
+  the gate   reads the working tree.  You want to be told about the defect you
+             just wrote, before you commit it.
+  ``--write`` reads a COMMITTED tree, always -- ``--commit`` if you name one,
+             otherwise ``HEAD``.  The register is a claim about a revision that
+             exists, so it must not be able to describe a file that only exists
+             in somebody's editor.
+
+That second rule is structural rather than advisory because this repository is
+a *shared* working tree with many concurrent authors.  A ``--write`` that read
+the filesystem would bake whatever half-finished file a neighbour happened to
+have open into a committed register -- silently, since an unfinished file looks
+exactly like a finished one to a static reader.  The mode cannot see the
+working tree at all, so no amount of carelessness can do it.
 
 This is local static evidence only.  It does not build, sign, submit, publish,
 or contact a cluster.
@@ -67,11 +85,14 @@ or contact a cluster.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -252,6 +273,105 @@ def sg_binary() -> str:
         "ast-grep is not on PATH; install it with `cargo install ast-grep` "
         "(the checker is pattern-driven and has no fallback)"
     )
+
+
+# --------------------------------------------------------------------------
+# committed trees
+# --------------------------------------------------------------------------
+
+
+def git_run(root: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def resolve_commit(root: pathlib.Path, rev: str) -> str:
+    """The full object name of ``rev``, or an error naming what went wrong.
+
+    Resolving to a full sha rather than carrying the caller's spelling matters
+    for the register: ``HEAD`` names a different tree tomorrow, and a baseline
+    that recorded ``HEAD`` would be a claim about nothing.
+    """
+
+    inside = git_run(root, "rev-parse", "--is-inside-work-tree")
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        raise AuditError(
+            f"{root} is not inside a git work tree, so there is no committed "
+            f"tree to measure; --write and --commit both need one"
+        )
+    resolved = git_run(root, "rev-parse", "--verify", f"{rev}^{{commit}}")
+    if resolved.returncode != 0:
+        raise AuditError(
+            f"{rev!r} does not resolve to a commit in {root}: "
+            f"{resolved.stderr.strip()}"
+        )
+    return resolved.stdout.strip()
+
+
+@contextlib.contextmanager
+def exported_commit(root: pathlib.Path, commit: str):
+    """Materialise one committed tree in a temporary directory.
+
+    ``git archive`` rather than ``git worktree add``: the export touches no
+    repository state at all, so it cannot contend on ``.git`` locks with the
+    other lanes working in this checkout, and cleaning it up is an ``rm``
+    rather than a bookkeeping operation that can be left half-done.
+    """
+
+    directory = pathlib.Path(tempfile.mkdtemp(prefix="seam-audit-commit-"))
+    try:
+        archive = subprocess.Popen(
+            ["git", "-C", str(root), "archive", commit],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        extract = subprocess.run(
+            ["tar", "-x", "-C", str(directory)],
+            stdin=archive.stdout,
+            capture_output=True,
+            check=False,
+        )
+        if archive.stdout is not None:
+            archive.stdout.close()
+        archive_error = archive.communicate()[1]
+        if archive.returncode != 0 or extract.returncode != 0:
+            raise AuditError(
+                f"could not export {commit[:12]} from {root}: "
+                f"{archive_error.decode(errors='replace').strip()} "
+                f"{extract.stderr.decode(errors='replace').strip()}".strip()
+            )
+        if not (directory / "Cargo.toml").exists():
+            raise AuditError(
+                f"the exported tree for {commit[:12]} has no Cargo.toml; it is "
+                f"not a repository root"
+            )
+        yield directory
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def uncommitted_rust_paths(root: pathlib.Path, commit: str) -> list[str]:
+    """Rust files whose working-tree content differs from ``commit``.
+
+    Reported, never obeyed.  ``--write`` measured the commit, so these are
+    exactly the files its register does *not* describe -- which is the one
+    thing a writer needs to know and cannot see from the register itself.
+    """
+
+    paths: set[str] = set()
+    tracked = git_run(root, "diff", "--name-only", commit, "--", "*.rs")
+    if tracked.returncode == 0:
+        paths.update(line for line in tracked.stdout.splitlines() if line)
+    untracked = git_run(
+        root, "ls-files", "--others", "--exclude-standard", "--", "*.rs"
+    )
+    if untracked.returncode == 0:
+        paths.update(line for line in untracked.stdout.splitlines() if line)
+    return sorted(paths)
 
 
 def sg_run(
@@ -467,9 +587,15 @@ def compare(
 
 
 def write_baseline(
-    path: pathlib.Path, findings: list[Finding], previous: dict
+    path: pathlib.Path, findings: list[Finding], previous: dict, commit: str
 ) -> None:
-    """Retriage: keep every verdict already recorded, tag the rest untriaged."""
+    """Retriage: keep every verdict already recorded, tag the rest untriaged.
+
+    ``commit`` is stamped into the register because a set of findings with no
+    revision attached is not checkable by anyone later: it cannot be
+    reproduced, and it cannot be shown to describe committed code rather than
+    whatever happened to be on disk.
+    """
 
     recorded: dict[str, dict[str, str]] = previous.get("findings", {})
     out: dict[str, dict[str, str]] = {}
@@ -478,7 +604,7 @@ def write_baseline(
         out.setdefault(finding.code, {})[finding.key] = verdict
     path.write_text(
         json.dumps(
-            {"schema": SCHEMA, "findings": out},
+            {"schema": SCHEMA, "measured_commit": commit, "findings": out},
             indent=2,
             sort_keys=True,
         )
@@ -497,7 +623,18 @@ def main(argv: list[str] | None = None) -> int:
         help="repository root to audit (default: this checkout)",
     )
     parser.add_argument(
-        "--write", action="store_true", help="retriage findings into the baseline"
+        "--write",
+        action="store_true",
+        help="retriage findings into the baseline (reads a committed tree)",
+    )
+    parser.add_argument(
+        "--commit",
+        default=None,
+        metavar="REV",
+        help=(
+            "audit this committed revision instead of the working tree; "
+            "--write always audits one and defaults it to HEAD"
+        ),
     )
     parser.add_argument(
         "--report", action="store_true", help="print every finding, gate or not"
@@ -517,13 +654,25 @@ def main(argv: list[str] | None = None) -> int:
     root = pathlib.Path(args.root).resolve()
     if not (root / "Cargo.toml").exists():
         raise AuditError(f"{root} is not a repository root (no Cargo.toml)")
+    if args.write and args.only:
+        raise AuditError("--write must retriage every class; drop --class")
 
     from seam_rules import survey_tree, run_classes  # noqa: PLC0415
 
     binary = sg_binary()
-    survey = survey_tree(binary, root)
     selected = tuple(args.only) if args.only else CLASSES
-    findings = run_classes(binary, survey, selected)
+
+    # ``--write`` never reads the working tree.  See the module docstring: the
+    # register is a claim about a revision, and this checkout is shared.
+    requested = args.commit or ("HEAD" if args.write else None)
+    commit = resolve_commit(root, requested) if requested else None
+
+    if commit is None:
+        findings = run_classes(binary, survey_tree(binary, root), selected)
+    else:
+        print(f"seam audit: reading committed tree {commit[:12]} ({requested})")
+        with exported_commit(root, commit) as exported:
+            findings = run_classes(binary, survey_tree(binary, exported), selected)
 
     if args.report:
         for finding in sorted(findings):
@@ -532,10 +681,23 @@ def main(argv: list[str] | None = None) -> int:
 
     baseline_path = pathlib.Path(args.baseline)
     if args.write:
-        if args.only:
-            raise AuditError("--write must retriage every class; drop --class")
-        write_baseline(baseline_path, findings, load_baseline(baseline_path))
-        print(f"wrote {baseline_path} with {len(findings)} findings")
+        write_baseline(baseline_path, findings, load_baseline(baseline_path), commit)
+        print(f"wrote {baseline_path} with {len(findings)} findings at {commit[:12]}")
+        skipped = uncommitted_rust_paths(root, commit)
+        if skipped:
+            print(
+                f"\n{len(skipped)} Rust files differ between {commit[:12]} and "
+                f"your working tree. The register does NOT describe them:"
+            )
+            for path in skipped:
+                print(f"  {path}")
+            print(
+                "\nThat is deliberate -- a shared checkout must not get another "
+                "author's unfinished file committed into this register. If any "
+                "of those files are yours and your fix is in them, commit it "
+                "and rerun --write, or the gate will keep reporting the finding "
+                "you already fixed."
+            )
         return 0
 
     if args.only:
