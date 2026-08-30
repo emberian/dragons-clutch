@@ -19,8 +19,8 @@ use dclutch_custody_contract::{
     ProjectedCustodyRequestV1, ReceiptEvidenceV1,
 };
 
-mod delegated;
 mod dealer_reservation_v1;
+mod delegated;
 mod projected;
 mod retirement_replay_handoff_v1;
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
@@ -178,6 +178,8 @@ pub fn process_instruction(
     if dealer_reservation_v1::is_instruction(instruction_data) {
         return dealer_reservation_v1::process(program_id, accounts, instruction_data);
     }
+    let (instruction_data, caller_authority_bump) =
+        split_caller_authority_bump_v1(instruction_data);
     if instruction_data.len()
         == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
         && instruction_data
@@ -198,7 +200,12 @@ pub fn process_instruction(
         && instruction_data.get(..DELEGATED_CUSTODY_REQUEST_MAGIC_V2.len())
             == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice())
     {
-        return delegated::process(program_id, accounts, instruction_data);
+        return delegated::process(
+            program_id,
+            accounts,
+            instruction_data,
+            caller_authority_bump,
+        );
     }
     if instruction_data.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
         && instruction_data.get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
@@ -213,8 +220,14 @@ pub fn process_instruction(
         CustodyRequestV1::decode(request_bytes).map_err(|_| CustodySbfError::Instruction)?;
     require_account_count(accounts, request.operation, continuation.is_some())?;
     let request_digest = hash(request_bytes).to_bytes();
-    let market =
-        authenticate_common_frame(program_id, accounts, request, request_digest, continuation)?;
+    let market = authenticate_common_frame(
+        program_id,
+        accounts,
+        request,
+        request_digest,
+        continuation,
+        caller_authority_bump,
+    )?;
     let realm = authenticate_realm(program_id, accounts, request, market)?;
     match request.operation {
         OperationV1::InitializeReplay => {
@@ -229,6 +242,81 @@ pub fn process_instruction(
         }
         OperationV1::CloseReplay => close_replay(program_id, accounts, request, request_digest),
     }
+}
+
+/// Strip the optional caller-authority bump the parent appended after its
+/// request, and return the instruction this program's own dispatch sees.
+///
+/// # Why a byte AFTER the request, and not a reserved byte inside it
+///
+/// `CallerAuthoritySeedsV1`'s last seed is `hash(request_bytes)`. A bump written
+/// into the request would change that digest, which changes the address, which
+/// changes the bump: the obvious carrier has no fixed point. A byte after the
+/// request is outside the loop, because the digest is taken over the request
+/// only -- pinned by
+/// `the_caller_authority_digest_covers_the_request_prefix_only` below, so that
+/// widening the digest to cover the whole instruction data meets a red row that
+/// explains what it breaks.
+///
+/// # Why this is length-driven, and why that is safe
+///
+/// This program dispatches on EXACT LENGTH, so the carry has to be legible to
+/// the dispatch before the dispatch runs. Each accepted length plus one is a
+/// length no route of this program otherwise accepts, which the compile-time
+/// assertions below make a checked fact rather than a reading of the file. A
+/// wire that is not `known + 1` is handed on untouched and refuses exactly
+/// where it used to.
+///
+/// The byte is not an authority: `authenticate_common_frame` reproduces the
+/// address from it and compares against the account at coordinate 0, so a wrong
+/// byte reproduces a different address and refuses. A caller that sends no
+/// suffix gets the search this always used to do.
+fn split_caller_authority_bump_v1(instruction_data: &[u8]) -> (&[u8], Option<u8>) {
+    const V1: usize = dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
+    const CONTINUED: usize = V1 + REGISTRY_CONTINUATION_REQUEST_BYTES_V1;
+    const DELEGATED: usize = DELEGATED_CUSTODY_REQUEST_BYTES_V2;
+    const PROJECTED: usize = PROJECTED_CUSTODY_REQUEST_BYTES_V1;
+    const HANDOFF: usize = dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1;
+
+    /// The routes whose handler READS a carried bump. The projected and
+    /// retirement-handoff routes derive their caller authority elsewhere and
+    /// are not on the hot path, so a byte after them would be stripped and then
+    /// dropped -- worse than not stripping it.
+    const CARRIED: [usize; 3] = [V1, CONTINUED, DELEGATED];
+    /// Every exact length this program dispatches on, carried or not.
+    const KNOWN: [usize; 5] = [V1, CONTINUED, DELEGATED, PROJECTED, HANDOFF];
+
+    // No carried length may BE another route's exact length, or a wire would
+    // dispatch as a different route with its last byte eaten.
+    const _: () = {
+        let mut outer = 0;
+        while outer < CARRIED.len() {
+            let mut inner = 0;
+            while inner < KNOWN.len() {
+                assert!(
+                    CARRIED[outer] + 1 != KNOWN[inner],
+                    "a carried Custody wire would collide with another route's exact length"
+                );
+                inner += 1;
+            }
+            outer += 1;
+        }
+    };
+
+    let Some(carried) = instruction_data.len().checked_sub(1) else {
+        return (instruction_data, None);
+    };
+    let mut index = 0;
+    while index < CARRIED.len() {
+        if CARRIED[index] == carried {
+            let (request, suffix) = instruction_data.split_at(carried);
+            // Zero is not a bump any derivation produces, so it reads as absent
+            // rather than as a value that is certain to fail to reproduce.
+            return (request, suffix.first().copied().filter(|bump| *bump != 0));
+        }
+        index += 1;
+    }
+    (instruction_data, None)
 }
 
 fn split_registry_continuation(
@@ -256,6 +344,7 @@ fn authenticate_common_frame(
     request: CustodyRequestV1,
     request_digest: [u8; 32],
     continuation: Option<RegistryContinuationRequestV1>,
+    carried_bump: Option<u8>,
 ) -> Result<CoreState, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
@@ -273,8 +362,21 @@ fn authenticate_common_frame(
         request_digest,
     )
     .map_err(|_| CustodySbfError::CallerAuthority)?;
-    let expected_caller =
-        Pubkey::find_program_address(&caller_seeds.as_slices(), caller_program.key).0;
+    // Reproduced from the bump the parent carried after the request, not
+    // searched for; see `split_caller_authority_bump_v1`. A wrong bump
+    // reproduces a different address and refuses at the equality below.
+    let expected_caller = match carried_bump {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let [domain, release, market, role, context, digest] = caller_seeds.as_slices();
+            Pubkey::create_program_address(
+                &[domain, release, market, role, context, digest, &bump_seed],
+                caller_program.key,
+            )
+            .map_err(|_| CustodySbfError::CallerAuthority)?
+        }
+        None => Pubkey::find_program_address(&caller_seeds.as_slices(), caller_program.key).0,
+    };
     if caller_authority.key != &expected_caller {
         return Err(CustodySbfError::CallerAuthority.into());
     }
@@ -1568,6 +1670,100 @@ fn poststate_commitment(projection: PoststateProjection) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE INVARIANT THE CALLER-AUTHORITY BUMP CARRY RESTS ON.
+    ///
+    /// `CallerAuthoritySeedsV1`'s last seed is `hash(request_bytes)`, and
+    /// `request_bytes` is what `split_registry_continuation` hands back -- the
+    /// request, never the whole instruction data. That is the only reason the
+    /// parent can append its bump after the request: a bump inside the hashed
+    /// region would change the digest, which changes the address, which changes
+    /// the bump, and the carrier would have no fixed point.
+    ///
+    /// **If you are here because this row went red:** something widened the
+    /// digest to cover more than the request. That is a reasonable-looking
+    /// hardening and it silently breaks the carry -- what fails afterwards is
+    /// `authenticate_common_frame`, reproducing an address nobody signed with,
+    /// for reasons no refusal code explains. Either keep the digest over the
+    /// request, or remove `split_caller_authority_bump_v1` and the push in
+    /// `trading-sbf/src/custody_composition_v3.rs` in the same change.
+    #[test]
+    fn the_caller_authority_digest_covers_the_request_prefix_only() {
+        let request = alloc::vec![0x5a_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        let bare = hash(&request).to_bytes();
+
+        let mut carried = request.clone();
+        carried.push(0xfd);
+        let (stripped, bump) = split_caller_authority_bump_v1(&carried);
+        assert_eq!(bump, Some(0xfd));
+        assert_eq!(stripped, &request[..]);
+        let (digest_input, continuation) =
+            split_registry_continuation(stripped).expect("a bare V1 request");
+        assert!(continuation.is_none());
+        assert_eq!(
+            hash(digest_input).to_bytes(),
+            bare,
+            "appending the caller-authority bump changed the digest its own address is \
+             derived from. The carrier is unsatisfiable in that state -- see this test's \
+             own doc comment."
+        );
+    }
+
+    /// Every declared length, carried and uncarried, lands on its own route.
+    #[test]
+    fn the_carried_suffix_never_collides_with_another_exact_length() {
+        let carried_widths = [
+            dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1,
+            dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1
+                + REGISTRY_CONTINUATION_REQUEST_BYTES_V1,
+            DELEGATED_CUSTODY_REQUEST_BYTES_V2,
+        ];
+        // The two routes that do NOT read a carried bump. A byte after one of
+        // them must be left where it is, so the route refuses it exactly as it
+        // did before this carrier existed rather than silently dropping it.
+        let uncarried_widths = [
+            PROJECTED_CUSTODY_REQUEST_BYTES_V1,
+            dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1,
+        ];
+        for width in carried_widths {
+            // An exact width is handed on untouched -- no route loses its last
+            // byte to a carrier that is not there.
+            let bare = alloc::vec![0x11_u8; width];
+            assert_eq!(split_caller_authority_bump_v1(&bare), (&bare[..], None));
+
+            // One more is a carried wire for that route, and one less is
+            // neither and must not be silently reinterpreted as one.
+            let mut carried = bare.clone();
+            carried.push(0x22);
+            let (stripped, bump) = split_caller_authority_bump_v1(&carried);
+            assert_eq!(stripped.len(), width);
+            assert_eq!(bump, Some(0x22));
+
+            let short = alloc::vec![0x11_u8; width - 1];
+            assert_eq!(split_caller_authority_bump_v1(&short), (&short[..], None));
+        }
+        for width in uncarried_widths {
+            for length in [width, width + 1] {
+                let bytes = alloc::vec![0x11_u8; length];
+                assert_eq!(
+                    split_caller_authority_bump_v1(&bytes),
+                    (&bytes[..], None),
+                    "a {length}-byte wire is not a carried shape and must reach dispatch whole"
+                );
+            }
+        }
+        // And no carried wire can be mistaken for another route's exact length.
+        for width in carried_widths {
+            for other in carried_widths.into_iter().chain(uncarried_widths) {
+                assert_ne!(width + 1, other);
+            }
+        }
+        // A zero suffix byte is not a bump any derivation produces, so it reads
+        // as absent rather than as a value certain to fail to reproduce.
+        let mut zeroed = alloc::vec![0x11_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        zeroed.push(0);
+        assert_eq!(split_caller_authority_bump_v1(&zeroed).1, None);
+    }
 
     #[test]
     fn replay_rent_normalization_is_exact_and_overflow_safe() {

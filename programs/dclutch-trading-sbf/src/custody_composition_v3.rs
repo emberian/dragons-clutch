@@ -119,6 +119,18 @@ pub fn execute_custody_route_v3<'info>(
         prior_receipt,
         ReceiptDeliveryV3::VerifiedOnly,
     )?;
+    // The caller authority Trading just derived, carried to the child so it
+    // reproduces the address instead of searching for it again. It goes AFTER
+    // the request because the digest those seeds end in covers the request
+    // only -- a bump inside it would change its own address. Custody's
+    // `split_caller_authority_bump_v1` reads it back, and its
+    // `the_caller_authority_digest_covers_the_request_prefix_only` pins the
+    // property this depends on.
+    buffers
+        .data
+        .try_reserve(1)
+        .map_err(|_| TradingSbfError::Content)?;
+    buffers.data.push(prepared.bump);
     buffers.push_callee(custody_program)?;
     let bump_seed = [prepared.bump];
     let [domain, release, market, role, context, digest] = prepared.authority_seeds.as_slices();

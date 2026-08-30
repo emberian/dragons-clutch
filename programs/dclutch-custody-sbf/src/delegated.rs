@@ -13,13 +13,24 @@ pub(super) fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
+    caller_authority_bump: Option<u8>,
 ) -> ProgramResult {
     let request = DelegatedCustodyRequestV2::decode(instruction_data)
         .map_err(|_| CustodySbfError::Instruction)?;
     let custody = request.custody;
     require_account_count(accounts, custody.operation, false)?;
+    // `instruction_data` is the request, with any carried caller-authority bump
+    // already split off by `split_caller_authority_bump_v1`, so this digest is
+    // still taken over exactly the request the parent hashed.
     let request_digest = hash(instruction_data).to_bytes();
-    let market = authenticate_common_frame(program_id, accounts, custody, request_digest, None)?;
+    let market = authenticate_common_frame(
+        program_id,
+        accounts,
+        custody,
+        request_digest,
+        None,
+        caller_authority_bump,
+    )?;
     let realm = authenticate_realm(program_id, accounts, custody, market)?;
     execute_transfer(program_id, accounts, request, request_digest, realm)
 }
