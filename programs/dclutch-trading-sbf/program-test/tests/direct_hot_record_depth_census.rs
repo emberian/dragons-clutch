@@ -40,6 +40,7 @@ use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
+use dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 
@@ -63,12 +64,13 @@ const CENSUS_SEEDS: u64 = 32;
 /// reads them at the bumps `SelectedRecordBumpsV1` carries in the Market root.
 /// The six sealed artifacts are absent because `borrow_sealed_record` reads
 /// coordinates the seal persisted. What is left is what still pays.
-const SEARCHED_RECORD_SCHEMAS: [(&str, [u8; 32]); 5] = [
+const SEARCHED_RECORD_SCHEMAS: [(&str, [u8; 32]); 6] = [
     ("product", PRODUCT_RECORD_SCHEMA_ID_V2),
     ("result-domain", RESULT_DOMAIN_SCHEMA_ID_V2),
     ("portfolio", PORTFOLIO_SCHEMA_ID_V2),
     ("linked-basis", GRADED_BASIS_RECORD_SCHEMA_ID_V3),
     ("realm", REALM_SCHEMA_RELEASE_ID_V1),
+    ("exec-strategy", EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2),
 ];
 
 /// One record's canonical coordinate, as the route would have to search for it.
