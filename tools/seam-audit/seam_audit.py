@@ -264,9 +264,18 @@ class Survey:
 
 def sg_binary() -> str:
     for candidate in ("sg", "ast-grep"):
-        probe = subprocess.run(
-            [candidate, "--version"], capture_output=True, text=True, check=False
-        )
+        # An absent binary raises rather than returning nonzero, so without
+        # this the message below was unreachable: a host with no ast-grep got a
+        # FileNotFoundError traceback and exit 1 -- the same code the gate uses
+        # for "this tree has a seam defect". A release gate must not report
+        # "the checker could not run" as "your code is bad"; that path is
+        # AuditError, which exits 2.
+        try:
+            probe = subprocess.run(
+                [candidate, "--version"], capture_output=True, text=True, check=False
+            )
+        except OSError:
+            continue
         if probe.returncode == 0:
             return candidate
     raise AuditError(

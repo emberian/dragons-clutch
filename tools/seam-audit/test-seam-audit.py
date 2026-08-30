@@ -278,6 +278,31 @@ class SignerCensus(unittest.TestCase):
         self.assertIsNone(_PAYER_CARVE_OUT.search(thirteen_b))
 
 
+class MissingToolchain(unittest.TestCase):
+    """"The checker could not run" must not be reported as "your code is bad".
+
+    An absent binary makes `subprocess.run` raise rather than return nonzero,
+    so this message was unreachable and a host without ast-grep got a traceback
+    and exit 1 -- the same code the gate uses for a real seam defect. In a
+    release gate that conflation is the whole difference between refusing a
+    build and refusing a build *for the right reason*.
+    """
+
+    def test_an_absent_binary_is_an_audit_error(self):
+        import seam_audit
+
+        original = seam_audit.subprocess.run
+        seam_audit.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(
+            FileNotFoundError(2, "No such file or directory", "sg")
+        )
+        try:
+            with self.assertRaises(seam_audit.AuditError) as caught:
+                seam_audit.sg_binary()
+        finally:
+            seam_audit.subprocess.run = original
+        self.assertIn("ast-grep", str(caught.exception))
+
+
 class GateSemantics(unittest.TestCase):
     """The ratchet turns both ways, and the reasons file is load-bearing."""
 
