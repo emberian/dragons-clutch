@@ -33,12 +33,17 @@ const UNREAD: MarketLiabilityV1 = Object.freeze({ status: 'unread', reason: 'no 
 function bound(supplyAtoms: ReadonlyArray<string>): MarketLiabilityV1 {
   return Object.freeze({
     status: 'bound',
-    address: 'Ff'.repeat(22),
-    claimCount: String(supplyAtoms.length),
+    observedSlot: '490435916',
+    aggregateAddress: DEVNET_DEPLOYMENT_V1.programs.claims,
+    claimsProgramId: DEVNET_DEPLOYMENT_V1.programs.claims,
+    claimCount: supplyAtoms.length,
+    revision: '1',
+    generation: '2',
+    liabilityBasisId: 'aa'.repeat(32),
+    custodyContext: '99'.repeat(32),
     supplyAtoms: Object.freeze(supplyAtoms),
     requiredBackingAtoms: '0',
-    revision: '1',
-    observedSlot: '490435916',
+    requiredBackingBasis: Object.freeze({ kind: 'categorical', label: 'categorical' }),
   }) as unknown as MarketLiabilityV1;
 }
 

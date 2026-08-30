@@ -2,7 +2,7 @@
 
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useDeploymentV1 } from '@/lib/deploymentStore';
 
@@ -32,6 +32,8 @@ import RefusedMarketStory from '@/components/RefusedMarketStory';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
 import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
+import { watchSentenceV1 } from '@/lib/rpcSubscribe';
+import { useAccountWatchV1 } from '@/lib/useAccountWatch';
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -225,6 +227,32 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     };
   }, [read]);
 
+  // The live layer. Two accounts carry everything that can change under a
+  // reader on this page — the Market root and the Claims aggregate holding its
+  // liabilities — so those are the only two watched, and a market whose
+  // aggregate was not read watches only the root.
+  //
+  // A notification is never decoded here. It says "what you read is stale",
+  // and the answer is to run the SAME bounded finalized read the page already
+  // uses, so nothing on screen can come from a second, unaudited path. The
+  // re-read is delayed a moment because a transaction usually moves both
+  // accounts and a reader does not need two reads for one event.
+  const watched = decoded === null
+    ? [address]
+    : decoded.liability.status === 'bound'
+      ? [address, decoded.liability.aggregateAddress]
+      : [address];
+  const [changedAtSlot, setChangedAtSlot] = useState<string | null>(null);
+  const reread = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watchState = useAccountWatchV1(deployment.endpoint, watched, (change) => {
+    setChangedAtSlot(change.slot);
+    if (reread.current !== null) clearTimeout(reread.current);
+    reread.current = setTimeout(() => { void read(); }, 1_200);
+  });
+  useEffect(() => () => {
+    if (reread.current !== null) clearTimeout(reread.current);
+  }, []);
+
   const marketProvenance: MarketProvenanceV1 = card?.provenance
     ?? Object.freeze({ kind: 'refused', reason: 'This Market has not been read at any finalized floor yet.' });
   const realmProvenance = detail?.realmProvenance
@@ -271,6 +299,18 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
         <article><span>Capability source</span><strong>{state.detail.registryProgramId === null ? 'not selected' : shortAddressV1(state.detail.registryProgramId, 6)}</strong><small>{state.detail.registryProgramId === null ? 'manifest unread' : 'manifest authenticated by content'}</small></article>
       </div>}
       {clock !== null && <p className="slot-clock-note">{slotClockCaveatV1(clock)}</p>}
+      {/* The live layer, stated rather than implied. A reader is told whether
+          this page is watching, and an endpoint that cannot carry a
+          subscription is a fact about the connection — never about the
+          market, and never a reason to distrust what is already on screen. */}
+      <p className={watchState === 'unavailable' ? 'market-capability-refusal' : 'live-watch-note'} aria-live="polite">
+        {watchState === 'unavailable' && <span>not watching</span>}
+        {watchState === 'live' && <i className="live-watch-dot" />}
+        {watchSentenceV1(watchState, deployment.label)}
+        {changedAtSlot !== null && watchState === 'live'
+          ? ` It last changed at slot ${changedAtSlot}, and this page re-read it.`
+          : ''}
+      </p>
     </section>
 
     <section className="trade-v3-card">
