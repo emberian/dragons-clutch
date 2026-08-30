@@ -58,6 +58,9 @@ use crate::liability_basis_v2::{
     LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2, MarketViewV2,
     encode_liability_basis_market_v2, encode_liability_basis_position_v2, vector_width,
 };
+use dclutch_claims_svm::liability_basis_state_v2::{
+    put_liability_basis_market_bump_v2, put_liability_basis_position_bump_v2,
+};
 
 pub use dclutch_claims_svm::founding_v5::CLAIMS_FOUNDING_ACCOUNT_COUNT_V5;
 /// Exact request plus typed projected-Custody receipt instruction width.
@@ -338,6 +341,14 @@ struct FoundingCandidates {
     aggregate: Vec<u8>,
     position: Vec<u8>,
     admission: [u8; PROTOCOL_POSITION_ADMISSION_BYTES_V2],
+    /// The two PDA bumps this route both SIGNS with and RECORDS in the bodies.
+    ///
+    /// Derived once, in `build_candidates_boxed`, because the bump has to be in
+    /// the candidate before `build_receipt` hashes it and before `allocate_all`
+    /// signs with it -- and deriving it twice would put back one of the searches
+    /// persisting it exists to remove.
+    aggregate_bump: u8,
+    position_bump: u8,
 }
 
 struct DecodedFounding {
@@ -943,15 +954,39 @@ fn build_candidates_boxed(
     market: MarketViewV2,
     request_digest: [u8; 32],
 ) -> Result<Box<FoundingCandidates>, ProgramError> {
-    let (aggregate, position) = build_liability_candidates(accounts, request, market)?;
+    let (mut aggregate, mut position) = build_liability_candidates(accounts, request, market)?;
     let admission = build_admission_candidate(program_id, accounts, request)?;
     if request_digest == [0; 32] {
         return Err(ClaimsFoundingSbfErrorV5::Receipt.into());
     }
+    // Each account records the bump its own creator derived, so every later
+    // reader reproduces the address instead of searching for it. This is the
+    // ONLY derivation of either bump on this route: `allocate_all` signs with
+    // what is recorded here.
+    let aggregate_bump = Pubkey::find_program_address(
+        &ClaimsFoundingAggregateSeedsV5::new(request.market())
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Allocation)?
+            .as_slices(),
+        program_id,
+    )
+    .1;
+    let position_bump = Pubkey::find_program_address(
+        &ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), request.founder())
+            .map_err(|_| ClaimsFoundingSbfErrorV5::Allocation)?
+            .as_slices(),
+        program_id,
+    )
+    .1;
+    put_liability_basis_market_bump_v2(&mut aggregate, aggregate_bump)
+        .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
+    put_liability_basis_position_bump_v2(&mut position, position_bump)
+        .map_err(|_| ClaimsFoundingSbfErrorV5::ClaimsState)?;
     Ok(Box::new(FoundingCandidates {
         aggregate,
         position,
         admission,
+        aggregate_bump,
+        position_bump,
     }))
 }
 
@@ -1058,6 +1093,7 @@ fn allocate_all(
         accounts.system,
         candidates.aggregate.len(),
         &aggregate.as_slices(),
+        Some(candidates.aggregate_bump),
     )?;
     let position =
         ProtocolPositionSeedsV2::new(accounts.aggregate.key.to_bytes(), request.founder())
@@ -1068,6 +1104,7 @@ fn allocate_all(
         accounts.system,
         candidates.position.len(),
         &position.as_slices(),
+        Some(candidates.position_bump),
     )?;
     let admission =
         ProtocolPositionAdmissionSeedsV2::new(accounts.aggregate.key.to_bytes(), request.founder())
@@ -1078,6 +1115,9 @@ fn allocate_all(
         accounts.system,
         candidates.admission.len(),
         &admission.as_slices(),
+        // The admission record has no reserved byte to carry a bump, so it
+        // still searches. It is not on the hot route.
+        None,
     )
 }
 
@@ -1088,8 +1128,16 @@ fn allocate_one<'info>(
     system: &AccountInfo<'info>,
     width: usize,
     seeds: &[&[u8]],
+    // The bump already derived for this address, where the body records one.
+    // Signing with it rather than searching again is the same act: the runtime
+    // will only produce a signature for the address these seeds and this bump
+    // name, and the allocation is checked against the account it lands on.
+    derived: Option<u8>,
 ) -> Result<(), ProgramError> {
-    let bump = [Pubkey::find_program_address(seeds, program_id).1];
+    let bump = [match derived {
+        Some(bump) => bump,
+        None => Pubkey::find_program_address(seeds, program_id).1,
+    }];
     let mut signer = Vec::with_capacity(seeds.len() + 1);
     signer.extend_from_slice(seeds);
     signer.push(&bump);

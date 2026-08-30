@@ -176,6 +176,13 @@ pub(crate) fn execute_claims_route_v3<'info>(
         prior_receipt,
         receipt_kind.delivery(),
     )?;
+    if carries_caller_bump_suffix_v4(receipt_kind) {
+        buffers
+            .data
+            .try_reserve(1)
+            .map_err(|_| TradingSbfError::Content)?;
+        buffers.data.push(bump);
+    }
     let fractional_root = fractional_root_signer(
         program_id,
         receipt_kind,
@@ -292,10 +299,14 @@ pub(crate) fn claims_child_wire_capacity_v3(
 ) -> Result<usize, ProgramError> {
     let request = invocation_request(invocation, request_bank, family_request)?;
     let receipt_bytes = receipt_dependency_width_v3(invocation);
-    if receipt_bytes == 0 {
-        return Ok(request.len());
-    }
     let (_, receipt_kind) = route_authority(request, invocation.kind)?;
+    let bump_suffix = usize::from(carries_caller_bump_suffix_v4(receipt_kind));
+    if receipt_bytes == 0 {
+        return request
+            .len()
+            .checked_add(bump_suffix)
+            .ok_or_else(|| TradingSbfError::Content.into());
+    }
     let suffix = if receipt_kind.delivery() == ReceiptDeliveryV3::ExactSuffix {
         usize::try_from(receipt_bytes).map_err(|_| TradingSbfError::Content)?
     } else {
@@ -304,7 +315,26 @@ pub(crate) fn claims_child_wire_capacity_v3(
     request
         .len()
         .checked_add(suffix)
+        .and_then(|width| width.checked_add(bump_suffix))
         .ok_or_else(|| TradingSbfError::Content.into())
+}
+
+/// Whether this child route reads a caller-authority bump appended after its
+/// request.
+///
+/// ONE route does, and the restriction is not caution: the Claims dispatcher
+/// routes on a magic prefix, so an extra byte reaches every handler, and the
+/// five handlers that hash their WHOLE instruction data into the packet digest
+/// would refuse it (see [`ReceiptKindV3::delivery`], which records exactly that
+/// distinction for the receipt suffix). `sparse_native_transfer_v1` hashes the
+/// fixed-width request prefix only, and its
+/// `the_caller_authority_digest_covers_the_request_prefix_only` test is what
+/// keeps that true.
+///
+/// A second route joins this list by proving the same property in its own
+/// program, with its own named test -- never by being added here.
+const fn carries_caller_bump_suffix_v4(kind: ReceiptKindV3) -> bool {
+    matches!(kind, ReceiptKindV3::SparseNativeTransfer)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

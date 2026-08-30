@@ -25,6 +25,7 @@ pub use dclutch_claims_svm::protocol_position_v2::{
 };
 use dclutch_claims_svm::{
     composition_v3::validate_sparse_close_receipt_v3,
+    liability_basis_state_v2::put_liability_basis_position_bump_v2,
     sparse_native_transfer_v1::{
         SPARSE_NATIVE_TRANSFER_RECEIPT_BYTES_V1, SparseNativeTransferReceiptV1,
     },
@@ -456,7 +457,14 @@ fn process_admit(
         .to_receipt_bytes()
         .map_err(|_| ProtocolPositionSbfErrorV2::Receipt)?;
 
-    allocate_pair(program_id, accounts, request, position_width)?;
+    let position_bump = allocate_pair(program_id, accounts, request, position_width)?;
+    // The Position records the bump this act signed it into existence with, so
+    // every later reader reproduces its address instead of searching for it.
+    // The bump is only known after `allocate_pair` derives it, and the body is
+    // not committed until below, so this is the last moment it can be stamped.
+    let mut position_candidate = position_candidate;
+    put_liability_basis_position_bump_v2(&mut position_candidate, position_bump)
+        .map_err(|_| ProtocolPositionSbfErrorV2::Position)?;
     commit_admission(accounts.common, &position_candidate, &admission_candidate)?;
     if account_digest(accounts.common.market)? != market_digest {
         return Err(ProtocolPositionSbfErrorV2::Commit.into());
@@ -1133,12 +1141,14 @@ fn authenticate_admission(
     Ok(())
 }
 
+/// Allocate the Position and its admission record, returning the Position's own
+/// canonical bump so the caller can record it in the body it is about to write.
 fn allocate_pair(
     program_id: &Pubkey,
     accounts: AdmitAccounts<'_, '_>,
     request: ProtocolPositionRequestV2,
     position_width: usize,
-) -> Result<(), ProgramError> {
+) -> Result<u8, ProgramError> {
     let position_seeds = ProtocolPositionSeedsV2::new(
         accounts.common.market.key.to_bytes(),
         request.position_owner,
@@ -1176,7 +1186,9 @@ fn allocate_pair(
             admission_owner,
             &admission_bump,
         ],
-    )
+    )?;
+    let [bump] = position_bump;
+    Ok(bump)
 }
 
 fn allocate_and_assign<'info>(
