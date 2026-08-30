@@ -1426,3 +1426,112 @@ The two recipient fields are the entire attack surface — a cranker who could
 choose them would redirect a sleeping holder's collateral — so they are
 **derived, not accepted**, and naming the holder as recipient is refused
 outright, that being the holder's own redemption with the signature deleted.
+
+---
+
+## 16. What shipped, reconciled against what was planned
+
+Written when the feature was whole, so a reader inherits the truth rather than
+the plan. Every amendment, departure and named debt from §15, with its status
+and where it actually lives.
+
+### 16.1 The commits
+
+| commit | what |
+|---|---|
+| `a2ad25ed` | C1 — `ClaimCheckV1` (288 B), `ClaimCheckEscrowV1` (256 B), seeds, magics |
+| `dd63777c` | the two release constants and the argument for their being constants |
+| `23b6bb93` | C2 — both conservation plans |
+| `9854c583` | C3 — 17 refusal codes in sub-bands `0x5600` / `0x5620` |
+| `a526f808` | the open, redeem and escrow-close request wires |
+| `6490faff` | compaction's request: the terminal header carried verbatim |
+| `dbb41f3c` | §15, the six amendments, with their arithmetic |
+| `7b584743` | C4 — `OpenClaimCheckEscrow` |
+| `706a6f48` | C5+C6 — the crank, the payout, the supply debit, the close and the split |
+| `7f78f48a` | C7 — `RedeemClaimCheck` |
+| `b7688fe7` | C8 — `CloseClaimCheckEscrow` |
+| `748b5730` | C9 — the end-to-end campaign |
+| `dff38069` | C10 — the operator surface a holder uses |
+
+### 16.2 Every amendment, and whether it survived contact
+
+| § | amendment | shipped as |
+|---|---|---|
+| 15.1 | zero-atom claim-checks refused | **as written.** Enforced at the constructor, across the wire, and in conservation (`claim_check_rent == 0` iff `entitlement == 0`, both directions). Confirmed from the other side by `execute_terminal_custody_v3`, which no-ops on a zero payout. |
+| 15.2 | crank paid before opener | **as written.** `ClaimCheckCompactionPlanV1` orders rent → crank → opener → residue. C5's test asserts from chain state that the crank is paid, that the opener is *still owed*, and that the four credits exhaust the released rent exactly. |
+| 15.3 | aliased sinks fold by identity | **as written.** `fold_credit` sums credits per distinct address; a sink that is also a closing account is refused. |
+| 15.4 | §6.3's fee tolerance unreachable | **confirmed, and left in.** The observation discipline is implemented and costs nothing; the executor's exact equality still refuses fee mints first, so `entitlement == payout` always today. |
+| 15.5 | §14.3 verified, C0's better shape | **held.** No Custody change, no new dependency, one ELF. |
+| 15.6 | compaction embeds the terminal header verbatim | **as written**, and it is what makes C5's differential structural. |
+
+### 16.3 Two further departures, made during implementation
+
+**The vault is a Claims-derived PDA, not the escrow's associated token account
+(§4.2).** An ATA's address derives under the associated-token program, so this
+program cannot sign for it and cannot create it with the tree's own
+`allocate`/`assign` idiom — it would have to CPI a third-party program into a
+frame that otherwise needs none. Deriving it under `CLAIM_CHECK_VAULT_SEED_V1`
+keeps creation on the house pattern, keeps the open frame at twelve accounts,
+and makes the vault recoverable from the aggregate alone, which is exactly what
+a holder needs once the market is gone. §4.2's reasoning survives intact: its
+point was that the vault is an ordinary `External` token account rather than a
+new `CompartmentV1`, and it still is — Custody authenticates a destination by
+its mint and its *owner*, never by how its address was derived.
+
+**C5 and C6 landed as one commit.** The plan split them to gate value
+separately from lamports, but the claim-check's rent comes from the swept
+position, so splitting would have meant writing a cranker-funded path only to
+delete it. Both gates are present: the differential for value, the four-credit
+identity for lamports.
+
+### 16.4 The authority relaxation, stated plainly
+
+Compaction stands in for a signature the holder is not there to give, so it had
+to relax exactly one check without weakening it for anybody else.
+
+`ParentAuthorityV3::ClaimCheckCrank` asks coordinate 0 for a signature and
+nothing more — it is the cranker, who is anybody. "Coordinate 0 is a signer in
+every mode" stays literally true; only *whose* signature changes, which is the
+axis that enum already varied on, and every other role is refused the relaxation
+by an explicit match arm.
+
+The entitlement is not carried by that signature. It is proved before the mode
+can be selected: the deadline has elapsed under checked arithmetic, the
+recipient is **derived** from the market's own aggregate rather than accepted
+from the caller, and the claim-check address is vacant.
+
+Making the *escrow* PDA sign was considered and rejected: a PDA is a signer only
+when the current instruction arrived via `invoke_signed`, so a top-level
+compaction cannot make its own PDA sign to itself, and buying that would have
+cost a claims→claims self-CPI and its re-entrancy surface.
+
+One hole opens and is closed explicitly. The owner's signature was silently
+doing a **second** job the enum never named: proving the position is wallet-held,
+because a Trading record or Claims capability owner is a PDA and cannot sign.
+The route replaces that inference with the persisted
+`ProtocolPositionOwnerKindV2` tag, read off the admission record, refusing
+`ClaimsCapability` with `0x560A`.
+
+### 16.5 Debt, named rather than absolved
+
+- **§6.2's dust-tolerant close receipt is not written.** The settlement's own
+  receipt is the evidence today and conservation is already checked by the plan,
+  so this is an off-chain consumer's convenience rather than a safety gap. It
+  remains owed.
+- **R3 is narrowed, not closed**, exactly as §10 said it would be. Closed for
+  native positions; open for fractional ones, whose claimants are the holders of
+  a mint and cannot be represented by a one-owner claim-check.
+- **C9 does not drive `market_closure_v1`.** That is a property of the campaign's
+  fixture, not of the feature: its market carries Claims capability positions, so
+  retiring it needs the fractional route. What C9 proves is the R3 claim
+  precisely — after the crank the sleeping holder's position does not exist and
+  the supply it held is gone from the aggregate, so that holder is no longer a
+  reason retirement cannot proceed.
+- **C9 does not drive a real `protocol_position_v2::Admit`.** The campaign's own
+  test caller has no Admit forwarding; `sparse-chain-caller` does, in a different
+  crate with no resolved market. The admission record is planted with the
+  production codec, so the format keeps one author and compaction reads exactly
+  one field from it. The gauntlet already builds `dclutch-rent-sbf`, so what is
+  missing for whoever closes this is the caller verb, not the ELF.
+- **No web surface.** The operator crate carries the holder's path; the site
+  copy belongs to the lane that owns the site's voice.
