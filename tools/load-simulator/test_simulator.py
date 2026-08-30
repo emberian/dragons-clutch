@@ -376,6 +376,44 @@ class DeathHonestyTest(SimulatorHarness):
         self.assertLess(expected, dt.datetime.now(dt.timezone.utc), "the deadline never expires")
 
 
+class WalletRowTest(SimulatorHarness):
+    """Participant balances reach the status artifact without the endpoint
+    reaching the process table."""
+
+    def test_a_wallet_that_does_not_answer_is_null_and_never_zero(self) -> None:
+        (self.root / "steps-needed").write_text("1")
+        body = self.config()
+        # The loopback endpoint in the test config has nothing listening, so
+        # this exercises the real unreachable path rather than a mocked one.
+        body["wallets"] = [{"address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",
+                            "source": "staged"}]
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = json.loads((self.work / "status.json").read_text())["wallets"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["role"], "participant")
+        self.assertEqual(rows[0]["source"], "staged")
+        # Null, not zero. A fabricated zero would be a claim about the wallet.
+        self.assertIsNone(rows[0]["sol_lamports"])
+
+    def test_the_balance_read_puts_no_endpoint_on_a_command_line(self) -> None:
+        """It used to shell `solana balance --url <rpc_url>`, which shows the
+        credential to every `ps` on the machine for as long as the child
+        lives. Redacting the files we write while handing the key to the
+        process table is not a redaction story."""
+        source = (HERE / "simulator.py").read_text()
+        # The old argv literal, gone. (The name still appears once, in the
+        # docstring saying why it is gone; that is a comment, not a call.)
+        self.assertNotIn('"solana", "balance"', source)
+        self.assertIn("urllib.request.urlopen", source)
+        # And no child process is spawned for a balance at all.
+        import inspect
+        body = inspect.getsource(simulator.Simulator.wallet_balance)
+        self.assertNotIn("subprocess", body)
+        self.assertIn("urlopen", body)
+
+
 class StorageBoundTest(SimulatorHarness):
     """The first fault, end to end: the census directory that filled the
     machine's data volume and took every lane's shell down with it."""

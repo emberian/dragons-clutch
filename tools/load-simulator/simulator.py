@@ -33,10 +33,10 @@ import argparse
 import json
 import os
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 from typing import Any, Optional
+import urllib.request
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -404,22 +404,56 @@ class Simulator:
 
     # ---------- wallets for status ----------
 
+    def wallet_balance(self, address: str) -> Optional[int]:
+        """One participant's lamports, read over JSON-RPC directly.
+
+        NOT `solana balance --url <rpc_url>`, which is what this did before.
+        That put the live endpoint -- credential and all -- into a process
+        ARGUMENT LIST, where `ps` shows it to every user on the machine for as
+        long as the child lives.
+
+        BUT SAY THE WHOLE TRUTH, because half of it would be worse than none:
+        this does NOT mean the credential never reaches a command line. Every
+        successor driver takes `--rpc-url` (see `cluster_args`), so the census
+        child is handed it once per cycle and `mint-wallets` hands it to the
+        activity harness. That is inherent to the driver interface and is not
+        something this function can fix. What it fixes is the one spawn we did
+        not need: a balance read is four lines of JSON-RPC, so paying a CLI
+        exposure for it bought nothing. Fewer processes carry the key, for
+        less of the time; the exposure is narrowed, not closed. Closing it
+        would mean the drivers reading the endpoint from the environment or a
+        mode-0600 file instead of argv, which is a change to their interface
+        and belongs to whoever owns it.
+
+        A balance that does not answer is recorded as null, never as zero: the
+        page renders "did not answer" and a fabricated zero would be a claim
+        about someone's wallet.
+        """
+        payload = json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "getBalance", "params": [address],
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            self.config["cluster"]["rpc_url"], data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except (OSError, ValueError):
+            return None
+        value = (body.get("result") or {}).get("value")
+        return value if isinstance(value, int) and value >= 0 else None
+
     def wallet_rows(self) -> list:
-        rows = []
-        for w in self.config.get("wallets", []):
-            row = {"address": w["address"], "role": "participant", "source": w.get("source", "staged")}
-            try:
-                proc = subprocess.run(
-                    ["solana", "balance", "--lamports", "--url",
-                     self.config["cluster"]["rpc_url"], w["address"]],
-                    stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False,
-                )
-                first = (proc.stdout or b"").decode().split()
-                row["sol_lamports"] = int(first[0]) if first and first[0].isdigit() else None
-            except (OSError, subprocess.TimeoutExpired, ValueError):
-                row["sol_lamports"] = None
-            rows.append(row)
-        return rows
+        return [
+            {
+                "address": w["address"],
+                "role": "participant",
+                "source": w.get("source", "staged"),
+                "sol_lamports": self.wallet_balance(w["address"]),
+            }
+            for w in self.config.get("wallets", [])
+        ]
 
     # ---------- the loop ----------
 
