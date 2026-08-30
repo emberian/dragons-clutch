@@ -9,6 +9,7 @@
 //! The vector tail is borrowed, exact-width, and never allocated.
 
 pub mod affine_batch_v2;
+pub mod claim_check_compaction_request_v1;
 pub mod claim_check_conservation_v1;
 pub mod claim_check_request_v1;
 pub mod claim_check_v1;
