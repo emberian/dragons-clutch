@@ -85,6 +85,17 @@ payout routes gate on `CorePhaseGateV3::TerminalOrRetiring`
 (`programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs:412`;
 `rational_terminal_v3.rs:266`).
 
+**And the gate that would otherwise block retirement is clear for exactly the
+reason these markets are stuck.** Both `retire` (`generated.rs:1179-1181`) and
+Claims' market closure
+(`programs/dclutch-claims-sbf/src/market_closure_v1.rs:591`) refuse unless
+`outstanding_capabilities == 0`. That counter is incremented in **one place
+only** — `activate_capability`, `generated.rs:1081-1084`, itself gated on
+`Phase::Open` — and decremented by `close_capability_child` (`:1109-1112`). The
+markets never activated a capability, so the counter has stood at its founding
+zero (`:832`) since the day they were founded. **The failure that makes them
+untradeable is the same fact that leaves their retirement path unobstructed.**
+
 **And the claims pay out at par whichever outcome wins.** The founder Position
 holds 500,000,000 claims at *each* of four outcomes
 (`TRADE_FLAGSHIP_FIRST_AUDIT_2026_08_30.md:20-23`) — a complete set, against a
@@ -92,6 +103,46 @@ fully collateralized Hoard. A complete set is the one holding whose value does
 not depend on the winner. Retirement's own precondition, an economically empty
 market (`generated.rs:1183-1189`), is reachable precisely because redeeming that
 set drains the Hoard exactly.
+
+**Resolution is the *only* way out, because the in-`Open` merge is dead code.**
+It is worth stating what does *not* work, since a reader will reach for it
+first. A complete set looks like it should be mergeable back to collateral
+without knowing the winner, and the economics kernel agrees — `admit_basket_phase`
+explicitly admits `MergeCompleteSet` in `Phase::Open`
+(`crates/dclutch-economic-slice-kernel/src/lib.rs:675-690`). It is unreachable
+anyway, for three reasons that have nothing to do with these markets being
+stuck:
+
+- **It addresses accounts that do not exist.** The generic `DCLTCPK1` route
+  derives the aggregate under `b"dclutch:claims-aggregate:v1"`
+  (`crates/dclutch-claims-svm/src/lib.rs:49`), while a market founded through
+  the live path holds LiabilityBasisV2 state under `b"dclutch:lbv2:market"`
+  (`crates/dclutch-claims-svm/src/founding_v5.rs:27`). The identity check
+  refuses first — `claims_aggregate.key != &expected_aggregate` →
+  `ClaimsSbfError::Identity` (`programs/dclutch-claims-sbf/src/lib.rs:1196-1203`).
+- **Nothing on chain emits it.** The route's authority must be a
+  `CallerAuthoritySeedsV1` PDA under an activated role program
+  (`lib.rs:1000-1006`), so no wallet can sign it — and the dispatcher's own
+  comment names three consumers of which one builds only the *mint* direction,
+  one does not exist, and one emits other actions
+  (`lib.rs:364-372`).
+- **It would move no collateral if it ran.** Its 13-account frame carries no
+  Custody program and no vault; the "payout" is written into a receipt field,
+  not transferred.
+
+So the single Hoard→External path in Claims is `execute_terminal_custody_v3`
+(`rational_terminal_v3.rs:332-349`), reachable only from the two
+`TerminalOrRetiring` routes; and the one Open-phase merge-out that does move
+collateral, `programs/dclutch-trading-sbf/src/direct/complementary.rs:801-813`,
+needs the live capability root these markets can never have. **Terminal
+admission is not merely the cheapest route out — it is the only one.**
+
+A small honesty note that follows from this: the web portfolio reports
+`kind: 'mergeable'` for any Open market with a complete set
+(`apps/dclutch-web/lib/portfolio.ts:150-155`). Its own text is careful —
+*"This is arithmetic on these balances, not an offer"* — and it is accurate as
+arithmetic, but on these two markets it names an operation the protocol cannot
+perform. Worth a word when option C's bucket is built.
 
 ## 4. What is genuinely absent
 
@@ -162,8 +213,11 @@ already-spent devnet rent — the wrong trade, and one that cannot be undone.
 **Ember may reasonably rule the other way**, and if the answer is B, the
 argument is hygiene: leaving fully collateralized principal parked in a market
 nobody will ever trade is a standing untidiness, and demonstrating the full
-lifecycle end-to-end on a real public market has its own demo value. That is a
-genuine values call and it is the one this record exists to put.
+lifecycle end-to-end on a real public market has its own demo value. **And
+there is no middle setting** — §3 shows the only collateral egress is the full
+resolve-then-redeem sequence, so "recover the principal but keep the market
+readable" is not on the menu. That is a genuine values call and it is the one
+this record exists to put.
 
 **Refuse D.** A sixth phase is the most expensive way to say something the
 market's own accounts already prove. "Permanently untradeable" is a fact
