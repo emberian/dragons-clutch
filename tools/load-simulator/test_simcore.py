@@ -8,6 +8,7 @@ refusal when the plan changed, halts are durable, status writes are atomic.
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib.util
 import json
 from pathlib import Path
@@ -187,6 +188,296 @@ class HaltTest(unittest.TestCase):
             # A deliberate human removal re-arms the work dir.
             (work / "HALT.json").unlink()
             simcore.refuse_if_halted(work)  # no raise
+
+
+# The real thing: one observation the live market18 devnet census wrote, kept
+# byte for byte.  Retention re-serializes observations, so what it has to
+# round-trip is the actual encoding of the actual tool, not a hand-written
+# approximation of it.
+REAL_OBSERVATION = Path(__file__).resolve().parent / "testdata" / "market18-census-observation.json"
+
+
+def cumulative_series(count: int, per_observation_padding: int = 3800) -> list:
+    """A census series shaped like the real one: element N is an observation,
+    and the FILE at cycle N holds elements 1..N."""
+    return [
+        {"stage": f"load-sim-cycle-{index:06d}", "slot": 1000 + index,
+         "verdicts": [{"law": "L5", "status": "holds", "detail": "x" * per_observation_padding}]}
+        for index in range(1, count + 1)
+    ]
+
+
+class CensusRetentionTest(unittest.TestCase):
+    """The fault that filled the machine's data volume on 2026-08-30, and the
+    bound that replaces it."""
+
+    def write_series(self, census: Path, cycle: int, series: list) -> Path:
+        census.mkdir(parents=True, exist_ok=True)
+        path = census / f"cycle-{cycle:06d}.json"
+        path.write_bytes(simcore.CensusRetention.serialize(series))
+        return path
+
+    def test_the_real_encoding_round_trips_byte_for_byte(self) -> None:
+        """Truncation drops whole ELEMENTS and never edits one.  That claim is
+        only worth anything if re-serializing what is kept reproduces the
+        census tool's own bytes, so it is checked against them."""
+        raw = REAL_OBSERVATION.read_bytes()
+        self.assertEqual(simcore.CensusRetention.serialize(json.loads(raw)), raw)
+
+    def test_growth_is_quadratic_before_and_constant_after(self) -> None:
+        """The measured fault, reproduced, then bounded -- with numbers."""
+        window, keep = 20, 2
+        retention = simcore.CensusRetention(window=window, keep_files=keep)
+        with tempfile.TemporaryDirectory() as tmp:
+            unbounded = Path(tmp) / "unbounded"
+            bounded = Path(tmp) / "bounded"
+            cycles = 60
+            for cycle in range(1, cycles + 1):
+                self.write_series(unbounded, cycle, cumulative_series(cycle))
+                self.write_series(bounded, cycle, cumulative_series(cycle))
+                report = retention.apply(bounded)
+
+            unbounded_bytes = sum(p.stat().st_size for p in unbounded.glob("cycle-*.json"))
+            bounded_bytes = sum(p.stat().st_size for p in bounded.glob("cycle-*.json"))
+
+            # Unbounded really is the sum of its own history.
+            self.assertEqual(len(list(unbounded.glob("cycle-*.json"))), cycles)
+            self.assertGreater(unbounded_bytes, 20 * bounded_bytes)
+
+            # Bounded holds exactly what it says it holds.
+            self.assertEqual(report["files"], keep)
+            self.assertEqual(report["observations"], window)
+            self.assertEqual(bounded_bytes, report["bytes_on_disk"])
+            self.assertLessEqual(bounded_bytes, report["bytes_bound"])
+            self.assertEqual(
+                report["bytes_bound"], keep * window * report["bytes_per_observation"]
+            )
+
+    def test_the_bound_stops_growing_while_the_run_does_not(self) -> None:
+        """A ceiling that only holds for a while is not a ceiling: disk after
+        the window fills is identical to disk three times further on."""
+        retention = simcore.CensusRetention(window=10, keep_files=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            census = Path(tmp) / "census"
+            sizes = {}
+            for cycle in range(1, 91):
+                self.write_series(census, cycle, cumulative_series(cycle))
+                retention.apply(census)
+                sizes[cycle] = sum(p.stat().st_size for p in census.glob("cycle-*.json"))
+            self.assertEqual(sizes[30], sizes[90])
+            self.assertEqual(sizes[30], sizes[60])
+
+    def test_the_newest_file_is_still_the_whole_window_a_reader_needs(self) -> None:
+        """The property `scripts/simulator-series.mjs` mines: the newest file
+        alone is the series, newest observation last."""
+        retention = simcore.CensusRetention(window=5, keep_files=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            census = Path(tmp) / "census"
+            for cycle in range(1, 13):
+                self.write_series(census, cycle, cumulative_series(cycle))
+                retention.apply(census)
+            files = simcore.CensusRetention.series_files(census)
+            self.assertEqual([p.name for p in files], ["cycle-000012.json"])
+            kept = json.loads(files[-1].read_bytes())
+            self.assertEqual(
+                [entry["stage"] for entry in kept],
+                [f"load-sim-cycle-{i:06d}" for i in range(8, 13)],
+            )
+
+    def test_the_one_observation_every_law_reads_survives_exactly(self) -> None:
+        """Losslessness is not a hope about the ledger: L2/L5/L6/L7 each read
+        `observations.last()` and nothing reads the prefix, so what truncation
+        must preserve is the final element, unedited."""
+        retention = simcore.CensusRetention(window=3, keep_files=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            census = Path(tmp) / "census"
+            full = cumulative_series(40)
+            path = self.write_series(census, 40, full)
+            retention.apply(census)
+            kept = json.loads(path.read_bytes())
+            self.assertEqual(kept[-1], full[-1])
+            self.assertEqual(kept, full[-3:])
+
+    def test_an_unbounded_directory_is_repaired_in_one_pass(self) -> None:
+        """Pointed at the 123-file directory the dead run left behind, it
+        reclaims rather than only preventing."""
+        retention = simcore.CensusRetention(window=8, keep_files=2)
+        with tempfile.TemporaryDirectory() as tmp:
+            census = Path(tmp) / "census"
+            for cycle in range(1, 124):
+                self.write_series(census, cycle, cumulative_series(cycle))
+            before = sum(p.stat().st_size for p in census.glob("cycle-*.json"))
+            report = retention.apply(census)
+            after = sum(p.stat().st_size for p in census.glob("cycle-*.json"))
+            self.assertEqual(report["removed_files"], 121)
+            self.assertEqual(report["files"], 2)
+            # Reclaims better than 98% of what the unbounded run was holding.
+            self.assertLess(after, before // 50)
+
+    def test_a_census_that_is_not_a_series_refuses_rather_than_skipping(self) -> None:
+        """A bound that quietly does nothing when the shape surprises it is not
+        a bound."""
+        with tempfile.TemporaryDirectory() as tmp:
+            census = Path(tmp) / "census"
+            census.mkdir()
+            (census / "cycle-000001.json").write_text('{"schema":"not-a-series"}')
+            with self.assertRaises(ValueError):
+                simcore.CensusRetention().apply(census)
+
+    def test_an_empty_directory_reports_zero_rather_than_guessing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = simcore.CensusRetention().apply(Path(tmp) / "census")
+            self.assertEqual(report["files"], 0)
+            self.assertIsNone(report["bytes_bound"])
+
+
+class HeartbeatTest(unittest.TestCase):
+    """The artifact says when it expects to have written again, so a reader
+    needs no rule of thumb about a cadence they cannot see."""
+
+    def writer(self, path: Path, **kwargs) -> simcore.StatusWriter:
+        defaults = dict(
+            path=path, cluster_label="devnet", rpc_url="https://devnet.example.com/",
+            mode="sustain", cadence_seconds=20.0, jitter_fraction=0.25, grace_seconds=300.0,
+        )
+        defaults.update(kwargs)
+        return simcore.StatusWriter(**defaults)
+
+    def status(self, writer: simcore.StatusWriter, **kwargs) -> dict:
+        return writer.write(
+            cycles_run=1, cycles_target=None, trades_landed=0, signatures=[], wallets=[],
+            last_reconciliation=None, **kwargs,
+        )
+
+    def test_the_deadline_is_derived_from_the_cadence_it_actually_keeps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self.status(self.writer(Path(tmp) / "status.json"))
+            beat = body["heartbeat"]
+            self.assertEqual(beat["budget_seconds"], 20.0 * 1.25 + 0.0 + 300.0)
+            span = (
+                dt.datetime.fromisoformat(beat["expected_next_update_by"])
+                - dt.datetime.fromisoformat(body["updated_at"])
+            ).total_seconds()
+            self.assertEqual(span, beat["budget_seconds"])
+
+    def test_a_throttled_run_widens_its_own_deadline_by_exactly_the_backoff(self) -> None:
+        """A run backing off 120s under 429s is late for a reason it knows, so
+        it says so rather than being read as dead."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "status.json"
+            calm = self.status(self.writer(path))["heartbeat"]
+            throttled = self.status(self.writer(path), backoff_seconds=120.0)["heartbeat"]
+            self.assertEqual(
+                throttled["budget_seconds"] - calm["budget_seconds"], 120.0
+            )
+
+    def test_the_dead_runs_own_artifact_would_have_been_caught_by_itself(self) -> None:
+        """The regression, stated as the case that happened: killed mid-cycle
+        at 16:50:41Z, still reading `halted: false` at 17:07 when the wave
+        noticed.  With the stamp, the file itself is past its deadline."""
+        with tempfile.TemporaryDirectory() as tmp:
+            body = self.status(self.writer(Path(tmp) / "status.json"))
+            self.assertFalse(body["halted"])
+            deadline = dt.datetime.fromisoformat(body["heartbeat"]["expected_next_update_by"])
+            sixteen_minutes_on = (
+                dt.datetime.fromisoformat(body["updated_at"]) + dt.timedelta(minutes=16)
+            )
+            self.assertLess(deadline, sixteen_minutes_on)
+
+
+class ExitRecordTest(unittest.TestCase):
+    def test_an_ending_it_can_observe_is_written_down(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            simcore.record_exit(work, simcore.EXIT_SIGNALLED, detail="SIGTERM", cycles_run=7)
+            body = json.loads((work / "EXIT.json").read_text())
+            self.assertEqual(body["schema"], simcore.SCHEMA_EXIT)
+            self.assertEqual(body["outcome"], simcore.EXIT_SIGNALLED)
+            self.assertEqual(body["cycles_run"], 7)
+
+    def test_a_previous_runs_record_is_cleared_so_absence_stays_a_live_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            simcore.record_exit(work, simcore.EXIT_COMPLETED)
+            simcore.clear_exit_record(work)
+            self.assertFalse((work / "EXIT.json").exists())
+            simcore.clear_exit_record(work)  # idempotent: no raise
+
+    def test_a_halt_record_and_an_exit_record_say_different_things(self) -> None:
+        """HALT.json is about the LEDGER and refuses a restart; EXIT.json is
+        about the PROCESS and never does."""
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            simcore.record_exit(work, simcore.EXIT_CRASHED, detail="boom")
+            simcore.refuse_if_halted(work)  # no raise
+
+
+class DiskFloorTest(unittest.TestCase):
+    def test_room_reads_as_room(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(simcore.DiskFloor(floor_bytes=1).check(Path(tmp)))
+
+    def test_a_floor_breach_names_its_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            floor = simcore.DiskFloor(floor_bytes=1 << 62)
+            sentence = floor.check(Path(tmp))
+            self.assertIsNotNone(sentence)
+            self.assertIn(str(1 << 62), sentence)
+            self.assertIn("stopping between cycles", sentence)
+
+
+class CommandRedactionTest(unittest.TestCase):
+    """d17aa1a4 took the provider key out of status.json and the cycle plan.
+    It did not reach HALT.json, which quotes the failing command -- and the
+    command is `--rpc-url https://…?api-key=<the live key>`."""
+
+    KEY = "abc123SECRET"
+    URL = f"https://devnet.helius-rpc.com/?api-key={KEY}"
+
+    def test_a_recorded_command_line_carries_no_credential(self) -> None:
+        line = simcore.redact_command(
+            ["/bin/boot", "ledger-census", "--rpc-url", self.URL, "--stage", "cycle-1"]
+        )
+        self.assertNotIn(self.KEY, line)
+        self.assertIn("devnet.helius-rpc.com", line)
+        self.assertIn("--stage cycle-1", line)
+
+    def test_free_text_from_a_child_or_an_exception_is_scrubbed_too(self) -> None:
+        scrubbed = simcore.redact_text(f"connection refused talking to {self.URL} after 3 tries")
+        self.assertNotIn(self.KEY, scrubbed)
+        self.assertIn("after 3 tries", scrubbed)
+
+    def test_the_halt_record_itself_refuses_to_store_it(self) -> None:
+        """Redaction at the point of STORAGE, so no future caller can forget."""
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            with self.assertRaises(simcore.Halt):
+                simcore.halt_loudly(
+                    work,
+                    f"census refused against {self.URL}",
+                    {"command": f"/bin/boot ledger-census --rpc-url {self.URL}", "exit_code": 4},
+                )
+            self.assertNotIn(self.KEY, (work / "HALT.json").read_text())
+
+    def test_the_exit_record_refuses_to_store_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            simcore.record_exit(work, simcore.EXIT_CRASHED, detail=f"OSError talking to {self.URL}")
+            self.assertNotIn(self.KEY, (work / "EXIT.json").read_text())
+
+    def test_a_status_artifact_still_carries_none_of_it(self) -> None:
+        """The file /pulse renders, checked whole rather than field by field."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "status.json"
+            writer = simcore.StatusWriter(
+                path=path, cluster_label="devnet", rpc_url=self.URL, mode="sustain",
+                cadence_seconds=20.0,
+            )
+            writer.write(
+                cycles_run=1, cycles_target=None, trades_landed=0, signatures=[],
+                wallets=[], last_reconciliation=None,
+            )
+            self.assertNotIn(self.KEY, path.read_text())
 
 
 if __name__ == "__main__":

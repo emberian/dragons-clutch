@@ -28,6 +28,16 @@
 // census does not carry, so the two are joined on the cycle number parsed from
 // the observation's stage name.
 //
+// AND THE ONE THING THAT ARRAY IS NOT. It is not a count of the run. Carrying
+// every observation forever cost the directory O(N²) — 28 MB by cycle 123, and
+// on 2026-08-30 it filled the machine's data volume and killed the run — so
+// the simulator now holds that array to a fixed window
+// (tools/load-simulator/simcore.py CensusRetention). The newest file is still
+// the whole series this script draws; it stops being the whole HISTORY. The
+// run's true cycle count therefore comes from status.json, which has always
+// known it, and `points_omitted_before` is measured against that rather than
+// against a window reporting its own length back as the total.
+//
 // EXACTNESS. Every quantity crosses into the artifact as a decimal string, the
 // way atoms already do everywhere in this app. Only the drawing turns them into
 // floats, and only in the browser.
@@ -140,6 +150,12 @@ function main() {
   });
 
   const kept = all.slice(-keep);
+  // The run's own count of itself, when it is at least what the census still
+  // holds. A windowed census can only ever UNDERSTATE how many cycles ran, so
+  // the larger of the two is the honest number and never an invented one.
+  const cyclesRun = typeof status.cycles?.run === 'number' && Number.isSafeInteger(status.cycles.run)
+    ? Math.max(status.cycles.run, all.length)
+    : all.length;
   const outcomeCount = kept.length === 0 ? 0 : kept[kept.length - 1].supply.length;
   for (const point of kept) {
     if (point.supply.length !== outcomeCount) {
@@ -193,8 +209,8 @@ function main() {
     market: status.market?.address ?? null,
     mode: status.mode,
     outcome_count: outcomeCount,
-    cycles_recorded: all.length,
-    points_omitted_before: all.length - kept.length,
+    cycles_recorded: cyclesRun,
+    points_omitted_before: cyclesRun - kept.length,
     census_file: path.basename(censusPath),
     points: kept,
   };
@@ -235,7 +251,7 @@ function main() {
 
   const first = kept[0];
   const last = kept[kept.length - 1];
-  console.log(`simulator-series: ${kept.length} of ${all.length} cycles kept, cycle ${first.cycle} to ${last.cycle}`);
+  console.log(`simulator-series: ${kept.length} of ${cyclesRun} cycles kept, cycle ${first.cycle} to ${last.cycle}`);
   console.log(`simulator-series: slot ${first.slot} to ${last.slot}, ${outcomeCount} outcomes, ${status.trades?.landed ?? '?'} trades landed`);
   const moved = ['slot', 'hoard_atoms', 'tracked_collateral']
     .filter((field) => new Set(kept.map((point) => point[field])).size > 1);

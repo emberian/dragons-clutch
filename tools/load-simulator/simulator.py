@@ -119,16 +119,33 @@ class Simulator:
         self.journal_root = self.work / "journal"
         self.stop = simcore.StopFlag()
         cadence = config.get("cadence", {})
+        period_seconds = float(cadence.get("period_seconds", 8.0))
+        jitter_fraction = float(cadence.get("jitter_fraction", 0.25))
         self.rate = simcore.RateController(
-            period_seconds=float(cadence.get("period_seconds", 8.0)),
-            jitter_fraction=float(cadence.get("jitter_fraction", 0.25)),
+            period_seconds=period_seconds,
+            jitter_fraction=jitter_fraction,
         )
+        # The status artifact carries the deadline by which a living run must
+        # have written again, so it is handed the same cadence the loop keeps
+        # rather than a number a reader has to guess at.
         self.status = simcore.StatusWriter(
             path=self.work / "status.json",
             cluster_label=config["cluster"]["label"],
             rpc_url=config["cluster"]["rpc_url"],
             mode="sustain" if sustain else "finite",
             market_address=config.get("market_address"),
+            cadence_seconds=period_seconds,
+            jitter_fraction=jitter_fraction,
+            grace_seconds=float(cadence.get("grace_seconds", 300.0)),
+        )
+        retention = config.get("census_retention", {})
+        self.retention = simcore.CensusRetention(
+            window=int(retention.get("window", simcore.DEFAULT_CENSUS_WINDOW)),
+            keep_files=int(retention.get("keep_files", simcore.DEFAULT_CENSUS_KEEP_FILES)),
+        )
+        self.retention_report: Optional[dict] = None
+        self.disk = simcore.DiskFloor(
+            floor_bytes=int(retention.get("disk_floor_bytes", simcore.DEFAULT_DISK_FLOOR_BYTES)),
         )
         self.signatures: list = []
         self.trades_landed = 0
@@ -371,10 +388,18 @@ class Simulator:
                 {
                     "exit_code": proc.returncode,
                     "log": str(self.work / "logs" / f"census-{cycle:06d}.log"),
-                    "command": shlex.join(str(a) for a in argv),
+                    # NOT shlex.join of the raw argv: it holds
+                    # `--rpc-url https://…?api-key=<the live key>`.
+                    "command": simcore.redact_command(argv),
                 },
             )
         self.prior_census = out
+        # Bound the series before the next cycle reads it back as `--prior`.
+        # Superseded files are strict prefixes of this one and the window drop
+        # is lossless for every conservation law (see CensusRetention), so the
+        # newest file stays the whole series a reader needs while the
+        # directory stops growing as the sum of its own history.
+        self.retention_report = self.retention.apply(out.parent)
         return {"ok": True, "checked_at": simcore.utc_now_iso(), "output": str(out)}
 
     # ---------- wallets for status ----------
@@ -433,13 +458,47 @@ class Simulator:
             halted=halted,
             halt_reason=halt_reason,
             stopping=stopping,
-            # Said out loud so a reader never has to infer "zero trades" from
-            # an empty list: this run is not attempting any.
-            extra={"trades_attempted": not self.census_only},
+            backoff_seconds=self.rate.current_backoff,
+            extra={
+                # Said out loud so a reader never has to infer "zero trades"
+                # from an empty list: this run is not attempting any.
+                "trades_attempted": not self.census_only,
+                # The storage this run is actually holding, and the ceiling it
+                # cannot pass, both as numbers. A bound nobody can read is not
+                # a bound, and this one is the fault that took the machine
+                # down on 2026-08-30.
+                "census_retention": self.retention_report,
+            },
         )
 
     def run(self) -> int:
+        """The loop, wrapped so that every ending this process can observe is
+        written down.  `record_exit` in the `finally` is the honest half of
+        the halt discipline: HALT.json means the LEDGER diverged and a human
+        must clear it, EXIT.json means the PROCESS ended and says how.  The
+        endings it cannot observe -- SIGKILL, ENOSPC on its own write -- leave
+        no record at all, on purpose, and are read off the heartbeat deadline
+        the status artifact stamps."""
+        # Before anything is cleared: a work dir already halted refuses to
+        # start, and that refusal must not erase the previous run's record of
+        # how it ended -- the two together are the whole story a reader needs.
         simcore.refuse_if_halted(self.work)
+        simcore.clear_exit_record(self.work)
+        outcome, detail, code = simcore.EXIT_CRASHED, None, 1
+        cycles_run = 0
+        try:
+            code, outcome, detail, cycles_run = self._run_cycles()
+            return code
+        except BaseException as error:  # noqa: BLE001 - recorded, then re-raised
+            outcome = simcore.EXIT_CRASHED
+            detail = f"{type(error).__name__}: {error}"
+            raise
+        finally:
+            simcore.record_exit(
+                self.work, outcome, detail=detail, cycles_run=cycles_run, exit_code=code,
+            )
+
+    def _run_cycles(self):
         self.stop.install()
         self.ensure_admissions()
         cycles_run = 0
@@ -450,6 +509,14 @@ class Simulator:
                 break
             if self.cycles_target is not None and cycle > self.cycles_target:
                 break
+            # Checked BETWEEN cycles, where stopping is still a choice. A
+            # writer that discovers the volume is full mid-write cannot record
+            # anything, which is exactly how this run died on 2026-08-30.
+            low_disk = self.disk.check(self.work)
+            if low_disk is not None:
+                print(f"stopping: {low_disk}", file=sys.stderr)
+                self.write_status(cycles_run, recon, stopping=True)
+                return 4, simcore.EXIT_LOW_DISK, low_disk, cycles_run
             plan = self.cycle_plan(cycle)
             journal = simcore.CycleJournal.open(self.journal_root, cycle)
             existing = journal.assert_same_plan_or_absent(plan)
@@ -495,7 +562,7 @@ class Simulator:
                 self.rate.on_clean_cycle()
                 if not self.execute:
                     print(f"preflight completed for cycle {cycle}; rerun with --execute")
-                    return 0
+                    return 0, simcore.EXIT_PREFLIGHT, "preflight signed nothing", cycles_run
                 cycle += 1
                 if self.stop.requested:
                     break
@@ -515,11 +582,16 @@ class Simulator:
                 journal.record(simcore.PHASE_HALTED, plan, reason=str(halt))
                 self.write_status(cycles_run, recon, halted=True, halt_reason=str(halt))
                 print(f"HALTED: {halt}", file=sys.stderr)
-                return 3
+                return 3, simcore.EXIT_HALTED, str(halt), cycles_run
         self.write_status(cycles_run, recon, stopping=False)
         if self.stop.requested:
             print(f"stopped cleanly on {self.stop.signal_name}; journals sealed at cycle {cycles_run}")
-        return 0
+            return 0, simcore.EXIT_SIGNALLED, (
+                f"finished the in-flight cycle on {self.stop.signal_name} and sealed its journal"
+            ), cycles_run
+        return 0, simcore.EXIT_COMPLETED, (
+            f"ran the {cycles_run} cycle(s) it was asked for"
+        ), cycles_run
 
 
 class BackpressureSignal(RuntimeError):
