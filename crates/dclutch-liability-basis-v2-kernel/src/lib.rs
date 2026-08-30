@@ -11,7 +11,6 @@
 use core::convert::TryInto;
 
 /// Content-bound Product admission and pure Claims transition candidates.
-pub mod product_claims;
 
 /// Degree-one through degree-three B-spline liability bases.
 pub mod spline;
