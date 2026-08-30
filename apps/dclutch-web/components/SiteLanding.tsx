@@ -53,14 +53,21 @@ export default function SiteLanding() {
     </section>
 
     <section className="trade-v3-card">
-      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it; a zero means we read a zero.</p></div></header>
+      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it; a zero means we read a zero. Where a total would have to span two different tokens you get both of them, each in its own units, because one figure covering both would be in no unit at all.</p></div></header>
       {/* FE-CHART mount: LandingPulse reads the counts from the active
           deployment and feeds the presentational NumberStrip. */}
       <LandingPulse />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>The app</h2><p>It opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed; anything that still needs an open market will tell you plainly that there is not one yet, instead of failing quietly.</p></div></header>
+      {/* The second dated sentence on this page, and it dated the same way the
+          aside did: it went on saying no market was open after one was. It
+          reads the same published cut, so opening a market is still one
+          fixture edit and the front door still stops claiming otherwise. */}
+      <header><span>01</span><div><h2>The app</h2><p>It opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed;{' '}
+        {PUBLIC_DEVNET_CUT_V1.market === null
+          ? <>anything that still needs an open market will tell you plainly that there is not one yet, instead of failing quietly.</>
+          : <>every surface tells you plainly what it could and could not read off the chain, instead of failing quietly.</>}</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/live">Launch story →</Anchor>
         <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>

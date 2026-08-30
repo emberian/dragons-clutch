@@ -34,6 +34,15 @@ describe('the front door, once a market is open', () => {
     expect(html).toContain(`/market?address=${MARKET}`);
   });
 
+  it('stops saying the app will tell you there is no open market, once there is one', () => {
+    // The aside was not the only dated sentence on this page. "Anything that
+    // still needs an open market will tell you plainly that there is not one
+    // yet" was written before there was one, and would have gone on saying it.
+    expect(html).toContain('The seven programs are deployed');
+    expect(html).not.toContain('will tell you plainly that there is not one yet');
+    expect(html).toContain('what it could and could not read off the chain');
+  });
+
   it('keeps the part that is still true on devnet', () => {
     // An open market does not make devnet tokens worth anything. This is the
     // sentence that must survive the market opening, not be swept out with it.
