@@ -2360,14 +2360,25 @@ fn prepare_public_facts_v1(
         &market_input.linked_basis_hex,
         "linked liability basis",
     )?)?;
-    if product_digest != aggregate_view.product_instance_id
+    // The aggregate stores the SEMANTIC product identity (the market input's
+    // product_id, which the product record embeds); product_digest is the
+    // record-content digest and belongs to the hot context, where the chain
+    // itself compares it against the live record bytes.
+    if hex32(&market_input.product_id)? != aggregate_view.product_instance_id
         || realm_digest != aggregate_view.realm_id
         || linked_basis_semantic != hex32(&market_input.liability_basis_id)?
         || aggregate_view.basis_id != linked_basis_semantic
     {
-        return Err(refusal(
-            "Direct Product/Realm/semantic-basis/linked-basis closure changed",
-        ));
+        return Err(refusal(format!(
+            "Direct Product/Realm/semantic-basis/linked-basis closure changed (product {} vs aggregate {}, realm {} vs {}, semantic {} vs input {}, aggregate basis {})",
+            market_input.product_id,
+            hex_encode_v1(&aggregate_view.product_instance_id),
+            hex_encode_v1(&realm_digest),
+            hex_encode_v1(&aggregate_view.realm_id),
+            hex_encode_v1(&linked_basis_semantic),
+            market_input.liability_basis_id,
+            hex_encode_v1(&aggregate_view.basis_id),
+        )));
     }
     let genesis_hash = rpc
         .call("getGenesisHash", &json!([]))?

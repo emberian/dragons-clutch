@@ -140,7 +140,9 @@ pub struct LiabilityBasisMarketInputV2 {
     pub release_set: [u8; 32],
     /// Immutable selected Registry program.
     pub registry_program: [u8; 32],
-    /// Finalized Product-instance digest.
+    /// Exact Product instance content identity, as the finalized product
+    /// record embeds it - not a digest of that record. Its neighbour
+    /// `realm_id` IS a record digest, so the asymmetry is deliberate.
     pub product_instance_id: [u8; 32],
     /// Semantic LiabilityBasisV2 identity.
     pub basis_id: [u8; 32],
@@ -192,7 +194,9 @@ pub struct LiabilityBasisMarketViewV2 {
     pub release_set: [u8; 32],
     /// Immutable selected Registry program.
     pub registry_program: [u8; 32],
-    /// Finalized Product-instance digest.
+    /// Exact Product instance content identity, as the finalized product
+    /// record embeds it - not a digest of that record. Its neighbour
+    /// `realm_id` IS a record digest, so the asymmetry is deliberate.
     pub product_instance_id: [u8; 32],
     /// Semantic LiabilityBasisV2 identity.
     pub basis_id: [u8; 32],
