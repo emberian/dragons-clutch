@@ -760,6 +760,10 @@ still on `A`, which §9 deliberately avoids needing.
 
 ### 6.1 Rule M1 — the one rule the implementing lane needs
 
+> *(Amended by §14.4: the `selected` list below wrongly includes rent credits,
+> and the rule needs a third category — a stored **founding** id consumed at an
+> **active** site.)*
+>
 > **M1.** `active_release_set` is read at exactly one kind of site: deriving or
 > authenticating the **Registry activation cache**, and joining the role
 > admissions read from it. `selected_release_set` is read everywhere else — PDA
@@ -851,6 +855,9 @@ seals are absent refuses *softly* — falls back to the unsealed path — rather
 than bricking. If it bricks, that is a second finding and belongs on the board,
 not buried in this design.
 
+**Answered, and it bricks — see §14.5.** Re-minting is permissionless as hoped;
+the soft-degradation half of the premise is false.
+
 ### 7.2 Positions, replays, permits, records: untouched
 
 By §6.2 every one of these keeps its address, and by M1 every stored copy of a
@@ -865,8 +872,10 @@ and `selected` never moves. Concretely:
 - **Custody replays and vaults.** Address and body both keyed on `selected`.
   Untouched.
 - **Rent credit.** Address `[domain, market, generation]`; stored `release_set`
-  equals `selected`. Untouched — which matters, because the rent credit is where
-  every other account's recovered rent lands, and it has no field-update route.
+  equals `selected`. ~~Untouched~~ — **THIS ROW IS WRONG AS WRITTEN; see §14.1.**
+  The stored id also seeds the *activation-cache* address on both branches of the
+  close path, so a hop leaves the credit deriving a superseded cache and its
+  close refuses forever. §14.3 carries the ruled resolution.
 - **Relay and resolution records.** Carry no release set at all.
 
 ### 7.3 The worked case that looks hardest: a permit that outlives an upgrade
@@ -1011,7 +1020,9 @@ right one. That makes cache closure the tree's *second* caller-funded cleanup
 verb after R6's record abort, which is a small but real move of a YELLOW row
 toward GREEN.
 
-**The residual, stated exactly.** A market still on `A` that has not yet
+**The residual, stated exactly.** *(§14.6 amends this: the bound below holds for
+markets but fails for the lifecycle rent credit, which makes §14.3 an ordering
+prerequisite for this section.)* A market still on `A` that has not yet
 migrated loses `A`'s surviving *single-role* routes at the moment of closure.
 It is not stranded: every multi-role route was already dead by conjunct 2, and
 migration remains available and does not touch the cache. So the effect is a
@@ -1106,7 +1117,9 @@ own method: classify before you edit.
 | 9 | **mirrors and generated docs** | operator, SDK and TS mirrors; `abi:*:verify`; refusal registry regen (`tools/genref/generate.sh` → `docs/reference/refusals.md`); route census `--check-unique` | the existing verify gates |
 | 10 | **the campaign that closes R1** | Real-SVM: found on `A`; upgrade one role; **assert the brick** by its pinned code; declare; migrate permissionlessly from a stranger's keypair; drive the market to full retirement on `B` and assert lamport conservation | this is the evidence that R1 is closed. Until it is green, R1 stays RED |
 
-**Sizing.** Commits 2–3 ≈ 600–900 lines; 4–5 are narrow in Lean and wide in
+**Sizing.** *(§14.7 amends this: commit 5's real surface was measured at ~39
+adapter sites across seven programs, not five join sites.)* Commits 2–3 ≈
+600–900 lines; 4–5 are narrow in Lean and wide in
 regenerated output; 6 ≈ 400–500; 7 ≈ 250; 9 is mechanical; 8 and 10 are the
 judgment-bearing ones.
 
@@ -1178,3 +1191,136 @@ from its role programs' upgrade authority; that exposure is decision 0012's and
 is unchanged. It cannot compel an authority to declare a successor, though §4.4
 bounds that: an authority that never upgrades never strands anyone. And it does
 not rescue any market founded before it lands.
+
+---
+
+## 14. Amendments from implementation
+
+Commits 1-3 landed and found five things this document got wrong or left open.
+Three are corrections to passages that are **wrong as written**; the doc says so
+here rather than quietly diverging from itself.
+
+### 14.1 §7.2's rent-credit row is wrong: the stored id is a cache seed
+
+§7.2 lists the lifecycle rent credit as *"Untouched"* on the grounds that its
+stored `release_set` equals `selected` and `selected` never moves. Half of that
+row is right and the conclusion is wrong.
+
+Right: the credit's own address really is `[domain, market, generation]`
+(`programs/dclutch-rent-sbf/src/lib.rs:735-738`). The release set is **not** a
+seed of the credit account. §6.2's address proof is unaffected.
+
+Wrong: the stored id is not merely an equality pin. It is the **seed of the
+activation-cache address**, at both branches of the close path.
+
+- Stored at `crates/dclutch-rent-contract/src/lifecycle_v2.rs:169`, written at
+  `:237-241`, read back at `:213`.
+- Continuation branch: `programs/dclutch-rent-sbf/src/lib.rs:796-798` derives
+  `find_program_address([ACTIVATION_PDA_DOMAIN_V1, state.release_set()])`.
+- Direct branch: `lib.rs:758-766` passes `state.release_set()` into
+  `authenticate_activated_role_v1`, which derives the same address at
+  `crates/dclutch-registry-activation-auth-v1/src/lib.rs:188-194`.
+- The code already says so in words, at `lib.rs:745-752`: *"the credit's own
+  `release_set()` names the activation generation the address must be derived
+  from."* The function is called `authenticate_current_core_v2` -- it demands the
+  **current** Core out of a cache addressed by a **frozen** id.
+
+After a hop the credit therefore derives the predecessor's cache and requires
+the current Core to be admitted by it. That cache is, by the definition of
+supersession, the one that no longer admits anything. The close refuses forever.
+
+> **Migration as designed unbricks the market and leaves the account every other
+> account's recovered rent drains into still bricked.**
+
+### 14.2 Why a mirrored field on the credit cannot fix it
+
+The tempting repair is to give the credit its own migrable `active_release_set`
+and a route that updates it. It does not work, for two reasons.
+
+**It creates a second author.** The market would hold one answer to "which
+release set is active" and the credit another. Two authors for one fact is the
+defect class this tree has already paid for roughly twenty always-refuses bugs;
+the lineage record must stay the single author.
+
+**Its update route has an unenforceable deadline.** The credit closes *after*
+the market is gone: `LifecycleRetiredMarketObservationV2::validate`
+(`crates/dclutch-rent-contract/src/lifecycle_v2.rs:150-157`, called at
+`programs/dclutch-rent-sbf/src/lib.rs:618-630`) requires the market account to be
+system-owned with `data_len == 0` **and** `lamports == 0`. Nothing on the close
+path reads the market's data, and nothing can: there is no `try_borrow_data` on
+`retired_market` anywhere in the file, which is structurally forced by the
+zero-length requirement. So a mirror on the credit must be updated before the
+market closes, nothing orders those two events, and once the market is gone the
+authority that could repair a stale mirror no longer exists.
+
+### 14.3 Ruled: the credit reads through the lineage instead
+
+The credit's stored `release_set` stays exactly as it is -- it is a **founding
+coordinate** and correctly records what the market was founded under. What
+changes is how the close *consumes* it: rather than deriving a cache from it
+directly, the close takes the lineage record for that id and walks forward to
+the current set, then derives the cache from the endpoint.
+
+This costs no new bytes, adds no state, introduces no second author, and has no
+deadline -- the lineage records are permanent and the walk is available forever.
+The forward-only conjunct of §4.5 makes the walk terminating. One consequential
+detail for the implementing lane: the existing comparison at
+`programs/dclutch-rent-sbf/src/lib.rs:820-824`, which requires the cache's own
+`execution_release_set_id()` to equal the credit's stored id, must become a
+comparison against the **endpoint of the walk** rather than against the stored
+id, or it will re-impose the very refusal this removes.
+
+### 14.4 M1 has no category for this site, and its example list is wrong
+
+§6.1's rule M1 lists *"stored copies in capability roots and rent credits"*
+among the sites that read `selected`. Its own mechanical test says a site is
+ACTIVE iff its value flows into `ACTIVATION_PDA_DOMAIN_V1` derivation or into
+`authenticate_activated_role_v1`. The credit's stored copy flows into **both**.
+The test and the example list disagree, and the test is right.
+
+The deeper gap is that M1 offers two categories where the tree has three. This
+site is neither "an active id" nor "a selected id" but a **stored founding id
+consumed at an active site** -- correct to persist, wrong to derive from. The
+census found five accounts in exactly that shape
+(`docs/evidence/RELEASE_SET_READ_SITE_CENSUS_2026_08_30.md` §6.1). Strike "and
+rent credits" from M1's `selected` list and read §6.1 of the census as the third
+category's membership roll.
+
+### 14.5 §7.1's soft-degradation premise is false: seals refuse hard
+
+§7.1 asked commit 1 to confirm that a market whose capability seals are absent
+*"refuses softly -- falls back to the unsealed path -- rather than bricking"*,
+and said that if it bricks, that is a finding. **It bricks.**
+`process_hot_execution_v3` consults the seal unconditionally and
+`authenticate_capability_seal_v3` refuses a vacant one; there is no unsealed
+fallback reachable from that route (census §8). Re-minting is genuinely
+permissionless and market-independent, so §7.1's cost analysis survives, but the
+window between a Trading upgrade and the re-mint is a hard outage of the hot
+route rather than a degradation, and §7.1 should say so.
+
+### 14.6 §9's residual analysis does not hold for the rent credit
+
+§9 argues that closing a superseded cache costs a delay *"bounded by one
+permissionless transaction, not a loss"*, because migration remains available
+and provably does not read that cache. That holds for markets. It fails for the
+rent credit, which has no migration route at all and whose close **requires**
+the predecessor's cache (14.1) -- close that cache and the credit's accumulated
+rent becomes permanently unrecoverable, which is a loss, not a delay.
+
+Under 14.3 the residual is repaired rather than merely bounded: a credit that
+reads through to the live cache does not care that the old one is gone. **This
+makes 14.3 an ordering prerequisite for §9** -- `Registry::CloseActivation` must
+not ship before the credit stops deriving from a frozen id.
+
+### 14.7 Commit 5 is mis-sized, and line citations decay
+
+§11 scopes commit 5 as a newtype introduction plus five join sites. The census
+measured the real surface at roughly **39 adapter sites across seven programs**,
+plus the five persisted families of 14.4. The newtypes remain the right control;
+the sizing does not.
+
+A methodological note the next lane should not have to rediscover: this
+document's line citations, and the census's own, decay within hours in a
+twelve-lane tree. The census's rent-credit row was accurate when written and
+drifted about sixty lines the same afternoon when an unrelated rent commit
+landed. **Cite by symbol and function name; treat every line number as a hint.**
