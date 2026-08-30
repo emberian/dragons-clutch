@@ -574,7 +574,8 @@ mod tests {
             SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
         },
         consume_artifacts_v4::{
-            SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_EFFECT_BYTES_V4,
+            SERIES_CONSUME_BASE_EFFECT_BYTES_V4, SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4,
+            SERIES_CONSUME_COMMON_SCALAR_COUNT_V4, SERIES_CONSUME_EFFECT_BYTES_V4,
             SeriesConsumeChildRequestsV4, encode_series_consume_effect_v4_from_requests_atomic,
         },
         effect_v4::SeriesConsumeEffectV4,
@@ -936,10 +937,20 @@ mod tests {
     #[test]
     fn admitted_effect_owns_child_request_and_receipt_commitments() {
         const FUNDING_COUNT: u16 = 7;
+        const ROOT_GENERATION: u64 = 9;
+        const ROOT_ENTRY_INDEX: u64 = 4;
         let family_request = request_with_proof(SeriesActionV3::Consume, 9);
         let effect_bytes = effect_bytes();
-        let scalars = [128, 288, 9, 32, u64::from(FUNDING_COUNT)];
-        let identities = [[9_u8; 32]];
+        let scalars: [u64; SERIES_CONSUME_COMMON_SCALAR_COUNT_V4 as usize] = [
+            128,
+            288,
+            9,
+            32,
+            u64::from(FUNDING_COUNT),
+            ROOT_GENERATION,
+            ROOT_ENTRY_INDEX,
+        ];
+        let identities = [[9_u8; 32]; SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4 as usize];
         let effect = SeriesConsumeEffectV4::decode(
             &effect_bytes,
             &family_request,
