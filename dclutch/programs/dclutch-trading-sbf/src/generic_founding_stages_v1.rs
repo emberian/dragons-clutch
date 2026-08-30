@@ -541,8 +541,7 @@ fn authenticate_open_ack_v1(
     drop(market_data);
     if ack.stage() != GenericFoundingStageV1::Open
         || ack.funding_count() != open.funding_count()
-        || ack.core_program().to_bytes()
-            != account(open_window, OPEN_CORE_PROGRAM)?.key.to_bytes()
+        || ack.core_program().to_bytes() != account(open_window, OPEN_CORE_PROGRAM)?.key.to_bytes()
         || ack.release_set() != open.release_set()
         || ack.market() != open.market()
         || ack.permit().to_bytes() != account(open_window, OPEN_PERMIT)?.key.to_bytes()
@@ -580,8 +579,8 @@ mod tests {
         wide.push(0);
         assert!(!is_generic_found_and_permit_v1(&wide));
         // The composed route's five-bump wire is not this route's wire.
-        let mut composed = [0_u8;
-            crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3];
+        let mut composed =
+            [0_u8; crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_INSTRUCTION_BYTES_V3];
         composed[..8]
             .copy_from_slice(&crate::generic_market_founding_v1::GENERIC_MARKET_FOUNDING_MAGIC_V3);
         assert!(!is_generic_found_and_permit_v1(&composed));

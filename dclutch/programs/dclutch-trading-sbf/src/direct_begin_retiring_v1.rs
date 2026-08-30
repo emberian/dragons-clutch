@@ -777,6 +777,7 @@ mod tests {
     use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
 
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     fn identity(byte: u8) -> Identity {
         Identity::new([byte; 32]).expect("identity")
@@ -817,6 +818,7 @@ mod tests {
             } else {
                 Some(identity(10))
             },
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let bytes = state.encode().expect("market bytes");
         let root = [11; 32];

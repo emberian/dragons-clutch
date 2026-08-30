@@ -190,10 +190,32 @@ def hostileStaleCandidate : Fill := {
   buyTen with expectedCandidateId := 99
 }
 
+/-- A vault too small to pay for the inventory the state is holding.
+
+This used to be classified as a VALID state that merely could not afford one
+more fill. Under exit affordability it is not a state at all: `initial` holds
+inventory at both coordinates, so its walk out costs two cranks at `workReward`
+2, and a vault of 1 cannot pay for it. Being too poor to fill while holding
+inventory now implies being too poor to exit, and that is the configuration the
+invariant removes. -/
 def hostileUnderfundedWork : State := {
   initial with
   livenessCustody := 1
   activeWorkRemaining := 1
+}
+
+/-- The exit reserve exactly: two nonzero coordinates at `workReward` 2. -/
+def exactReserve : State := {
+  initial with
+  livenessCustody := 4
+  activeWorkRemaining := 4
+}
+
+/-- One below the reserve, and therefore not a state. -/
+def belowReserve : State := {
+  initial with
+  livenessCustody := 3
+  activeWorkRemaining := 3
 }
 
 def hostileQuoteOverflow : State := {
@@ -220,11 +242,37 @@ theorem hostile_rounding_replay_stale_release_and_underfunded_work_refuse :
     run policy hostileResetPaid (invoke (.fill buySix)) = hostileResetPaid ∧
     accepts policy initial (invoke (.fill hostileStaleCandidate)) = false ∧
     run policy initial (invoke (.fill hostileStaleCandidate)) = initial ∧
-    valid policy hostileUnderfundedWork = true ∧
+    valid policy hostileUnderfundedWork = false ∧
     accepts policy hostileUnderfundedWork (invoke (.fill buyTen)) = false ∧
     run policy hostileUnderfundedWork (invoke (.fill buyTen)) = hostileUnderfundedWork ∧
     valid policy hostileQuoteOverflow = true ∧
     accepts policy hostileQuoteOverflow (invoke (.fill buyTen)) = false := by
+  native_decide
+
+/-- Exit affordability, stated as the property census R4 needed.
+
+R4 reads as "a vanished dealer bricks the market". The vanishing is the mild
+case: `fillAccepts` refuses only BELOW one `workReward`, so before this
+invariant the last admitted fill could leave the vault empty, `terminalPost`
+carried that residue through unchanged, and the market reached `.terminal`
+unable to pay for the unwinds that reach zero inventory — with every party
+present and cooperative. `schedulePost` and `activatePost` are the only writes
+that raise the vault and both are unreachable outside `.open`, so nobody could
+fix it afterwards, the dealer included.
+
+The boundary is pinned from both sides, because a proof that only shows the
+refusal cannot tell a reserve from an off-by-one. -/
+theorem a_state_may_not_hold_inventory_it_cannot_afford_to_unwind :
+    -- Exactly the reserve is a state; one below it is not.
+    valid policy exactReserve = true ∧
+    valid policy belowReserve = false ∧
+    -- And a fill may not spend it. This is the sharp half: the fill passes
+    -- EVERY acceptance conjunct — 4 covers its own `workReward` of 2, so
+    -- `fillAccepts` is satisfied and `accepts` is true — and it is still rolled
+    -- back, by the post-state invariant alone. What it cannot afford is not
+    -- itself but the exit it would leave behind.
+    accepts policy exactReserve (invoke (.fill buyTen)) = true ∧
+    run policy exactReserve (invoke (.fill buyTen)) = exactReserve := by
   native_decide
 
 theorem release_substitution_and_unauthenticated_deployment_refuse :

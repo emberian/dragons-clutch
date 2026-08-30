@@ -55,6 +55,27 @@ pub const CLAIM_CHECK_ESCROW_KIND_V1: u8 = 2;
 pub const CLAIM_CHECK_SEED_V1: &[u8] = b"dclutch:claim-check:v1";
 /// Canonical claim-check escrow PDA seed domain.
 pub const CLAIM_CHECK_ESCROW_SEED_V1: &[u8] = b"dclutch:claim-check-escrow:v1";
+/// Canonical claim-check escrow vault PDA seed domain.
+///
+/// The vault is a Claims-derived PDA rather than the escrow's associated token
+/// account, which is a deliberate departure from the design.
+///
+/// An associated token account lives at an address derived under the
+/// *associated-token* program, so this program cannot sign for it and could not
+/// create it with the tree's own `allocate`/`assign` idiom -- it would have to
+/// CPI the associated-token program, putting a third-party program in a frame
+/// that otherwise needs none. Deriving the vault here instead keeps creation on
+/// the house pattern, keeps the frame smaller, and makes the vault's address
+/// recoverable from the aggregate alone, which is exactly what a holder needs
+/// once the market is gone.
+///
+/// Nothing about the design's reasoning is lost. The point of §4.2 was that the
+/// vault is an ordinary `External` token account rather than a new Custody
+/// compartment, and it still is: Custody authenticates a transfer destination
+/// by its mint and its *owner*, never by how its address was derived, so from
+/// Custody's side this is the same kind of account a holder's own wallet token
+/// account already is.
+pub const CLAIM_CHECK_VAULT_SEED_V1: &[u8] = b"dclutch:claim-check-vault:v1";
 
 /// Slots a market must remain redeemable before any position may be compacted.
 ///
@@ -235,6 +256,34 @@ impl ClaimCheckEscrowSeedsV1 {
             aggregate: self.aggregate,
             bump: [bump],
         }
+    }
+}
+
+/// Canonical escrow vault PDA coordinates.
+///
+/// One vault per market, addressed by the same aggregate the escrow is, so a
+/// holder returning to a market that no longer exists can find both from the
+/// one coordinate their claim-check carries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ClaimCheckVaultSeedsV1 {
+    aggregate: [u8; 32],
+}
+
+impl ClaimCheckVaultSeedsV1 {
+    /// Construct the unique vault coordinates for one market.
+    pub fn new(aggregate: [u8; 32]) -> ClaimCheckResultV1<Self> {
+        require_nonzero(aggregate)?;
+        Ok(Self { aggregate })
+    }
+
+    /// Borrow the sole exact vault PDA seed order, excluding its bump.
+    pub fn as_slices(&self) -> [&[u8]; 2] {
+        [CLAIM_CHECK_VAULT_SEED_V1, &self.aggregate]
+    }
+
+    /// Return the Claims aggregate coordinate.
+    pub const fn aggregate(self) -> [u8; 32] {
+        self.aggregate
     }
 }
 
@@ -967,6 +1016,72 @@ mod tests {
     }
 
     #[test]
+    fn the_redemption_frame_contains_nothing_the_market_takes_with_it() {
+        // The assertion is on the SPEC, not on an inspection of the route. A
+        // later edit that reaches for an aggregate, a Core state, a basis or
+        // graph record, a Hoard or a Custody replay cursor has to add a role
+        // here and answer `survives_retirement` for it, and the honest answer
+        // fails this test.
+        for role in ClaimCheckRedemptionRoleV1::frame() {
+            assert!(
+                role.survives_retirement(),
+                "{role:?} does not outlive the market and cannot be in this frame"
+            );
+        }
+    }
+
+    #[test]
+    fn the_redemption_frame_is_pinned_exactly() {
+        // Width and order are both load-bearing: the route indexes this frame,
+        // and a silent insertion would shift every account after it.
+        assert_eq!(
+            ClaimCheckRedemptionRoleV1::frame(),
+            [
+                ClaimCheckRedemptionRoleV1::Holder,
+                ClaimCheckRedemptionRoleV1::ClaimCheckRecord,
+                ClaimCheckRedemptionRoleV1::Escrow,
+                ClaimCheckRedemptionRoleV1::Vault,
+                ClaimCheckRedemptionRoleV1::HolderTokens,
+                ClaimCheckRedemptionRoleV1::CollateralMint,
+                ClaimCheckRedemptionRoleV1::TokenProgram,
+            ]
+        );
+        assert_eq!(
+            ClaimCheckRedemptionRoleV1::frame().len(),
+            CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1
+        );
+    }
+
+    #[test]
+    fn exactly_one_account_signs_and_it_is_the_person_being_paid() {
+        // GREEN-SELF stated as arithmetic: no third party stands between a
+        // holder and their collateral, and there is no second signature for
+        // anyone to be induced to provide.
+        let signers: usize = ClaimCheckRedemptionRoleV1::frame()
+            .iter()
+            .filter(|role| role.privileges().0)
+            .count();
+        assert_eq!(signers, 1);
+        assert!(ClaimCheckRedemptionRoleV1::Holder.privileges().0);
+        assert!(ClaimCheckRedemptionRoleV1::Holder.privileges().1);
+        // Nothing the route only reads is writable.
+        for role in [
+            ClaimCheckRedemptionRoleV1::CollateralMint,
+            ClaimCheckRedemptionRoleV1::TokenProgram,
+        ] {
+            assert_eq!(role.privileges(), (false, false));
+        }
+    }
+
+    #[test]
+    fn a_redemption_frame_is_far_smaller_than_the_compaction_that_made_it() {
+        // The residue claim, as a number. A crank needs the whole market; a
+        // holder coming back needs seven accounts and none of the market's.
+        assert_eq!(CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, 7);
+        assert!(CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 < 36);
+    }
+
+    #[test]
     fn the_five_wire_magics_are_pairwise_distinct() {
         let magics = [
             CLAIM_CHECK_OPEN_MAGIC_V1,
@@ -977,6 +1092,89 @@ mod tests {
         ];
         for (index, left) in magics.iter().enumerate() {
             assert!(!magics.iter().skip(index + 1).any(|right| right == left));
+        }
+    }
+}
+
+/// Exact claim-check redemption frame width.
+pub const CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1: usize = 7;
+
+/// One account role in the claim-check redemption frame.
+///
+/// This frame is the point of the whole design, so it is declared rather than
+/// left implicit. What a holder touches when they finally come back is a market
+/// that no longer exists: the aggregate closed, the Core state closed, the
+/// linked basis and composition graph records closed, the Hoard emptied and
+/// closed, the Custody replay cursor gone. A redemption route that needed any
+/// of them would not be a claim-check; it would be a promise that stops working
+/// the moment the thing it depends on is cleaned up.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaimCheckRedemptionRoleV1 {
+    /// The holder, who signs and is paid. The only signer this frame admits.
+    Holder,
+    /// The claim-check record, closed into the holder.
+    ClaimCheckRecord,
+    /// The per-market escrow, whose outstanding count this redemption retires.
+    Escrow,
+    /// The escrow vault, debited by exactly the record's entitlement.
+    Vault,
+    /// The holder's own token account, credited.
+    HolderTokens,
+    /// The collateral mint, for a checked transfer.
+    CollateralMint,
+    /// The collateral token program.
+    TokenProgram,
+}
+
+impl ClaimCheckRedemptionRoleV1 {
+    /// The exact ordered frame.
+    #[must_use]
+    pub const fn frame() -> [Self; CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1] {
+        [
+            Self::Holder,
+            Self::ClaimCheckRecord,
+            Self::Escrow,
+            Self::Vault,
+            Self::HolderTokens,
+            Self::CollateralMint,
+            Self::TokenProgram,
+        ]
+    }
+
+    /// Whether an account in this role still exists after the market retires.
+    ///
+    /// **Every role in [`Self::frame`] must answer `true`, and a test enforces
+    /// it.** The method exists so that adding an account to this route is not a
+    /// silent act: a later edit must state, here, whether the thing it is
+    /// reaching for outlives the market. The honest answer for an aggregate, a
+    /// Core state, a basis or graph record, a Hoard or a Custody replay cursor
+    /// is `false`, and the test fails on it. Answering `true` for one of those
+    /// would be a deliberate false statement rather than an oversight, which is
+    /// the most a type can do about it.
+    #[must_use]
+    pub const fn survives_retirement(self) -> bool {
+        match self {
+            // Created by compaction, or independent of the market entirely.
+            Self::Holder
+            | Self::ClaimCheckRecord
+            | Self::Escrow
+            | Self::Vault
+            | Self::HolderTokens
+            | Self::CollateralMint
+            | Self::TokenProgram => true,
+        }
+    }
+
+    /// Exact privileges this role carries.
+    #[must_use]
+    pub const fn privileges(self) -> (bool, bool) {
+        match self {
+            // signer, writable
+            Self::Holder => (true, true),
+            Self::ClaimCheckRecord | Self::Escrow | Self::Vault | Self::HolderTokens => {
+                (false, true)
+            }
+            Self::CollateralMint | Self::TokenProgram => (false, false),
         }
     }
 }

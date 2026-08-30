@@ -26,6 +26,22 @@ import { PublicKey } from '@solana/web3.js';
 
 export const SIMULATOR_SERIES_SCHEMA_V1 = 'dclutch-simulator-series-v1';
 
+/**
+ * v2 adds the one thing v1 threw away: the conservation laws' NAMES.
+ *
+ * v1 reduced each cycle's verdicts to three integers — held, broken,
+ * inapplicable — and a count is the least interesting true thing about a law.
+ * The census has always recorded which law it was (`L1`..`L7`) and a sentence
+ * saying what it checked; v2 carries both across, so a reader can watch a
+ * NAMED law hold rather than watch a number stay at six.
+ *
+ * v1 documents remain readable and are decoded as a series with no laws
+ * recorded, which is a true thing to say about a capture taken before this
+ * existed — never a decode failure. The three counts stay in both versions:
+ * they are what the run itself halts on.
+ */
+export const SIMULATOR_SERIES_SCHEMA_V2 = 'dclutch-simulator-series-v2';
+
 /** The one URL the surfaces read. Pinned by test: the artifact's link check
  * cannot see a runtime fetch, so the string itself is the contract. */
 export const SIMULATOR_SERIES_URL_V1 = '/simulator-series.json';
@@ -58,6 +74,38 @@ export type SimulatorSeriesPointV1 = Readonly<{
   checksHeld: number;
   checksBroken: number;
   checksInapplicable: number;
+  /**
+   * Each named law's verdict at this cycle, index-aligned with the series'
+   * `lawIds`. Empty under v1 and under any capture that recorded no verdicts.
+   */
+  lawStatuses: ReadonlyArray<ConservationLawStatusV1>;
+}>;
+
+/**
+ * What a conservation law did at one cycle boundary.
+ *
+ * `inapplicable` is a third state on purpose and is not a soft failure: the
+ * first census has no predecessor to compare against, and an externally driven
+ * census cannot account for fees it did not pay. A law that does not apply is
+ * neither evidence for nor against the ledger, and folding it into either
+ * number would make one of them a lie.
+ */
+export type ConservationLawStatusV1 = 'holds' | 'violated' | 'inapplicable';
+
+/** The wire's one character per status. Compact because it is repeated per cycle. */
+const LAW_STATUS_CHARS: Readonly<Record<string, ConservationLawStatusV1>> = Object.freeze({
+  h: 'holds',
+  v: 'violated',
+  i: 'inapplicable',
+});
+
+/** One named law at the newest recorded cycle, with the sentence it wrote. */
+export type ConservationLawV1 = Readonly<{
+  /** The census's own identifier for the law, e.g. `L4`. */
+  id: string;
+  status: ConservationLawStatusV1;
+  /** The census's own sentence about what it checked. Never this site's words. */
+  detail: string;
 }>;
 
 /**
@@ -86,8 +134,15 @@ export type SimulatorCollateralHolderV1 = Readonly<{
 }>;
 
 export type SimulatorSeriesV1 = Readonly<{
-  schema: typeof SIMULATOR_SERIES_SCHEMA_V1;
+  schema: typeof SIMULATOR_SERIES_SCHEMA_V1 | typeof SIMULATOR_SERIES_SCHEMA_V2;
   capturedAt: string;
+  /**
+   * The conservation laws this capture recorded, in the census's own order.
+   * Every point's `lawStatuses` is index-aligned with this. Empty under v1.
+   */
+  lawIds: ReadonlyArray<string>;
+  /** Those same laws at the NEWEST cycle, with the sentence each wrote. */
+  laws: ReadonlyArray<ConservationLawV1>;
   /** Claim holders, largest total first. Empty when the capture recorded none. */
   positions: ReadonlyArray<SimulatorPositionV1>;
   /** Collateral token accounts, largest first. Empty when none were recorded. */
@@ -142,13 +197,35 @@ function address(value: unknown, field: string): string {
   return raw;
 }
 
-function point(value: unknown, index: number, outcomeCount: number): SimulatorSeriesPointV1 {
+/**
+ * One cycle's law verdicts, off the compact wire string.
+ *
+ * A capture that recorded no laws yields none. A capture that recorded a
+ * different NUMBER of them than the series declares is a defect and says so:
+ * misaligned statuses would attribute one law's verdict to another law's name,
+ * which is the exact failure a named band exists to prevent.
+ */
+function lawStatuses(value: unknown, field: string, lawCount: number): ReadonlyArray<ConservationLawStatusV1> {
+  if (value === null || value === undefined) return Object.freeze([]);
+  if (typeof value !== 'string') throw new Error(`${field} must be one status string`);
+  if (value.length !== lawCount) {
+    throw new Error(`${field} carries ${value.length} verdicts and the series declares ${lawCount} laws`);
+  }
+  return Object.freeze(Array.from(value, (character, cell) => {
+    const status = LAW_STATUS_CHARS[character];
+    if (status === undefined) throw new Error(`${field} verdict ${cell} is not one of h, v, i`);
+    return status;
+  }));
+}
+
+function point(value: unknown, index: number, outcomeCount: number, lawCount: number): SimulatorSeriesPointV1 {
   const body = object(value, `point ${index}`);
   if (!Array.isArray(body.supply)) throw new Error(`point ${index} supply must be one list`);
   if (body.supply.length !== outcomeCount) {
     throw new Error(`point ${index} carries ${body.supply.length} outcomes and the series declares ${outcomeCount}`);
   }
   return Object.freeze({
+    lawStatuses: lawStatuses(body.law_statuses, `point ${index} law_statuses`, lawCount),
     cycle: count(body.cycle, `point ${index} cycle`),
     slot: atoms(body.slot, `point ${index} slot`),
     recordedAt: body.recorded_at === null || body.recorded_at === undefined
@@ -167,14 +244,41 @@ function point(value: unknown, index: number, outcomeCount: number): SimulatorSe
  * half-series, and never a series whose cycles run backwards. */
 export function parseSimulatorSeriesV1(value: unknown): SimulatorSeriesV1 {
   const root = object(value, 'simulator series');
-  if (root.schema !== SIMULATOR_SERIES_SCHEMA_V1) throw new Error('simulator series has another schema');
+  const schema = root.schema;
+  if (schema !== SIMULATOR_SERIES_SCHEMA_V1 && schema !== SIMULATOR_SERIES_SCHEMA_V2) {
+    throw new Error('simulator series has another schema');
+  }
   const cluster = root.cluster;
   if (cluster !== 'local' && cluster !== 'devnet') throw new Error('cluster must be local or devnet');
   const mode = root.mode;
   if (mode !== 'finite' && mode !== 'sustain') throw new Error('mode must be finite or sustain');
   if (!Array.isArray(root.points)) throw new Error('points must be one list');
   const outcomeCount = count(root.outcome_count, 'outcome_count');
-  const points = Object.freeze(root.points.map((entry, index) => point(entry, index, outcomeCount)));
+  // The law names come first: every point's verdict string is checked against
+  // this list's length, so a series can never draw seven verdicts under six
+  // names.
+  const lawIds = !Array.isArray(root.law_ids)
+    ? Object.freeze([])
+    : Object.freeze(root.law_ids.map((entry, index) => text(entry, `law_ids ${index}`)));
+  const laws = !Array.isArray(root.laws) ? Object.freeze([]) : Object.freeze(root.laws.map((entry, index) => {
+    const body = object(entry, `law ${index}`);
+    const status = body.status;
+    if (status !== 'holds' && status !== 'violated' && status !== 'inapplicable') {
+      throw new Error(`law ${index} status must be holds, violated or inapplicable`);
+    }
+    return Object.freeze({
+      id: text(body.id, `law ${index} id`),
+      status,
+      detail: text(body.detail, `law ${index} detail`),
+    });
+  }));
+  if (laws.length > 0 && laws.length !== lawIds.length) {
+    throw new Error(`${laws.length} laws are described and ${lawIds.length} are named`);
+  }
+  for (const [index, law] of laws.entries()) {
+    if (law.id !== lawIds[index]) throw new Error(`law ${index} is ${law.id} and law_ids names ${lawIds[index]}`);
+  }
+  const points = Object.freeze(root.points.map((entry, index) => point(entry, index, outcomeCount, lawIds.length)));
   // A line is only honest if its x-axis is ordered. Two points out of order
   // would draw a shape that never happened, and no decoder below this one
   // would catch it.
@@ -206,8 +310,10 @@ export function parseSimulatorSeriesV1(value: unknown): SimulatorSeriesV1 {
   }));
 
   return Object.freeze({
-    schema: SIMULATOR_SERIES_SCHEMA_V1,
+    schema,
     capturedAt: instant(root.captured_at, 'captured_at'),
+    lawIds,
+    laws,
     positions,
     collateralHolders,
     cluster,
@@ -368,4 +474,169 @@ export function simulatorSeriesSpanV1(series: SimulatorSeriesV1): SimulatorSerie
     checksHeld: series.points.reduce((sum, entry) => sum + entry.checksHeld, 0),
     checksBroken: series.points.reduce((sum, entry) => sum + entry.checksBroken, 0),
   });
+}
+
+/**
+ * THE HEARTBEAT: the part of this record that actually moves.
+ *
+ * A census-only run signs nothing, so it spends nothing, so every quantity it
+ * observes is expected to hold still — and on the recorded devnet run every
+ * one of them does, for hundreds of cycles. Drawing those and only those is
+ * how a true record ends up reading as a dead one.
+ *
+ * Two things are nevertheless moving the whole time, and both are chain facts
+ * rather than simulator facts. The chain advanced between one reading and the
+ * next, and the run took a measurable amount of wall-clock to come back. That
+ * is a heartbeat: not a market's price, but proof that something is on the
+ * other end of the line, which is the question a stranger is actually asking.
+ *
+ * TWO MEASURES, NEVER ONE PAIR OF AXES. Slots and seconds are different
+ * dimensions at different magnitudes; they are returned as separate lines for
+ * separate figures and are never stacked on a shared scale.
+ */
+export type SimulatorHeartbeatV1 = Readonly<{
+  /** Slots the chain advanced between consecutive recordings, exact. */
+  slotAdvance: SimulatorSeriesLineV1;
+  /** Whole seconds between consecutive recordings, or null when any is unknown. */
+  cadence: SimulatorSeriesLineV1 | null;
+  /** One label per interval, index-aligned with the lines. */
+  xLabels: ReadonlyArray<string>;
+  /** Intervals drawn: one fewer than the points, because an interval needs two. */
+  intervals: number;
+  /**
+   * Slots per second across the whole drawn window, to two places, or null
+   * when the run did not record enough instants to divide by. Measured — the
+   * exact totals it comes from are on the span beside it, never a chain
+   * constant assumed and printed as if observed.
+   */
+  measuredSlotRate: string | null;
+  /** The longest a recording ever went without a successor, in whole seconds. */
+  longestGapSeconds: string | null;
+  /** The shortest such interval, in whole seconds. */
+  shortestGapSeconds: string | null;
+}>;
+
+export function simulatorHeartbeatV1(series: SimulatorSeriesV1): SimulatorHeartbeatV1 | null {
+  const points = series.points;
+  if (points.length < 2) return null;
+
+  const slotAdvance: string[] = [];
+  const xLabels: string[] = [];
+  const seconds: string[] = [];
+  let everyInstantKnown = true;
+  for (let index = 1; index < points.length; index += 1) {
+    const before = points[index - 1];
+    const after = points[index];
+    // A slot count is a u64 and stays exact: BigInt in, decimal string out.
+    const advance = BigInt(after.slot) - BigInt(before.slot);
+    slotAdvance.push((advance < 0n ? -advance : advance).toString());
+    xLabels.push(`cycle ${before.cycle} → ${after.cycle}`);
+    if (before.recordedAt === null || after.recordedAt === null) {
+      everyInstantKnown = false;
+      continue;
+    }
+    const gap = Math.round((Date.parse(after.recordedAt) - Date.parse(before.recordedAt)) / 1000);
+    seconds.push(String(Math.max(0, gap)));
+  }
+
+  // The cadence line is drawn only when EVERY interval on it was measured. A
+  // line with holes silently redrawn as a shorter line would compress the
+  // x-axis and put an interval under another interval's label.
+  const cadence = everyInstantKnown && seconds.length === slotAdvance.length
+    ? Object.freeze({ label: 'seconds between recordings', values: Object.freeze([...seconds]) })
+    : null;
+
+  const totalSlots = BigInt(points[points.length - 1].slot) - BigInt(points[0].slot);
+  const totalSeconds = cadence === null
+    ? 0n
+    : seconds.reduce((sum, value) => sum + BigInt(value), 0n);
+  const measuredSlotRate = totalSeconds === 0n
+    ? null
+    // Two places, computed on integers so the rounding is the only float here.
+    : (Number((totalSlots * 100n) / totalSeconds) / 100).toFixed(2);
+
+  const extremum = (pick: (left: bigint, right: bigint) => bigint) =>
+    (cadence === null ? null : seconds.reduce((best, value) => pick(best, BigInt(value)), BigInt(seconds[0])).toString());
+
+  return Object.freeze({
+    slotAdvance: Object.freeze({ label: 'slots the chain advanced', values: Object.freeze(slotAdvance) }),
+    cadence,
+    xLabels: Object.freeze(xLabels),
+    intervals: slotAdvance.length,
+    measuredSlotRate,
+    longestGapSeconds: extremum((left, right) => (right > left ? right : left)),
+    shortestGapSeconds: extremum((left, right) => (right < left ? right : left)),
+  });
+}
+
+/**
+ * One named conservation law, across every drawn cycle.
+ *
+ * The counts a v1 series carries answer "how many held"; this answers "which
+ * one, and what did it check" — and the second question is the one a reader
+ * who does not already trust us needs answered. The sentence on each row is
+ * the census's own, from the newest cycle, and is never rewritten here.
+ */
+export type ConservationLawRowV1 = Readonly<{
+  id: string;
+  /** This law's verdict at each drawn cycle, oldest first. */
+  statuses: ReadonlyArray<ConservationLawStatusV1>;
+  held: number;
+  violated: number;
+  inapplicable: number;
+  /** The census's sentence at the newest cycle, or null when none was recorded. */
+  detail: string | null;
+}>;
+
+/**
+ * The cycle numbers a law band is drawn against.
+ *
+ * Not every point necessarily carries a verdict set — a cycle whose census
+ * recorded a DIFFERENT set of laws carries none rather than a set laid under
+ * the wrong names — so the band's x-axis is these cycles, which can be fewer
+ * than the series' points. Every row filters identically, so the rows stay
+ * aligned with each other and with this.
+ */
+export function lawBandCyclesV1(series: SimulatorSeriesV1): ReadonlyArray<number> {
+  return Object.freeze(series.points.filter((entry) => entry.lawStatuses.length > 0).map((entry) => entry.cycle));
+}
+
+export function conservationLawRowsV1(series: SimulatorSeriesV1): ReadonlyArray<ConservationLawRowV1> {
+  return Object.freeze(series.lawIds.map((id, cell) => {
+    const statuses = Object.freeze(series.points
+      .filter((entry) => entry.lawStatuses.length > cell)
+      .map((entry) => entry.lawStatuses[cell]));
+    const tally = (wanted: ConservationLawStatusV1) => statuses.filter((status) => status === wanted).length;
+    return Object.freeze({
+      id,
+      statuses,
+      held: tally('holds'),
+      violated: tally('violated'),
+      inapplicable: tally('inapplicable'),
+      detail: series.laws[cell]?.detail ?? null,
+    });
+  }));
+}
+
+/**
+ * One plain sentence about the laws, or null when the capture recorded none.
+ *
+ * It leads with the violation when there is one. A run that broke a law halts
+ * itself, so a reader arriving at a page that shows one is looking at the
+ * single most important fact on it, and it must not be the third clause.
+ */
+export function conservationReadingV1(series: SimulatorSeriesV1): string | null {
+  const rows = conservationLawRowsV1(series);
+  if (rows.length === 0) return null;
+  const violated = rows.filter((row) => row.violated > 0);
+  if (violated.length > 0) {
+    return `${violated.map((row) => row.id).join(', ')} did not hold. The run halts on exactly this, and the market's collateral is the thing in question.`;
+  }
+  const held = rows.reduce((sum, row) => sum + row.held, 0);
+  const skipped = rows.reduce((sum, row) => sum + row.inapplicable, 0);
+  const drawn = rows[0]?.statuses.length ?? 0;
+  // "240 did not apply" beside "240 cycle boundaries" reads as the same 240.
+  // The noun is what disambiguates them, so the noun is always said.
+  return `${rows.length} laws, re-checked at every one of ${drawn} cycle boundaries: ${held} checks held and none broke.${
+    skipped === 0 ? '' : ` ${skipped} checks did not apply at the boundary they were on, which is neither a pass nor a failure.`}`;
 }

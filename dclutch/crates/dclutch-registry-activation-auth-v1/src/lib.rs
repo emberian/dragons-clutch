@@ -81,8 +81,6 @@ pub enum ActivationAuthErrorV1 {
     ActivationCache,
     /// The observed deployment is not the one this activation admitted.
     Deployment,
-    /// The account is not the Registry-owned lineage record it claims to be.
-    ReleaseLineage,
     /// The activated release's pinned deployment slot moved: it was upgraded.
     ///
     /// This is the operator-actionable half of [`Self::Deployment`], and it is
@@ -100,7 +98,6 @@ impl From<ActivationAuthErrorV1> for ProgramError {
             ActivationAuthErrorV1::AccountFrame => Self::InvalidArgument,
             ActivationAuthErrorV1::ActivationCache
             | ActivationAuthErrorV1::Deployment
-            | ActivationAuthErrorV1::ReleaseLineage
             | ActivationAuthErrorV1::ReleaseSuperseded => Self::InvalidAccountData,
         }
     }
@@ -179,19 +176,41 @@ pub fn authenticate_activated_role_and_bump_v1(
 /// witness to [`authenticate_activated_role_with_bump_v1`] for every role in
 /// the same frame. The complete fixed-width hostile decoder runs here, so the
 /// witness cannot come from address/owner checks alone.
+///
+/// # Why this reads the bump instead of searching for it
+///
+/// This one address is derived SIX times per top-level Direct transaction --
+/// once in Trading, twice inside the Registry's own `Reauthenticate` CPIs, once
+/// from Claims and twice from Custody -- and its depth is a lottery redrawn by
+/// every rebuild, because `release_set_id` hashes the deployed ELF digests. One
+/// step of that lottery moved all six searches by 9,000 CU on a route whose
+/// whole margin is about eighteen thousand.
+///
+/// Every one of those six sites already holds this account and already runs the
+/// hostile decoder over it, so the cache carries its own bump and each reader
+/// REPRODUCES the address rather than walking down from 255. The conjunction is
+/// the same one, with the search removed:
+///
+/// * the account's owner and exact width are required BEFORE its bytes are
+///   read, so the bump is not taken from a stranger's account;
+/// * the body must hostile-decode and must name the very `release_set_id` the
+///   caller is executing under, which is the other of the two seeds;
+/// * the address `create_program_address` produces from those seeds and that
+///   bump must equal the account the caller was handed -- a wrong byte produces
+///   a different address and refuses.
+///
+/// So the byte is a memo of the Registry's own derivation. Canonicality is
+/// enforced where the account is created: the Registry signs the cache into
+/// existence with the bump it searched for, and can write at no other address.
+///
+/// A cache whose bump byte is zero was written before it was persisted; that
+/// reader falls back to the search, which is exactly what it used to do.
 #[inline(never)]
 pub fn authenticate_activation_cache_bump_v1(
     registry: &AccountInfo<'_>,
     cache: &AccountInfo<'_>,
     release_set_id: &[u8; 32],
 ) -> Result<AuthenticatedActivationCacheBumpV1> {
-    let (expected, bump) = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_slice()],
-        registry.key,
-    );
-    if cache.key != &expected {
-        return Err(ActivationAuthErrorV1::ActivationCache);
-    }
     require_cache_account(registry.key, cache)?;
     let bytes = cache
         .try_borrow_data()
@@ -204,6 +223,31 @@ pub fn authenticate_activation_cache_bump_v1(
         .as_bytes()
         != release_set_id
     {
+        return Err(ActivationAuthErrorV1::ActivationCache);
+    }
+    let carried = activated
+        .cache_bump()
+        .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    let (expected, bump) = match carried {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let expected = Pubkey::create_program_address(
+                &[
+                    ACTIVATION_PDA_DOMAIN_V1,
+                    release_set_id.as_slice(),
+                    &bump_seed,
+                ],
+                registry.key,
+            )
+            .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+            (expected, bump)
+        }
+        None => Pubkey::find_program_address(
+            &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_slice()],
+            registry.key,
+        ),
+    };
+    if cache.key != &expected {
         return Err(ActivationAuthErrorV1::ActivationCache);
     }
     Ok(AuthenticatedActivationCacheBumpV1(bump))
@@ -320,19 +364,21 @@ pub fn release_lineage_address_v1(
     release_lineage_address_and_bump_v1(registry, predecessor_release_set_id).0
 }
 
-/// Require Registry ownership and the one exact lineage-record width.
+/// Answer whether this is the Registry-owned record of the one exact width.
 ///
-/// Deliberately does not check privileges: the declaration route needs the
+/// Returns a plain answer rather than a refusal, for the same reason it
+/// deliberately does not check privileges: the declaration route needs the
 /// record writable and the migration route needs it read-only, so each frame
-/// states its own, and neither borrows the other's.
-pub fn require_lineage_account_v1(registry: &Pubkey, lineage: &AccountInfo<'_>) -> Result<()> {
-    if lineage.owner != registry
-        || lineage.executable
-        || lineage.data_len() != RELEASE_LINEAGE_BYTES_V1
-    {
-        return Err(ActivationAuthErrorV1::ReleaseLineage);
-    }
-    Ok(())
+/// states its own and neither borrows the other's. The refusal is likewise the
+/// caller's to name in its own band -- `ActivationAuthErrorV1` is the
+/// activation cache's vocabulary, and a lineage record is a different account.
+/// Widening that enum for this one check would have handed a variant they can
+/// never receive to every consumer of every other function here.
+#[must_use]
+pub fn is_lineage_account_v1(registry: &Pubkey, lineage: &AccountInfo<'_>) -> bool {
+    lineage.owner == registry
+        && !lineage.executable
+        && lineage.data_len() == RELEASE_LINEAGE_BYTES_V1
 }
 
 /// Require the exact read-only three-account reauthentication frame.

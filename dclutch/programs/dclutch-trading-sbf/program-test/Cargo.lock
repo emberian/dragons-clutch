@@ -2014,6 +2014,7 @@ dependencies = [
  "dclutch-direct-codec",
  "dclutch-direct-hot-program-test-support",
  "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
  "dclutch-general-config-contract",
  "dclutch-market-core-codec",
  "dclutch-product-payoff-v2-codec",

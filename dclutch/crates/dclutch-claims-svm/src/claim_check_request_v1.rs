@@ -105,7 +105,12 @@ impl ClaimCheckActionV1 {
 pub struct OpenClaimCheckEscrowRequestV1 {
     /// Immutable selected execution release set.
     pub release_set: [u8; 32],
-    /// Logical Core Market identity.
+    /// The Core market state ACCOUNT address.
+    ///
+    /// Not `identity.market_id`, which is a different value the tree also calls
+    /// "market". The escrow is addressed by the Claims aggregate, and the
+    /// aggregate seeds off this account address, so the request must mean what
+    /// the aggregate means.
     pub market: [u8; 32],
     /// Collateral Realm identity, naming the mint and its token program.
     pub realm: [u8; 32],

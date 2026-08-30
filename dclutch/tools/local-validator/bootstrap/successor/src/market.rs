@@ -50,7 +50,7 @@ use dclutch_market_core_codec::{
     FOUND_RENT_SYSVAR_INDEX_V3, FoundingIntentV5, GenericFoundingRequestV1, GenericFoundingStageV1,
     Identity, MarketCoreStateSeedsV2, MarketIdentity, PROJECT_FOUND_ACCOUNT_COUNT_V2, Phase,
     ProjectFoundReceiptV2, ProjectFoundRequestV2, Readiness, Request,
-    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1,
+    SERIES_FOUNDING_PERMIT_BYTES_V1, STATE_BYTES, SeriesFoundingPermitSeedsV1, StateBumpsV1,
     generic_founding_funding_list_id_v1,
 };
 use dclutch_market_founding_v1_operator::{
@@ -384,6 +384,7 @@ fn compile_current_founding_message_v1(
 
 fn authenticate_resolved_founding_message_v1(
     operation: FoundingSubmissionOperationV1,
+    recovery_policy: bool,
     message: &VersionedMessage,
     tables: &[ObservedAccount],
 ) -> Result<()> {
@@ -429,12 +430,13 @@ fn authenticate_resolved_founding_message_v1(
             }
         }
     }
-    if resolved.len() != operation.exact_unique_accounts() {
+    if resolved.len() != operation.exact_unique_accounts(recovery_policy) {
         return Err(Error::new(format!(
-            "{} resolved account count changed: expected {}, observed {}",
+            "{} resolved account count changed: expected {}, observed {} (market {} a recovery policy)",
             operation.label(),
-            operation.exact_unique_accounts(),
-            resolved.len()
+            operation.exact_unique_accounts(recovery_policy),
+            resolved.len(),
+            if recovery_policy { "carries" } else { "does not carry" },
         )));
     }
     Ok(())
@@ -470,7 +472,12 @@ fn authenticate_current_founding_intent_v1(
         heap_frame_bytes,
         blockhash,
     )?;
-    authenticate_resolved_founding_message_v1(operation, &recomputed, tables)?;
+    authenticate_resolved_founding_message_v1(
+        operation,
+        binding.market_has_recovery_policy,
+        &recomputed,
+        tables,
+    )?;
     let expected_signers = expected_signers
         .iter()
         .map(ToString::to_string)
@@ -556,7 +563,12 @@ fn send_durable_founding_v1(
             heap_frame_bytes,
             blockhash,
         )?;
-        authenticate_resolved_founding_message_v1(operation, &message, tables)?;
+        authenticate_resolved_founding_message_v1(
+            operation,
+            recorder.binding.market_has_recovery_policy,
+            &message,
+            tables,
+        )?;
         let message_bytes = message.serialize();
         let exact_fee_lamports = rpc
             .call(
@@ -1713,6 +1725,13 @@ struct MarketRecords {
     manipulation_floor: Option<PublishedRecord>,
     recovery: Option<PublishedRecord>,
     manifest: PublishedRecord,
+    /// The exact capability-manifest bytes that were PUBLISHED, which are not
+    /// always the bytes the input declared: a market with bounded Source
+    /// material has its manifest rebuilt so the Source entry names the compiled
+    /// Source rather than the floor template's. Everything on chain — the
+    /// record, the Market identity, and Core's own authentication — is bound to
+    /// these bytes, so the founding artifact must be derived from them too.
+    manifest_body: Vec<u8>,
     basis: PublishedRecord,
     /// The five source-graph records both provider legs authenticate. They are
     /// published with the rest of the graph rather than left to a resolution
@@ -3353,6 +3372,11 @@ fn publish_market_records(
             }
         }
     }
+    // Keep the published bytes, not just the record's coordinates: the
+    // founding artifact's capability-root selection is derived from the
+    // manifest, and deriving it from the input's DECLARED manifest instead of
+    // this published one makes a bounded-Source-material market unfoundable.
+    let manifest_body = manifest.clone();
     let manifest = publish_record(
         rpc,
         registry,
@@ -3486,6 +3510,7 @@ fn publish_market_records(
             manipulation_floor,
             recovery,
             manifest,
+            manifest_body,
             basis,
             source_spec,
             window_spec,
@@ -4788,7 +4813,25 @@ fn derive_founding_coordinates(
     // mask. The physical list is ordered by each mask's lowest manifest bit;
     // the generic founding artifact commits to these physical addresses, not
     // to a caller-authored logical count.
-    let manifest_bytes = decode_hex(&input.capability_manifest_hex)?;
+    // The PUBLISHED manifest, never the declared one. A market with bounded
+    // Source material has its manifest rebuilt before publication (the Source
+    // entry's config id becomes the compiled Source's digest instead of the
+    // floor template's), and the Market identity, the record, and Core's
+    // `authenticate_derived_capability_root` are all bound to the rebuilt
+    // bytes. Deriving the capability-root selection from
+    // `input.capability_manifest_hex` here instead made every such market
+    // unfoundable: Core rebuilt a different root and refused with a bare
+    // `CoreSbfError::Reference` nine stages into an atomic founding, naming
+    // none of this. Direct markets never saw it because an unbounded Source
+    // never triggers the rebuild, so declared and published were the same
+    // bytes.
+    let manifest_bytes = records.manifest_body.clone();
+    if record_identity(&manifest_bytes) != records.manifest.digest {
+        return Err(Error::new(
+            "the founding artifact's capability manifest is not the manifest this market \
+             published; the derived capability root would refuse on chain",
+        ));
+    }
     let manifest = CapabilityManifestV1::decode(&manifest_bytes)
         .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
     let manifest_id = CapabilityContentId::new(records.manifest.digest)
@@ -8450,6 +8493,7 @@ fn derive_founding_outer_v1(
         principal_cap_sets: coordinates.principal_cap_sets,
         rent_beneficiary: identity_of(coordinates.credit.to_bytes())?,
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     let market_state_bytes = market_state
         .encode()
@@ -9509,6 +9553,7 @@ fn append_distinct_funding_readiness_accounts_v1(
 fn authenticate_funding_readiness_compiled_geometry_v1(
     payer: Pubkey,
     operation: FoundingSubmissionOperationV1,
+    recovery_policy: bool,
     instructions: &[Instruction],
     observation: Observation,
     routing_tables: &[ObservedAccount],
@@ -9527,7 +9572,12 @@ fn authenticate_funding_readiness_compiled_geometry_v1(
             operation.label()
         ))
     })?;
-    authenticate_resolved_founding_message_v1(operation, &compiled.message, routing_tables)?;
+    authenticate_resolved_founding_message_v1(
+        operation,
+        recovery_policy,
+        &compiled.message,
+        routing_tables,
+    )?;
     let plus_one = funding_readiness_compiled_geometry_v1(
         payer,
         &append_distinct_funding_readiness_accounts_v1(instructions, 1)?,
@@ -9554,7 +9604,7 @@ fn authenticate_funding_readiness_compiled_geometry_v1(
         )?,
         routing_tables,
     )?;
-    if base.complete_keys != operation.exact_unique_accounts()
+    if base.complete_keys != operation.exact_unique_accounts(recovery_policy)
         || base.required_signatures != operation.exact_required_signatures()
         || plus_one.complete_keys != base.complete_keys.saturating_add(1)
         || plus_two.complete_keys != base.complete_keys.saturating_add(2)
@@ -9635,9 +9685,14 @@ fn execute_one_funding_readiness_v1(
     submission_recorder: Option<&mut FoundingSubmissionRecorderV1<'_>>,
 ) -> Result<(TransactionEvidence, CompiledMessageGeometryV1)> {
     let instructions = funding_readiness_instructions_v1(payer.pubkey(), instruction, prepay);
+    // The frame's own coordinates decide the width: the recovery record's
+    // raw/staging pair is in the frame exactly when the market has a recovery
+    // policy, so the pin reads the presence from the same struct that builds
+    // the accounts rather than from a second opinion.
     let geometry = authenticate_funding_readiness_compiled_geometry_v1(
         payer.pubkey(),
         operation,
+        coordinates.recovery_policy.is_some(),
         &instructions,
         observation,
         routing_tables,
@@ -12680,6 +12735,7 @@ mod tests {
             manipulation_floor: None,
             recovery: None,
             manifest: published(0x6c),
+            manifest_body: Vec::new(),
             basis: published(0x6e),
             source_spec: published(0x70),
             window_spec: published(0x72),
@@ -13291,12 +13347,13 @@ mod tests {
             let geometry = authenticate_funding_readiness_compiled_geometry_v1(
                 payer,
                 operation,
+                true,
                 &instructions,
                 table.observation,
                 std::slice::from_ref(&table),
             )
             .expect("routed geometry");
-            assert_eq!(geometry.complete_keys, operation.exact_unique_accounts());
+            assert_eq!(geometry.complete_keys, operation.exact_unique_accounts(true));
             assert_eq!(geometry.required_signatures, 1);
             assert_eq!(geometry.message_bytes, expected_message_bytes);
             assert_eq!(geometry.packet_bytes, expected_packet_bytes);
@@ -13337,6 +13394,7 @@ mod tests {
             "11".repeat(32),
             "22".repeat(32),
             payer,
+            true,
         )
         .expect("binding");
         let resolved_digest = "33".repeat(32);

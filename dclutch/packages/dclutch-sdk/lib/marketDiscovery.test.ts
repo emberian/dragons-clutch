@@ -10,6 +10,7 @@ import {
   formatAtomsV1,
   inspectMarketDiscoveryV1,
   isCoreMarketHeaderV2,
+  isCurrentCoreMarketAccountV1,
   isIncompatibleCoreMarketAccountV1,
   parseMarketAddressListV1,
   provenanceChipV1,
@@ -41,7 +42,7 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
  *
  * The 352-byte Market fixture is retained only to prove this generation refuses
  * it. `CURRENT_MARKET_DATA` moves its stable identity prefix into the generated
- * 360-byte layout and supplies a nonzero test cap. It is unit-test input, never
+ * current layout and supplies a nonzero test cap. It is unit-test input, never
  * external evidence of a post-upgrade Market. The Claims and Registry records
  * remain verbatim finalized bytes from the earlier campaign.
  */
@@ -159,7 +160,7 @@ describe('Market discovery cards', () => {
     expect(card.principalCapSets).toBe('500000000');
     expect(card.settlement).toEqual({ status: 'open', label: 'no terminal receipt' });
     expect(card.identity.schemaMagic).toBe('DCLTCOR3');
-    expect(card.identity.accountBytes).toBe(360);
+    expect(card.identity.accountBytes).toBe(368);
     expect(card.identity.registryProgram).toBe(REGISTRY);
     expect(provenanceChipV1(card.provenance)).toBe(`CHAIN · finalized slot ${SLOT}`);
 
@@ -339,7 +340,7 @@ describe('Market discovery cards', () => {
     const damaged = await inspectMarketDiscoveryV1(client(new Map([[LIVE.market.address, liveRpcAccount(LIVE.market, { data: truncated })]])), {
       coreProgramId: CORE, addresses: [LIVE.market.address],
     });
-    expect(damaged.cards[0].refusal).toMatch(/the exact current width is 360/);
+    expect(damaged.cards[0].refusal).toMatch(/the exact current width is 368/);
   });
 
   it('refuses a Realm record whose bytes do not hash to the committed identity', async () => {
@@ -375,7 +376,7 @@ describe('Market enumeration', () => {
     expect(isCoreMarketHeaderV2(categorical)).toBe(false);
   });
 
-  it('recognizes only the exact superseded 352-byte DCLTCOR2 account as incompatible', () => {
+  it('recognizes each superseded generation, including the one sharing the current magic', () => {
     expect(isIncompatibleCoreMarketAccountV1(liveRpcAccount(LIVE.market))).toBe(true);
     expect(isIncompatibleCoreMarketAccountV1(liveRpcAccount(LIVE.market, {
       data: mutate(LIVE.market.data, 0, new TextEncoder().encode('DCLTCOR3')),
@@ -384,6 +385,15 @@ describe('Market enumeration', () => {
       ...liveRpcAccount(LIVE.market),
       space: 351,
     })).toBe(false);
+    // The bump tail widened DCLTCOR3 without moving its schema version, so the
+    // pre-tail generation carries the CURRENT magic and version and is told
+    // apart by width alone. Listing it as current would offer the reader an
+    // account it cannot decode.
+    const preTail = { data: CURRENT_MARKET_DATA.slice(0, 360), space: 360 };
+    expect(isIncompatibleCoreMarketAccountV1(preTail)).toBe(true);
+    expect(isCurrentCoreMarketAccountV1(preTail)).toBe(false);
+    expect(isCoreMarketHeaderV2(preTail.data)).toBe(true);
+    expect(isCurrentCoreMarketAccountV1({ data: CURRENT_MARKET_DATA, space: CORE_STATE_BYTES })).toBe(true);
   });
 
   it('lists current Markets while separately disclosing incompatible historical accounts', async () => {
@@ -403,7 +413,7 @@ describe('Market enumeration', () => {
       accountBytes: 352,
     }]);
     expect(enumeration.note).toMatch(/3 finalized Core accounts at slot 99; 1 carry the current DCLTCOR3 Market header/);
-    expect(enumeration.note).toMatch(/1 historical DCLTCOR2 Market account; it uses the incompatible 352-byte layout and is not listed as current/);
+    expect(enumeration.note).toMatch(/1 historical Market account \(1 DCLTCOR2 at 352 bytes\); it is not listed as current/);
   });
 
   it('reports the indexer-shaped gap when getProgramAccounts is unavailable', async () => {

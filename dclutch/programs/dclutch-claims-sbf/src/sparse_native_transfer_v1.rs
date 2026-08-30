@@ -14,7 +14,8 @@ use dclutch_claims_svm::{
     liability_basis_state_v2::{
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
         LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, LiabilityBasisMarketViewV2,
-        LiabilityBasisPositionViewV2,
+        LiabilityBasisPositionViewV2, liability_basis_market_bump_v2,
+        liability_basis_position_bump_v2,
     },
     protocol_position_v2::{
         PROTOCOL_POSITION_ADMISSION_BYTES_V2, ProtocolPositionAdmissionV2, ProtocolPositionSeedsV2,
@@ -179,15 +180,22 @@ pub(super) fn process(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    let (request_bytes, admission) = split_instruction(instruction_data)?;
+    let (request_bytes, suffix) = split_instruction(instruction_data)?;
     let request = SparseNativeTransferV1::decode(request_bytes)
         .map_err(|_| SparseNativeTransferSbfErrorV1::Instruction)?;
     let accounts = Accounts::parse(account_infos)?;
     authenticate_privileges(program_id, account_infos, accounts)?;
+    // The digest covers the request bytes ONLY, which is what lets the parent
+    // append its caller-authority bump after them; see `split_instruction`.
     let packet_digest = hash(request_bytes).to_bytes();
-    authenticate_authority(accounts, request, packet_digest)?;
+    authenticate_authority(
+        accounts,
+        request,
+        packet_digest,
+        suffix.caller_authority_bump,
+    )?;
     authenticate_releases(accounts, request)?;
-    if let Some(admission) = admission {
+    if let Some(admission) = suffix.admission {
         validate_sparse_admission_receipt_v3(
             admission,
             request,
@@ -213,7 +221,9 @@ fn execute_authenticated_transfer(
         .map_err(|_| SparseNativeTransferSbfErrorV1::Accounts)?;
     let market = LiabilityBasisMarketViewV2::decode(&market_before)
         .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?;
-    authenticate_market(program_id, accounts, request, market)?;
+    let market_bump = liability_basis_market_bump_v2(&market_before)
+        .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?;
+    authenticate_market(program_id, accounts, request, market, market_bump)?;
     authenticate_product_and_core(accounts, request, market)?;
     let source_before = accounts
         .source
@@ -298,26 +308,67 @@ fn execute_authenticated_transfer(
     Ok(())
 }
 
+/// Everything this instruction carries after the fixed-width request.
+struct SparseInstructionSuffixV1 {
+    admission: Option<ProtocolPositionAdmissionV2>,
+    /// The caller-authority bump the parent derived, if it carried one.
+    caller_authority_bump: Option<u8>,
+}
+
+/// Split the request from its optional admission receipt and caller bump.
+///
+/// # Why the bump can live here at all, which is not obvious
+///
+/// The caller authority's seeds END in `hash(request_bytes)`, so a bump written
+/// INSIDE the request would change the digest, which changes the address, which
+/// changes the bump: there is no fixed point and the obvious carrier is
+/// circular. A byte AFTER the request is outside that loop, because the digest
+/// covers the fixed-width prefix only and nothing else -- which is exactly the
+/// invariant
+/// `the_caller_authority_digest_covers_the_request_prefix_only` pins, so that
+/// widening the digest meets a red row instead of an unexplainable derivation
+/// failure.
+///
+/// The byte is not an authority. `authenticate_authority` reproduces the
+/// address from it and compares against the account the parent passed at
+/// coordinate 0; a wrong byte reproduces a different address and refuses. A
+/// caller that omits it gets the search this always used to do.
 fn split_instruction(
     instruction_data: &[u8],
-) -> Result<(&[u8], Option<ProtocolPositionAdmissionV2>), ProgramError> {
+) -> Result<(&[u8], SparseInstructionSuffixV1), ProgramError> {
     let request = instruction_data
         .get(..SPARSE_NATIVE_TRANSFER_BYTES_V1)
         .ok_or(SparseNativeTransferSbfErrorV1::Instruction)?;
     let suffix = instruction_data
         .get(SPARSE_NATIVE_TRANSFER_BYTES_V1..)
         .ok_or(SparseNativeTransferSbfErrorV1::Instruction)?;
-    let admission = if suffix.is_empty() {
-        None
-    } else if suffix.len() == PROTOCOL_POSITION_ADMISSION_BYTES_V2 {
-        Some(
-            ProtocolPositionAdmissionV2::decode_receipt(suffix)
-                .map_err(|_| SparseNativeTransferSbfErrorV1::Instruction)?,
-        )
-    } else {
-        return Err(SparseNativeTransferSbfErrorV1::Instruction.into());
+    // Exactly four shapes, distinguished by exact length. 512 is not 1 and 513
+    // is not 512, so no shape is reachable two ways.
+    const ADMISSION: usize = PROTOCOL_POSITION_ADMISSION_BYTES_V2;
+    let (admission_bytes, caller_authority_bump) = match suffix.len() {
+        0 => (None, None),
+        1 => (None, suffix.first().copied()),
+        ADMISSION => (suffix.get(..ADMISSION), None),
+        n if n == ADMISSION + 1 => (suffix.get(..ADMISSION), suffix.get(ADMISSION).copied()),
+        _ => return Err(SparseNativeTransferSbfErrorV1::Instruction.into()),
     };
-    Ok((request, admission))
+    let admission = match admission_bytes {
+        None => None,
+        Some(bytes) => Some(
+            ProtocolPositionAdmissionV2::decode_receipt(bytes)
+                .map_err(|_| SparseNativeTransferSbfErrorV1::Instruction)?,
+        ),
+    };
+    Ok((
+        request,
+        SparseInstructionSuffixV1 {
+            admission,
+            // A zero byte is not a bump any derivation produces, so it is not a
+            // carrier either; treat it as absent rather than as a value that
+            // will fail to reproduce.
+            caller_authority_bump: caller_authority_bump.filter(|bump| *bump != 0),
+        },
+    ))
 }
 
 fn authenticate_privileges(
@@ -356,6 +407,7 @@ fn authenticate_authority(
     accounts: Accounts<'_, '_>,
     request: SparseNativeTransferV1,
     packet_digest: [u8; 32],
+    carried_bump: Option<u8>,
 ) -> Result<(), ProgramError> {
     let input = request.input();
     let seeds = CallerAuthoritySeedsV1::new(
@@ -367,9 +419,23 @@ fn authenticate_authority(
         packet_digest,
     )
     .map_err(|_| SparseNativeTransferSbfErrorV1::Release)?;
-    if accounts.authority.key
-        != &Pubkey::find_program_address(&seeds.as_slices(), accounts.caller_program.key).0
-    {
+    // The parent derived this address to sign the CPI with; reproducing it from
+    // the bump it carried costs one syscall instead of however many the search
+    // would take. The check is unchanged -- a wrong bump reproduces a different
+    // address and refuses right here.
+    let expected = match carried_bump {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let [domain, release, market, role, context, digest] = seeds.as_slices();
+            Pubkey::create_program_address(
+                &[domain, release, market, role, context, digest, &bump_seed],
+                accounts.caller_program.key,
+            )
+            .map_err(|_| SparseNativeTransferSbfErrorV1::Release)?
+        }
+        None => Pubkey::find_program_address(&seeds.as_slices(), accounts.caller_program.key).0,
+    };
+    if accounts.authority.key != &expected {
         return Err(SparseNativeTransferSbfErrorV1::Release.into());
     }
     Ok(())
@@ -427,13 +493,35 @@ fn authenticate_market(
     accounts: Accounts<'_, '_>,
     request: SparseNativeTransferV1,
     market: LiabilityBasisMarketViewV2,
+    carried_bump: Option<u8>,
 ) -> Result<(), ProgramError> {
     let input = request.input();
-    let expected = Pubkey::find_program_address(
-        &[LIABILITY_BASIS_MARKET_SEED_V2, input.market.as_slice()],
-        program_id,
-    )
-    .0;
+    // This program created this account and recorded the bump it signed it into
+    // existence with, so the address is REPRODUCED rather than searched for. A
+    // wrong byte reproduces a different address and refuses just below; an
+    // aggregate written before the byte existed carries zero and is searched
+    // for exactly as it used to be.
+    let expected = match carried_bump {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    LIABILITY_BASIS_MARKET_SEED_V2,
+                    input.market.as_slice(),
+                    &bump_seed,
+                ],
+                program_id,
+            )
+            .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?
+        }
+        None => {
+            Pubkey::find_program_address(
+                &[LIABILITY_BASIS_MARKET_SEED_V2, input.market.as_slice()],
+                program_id,
+            )
+            .0
+        }
+    };
     if accounts.market.owner != program_id
         || accounts.market.key != &expected
         || market.logical_market != input.market
@@ -505,11 +593,28 @@ fn authenticate_product_and_core(
     }
     let core =
         CoreState::decode(&core_data).map_err(|_| SparseNativeTransferSbfErrorV1::Product)?;
-    let expected = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
-        accounts.core_program.key,
-    )
-    .0;
+    // Reproduced from the bump the founding recorded in the state itself, not
+    // searched for. Nine seeds, all drawn from the Market identity, so all nine
+    // move with the key draw -- and Trading and Custody derive this same address
+    // on the same transaction. A wrong bump reproduces a different address and
+    // refuses just below; a state written before the bump tail existed carries
+    // none and is searched for exactly as before. See `StateBumpsV1`.
+    let seeds = MarketCoreStateSeedsV2::new(core.identity);
+    let base = seeds.as_slices();
+    let expected = match core.bumps.market {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    base[0], base[1], base[2], base[3], base[4], base[5], base[6], base[7],
+                    base[8], &bump_seed,
+                ],
+                accounts.core_program.key,
+            )
+            .map_err(|_| SparseNativeTransferSbfErrorV1::Product)?
+        }
+        None => Pubkey::find_program_address(&base, accounts.core_program.key).0,
+    };
     if expected != *accounts.core_market.key
         || core.phase != CorePhase::Open
         || core.identity.market_id.to_bytes() != input.market
@@ -537,9 +642,25 @@ fn authenticate_position(
 ) -> Result<(), ProgramError> {
     let seeds = ProtocolPositionSeedsV2::new(market_account.key.to_bytes(), owner)
         .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?;
-    let expected = Pubkey::find_program_address(&seeds.as_slices(), program_id).0;
     let position = LiabilityBasisPositionViewV2::decode(data)
         .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?;
+    // Reproduced from the bump this program recorded when it created the
+    // Position, not searched for. Two Positions are authenticated per transfer,
+    // so this is the same saving twice.
+    let expected = match liability_basis_position_bump_v2(data)
+        .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?
+    {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let [domain, market_seed, owner_seed] = seeds.as_slices();
+            Pubkey::create_program_address(
+                &[domain, market_seed, owner_seed, &bump_seed],
+                program_id,
+            )
+            .map_err(|_| SparseNativeTransferSbfErrorV1::ClaimsState)?
+        }
+        None => Pubkey::find_program_address(&seeds.as_slices(), program_id).0,
+    };
     if account.owner != program_id
         || account.key != &expected
         || position.market_account != market_account.key.to_bytes()
@@ -804,6 +925,93 @@ mod tests {
             read_claim(&destination, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2, 1),
             Ok(9)
         );
+    }
+
+    /// THE INVARIANT THE CALLER-AUTHORITY BUMP CARRY RESTS ON.
+    ///
+    /// The caller authority's last seed is `hash(request_bytes)` and
+    /// `request_bytes` is the FIXED-WIDTH PREFIX of this instruction, not the
+    /// whole of it. That is the only reason the parent can append its bump
+    /// after the request at all: a bump inside the hashed region would change
+    /// the digest, which changes the address, which changes the bump, and the
+    /// carrier would have no fixed point.
+    ///
+    /// **If you are here because this row went red:** something widened the
+    /// digest to cover more than the request prefix -- a reasonable-looking
+    /// hardening, and it silently breaks the carry. What breaks is not this
+    /// test; it is `authenticate_authority`, which will then reproduce an
+    /// address nobody signed with, for reasons no refusal code explains. Either
+    /// keep the digest over the prefix, or remove the suffix carrier in
+    /// `split_instruction` and its parent in `claims_composition_v3.rs` in the
+    /// same change.
+    #[test]
+    fn the_caller_authority_digest_covers_the_request_prefix_only() {
+        let bytes = request(7).to_bytes();
+        assert_eq!(bytes.len(), SPARSE_NATIVE_TRANSFER_BYTES_V1);
+        let bare = hash(&bytes).to_bytes();
+
+        // Every width the wire can carry, including the two admission-shaped
+        // ones. The bytes need not be a decodable admission receipt: the claim
+        // is about what the digest is taken OVER, not about what follows.
+        for width in [
+            1_usize,
+            PROTOCOL_POSITION_ADMISSION_BYTES_V2,
+            PROTOCOL_POSITION_ADMISSION_BYTES_V2 + 1,
+        ] {
+            let mut extended = bytes.to_vec();
+            extended.extend_from_slice(&alloc::vec![0xab_u8; width]);
+            let prefix = &extended[..SPARSE_NATIVE_TRANSFER_BYTES_V1];
+            assert_eq!(
+                hash(prefix).to_bytes(),
+                bare,
+                "appending {width} byte(s) to this instruction changed its caller-authority \
+                 digest. The bump carried after the request is derived from that digest, so \
+                 this makes the carrier unsatisfiable -- see this test's own doc comment.",
+            );
+        }
+
+        // And the split really does hand `process` that prefix, rather than
+        // something the digest is then taken over a second time.
+        let mut with_bump = bytes.to_vec();
+        with_bump.push(0xab);
+        let (prefix, suffix) = split_instruction(&with_bump).expect("request plus one bump byte");
+        assert_eq!(prefix, &bytes[..]);
+        assert_eq!(hash(prefix).to_bytes(), bare);
+        assert_eq!(suffix.caller_authority_bump, Some(0xab));
+    }
+
+    /// The suffix grammar admits exactly four shapes and nothing else.
+    #[test]
+    fn the_instruction_suffix_admits_only_its_four_declared_shapes() {
+        let bytes = request(7).to_bytes();
+        let admission = PROTOCOL_POSITION_ADMISSION_BYTES_V2;
+        for (width, expected_bump) in [(0_usize, None), (1, Some(0xab))] {
+            let mut extended = bytes.to_vec();
+            extended.extend_from_slice(&alloc::vec![0xab_u8; width]);
+            let (_, suffix) = split_instruction(&extended).expect("declared shape");
+            assert_eq!(suffix.caller_authority_bump, expected_bump);
+            assert!(suffix.admission.is_none());
+        }
+        // A zero byte is not a bump any derivation produces, so it reads as
+        // absent rather than as a value that would fail to reproduce.
+        let mut zeroed = bytes.to_vec();
+        zeroed.push(0);
+        assert_eq!(
+            split_instruction(&zeroed)
+                .expect("one trailing byte")
+                .1
+                .caller_authority_bump,
+            None
+        );
+        for width in [2_usize, 3, admission - 1, admission + 2] {
+            let mut extended = bytes.to_vec();
+            extended.extend_from_slice(&alloc::vec![0_u8; width]);
+            assert_eq!(
+                split_instruction(&extended).err(),
+                Some(SparseNativeTransferSbfErrorV1::Instruction.into()),
+                "a {width}-byte suffix is not one of the four declared shapes"
+            );
+        }
     }
 
     #[test]

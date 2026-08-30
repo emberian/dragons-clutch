@@ -63,7 +63,7 @@ use dclutch_execution_strategy_contract::v2::{
 };
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
-    STATE_BYTES,
+    STATE_BYTES, StateBumpsV1,
 };
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ArtifactActivationInputV1,
@@ -421,6 +421,7 @@ fn core_market(
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(0xa9),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .expect("canonical Open Market state");

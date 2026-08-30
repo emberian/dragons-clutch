@@ -24,9 +24,11 @@
 //! There are no legacy consumers left. The one that was -- the `DCLLBX02`
 //! route in `dclutch-claims-sbf::liability_basis_v2`, which still expected a
 //! Core-owned `LinkedBasisRecordV2` -- was deleted rather than converged, and
-//! its module is now just the shared LBV2 state vocabulary. `LinkedBasisRecordV2`
-//! survives only inside `dclutch-liability-basis-v2-kernel::product_claims`,
-//! for that crate's own tests; no SBF path decodes it.
+//! its module is now just the shared LBV2 state vocabulary.
+//! `LinkedBasisRecordV2` no longer exists in Rust at all: the last model of it
+//! was `dclutch-liability-basis-v2-kernel::product_claims`, which was deleted
+//! once it was the only thing keeping a retired record family alive. `DCLTLNK2`
+//! now appears in this tree solely as prose.
 
 #![no_std]
 #![forbid(unsafe_code)]

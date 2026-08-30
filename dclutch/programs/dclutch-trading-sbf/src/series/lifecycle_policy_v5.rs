@@ -320,7 +320,10 @@ mod tests {
     /// The width constant is exactly what the encoder emits.
     #[test]
     fn the_width_constant_is_exact() {
-        assert_eq!(policy_bytes().len(), SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5);
+        assert_eq!(
+            policy_bytes().len(),
+            SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5
+        );
         let mut scratch = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5 - 1];
         let mut output = vec![0_u8; SERIES_CONSUME_STATE_LIFECYCLE_BYTES_V5 - 1];
         assert_eq!(

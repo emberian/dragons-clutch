@@ -1558,6 +1558,41 @@ fn validate_state(
     {
         return Err(Error::Underfunded);
     }
+    // Exit affordability: a Dealer state may never hold more inventory than its
+    // liveness vault can pay to unwind.
+    //
+    // `retire` is reachable only through zero inventory, zero inventory only
+    // through `unwind`, and one `unwind` retires one whole coordinate for one
+    // `work_reward`. So the walk out of a state costs exactly one reward per
+    // nonzero coordinate, and a state holding fewer rewards than that is a
+    // market nobody can ever close — the dealer included, because the only two
+    // writes that refill the vault (`schedule`, `activate`) both refuse outside
+    // `Phase::Open`.
+    //
+    // Checking it HERE is what makes it hold everywhere: all eight transitions
+    // end by revalidating their post-state, so `fill` cannot spend the reserve
+    // the terminal walk needs, and `activate` cannot swap in a candidate whose
+    // funding cannot cover the inventory already standing. Without it the vault
+    // is a work escrow checked only at creation, which is precisely the decay
+    // `general-adapter-contract/src/candidate_v1.rs:363-394` names: "an
+    // over-draw is caught at the draw rather than at the last crank that finds
+    // the compartment empty".
+    let unwind_cranks = u64::try_from(
+        state
+            .inventory
+            .iter()
+            .take(usize::from(policy.outcome_count))
+            .filter(|quantity| **quantity != 0)
+            .count(),
+    )
+    .map_err(|_| Error::ArithmeticOverflow)?;
+    if state.active_work_remaining
+        < unwind_cranks
+            .checked_mul(active.work_reward)
+            .ok_or(Error::ArithmeticOverflow)?
+    {
+        return Err(Error::Underfunded);
+    }
     if state.fee_paid != fee_due(policy, state.fee_base)? {
         return Err(Error::InvalidCurve);
     }
@@ -1876,6 +1911,19 @@ fn unwind(
     let outcome = usize::from(request.outcome);
     if outcome >= usize::from(policy.outcome_count) {
         return Err(Error::InvalidCurve);
+    }
+    // One unwind retires one whole coordinate, which makes the terminal walk
+    // cost exactly one `work_reward` per nonzero coordinate — the quantity
+    // `validate_state`'s exit-affordability invariant is sized against. A walk
+    // whose length its own callers choose cannot be reserved for.
+    //
+    // A zero quantity needs no conjunct here: `Request::validate_shape` refuses
+    // it on the wire for this action (`NonCanonicalPadding`, the `Unwind` arm),
+    // so it cannot reach a transition. That is where `DealerLiquidity.lean`'s
+    // `0 < unwind.quantity` is carried, and stating it twice would leave a dead
+    // guard that reads as load-bearing.
+    if request.quantity != state.inventory[outcome] {
+        return Err(Error::InventoryRisk);
     }
     state.inventory[outcome] = state.inventory[outcome]
         .checked_sub(request.quantity)

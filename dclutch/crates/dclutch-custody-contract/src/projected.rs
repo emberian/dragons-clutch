@@ -1749,6 +1749,7 @@ mod tests {
     use dclutch_market_core_codec::{Identity, MarketIdentity, Readiness};
 
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     fn id(seed: u8) -> [u8; 32] {
         [seed; 32]
@@ -1871,6 +1872,7 @@ mod tests {
             principal_cap_sets: u64::MAX,
             rent_beneficiary: identity(22),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         }
     }
 

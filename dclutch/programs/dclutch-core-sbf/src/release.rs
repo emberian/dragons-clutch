@@ -126,11 +126,8 @@ pub(crate) fn authenticate_roles<'accounts, 'info>(
     let bytes = cache.try_borrow_data().map_err(|_| CoreSbfError::Release)?;
     let view =
         ActivatedExecutionReleaseSetViewV1::decode(&bytes).map_err(|_| CoreSbfError::Release)?;
-    let expected_cache = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, &release_set_id],
-        registry.key,
-    )
-    .0;
+    let expected_cache =
+        Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set_id], registry.key).0;
     if cache.key != &expected_cache
         || cache.owner != registry.key
         || cache.is_signer

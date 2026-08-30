@@ -391,9 +391,13 @@ fn require_root_only_series_lifecycle(
             let indices = selected
                 .project_account_indices(profile, 0, None)
                 .map_err(|_| SeriesArtifactErrorV4::Lifecycle)?;
-            for coordinate in [Some(indices.state()), indices.payer(), indices.rent_credit()]
-                .into_iter()
-                .flatten()
+            for coordinate in [
+                Some(indices.state()),
+                indices.payer(),
+                indices.rent_credit(),
+            ]
+            .into_iter()
+            .flatten()
             {
                 if is_ticket(coordinate)? {
                     return Err(SeriesArtifactErrorV4::TicketAuthorship);
@@ -744,12 +748,22 @@ pub(super) mod tests {
                 guard: LifecycleGuardInputV3::Always,
             },
         }];
-        let width =
-            HEADER_BYTES + RECIPE_BYTES + 2 * SEED_BYTES + ACTION_PLAN_BYTES + PROTECTED_OUTPUT_BYTES;
+        let width = HEADER_BYTES
+            + RECIPE_BYTES
+            + 2 * SEED_BYTES
+            + ACTION_PLAN_BYTES
+            + PROTECTED_OUTPUT_BYTES;
         let mut scratch = vec![0_u8; width];
         let mut output = vec![0_u8; width];
         encode_lifecycle_policy_v5_atomic(
-            &recipes, &seeds, &plans, &[None], &[], &[], &mut scratch, &mut output,
+            &recipes,
+            &seeds,
+            &plans,
+            &[None],
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
         )
         .expect("hostile policy encodes");
         output

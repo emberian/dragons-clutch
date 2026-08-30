@@ -816,7 +816,10 @@ fn encode_action_program_set(
     Ok(bytes)
 }
 
-fn encode_config(input: GeneralSelectedReleaseInputV1, program_set_id: [u8; 32]) -> Result<Vec<u8>> {
+fn encode_config(
+    input: GeneralSelectedReleaseInputV1,
+    program_set_id: [u8; 32],
+) -> Result<Vec<u8>> {
     Ok(GeneralConfigV3::new(GeneralConfigV3Input {
         capacity_profile_id: input.capacity_profile,
         claim_basis_id: input.claim_basis,
@@ -940,8 +943,8 @@ fn encode_account_profile(
     widths: GeneralExternalAccountWidthsV3,
     action: Action,
 ) -> Result<Vec<u8>> {
-    let bytes =
-        general_account_profile_bytes_v3(action).map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    let bytes = general_account_profile_bytes_v3(action)
+        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
     encode_general_account_profile_v3_atomic(action, widths, &mut scratch, &mut output)
@@ -954,8 +957,8 @@ fn encode_account_profile(
 /// The seed order is NOT named here. It comes from `state_seeds_v3` through the
 /// encoder, which is the single-author property this whole release depends on.
 fn encode_lifecycle(input: GeneralSelectedReleaseInputV1, action: Action) -> Result<Vec<u8>> {
-    let bytes =
-        general_state_lifecycle_bytes_v5(action).map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    let bytes = general_state_lifecycle_bytes_v5(action)
+        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
     let child_widths = if action == Action::InitializeSettlement {
@@ -982,8 +985,13 @@ fn encode_transition(action: Action) -> Result<Vec<u8>> {
         .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_general_transition_program_v3_atomic(action, &mut instructions, &mut scratch, &mut output)
-        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    encode_general_transition_program_v3_atomic(
+        action,
+        &mut instructions,
+        &mut scratch,
+        &mut output,
+    )
+    .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
     Ok(output)
 }
 
@@ -999,12 +1007,12 @@ fn encode_effect(action: Action) -> Result<Vec<u8>> {
         .ok_or(GeneralSelectedReleaseErrorV1::Encoding)?;
     let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; count];
     let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
-    let base =
-        general_effect_program_bytes_v3(action).map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    let base = general_effect_program_bytes_v3(action)
+        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
     let mut base_scratch = vec![0_u8; base];
     let mut base_output = vec![0_u8; base];
-    let bytes =
-        general_effect_program_bytes_v4(action).map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
+    let bytes = general_effect_program_bytes_v4(action)
+        .map_err(|_| GeneralSelectedReleaseErrorV1::Encoding)?;
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
     encode_general_effect_program_v4_atomic(

@@ -80,45 +80,42 @@ inventory with exactly one affordable unwind. That is a deliberate, profitable,
 protocol-admitted brick. It is not an absence and a quiescence timeout would not
 catch it, because the dealer is present and acting.
 
-### F3 — the specification forbids the zero-quantity unwind; the Rust admits and pays for it
+### F3 — WITHDRAWN: the zero-quantity unwind is not reachable, and the way that surfaced is worth keeping
 
-This one is not a design gap. It is a **divergence between the Lean model and
-the hand-written Rust**, and the model is the half that is right.
+The first draft of this note claimed a third finding: that
+`DealerLiquidity.lean` states `0 < quantity` three times — `fillAccepts:457`,
+`unwindAccepts:527`, `liquidityChangeAccepts:559` — while the Rust transcribed
+it once, into `fill`'s transition alone, leaving a zero-quantity `Unwind` as a
+paid no-op that anyone could repeat until the vault was empty.
 
-`formal/dclutch-semantics/DClutchSemantics/DealerLiquidity.lean` states the same
-conjunct three times:
+**That is wrong, and the claim should not be carried forward.** The conjunct is
+transcribed for all four economic actions. It lives one layer up, at the wire:
+`Request::validate_shape` refuses `quantity == 0` for `Unwind` (`:1272`) and for
+both liquidity actions (`:1290`) with `NonCanonicalPadding`. Every entry point
+decodes before it interprets — `interpret`, `interpret_projected`, and
+`dealer-sbf`'s own `Request::decode` at
+`programs/dclutch-dealer-sbf/src/lib.rs:383-386` — so no such packet can reach a
+transition, on chain or off.
 
-| Lean predicate | line | conjunct |
-|---|---|---|
-| `fillAccepts` | `:457` | `0 < fill.quantity` |
-| `unwindAccepts` | `:527` | `0 < unwind.quantity` |
-| `liquidityChangeAccepts` | `:559` | `0 < change.quantity` |
+The error was reading the transition functions in isolation and concluding from
+`fill`'s redundant guard that its siblings had none. It is recorded here rather
+than deleted because of **how** it surfaced: the hostile was written before the
+claim was believed, and it could not be *constructed* — `Request::to_bytes`
+refused the zero-quantity request at the encode. A case answered by an earlier
+gate is not the case it claims, and the cheapest way to discover that a guard is
+two layers deep is to make the case actually run.
 
-The Rust transcribed it **once** — `fill` refuses `request.quantity == 0`
-(`:1755`). `unwind` (`:1869-1875`) and `adjust_liquidity` (`:1955-1960`) do not.
+What is kept is a test, not a conjunct.
+`the_wire_owns_the_zero_quantity_rule_for_every_economic_action` pins where the
+guard lives for all four actions, and states in its own header what a
+zero-quantity unwind *would* do if that arm of `validate_shape` were ever
+relaxed: `Plan::push` no-ops on a zero amount (`:1387-1389`), so the redemption
+and the hoard transfer would vanish and the `LivenessVault -> Executor` reward
+would be the only surviving transfer. The two conjuncts the first draft added to
+`unwind` and `adjust_liquidity` were removed — unreachable guards that read as
+load-bearing are the same defect class as a dormant plan that reads as a design.
 
-For `unwind` the consequence is a funded anti-liveness verb. A zero-quantity
-unwind subtracts nothing from inventory and pays out nothing, but still runs
-`state.active_work_remaining -= active.work_reward` (`:1892`) and
-`plan.push(LivenessVault, Executor, active.work_reward)` (`:1897`). `Plan::push`
-no-ops on a zero amount (`:1387-1389`), so the two real transfers vanish and the
-executor reward is the only transfer that survives.
-
-**In Terminal, anyone may drain the entire liveness vault into their own
-account, one `work_reward` at a time, doing zero work, and thereby guarantee the
-market can never retire.** `dealer-sbf` adds no quantity guard — it takes the
-codec's plan as given (`programs/dclutch-dealer-sbf/src/lib.rs:1905-1915`) — and
-`authenticate_actor` (`:564-577`) requires `actor_id == [0; 32]` for `Unwind`,
-i.e. it is open to anyone.
-
-The census scored Dealer `Fill`/`Unwind` **GREEN**, *"the tree's second real
-caller-funded verb"*. It is GREEN for whether the caller is paid and RED for
-what the payment buys. Same family as Y3b: funded **anti**-liveness, not
-unfunded liveness.
-
-For `adjust_liquidity` the consequence is milder — the route is dealer-gated, so
-it is not a grief — but it is the same dropped conjunct, and it lets a no-op
-advance `state_revision` (`:2010`).
+Nothing in F1, F2, or either ruling depends on F3.
 
 ### F4 — entry has no on-chain route, and this is a different problem than a liveness gap
 
@@ -142,8 +139,12 @@ Dealer program-test drives it.
 
 Stated plainly, as the census asked: **a family whose participants cannot enter
 on chain does not have a liveness gap, it has a reachability gap.** No Dealer
-exists on any cluster, and none can be created by any route that is executed
-anywhere in this tree.
+`Policy`, `Candidate` or `State` can be created by any route that is executed
+anywhere in this tree — that part is measured above. That none exists on a
+cluster is the campaign's own statement rather than mine
+(`DEALER_ACCEPTED_TRANSITION_2026_08_29.md`, "No devnet anything. No selected
+Market, no live participant, no public caller"), and no evidence document in
+`docs/evidence/` records a founded Dealer.
 
 Two consequences, and they point in opposite directions:
 
@@ -193,18 +194,18 @@ and this note does not change it. It is recorded as debt below.
 
 ## The ruling
 
-**One invariant and one conjunct close F1, F2 and F3. No new action, no new
-field, no ABI change, no ELF, no force-exit verb.**
+**One invariant and one conjunct close F1 and F2. No new action, no new field,
+no ABI change, no ELF, no force-exit verb.**
 
 ### Ruling 1 — an unwind retires exactly one coordinate
 
-`unwind` refuses unless `request.quantity` is nonzero **and** equal to
-`state.inventory[outcome]`.
+`unwind` refuses unless `request.quantity` equals `state.inventory[outcome]`.
 
-This restores the specification's `0 < quantity` (F3) and additionally makes the
-cost of the terminal walk exactly computable: one crank per nonzero coordinate,
-never more. That exactness is what Ruling 2 needs — a reserve cannot be sized
-against a walk whose length a caller chooses.
+The zero case needs no conjunct here: the wire already owns it (F3). What this
+adds is exactness — the terminal walk costs one crank per nonzero coordinate,
+never more, because no caller can split a coordinate across calls. That
+exactness is what Ruling 2 needs: a reserve cannot be sized against a walk whose
+length a caller chooses.
 
 The capability given up is the *partial* unwind. It has no identified use: an
 unwind redeems terminal inventory the dealer already owns, no per-unit cost
@@ -245,8 +246,9 @@ What it does to each finding:
   one-crank replacement candidate is refused whenever inventory is nonzero at
   two or more coordinates. The deliberate shrink becomes unrepresentable rather
   than merely discouraged.
-- **F3** — with Ruling 1, each unwind decreases both sides by exactly one term,
-  so the invariant is preserved exactly along the terminal walk.
+- **The walk itself** — with Ruling 1, each unwind decreases both sides of the
+  inequality by exactly one term, so the invariant is preserved exactly along
+  the terminal walk rather than merely holding at its start.
 
 And the property that closes R4:
 
@@ -273,6 +275,51 @@ that no Dealer has ever been founded on any cluster, that set is empty — and i
 must be kept empty: **entry must not be built until this invariant is in place**,
 or the window this note is exploiting closes and a genuine migration is needed.
 That ordering is the note's one hard constraint on other lanes.
+
+---
+
+## What was executed
+
+Both rulings are landed in both halves, and the two halves are still welded.
+
+**Rust** — `crates/dclutch-dealer-codec`, 44/44 (39 before). The five new cases,
+and what each would do without the change:
+
+| case | pins | red without the change |
+|---|---|---|
+| `a_fill_may_not_spend_the_reserve_its_own_exit_needs` | the reserve, from both sides of one fill: admitted at a vault of 6, refused at 4, the states differing only in `active_work_remaining` | yes — the old rule admits both (4 clears `fill`'s own `work_reward` of 2) |
+| `a_replacement_may_not_price_the_standing_inventory_out_of_its_exit` | F2, from both sides: the same 50-funding candidate activates at a reward rate of 20 and is refused at 30 | yes — the old rule admits both (50 ≤ `work_funding`) |
+| `an_unwind_retires_one_whole_coordinate` | Ruling 1 — a 49-of-50 unwind refuses | yes |
+| `the_exact_reserve_walks_the_whole_way_out_and_retires` | the property itself: a state holding *exactly* the reserve walks every coordinate to zero and reaches `Retire`, ending at a vault of zero rather than short | no — a control, and it is there to prove the invariant is not over-strict |
+| `the_wire_owns_the_zero_quantity_rule_for_every_economic_action` | F3's correction — where the guard actually lives, for all four economic actions | no — it pins pre-existing behaviour I had misread |
+
+The boundary pairs are the point. A case that only shows a refusal cannot
+distinguish a reserve from an off-by-one, so each of the first two admits the
+neighbouring state that differs in exactly one field.
+
+**Lean** — `DClutchSemantics.DealerLiquidity` and `.DealerLiquidityExamples`
+build, with a new `native_decide` theorem,
+`a_state_may_not_hold_inventory_it_cannot_afford_to_unwind`: the exact reserve is
+a valid state, one below it is not, and a fill from the exact reserve **passes
+every acceptance conjunct and is still rolled back** — `accepts = true`,
+`run = pre` — by the post-state invariant alone. That last clause is the
+mechanism stated exactly: what the fill cannot afford is not itself but the exit
+it would leave behind.
+
+**One existing Lean fixture was reclassified, and it is the invariant doing its
+job.** `hostileUnderfundedWork` — `initial` with a vault of 1 — was asserted
+`valid = true`, a state that merely could not afford one more fill. It is now
+`valid = false`, because `initial` holds inventory at both coordinates and a
+vault of 1 cannot pay the two-crank walk out. Generalised: **being too poor to
+fill while holding inventory now implies being too poor to exit**, so that
+configuration is gone rather than merely discouraged. The hostile's operational
+content is unchanged and still asserted — the fill refuses, nothing moves.
+
+**The weld held.** `crates/dclutch-dealer-codec/tests/generator_fresh.rs` rebuilds
+the Lean library, re-runs `EmitDealerLiquidityAbiRust.lean` and compares bytes:
+green after the Lean edit, so `generated_dealer_liquidity.rs` is unchanged. The
+change is semantic only — no offset, no magic, no width, no action tag moved,
+which is what "no ABI change, no ELF" above means measured rather than asserted.
 
 ---
 
@@ -325,11 +372,70 @@ Custody ELF, ~200-300 lines, one new route, and four hostiles.
   sleeping LP share blocks obligation close. This is R3's shape in the Dealer
   family — a sleeping holder blocking retirement — and it should be ruled with
   R3, not separately, because the two want the same terminal-value policy.
-- **The family's one-command runner does not run the family's own program-test.**
-  `run-program-test.sh` covers the accelerator campaign only; the Dealer
-  transition machine's real-ELF campaign is
-  `programs/dclutch-dealer-sbf/program-test/tests/family.rs`, reachable only
-  through `tools/gauntlet/dealer/run-dealer.sh`. Two runners, one family.
+- **The family has two runners, and only one of them is advertised.** This is
+  not architectural debt — the split is deliberate and both halves earn their
+  keep. `run-program-test.sh` builds six ELFs and runs the accepted
+  checkpoint/reserve/commit/deliver campaign (31 tests across four targets);
+  `tools/gauntlet/dealer/run-dealer.sh` builds five, gates on the toolchain
+  reporting zero frame diagnostics, runs the Dealer program's own real-ELF
+  refusal campaign (`programs/dclutch-dealer-sbf/program-test/tests/family.rs`),
+  then folds evidence, checks witnesses and files a census observation. Only the
+  second one ever loads `dclutch_dealer_sbf.so`. The debt is documentary: the
+  campaign write-up presents `run-program-test.sh` as *the* one-command
+  reproduction for the Dealer family, and a reader taking that at face value
+  never builds the Dealer program at all.
+- **The Dealer gauntlet tier was dark for three days, and the repair here is
+  partial.** `tools/gauntlet/dealer/run-dealer.sh` — the only runner that loads
+  `dclutch_dealer_sbf.so` — failed at `family.rs`, and the cause was not a
+  regression but a **retired mechanism**: `c202ee3d` ("families: read the
+  activation cache the Registry owns, and stop calling it") removed the
+  `RegistryInstructionV1::Reauthenticate` CPI because Dealer runs as a child of
+  a Registry continuation already at CPI depth one, so the invocation was
+  reentrancy Solana refused before Dealer could do any work
+  (`dealer-sbf/src/lib.rs:1167-1175`). The campaign still asserted that a
+  Registry CPI must appear. That commit changed the release path in six SBF
+  programs and updated no campaign; `0e34c036` then did the same for the slot
+  pin across seven. **A commit that retires a mechanism leaves tests asserting
+  it, and those tests fail only inside runners nothing routinely runs** — so
+  they neither block the change nor get updated with it.
+
+  The assertion is corrected and the tier is green, but it is now weaker than it
+  should be, and the reason is worth stating precisely: **every failure
+  reachable through the release waist folds to one code.**
+  `ActivationAuthErrorV1::{AccountFrame, ActivationCache, Deployment}` all map
+  through the `_` arm at `dealer-sbf/src/lib.rs:162-171` to `Release` (`0x7005`);
+  only `ReleaseSuperseded` (`0x700A`) is distinct, and it is unreachable in this
+  fixture. So no stub cache can discriminate one gate from another.
+
+  **The real repair, with the recipe, so the next lane does not redo the
+  archaeology.** Stage a *valid* cache and show the refusal move past the waist
+  entirely. The working precedent is
+  `crates/dclutch-registry-activation-auth-v1/src/tests.rs:137-215`
+  (`Fixture::build`) — the only construction in the tree that passes
+  `authenticate_activated_role_v1`, and a faithful template. What it needs:
+  build one `ArtifactReleaseV1::new` per role with `deployment_slot = 0`,
+  `Immutable`, authority `None` — because `family.rs`'s `immutable_programdata`
+  hard-codes exactly that (`:169-181`) — over the real program ids, remembering
+  that **Dealer occupies the Trading role** (`authenticate_receipt_join` pins
+  `receipts.trading.program() == program_id`, `lib.rs:1211`); assemble
+  `ExecutionReleaseSetV1::new` (Claims and Resolution need their own distinct
+  synthetic releases, because `validate_aliases` requires same-program iff
+  same-release); fill a 1288-byte buffer
+  (`ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1`, header 48 + 5×248) with
+  `initialize_activation_cache_v1` + `activate_execution_role_into_v1`; and
+  place it at `activation_cache_address_v1(&registry, &release_set_id)`, owned
+  by the Registry. The one coupling to plan for: `release_set_id` is
+  `ContentId::new(hash(release_set.to_bytes()))`, so the fixture's
+  `RELEASE_SET_ID` constant must be *derived* from the built set rather than
+  chosen, which means `policy()` and `dealer_state()` derive from it too. The
+  current stub trips the very first conjunct — the cache address
+  (`auth lib.rs:188-194`) — so nothing after it has ever executed.
+
+  This is a rewrite of the campaign's spine rather than a patch, which is why it
+  is recorded rather than done: it changes what the eight release-loop cases
+  refuse with, and it is the work `c202ee3d` deferred across every family, not
+  just this one.
+
 - **No accepted Dealer transition is executed against a real ELF anywhere.**
   `family.rs` says so in its own header: it is evidence for the authentication
   prefix, and *"NOT evidence that any Dealer action commits"*. So Rulings 1 and 2

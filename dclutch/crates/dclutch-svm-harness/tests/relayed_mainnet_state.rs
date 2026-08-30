@@ -39,6 +39,7 @@ use dclutch_capability_contract::{
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    StateBumpsV1,
 };
 use dclutch_product_runtime_v2::{
     ContentId as ProductContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
@@ -1111,6 +1112,7 @@ fn fixture_with_venue(
         principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_beneficiary.to_bytes()).expect("beneficiary"),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     test.add_account(
         market,

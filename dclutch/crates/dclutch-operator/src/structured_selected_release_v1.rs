@@ -48,12 +48,13 @@
 //! capability manifest names as `release_id`, and whose manifest digest is a
 //! SEED of the Market PDA -- is fixed before the Market address exists.
 
+use dclutch_bearer_v2_operator::RationalOpenCapabilityProgramSetInputV6;
 use dclutch_bearer_v2_operator::{
     OPEN_CAPABILITY_SELECTED_ACTION_COUNT_V1, OPEN_CAPABILITY_SELECTED_ACTIONS_V1,
-    RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3,
-    RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
     OpenCapabilityActionArtifactBytesV1, OpenCapabilityArtifactReleaseBytesV1,
-    OpenCapabilityArtifactSelectionV1, RationalOpenSelectedBundleInputV6,
+    OpenCapabilityArtifactSelectionV1, RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
+    RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3,
+    RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3, RationalOpenSelectedBundleInputV6,
     RationalOpenSelectedHotBundleV3, RationalOpenStructuredHotBundleV3,
     RationalOpenStructuredSelectedBundleInputV6, RationalTerminalAccountProfileInputV3,
     RationalTerminalHotBundleV3, RationalTerminalSelectedBundleInputV6, RepresentationActionV2,
@@ -61,7 +62,6 @@ use dclutch_bearer_v2_operator::{
     build_rational_open_selected_bundle_v6, build_rational_open_structured_selected_bundle_v6,
     build_rational_terminal_selected_bundle_v6, encode_open_capability_lifecycle_policy_v5,
 };
-use dclutch_bearer_v2_operator::RationalOpenCapabilityProgramSetInputV6;
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_structured_v2_kernel::{
     STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
@@ -325,23 +325,24 @@ pub fn structured_selected_release_v1(
     }
     let terminal = compile_terminal(input, selection, &lifecycle)?;
 
-    let set = build_rational_open_capability_program_set_v6(RationalOpenCapabilityProgramSetInputV6 {
-        token_behavior_selection: selection,
-        denominate: selected
-            .first()
-            .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
-        reconstitute: selected
-            .get(1)
-            .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
-        issue_structured: structured
-            .first()
-            .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
-        unwrap_structured: structured
-            .get(1)
-            .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
-        redeem_terminal: &terminal,
-    })
-    .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?;
+    let set =
+        build_rational_open_capability_program_set_v6(RationalOpenCapabilityProgramSetInputV6 {
+            token_behavior_selection: selection,
+            denominate: selected
+                .first()
+                .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
+            reconstitute: selected
+                .get(1)
+                .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
+            issue_structured: structured
+                .first()
+                .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
+            unwrap_structured: structured
+                .get(1)
+                .ok_or(StructuredSelectedReleaseErrorV1::Release)?,
+            redeem_terminal: &terminal,
+        })
+        .map_err(|_| StructuredSelectedReleaseErrorV1::ProgramSet)?;
 
     let release = StructuredSelectedReleaseV1 {
         selected,

@@ -106,7 +106,7 @@ describe('Market detail projection', () => {
     expect(card.identity).toMatchObject({
       schemaMagic: 'DCLTCOR3',
       schemaVersion: 3,
-      accountBytes: 360,
+      accountBytes: 368,
       marketId: LIVE.market.address,
       registryProgram: REGISTRY,
     });

@@ -14,15 +14,31 @@ recording a hazard is not the same as closing it, and a register that blurs the
 two is worse than no register.
 
 Baseline written 2026-08-29, 634 entries; re-verified clean at `05372c0f`.
-Main moves under this file. What the baseline pins is the finding *set*, not
-a revision: if it still reproduces exactly, the gate is green wherever main is.
+Rewritten 2026-08-30 at `fd8cad39`, 728 entries, and from that date the register
+carries the revision it was measured at in its own `measured_commit` field —
+`--write` reads a committed tree and cannot read the working one, because this
+is a shared checkout and an unfinished file looks exactly like a finished one to
+a static reader.
+
+Main still moves under this file. What the baseline pins is the finding *set*:
+if it still reproduces exactly, the gate is green wherever main is. The commit
+is recorded so the set can be reproduced later, not to bind the gate to it.
 
 ---
 
 ### confirmed-defect
 
-**5 entries. Open defects, all reachable, none fixed here.** These are recorded
+**4 entries. Open defects, all reachable, none fixed here.** These are recorded
 so the gate does not report the tree as clean while they stand — not excused.
+
+Was five. `PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2` +
+`RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2` — the two-crates-one-byte-string
+collision described at the bottom of this section — **no longer reproduces at
+`fd8cad39`**, along with its `DOMAIN_RAW_RESTATEMENT` and
+`SEED_DOMAIN_UNASSERTED` companions in the Rational family. Somebody fixed it
+between `05372c0f` and here without the register being told, which is exactly
+what the `GONE` half of the ratchet is for: a fixed defect has to *leave*, or it
+stands as cover for the next one. Its entry below is kept as history and marked.
 
 - `TRANSACTION_LEVEL_SIGNER_CENSUS` ·
   `programs/dclutch-trading-sbf/src/projected_custody_bootstrap_v1.rs` ·
@@ -55,7 +71,8 @@ so the gate does not report the tree as clean while they stand — not excused.
   reviewer trusts the identifier and the chain sees the literal, and here they
   describe different things.
 
-- `DOMAIN_BYTES_COLLIDE` · `PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2` +
+- **FIXED, left the register at `fd8cad39`.** `DOMAIN_BYTES_COLLIDE` ·
+  `PROTOCOL_POSITION_CLAIMS_CAPABILITY_SEED_V2` +
   `RATIONAL_CLAIMS_CUSTODY_OWNER_SEED_V2` — two crates, one byte string
   `dclutch:rational-claims:v2`, and two *different stated meanings*: one
   doc-comment says "canonical Claims custody owner", the other says "rational
@@ -85,8 +102,19 @@ consistent three-seed derivation sites. The name/bytes gap here is stylistic.
 
 ### debt-seed-guard
 
-**61 entries.** A PDA seed domain within 32 bytes today with no compile-time
-assert holding it there. Not a live defect — every one of these derives an
+**62 entries.** A PDA seed domain within 32 bytes today with no compile-time
+assert holding it there.
+
+Three of them are **assigned, not accepted**: `CLAIM_CHECK_SEED_V1`,
+`CLAIM_CHECK_ESCROW_SEED_V1` and `CLAIM_CHECK_VAULT_SEED_V1` in
+`crates/dclutch-claims-svm`, which arrived with the claim-check work and are the
+ratchet's first live catch. They are one line each and they belong to whoever
+owns that crate. They are recorded rather than fixed here for a reason that is
+itself the subject of this tool: at the time, that file carried another lane's
+uncommitted changes in a shared checkout, so editing it would have staged
+somebody else's half-finished work under this lane's commit — the same hazard
+`--write` was changed to make impossible. Closing it in the tool and then doing
+it by hand would have been the wrong trade. Not a live defect — every one of these derives an
 address right now — but the audit's own closing recommendation is to finish this
 coverage, because the two guards that actually caught things in that sweep were
 this one and a frame-width tie, and where they exist they work. The fix is one
@@ -101,9 +129,22 @@ in both directions once the reader saw all five guard dialects.
 
 ### debt-derivation-restatement
 
-**239 entries.** A seed tuple spelled out in a crate that does not own the
+**241 entries.** A seed tuple spelled out in a crate that does not own the
 domain, where the owning crate exports a seed constructor for exactly that
 purpose. Each is a second author for one address.
+
+The population moved in both directions on 2026-08-30, and the directions mean
+different things. **Two left because they were fixed**: the Direct trade
+producer's raw-record and staging-cursor derivations now go through
+`RecordKeyV1`, which is what the ratchet is for — a *new* file restating an
+existing domain should be corrected, not filed beside the 239. **Three arrived
+and are assigned**: `claim_check_compaction_v1.rs` in `dclutch-claims-sbf`
+restates the two Record domains and `LIABILITY_BASIS_MARKET_SEED_V2`. Same
+owner and same reason as the `debt-seed-guard` three above — that file was
+carrying another lane's uncommitted work. Worth flagging to whoever takes them:
+`LIABILITY_BASIS_MARKET_SEED_V2` is one of the four names in the confirmed
+`DOMAIN_BYTES_COLLIDE` above, so a second author for *that* domain is a second
+author for a byte string whose first author is already in dispute.
 
 These are not equally bad and the register does not pretend otherwise. Some are
 forced: `create_program_address` must append the bump, and no `as_slices()`
@@ -120,8 +161,38 @@ class-2 defects were introduced.
 
 ### hazard-signer-census
 
-**28 entries.** A blanket `is_signer` refusal over a whole account frame,
+**24 entries.** A blanket `is_signer` refusal over a whole account frame,
 minus the one already confirmed as #13b.
+
+Was 28. Four left on 2026-08-30 because the reader was fixed, not because the
+code changed, and the distinction matters enough to write down.
+
+Three — `authenticate_generic_market_open_frame_v1`,
+`authenticate_generic_market_founding_lock_census_v3` and
+`authenticate_generic_found_and_permit_lock_census_v3` in `market.rs` — pair the
+census with an explicit `meta.pubkey == payer` exclusion. That is this class's
+harm statement in negated form: a frame that refuses the fee payer being *named*
+in it cannot be "dead for any builder that pays with an account it also names".
+The writability half has honoured an in-place exemption since it was written;
+the signer half honouring none was a fact about the reader. The fourth,
+`authenticate_lookup_infrastructure_planned_journal_v1`, was never a refusal at
+all — both `is_signer` reads classify the coordinate into
+`TerminalAddressClassV1::InlineSigner` and no `Err` is reachable from either.
+
+**The bigger narrowing was considered and refused.** Nine of twelve sampled
+sites census `AccountMeta` the builder authored rather than runtime
+`AccountInfo`, and `is_signer` is only a transaction-level property for the
+latter — so it is tempting to drop the whole authored-meta population. The
+discriminator would have to be textual (`.pubkey` for a meta, `.key` for an
+account), and `project_manifest_document_v3` is the counterexample that kills
+it: `ObservedAccountMetaV3` is an authored meta type that reads
+`.account.key`. Trading a bounded false-positive rate for an unbounded
+false-negative rate is a bad trade in the one class that found a real
+always-refuses defect unaided. Do not retry it without type resolution.
+
+What has *not* changed is the question these 24 still need, and it is the same
+one that answered the four above: does any builder of this route place a signing
+account in this frame? #13b is what the answer looks like when it is yes.
 
 The principle is not in doubt — `DEALER_ACCEPTED_TRANSITION_2026_08_29.md`
 states it plainly: *an exact-privilege census is a constraint on the whole
@@ -136,8 +207,27 @@ account in this frame — and #13b is what the answer looks like when it is yes.
 
 ### hazard-privilege-pin
 
-**24 entries.** An exact writability census over every coordinate of a frame
+**37 entries.** An exact writability census over every coordinate of a frame
 with no exemption anywhere.
+
+Was 24, and the thirteen that arrived on 2026-08-30 were **not new code**. The
+reader used to `continue` after reporting a signer census, so a function could
+only ever be reported for one half of class 6 — twelve sites had a pin finding
+hidden behind a signer finding, including `authenticate_expired_checkpoint_v1`,
+which is #13b's own function. A gate that reports one defect per function hides
+the second behind the first, which is this tool's entire subject matter, so the
+`continue` is gone and the hidden twelve are now visible. The thirteenth is
+`project_manifest_document_v3`, which surfaced here the moment it stopped being
+reported as a signer census.
+
+They are recorded as hazards rather than triaged because the per-route reading
+below has not been done for them either. One tempting follow-up, named so it is
+measured rather than guessed: several of the thirteen express a *per-coordinate*
+writability expectation (`let expected_writable = index == 1`, `matches!(index,
+..)`) which is arguably the same one-coordinate exemption `16351a13` was fixed
+with. Recognising that dialect would drop some of these — but it must be run
+against the `16351a13` historical control first, because that control's whole
+job is to still catch the Custody pin, and a dialect too generous silences it.
 
 Same principle, the writability half, and it has already bitten once:
 `16351a13` found Custody pinning the checkpoint readonly while its documented
@@ -166,8 +256,11 @@ downstream check is one refactor away from moving.
 
 ### inventory-guard-present
 
-**257 entries. Not findings.** Each records that one file refuses the unset
-pubkey somewhere in it. The class has no defect behind it, so the only useful
+**260 entries. Not findings.** Each records that one file refuses the unset
+pubkey somewhere in it. Three arrived on 2026-08-30 —
+`bearer-v2-operator/open_release_v1.rs`, `claims-svm/claim_check_v1.rs`,
+`fractional-claim-kernel/selection_config_v1.rs` — which means three new files
+grew a guard, not that three defects appeared. The class has no defect behind it, so the only useful
 property to assert is that the existing guards stay: the gate's ratchet turns
 both ways, so a file quietly losing its last guard is reported as `GONE` and
 fails.

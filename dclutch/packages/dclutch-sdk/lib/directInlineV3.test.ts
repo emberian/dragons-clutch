@@ -212,10 +212,10 @@ describe('Direct V3 inline transaction construction', () => {
     const plan = compileDirectInlineTransactionV3({ route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n });
     expect(plan.hotInstructionBytes).toHaveLength(HOT_EXECUTION_ENVELOPE_BYTES_V3 + DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3);
     expect(plan.requiredSigners).toEqual([candidate.payer]);
-    expect(plan.transaction.message.compiledInstructions).toHaveLength(3);
+    expect(plan.transaction.message.compiledInstructions).toHaveLength(4);
     expect(plan.nativeEvidenceBytes).toHaveLength(158);
-    expect(plan.nativeEvidenceInstructionIndex).toBe(1);
-    expect(plan.tradingInstructionIndex).toBe(2);
+    expect(plan.nativeEvidenceInstructionIndex).toBe(2);
+    expect(plan.tradingInstructionIndex).toBe(3);
     expect(plan.nativeMessageOffsets).toEqual([
       DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3,
       DIRECT_NATIVE_EVIDENCE_BUYER_MESSAGE_OFFSET_V3,
@@ -223,7 +223,10 @@ describe('Direct V3 inline transaction construction', () => {
     expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(seller.intent))).toBe(false);
     expect(containsSlice(plan.nativeEvidenceBytes, encodeCompactIntentSigningMessageV2(buyer.intent))).toBe(false);
     expect(plan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
-    expect(1_232 - plan.wireBytes.length).toBe(73);
+    // 65, not 73: the top-level route now carries RequestHeapFrame, which costs
+    // exactly 8 packet bytes (program index, empty account vector, five data
+    // bytes). ComputeBudget was already a static key, so no account is added.
+    expect(1_232 - plan.wireBytes.length).toBe(65);
     expect(plan.loadedAddresses).toBe(DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3);
     expect(() => compileDirectInlineTransactionV3({ route: route(false), seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n })).toThrow(/unavailable/);
   });
@@ -246,19 +249,31 @@ describe('Direct V3 inline transaction construction', () => {
       evidence, trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
     )).not.toThrow();
     const compute = ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 });
+    const heap = ComputeBudgetProgram.requestHeapFrame({ bytes: 65_536 });
     expect(() => validateDirectInlineInstructionSequenceV3(
-      [compute, evidence, trading], new PublicKey(candidate.tradingProgram),
+      [compute, heap, evidence, trading], new PublicKey(candidate.tradingProgram),
     )).not.toThrow();
     expect(() => validateDirectInlineInstructionSequenceV3(
-      [compute, trading, evidence], new PublicKey(candidate.tradingProgram),
+      [compute, heap, trading, evidence], new PublicKey(candidate.tradingProgram),
     )).toThrow(/immediately adjacent/);
     expect(() => validateDirectInlineInstructionSequenceV3(
       [evidence, trading], new PublicKey(candidate.tradingProgram),
     )).toThrow(/exactly ComputeBudget/);
     expect(() => validateDirectInlineInstructionSequenceV3(
-      [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_399_999 }), evidence, trading],
+      [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_399_999 }), heap, evidence, trading],
       new PublicKey(candidate.tradingProgram),
     )).toThrow(/SetComputeUnitLimit/);
+    // The grant is not merely present, it is the exact size the program was
+    // built for. A smaller frame compiles, submits, and is refused on chain.
+    expect(() => validateDirectInlineInstructionSequenceV3(
+      [compute, ComputeBudgetProgram.requestHeapFrame({ bytes: 32_768 }), evidence, trading],
+      new PublicKey(candidate.tradingProgram),
+    )).toThrow(/RequestHeapFrame/);
+    // Omitting it entirely is the mistake a caller written against the old
+    // three-instruction shape actually makes.
+    expect(() => validateDirectInlineInstructionSequenceV3(
+      [compute, evidence, trading], new PublicKey(candidate.tradingProgram),
+    )).toThrow(/exactly ComputeBudget, RequestHeapFrame/);
 
     const offset = plan.nativeEvidenceBytes.slice();
     new DataView(offset.buffer).setUint16(2 + 8, DIRECT_NATIVE_EVIDENCE_SELLER_MESSAGE_OFFSET_V3 - 1, true);

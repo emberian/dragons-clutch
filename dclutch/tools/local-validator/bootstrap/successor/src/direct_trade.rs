@@ -3240,10 +3240,10 @@ fn build_direct_transaction_journal_v1(
             if unique != 61
                 || plan.message.loaded_addresses != 57
                 || planning.provision.addresses.len() != 57
-                || plan.message.wire_bytes != 1_159
+                || plan.message.wire_bytes != 1_167
             {
                 return Err(refusal(format!(
-                    "Direct Hot expected static4+loaded57=61 and 1,159 bytes; observed unique={unique}, loaded={}, table={}, wire={}",
+                    "Direct Hot expected static4+loaded57=61 and 1,167 bytes; observed unique={unique}, loaded={}, table={}, wire={}",
                     plan.message.loaded_addresses,
                     planning.provision.addresses.len(),
                     plan.message.wire_bytes,
@@ -4463,11 +4463,11 @@ fn publish_direct_evidence_v1(
         .ok_or_else(|| refusal("Direct finalized Hot omitted wire width"))?;
     if static_account_count != 4
         || loaded_address_count != 57
-        || wire_bytes != 1_159
+        || wire_bytes != 1_167
         || journal.unique_message_account_count != Some(61)
     {
         return Err(refusal(
-            "Direct evidence did not preserve static4+loaded57=61 and 1,159-byte geometry",
+            "Direct evidence did not preserve static4+loaded57=61 and 1,167-byte geometry",
         ));
     }
     let capability_seal_sha256 = finalized_capability_seal_digest_v1(validated)?;
@@ -4685,7 +4685,7 @@ fn authenticate_persisted_direct_evidence_v1(
         || evidence.loaded_address_count != 57
         || evidence.unique_message_account_count != 61
         || evidence.lookup_address_count != 57
-        || evidence.wire_bytes != 1_159
+        || evidence.wire_bytes != 1_167
         || evidence.poststates.len() != 10
         || evidence.final_accounts.len() != 10
         || evidence.positions[0].account != validated.public.route.claims.seller_position
@@ -4906,7 +4906,7 @@ fn authenticate_embedded_direct_evidence_identity_v1(
         || evidence.loaded_address_count != 57
         || evidence.unique_message_account_count != 61
         || evidence.lookup_address_count != 57
-        || evidence.wire_bytes != 1_159
+        || evidence.wire_bytes != 1_167
         || evidence.poststates.len() != 10
         || evidence.final_accounts.len() != 10
         || evidence.price_scale != 1_000_000
@@ -4976,7 +4976,7 @@ fn authenticate_embedded_hot_journal_v1(
         || journal.lookup_addresses_sha256 != evidence.lookup_addresses_sha256
         || journal.lookup_addresses.len() != 57
         || journal.unique_message_account_count != Some(61)
-        || journal.expected_wire_bytes != Some(1_159)
+        || journal.expected_wire_bytes != Some(1_167)
         || journal.expected_prestates.len() != 10
         || journal.expected_poststates.len() != 10
         || journal.finalized_poststates.len() != 10
@@ -5114,12 +5114,12 @@ fn authenticate_embedded_hot_journal_v1(
             .ok_or_else(|| refusal("embedded Direct Hot journal omitted signed packet"))?,
         "embedded Direct Hot packet",
     )?;
-    if packet.len() != 1_159
+    if packet.len() != 1_167
         || journal.transaction_sha256.as_deref() != Some(sha256_hex(&packet).as_str())
         || direct_hot_message_geometry_v1(journal)? != (4, 57)
     {
         return Err(refusal(
-            "embedded Direct Hot packet changed its exact 4+57=61 / 1,159-byte geometry",
+            "embedded Direct Hot packet changed its exact 4+57=61 / 1,167-byte geometry",
         ));
     }
     Ok(())
@@ -5779,7 +5779,7 @@ fn authenticate_embedded_hot_message_v1(
             );
         }
     }
-    if resolved.len() != 61 || message.account_keys.len() != 4 || message.instructions.len() != 3 {
+    if resolved.len() != 61 || message.account_keys.len() != 4 || message.instructions.len() != 4 {
         return Err(refusal(
             "embedded Direct Hot resolved key or instruction width changed",
         ));
@@ -5794,19 +5794,24 @@ fn authenticate_embedded_hot_message_v1(
         .instructions
         .first()
         .ok_or_else(|| refusal("embedded Direct ComputeBudget instruction was absent"))?;
-    let native = message
+    let heap = message
         .instructions
         .get(1)
+        .ok_or_else(|| refusal("embedded Direct RequestHeapFrame instruction was absent"))?;
+    let native = message
+        .instructions
+        .get(2)
         .ok_or_else(|| refusal("embedded Direct Ed25519 instruction was absent"))?;
     let hot = message
         .instructions
-        .get(2)
+        .get(3)
         .ok_or_else(|| refusal("embedded Direct Trading instruction was absent"))?;
     let trading = parse_key(
         &public.route.fixed.trading_program,
         "Direct Trading program",
     )?;
     if program_at(compute.program_id_index)? != compute_budget::ID
+        || program_at(heap.program_id_index)? != compute_budget::ID
         || program_at(native.program_id_index)? != ed25519_program::ID
         || program_at(hot.program_id_index)? != trading
     {
@@ -6652,7 +6657,7 @@ mod tests {
             static_account_count: 4,
             loaded_address_count: 57,
             unique_message_account_count: 61,
-            wire_bytes: 1_159,
+            wire_bytes: 1_167,
             capability_seal: Pubkey::new_unique().to_string(),
             capability_seal_sha256: "66".repeat(32),
             hot_ack_producer: Pubkey::new_unique().to_string(),

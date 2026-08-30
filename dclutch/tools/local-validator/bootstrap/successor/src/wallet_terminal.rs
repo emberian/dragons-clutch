@@ -24,7 +24,7 @@ use dclutch_custody_contract::{
 #[cfg(test)]
 use dclutch_custody_contract::{ContextV1, CustodyRequestV1, OperationV1};
 use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
+    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES, StateBumpsV1,
 };
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
@@ -1505,6 +1505,7 @@ pub(crate) mod tests {
             principal_cap_sets: 1,
             rent_beneficiary: identity(9),
             terminal_receipt: Some(identity(10)),
+            bumps: StateBumpsV1::UNRECORDED,
         }
     }
 

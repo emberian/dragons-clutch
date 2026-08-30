@@ -65,7 +65,7 @@ async function capabilitySealFixture(): Promise<Readonly<{
   const descriptorSchema = identity(12);
   const descriptorDigest = identity(13);
   const action = new Uint8Array([1, 0, 0, 0]);
-  const [seal] = PublicKey.findProgramAddressSync([
+  const [seal, sealBump] = PublicKey.findProgramAddressSync([
     new TextEncoder().encode('dclutch:capability-seal:v1'), descriptorSchema, descriptorDigest, action,
     identity(0x52), new PublicKey(registry).toBytes(),
   ], new PublicKey(trading));
@@ -83,6 +83,7 @@ async function capabilitySealFixture(): Promise<Readonly<{
   const body = new Uint8Array(968);
   body.set(new TextEncoder().encode('DCLTCSL1'));
   putU16(body, 8, 1); putU16(body, 10, 1); putU16(body, 12, 6); putU16(body, 14, 0x00ff); putU32(body, 16, 1);
+  body[20] = sealBump;
   body.set(descriptorSchema, 24); body.set(descriptorDigest, 56); body.set(identity(0x52), 88); body.set(new PublicKey(registry).toBytes(), 120);
   records.forEach((record, ordinal) => {
     const row = 152 + ordinal * 136;

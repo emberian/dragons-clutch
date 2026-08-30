@@ -18,16 +18,16 @@ use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, Capa
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     hot_v3::{
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
-        HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3,
-        HOT_CORE_PROGRAM_ACCOUNT_V3, HOT_CORE_PROGRAMDATA_ACCOUNT_V3,
-        HOT_DESCRIPTOR_RAW_ACCOUNT_V3, HOT_DESCRIPTOR_STAGING_ACCOUNT_V3,
-        HOT_EFFECT_RAW_ACCOUNT_V3, HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3,
-        HOT_FIXED_ACCOUNT_COUNT_V3, HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3,
-        HOT_LIFECYCLE_RAW_ACCOUNT_V3, HOT_LIFECYCLE_STAGING_ACCOUNT_V3,
-        HOT_LINKED_BASIS_RAW_ACCOUNT_V3, HOT_MANIFEST_RAW_ACCOUNT_V3,
-        HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3, HOT_PORTFOLIO_RAW_ACCOUNT_V3,
-        HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3, HOT_ACTIVATION_CACHE_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_CORE_PROGRAM_ACCOUNT_V3,
+        HOT_CORE_PROGRAMDATA_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_EFFECT_RAW_ACCOUNT_V3,
+        HOT_EFFECT_STAGING_ACCOUNT_V3, HOT_FAMILY_REQUEST_OFFSET_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+        HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_LIFECYCLE_RAW_ACCOUNT_V3,
+        HOT_LIFECYCLE_STAGING_ACCOUNT_V3, HOT_LINKED_BASIS_RAW_ACCOUNT_V3,
+        HOT_MANIFEST_RAW_ACCOUNT_V3, HOT_MANIFEST_STAGING_ACCOUNT_V3, HOT_MARKET_ACCOUNT_V3,
+        HOT_PORTFOLIO_RAW_ACCOUNT_V3, HOT_PRODUCT_RAW_ACCOUNT_V3, HOT_PROGRAM_SET_RAW_ACCOUNT_V3,
         HOT_PROGRAM_SET_STAGING_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
         HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3,
         HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3, HOT_RESULT_DOMAIN_RAW_ACCOUNT_V3,
@@ -91,6 +91,23 @@ pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES
 
 /// Direct Hot cannot execute within Solana's default transaction CU allocation.
 pub const DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
+
+/// Where the Hot instruction sits in a SIGNED top-level Direct transaction.
+///
+/// Compute limit, heap frame, native Ed25519 evidence, Trading. The native
+/// evidence names the index it expects to find the signed Hot instruction at,
+/// so this constant is what the builder encodes and what the validator
+/// re-encodes to authenticate a caller's evidence -- one name rather than the
+/// bare `3` that would have to agree in three places.
+pub const DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1: u16 = 3;
+
+/// Where the Hot instruction sits in an UNSIGNED top-level Direct transaction.
+///
+/// Compute limit, heap frame, Trading: no evidence instruction, so everything
+/// after the grant shifts down one. The grant itself is NOT optional here --
+/// the heap refusal is a property of the route, not of whether makers signed,
+/// because both arms take the same Registry reauthentication path.
+pub const DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1: usize = 2;
 
 /// Neither can the capability seal, which authenticates one finalized registry
 /// proof and hashes one record body per role before writing the closure. It
@@ -200,8 +217,18 @@ pub struct DirectInlineEconomicPreviewV3 {
 /// Complete unsigned adjacent-evidence execution material.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirectInlineHotReportV3 {
-    /// Compute limit, then native Ed25519 immediately followed by Trading.
-    pub instructions: [Instruction; 3],
+    /// Compute limit, heap frame, then native Ed25519 immediately followed by
+    /// Trading.
+    ///
+    /// The heap grant sits at index 1, ahead of the evidence, and both ends of
+    /// that position are forced. It cannot be appended: the runtime clears
+    /// return data at the start of every top-level instruction, so a trailing
+    /// ComputeBudget instruction erases the commit-last ACK the Hot execution
+    /// just produced. It cannot be omitted either: this route makes two
+    /// Registry reauthentication CPIs a continuation never makes, and Trading
+    /// refuses it by name with `TradingSbfError::HeapFrame` when the grant did
+    /// not arrive.
+    pub instructions: [Instruction; 4],
     /// Complete exact HotExecutionEnvelopeV3 plus Direct request bytes.
     pub hot_instruction_data: Vec<u8>,
     /// Same finalized observation selecting every physical account.
@@ -475,13 +502,14 @@ pub fn build_direct_inline_hot_v4(
     };
     let native = native_ed25519_instruction(
         DirectNativeEvidenceContainerV3::TradingHot,
-        2,
+        DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
         &hot_instruction_data,
         [seller.signature, buyer.signature],
     )?;
     Ok(DirectInlineHotReportV3 {
         instructions: [
             ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1),
+            ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
             native,
             trading,
         ],
@@ -573,14 +601,21 @@ pub fn build_direct_hot_request_v4(
         accounts,
         data: hot_instruction_data.clone(),
     };
-    let mut instructions = Vec::with_capacity(usize::from(!signatures.is_empty()) + 2);
+    let mut instructions = Vec::with_capacity(usize::from(!signatures.is_empty()) + 3);
     instructions.push(ComputeBudgetInstruction::set_compute_unit_limit(
         DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1,
+    ));
+    // Unconditional, and ahead of any evidence. The heap refusal is a property
+    // of the top-level ROUTE, not of whether the makers signed: both arms take
+    // the same Registry reauthentication path, so an unsigned submission needs
+    // the grant exactly as much as a signed one.
+    instructions.push(ComputeBudgetInstruction::request_heap_frame(
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1,
     ));
     if !signatures.is_empty() {
         instructions.push(native_ed25519_instruction_many(
             DirectNativeEvidenceContainerV3::TradingHot,
-            2,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot_instruction_data,
             decoded.action(),
             product.outcome_count,
@@ -1335,26 +1370,38 @@ pub(crate) fn validate_direct_hot_instruction_sequence_v4(
     if instructions.first() != Some(&compute) {
         return Err(DirectInlineTransactionErrorV3::InstructionSequence);
     }
+    // The heap grant is checked here rather than trusted, and on BOTH arms. A
+    // top-level submission that omits it is not a transaction that merely runs
+    // differently: Trading refuses it with `TradingSbfError::HeapFrame`, so
+    // emitting one is emitting a guaranteed refusal. Catching it at the
+    // operator costs one comparison and names the omission at the only place
+    // that can still fix it.
+    let heap = ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1);
+    if instructions.get(1) != Some(&heap) {
+        return Err(DirectInlineTransactionErrorV3::InstructionSequence);
+    }
     let signature_count = native_signature_count_v3(action, tail_count);
     let count = usize::try_from(signature_count)
         .map_err(|_| DirectInlineTransactionErrorV3::InstructionSequence)?;
     if count == 0 {
         let trading = instructions
-            .get(1)
+            .get(DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1)
             .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?;
-        if instructions.len() != 2 || trading.data != hot_instruction_data {
+        if instructions.len() != DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1 + 1
+            || trading.data != hot_instruction_data
+        {
             return Err(DirectInlineTransactionErrorV3::InstructionSequence);
         }
         return Ok(());
     }
-    if instructions.len() != 3 {
+    if instructions.len() != usize::from(DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1) + 1 {
         return Err(DirectInlineTransactionErrorV3::InstructionSequence);
     }
     let native = instructions
-        .get(1)
+        .get(2)
         .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?;
     let trading = instructions
-        .get(2)
+        .get(usize::from(DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1))
         .ok_or(DirectInlineTransactionErrorV3::InstructionSequence)?;
     if native.program_id != ed25519_program::ID
         || !native.accounts.is_empty()
@@ -1393,7 +1440,7 @@ pub(crate) fn validate_direct_hot_instruction_sequence_v4(
     let mut expected = vec![0_u8; bytes];
     encode_direct_native_evidence_many_v3_atomic(
         DirectNativeEvidenceContainerV3::TradingHot,
-        2,
+        DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
         hot_instruction_data,
         tail_count,
         &signatures,
@@ -1851,7 +1898,7 @@ mod tests {
         hot_instruction_data.extend_from_slice(&request);
         let native = native_ed25519_instruction(
             DirectNativeEvidenceContainerV3::TradingHot,
-            2,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot_instruction_data,
             [seller.signature, buyer.signature],
         )
@@ -1859,6 +1906,7 @@ mod tests {
         DirectInlineHotReportV3 {
             instructions: [
                 ComputeBudgetInstruction::set_compute_unit_limit(DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1),
+                ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
                 native,
                 Instruction {
                     program_id: key(200),
@@ -2514,7 +2562,7 @@ mod tests {
         hot.extend_from_slice(&request);
         let direct = native_ed25519_instruction(
             DirectNativeEvidenceContainerV3::TradingHot,
-            2,
+            DIRECT_HOT_TRADING_INSTRUCTION_INDEX_V1,
             &hot,
             [seller.signature, buyer.signature],
         )
@@ -2535,8 +2583,8 @@ mod tests {
             );
             assert_eq!(read_test_u16(&direct.data, descriptor + 10), 172);
             assert_eq!(read_test_u16(&direct.data, descriptor + 2), u16::MAX);
-            assert_eq!(read_test_u16(&direct.data, descriptor + 6), 2);
-            assert_eq!(read_test_u16(&direct.data, descriptor + 12), 2);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 6), 3);
+            assert_eq!(read_test_u16(&direct.data, descriptor + 12), 3);
         }
 
         let registry = Instruction {
@@ -2807,20 +2855,22 @@ mod tests {
         assert_eq!(plan.required_signers, vec![payer]);
         assert_eq!(plan.message.required_signatures, 1);
         assert_eq!(plan.message.loaded_addresses, 89);
-        assert_eq!(plan.message.wire_bytes, 1_204);
+        assert_eq!(plan.message.wire_bytes, 1_212);
         assert_eq!(
             crate::versioned::PACKET_DATA_BYTES - plan.message.wire_bytes,
-            28
+            20
         );
         let message = match &plan.message.message {
             solana_message::VersionedMessage::V0(message) => message,
             _ => panic!("Direct compiler emitted a legacy message"),
         };
-        assert_eq!(message.instructions.len(), 3);
+        assert_eq!(message.instructions.len(), 4);
         assert_eq!(message.instructions[0].data, vec![2, 0xc0, 0x5c, 0x15, 0]);
-        assert_eq!(message.instructions[1].data.len(), 158);
-        assert_eq!(message.instructions[1].data[2 + 6], 2);
-        assert_eq!(message.instructions[1].data[2 + 12], 2);
+        // RequestHeapFrame(65_536): discriminant 1, then the u32 little-endian.
+        assert_eq!(message.instructions[1].data, vec![1, 0, 0, 1, 0]);
+        assert_eq!(message.instructions[2].data.len(), 158);
+        assert_eq!(message.instructions[2].data[2 + 6], 3);
+        assert_eq!(message.instructions[2].data[2 + 12], 3);
         assert_eq!(plan.outcome_count, 258);
         assert_eq!(
             plan.selected_program_schema,
@@ -2850,9 +2900,9 @@ mod tests {
                         ComputeBudgetInstruction::set_compute_unit_limit(1_399_999)
                 }
                 1 => hostile.instructions.swap(0, 1),
-                2 => hostile.instructions[1].data[2 + 4] ^= 1,
-                3 => hostile.instructions[1].data[2 + 6] ^= 1,
-                _ => hostile.instructions[1].data[2 + 12] ^= 1,
+                2 => hostile.instructions[2].data[2 + 4] ^= 1,
+                3 => hostile.instructions[2].data[2 + 6] ^= 1,
+                _ => hostile.instructions[2].data[2 + 12] ^= 1,
             }
             assert_eq!(
                 validate_direct_hot_instruction_sequence_v4(

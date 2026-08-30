@@ -1172,6 +1172,7 @@ fn state(
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
     use dclutch_product_runtime_v2::{
         ContentId as ProductContentId, ResultDomainInputV2, compile_result_domain_v2,
         result_domain_record_bytes,
@@ -1871,6 +1872,7 @@ mod tests {
             rent_beneficiary: dclutch_market_core_codec::Identity::new(key(153).to_bytes())
                 .expect("beneficiary"),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let core_request = Request::administrative(Action::ExecuteProvider, generation, market_id);
         let core_bytes = core_request.encode().expect("Core request");

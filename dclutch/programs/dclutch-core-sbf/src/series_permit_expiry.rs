@@ -4,7 +4,10 @@
 //! is still System-owned and has no data. The adapter independently
 //! authenticates the immutable Series records and ordered occurrence proof,
 //! recomputes the retry deadline, observes the terminal Trading replay, and
-//! transfers every prefunded lamport to the immutable RentCredit.
+//! transfers the prefunded lamports to the immutable RentCredit -- less a
+//! capped, chain-derived reward to the crank that turned it, when the caller
+//! names one in an optional 26th account. A 25-account frame still refunds
+//! every lamport, exactly as it always did.
 
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
@@ -65,11 +68,18 @@ struct ExpiryAccounts<'accounts, 'info> {
     clock: &'accounts AccountInfo<'info>,
     rent: &'accounts AccountInfo<'info>,
     system: &'accounts AccountInfo<'info>,
+    crank: Option<&'accounts AccountInfo<'info>>,
 }
 
 impl<'accounts, 'info> ExpiryAccounts<'accounts, 'info> {
+    /// Parse the fixed 25-account frame, or the funded 26.
+    ///
+    /// The crank recipient is optional by frame length, so every existing
+    /// 25-account caller behaves exactly as it did. `require_distinct` runs
+    /// over the whole slice, so the recipient cannot alias any of the 25.
     fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
-        if accounts.len() != SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1 {
+        let funded = accounts.len() == SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1 + 1;
+        if accounts.len() != SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1 && !funded {
             return Err(CoreSbfError::AccountFrame);
         }
         require_distinct(accounts)?;
@@ -99,9 +109,39 @@ impl<'accounts, 'info> ExpiryAccounts<'accounts, 'info> {
             clock: account(accounts, 22)?,
             rent: account(accounts, 23)?,
             system: account(accounts, 24)?,
+            crank: if funded {
+                Some(account(accounts, SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1)?)
+            } else {
+                None
+            },
         };
         value.validate_privileges()?;
+        value.validate_crank()?;
         Ok(value)
+    }
+
+    /// Validate the optional crank recipient of a funded expiry.
+    ///
+    /// **Silent about `is_signer` in both directions, deliberately.** The other
+    /// 25 accounts are all refused as signers because this is a permissionless
+    /// verb; the recipient is the one account for which a signature would mean
+    /// something else entirely -- who is *owed*, never who is *permitted* --
+    /// and it is usually the fee payer, who signs. Requiring a signature would
+    /// gate a permissionless route; refusing one is the live defect that keeps
+    /// a cleanup's beneficiary from paying its own fee. See
+    /// `docs/design/FUNDED_CRANK_V1.md` section 6.
+    fn validate_crank(&self) -> Result<(), CoreSbfError> {
+        let Some(crank) = self.crank else {
+            return Ok(());
+        };
+        if !crank.is_writable
+            || crank.executable
+            || crank.owner != &system_program::ID
+            || !crank.data_is_empty()
+        {
+            return Err(CoreSbfError::AccountFrame);
+        }
+        Ok(())
     }
 
     fn validate_privileges(&self) -> Result<(), CoreSbfError> {
@@ -197,7 +237,7 @@ pub(crate) fn process(
     )?;
     let refund_owner = authenticate_series(&frame, permit, proof_bytes, &rent)?;
     authenticate_unallocated_permit(program_id, &frame, permit, refund_owner, &rent)?;
-    refund(&frame, permit)?;
+    refund(&frame, permit, &rent)?;
     Ok(())
 }
 
@@ -406,33 +446,126 @@ fn authenticate_unallocated_permit(
     Ok(())
 }
 
+/// Exact two-way split of one expired permit's balance.
+///
+/// **This is the Rust half of a spec/implementation pair that no build checks.**
+/// Its counterpart is `DClutch.MarketCore.seriesPermitExpiryCrankReward` /
+/// `seriesPermitExpiryRefund` in
+/// `formal/dclutch-semantics/DClutchSemantics/MarketCore.lean`, which is
+/// **spec-only** -- nothing in this tree is generated from it, so a divergence
+/// between these two definitions produces no error anywhere. The tests below
+/// are the only gate, and each is named for the theorem it mirrors. If you
+/// change either side, change both.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExpirySplitV1 {
+    reward: u64,
+    refunded: u64,
+}
+
+impl ExpirySplitV1 {
+    /// Mirrors Lean `seriesPermitExpiryCrankReward` / `seriesPermitExpiryRefund`.
+    ///
+    /// `reward_cap == 0` is the unfunded 25-account frame, where the RentCredit
+    /// receives every lamport -- Lean
+    /// `series_permit_expiry_unfunded_refunds_everything`.
+    const fn new(balance: u64, reward_cap: u64) -> Self {
+        // `min`, never a guarded subtraction: this must not refuse for want of
+        // funds. A thin permit pays a thin reward and is still admitted.
+        let reward = if reward_cap < balance {
+            reward_cap
+        } else {
+            balance
+        };
+        Self {
+            reward,
+            refunded: balance - reward,
+        }
+    }
+
+    /// Mirrors Lean `series_permit_expiry_conserves`.
+    const fn total(self) -> u64 {
+        self.reward + self.refunded
+    }
+}
+
+/// Split one expired permit between the crank that turned it and the RentCredit.
+///
+/// Mirrors `DClutch.MarketCore.seriesPermitExpiryCrankReward` /
+/// `seriesPermitExpiryRefund` in
+/// `formal/dclutch-semantics/DClutchSemantics/MarketCore.lean`, where
+/// `series_permit_expiry_conserves` proves the two legs sum to the balance and
+/// `series_permit_expiry_unfunded_refunds_everything` proves the 25-account
+/// frame is unchanged. **Keep the two in step**: the model is spec-only, so a
+/// divergence here goes unnoticed by every build in the tree.
 fn refund(
     frame: &ExpiryAccounts<'_, '_>,
     permit: SeriesFoundingPermitV1,
+    rent: &Rent,
 ) -> Result<(), CoreSbfError> {
     let seeds = permit.seeds();
     let base = seeds.as_slices();
     let bump = [permit.intent().bump()];
     let signer = [base[0], base[1], base[2], base[3], bump.as_slice()];
-    invoke_signed(
-        &transfer(
-            frame.permit.key,
-            frame.rent_credit.key,
-            frame.permit.lamports(),
-        ),
-        &[
-            frame.permit.clone(),
-            frame.rent_credit.clone(),
-            frame.system.clone(),
-        ],
-        &[&signer],
-    )
-    .map_err(|_| CoreSbfError::Creation)?;
+    let balance = frame.permit.lamports();
+
+    // Expiry is a CLOSING route: the permit drains and closes whatever happens,
+    // so the reward is a capped slice of lamports already leaving. `min`, never
+    // a guarded subtraction -- this must not refuse for want of funds, because
+    // a crank that can refuse for money is an unturned crank. The cap is
+    // chain-derived (one empty account's Rent), never a source literal.
+    let reward_cap = match frame.crank {
+        Some(_) => rent.minimum_balance(0),
+        None => 0,
+    };
+    let split = ExpirySplitV1::new(balance, reward_cap);
+    if split.total() != balance {
+        return Err(CoreSbfError::Arithmetic);
+    }
+    let (reward, refunded) = (split.reward, split.refunded);
+
+    let credit_before = frame.rent_credit.lamports();
+    let crank_before = frame.crank.map(|crank| crank.lamports());
+
+    if let (Some(crank), true) = (frame.crank, reward > 0) {
+        invoke_signed(
+            &transfer(frame.permit.key, crank.key, reward),
+            &[frame.permit.clone(), crank.clone(), frame.system.clone()],
+            &[&signer],
+        )
+        .map_err(|_| CoreSbfError::Creation)?;
+    }
+    if refunded > 0 {
+        invoke_signed(
+            &transfer(frame.permit.key, frame.rent_credit.key, refunded),
+            &[
+                frame.permit.clone(),
+                frame.rent_credit.clone(),
+                frame.system.clone(),
+            ],
+            &[&signer],
+        )
+        .map_err(|_| CoreSbfError::Creation)?;
+    }
+
     if frame.permit.lamports() != 0
         || frame.permit.owner != &system_program::ID
         || frame.permit.data_len() != 0
     {
         return Err(CoreSbfError::Commit);
+    }
+    // Conservation, checked against observation: every lamport that left the
+    // permit arrived at exactly one of the two recipients, and nowhere else.
+    let credit_expected = credit_before
+        .checked_add(refunded)
+        .ok_or(CoreSbfError::Arithmetic)?;
+    if frame.rent_credit.lamports() != credit_expected {
+        return Err(CoreSbfError::Commit);
+    }
+    if let (Some(crank), Some(before)) = (frame.crank, crank_before) {
+        let expected = before.checked_add(reward).ok_or(CoreSbfError::Arithmetic)?;
+        if crank.lamports() != expected {
+            return Err(CoreSbfError::Commit);
+        }
     }
     Ok(())
 }
@@ -465,5 +598,97 @@ mod tests {
         assert_eq!(require_expired(101, 100, 100), Ok(()));
         assert_eq!(require_expired(101, 100, 99), Err(CoreSbfError::Reference));
         assert_eq!(require_expired(100, 100, 100), Err(CoreSbfError::Reference));
+    }
+
+    // *** THE MODEL GATE. ***
+    //
+    // `MarketCore.lean` is spec-only: nothing in this tree is generated from
+    // it, so the Lean model and this program agree only by inspection, and a
+    // divergence raises no error in any build. These four tests are the gate.
+    // Each is named for the theorem it mirrors, and together they pin every
+    // equation the Lean proves about the split. Changing one side without the
+    // other turns exactly one of these red.
+
+    /// Mirrors Lean `series_permit_expiry_conserves`: the two legs sum to the
+    /// balance. Non-trivial in BOTH languages for the same reason -- Lean's
+    /// `Nat` and Rust's `u64` both truncate on underflow, so a cap above the
+    /// balance would silently swallow lamports rather than error.
+    #[test]
+    fn series_permit_expiry_conserves() {
+        for balance in [0_u64, 1, 889_999, 890_880, 890_881, 5_000_000, u64::MAX] {
+            for cap in [0_u64, 1, 890_880, 5_000_000, u64::MAX] {
+                let split = ExpirySplitV1::new(balance, cap);
+                assert_eq!(
+                    split.total(),
+                    balance,
+                    "balance {balance} cap {cap} must conserve"
+                );
+                assert_eq!(split.reward + split.refunded, balance);
+            }
+        }
+
+        // *** NEGATIVE CONTROL, and it is the same one the Lean side uses. ***
+        // The property that discriminates is that the REWARD leg is capped by
+        // the balance. Pay the raw cap instead of `min(cap, balance)` and
+        // conservation breaks the moment the cap exceeds the balance. On the
+        // Lean side `omega` REFUSES `cap + seriesPermitExpiryRefund o cap =
+        // lamports`, reporting the counterexample `cap - min cap lamports >= 1`.
+        //
+        // Note what does NOT discriminate, because it cost a wrong claim to
+        // learn: `refunded = balance - cap` is EXTENSIONALLY EQUAL to the real
+        // definition in both languages -- Lean's `Nat` and a saturating `u64`
+        // both truncate identically. A control built on that difference proves
+        // nothing.
+        let thin = ExpirySplitV1::new(30, 100);
+        assert_eq!((thin.reward, thin.refunded), (30, 0));
+        assert_ne!(
+            100 + thin.refunded,
+            30,
+            "paying the raw cap must break conservation, or this test is inert"
+        );
+        assert_eq!(
+            thin.reward + thin.refunded,
+            30,
+            "the capped reward conserves"
+        );
+    }
+
+    /// Mirrors Lean `series_permit_expiry_reward_is_capped` and
+    /// `series_permit_expiry_reward_within_balance`.
+    #[test]
+    fn series_permit_expiry_reward_is_capped_and_within_balance() {
+        for balance in [0_u64, 1, 890_880, 5_000_000, u64::MAX] {
+            for cap in [0_u64, 1, 890_880, u64::MAX] {
+                let split = ExpirySplitV1::new(balance, cap);
+                assert!(split.reward <= cap, "balance {balance} cap {cap}");
+                assert!(split.reward <= balance, "balance {balance} cap {cap}");
+            }
+        }
+    }
+
+    /// Mirrors Lean `series_permit_expiry_unfunded_refunds_everything`.
+    ///
+    /// **This is also the compatibility proof for the optional 26th account**:
+    /// a 25-account frame sets the cap to zero, so the RentCredit still
+    /// receives every lamport and no existing caller observes any change.
+    #[test]
+    fn series_permit_expiry_unfunded_refunds_everything() {
+        for balance in [0_u64, 1, 890_880, 5_000_000, u64::MAX] {
+            let split = ExpirySplitV1::new(balance, 0);
+            assert_eq!(split.reward, 0);
+            assert_eq!(split.refunded, balance);
+        }
+    }
+
+    /// The two concrete instances checked against the Lean by `lake env lean`.
+    /// Keeping the same numbers on both sides makes a drift legible at a glance.
+    #[test]
+    fn series_permit_expiry_matches_the_lean_worked_instances() {
+        // Thin permit, generous cap: the crank takes all 30, refund 0.
+        let thin = ExpirySplitV1::new(30, 100);
+        assert_eq!((thin.reward, thin.refunded), (30, 0));
+        // Fat permit, small cap: the crank takes the cap, RentCredit keeps rest.
+        let fat = ExpirySplitV1::new(5_000, 100);
+        assert_eq!((fat.reward, fat.refunded), (100, 4_900));
     }
 }

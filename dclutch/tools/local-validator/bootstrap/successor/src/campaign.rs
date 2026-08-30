@@ -2940,6 +2940,14 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
         let market_digest = market_sha256
             .as_deref()
             .ok_or_else(|| Error::new("founding journal recovery omitted Market digest"))?;
+        // The post-Open funding-readiness frames are two accounts narrower
+        // without a recovery policy, so the journal cannot re-check its own
+        // recorded geometry without knowing which market it belongs to.
+        let market_has_recovery_policy = !market
+            .as_ref()
+            .ok_or_else(|| Error::new("founding journal recovery omitted the Market input"))?
+            .recovery_policy_hex
+            .is_empty();
         let binding = crate::market::founding_submission_journal::FoundingSubmissionBindingV1::new(
             args.origin.label(),
             &observed_genesis_hash,
@@ -2948,6 +2956,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             plan_sha256.clone(),
             market_digest,
             payer,
+            market_has_recovery_policy,
         )?;
         let operations = founding_submission_journals
             .keys()
@@ -3280,6 +3289,7 @@ fn execute_with_evidence_lease(args: CampaignArgsV1) -> Result<()> {
             plan_sha256.clone(),
             market_sha256,
             payer.pubkey(),
+            !market_input.recovery_policy_hex.is_empty(),
         )?;
         // The binding is moved into the recorder and dropped with it; the
         // sealing totality pass below needs the same identity to annotate any

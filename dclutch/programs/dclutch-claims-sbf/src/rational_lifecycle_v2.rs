@@ -1240,9 +1240,22 @@ fn authenticate_vacant_prepaid(
     observed_lamports: u64,
     rent_principal: u64,
 ) -> Result<(), ProgramError> {
+    // A FLOOR, NOT AN EQUALITY. Every caller passes a `find_program_address`
+    // PDA that this function requires to be system-owned and empty, so anyone
+    // on the network may send it lamports and nothing can prevent it. Under an
+    // equality one lamport from a stranger refused the activation, repeatably,
+    // for about one lamport plus a fee -- the same griefing verb census row R13
+    // names at the Position admission.
+    //
+    // The underfunding guard is the line below and is untouched, so the pair
+    // now reads `live >= declared >= principal` and this relaxation removes
+    // nothing. Nothing here does lamport arithmetic either: `observed_lamports`
+    // is used nowhere else in this program, and every caller's next act is
+    // `allocate_and_assign`, which moves no lamports. So the bytes this route
+    // writes are identical whether or not a donation arrived.
     if resource.owner != &system_program::ID
         || !resource.data_is_empty()
-        || resource.lamports() != observed_lamports
+        || resource.lamports() < observed_lamports
         || observed_lamports < rent_principal
     {
         return Err(RationalLifecycleSbfErrorV2::Rent.into());

@@ -15,20 +15,20 @@ use dclutch_dealer_codec::scenario_checkpoint_v1::{
     DEALER_SCENARIO_CUSTODY_PRESTATE_DOMAIN_V1, DEALER_SCENARIO_PREPARATION_PAGES_V1,
     DealerScenarioCheckpointV1,
 };
-use dclutch_dealer_codec::scenario_evaluation_receipt_v1::{
-    DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1, DealerScenarioEvaluationReceiptV1,
-};
+use dclutch_dealer_codec::scenario_custody_reservation_v1::DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1;
 use dclutch_dealer_codec::scenario_custody_reservation_v1::{
     DEALER_SCENARIO_DELEGATED_CUSTODY_REQUEST_BYTES_V1, DealerScenarioCustodyEffectManifestV1,
     DealerScenarioCustodyEffectV1, DealerScenarioCustodyRequestKindV1,
     encode_dealer_scenario_activation_instruction_v1,
     encode_dealer_scenario_reservation_instruction_v1,
 };
+use dclutch_dealer_codec::scenario_evaluation_receipt_v1::{
+    DEALER_SCENARIO_EVALUATION_RECEIPT_PDA_DOMAIN_V1, DealerScenarioEvaluationReceiptV1,
+};
 use dclutch_dealer_codec::scenario_membership_manifest_v1::{
     DEALER_SCENARIO_MEMBERSHIP_MANIFEST_PDA_DOMAIN_V1, DEALER_SCENARIO_MEMBERSHIP_PAGE_DOMAIN_V1,
     DEALER_SCENARIO_MEMBERSHIP_PAGES_V1, DealerScenarioMembershipManifestV1,
 };
-use dclutch_dealer_codec::scenario_custody_reservation_v1::DEALER_SCENARIO_RESERVATION_BATCH_PDA_DOMAIN_V1;
 use dclutch_dealer_codec::scenario_reservation_receipt_v1::{
     DEALER_SCENARIO_MAX_RESERVATIONS_V1, DealerScenarioReservationActionV1,
 };

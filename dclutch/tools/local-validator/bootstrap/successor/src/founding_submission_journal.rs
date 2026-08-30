@@ -58,7 +58,18 @@ impl FoundingSubmissionOperationV1 {
         }
     }
 
-    pub(crate) const fn exact_unique_accounts(self) -> usize {
+    /// The exact unique-account width of one operation's compiled message.
+    ///
+    /// `recovery_policy` says whether this market was founded WITH a recovery
+    /// policy. Only the three founding legs are shape-invariant; the post-Open
+    /// funding-readiness frames carry the recovery record's raw/staging pair,
+    /// and a market founded without a recovery policy publishes no such record,
+    /// so its frame is exactly two accounts narrower. `funding_readiness.rs`
+    /// measures both widths directly against the frame it builds
+    /// (`every_observed_semantic_position_is_nonaliased_and_bounded`); this pin
+    /// exists to catch drift, so it has to know the same two shapes rather than
+    /// refuse the narrower one as drift.
+    pub(crate) const fn exact_unique_accounts(self, recovery_policy: bool) -> usize {
         match self {
             Self::Dcltcfq1 => 49,
             Self::Dcltpcb2 => 60,
@@ -66,8 +77,20 @@ impl FoundingSubmissionOperationV1 {
             // Canonical V7 frames are pairwise distinct and carry their own
             // program key as a frame account. The bounded inline v0 packet
             // adds exactly the disposable payer and ComputeBudget program.
-            Self::CoreFundingCreateV1 => 20,
-            Self::ResolutionFundingActivateV1 | Self::CoreFundingAcceptV1 => 22,
+            Self::CoreFundingCreateV1 => {
+                if recovery_policy {
+                    20
+                } else {
+                    18
+                }
+            }
+            Self::ResolutionFundingActivateV1 | Self::CoreFundingAcceptV1 => {
+                if recovery_policy {
+                    22
+                } else {
+                    20
+                }
+            }
         }
     }
 
@@ -164,6 +187,12 @@ pub(crate) struct FoundingSubmissionBindingV1 {
     pub(crate) plan_sha256: String,
     pub(crate) market_sha256: String,
     pub(crate) payer: Pubkey,
+    /// Whether the market this run founds carries a recovery policy. It is a
+    /// market fact, not a run fact, but it belongs beside `market_sha256`
+    /// because every geometry pin in this module is a function of it and the
+    /// operation, and a journal loaded against the wrong shape would refuse a
+    /// correct frame as drift.
+    pub(crate) market_has_recovery_policy: bool,
 }
 
 impl FoundingSubmissionBindingV1 {
@@ -175,6 +204,7 @@ impl FoundingSubmissionBindingV1 {
         plan_sha256: impl Into<String>,
         market_sha256: impl Into<String>,
         payer: Pubkey,
+        market_has_recovery_policy: bool,
     ) -> Result<Self> {
         if !evidence_path.is_absolute() {
             return Err(refusal("founding journal evidence path must be absolute"));
@@ -190,6 +220,7 @@ impl FoundingSubmissionBindingV1 {
             plan_sha256: plan_sha256.into(),
             market_sha256: market_sha256.into(),
             payer,
+            market_has_recovery_policy,
         };
         authenticate_binding_v1(&binding)?;
         Ok(binding)
@@ -334,14 +365,14 @@ pub(crate) fn plan_founding_submission_v1(
         return Err(refusal("founding recovery payload was empty"));
     }
     let (unique, required_signatures) = message_geometry_v1(&plan.message, &plan.expected_signers)?;
-    if unique != plan.operation.exact_unique_accounts()
+    if unique != plan.operation.exact_unique_accounts(binding.market_has_recovery_policy)
         || required_signatures != plan.operation.exact_required_signatures()
         || plan.expected_signers.first() != Some(&binding.payer)
     {
         return Err(refusal(format!(
             "{} planned geometry changed: expected {} unique accounts and {} signers, observed {unique} and {required_signatures}",
             plan.operation.label(),
-            plan.operation.exact_unique_accounts(),
+            plan.operation.exact_unique_accounts(binding.market_has_recovery_policy),
             plan.operation.exact_required_signatures(),
         )));
     }
@@ -699,7 +730,10 @@ pub(crate) fn authenticate_founding_submission_v1(
         || journal.intent_sha256 != intent_digest_v1(journal)?
         || journal.state_sha256 != state_digest_v1(journal)?
         || journal.last_valid_block_height == 0
-        || journal.exact_unique_message_accounts != journal.operation.exact_unique_accounts()
+        || journal.exact_unique_message_accounts
+            != journal
+                .operation
+                .exact_unique_accounts(binding.market_has_recovery_policy)
         || journal.expected_signers.len() != journal.operation.exact_required_signatures()
     {
         return Err(refusal("founding journal identity or state digest changed"));
@@ -1207,6 +1241,7 @@ mod tests {
             digest(1),
             digest(2),
             payer,
+            true,
         )
         .expect("binding")
     }
@@ -1220,12 +1255,46 @@ mod tests {
             digest(1),
             digest(2),
             payer,
+            true,
         )
         .expect("loopback binding")
     }
 
+    /// A market founded with NO recovery policy publishes no recovery record,
+    /// so the post-Open funding-readiness frames lose that record's raw and
+    /// staging accounts and nothing else. The three founding legs are
+    /// shape-invariant. Pinning both widths here is what stops the narrower
+    /// frame being read as drift and refused, which is exactly what happened to
+    /// the first market ever founded without one.
+    #[test]
+    fn only_the_post_open_funding_frames_narrow_without_a_recovery_policy() {
+        use FoundingSubmissionOperationV1 as Op;
+        for operation in [Op::Dcltcfq1, Op::Dcltpcb2, Op::Dcltgmf3] {
+            assert_eq!(
+                operation.exact_unique_accounts(true),
+                operation.exact_unique_accounts(false),
+                "{} must not depend on the recovery policy",
+                operation.label()
+            );
+        }
+        for operation in [
+            Op::CoreFundingCreateV1,
+            Op::ResolutionFundingActivateV1,
+            Op::CoreFundingAcceptV1,
+        ] {
+            assert_eq!(
+                operation.exact_unique_accounts(true) - operation.exact_unique_accounts(false),
+                2,
+                "{} must lose exactly the recovery record's raw/staging pair",
+                operation.label()
+            );
+        }
+        assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(false), 18);
+        assert_eq!(Op::CoreFundingCreateV1.exact_unique_accounts(true), 20);
+    }
+
     fn message(signers: &[Pubkey], operation: FoundingSubmissionOperationV1) -> VersionedMessage {
-        let total = operation.exact_unique_accounts();
+        let total = operation.exact_unique_accounts(true);
         let mut static_keys = signers.to_vec();
         static_keys.push(Pubkey::new_unique());
         let loaded = total - static_keys.len();
@@ -1566,6 +1635,7 @@ mod tests {
                 digest(1),
                 digest(2),
                 payer.pubkey(),
+                true,
             )
             .is_err()
         );
@@ -1578,6 +1648,7 @@ mod tests {
                 digest(1),
                 digest(2),
                 payer.pubkey(),
+                true,
             )
             .is_err()
         );
@@ -1590,6 +1661,7 @@ mod tests {
                 digest(1),
                 digest(2),
                 payer.pubkey(),
+                true,
             )
             .is_err()
         );

@@ -361,6 +361,51 @@ fn process_remaining_instruction(
     ) {
         return rational_lifecycle_v2::process(program_id, accounts, instruction_data);
     }
+    // The claim-check family. Its magics are matched before the generic plan
+    // fallthrough because that fallthrough decodes by shape rather than by
+    // magic, and a route reached by shape is a route nobody named.
+    if instruction_data.get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.len())
+        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_OPEN_MAGIC_V1.as_slice())
+    {
+        return claim_check_compaction_v1::process_open_escrow(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    if instruction_data
+        .get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.len())
+        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.as_slice())
+    {
+        return claim_check_compaction_v1::process_compaction(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    // Redemption and escrow close share one magic and separate by action, so
+    // the dispatcher reads the action rather than the magic alone.
+    if instruction_data.get(..dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.len())
+        == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_REDEEM_MAGIC_V1.as_slice())
+    {
+        return match dclutch_claims_svm::claim_check_request_v1::claim_check_action_of(
+            instruction_data,
+        ) {
+            Ok(dclutch_claims_svm::claim_check_request_v1::ClaimCheckActionV1::CloseEscrow) => {
+                claim_check_redemption_v1::process_escrow_close(
+                    program_id,
+                    accounts,
+                    instruction_data,
+                )
+            }
+            _ => claim_check_redemption_v1::process_redemption(
+                program_id,
+                accounts,
+                instruction_data,
+            ),
+        };
+    }
+
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
     // reachable solely for the current Trading General child-packet builder
     // (`dclutch-general-adapter-contract/src/child_packets.rs`) and Dealer
@@ -1298,6 +1343,7 @@ mod tests {
     use dclutch_market_core_codec::{MarketIdentity, Readiness};
 
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     fn account(
         key: Pubkey,
@@ -1569,6 +1615,7 @@ mod tests {
             principal_cap_sets: u64::MAX,
             rent_beneficiary: semantic_id(16)?,
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         })
     }
 

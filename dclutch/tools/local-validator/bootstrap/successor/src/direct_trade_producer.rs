@@ -49,7 +49,7 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_operator::{
     direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
     direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
@@ -2603,6 +2603,25 @@ fn derive_capability_seal_v1(
 /// constants. Both coordinates are self-verifying: the raw record address is
 /// the Registry PDA of (schema, content digest), so a wrong schema or body
 /// cannot resolve.
+/// Address of one Registry record under the seed order the Registry itself uses.
+///
+/// The seeds come from [`RecordKeyV1`] rather than being spelled here: a
+/// Registry record address is the Registry's fact, and this producer is not a
+/// second author of it. `crates/dclutch-record-contract` exports the
+/// constructor for exactly this, and `programs/dclutch-registry-sbf`'s own
+/// `derive_record_pda` reads the same three segments in the same order.
+fn record_address_v1(registry: &Pubkey, seeds: RecordPdaSeedsV1) -> Pubkey {
+    Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            seeds.schema_release_id().as_bytes(),
+            seeds.expected_digest().as_bytes(),
+        ],
+        registry,
+    )
+    .0
+}
+
 pub(crate) fn resolved_record_v1(
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
@@ -2622,15 +2641,27 @@ pub(crate) fn resolved_record_v1(
     let schema = devnet_market_record_schema_v1(market_input, label)?;
     let digest = hex32(&row.data_sha256)?;
     let registry = pubkey(&plan.registry.program_id)?;
-    let raw =
-        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
+    // Going through RecordKeyV1 also buys the owner's zero-identity refusal,
+    // which the raw spelling did not have: an all-zero schema or digest used to
+    // derive an address the Registry can never mint, and was caught only
+    // downstream as an address mismatch that named neither field.
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(schema).map_err(|_| {
+            refusal(format!("campaign {label} record schema is the zero identity"))
+        })?,
+        ContentDigest::new(digest).map_err(|_| {
+            refusal(format!(
+                "campaign {label} record content digest is the zero identity"
+            ))
+        })?,
+    );
+    let raw = record_address_v1(&registry, key.raw_record_pda_seeds());
     if raw.to_string() != row.address {
         return Err(refusal(format!(
             "campaign {label} is not the canonical Registry record coordinate for its schema and content"
         )));
     }
-    let staging =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).0;
+    let staging = record_address_v1(&registry, key.staging_cursor_pda_seeds());
     let body_hex = devnet_market_record_body_hex_v1(market_input, label).unwrap_or_default();
     if !body_hex.is_empty() {
         let body = decode_hex_v1(&body_hex, label)?;

@@ -1164,7 +1164,7 @@ def validate_geometry_and_state(repo: Path) -> dict[str, Any]:
             "evidence.static_account_count != 4",
             "evidence.unique_message_account_count != 61",
             "evidence.lookup_address_count != 57",
-            "evidence.wire_bytes != 1_159",
+            "evidence.wire_bytes != 1_167",
             "evidence.poststates.len() != 10",
             "packet.len() > 1_232",
         ),
@@ -1259,7 +1259,7 @@ def validate_geometry_and_state(repo: Path) -> dict[str, Any]:
         "aggregate retirement geometry",
     )
     return {
-        "direct_hot": {"static": 4, "loaded": 57, "unique": 61, "wire_bytes": 1_159, "poststates": 10},
+        "direct_hot": {"static": 4, "loaded": 57, "unique": 61, "wire_bytes": 1_167, "poststates": 10},
         "packet_limit_bytes": PACKET_BYTES,
         "participant": "source-owned dynamic message width; exact history equality",
         "resolution": "source-owned routed messages; each <=1232 bytes",

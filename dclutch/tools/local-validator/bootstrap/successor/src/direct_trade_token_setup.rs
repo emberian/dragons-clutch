@@ -28,7 +28,9 @@ use dclutch_direct_codec::{
         direct_token_setup_frame_digest_v1,
     },
 };
-use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase as CorePhase};
+use dclutch_market_core_codec::{
+    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, StateBumpsV1,
+};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1,
 };
@@ -778,6 +780,7 @@ mod tests {
             principal_cap_sets: 1,
             rent_beneficiary: Identity::new(id(8)).expect("refund"),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let market = state.encode().expect("market").to_vec();
         let selection = CapabilityExecutionSelectionV1::new(

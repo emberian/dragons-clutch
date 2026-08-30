@@ -185,7 +185,11 @@ pub fn process_capability_seal_v1(
     if data.len() != CAPABILITY_SEAL_BYTES_V1 {
         return Err(TradingSbfError::Commit.into());
     }
-    SealedDescriptorClosureV1::encode(key, rows, &mut data).map_err(|_| TradingSbfError::Commit)?;
+    // The bump this act already derived to sign the account into existence is
+    // persisted with the verdict, so every later reader reproduces the address
+    // instead of searching for it. See `CAPABILITY_SEAL_BUMP_OFFSET_V1`.
+    SealedDescriptorClosureV1::encode(key, rows, bump, &mut data)
+        .map_err(|_| TradingSbfError::Commit)?;
     Ok(())
 }
 
@@ -377,6 +381,22 @@ fn seal_row_v1(
 /// with that derivation. It consumes nothing from the seal; every artifact the
 /// seal names is still bound to its own digest, live, by
 /// `borrow_finalized_record`.
+///
+/// # Why the seal's own bump is read rather than searched
+///
+/// The address is REPRODUCED from the bump the seal persists, not found. This
+/// is the argument `borrow_finalized_record_at` already makes in this module
+/// and it is not weakened here: a wrong bump reproduces a different address,
+/// which fails the equality against the account the frame supplied, and refuses.
+/// The bump is not caller input in any sense -- the seal is Trading-owned and
+/// write-once, its only writer is `process_capability_seal_v1` above, and that
+/// writer derives the bump canonically and can only write at the address that
+/// derivation names. So the byte is a memo of this program's own computation.
+///
+/// The seed set joins on `trading_semantic_release`, so this release addresses
+/// only seals written under itself; there is no older body for this reader to
+/// meet. That is also why persisting the bump needed no migration: an upgrade
+/// already moves every seal to a new, empty address that must be minted afresh.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn authenticate_capability_seal_v3<'a>(
@@ -398,9 +418,7 @@ pub(super) fn authenticate_capability_seal_v3<'a>(
     )
     .map_err(|_| TradingSbfError::Content)?;
     let seal = frame.capability_seal;
-    let expected = Pubkey::find_program_address(&key.seeds().as_slices(), program_id).0;
-    if seal.key != &expected
-        || seal.owner != program_id
+    if seal.owner != program_id
         || seal.is_signer
         || seal.is_writable
         || seal.executable
@@ -411,6 +429,19 @@ pub(super) fn authenticate_capability_seal_v3<'a>(
         return Err(TradingSbfError::Content.into());
     }
     let closure = SealedDescriptorClosureV1::decode(bytes).map_err(|_| TradingSbfError::Content)?;
+    let seeds = key.seeds();
+    let base = seeds.as_slices();
+    let bump_seed = [closure.bump().map_err(|_| TradingSbfError::Content)?];
+    let expected = Pubkey::create_program_address(
+        &[
+            base[0], base[1], base[2], base[3], base[4], base[5], &bump_seed,
+        ],
+        program_id,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    if seal.key != &expected {
+        return Err(TradingSbfError::Content.into());
+    }
     closure
         .require_key(key)
         .map_err(|_| TradingSbfError::Content)?;

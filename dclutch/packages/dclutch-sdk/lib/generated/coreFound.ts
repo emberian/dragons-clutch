@@ -3,7 +3,7 @@
 
 export const CORE_VERSION = 3 as const;
 export const CORE_REQUEST_BYTES = 72 as const;
-export const CORE_STATE_BYTES = 360 as const;
+export const CORE_STATE_BYTES = 368 as const;
 export const CORE_ACTION_FOUND_TAG = 0 as const;
 export const LIFECYCLE_RENT_CREDIT_BYTES_V2 = 128 as const;
 export const CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2 = 128 as const;

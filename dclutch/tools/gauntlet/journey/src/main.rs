@@ -66,6 +66,41 @@ mod relayed;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
+// SIX MODULES THE JOURNEY DOES NOT USE AND CANNOT BUILD WITHOUT.
+//
+// The journey founds one Direct market. It does not found a Structured, a
+// General or a Rational one, does not select a capability, and does not drive
+// the funding-readiness suffix — and it links all six anyway, because the
+// files it DOES share have grown call sites into them: `market.rs` calls
+// `crate::selected_capability::` and imports `crate::funding_readiness`,
+// `local_mutable.rs` calls `crate::general_market::`, `crate::rational_market::`
+// and `crate::structured_market::`, and `campaign.rs` calls
+// `crate::release_identity::`.
+//
+// This is the `#[path]` tripwire in the header doing exactly what it says, and
+// it went off silently: nothing runs this tier in CI, so the subset fell six
+// modules and one crate behind the successor and the whole whole-life campaign
+// was simply un-buildable until somebody tried to run it. The closure is
+// finite — none of the six reaches outside the set now linked here — so the
+// honest fix is to link them, not to fork the files or to guard the call sites.
+#[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
+#[allow(dead_code)]
+mod funding_readiness;
+#[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
+#[allow(dead_code)]
+mod general_market;
+#[path = "../../../local-validator/bootstrap/successor/src/rational_market.rs"]
+#[allow(dead_code)]
+mod rational_market;
+#[path = "../../../local-validator/bootstrap/successor/src/release_identity.rs"]
+#[allow(dead_code)]
+mod release_identity;
+#[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
+#[allow(dead_code)]
+mod selected_capability;
+#[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
+#[allow(dead_code)]
+mod structured_market;
 #[path = "../../../local-validator/bootstrap/successor/src/runtime.rs"]
 #[allow(dead_code)]
 mod runtime;

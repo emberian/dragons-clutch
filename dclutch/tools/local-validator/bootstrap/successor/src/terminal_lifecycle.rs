@@ -13,7 +13,7 @@ use std::{io::Write, path::PathBuf};
 use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
-use dclutch_market_core_codec::CoreState;
+use dclutch_market_core_codec::{CoreState, StateBumpsV1};
 use dclutch_operator::ObservedAccount;
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
@@ -758,6 +758,7 @@ mod tests {
             principal_cap_sets: 1,
             rent_beneficiary: identity(10),
             terminal_receipt: Some(identity(11)),
+            bumps: StateBumpsV1::UNRECORDED,
         }
     }
 

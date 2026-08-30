@@ -291,6 +291,12 @@ enum SeriesFault {
     None,
     LateHoardBalance,
     BatchClaimsProgramdata,
+    /// The Market PDA holds one lamport LESS than the occurrence budgeted.
+    ///
+    /// The negative control for the rent floor: underfunding must refuse, and a
+    /// genesis is the only place to express it, since nobody can take lamports
+    /// back out of a keyless PDA.
+    UnderfundedMarket,
 }
 
 fn artifacts() -> Artifacts {
@@ -598,6 +604,24 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
     let mut base = fixture(false);
     let test = base.test.as_mut().expect("ProgramTest");
     let rent = Rent::default();
+    if fault == SeriesFault::UnderfundedMarket {
+        // Re-declare the Market PDA one lamport short of what the occurrence
+        // budgets. Genesis is the only place this can be expressed: nothing can
+        // take lamports back out of a keyless system-owned PDA once they land.
+        test.add_account(
+            base.market,
+            Account {
+                lamports: rent
+                    .minimum_balance(STATE_BYTES)
+                    .checked_sub(1)
+                    .expect("underfunded market"),
+                data: Vec::new(),
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
     let manifest = CapabilityManifestV1::decode(&base.manifest.data).expect("manifest");
     let manifest_id = CapabilityContentId::new(base.manifest.digest).expect("manifest ID");
     let funding_rent = rent.minimum_balance(FUNDING_STATE_BYTES);
@@ -2390,5 +2414,187 @@ async fn emit_series_consume_validator_campaign() {
         instruction.data.len(),
         lookup.key,
         directory.display()
+    );
+}
+
+/// A STRANGER'S ONE LAMPORT NO LONGER STRANDS A SCHEDULED OCCURRENCE.
+///
+/// Census row R13's class, and this instance was worse than the one the census
+/// named. R13's victim declared a balance a slot early and was front-run in the
+/// gap. Here the victim cannot choose a different account at all:
+/// `series_consume.rs:825-829` pins `request.market()` to
+/// `occurrence.market()`, so the market PDA's address is **published on chain
+/// in the occurrence record before the founding transaction exists**. Anyone
+/// could read a scheduled occurrence, send its market PDA a single lamport, and
+/// strand that occurrence's prepaid ticket forever, for about one lamport plus
+/// a fee, with no race to win.
+///
+/// This harness already knew about the rule and routed around it rather than
+/// treating it as a defect: `emit_series_consume_validator_campaign`'s header
+/// names "the exact-lamports rule (`series_consume` compares
+/// `market.lamports()` to `request.market_rent()` with `!=`, so a rent
+/// heuristic silently refuses)" as one of two hazards a host port would hit.
+/// It is now a floor, so that hazard is gone for any future port too.
+///
+/// The attack is executed, not simulated: a funded keypair that is nobody sends
+/// the lamport in its own finalized transaction, after genesis and before the
+/// Consume lands, and the test asserts it arrived before submitting.
+#[tokio::test]
+async fn a_strangers_lamport_cannot_strand_a_scheduled_series_occurrence() {
+    let mut fixture = series_fixture(SeriesFault::None);
+    let mut test = fixture.base.test.take().expect("ProgramTest");
+    let instruction = series_instruction(&fixture);
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+    let mut context = test.start_with_context().await;
+
+    let budgeted = context
+        .banks_client
+        .get_account(fixture.base.market)
+        .await
+        .expect("market query")
+        .expect("prepaid market")
+        .lamports;
+
+    // THE ATTACK. The occurrence record names this address publicly; the griefer
+    // needs no permission, no race, and no knowledge the chain does not already
+    // publish.
+    let griefer = Keypair::new();
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let payer = context.payer.pubkey();
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[solana_system_interface::instruction::transfer(
+                &payer,
+                &griefer.pubkey(),
+                Rent::default()
+                    .minimum_balance(0)
+                    .checked_mul(64)
+                    .expect("griefer funding"),
+            )],
+            Some(&payer),
+            &[&context.payer],
+            blockhash,
+        ))
+        .await
+        .expect("the stranger is funded like anyone else");
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    context
+        .banks_client
+        .process_transaction(solana_transaction::Transaction::new_signed_with_payer(
+            &[solana_system_interface::instruction::transfer(
+                &griefer.pubkey(),
+                &fixture.base.market,
+                1,
+            )],
+            Some(&griefer.pubkey()),
+            &[&griefer],
+            blockhash,
+        ))
+        .await
+        .expect("one lamport to a published address needs nobody's permission");
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(fixture.base.market)
+            .await
+            .expect("market query")
+            .expect("donated market")
+            .lamports,
+        budgeted + 1,
+        "the attack must have landed, or nothing below is a test"
+    );
+
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("post-donation blockhash");
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
+        &[instruction],
+        &lookup,
+        blockhash,
+        &[&context.payer],
+    );
+    let failure = submit_and_record(
+        &context,
+        transaction,
+        "Series occurrence Consume survives a one-lamport front-run",
+    )
+    .await;
+    assert_eq!(
+        failure, None,
+        "a stranger's lamport must not be able to strand this occurrence"
+    );
+
+    // The Market is founded on the occurrence's own terms, and the donation is
+    // simply carried by the account rather than accounted anywhere.
+    let market = context
+        .banks_client
+        .get_account(fixture.base.market)
+        .await
+        .expect("Market query")
+        .expect("founded Market");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+    assert_eq!(market.lamports, budgeted + 1);
+    let state = CoreState::decode(&market.data).expect("Core state");
+    assert_eq!(state.phase, Phase::Founding);
+    assert_eq!(state.readiness, Readiness::Prepaid);
+}
+
+/// UNDERFUNDING A SCHEDULED OCCURRENCE'S MARKET STILL REFUSES, AT THE CODE.
+///
+/// The negative control for the floor above, and the reason it is a separate
+/// test rather than an assertion inside that one: it must run against a market
+/// account that holds LESS than the occurrence budgeted, which is a different
+/// genesis, not a different transaction.
+///
+/// This is the entire safety content of the comparison that was relaxed. If it
+/// ever passes, the floor became no check at all.
+#[tokio::test]
+async fn a_market_short_of_its_occurrences_budgeted_rent_still_refuses() {
+    let fixture = series_fixture(SeriesFault::UnderfundedMarket);
+    let (_fixture, _context, failure) = execute_series(
+        fixture,
+        "Series occurrence Consume against an underfunded Market",
+    )
+    .await;
+    let failure = failure.expect("an underfunded Market must refuse");
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::Reference as u32,
+        "underfunded Series Market rent",
+    );
+    // Seal the lie: prove the genesis really was short, and that the refusal
+    // left the Market vacant rather than founding it anyway. Without this the
+    // test would still pass if the fault had silently not been applied and
+    // something else had refused.
+    let market = _context
+        .banks_client
+        .get_account(_fixture.base.market)
+        .await
+        .expect("market query")
+        .expect("underfunded market");
+    assert_eq!(
+        market.lamports,
+        Rent::default()
+            .minimum_balance(STATE_BYTES)
+            .checked_sub(1)
+            .expect("underfunded market"),
+        "the fault must actually have been applied"
+    );
+    assert_eq!(market.owner, system_program::ID);
+    assert!(
+        market.data.is_empty(),
+        "the refused found allocated nothing"
     );
 }

@@ -62,22 +62,38 @@ import { type BindingCheck } from './decoders';
 export const MARKET_DISCOVERY_MAX_ADDRESSES = 32;
 const RPC_ACCOUNT_BATCH = 32;
 const CORE_STATE_MAGIC_TEXT = new TextDecoder().decode(CORE_STATE_MAGIC);
-const INCOMPATIBLE_CORE_STATE_VERSION = CORE_VERSION - 1;
-const INCOMPATIBLE_CORE_STATE_BYTES = CORE_STATE_BYTES - 8;
-const INCOMPATIBLE_CORE_STATE_MAGIC = (() => {
-  if (CORE_VERSION !== 3 || CORE_STATE_BYTES !== 360) {
-    throw new Error('historical DCLTCOR2 classification must be re-answered for the new generated Core generation');
+
+/**
+ * One Core Market generation a program scan can see but this reader cannot
+ * decode.
+ *
+ * A generation is (magic, version, width), not a magic: the bump tail widened
+ * DCLTCOR3 from 360 to 368 bytes without changing the schema version, so two
+ * live widths share one magic and only the account's space tells them apart.
+ */
+type HistoricalCoreGenerationV1 = Readonly<{
+  magic: Uint8Array;
+  magicText: string;
+  version: number;
+  accountBytes: number;
+}>;
+
+const HISTORICAL_CORE_GENERATIONS_V1: ReadonlyArray<HistoricalCoreGenerationV1> = (() => {
+  if (CORE_VERSION !== 3 || CORE_STATE_BYTES !== 368) {
+    throw new Error('historical Core generations must be re-answered for the new generated Core generation');
   }
-  const magic = CORE_STATE_MAGIC.slice();
-  const versionDigitOffset = magic.length - 1;
   const asciiZero = 48;
-  if (magic[versionDigitOffset] !== asciiZero + CORE_VERSION) {
+  const versionDigitOffset = CORE_STATE_MAGIC.length - 1;
+  if (CORE_STATE_MAGIC[versionDigitOffset] !== asciiZero + CORE_VERSION) {
     throw new Error('generated Core magic no longer ends with its one-digit schema version');
   }
-  magic[versionDigitOffset] = asciiZero + INCOMPATIBLE_CORE_STATE_VERSION;
-  return magic;
+  const generation = (version: number, accountBytes: number): HistoricalCoreGenerationV1 => {
+    const magic = CORE_STATE_MAGIC.slice();
+    magic[versionDigitOffset] = asciiZero + version;
+    return Object.freeze({ magic, magicText: new TextDecoder().decode(magic), version, accountBytes });
+  };
+  return Object.freeze([generation(2, 352), generation(3, 360)]);
 })();
-const INCOMPATIBLE_CORE_STATE_MAGIC_TEXT = new TextDecoder().decode(INCOMPATIBLE_CORE_STATE_MAGIC);
 
 export type MarketProvenanceV1 =
   | Readonly<{ kind: 'chain'; observedSlot: string }>
@@ -310,12 +326,44 @@ export function isCoreMarketHeaderV2(data: Uint8Array): boolean {
   return CORE_STATE_MAGIC.every((byte, index) => data[index] === byte);
 }
 
-/** Recognize the exact historical Core generation without decoding it as current state. */
+/**
+ * Is this the current Core Market generation?
+ *
+ * The magic no longer settles it on its own, so the account's space is part of
+ * the answer; a scan that listed on magic alone would offer a historical
+ * account as current and fail to decode it.
+ */
+export function isCurrentCoreMarketAccountV1(account: Pick<RpcAccount, 'data' | 'space'>): boolean {
+  return account.space === CORE_STATE_BYTES && isCoreMarketHeaderV2(account.data);
+}
+
+function historicalCoreGenerationV1(
+  account: Pick<RpcAccount, 'data' | 'space'>,
+): HistoricalCoreGenerationV1 | undefined {
+  if (account.data.length < 10) return undefined;
+  const version = new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength)
+    .getUint16(8, true);
+  return HISTORICAL_CORE_GENERATIONS_V1.find((generation) => generation.accountBytes === account.space
+    && generation.version === version
+    && generation.magic.every((byte, index) => account.data[index] === byte));
+}
+
+/** Recognize a historical Core generation without decoding it as current state. */
 export function isIncompatibleCoreMarketAccountV1(account: Pick<RpcAccount, 'data' | 'space'>): boolean {
-  if (account.space !== INCOMPATIBLE_CORE_STATE_BYTES || account.data.length < 10) return false;
-  if (!INCOMPATIBLE_CORE_STATE_MAGIC.every((byte, index) => account.data[index] === byte)) return false;
-  return new DataView(account.data.buffer, account.data.byteOffset, account.data.byteLength).getUint16(8, true)
-    === INCOMPATIBLE_CORE_STATE_VERSION;
+  return historicalCoreGenerationV1(account) !== undefined;
+}
+
+/** Name each historical generation a scan actually found, with its count. */
+function historicalGenerationsTextV1(accounts: ReadonlyArray<IncompatibleMarketAccountV1>): string {
+  return HISTORICAL_CORE_GENERATIONS_V1
+    .map((generation) => ({
+      generation,
+      count: accounts.filter((account) => account.accountBytes === generation.accountBytes
+        && account.magic === generation.magicText).length,
+    }))
+    .filter((entry) => entry.count > 0)
+    .map((entry) => `${entry.count} ${entry.generation.magicText} at ${entry.generation.accountBytes} bytes`)
+    .join(', ');
 }
 
 type EnumerationClient = Pick<SolanaRpcClient, 'programHeaders'>;
@@ -332,22 +380,24 @@ export async function enumerateCoreMarketAddressesV1(client: EnumerationClient, 
   try {
     const scan = await client.programHeaders(program);
     const addresses = scan.accounts
-      .filter((entry) => isCoreMarketHeaderV2(entry.account.data))
+      .filter((entry) => isCurrentCoreMarketAccountV1(entry.account))
       .map((entry) => entry.address)
       .sort((left, right) => left.localeCompare(right));
     const incompatibleMarketAccounts = scan.accounts
-      .filter((entry) => isIncompatibleCoreMarketAccountV1(entry.account))
-      .map((entry) => Object.freeze({
-        address: entry.address,
-        magic: INCOMPATIBLE_CORE_STATE_MAGIC_TEXT,
-        accountBytes: INCOMPATIBLE_CORE_STATE_BYTES,
-      }))
+      .flatMap((entry) => {
+        const generation = historicalCoreGenerationV1(entry.account);
+        return generation === undefined ? [] : [Object.freeze({
+          address: entry.address,
+          magic: generation.magicText,
+          accountBytes: generation.accountBytes,
+        })];
+      })
       .sort((left, right) => left.address.localeCompare(right.address));
     const bounded = addresses.slice(0, MARKET_DISCOVERY_MAX_ADDRESSES);
     const dropped = addresses.length - bounded.length;
     const incompatibleNote = incompatibleMarketAccounts.length === 0
       ? ''
-      : ` The same scan found ${incompatibleMarketAccounts.length} historical ${INCOMPATIBLE_CORE_STATE_MAGIC_TEXT} Market account${incompatibleMarketAccounts.length === 1 ? '' : 's'}; ${incompatibleMarketAccounts.length === 1 ? 'it uses' : 'they use'} the incompatible ${INCOMPATIBLE_CORE_STATE_BYTES}-byte layout and ${incompatibleMarketAccounts.length === 1 ? 'is' : 'are'} not listed as current.`;
+      : ` The same scan found ${incompatibleMarketAccounts.length} historical Market account${incompatibleMarketAccounts.length === 1 ? '' : 's'} (${historicalGenerationsTextV1(incompatibleMarketAccounts)}); ${incompatibleMarketAccounts.length === 1 ? 'it is' : 'they are'} not listed as current.`;
     return Object.freeze({
       mode: 'program-scan',
       scanSlot: scan.slot,
@@ -850,7 +900,7 @@ export async function inspectMarketDiscoveryV1(
       cards: Object.freeze([]),
       reason: incompatibleCount === 0
         ? 'No current compatible Market address has been supplied or enumerated at this finalized floor.'
-        : `No current compatible Market is listed at this finalized floor. The scan also found ${incompatibleCount} historical ${INCOMPATIBLE_CORE_STATE_MAGIC_TEXT} account${incompatibleCount === 1 ? '' : 's'} that the current reader cannot decode.`,
+        : `No current compatible Market is listed at this finalized floor. The scan also found ${incompatibleCount} historical Core Market account${incompatibleCount === 1 ? '' : 's'} that the current reader cannot decode.`,
     });
   }
 

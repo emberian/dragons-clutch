@@ -78,7 +78,7 @@ use dclutch_general_config_contract::root::{GeneralRootV2, general_root_creation
 use dclutch_general_config_contract::v3::GENERAL_CONFIG_SCHEMA_ID_V3;
 use dclutch_general_config_contract::{GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2};
 use dclutch_market_core_codec::{
-    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
+    CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, StateBumpsV1,
 };
 use dclutch_operator::general_hot_v3::{
     CheckedGeneralHotReleaseV3, GeneralHotArtifactDigestsV3, GeneralHotInstructionV3,
@@ -518,6 +518,7 @@ fn build_fixture(action: Action) -> GeneralChainFixtureV3 {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity([0x26; 32]),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     }
     .encode()
     .expect("canonical Open Market state");

@@ -1,16 +1,27 @@
 # DEMO-VERT — the relayed graduation market, end to end, on a local rehearsal
 
-> **Parked:** `run` currently refuses before reading inputs or starting a
-> validator. Direct market capability is now bound to an authenticated live
-> deployment, while this older campaign compiled its replacement market before
-> a checked local plan or live loopback substrate existed. Keeping that order
-> would require invented Direct identities, so the runner refuses instead.
+> **Un-parked.** The two-phase order the old park banner prescribed is now the
+> code: prepare the checked mutable substrate, boot a validator over the
+> prepared account directory, run the administration campaign through
+> activation, call `DirectMarketCompilerOwnedV1::load_local` against the LIVE
+> deployment, compile the relayed market, and only then found and relay.
 >
-> Restore it as one two-phase campaign: prepare the checked mutable substrate,
-> authenticate the live loopback accounts, call
-> `DirectMarketCompilerOwnedV1::load_local`, compile the relayed market, and
-> only then found and relay. The full vertical source remains compiled so drift
-> in the successor compiler is still caught.
+> **The shell runner below is stale and does not drive this.** It still passes
+> `--spec-template` and never passes `--rpc-port`, so it dies with
+> `--rpc-port is required` after building every ELF. The campaign binary's real
+> contract is a checked release gate and the three digests that bind it:
+>
+> ```sh
+> dclutch-relayed-vertical-campaign run --walk failure \
+>     --transcript ABS.json --relayer-bin ABS/dclutch-relayer --work ABS/dir \
+>     --rpc-port PORT --checked-release-gate ABS/CHECKED_UPGRADE_GATE.json \
+>     --expected-gate-sha256 HEX64 --expected-source-revision HEX40 \
+>     --expected-source-tree-sha256 HEX64 --seed HEX64
+> ```
+>
+> Build the gate with `tools/release/checked-release-candidate.sh --work DIR`;
+> it prints the gate digest, and the gate JSON carries `source_revision` and
+> `source_tree_sha256`. Teaching the shell runner this contract is open work.
 
 One journey-shaped campaign for the `RelayedMainnetStateV1` family
 (`docs/design/MAINNET_STATE_RELAY.md`): a zero-cut graduation Product founded

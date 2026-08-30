@@ -314,11 +314,37 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             .map_err(|error| Error::new(format!("founded Market: {error:?}")))?;
     let generation = market_state.identity.generation;
     let rent_beneficiary = Pubkey::new_from_array(market_state.rent_beneficiary.to_bytes());
-    if market_state.identity.resolution_policy.to_bytes() != facts.material_digest {
-        return Err(Error::new(
-            "the founded Market's resolution policy is not the compiled relayed material",
-        ));
-    }
+    // The Market's resolution policy is the digest of the source material the
+    // campaign PUBLISHED, and that is deliberately not the digest `relayed.rs`
+    // compiled. The market compiler rebuilds the manipulation floor with the
+    // market's own coordinates, and one of them is the collateral mint --
+    // created at run time, unknowable to any compiler. So a market whose floor
+    // is bounded can never publish the compiler's `material_digest`, and
+    // comparing the two could never hold for this family. Every record
+    // identity below is therefore read off the FOUNDED MARKET, and the ties
+    // back to what this campaign compiled are made on the fields the market
+    // compiler does not rewrite: the source spec, and the absence of a
+    // recovery policy.
+    let published_material = market_state.identity.resolution_policy.to_bytes();
+    // The floor the market PUBLISHED. The compiler proposes a template; the
+    // market compiler keeps its basis, derivation release and atoms and
+    // replaces the source spec, adapter config and collateral unit with the
+    // market's own, so the published record is the only one that exists.
+    let published_floor = crate::market::record_identity(
+        &session
+            .rpc
+            .required_account(
+                pubkey(
+                    &session
+                        .accounts
+                        .get("manipulation_floor_record")
+                        .ok_or_else(|| Error::new("no manipulation_floor_record evidence"))?
+                        .address,
+                )?,
+                "published ManipulationFloorV1 record",
+            )?
+            .data,
+    );
 
     let founder_wallet = pubkey(
         &session
@@ -433,7 +459,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
              was admitted UNDER kappa = 1/4: principal {} of the {}-atom cap.",
             attestation.pubkey(),
             hex(&facts.account_set_id),
-            hex(&facts.manipulation_floor_digest),
+            hex(&published_floor),
             dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
             facts.admitted_principal_atoms,
             facts.admitted_principal_cap_atoms,
@@ -450,9 +476,26 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     )?;
 
     // ------------------------------------ 5. resolution funding, no-recovery
-    let manifest_view = CapabilityManifestV1::decode(&facts.manifest_bytes)
+    // The PUBLISHED manifest and the PUBLISHED material digest. The market
+    // compiler rewrote the Source entry's config id from the floor template's
+    // digest to the compiled material's, so selecting the no-recovery entries
+    // out of the DECLARED manifest picks the right indexes for a market that
+    // was never founded -- and the FundingLedgerV2 address derived from that
+    // mask does not exist, which the chain reports only as `Funding`.
+    let manifest_record = pubkey(
+        &session
+            .accounts
+            .get("capability_manifest_record")
+            .ok_or_else(|| Error::new("no capability_manifest_record evidence"))?
+            .address,
+    )?;
+    let published_manifest_bytes = session
+        .rpc
+        .required_account(manifest_record, "published CapabilityManifestV1 record")?
+        .data;
+    let manifest_view = CapabilityManifestV1::decode(&published_manifest_bytes)
         .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
-    let funding_entry_indices = select_no_recovery_entries(manifest_view, facts.material_digest)?;
+    let funding_entry_indices = select_no_recovery_entries(manifest_view, published_material)?;
     let manifest_id =
         CapabilityContentId::new(market_state.identity.capability_manifest.to_bytes())
             .map_err(|error| Error::new(format!("manifest identity: {error:?}")))?;
@@ -503,13 +546,20 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     let material_pair = RecordPairV1::derive(
         registry_program,
         SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
-        facts.material_digest,
+        published_material,
     );
     let material_account = session
         .rpc
         .required_account(material_pair.raw, "SourceMaterialV3 record")?;
     let material = SourceMaterialV3::decode(&material_account.data)
         .map_err(|error| Error::new(format!("SourceMaterialV3: {error:?}")))?;
+    // The two facts the market compiler does NOT rewrite, so they still tie
+    // the founded market back to the graph this campaign compiled.
+    if material.primary_source_spec().to_bytes() != facts.source_spec_digest {
+        return Err(Error::new(
+            "the founded Market's source material does not name the relayed source spec",
+        ));
+    }
     if material.recovery_policy().is_some() {
         return Err(Error::new(
             "the relayed vertical requires a no-recovery SourceMaterialV3",
@@ -517,7 +567,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     }
     match material.principal_policy() {
         SourcePrincipalPolicyV1::BoundedByFloor(floor)
-            if floor.to_bytes() == facts.manipulation_floor_digest => {}
+            if floor.to_bytes() == published_floor => {}
         _ => {
             return Err(Error::new(
                 "the relayed SourceMaterialV3 does not select the published manipulation floor",
@@ -527,7 +577,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     let manifest_pair = RecordPairV1::derive(
         registry_program,
         dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
-        crate::market::record_identity(&facts.manifest_bytes),
+        market_state.identity.capability_manifest.to_bytes(),
     );
 
     let create_snapshot = fund_snapshot(
@@ -773,6 +823,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             &twin,
             &mut session,
             &facts,
+            published_material,
             &authority,
             &fee_payer,
             &attestation_path,
@@ -825,7 +876,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
             "kappa_denominator": dclutch_source_contract::CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1,
             "manipulation_floor_lamports":
                 dclutch_source_contract::BONDING_CURVE_GRADUATION_FLOOR_LAMPORTS_V1,
-            "manipulation_floor_record": hex(&facts.manipulation_floor_digest),
+            "manipulation_floor_record": hex(&published_floor),
             "principal_atoms": facts.admitted_principal_atoms.to_string(),
             "principal_cap_atoms": facts.admitted_principal_cap_atoms.to_string(),
         },
@@ -853,6 +904,11 @@ fn success_walk(
     twin: &twin::MainnetTwinV1,
     session: &mut RelaySessionV1,
     facts: &RelayedMarketFactsV1,
+    // The source-material identity the founded Market NAMES, which is not the
+    // one the compiler produced: the market compiler rebuilds the manipulation
+    // floor with the market's own collateral unit, so only the published
+    // identity exists on chain for the relay to select.
+    published_material: [u8; 32],
     authority: &Keypair,
     fee_payer: &Keypair,
     attestation_path: &std::path::Path,
@@ -943,7 +999,7 @@ fn success_walk(
         generation,
         artifacts.observed_slot,
         u16::try_from(entries.len()).map_err(|_| Error::new("set width overflow"))?,
-        facts.material_digest,
+        published_material,
         facts.source_spec_digest,
     )?;
     session.transactions.push(session.rpc.send(
@@ -984,7 +1040,7 @@ fn success_walk(
         &book,
         generation,
         artifacts.observed_slot,
-        facts.material_digest,
+        published_material,
         facts.source_spec_digest,
         &entries,
     )?;
@@ -1018,7 +1074,7 @@ fn success_walk(
             relay_program_data: pubkey(&session.plan.resolution.programdata_id)?,
             relay_program_deployment_slot: session.plan.resolution.deployment_slot,
             market_owner: pubkey(&session.plan.core.program_id)?,
-            source_material_id: facts.material_digest,
+            source_material_id: published_material,
             provider_release_id: crate::market::record_identity(&hex_decode(
                 &facts.input.provider_release_hex,
             )),

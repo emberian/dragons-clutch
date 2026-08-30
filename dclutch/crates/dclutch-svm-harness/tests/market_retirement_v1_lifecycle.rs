@@ -215,6 +215,7 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: CoreIdentity::new(rent_credit.to_bytes()).expect("RentCredit"),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     set_account(
         &mut context,

@@ -82,20 +82,25 @@ export function mutate(source: Uint8Array, offset: number, replacement: Uint8Arr
   return copy;
 }
 
+/** Exact width of the recorded superseded Core V2 account. */
+const LEGACY_CORE_V2_STATE_BYTES = 352;
+
 /**
  * Test-only current Core envelope over the recorded Market's unchanged seeds.
  *
  * The captured chain account is the superseded 352-byte Core V2 generation and
  * stays byte-for-byte intact as historical evidence. Current reader tests need
- * a 360-byte Core V3 account, but no current public Market has been recorded
- * yet. This helper performs the exact V2-to-V3 physical migration: everything
- * before the new principal cap is preserved, the cap is inserted, and the
- * existing rent beneficiary and terminal receipt move eight bytes later.
+ * a current-width Core V3 account, but no current public Market has been
+ * recorded yet. This helper performs the exact V2-to-V3 physical migration:
+ * everything before the new principal cap is preserved, the cap is inserted,
+ * and the existing rent beneficiary and terminal receipt move eight bytes
+ * later. Every byte past the terminal receipt is left zero, which is what the
+ * current state means by an unrecorded bump and a canonical reserved span.
  * It is synthetic parser support, never presented as chain evidence.
  */
 export function currentCoreMarketV3(principalCapSets: bigint = 500_000_000n): Uint8Array {
   const source = LIVE.market.data;
-  if (source.length !== CORE_STATE_BYTES - 8) throw new Error('the recorded Core V2 fixture has an unexpected width');
+  if (source.length !== LEGACY_CORE_V2_STATE_BYTES) throw new Error('the recorded Core V2 fixture has an unexpected width');
   if (principalCapSets <= 0n || principalCapSets > 0xffff_ffff_ffff_ffffn) {
     throw new Error('the current Core fixture principal cap must be a nonzero u64');
   }

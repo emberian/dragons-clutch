@@ -10,12 +10,12 @@ use crate::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATED_EXECUTION_RELEASE_SET_MAGIC_V1,
     ACTIVATED_EXECUTION_RELEASE_SET_PROFILE_V1, ACTIVATED_EXECUTION_RELEASE_SET_SCHEMA_VERSION_V1,
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, Error, ExecutionReleaseActivationInputsV1,
-    RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_MAGIC_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
-    RELEASE_LINEAGE_PDA_SEED_COUNT_V1, RELEASE_LINEAGE_PROFILE_V1,
+    ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
+    ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1, Error,
+    ExecutionReleaseActivationInputsV1, RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_MAGIC_V1,
+    RELEASE_LINEAGE_PDA_DOMAIN_V1, RELEASE_LINEAGE_PDA_SEED_COUNT_V1, RELEASE_LINEAGE_PROFILE_V1,
     RELEASE_LINEAGE_SCHEMA_VERSION_V1, ReleaseLineageV1, activate_execution_release_set_v1,
-    activate_execution_role_into_v1, initialize_activation_cache_v1,
+    activate_execution_role_into_v1, initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 
 const ROLE_CACHE_HEADER_BYTES: usize = 48;
@@ -714,7 +714,11 @@ fn activation_cache_decoder_refuses_malformed_headers_and_role_identities() {
         (0, Error::InvalidMagic),
         (8, Error::UnsupportedSchema),
         (10, Error::UnsupportedArtifactProfile),
-        (12, Error::NonCanonicalReservedBytes),
+        // 12 is the cache's own PDA bump and is deliberately NOT zero-checked;
+        // see the tolerated-bump assertions below. 13..16 are what remains of
+        // the reserved field.
+        (13, Error::NonCanonicalReservedBytes),
+        (15, Error::NonCanonicalReservedBytes),
         (16, Error::ZeroIdentity),
     ] {
         let mut hostile = encoded;
@@ -728,6 +732,29 @@ fn activation_cache_decoder_refuses_malformed_headers_and_role_identities() {
             Err(expected)
         );
     }
+
+    // The bump byte is a carrier, not a canonicality field: a body that has one
+    // decodes and reports it, and a body written before it existed decodes and
+    // reports `None` so its readers fall back to the search. Both are valid.
+    let mut carried = encoded.to_vec();
+    assert_eq!(
+        ActivatedExecutionReleaseSetViewV1::decode(&carried)
+            .expect("cache without a bump")
+            .cache_bump(),
+        Ok(None)
+    );
+    put_activation_cache_bump_v1(&mut carried, 254).expect("record the bump");
+    assert_eq!(
+        ActivatedExecutionReleaseSetViewV1::decode(&carried)
+            .expect("cache carrying a bump")
+            .cache_bump(),
+        Ok(Some(254))
+    );
+    assert_eq!(
+        put_activation_cache_bump_v1(&mut carried, 0),
+        Err(Error::NonCanonicalReservedBytes),
+        "zero is not a bump any derivation produces, so it is refused at the writer"
+    );
 
     let mut zero_artifact_id = encoded;
     zero_artifact_id[ROLE_CACHE_HEADER_BYTES..ROLE_CACHE_HEADER_BYTES + 32].fill(0);
@@ -755,7 +782,9 @@ fn lineage_consent(
         if let Some(slot) = consent.get_mut(index).filter(|_| copied(&moved, index)) {
             // A distinct authority per role, so a test that swapped two slots
             // would be caught instead of comparing equal.
-            *slot = Some(bytes(0xa0 + u8::try_from(index).expect("role index is small")));
+            *slot = Some(bytes(
+                0xa0 + u8::try_from(index).expect("role index is small"),
+            ));
         }
     }
     consent
@@ -836,7 +865,9 @@ fn lineage_layout_is_the_wire_contract() {
             .all(|byte| *byte == 0)
     );
     assert_eq!(
-        encoded.get(152..184).expect("Trading authority is in bounds"),
+        encoded
+            .get(152..184)
+            .expect("Trading authority is in bounds"),
         bytes(0xa2).as_slice()
     );
 }
@@ -952,7 +983,11 @@ fn lineage_refuses_self_succession() {
 #[test]
 fn lineage_refuses_a_hop_that_moved_nothing() {
     assert_eq!(
-        ReleaseLineageV1::new(content(0x11), content(0x22), [None; EXECUTION_ROLE_COUNT_V1]),
+        ReleaseLineageV1::new(
+            content(0x11),
+            content(0x22),
+            [None; EXECUTION_ROLE_COUNT_V1]
+        ),
         Err(Error::LineageWithoutMovedRole)
     );
 
@@ -1027,7 +1062,10 @@ fn lineage_consent_is_indexed_by_the_canonical_role_order() {
     for role in EXECUTION_ROLE_ORDER_V1 {
         let index = role.role_index();
         let slot = encoded
-            .get(LINEAGE_AUTHORITIES_OFFSET + index * 32..LINEAGE_AUTHORITIES_OFFSET + (index + 1) * 32)
+            .get(
+                LINEAGE_AUTHORITIES_OFFSET + index * 32
+                    ..LINEAGE_AUTHORITIES_OFFSET + (index + 1) * 32,
+            )
             .expect("authority slot is in bounds");
         match lineage.consenting_authority(role) {
             Some(authority) => assert_eq!(slot, authority.as_slice(), "{role:?} authority slot"),

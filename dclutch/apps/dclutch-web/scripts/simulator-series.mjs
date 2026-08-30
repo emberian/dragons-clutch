@@ -28,6 +28,16 @@
 // census does not carry, so the two are joined on the cycle number parsed from
 // the observation's stage name.
 //
+// AND THE ONE THING THAT ARRAY IS NOT. It is not a count of the run. Carrying
+// every observation forever cost the directory O(N²) — 28 MB by cycle 123, and
+// on 2026-08-30 it filled the machine's data volume and killed the run — so
+// the simulator now holds that array to a fixed window
+// (tools/load-simulator/simcore.py CensusRetention). The newest file is still
+// the whole series this script draws; it stops being the whole HISTORY. The
+// run's true cycle count therefore comes from status.json, which has always
+// known it, and `points_omitted_before` is measured against that rather than
+// against a window reporting its own length back as the total.
+//
 // EXACTNESS. Every quantity crosses into the artifact as a decimal string, the
 // way atoms already do everywhere in this app. Only the drawing turns them into
 // floats, and only in the browser.
@@ -37,9 +47,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
-const SERIES_SCHEMA = 'dclutch-simulator-series-v1';
+const SERIES_SCHEMA = 'dclutch-simulator-series-v2';
 const STATUS_SCHEMA = 'dclutch-load-simulator-status-v1';
 const CENSUS_STAGE = /^load-sim-cycle-(\d+)$/;
+
+/**
+ * v2 carries the conservation laws' NAMES, which v1 dropped.
+ *
+ * v1 reduced each cycle's verdicts to three integers. A count is the least
+ * interesting true thing about a law: the census has always recorded WHICH law
+ * (`L1`..`L7`) and a sentence saying what it checked, and a page that can say
+ * "the Hoard still covers the worst outcome, at every one of 414 boundaries"
+ * is saying something a count cannot. The counts stay — they are what the run
+ * halts on — and the names now travel beside them.
+ *
+ * Per cycle the verdicts cross as ONE compact string, one character per law in
+ * `law_ids` order, because this field is repeated on every point and the whole
+ * artifact is downloaded by every reader of /pulse.
+ */
+const LAW_STATUS_CHARS = { holds: 'h', violated: 'v', inapplicable: 'i' };
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const APP = path.resolve(HERE, '..');
@@ -119,12 +145,30 @@ function main() {
   }
   const instants = journalInstants(work);
 
+  // The law names come from the NEWEST observation and every other cycle is
+  // held to them. A cycle that recorded a different set is a cycle whose
+  // verdicts cannot be laid under these names without misattributing one law's
+  // result to another, so it carries no verdict string rather than a shifted
+  // one — and the decoder in lib/simulatorSeries.ts refuses a length mismatch
+  // outright, so a bug here cannot reach a chart quietly.
+  const newestVerdicts = Array.isArray(observations[observations.length - 1].verdicts)
+    ? observations[observations.length - 1].verdicts
+    : [];
+  const lawIds = newestVerdicts.map((verdict) => String(verdict.law));
+  let cyclesWithoutLaws = 0;
+
   const all = observations.map((observation, index) => {
     const stage = String(observation.stage ?? '');
     const matched = CENSUS_STAGE.exec(stage);
     const cycle = matched === null ? index + 1 : Number(matched[1]);
     const verdicts = Array.isArray(observation.verdicts) ? observation.verdicts : [];
+    const aligned = verdicts.length === lawIds.length
+      && verdicts.every((verdict, cell) => String(verdict.law) === lawIds[cell]);
+    if (!aligned && lawIds.length > 0) cyclesWithoutLaws += 1;
     return {
+      law_statuses: !aligned || lawIds.length === 0
+        ? null
+        : verdicts.map((verdict) => LAW_STATUS_CHARS[verdict.status] ?? 'i').join(''),
       cycle,
       slot: exact(observation.slot, `observation ${index} slot`),
       recorded_at: instants.get(cycle) ?? null,
@@ -140,6 +184,12 @@ function main() {
   });
 
   const kept = all.slice(-keep);
+  // The run's own count of itself, when it is at least what the census still
+  // holds. A windowed census can only ever UNDERSTATE how many cycles ran, so
+  // the larger of the two is the honest number and never an invented one.
+  const cyclesRun = typeof status.cycles?.run === 'number' && Number.isSafeInteger(status.cycles.run)
+    ? Math.max(status.cycles.run, all.length)
+    : all.length;
   const outcomeCount = kept.length === 0 ? 0 : kept[kept.length - 1].supply.length;
   for (const point of kept) {
     if (point.supply.length !== outcomeCount) {
@@ -187,14 +237,24 @@ function main() {
   const series = {
     schema: SERIES_SCHEMA,
     captured_at: new Date().toISOString().replace(/\.\d{3}Z$/, '+00:00'),
+    law_ids: lawIds,
+    // The newest cycle's verdicts in full, sentences included. Those sentences
+    // are the CENSUS's — `tracked 1000000000 atoms across 4 accounts == Mint
+    // supply 1000000000` — and they cross verbatim. A page may say what a law
+    // is for; it may not restate what the law found.
+    laws: newestVerdicts.map((verdict) => ({
+      id: String(verdict.law),
+      status: LAW_STATUS_CHARS[verdict.status] === undefined ? 'inapplicable' : verdict.status,
+      detail: String(verdict.detail ?? ''),
+    })),
     positions,
     collateral_holders: collateralHolders,
     cluster: status.cluster?.label ?? null,
     market: status.market?.address ?? null,
     mode: status.mode,
     outcome_count: outcomeCount,
-    cycles_recorded: all.length,
-    points_omitted_before: all.length - kept.length,
+    cycles_recorded: cyclesRun,
+    points_omitted_before: cyclesRun - kept.length,
     census_file: path.basename(censusPath),
     points: kept,
   };
@@ -235,11 +295,18 @@ function main() {
 
   const first = kept[0];
   const last = kept[kept.length - 1];
-  console.log(`simulator-series: ${kept.length} of ${all.length} cycles kept, cycle ${first.cycle} to ${last.cycle}`);
+  console.log(`simulator-series: ${kept.length} of ${cyclesRun} cycles kept, cycle ${first.cycle} to ${last.cycle}`);
   console.log(`simulator-series: slot ${first.slot} to ${last.slot}, ${outcomeCount} outcomes, ${status.trades?.landed ?? '?'} trades landed`);
   const moved = ['slot', 'hoard_atoms', 'tracked_collateral']
     .filter((field) => new Set(kept.map((point) => point[field])).size > 1);
   console.log(`simulator-series: fields that actually move across these cycles: ${moved.join(', ') || 'none but the supply vector, if that'}`);
+  console.log(`simulator-series: ${lawIds.length} laws named (${lawIds.join(' ')})${
+    cyclesWithoutLaws === 0 ? '' : `, ${cyclesWithoutLaws} cycles recorded a different set and carry no verdict string`}`);
+  // The one number worth printing loudly at the end of a capture: a broken law
+  // is the only thing in this artifact that is an emergency rather than a
+  // measurement, and the operator should not have to open the JSON to see it.
+  const broken = kept.reduce((sum, point) => sum + (point.law_statuses ?? '').split('').filter((c) => c === 'v').length, 0);
+  console.log(`simulator-series: ${broken === 0 ? 'no law was violated at any drawn cycle' : `*** ${broken} LAW VIOLATIONS ACROSS THE DRAWN CYCLES ***`}`);
 }
 
 try {

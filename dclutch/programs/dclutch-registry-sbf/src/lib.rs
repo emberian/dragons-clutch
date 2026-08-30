@@ -33,7 +33,7 @@ use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1,
     ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
+    initialize_activation_cache_v1, put_activation_cache_bump_v1,
 };
 use dclutch_registry_svm::{
     ProgramDataV3View, ProgramV3View, REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1,
@@ -249,13 +249,18 @@ fn process_activate_role(
         release_set_staging,
         &rent,
     )?;
-    let created =
+    let (created, cache_bump) =
         ensure_activation_cache_account(program_id, payer, cache, system, &rent, release_set_id)?;
     let mut output = cache
         .try_borrow_mut_data()
         .map_err(|_| RegistryError::Borrow)?;
     if created {
         initialize_activation_cache_v1(&mut output, release_set_id)
+            .map_err(|_| RegistryError::ActivationCache)?;
+        // The bump this act just signed the account into existence with is
+        // persisted in the body, so the six readers of this one address stop
+        // searching for it. See `ACTIVATION_CACHE_BUMP_OFFSET_V1`.
+        put_activation_cache_bump_v1(&mut output, cache_bump)
             .map_err(|_| RegistryError::ActivationCache)?;
     }
     // `activate_execution_role_into_v1` revalidates the cache header and refuses
@@ -544,11 +549,35 @@ fn authenticate_cache_identity(
     let release_set_id = activated
         .execution_release_set_id()
         .map_err(|_| RegistryError::ActivationCache)?;
-    let expected = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
-        program_id,
-    )
-    .0;
+    // Reproduced from the bump the cache carries, not searched for. A wrong
+    // byte reproduces a different address and refuses here, and only this
+    // program writes the byte -- see `ACTIVATION_CACHE_BUMP_OFFSET_V1`. A cache
+    // written before the bump existed carries zero and is searched for as
+    // before.
+    let expected = match activated
+        .cache_bump()
+        .map_err(|_| RegistryError::ActivationCache)?
+    {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    ACTIVATION_PDA_DOMAIN_V1,
+                    release_set_id.as_bytes(),
+                    &bump_seed,
+                ],
+                program_id,
+            )
+            .map_err(|_| RegistryError::ActivationCache)?
+        }
+        None => {
+            Pubkey::find_program_address(
+                &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
+                program_id,
+            )
+            .0
+        }
+    };
     if cache.key != &expected {
         return Err(RegistryError::ActivationCache.into());
     }
@@ -562,7 +591,7 @@ fn ensure_activation_cache_account<'a>(
     system: &AccountInfo<'a>,
     rent: &Rent,
     release_set_id: ContentId,
-) -> Result<bool, ProgramError> {
+) -> Result<(bool, u8), ProgramError> {
     let (expected, bump) = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
         program_id,
@@ -577,7 +606,7 @@ fn ensure_activation_cache_account<'a>(
         {
             return Err(RegistryError::ActivationCache.into());
         }
-        return Ok(false);
+        return Ok((false, bump));
     }
     if cache.owner != &system_program::ID
         || cache.executable
@@ -609,7 +638,7 @@ fn ensure_activation_cache_account<'a>(
     {
         return Err(RegistryError::CreateCpi.into());
     }
-    Ok(true)
+    Ok((true, bump))
 }
 
 fn validate_activate_role_privileges(

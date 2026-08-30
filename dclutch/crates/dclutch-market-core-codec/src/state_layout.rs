@@ -26,7 +26,7 @@ impl CoreStateLayoutV2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Identity, MarketIdentity, Phase, Readiness, STATE_BYTES};
+    use crate::{Identity, MarketIdentity, Phase, Readiness, STATE_BYTES, StateBumpsV1};
 
     fn identity(value: u8) -> Identity {
         Identity::new([value; 32]).expect("identity")
@@ -52,6 +52,7 @@ mod tests {
             principal_cap_sets: u64::MAX,
             rent_beneficiary: identity(11),
             terminal_receipt: None,
+            bumps: StateBumpsV1::UNRECORDED,
         }
     }
 

@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import published from '@/public/simulator-series.json';
 import {
+  conservationLawRowsV1,
+  conservationReadingV1,
   everyLineFlatV1,
   issuedSupplyLinesV1,
+  lawBandCyclesV1,
   parseSimulatorSeriesV1,
   readSimulatorSeriesV1,
+  simulatorHeartbeatV1,
   simulatorSeriesSpanV1,
-  SIMULATOR_SERIES_SCHEMA_V1,
+  SIMULATOR_SERIES_SCHEMA_V2,
   SIMULATOR_SERIES_URL_V1,
 } from './simulatorSeries';
 
@@ -22,10 +26,50 @@ describe('the published simulator series', () => {
   const series = parseSimulatorSeriesV1(published);
 
   it('decodes exactly as committed', () => {
-    expect(series.schema).toBe(SIMULATOR_SERIES_SCHEMA_V1);
+    expect(series.schema).toBe(SIMULATOR_SERIES_SCHEMA_V2);
     expect(series.cluster).toBe('devnet');
     expect(series.points.length).toBeGreaterThan(0);
     expect(series.outcomeCount).toBeGreaterThan(0);
+  });
+
+  /**
+   * The published capture must carry the laws by NAME, not only by count.
+   * A capture that silently regressed to v1's three integers would still
+   * decode and would still draw — as an empty band with a sentence explaining
+   * itself, which is honest and is not what anyone published this for.
+   */
+  it('carries every conservation law by name, aligned to every drawn cycle', () => {
+    expect(series.lawIds.length).toBeGreaterThan(0);
+    expect(series.laws.map((law) => law.id)).toEqual([...series.lawIds]);
+    for (const law of series.laws) expect(law.detail.length).toBeGreaterThan(0);
+    const rows = conservationLawRowsV1(series);
+    const cycles = lawBandCyclesV1(series);
+    expect(rows).toHaveLength(series.lawIds.length);
+    for (const row of rows) expect(row.statuses).toHaveLength(cycles.length);
+  });
+
+  it('never publishes a violated law without the page leading on it', () => {
+    // A broken law halts the run. If one is ever captured, the reading must
+    // put it first — this pin is the reason the sentence is built rather than
+    // assembled at the call site.
+    const reading = conservationReadingV1(series);
+    expect(reading).not.toBeNull();
+    const violated = conservationLawRowsV1(series).filter((row) => row.violated > 0);
+    if (violated.length === 0) expect(reading).toContain('checks held and none broke');
+    else expect(reading?.startsWith(violated[0].id)).toBe(true);
+  });
+
+  /**
+   * The verdict this artifact exists to make renderable: the market's own
+   * quantities do not move, and the chain does. If a future capture ever has a
+   * moving supply this test does not fail — it just stops being the point.
+   */
+  it('has a chain clock that moves even while the market does not', () => {
+    const heartbeat = simulatorHeartbeatV1(series);
+    expect(heartbeat).not.toBeNull();
+    expect(heartbeat?.slotAdvance.values.length).toBe(series.points.length - 1);
+    expect(new Set(heartbeat?.slotAdvance.values).size).toBeGreaterThan(1);
+    expect(heartbeat?.measuredSlotRate).toMatch(/^\d+\.\d\d$/);
   });
 
   it('carries a market, so every line drawn from it can name what it is about', () => {
@@ -97,6 +141,142 @@ describe('the series decoder', () => {
 
   it('names the field it refused, every time', () => {
     expect(() => parseSimulatorSeriesV1({ ...one, market: 'not-an-address' })).toThrow(/market must be one canonical Solana address/);
+  });
+
+  /**
+   * v1 stays readable and decodes as a series with no laws recorded. A capture
+   * taken before the names existed genuinely has none, and that is a true
+   * thing to say about it — not a decode failure and not an invented set.
+   */
+  it('still reads a v1 document, as a series that recorded no law names', () => {
+    const series = parseSimulatorSeriesV1(one);
+    expect(series.lawIds).toEqual([]);
+    expect(conservationLawRowsV1(series)).toEqual([]);
+    expect(conservationReadingV1(series)).toBeNull();
+    expect(series.points[0].lawStatuses).toEqual([]);
+  });
+
+  const withLaws = {
+    ...one,
+    schema: 'dclutch-simulator-series-v2',
+    law_ids: ['L1', 'L2'],
+    laws: [
+      { id: 'L1', status: 'holds', detail: 'tracked 10 atoms == Mint supply 10' },
+      { id: 'L2', status: 'inapplicable', detail: 'no predecessor to move from' },
+    ],
+    points: [
+      { ...one.points[0], law_statuses: 'hi' },
+      { ...one.points[1], law_statuses: 'hh' },
+    ],
+  };
+
+  it('expands the compact verdict string into named statuses', () => {
+    const series = parseSimulatorSeriesV1(withLaws);
+    expect(series.points[0].lawStatuses).toEqual(['holds', 'inapplicable']);
+    const rows = conservationLawRowsV1(series);
+    expect(rows[1]).toMatchObject({ id: 'L2', held: 1, inapplicable: 1, violated: 0 });
+    expect(rows[0].detail).toBe('tracked 10 atoms == Mint supply 10');
+    expect(lawBandCyclesV1(series)).toEqual([1, 2]);
+  });
+
+  /**
+   * The misalignment refusal, which is the whole reason the count is checked
+   * rather than trusted: a shifted verdict string would report L2's result
+   * under L1's name, and every downstream reader would believe it.
+   */
+  it('refuses a verdict string that does not match the number of named laws', () => {
+    const shifted = { ...withLaws, points: [{ ...withLaws.points[0], law_statuses: 'h' }, withLaws.points[1]] };
+    expect(() => parseSimulatorSeriesV1(shifted)).toThrow(/carries 1 verdicts and the series declares 2 laws/);
+  });
+
+  it('refuses a verdict character it does not know, instead of guessing at it', () => {
+    const unknown = { ...withLaws, points: [{ ...withLaws.points[0], law_statuses: 'hx' }, withLaws.points[1]] };
+    expect(() => parseSimulatorSeriesV1(unknown)).toThrow(/verdict 1 is not one of h, v, i/);
+  });
+
+  it('refuses laws whose order disagrees with the names they are drawn under', () => {
+    const swapped = { ...withLaws, laws: [withLaws.laws[1], withLaws.laws[0]] };
+    expect(() => parseSimulatorSeriesV1(swapped)).toThrow(/law 0 is L2 and law_ids names L1/);
+  });
+
+  it('leads on the violation when there is one', () => {
+    const broken = parseSimulatorSeriesV1({
+      ...withLaws,
+      points: [{ ...withLaws.points[0], law_statuses: 'hi' }, { ...withLaws.points[1], law_statuses: 'vh' }],
+    });
+    expect(conservationReadingV1(broken)?.startsWith('L1 did not hold')).toBe(true);
+  });
+});
+
+/**
+ * The heartbeat: the derivation that decides whether this page reads as alive.
+ *
+ * Its risks are arithmetic ones. A slot delta is a u64 difference and must not
+ * round; a cadence line with a hole in it must not be silently redrawn shorter
+ * than its own x-axis; and a rate is a claim about the chain that must come
+ * from the run's own two totals rather than from a constant.
+ */
+describe('the heartbeat', () => {
+  const build = (points: ReadonlyArray<unknown>) => parseSimulatorSeriesV1({
+    schema: 'dclutch-simulator-series-v2',
+    captured_at: '2026-08-30T16:40:07+00:00',
+    cluster: 'devnet',
+    market: null,
+    mode: 'sustain',
+    outcome_count: 1,
+    cycles_recorded: points.length,
+    points_omitted_before: 0,
+    census_file: 'cycle-000003.json',
+    points,
+  });
+  const point = (cycle: number, slot: string, recordedAt: string | null) => ({
+    cycle, slot, recorded_at: recordedAt, supply: ['5'], hoard_atoms: '5', tracked_collateral: '5',
+    checks_held: 6, checks_broken: 0, checks_inapplicable: 1,
+  });
+
+  const series = build([
+    point(1, '100', '2026-08-30T15:00:00+00:00'),
+    point(2, '160', '2026-08-30T15:00:20+00:00'),
+    point(3, '400', '2026-08-30T15:01:00+00:00'),
+  ]);
+
+  it('measures the chain advance between readings exactly, and labels each interval', () => {
+    const heartbeat = simulatorHeartbeatV1(series);
+    expect(heartbeat?.slotAdvance.values).toEqual(['60', '240']);
+    expect(heartbeat?.cadence?.values).toEqual(['20', '40']);
+    expect(heartbeat?.xLabels).toEqual(['cycle 1 → 2', 'cycle 2 → 3']);
+    expect(heartbeat?.intervals).toBe(2);
+  });
+
+  it('divides the run’s own totals for the rate rather than assuming one', () => {
+    // 300 slots over 60 recorded seconds. Nothing about Solana's nominal rate
+    // is consulted, which is the point: this is what THIS run observed.
+    expect(simulatorHeartbeatV1(series)?.measuredSlotRate).toBe('5.00');
+    expect(simulatorHeartbeatV1(series)?.longestGapSeconds).toBe('40');
+    expect(simulatorHeartbeatV1(series)?.shortestGapSeconds).toBe('20');
+  });
+
+  it('drops the cadence line entirely when an instant is missing, rather than shortening it', () => {
+    const holed = simulatorHeartbeatV1(build([
+      point(1, '100', '2026-08-30T15:00:00+00:00'),
+      point(2, '160', null),
+      point(3, '400', '2026-08-30T15:01:00+00:00'),
+    ]));
+    expect(holed?.slotAdvance.values).toEqual(['60', '240']);
+    expect(holed?.cadence).toBeNull();
+    expect(holed?.measuredSlotRate).toBeNull();
+  });
+
+  it('keeps a u64 slot difference exact, where a float would not', () => {
+    const wide = simulatorHeartbeatV1(build([
+      point(1, '18446744073709551000', null),
+      point(2, '18446744073709551615', null),
+    ]));
+    expect(wide?.slotAdvance.values).toEqual(['615']);
+  });
+
+  it('has nothing to measure between when only one cycle was recorded', () => {
+    expect(simulatorHeartbeatV1(build([point(1, '100', null)]))).toBeNull();
   });
 });
 

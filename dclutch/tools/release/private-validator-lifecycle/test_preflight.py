@@ -91,7 +91,7 @@ class OfflinePreflightTests(unittest.TestCase):
         self.assertEqual(completion, report["stage_vocabulary"]["private"])
         self.assertLessEqual(report["founding_geometry"]["complete_transaction_keys"], 64)
         self.assertEqual(report["transaction_geometry"]["direct_hot"], {
-            "static": 4, "loaded": 57, "unique": 61, "wire_bytes": 1_159, "poststates": 10,
+            "static": 4, "loaded": 57, "unique": 61, "wire_bytes": 1_167, "poststates": 10,
         })
         self.assertFalse(report["recovery_exposure"]["happy_path_stage"])
         self.assertEqual(report["recovery_exposure"]["operations"], [
@@ -199,7 +199,7 @@ class OfflinePreflightTests(unittest.TestCase):
         path = self.repo / f"{preflight.SUCCESSOR}/direct_trade.rs"
 
         def substitute() -> None:
-            path.write_text(path.read_text().replace("wire_bytes != 1_159", "wire_bytes != 1_158", 1))
+            path.write_text(path.read_text().replace("wire_bytes != 1_167", "wire_bytes != 1_166", 1))
 
         with self.assertRaisesRegex(preflight.Refusal, "repository is not clean|changed during"):
             preflight.run_preflight(self.repo, "full-probe", _stability_hook=substitute)

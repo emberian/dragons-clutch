@@ -1,0 +1,133 @@
+[
+  {
+    "stage": "load-sim-cycle-000001",
+    "slot": 490489087,
+    "declared_collateral_delta": 0,
+    "declared_hoard_delta": 0,
+    "lamports": {
+      "fees_lamports": 0,
+      "unwatched_lamports": 0,
+      "unwatched_note": "",
+      "inapplicable": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess their fees"
+    },
+    "payer_lamports": 771412212,
+    "mint_supply": 1000000000,
+    "token_atoms": {
+      "hoard": 500000000,
+      "p1": 700,
+      "p2": 700,
+      "wallet": 499998600
+    },
+    "tracked_collateral": 1000000000,
+    "hoard_atoms": 500000000,
+    "outcome_count": 4,
+    "aggregate_supply": [
+      500000000,
+      500000000,
+      500000000,
+      500000000
+    ],
+    "position_balances": {
+      "founder": [
+        500000000,
+        500000000,
+        500000000,
+        500000000
+      ]
+    },
+    "position_totals": [
+      500000000,
+      500000000,
+      500000000,
+      500000000
+    ],
+    "accounts": {
+      "capability_root": {
+        "address": "2oJ7DVuveQEfvNFPRnjaJvsyTYyVjZDQgYZimEBjCBFV",
+        "exists": true,
+        "owner": "5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk",
+        "lamports": 2672640,
+        "data_len": 256
+      },
+      "claims_aggregate": {
+        "address": "2SiorXJpwZabPVsvBNcj6wUKUmXAP58FTi1czZM7iAfL",
+        "exists": true,
+        "owner": "85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN",
+        "lamports": 2895360,
+        "data_len": 288
+      },
+      "founder": {
+        "address": "4YSPmPTzbPHMRWHqZEprvN96VSDtP9R6iWZ42b69kGB4",
+        "exists": true,
+        "owner": "85hwTeQGabwFRs71Hafvngb1UmHb6dQoumBv3VV4epNN",
+        "lamports": 2004480,
+        "data_len": 160
+      },
+      "hoard": {
+        "address": "HziNn98ALVyKaJDGA3F7KroSXjBqNR9xAHG5r1nXjmLB",
+        "exists": true,
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 2039280,
+        "data_len": 165
+      },
+      "p1": {
+        "address": "FfbeqwBHa3FNW4sCXTPg4AUQoyQhu4ATR4vZMK7ve4LP",
+        "exists": true,
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 2039280,
+        "data_len": 165
+      },
+      "p2": {
+        "address": "9nQbgMxgtiDBVQt1DvGrmbccq8o2PWaRxW6jMHDNQEhE",
+        "exists": true,
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 2039280,
+        "data_len": 165
+      },
+      "wallet": {
+        "address": "BYZN5acKw7Lp41RnyFgdB9Ef6UHnJdv3nwqrZTnWqaUL",
+        "exists": true,
+        "owner": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "lamports": 2039280,
+        "data_len": 165
+      }
+    },
+    "verdicts": [
+      {
+        "law": "L1",
+        "status": "holds",
+        "detail": "tracked 1000000000 atoms across 4 accounts == Mint supply 1000000000"
+      },
+      {
+        "law": "L2",
+        "status": "inapplicable",
+        "detail": "the first census has no predecessor to move from"
+      },
+      {
+        "law": "L3",
+        "status": "holds",
+        "detail": "1 Positions sum to the aggregate supply vector [500000000, 500000000, 500000000, 500000000]"
+      },
+      {
+        "law": "L4",
+        "status": "holds",
+        "detail": "Hoard 500000000 >= worst outcome 500000000 x unit 1 = 500000000"
+      },
+      {
+        "law": "L5",
+        "status": "inapplicable",
+        "detail": "the first census has no predecessor"
+      },
+      {
+        "law": "L6",
+        "status": "inapplicable",
+        "detail": "the first census has no predecessor"
+      },
+      {
+        "law": "L7",
+        "status": "inapplicable",
+        "detail": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess their fees"
+      }
+    ]
+  }
+]

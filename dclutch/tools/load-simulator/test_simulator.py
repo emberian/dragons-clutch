@@ -10,6 +10,7 @@ validator.  The real drivers are exercised by run-local.sh.
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -34,11 +35,13 @@ FAKE_BOOT = r"""#!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 cmd="${1:-}"; shift || true
-outdir=""; session=""; output=""
+outdir=""; session=""; output=""; prior=""; stage=""
 while [ "$#" -gt 0 ]; do case "$1" in
   --output-dir) outdir="$2"; shift 2 ;;
   --session) session="$2"; shift 2 ;;
   --output) output="$2"; shift 2 ;;
+  --prior) prior="$2"; shift 2 ;;
+  --stage) stage="$2"; shift 2 ;;
   *) shift ;;
 esac; done
 case "$cmd" in
@@ -64,7 +67,31 @@ case "$cmd" in
     if [ -f "$here/census-violation" ]; then
       echo "conservation law violated: hoard delta -3" >&2; exit 4
     fi
-    echo '{"schema":"fake-census","ok":true}' > "$output"
+    # CUMULATIVE, like the real one: `--prior` is reloaded and the new
+    # observation appended, so the newest file is the whole series and the
+    # directory grows as the SUM of its files. That growth is the fault the
+    # retention bound exists to stop, so the fake has to reproduce it or the
+    # bound is never exercised. Encoding matches serde_json::to_vec_pretty.
+    DCLUTCH_PRIOR="$prior" DCLUTCH_STAGE="$stage" DCLUTCH_OUTPUT="$output" python3 - <<'PY'
+import json, os
+prior, stage, output = os.environ["DCLUTCH_PRIOR"], os.environ["DCLUTCH_STAGE"], os.environ["DCLUTCH_OUTPUT"]
+series = json.load(open(prior)) if prior else []
+series.append({
+    "stage": stage,
+    "slot": 1000 + len(series),
+    "hoard_atoms": 0,
+    "tracked_collateral": 0,
+    "aggregate_supply": [0, 0],
+    "accounts": {},
+    "position_balances": {},
+    "token_atoms": {},
+    "verdicts": [{"law": "L1", "status": "holds", "detail": "fake census"}],
+    # Padding so one observation has a realistic weight and the growth this
+    # bounds is visible at test scale rather than only at devnet scale.
+    "padding": "x" * 512,
+})
+open(output, "w").write(json.dumps(series, indent=2))
+PY
     ;;
   local-private-validator-user-position-admission-v1)
     echo '{"schema":"fake-admission","phase":"finalized"}' > "$output"
@@ -74,7 +101,10 @@ esac
 """
 
 
-class SimulatorLoopTest(unittest.TestCase):
+class SimulatorHarness(unittest.TestCase):
+    """The fake-driver rig, with no assertions of its own, so the suites below
+    share it without re-running each other's cases."""
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -124,6 +154,8 @@ class SimulatorLoopTest(unittest.TestCase):
             capture_output=True, text=True, timeout=120,
         )
 
+
+class SimulatorLoopTest(SimulatorHarness):
     def test_preflight_runs_one_cycle_and_sends_nothing(self) -> None:
         cfg = self.write_config(self.config())
         proc = self.run_sim("run", "--config", str(cfg), "--cycles", "3")
@@ -266,6 +298,175 @@ class SimulatorLoopTest(unittest.TestCase):
         for p in (self.work / "journal").rglob("cycle.json"):
             body = json.loads(p.read_text())
             self.assertEqual(body["phase"], "finalized", p)
+        # And it said so: a stop it can observe is a stop it records.
+        exit_record = json.loads((self.work / "EXIT.json").read_text())
+        self.assertEqual(exit_record["outcome"], simcore.EXIT_SIGNALLED)
+        self.assertEqual(exit_record["exit_code"], 0)
+
+
+class DeathHonestyTest(SimulatorHarness):
+    """The second fault: the run was killed mid-cycle 124 inside the ENOSPC
+    window and left an artifact still reading `halted: false` with no halt
+    record beside it.  Nothing in the file contradicted the claim."""
+
+    def test_a_finished_run_records_how_it_ended(self) -> None:
+        (self.root / "steps-needed").write_text("1")
+        cfg = self.write_config(self.config())
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "2", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        body = json.loads((self.work / "EXIT.json").read_text())
+        self.assertEqual(body["outcome"], simcore.EXIT_COMPLETED)
+        self.assertEqual(body["cycles_run"], 2)
+
+    def test_a_halt_records_both_and_they_say_different_things(self) -> None:
+        (self.root / "steps-needed").write_text("1")
+        (self.root / "census-violation").write_text("1")
+        cfg = self.write_config(self.config())
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 3, proc.stderr)
+        # HALT.json: the LEDGER diverged, and a human must clear it.
+        self.assertTrue((self.work / "HALT.json").exists())
+        # EXIT.json: the PROCESS ended, and here is how.
+        self.assertEqual(
+            json.loads((self.work / "EXIT.json").read_text())["outcome"], simcore.EXIT_HALTED,
+        )
+
+    def test_a_kill_leaves_no_record_and_the_artifact_says_it_expected_one(self) -> None:
+        """THE CASE THAT HAPPENED.  SIGKILL runs no handler, so nothing is
+        written on the way down -- and pretending otherwise is the fault, not
+        the fix.  What must hold is that the artifact left behind is READABLE
+        AS DEAD: its own deadline passes, with no exit record beside it."""
+        (self.root / "steps-needed").write_text("3")
+        body = self.config()
+        body["cadence"] = {"period_seconds": 0.2, "jitter_fraction": 0.25, "grace_seconds": 1.0}
+        cfg = self.write_config(body)
+        import signal as sig
+        import time
+        proc = subprocess.Popen(
+            [sys.executable, str(HERE / "simulator.py"), "run", "--config", str(cfg),
+             "--sustain", "--execute"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            deadline = time.monotonic() + 30
+            status_path = self.work / "status.json"
+            while time.monotonic() < deadline and not status_path.exists():
+                time.sleep(0.05)
+            self.assertTrue(status_path.exists(), "the run never wrote a status to kill it after")
+            proc.send_signal(sig.SIGKILL)
+            proc.communicate(timeout=30)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+
+        status = json.loads(status_path.read_text())
+        # Exactly the dead run's artifact: nothing in the flags is alarming.
+        self.assertFalse(status["halted"])
+        self.assertFalse(status["stopping"])
+        self.assertIsNone(status["halt_reason"])
+        # It could not record an ending, and it did not invent one.
+        self.assertFalse((self.work / "EXIT.json").exists())
+        # But it stamped the instant by which a living run must have written
+        # again, and a reader with a clock can evaluate that unaided.
+        expected = dt.datetime.fromisoformat(status["heartbeat"]["expected_next_update_by"])
+        self.assertLess(
+            (expected - dt.datetime.fromisoformat(status["updated_at"])).total_seconds(), 10.0,
+        )
+        time.sleep(2.0)
+        self.assertLess(expected, dt.datetime.now(dt.timezone.utc), "the deadline never expires")
+
+
+class WalletRowTest(SimulatorHarness):
+    """Participant balances reach the status artifact without the endpoint
+    reaching the process table."""
+
+    def test_a_wallet_that_does_not_answer_is_null_and_never_zero(self) -> None:
+        (self.root / "steps-needed").write_text("1")
+        body = self.config()
+        # The loopback endpoint in the test config has nothing listening, so
+        # this exercises the real unreachable path rather than a mocked one.
+        body["wallets"] = [{"address": "5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf",
+                            "source": "staged"}]
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "1", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = json.loads((self.work / "status.json").read_text())["wallets"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["role"], "participant")
+        self.assertEqual(rows[0]["source"], "staged")
+        # Null, not zero. A fabricated zero would be a claim about the wallet.
+        self.assertIsNone(rows[0]["sol_lamports"])
+
+    def test_the_balance_read_puts_no_endpoint_on_a_command_line(self) -> None:
+        """It used to shell `solana balance --url <rpc_url>`, which shows the
+        credential to every `ps` on the machine for as long as the child
+        lives. Redacting the files we write while handing the key to the
+        process table is not a redaction story."""
+        source = (HERE / "simulator.py").read_text()
+        # The old argv literal, gone. (The name still appears once, in the
+        # docstring saying why it is gone; that is a comment, not a call.)
+        self.assertNotIn('"solana", "balance"', source)
+        self.assertIn("urllib.request.urlopen", source)
+        # And no child process is spawned for a balance at all.
+        import inspect
+        body = inspect.getsource(simulator.Simulator.wallet_balance)
+        self.assertNotIn("subprocess", body)
+        self.assertIn("urlopen", body)
+
+
+class StorageBoundTest(SimulatorHarness):
+    """The first fault, end to end: the census directory that filled the
+    machine's data volume and took every lane's shell down with it."""
+
+    def test_a_running_loop_holds_its_census_inside_the_stated_bound(self) -> None:
+        (self.root / "steps-needed").write_text("1")
+        body = self.config()
+        body["cadence"] = {"period_seconds": 0.01}
+        body["census_retention"] = {"window": 4, "keep_files": 2}
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "25", "--execute")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        census = self.work / "census"
+        files = sorted(census.glob("cycle-*.json"))
+        # Twenty-five cycles ran; two census files remain, not twenty-five.
+        self.assertEqual([p.name for p in files], ["cycle-000024.json", "cycle-000025.json"])
+        status = json.loads((self.work / "status.json").read_text())
+        self.assertEqual(status["cycles"]["run"], 25)
+
+        # The newest file is still the whole series a reader needs, ending at
+        # the cycle that wrote it -- the property simulator-series.mjs mines.
+        newest = json.loads(files[-1].read_bytes())
+        self.assertEqual(len(newest), 4)
+        self.assertEqual(newest[-1]["stage"], "load-sim-cycle-000025")
+
+        # And the artifact states the ceiling it is under, as a number.
+        report = status["census_retention"]
+        actual = sum(p.stat().st_size for p in files)
+        self.assertEqual(report["bytes_on_disk"], actual)
+        self.assertLessEqual(actual, report["bytes_bound"])
+        self.assertEqual(
+            report["bytes_bound"], 2 * 4 * report["bytes_per_observation"],
+        )
+
+    def test_the_low_disk_floor_stops_between_cycles_rather_than_mid_write(self) -> None:
+        """The other half of not repeating the outage: whatever else is
+        filling the volume, this process is not the one that takes the last of
+        it, and it stops while it still has room to say so."""
+        (self.root / "steps-needed").write_text("1")
+        body = self.config()
+        body["census_retention"] = {"disk_floor_bytes": 1 << 62}
+        cfg = self.write_config(body)
+        proc = self.run_sim("run", "--config", str(cfg), "--cycles", "3", "--execute")
+        self.assertEqual(proc.returncode, 4, proc.stderr)
+        self.assertIn("stopping", proc.stderr)
+        record = json.loads((self.work / "EXIT.json").read_text())
+        self.assertEqual(record["outcome"], simcore.EXIT_LOW_DISK)
+        # It stopped BEFORE spending a cycle, and it is not halted: a full
+        # volume is an environment fact, not a conservation divergence, so a
+        # restart with room needs no human to clear anything.
+        self.assertFalse((self.work / "HALT.json").exists())
+        self.assertEqual(json.loads((self.work / "status.json").read_text())["cycles"]["run"], 0)
 
 
 if __name__ == "__main__":

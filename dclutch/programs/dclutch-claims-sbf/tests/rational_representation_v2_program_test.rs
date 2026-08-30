@@ -9,6 +9,7 @@
 
 use std::{env, fs, path::PathBuf, vec::Vec};
 
+mod claim_check;
 mod structured_lowering;
 
 use dclutch_claims_sbf::ClaimsSbfError;
@@ -47,7 +48,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_market_core_codec::{
     Action, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase as CorePhase,
-    Readiness, Request,
+    Readiness, Request, StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
@@ -917,6 +918,7 @@ fn core_market(
         principal_cap_sets: u64::MAX,
         rent_beneficiary: semantic_identity(market_rent_credit().to_bytes()),
         terminal_receipt: terminal_receipt.map(semantic_identity),
+        bumps: StateBumpsV1::UNRECORDED,
     };
     (market, state.encode().expect("Core state").to_vec())
 }
@@ -5041,7 +5043,13 @@ fn wallet_payout_custody_caller(
             transfer_index: input.transfer_index,
         },
         source: terminal.hoard.to_bytes(),
-        destination: terminal.recipient.to_bytes(),
+        // Read from the request, not from the fixture. The chain does exactly
+        // this -- `authenticate_extra_privileges` binds the recipient ACCOUNT
+        // to `input.recipient_token_account` -- so hardcoding the fixture's own
+        // recipient here made the helper a second author for a field the
+        // request already carries. Identical for every wallet payout, and the
+        // difference is what a payout to any other destination needs.
+        destination: input.recipient_token_account,
         source_vault_context: fixture.custody_context,
         destination_vault_context: [0; 32],
         mint: input.collateral_mint,
@@ -6512,7 +6520,12 @@ async fn the_representation_redemption_also_survives_a_strangers_retirement() {
         shard_supply(WINNERS) - DENOMINATOR
     );
     assert_eq!(
-        token_amount(after.actor_shards.get(WINNERS).expect("winner actor shards")),
+        token_amount(
+            after
+                .actor_shards
+                .get(WINNERS)
+                .expect("winner actor shards")
+        ),
         actor_shards()[WINNERS] - DENOMINATOR
     );
     // Structured custody is untouched, exactly as in the Terminal-phase run:

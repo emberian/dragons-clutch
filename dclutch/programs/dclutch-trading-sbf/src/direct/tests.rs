@@ -42,7 +42,7 @@ use dclutch_direct_codec::{
 };
 use dclutch_market_core_codec::{
     Binding, CoreMarketViewV1, CoreReferenceObservationV1, CoreState, Identity, MarketIdentity,
-    Phase, Product, Readiness, Realm, ReleaseSet,
+    Phase, Product, Readiness, Realm, ReleaseSet, StateBumpsV1,
 };
 use solana_program::hash::{hash, hashv};
 use solana_program::pubkey::Pubkey;
@@ -112,6 +112,7 @@ fn core_market_view(outcome_count: u32) -> CoreMarketViewV1 {
         principal_cap_sets: u64::MAX,
         rent_beneficiary: identity(90),
         terminal_receipt: None,
+        bumps: StateBumpsV1::UNRECORDED,
     };
     CoreMarketViewV1::authenticate(
         state,
@@ -2819,23 +2820,32 @@ fn inline_maker_root_reproduction_refuses_bump_and_coordinate_hostiles() {
     // and reproduction from the authenticated coordinates refuses each one.
     let other_maker = derive_pda(
         id(10),
-        &MakerReplaySeedsV1::new(DirectCoordinatesV1::new(id(1), 4).expect("coordinates"), id(4))
-            .expect("substituted maker seeds")
-            .as_slices(),
+        &MakerReplaySeedsV1::new(
+            DirectCoordinatesV1::new(id(1), 4).expect("coordinates"),
+            id(4),
+        )
+        .expect("substituted maker seeds")
+        .as_slices(),
     )
     .0;
     let other_market = derive_pda(
         id(10),
-        &MakerReplaySeedsV1::new(DirectCoordinatesV1::new(id(2), 4).expect("coordinates"), id(2))
-            .expect("substituted market seeds")
-            .as_slices(),
+        &MakerReplaySeedsV1::new(
+            DirectCoordinatesV1::new(id(2), 4).expect("coordinates"),
+            id(2),
+        )
+        .expect("substituted market seeds")
+        .as_slices(),
     )
     .0;
     let other_generation = derive_pda(
         id(10),
-        &MakerReplaySeedsV1::new(DirectCoordinatesV1::new(id(1), 5).expect("coordinates"), id(2))
-            .expect("substituted generation seeds")
-            .as_slices(),
+        &MakerReplaySeedsV1::new(
+            DirectCoordinatesV1::new(id(1), 5).expect("coordinates"),
+            id(2),
+        )
+        .expect("substituted generation seeds")
+        .as_slices(),
     )
     .0;
     for substituted in [other_maker, other_market, other_generation, id(60)] {

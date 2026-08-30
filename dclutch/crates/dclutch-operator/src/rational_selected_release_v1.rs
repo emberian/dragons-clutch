@@ -300,8 +300,12 @@ pub fn rational_selected_release_v1(
         activate_receipt: fixed
             .first()
             .ok_or(RationalSelectedReleaseErrorV1::Release)?,
-        activate_coordinate: fixed.get(1).ok_or(RationalSelectedReleaseErrorV1::Release)?,
-        retire_coordinate: fixed.get(2).ok_or(RationalSelectedReleaseErrorV1::Release)?,
+        activate_coordinate: fixed
+            .get(1)
+            .ok_or(RationalSelectedReleaseErrorV1::Release)?,
+        retire_coordinate: fixed
+            .get(2)
+            .ok_or(RationalSelectedReleaseErrorV1::Release)?,
         retire_receipt: &compact,
     })
     .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?;
@@ -424,7 +428,10 @@ impl RationalSelectedReleaseV1 {
         });
         for (ordinal, supplied) in bytes.actions.into_iter().enumerate() {
             let entry = set
-                .entry(u16::try_from(ordinal).map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?)
+                .entry(
+                    u16::try_from(ordinal)
+                        .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?,
+                )
                 .map_err(|_| RationalSelectedReleaseErrorV1::ProgramSet)?;
             let descriptor = CapabilityProgramV4::decode(supplied.descriptor)
                 .map_err(|_| RationalSelectedReleaseErrorV1::Release)?;
@@ -559,7 +566,10 @@ fn validate_input(input: RationalSelectedReleaseInputV1<'_>) -> Result<()> {
 }
 
 /// Account observations for one fixed-cardinality action, derived not supplied.
-fn fixed_lengths(input: RationalSelectedReleaseInputV1<'_>, action: LifecycleActionV2) -> Result<Vec<u32>> {
+fn fixed_lengths(
+    input: RationalSelectedReleaseInputV1<'_>,
+    action: LifecycleActionV2,
+) -> Result<Vec<u32>> {
     let coordinate_count = u32::from(action != LifecycleActionV2::ActivateReceipt);
     let count = usize::from(
         lifecycle_logical_account_count_v3(action, coordinate_count)
@@ -754,11 +764,11 @@ mod tests {
         assert_eq!(first.program_set, second.program_set);
         assert_eq!(first.config, second.config);
         assert_eq!(first.publication, second.publication);
+        assert_eq!(first.publication.to_bytes(), second.publication.to_bytes());
         assert_eq!(
-            first.publication.to_bytes(),
-            second.publication.to_bytes()
+            first.publication.publication_id(),
+            second.publication.publication_id()
         );
-        assert_eq!(first.publication.publication_id(), second.publication.publication_id());
     }
 
     /// The publication's width is its own field table, and its layout closes.
@@ -891,8 +901,14 @@ mod tests {
             ..input(&basis)
         })
         .expect("second");
-        assert_ne!(first.publication.program_set_id, second.publication.program_set_id);
-        assert_ne!(first.publication.descriptors, second.publication.descriptors);
+        assert_ne!(
+            first.publication.program_set_id,
+            second.publication.program_set_id
+        );
+        assert_ne!(
+            first.publication.descriptors,
+            second.publication.descriptors
+        );
         // But the config is shared: it binds Realm and release set, not shape.
         assert_eq!(first.publication.config_id, second.publication.config_id);
     }

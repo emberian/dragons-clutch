@@ -19,6 +19,32 @@ pub const LIABILITY_BASIS_POSITION_MAGIC_V2: [u8; 8] = *b"DCLLBP02";
 /// Implemented state ABI version.
 pub const LIABILITY_BASIS_STATE_VERSION_V2: u16 = 2;
 
+/// Offset of the aggregate's own canonical PDA bump.
+///
+/// The aggregate is created by the Claims program under
+/// `[LIABILITY_BASIS_MARKET_SEED_V2, logical_market]`, and every reader in that
+/// same program searches for the address again. The creator had to derive the
+/// bump in order to sign the account into existence, so it records it and the
+/// readers reproduce the address with `create_program_address` instead. A wrong
+/// byte reproduces a different address and refuses, so the byte is a memo of
+/// the program's own derivation and never an authority.
+///
+/// It is the first of the two canonical reserved bytes at offset 10, so the
+/// header width and every offset after it are unchanged.
+///
+/// **Zero means "written before this byte existed", not "invalid".**
+/// `find_program_address` walks 255 down to 1 and never returns 0, so a zero
+/// here is an older body and its reader falls back to the search it used to do
+/// unconditionally. That is what makes this deployable with no migration.
+pub const LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2: usize = 10;
+/// Offset of a Position's own canonical PDA bump.
+///
+/// The same carry as [`LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2`], for the
+/// `ProtocolPositionSeedsV2` address. It takes the first of the eight reserved
+/// bytes at [`POSITION_RESERVED_OFFSET`], which no layout projection publishes,
+/// so the header width and every published coordinate are unchanged.
+pub const LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2: usize = POSITION_RESERVED_OFFSET;
+
 const MARKET_CLAIM_COUNT_OFFSET: usize = 12;
 const MARKET_REVISION_OFFSET: usize = 16;
 const MARKET_LOGICAL_ID_OFFSET: usize = 24;
@@ -230,7 +256,10 @@ impl LiabilityBasisMarketViewV2 {
             LIABILITY_BASIS_MARKET_MAGIC_V2,
             LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
         )?;
-        require_zero(bytes, 10, 2)?;
+        // Byte 10 is the aggregate's own PDA bump and is deliberately NOT
+        // zero-checked; see `LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2`. Byte 11 is
+        // what remains of the reserved field.
+        require_zero(bytes, LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2 + 1, 1)?;
         let value = Self {
             claim_count: read_u32(bytes, MARKET_CLAIM_COUNT_OFFSET)?,
             revision: read_u64(bytes, MARKET_REVISION_OFFSET)?,
@@ -302,7 +331,10 @@ impl LiabilityBasisPositionViewV2 {
             LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
         )?;
         require_zero(bytes, 10, 2)?;
-        require_zero(bytes, POSITION_RESERVED_OFFSET, 8)?;
+        // The first of these eight is the Position's own PDA bump; see
+        // `LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2`. The other seven stay
+        // reserved.
+        require_zero(bytes, LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2 + 1, 7)?;
         let value = Self {
             claim_count: read_u32(bytes, POSITION_CLAIM_COUNT_OFFSET)?,
             revision: read_u64(bytes, POSITION_REVISION_OFFSET)?,
@@ -335,6 +367,77 @@ impl LiabilityBasisPositionViewV2 {
             claim_index,
         )
     }
+}
+
+/// Read the aggregate's own canonical PDA bump, if this body carries one.
+///
+/// `None` for a body written before the bump was persisted, which tells the
+/// reader to search as it always did. Hostile-decodes first, so the byte is
+/// only ever taken from a canonical aggregate.
+pub fn liability_basis_market_bump_v2(bytes: &[u8]) -> Result<Option<u8>> {
+    LiabilityBasisMarketViewV2::decode(bytes)?;
+    Ok(read_optional_bump(
+        bytes,
+        LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2,
+    ))
+}
+
+/// Read a Position's own canonical PDA bump, if this body carries one.
+pub fn liability_basis_position_bump_v2(bytes: &[u8]) -> Result<Option<u8>> {
+    LiabilityBasisPositionViewV2::decode(bytes)?;
+    Ok(read_optional_bump(
+        bytes,
+        LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2,
+    ))
+}
+
+/// Record the aggregate's own canonical PDA bump into an encoded body.
+///
+/// Deliberately separate from [`encode_liability_basis_market_into_v2`] rather
+/// than a field of its input. The bump is a carrier, not a fact the aggregate
+/// needs to be valid, and every reader falls back to the search when it is
+/// absent -- so the two sites that HAVE a bump to record (the Claims founding
+/// route, and the fixtures that stage what it produces) record it, and the
+/// couple of dozen harnesses that build an aggregate by hand are unaffected.
+pub fn put_liability_basis_market_bump_v2(output: &mut [u8], bump: u8) -> Result<()> {
+    put_bump(
+        output,
+        LIABILITY_BASIS_MARKET_BUMP_OFFSET_V2,
+        bump,
+        |bytes| LiabilityBasisMarketViewV2::decode(bytes).map(|_| ()),
+    )
+}
+
+/// Record a Position's own canonical PDA bump into an encoded body.
+pub fn put_liability_basis_position_bump_v2(output: &mut [u8], bump: u8) -> Result<()> {
+    put_bump(
+        output,
+        LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2,
+        bump,
+        |bytes| LiabilityBasisPositionViewV2::decode(bytes).map(|_| ()),
+    )
+}
+
+fn read_optional_bump(bytes: &[u8], offset: usize) -> Option<u8> {
+    bytes.get(offset).copied().filter(|bump| *bump != 0)
+}
+
+fn put_bump(
+    output: &mut [u8],
+    offset: usize,
+    bump: u8,
+    decode: fn(&[u8]) -> Result<()>,
+) -> Result<()> {
+    decode(output)?;
+    // Zero is not a bump any derivation produces, so a caller offering one has
+    // not derived the address it is writing.
+    if bump == 0 {
+        return Err(LiabilityBasisStateErrorV2::NonCanonical);
+    }
+    *output
+        .get_mut(offset)
+        .ok_or(LiabilityBasisStateErrorV2::InvalidLength)? = bump;
+    Ok(())
 }
 
 /// Return the exact header plus `u64[claim_count]` byte width.
@@ -593,8 +696,22 @@ mod tests {
             LiabilityBasisMarketViewV2::decode(&zero),
             Err(LiabilityBasisStateErrorV2::ZeroIdentity)
         );
+        // Byte 10 is the aggregate's own PDA bump and is a carrier, not a
+        // canonicality field: a body that has one decodes and reports it, a
+        // body written before it existed decodes and reports `None`, and its
+        // reader searches as it always did.
+        let mut carried = canonical;
+        assert_eq!(liability_basis_market_bump_v2(&carried), Ok(None));
+        put_liability_basis_market_bump_v2(&mut carried, 253).expect("record the bump");
+        assert_eq!(liability_basis_market_bump_v2(&carried), Ok(Some(253)));
+        assert_eq!(
+            put_liability_basis_market_bump_v2(&mut carried, 0),
+            Err(LiabilityBasisStateErrorV2::NonCanonical),
+            "zero is not a bump any derivation produces, so it is refused at the writer"
+        );
+        // Byte 11 is what remains of the reserved field, and still is one.
         let mut reserved = canonical;
-        *reserved.get_mut(10).expect("reserved byte") = 1;
+        *reserved.get_mut(11).expect("reserved byte") = 1;
         assert_eq!(
             LiabilityBasisMarketViewV2::decode(&reserved),
             Err(LiabilityBasisStateErrorV2::NonCanonical)
@@ -612,6 +729,51 @@ mod tests {
             view.supply(&canonical, 2),
             Err(LiabilityBasisStateErrorV2::InvalidClaimIndex)
         );
+    }
+
+    /// The two own-account PDA bumps are carriers, not canonicality fields.
+    ///
+    /// A body written before they existed decodes and reports `None`, which is
+    /// what makes this deployable without a migration: its reader falls back to
+    /// the search it always did. A body that carries one reports it, and zero
+    /// is refused at the writer because no derivation produces it.
+    #[test]
+    fn the_own_account_bumps_round_trip_and_are_absent_rather_than_invalid() {
+        let mut position = [0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 8];
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: 9,
+                market_account: [8; 32],
+                owner: [9; 32],
+                basis_id: [5; 32],
+            },
+            &[4],
+            &mut position,
+        )
+        .expect("position");
+        assert_eq!(liability_basis_position_bump_v2(&position), Ok(None));
+        put_liability_basis_position_bump_v2(&mut position, 251).expect("record the bump");
+        assert_eq!(liability_basis_position_bump_v2(&position), Ok(Some(251)));
+        assert_eq!(
+            put_liability_basis_position_bump_v2(&mut position, 0),
+            Err(LiabilityBasisStateErrorV2::NonCanonical)
+        );
+        // Recording a bump must move nothing else, or the two hundred sites
+        // that hash these bodies would disagree about what they hold.
+        let mut plain = [0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 8];
+        encode_liability_basis_position_into_v2(
+            LiabilityBasisPositionInputV2 {
+                revision: 9,
+                market_account: [8; 32],
+                owner: [9; 32],
+                basis_id: [5; 32],
+            },
+            &[4],
+            &mut plain,
+        )
+        .expect("position");
+        plain[LIABILITY_BASIS_POSITION_BUMP_OFFSET_V2] = 251;
+        assert_eq!(position, plain);
     }
 
     #[test]
@@ -723,7 +885,7 @@ mod tests {
     fn hostile_layout_projection_preserves_outputs() {
         let mut market = [0_u8; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + 8];
         encode_liability_basis_market_into_v2(market_input(), &[11], &mut market).expect("market");
-        market[10] = 1;
+        market[11] = 1;
         let mut market_revision = 0xa5a5;
         let market_before = market_revision;
         assert!(
@@ -740,7 +902,9 @@ mod tests {
         };
         let mut position = [0_u8; LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + 8];
         encode_liability_basis_position_into_v2(input, &[4], &mut position).expect("position");
-        position[POSITION_RESERVED_OFFSET] = 1;
+        // The first reserved byte is now the Position's own PDA bump; the
+        // other seven still refuse.
+        position[POSITION_RESERVED_OFFSET + 1] = 1;
         let mut position_revision = 0x5a5a;
         let position_before = position_revision;
         assert!(

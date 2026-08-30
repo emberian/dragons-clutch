@@ -55,8 +55,22 @@ pub const CAPABILITY_SEAL_ROW_COUNT_OFFSET_V1: usize = 12;
 pub const CAPABILITY_SEAL_VERDICTS_OFFSET_V1: usize = 14;
 /// Offset of the persisted action selector.
 pub const CAPABILITY_SEAL_ACTION_OFFSET_V1: usize = 16;
-/// Offset of the four canonical reserved bytes.
-pub const CAPABILITY_SEAL_RESERVED_OFFSET_V1: usize = 20;
+/// Offset of the seal's own canonical PDA bump.
+///
+/// The seal is a write-once account whose address the writing program derived
+/// for itself, so the cheapest place to keep that derivation is the account.
+/// Every reader then reproduces the address with `create_program_address` at
+/// this byte instead of walking the search down from 255 -- and a wrong byte
+/// reproduces a different address and refuses, so the byte is a memo of the
+/// program's own computation and never an authority.
+///
+/// It is the first of what used to be four canonical reserved bytes, so the
+/// account width and every offset after it are unchanged.
+pub const CAPABILITY_SEAL_BUMP_OFFSET_V1: usize = 20;
+/// Offset of the three canonical reserved bytes.
+pub const CAPABILITY_SEAL_RESERVED_OFFSET_V1: usize = 21;
+/// Exact count of the canonical reserved bytes.
+pub const CAPABILITY_SEAL_RESERVED_BYTES_V1: usize = 3;
 /// Offset of the persisted descriptor schema identity.
 pub const CAPABILITY_SEAL_DESCRIPTOR_SCHEMA_OFFSET_V1: usize = 24;
 /// Offset of the persisted descriptor content identity.
@@ -167,6 +181,14 @@ pub enum Error {
     UnsupportedArtifactProfile,
     /// A canonical reserved field is nonzero.
     NonCanonicalReserved,
+    /// The persisted PDA bump is zero, which no derivation ever produces.
+    ///
+    /// `find_program_address` walks 255 down to 1, so zero is not a bump this
+    /// or any program can have written -- it is an unwritten byte. The seal
+    /// carrying one is a body from before the bump was persisted, and since a
+    /// Trading upgrade moves every seal to a new address it can only be reached
+    /// by a reader looking at an account its own release never wrote.
+    ZeroBump,
     /// The persisted row count is not the artifact profile's exact count.
     InvalidRowCount,
     /// The persisted verdict set is not the artifact profile's exact set.
@@ -459,7 +481,18 @@ impl<'a> SealedDescriptorClosureV1<'a> {
         if read_u16(bytes, CAPABILITY_SEAL_PROFILE_OFFSET_V1)? != CAPABILITY_SEAL_PROFILE_V1 {
             return Err(Error::UnsupportedArtifactProfile);
         }
-        require_zero(bytes, CAPABILITY_SEAL_RESERVED_OFFSET_V1, 4)?;
+        if *bytes
+            .get(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+            .ok_or(Error::InvalidLength)?
+            == 0
+        {
+            return Err(Error::ZeroBump);
+        }
+        require_zero(
+            bytes,
+            CAPABILITY_SEAL_RESERVED_OFFSET_V1,
+            CAPABILITY_SEAL_RESERVED_BYTES_V1,
+        )?;
         if usize::from(read_u16(bytes, CAPABILITY_SEAL_ROW_COUNT_OFFSET_V1)?)
             != CAPABILITY_SEAL_ROW_COUNT_V1
         {
@@ -490,14 +523,23 @@ impl<'a> SealedDescriptorClosureV1<'a> {
     }
 
     /// Encode one exact canonical seal body.
+    ///
+    /// `bump` is the seal address's own canonical PDA bump, which the writer
+    /// necessarily derived in order to sign the account into existence. It is
+    /// persisted so that readers reproduce the address instead of searching for
+    /// it; see [`CAPABILITY_SEAL_BUMP_OFFSET_V1`].
     pub fn encode(
         key: CapabilitySealKeyV1,
         rows: [SealedRecordRowV1; CAPABILITY_SEAL_ROW_COUNT_V1],
+        bump: u8,
         output: &mut [u8],
     ) -> Result<()> {
         // Associated on the borrowed view only for locality; it writes bytes.
         if output.len() != CAPABILITY_SEAL_BYTES_V1 {
             return Err(Error::InvalidLength);
+        }
+        if bump == 0 {
+            return Err(Error::ZeroBump);
         }
         for byte in output.iter_mut() {
             *byte = 0;
@@ -528,6 +570,9 @@ impl<'a> SealedDescriptorClosureV1<'a> {
             CAPABILITY_SEAL_VERDICTS_V1,
         )?;
         put_u32(output, CAPABILITY_SEAL_ACTION_OFFSET_V1, key.action)?;
+        *output
+            .get_mut(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+            .ok_or(Error::InvalidLength)? = bump;
         copy(
             output,
             CAPABILITY_SEAL_DESCRIPTOR_SCHEMA_OFFSET_V1,
@@ -587,6 +632,17 @@ impl<'a> SealedDescriptorClosureV1<'a> {
             read_array(self.bytes, CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1)?,
             read_array(self.bytes, CAPABILITY_SEAL_REGISTRY_OFFSET_V1)?,
         )
+    }
+
+    /// The seal address's own canonical PDA bump, as its writer derived it.
+    ///
+    /// Nonzero by [`Self::decode`], which refuses a zero here rather than
+    /// letting an unwritten byte become an unexplainable address mismatch.
+    pub fn bump(self) -> Result<u8> {
+        self.bytes
+            .get(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+            .copied()
+            .ok_or(Error::InvalidLength)
     }
 
     /// Borrow the canonical row for one role.

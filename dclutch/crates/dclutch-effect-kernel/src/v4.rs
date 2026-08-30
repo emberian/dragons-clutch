@@ -1474,7 +1474,9 @@ mod tests {
             .expect("row")
         });
         let mut output = [0_u8; CAPABILITY_SEAL_BYTES_V1];
-        SealedDescriptorClosureV1::encode(key, rows, &mut output).expect("seal");
+        // Any nonzero bump: this test is about the artifact view, and the
+        // address the bump reproduces is not part of what it exercises.
+        SealedDescriptorClosureV1::encode(key, rows, 255, &mut output).expect("seal");
         output
     }
 

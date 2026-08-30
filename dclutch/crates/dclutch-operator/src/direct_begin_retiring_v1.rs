@@ -1011,6 +1011,7 @@ mod tests {
     use solana_sdk_ids::system_program;
 
     use super::*;
+    use dclutch_market_core_codec::StateBumpsV1;
 
     const OBSERVATION: Observation = Observation {
         slot: 700,
@@ -1089,6 +1090,7 @@ mod tests {
             principal_cap_sets: 10,
             rent_beneficiary: identity(9),
             terminal_receipt: Some(identity(10)),
+            bumps: StateBumpsV1::UNRECORDED,
         };
         let selection = CapabilityExecutionSelectionV1::new(
             0,

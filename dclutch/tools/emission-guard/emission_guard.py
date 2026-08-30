@@ -77,6 +77,22 @@ LEAN_EMIT_RE = re.compile(
     r"lean-emit\.mjs\s+\S+\s+(Emit[A-Za-z0-9_]+\.lean)\s+(\S+)(?:\s+(--check))?"
 )
 
+# The third guard kind, and the one this census was blind to until it was
+# taught to look: a Rust integration test that runs the emitter through
+# `Command` and asserts its stdout equals the committed bytes. These cannot be
+# found with SCRIPT_EMITTER_RE, because `.args(["env", "lean", "--run",
+# "EmitFoo.lean"])` puts the emitter on its own line -- so the emitter appears
+# only as a bare string literal.
+RUST_EMITTER_RE = re.compile(r'"(Emit[A-Za-z0-9_]+\.lean)"')
+
+# What promotes such a test from "runs Lean" to "is a guard". The tool's rule
+# everywhere else is that the COMPARISON constitutes a guard, never the build,
+# so a test qualifies only if it both reads the committed artifact back and
+# asserts equality. Deliberately conservative: a test that merely rebuilds a
+# module, or shells out for a digest without comparing it, is not counted.
+RUST_READBACK_RE = re.compile(r"fs::read\b|include_str!|read_to_string\b")
+RUST_COMPARE_RE = re.compile(r"assert_eq!")
+
 
 @dataclass
 class Guard:
@@ -89,12 +105,37 @@ class Guard:
     command: list[str] = field(default_factory=list)
 
 
+class ToolError(Exception):
+    """The census could not be taken at all.
+
+    Distinct from drift ON PURPOSE, and the distinction is exit-code-visible:
+    2 means this tool could not run, 1 means this tree disagrees with its
+    committed census. Conflating them is a defect this repository has already
+    paid for once -- `tools/seam-audit` used to exit 1 when `ast-grep` was
+    absent, the same code it uses for "this tree has a seam defect", because
+    the "install it" message sat behind a returncode check that an absent
+    binary never reaches. It was fixed there in c3de7b46 and the same hole was
+    open here: `git ls-files` under `check=True` raises, Python exits 1, and a
+    CI job reading only the status calls a tree it never examined broken.
+
+    A gate that cannot run has not passed and has not failed. It has to say so.
+    """
+
+
 def tracked_files(root: pathlib.Path) -> list[str]:
-    out = subprocess.run(
+    result = subprocess.run(
         ["git", "-C", str(root), "ls-files"],
-        check=True, text=True, stdout=subprocess.PIPE,
-    ).stdout
-    return sorted(line for line in out.splitlines() if line)
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise ToolError(
+            f"cannot enumerate tracked files under {root}: "
+            f"{result.stderr.strip() or 'git ls-files failed'}. The census "
+            f"reads `git ls-files`, so it needs a git checkout -- an exported "
+            f"or vendored copy of this tree is not one. This says nothing "
+            f"about whether the census would pass."
+        )
+    return sorted(line for line in result.stdout.splitlines() if line)
 
 
 def first_line(path: pathlib.Path) -> str | None:
@@ -163,6 +204,29 @@ def discover_guards(root: pathlib.Path, files: list[str]) -> list[Guard]:
                       kind="lean-emit", workdir=pkg_dir,
                       command=["node", "scripts/lean-emit.mjs"])
             )
+
+    for rel in files:
+        path = pathlib.PurePosixPath(rel)
+        if path.suffix != ".rs" or path.parent.name != "tests":
+            continue
+        crate_dir = path.parent.parent
+        if not (root / crate_dir / "Cargo.toml").is_file():
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not RUST_READBACK_RE.search(text) or not RUST_COMPARE_RE.search(text):
+            continue
+        emitters = set(RUST_EMITTER_RE.findall(text))
+        if emitters:
+            guards.append(
+                Guard(path=rel, emitters=emitters, kind="cargo-test",
+                      workdir=str(crate_dir),
+                      command=["cargo", "test", "--manifest-path",
+                               f"{crate_dir}/Cargo.toml", "--test", path.stem])
+            )
+
     return sorted(guards, key=lambda g: g.path)
 
 
@@ -199,11 +263,12 @@ def render_coverage(census: Census) -> str:
     lines.append("# Lean emission coverage")
     lines.append("")
     lines.append(
-        "Which generated files a byte-identity check script actually guards, "
-        "and which are generated with nothing watching them. Regenerate with "
-        "`tools/emission-guard/emission_guard.py --write`; byte-gate with "
-        "`--verify`. This census is cheap — it reads first lines and shell "
-        "scripts, and never runs Lean."
+        "Which generated files a byte-identity guard actually re-runs and "
+        "compares, and which are generated with nothing watching them. "
+        "Regenerate with `tools/emission-guard/emission_guard.py --write`; "
+        "byte-gate with `--verify`. This census is cheap — it reads first "
+        "lines, shell scripts, `package.json` scripts and Rust integration "
+        "tests, and never runs Lean."
     )
     lines.append("")
     lines.append(
@@ -228,14 +293,17 @@ def render_coverage(census: Census) -> str:
     lines.append(
         "Each runs its emitter and compares the output against the committed "
         "bytes. All of them need `lake` (and the shell ones `rustfmt`), which "
-        "is why they are not on a cheap CI tier."
+        "is why they are not on a cheap CI tier. A guard is a comparison, "
+        "never a build: three kinds qualify — a `check*.sh` script, a "
+        "`package.json` script passing `--check`, and a Rust integration test "
+        "that reads the committed artifact back and asserts equality."
     )
     lines.append("")
-    lines.append("| Guard | Emitters re-run |")
-    lines.append("|---|---|")
+    lines.append("| Guard | Kind | Emitters re-run |")
+    lines.append("|---|---|---|")
     for guard in census.guards:
         names = ", ".join(f"`{e}`" for e in sorted(guard.emitters))
-        lines.append(f"| `{guard.path}` | {names} |")
+        lines.append(f"| `{guard.path}` | {guard.kind} | {names} |")
     lines.append("")
 
     lines.append("## Guarded generated files")
@@ -250,8 +318,8 @@ def render_coverage(census: Census) -> str:
     lines.append("")
     if unguarded:
         lines.append(
-            "No check script re-runs these emitters. Listed by emitter, "
-            "because a single new check script covers every file in a group."
+            "No guard of any kind re-runs these emitters. Listed by emitter, "
+            "because a single new guard covers every file in a group."
         )
         lines.append("")
         by_emitter: dict[str, list[str]] = {}
@@ -274,9 +342,8 @@ def changed_paths(root: pathlib.Path, revision_range: str) -> list[str]:
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     if result.returncode != 0:
-        raise SystemExit(
-            f"emission_guard: cannot read '{revision_range}': "
-            f"{result.stderr.strip()}"
+        raise ToolError(
+            f"cannot read '{revision_range}': {result.stderr.strip()}"
         )
     return [line for line in result.stdout.splitlines() if line]
 
@@ -327,6 +394,11 @@ def run_guards(root: pathlib.Path, guards: list[Guard]) -> int:
         print(f"EMISSION-GUARD\trun\t{guard.path}", flush=True)
         if guard.kind == "shell":
             result = subprocess.run(["sh", guard.path], cwd=root)
+        elif guard.kind == "cargo-test":
+            # Named exactly, never a bare `-p <crate>`: the guard is this one
+            # test binary, and running its crate's whole suite to check one
+            # byte comparison would be a resource grab rather than diligence.
+            result = subprocess.run(guard.command, cwd=root)
         else:
             # The package script owns its exact arguments; running it through
             # npm keeps this tool from restating a command line that lives in
@@ -440,4 +512,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except ToolError as error:
+        print(f"emission_guard: {error}", file=sys.stderr)
+        # 2, matching tools/seam-audit/seam_audit.py, so this tree has ONE
+        # convention for "the checker could not run" rather than two.
+        sys.exit(2)
