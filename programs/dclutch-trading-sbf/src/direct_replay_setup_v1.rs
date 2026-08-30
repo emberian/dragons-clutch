@@ -92,7 +92,6 @@ fn invoke_replay_child_v1(
     instruction_data: &[u8],
     request: DirectReplaySetupRequestV1,
 ) -> Result<ReplayInvocationV1, ProgramError> {
-    let market_state = authenticate_market(accounts, request)?;
     let maker_root = Pubkey::find_program_address(
         &MakerReplaySeedsV1::new(
             DirectCoordinatesV1::new(request.market, request.generation)
@@ -106,8 +105,7 @@ fn invoke_replay_child_v1(
     .0;
     let payer = account(accounts, PAYER)?;
     let rent_refund = account(accounts, RENT_REFUND)?;
-    if rent_refund.key.to_bytes() != market_state.rent_beneficiary.to_bytes()
-        || rent_refund.key == payer.key
+    if rent_refund.key == payer.key
         || maker_root == *rent_refund.key
         || maker_root == *payer.key
         || maker_root == *account(accounts, MARKET)?.key
@@ -118,9 +116,9 @@ fn invoke_replay_child_v1(
         Rent::from_account_info(account(accounts, RENT)?).map_err(|_| TradingSbfError::Content)?;
     let exact_rent = rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1);
     let top_request_digest = hash(instruction_data).to_bytes();
-    let custody_request = expected_custody_request_v1(
+    let custody_request = authenticate_market_and_derive_request_v1(
+        accounts,
         request,
-        market_state,
         program_id.to_bytes(),
         maker_root.to_bytes(),
         payer.key.to_bytes(),
@@ -135,7 +133,7 @@ fn invoke_replay_child_v1(
     authenticate_child_coordinates(
         program_id,
         accounts,
-        custody_request,
+        &custody_request,
         custody_request_digest,
     )?;
 
@@ -147,7 +145,7 @@ fn invoke_replay_child_v1(
         program_id,
         accounts,
         &custody_request_bytes,
-        custody_request,
+        &custody_request,
         custody_request_digest,
     )?;
     Ok(ReplayInvocationV1 {
@@ -168,12 +166,11 @@ fn authenticate_and_emit_replay_v1(
     accounts: &[AccountInfo<'_>],
     invocation: ReplayInvocationV1,
 ) -> ProgramResult {
-    let market_state = authenticate_market(accounts, invocation.request)?;
     let payer = account(accounts, PAYER)?;
     let rent_refund = account(accounts, RENT_REFUND)?;
-    let custody_request = expected_custody_request_v1(
+    let custody_request = authenticate_market_and_derive_request_v1(
+        accounts,
         invocation.request,
-        market_state,
         program_id.to_bytes(),
         invocation.maker_root,
         payer.key.to_bytes(),
@@ -203,7 +200,7 @@ fn authenticate_and_emit_replay_v1(
     }
     let (custody_poststate, custody_replay_digest) = authenticate_child_result(
         accounts,
-        custody_request,
+        &custody_request,
         custody_request_digest,
         invocation.exact_rent,
     )?;
@@ -253,12 +250,49 @@ fn emit_replay_receipt_v1(
     Ok(())
 }
 
+/// Authenticate the Market and derive the sole admitted child request in one
+/// frame.
+///
+/// The Core state is 360 bytes and the canonical re-encoding this
+/// authentication compares against is another 368. Neither is wanted once the
+/// request exists, and a caller that held them would also be holding the
+/// 648-byte request, its 672-byte encoding and a CPI account frame. Confining
+/// them here is what keeps both callers under the SBPF v0 4,096-byte bound.
+///
+/// The rent-beneficiary conjunct moved in with the state it reads. It was
+/// already stated twice -- `expected_custody_request_v1` refuses the same
+/// mismatch with the same refusal -- so nothing is checked less often.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn authenticate_market_and_derive_request_v1(
+    accounts: &[AccountInfo<'_>],
+    request: DirectReplaySetupRequestV1,
+    trading_program: [u8; 32],
+    maker_root: [u8; 32],
+    payer: [u8; 32],
+    rent_refund: [u8; 32],
+    exact_rent: u64,
+    top_request_digest: [u8; 32],
+) -> Result<CustodyRequestV1, ProgramError> {
+    let market_state = authenticate_market(accounts, request)?;
+    expected_custody_request_v1(
+        request,
+        &market_state,
+        trading_program,
+        maker_root,
+        payer,
+        rent_refund,
+        exact_rent,
+        top_request_digest,
+    )
+}
+
 /// Build the sole Custody request admitted by this route.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
 pub fn expected_custody_request_v1(
     top: DirectReplaySetupRequestV1,
-    market: CoreState,
+    market: &CoreState,
     trading_program: [u8; 32],
     maker_root: [u8; 32],
     payer: [u8; 32],
@@ -402,7 +436,7 @@ fn authenticate_market(
 fn authenticate_child_coordinates(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
-    request: CustodyRequestV1,
+    request: &CustodyRequestV1,
     request_digest: [u8; 32],
 ) -> ProgramResult {
     let caller_seeds = CallerAuthoritySeedsV1::new(
@@ -419,7 +453,7 @@ fn authenticate_child_coordinates(
         != &Pubkey::find_program_address(&caller_seeds.as_slices(), program_id).0
         || replay.key
             != &Pubkey::find_program_address(
-                &CustodyReplaySeedsV1::from_request(request).as_slices(),
+                &CustodyReplaySeedsV1::from_request(*request).as_slices(),
                 custody_program.key,
             )
             .0
@@ -436,7 +470,7 @@ fn invoke_custody(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     request_bytes: &[u8],
-    request: CustodyRequestV1,
+    request: &CustodyRequestV1,
     request_digest: [u8; 32],
 ) -> ProgramResult {
     let frame_count = dclutch_custody_contract::INITIALIZE_REPLAY_ACCOUNT_COUNT_V1 as usize;
@@ -484,7 +518,7 @@ fn invoke_custody(
 #[inline(never)]
 fn authenticate_child_result(
     accounts: &[AccountInfo<'_>],
-    request: CustodyRequestV1,
+    request: &CustodyRequestV1,
     request_digest: [u8; 32],
     exact_rent: u64,
 ) -> Result<([u8; 32], [u8; 32]), ProgramError> {
@@ -502,7 +536,7 @@ fn authenticate_child_result(
     let replay_digest = hash(&bytes).to_bytes();
     let state = CustodyReplayV1::decode(&bytes).map_err(|_| TradingSbfError::Transition)?;
     receipt
-        .verify_for(request, request_digest, replay_digest)
+        .verify_for(*request, request_digest, replay_digest)
         .map_err(|_| TradingSbfError::Transition)?;
     if replay.owner != custody_program.key
         || replay.lamports() != exact_rent
@@ -579,7 +613,7 @@ mod tests {
         let (top, state, maker_root) = fixture();
         let request = expected_custody_request_v1(
             top,
-            state,
+            &state,
             [14; 32],
             maker_root,
             [15; 32],
@@ -599,7 +633,7 @@ mod tests {
 
         assert_eq!(
             expected_custody_request_v1(
-                top, state, [14; 32], maker_root, [15; 32], [17; 32], 1_000, [16; 32],
+                top, &state, [14; 32], maker_root, [15; 32], [17; 32], 1_000, [16; 32],
             ),
             Err(TradingSbfError::Content.into())
         );
@@ -609,7 +643,7 @@ mod tests {
                     generation: top.generation + 1,
                     ..top
                 },
-                state,
+                &state,
                 [14; 32],
                 maker_root,
                 [15; 32],
@@ -627,7 +661,7 @@ mod tests {
         let expected = |root, payer, rent, digest| {
             expected_custody_request_v1(
                 top,
-                state,
+                &state,
                 [14; 32],
                 root,
                 payer,
