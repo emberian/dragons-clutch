@@ -112,6 +112,60 @@ describe('the heartbeat judgement', () => {
   });
 });
 
+describe('a run that stamps its own liveness deadline', () => {
+  // The 2026-08-30 death: killed mid-cycle by a full disk, no chance to write
+  // anything on the way down, so the artifact it left behind still reads
+  // healthy. The fifteen-minute rule below is this page's guess about a
+  // cadence it cannot see; a run that states its own deadline is believed
+  // ahead of it, because it knows its period and its backoff and we do not.
+  const stamped = (deadlineOffsetMs: number) => parseSimulatorStatusV1(mutated((copy) => {
+    copy.heartbeat = {
+      cadence_seconds: 20,
+      expected_next_update_by: new Date(Date.parse(String(copy.updated_at)) + deadlineOffsetMs).toISOString(),
+    };
+  }));
+
+  it('carries the deadline through the decoder', () => {
+    expect(stamped(325_000).expectedNextUpdateBy).not.toBeNull();
+  });
+
+  it('is running while its own deadline has not passed', () => {
+    const status = stamped(325_000);
+    expect(simulatorBeatV1(status, Date.parse(status.updatedAt) + 300_000).state).toBe('running');
+  });
+
+  it('is a record once its own deadline passes, well before the fifteen-minute guess would say so', () => {
+    const status = stamped(325_000);
+    const sixMinutesOn = Date.parse(status.updatedAt) + 6 * 60_000;
+    expect(sixMinutesOn - Date.parse(status.updatedAt)).toBeLessThan(STALE_AFTER_MS_V1);
+    const beat = simulatorBeatV1(status, sixMinutesOn);
+    expect(beat.state).toBe('stale');
+    expect(beat.sentence).toContain('said it would have written again');
+  });
+
+  it('still says halted first: a stated deadline never buries a conservation halt', () => {
+    const halted = parseSimulatorStatusV1(mutated((copy) => {
+      copy.halted = true;
+      copy.halt_reason = 'conservation violated at cycle 12';
+      copy.heartbeat = { expected_next_update_by: new Date(Date.parse(String(copy.updated_at)) + 325_000).toISOString() };
+    }));
+    expect(simulatorBeatV1(halted, Date.parse(halted.updatedAt) + 1_000).state).toBe('halted');
+  });
+
+  it('falls back to the fifteen-minute rule for a run that stamps nothing', () => {
+    const unstamped = parseSimulatorStatusV1(example);
+    expect(unstamped.expectedNextUpdateBy).toBeNull();
+    const wellPast = Date.parse(unstamped.updatedAt) + STALE_AFTER_MS_V1 + 1_000;
+    expect(simulatorBeatV1(unstamped, wellPast).state).toBe('stale');
+  });
+
+  it('refuses an unreadable heartbeat rather than silently ignoring it', () => {
+    expect(() => parseSimulatorStatusV1(mutated((copy) => {
+      copy.heartbeat = { expected_next_update_by: 'whenever' };
+    }))).toThrow('parseable timestamp');
+  });
+});
+
 describe('the guarded reader', () => {
   it('pins the one URL the surface reads, because the link checker cannot see it', () => {
     expect(SIMULATOR_STATUS_URL_V1).toBe('/simulator-status.json');

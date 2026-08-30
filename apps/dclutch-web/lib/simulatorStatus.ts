@@ -35,7 +35,12 @@ export const NO_SIMULATOR_SENTENCE_V1 =
 
 /** A pulse older than this renders as stale rather than running: the
  * simulator writes every cycle, and fifteen minutes of silence is a stopped
- * writer whatever the file says. */
+ * writer whatever the file says.
+ *
+ * This is a GUESS about a cadence this page cannot see, and it is kept as the
+ * outer defence rather than the only one. A run that stamps its own
+ * `heartbeat.expected_next_update_by` is believed ahead of it — see
+ * `simulatorBeatV1`. */
 export const STALE_AFTER_MS_V1 = 15 * 60_000;
 
 export type SimulatorWalletV1 = Readonly<{
@@ -70,6 +75,21 @@ export type SimulatorStatusV1 = Readonly<{
   halted: boolean;
   haltReason: string | null;
   stopping: boolean;
+  /**
+   * The instant by which a LIVING run must have written again, stamped by the
+   * run itself (tools/load-simulator/simcore.py StatusWriter.heartbeat).
+   *
+   * On 2026-08-30 a run was killed mid-cycle by a full disk. It could not
+   * write anything on the way down, so the status it had already written
+   * stayed on disk reading `halted: false, stopping: false` — an artifact
+   * still claiming health with no process behind it. Nothing IN the file
+   * contradicted that; this page caught it only by applying its own
+   * fifteen-minute rule, which is a guess about a cadence it cannot see.
+   *
+   * Null for a run old enough not to stamp one, in which case the guess is
+   * still what we have.
+   */
+  expectedNextUpdateBy: string | null;
 }>;
 
 function object(value: unknown, field: string): Record<string, unknown> {
@@ -178,7 +198,18 @@ export function parseSimulatorStatusV1(value: unknown): SimulatorStatusV1 {
     halted: flag(root.halted, 'halted'),
     haltReason: textOrNull(root.halt_reason, 'halt_reason'),
     stopping: flag(root.stopping, 'stopping'),
+    expectedNextUpdateBy: heartbeatDeadline(root.heartbeat),
   });
+}
+
+/** The run's own liveness deadline, when it stamped one. A heartbeat block
+ * that is present but unreadable is a defect and says so, like every other
+ * field here; an absent one is simply an older run. */
+function heartbeatDeadline(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const body = object(value, 'heartbeat');
+  if (body.expected_next_update_by === null || body.expected_next_update_by === undefined) return null;
+  return instant(body.expected_next_update_by, 'heartbeat expected_next_update_by');
 }
 
 export type SimulatorBeatV1 = Readonly<{
@@ -196,8 +227,18 @@ export function simulatorBeatV1(status: SimulatorStatusV1, nowMs: number): Simul
         : `The simulator halted itself: ${status.haltReason}`,
     });
   }
-  const age = nowMs - Date.parse(status.updatedAt);
-  if (age > STALE_AFTER_MS_V1) {
+  // The run's OWN deadline first, when it stamped one: it knows its cadence
+  // and its backoff, and this page does not. Only when it stamped none does
+  // the fifteen-minute guess decide.
+  if (status.expectedNextUpdateBy !== null) {
+    if (nowMs > Date.parse(status.expectedNextUpdateBy)) {
+      return Object.freeze({
+        state: 'stale' as const,
+        sentence:
+          'The run said it would have written again by now and has not, so this pulse is a record, not a heartbeat.',
+      });
+    }
+  } else if (nowMs - Date.parse(status.updatedAt) > STALE_AFTER_MS_V1) {
     return Object.freeze({
       state: 'stale' as const,
       sentence: `The last write is older than ${Math.floor(STALE_AFTER_MS_V1 / 60_000)} minutes, so this pulse is a record, not a heartbeat.`,
