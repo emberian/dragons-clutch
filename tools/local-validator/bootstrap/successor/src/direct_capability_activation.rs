@@ -233,12 +233,15 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     )?;
 
     // ------------------------------------------------------- evidence facts
+    // The OPEN market is `founding_market` (generation + 1); the plain `market`
+    // label is the Found37 market at the input generation, still in Founding.
+    // The trade producer reads `founding_market` too.
     let market = evidence
         .accounts
-        .get("market")
+        .get("founding_market")
         .map(|row| pubkey(&row.address))
         .transpose()?
-        .ok_or_else(|| refusal("activation/campaign-market", "campaign omitted market"))?;
+        .ok_or_else(|| refusal("activation/campaign-market", "campaign omitted founding_market"))?;
     let funding_ledger = evidence
         .accounts
         .get("direct_trading_funding_ledger")
@@ -250,7 +253,13 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
                 "campaign omitted direct_trading_funding_ledger",
             )
         })?;
-    let checkpoint_root = evidence
+    // The founding checkpoint's `direct_capability_root` is the FOUNDING-PERMIT
+    // namespace address (its selection config is the generic-founding preimage
+    // digest, decision 0004). No account can ever exist there: both the
+    // activation and hot paths force `selection.config == entry.config_id`,
+    // so the EXECUTION root derives from the manifest entry below. The permit
+    // address is reported for the record, never required.
+    let founding_permit_root = evidence
         .checkpoint_direct_capability_root
         .as_deref()
         .map(pubkey)
@@ -259,13 +268,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             .accounts
             .get("direct_capability_root")
             .map(|row| pubkey(&row.address))
-            .transpose()?)
-        .ok_or_else(|| {
-            refusal(
-                "activation/campaign-root",
-                "campaign names no direct_capability_root coordinate",
-            )
-        })?;
+            .transpose()?);
     let entry_index = evidence.direct_selected_manifest_entry_index;
 
     let realm = record_pair(&plan, &market_input, &evidence, "realm_record")?;
@@ -400,14 +403,6 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     .map_err(|error| Error::new(format!("root header: {error:?}")))?;
     let trading = pubkey(&plan.trading.program_id)?;
     let (root, _) = Pubkey::find_program_address(&root_header.seeds().as_slices(), &trading);
-    if root != checkpoint_root {
-        return Err(refusal(
-            "activation/root-coordinate",
-            format!(
-                "derived root {root} differs from the founding checkpoint's {checkpoint_root}"
-            ),
-        ));
-    }
     if let Some(existing) = rpc.account(root)? {
         if existing.owner == trading && !existing.data.is_empty() {
             let tail = existing
@@ -594,6 +589,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         "generation": generation,
         "entryIndex": entry_index,
         "root": root.to_string(),
+        "foundingPermitRoot": founding_permit_root.map(|value| value.to_string()),
         "fundingLedger": funding_ledger.to_string(),
         "callerAuthority": caller_authority.to_string(),
         "contextSha256": sha256_hex(&context),
