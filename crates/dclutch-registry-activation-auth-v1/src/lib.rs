@@ -81,8 +81,6 @@ pub enum ActivationAuthErrorV1 {
     ActivationCache,
     /// The observed deployment is not the one this activation admitted.
     Deployment,
-    /// The account is not the Registry-owned lineage record it claims to be.
-    ReleaseLineage,
     /// The activated release's pinned deployment slot moved: it was upgraded.
     ///
     /// This is the operator-actionable half of [`Self::Deployment`], and it is
@@ -100,7 +98,6 @@ impl From<ActivationAuthErrorV1> for ProgramError {
             ActivationAuthErrorV1::AccountFrame => Self::InvalidArgument,
             ActivationAuthErrorV1::ActivationCache
             | ActivationAuthErrorV1::Deployment
-            | ActivationAuthErrorV1::ReleaseLineage
             | ActivationAuthErrorV1::ReleaseSuperseded => Self::InvalidAccountData,
         }
     }
@@ -320,19 +317,21 @@ pub fn release_lineage_address_v1(
     release_lineage_address_and_bump_v1(registry, predecessor_release_set_id).0
 }
 
-/// Require Registry ownership and the one exact lineage-record width.
+/// Answer whether this is the Registry-owned record of the one exact width.
 ///
-/// Deliberately does not check privileges: the declaration route needs the
+/// Returns a plain answer rather than a refusal, for the same reason it
+/// deliberately does not check privileges: the declaration route needs the
 /// record writable and the migration route needs it read-only, so each frame
-/// states its own, and neither borrows the other's.
-pub fn require_lineage_account_v1(registry: &Pubkey, lineage: &AccountInfo<'_>) -> Result<()> {
-    if lineage.owner != registry
-        || lineage.executable
-        || lineage.data_len() != RELEASE_LINEAGE_BYTES_V1
-    {
-        return Err(ActivationAuthErrorV1::ReleaseLineage);
-    }
-    Ok(())
+/// states its own and neither borrows the other's. The refusal is likewise the
+/// caller's to name in its own band -- `ActivationAuthErrorV1` is the
+/// activation cache's vocabulary, and a lineage record is a different account.
+/// Widening that enum for this one check would have handed a variant they can
+/// never receive to every consumer of every other function here.
+#[must_use]
+pub fn is_lineage_account_v1(registry: &Pubkey, lineage: &AccountInfo<'_>) -> bool {
+    lineage.owner == registry
+        && !lineage.executable
+        && lineage.data_len() == RELEASE_LINEAGE_BYTES_V1
 }
 
 /// Require the exact read-only three-account reauthentication frame.
