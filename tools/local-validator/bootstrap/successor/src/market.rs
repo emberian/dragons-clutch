@@ -1713,6 +1713,13 @@ struct MarketRecords {
     manipulation_floor: Option<PublishedRecord>,
     recovery: Option<PublishedRecord>,
     manifest: PublishedRecord,
+    /// The exact capability-manifest bytes that were PUBLISHED, which are not
+    /// always the bytes the input declared: a market with bounded Source
+    /// material has its manifest rebuilt so the Source entry names the compiled
+    /// Source rather than the floor template's. Everything on chain — the
+    /// record, the Market identity, and Core's own authentication — is bound to
+    /// these bytes, so the founding artifact must be derived from them too.
+    manifest_body: Vec<u8>,
     basis: PublishedRecord,
     /// The five source-graph records both provider legs authenticate. They are
     /// published with the rest of the graph rather than left to a resolution
@@ -3353,6 +3360,11 @@ fn publish_market_records(
             }
         }
     }
+    // Keep the published bytes, not just the record's coordinates: the
+    // founding artifact's capability-root selection is derived from the
+    // manifest, and deriving it from the input's DECLARED manifest instead of
+    // this published one makes a bounded-Source-material market unfoundable.
+    let manifest_body = manifest.clone();
     let manifest = publish_record(
         rpc,
         registry,
@@ -3486,6 +3498,7 @@ fn publish_market_records(
             manipulation_floor,
             recovery,
             manifest,
+            manifest_body,
             basis,
             source_spec,
             window_spec,
@@ -4788,7 +4801,25 @@ fn derive_founding_coordinates(
     // mask. The physical list is ordered by each mask's lowest manifest bit;
     // the generic founding artifact commits to these physical addresses, not
     // to a caller-authored logical count.
-    let manifest_bytes = decode_hex(&input.capability_manifest_hex)?;
+    // The PUBLISHED manifest, never the declared one. A market with bounded
+    // Source material has its manifest rebuilt before publication (the Source
+    // entry's config id becomes the compiled Source's digest instead of the
+    // floor template's), and the Market identity, the record, and Core's
+    // `authenticate_derived_capability_root` are all bound to the rebuilt
+    // bytes. Deriving the capability-root selection from
+    // `input.capability_manifest_hex` here instead made every such market
+    // unfoundable: Core rebuilt a different root and refused with a bare
+    // `CoreSbfError::Reference` nine stages into an atomic founding, naming
+    // none of this. Direct markets never saw it because an unbounded Source
+    // never triggers the rebuild, so declared and published were the same
+    // bytes.
+    let manifest_bytes = records.manifest_body.clone();
+    if record_identity(&manifest_bytes) != records.manifest.digest {
+        return Err(Error::new(
+            "the founding artifact's capability manifest is not the manifest this market \
+             published; the derived capability root would refuse on chain",
+        ));
+    }
     let manifest = CapabilityManifestV1::decode(&manifest_bytes)
         .map_err(|error| Error::new(format!("CapabilityManifestV1: {error:?}")))?;
     let manifest_id = CapabilityContentId::new(records.manifest.digest)
@@ -12680,6 +12711,7 @@ mod tests {
             manipulation_floor: None,
             recovery: None,
             manifest: published(0x6c),
+            manifest_body: Vec::new(),
             basis: published(0x6e),
             source_spec: published(0x70),
             window_spec: published(0x72),
