@@ -122,23 +122,33 @@ async fn a_top_level_submission_no_longer_refuses_as_release() {
 
 /// The whole point of the file: a top-level submission executes.
 ///
-/// IGNORED ON WALL #27, WHICH THIS TEST FOUND. With wall #26 fixed the route
-/// runs 230,000 CU further than it ever had and then dies on the heap --
-/// `memory allocation failed, out of memory`, ~1,055,000 CU in, deep in the
-/// finalization the top-level path had never once reached. The allocator is a
-/// bump allocator that never frees, Hot is deliberately OFF
-/// `declares_extended_heap_profile_v1` so a `RequestHeapFrame` is inert for it
-/// (see `hot_heap_frame_is_inert.rs`), and the continuation route fits in the
-/// same 32 KiB because it does not make the two Registry reauthentication CPIs
-/// this route must.
+/// # Wall #27 is closed, and this test is no longer ignored
 ///
-/// So closing wall #27 is either a structural reduction of this route's
-/// allocations, the way W2p closed the tail's, or a deliberate decision to put
-/// Hot on the extended-heap list. Both are named in that test's own header as
-/// the two things that change it. Un-ignore this the moment either lands: the
-/// assertions below are the real acceptance criteria for a public Direct trade
-/// and they are already written.
-#[ignore = "wall #27: the top-level route exhausts the 32 KiB Hot heap in finalization"]
+/// It was ignored because with wall #26 fixed the route ran 230,000 CU further
+/// than it ever had and then died on the heap -- `memory allocation failed, out
+/// of memory`, deep in a finalization the top-level path had never once
+/// reached. Its own header named the two things that could change that: a
+/// structural reduction the way W2p closed the tail's, or a deliberate decision
+/// to put Hot on `declares_extended_heap_profile_v1`'s list. The second landed
+/// (2026-08-30), so the grant is admissible, the transaction carries it, and
+/// `TradingSbfError::HeapFrame` refuses BY NAME if it ever arrives without one.
+///
+/// # What this route actually costs, measured
+///
+/// Quoted per ledger M-61 -- pass rate, range and mean against the ELF digest
+/// they belong to, never one seed and never a worst margin alone. Trading ELF
+/// sha256 `d9b147833c5344ae...`, twelve fixture seeds, `Immutable` substrate:
+///
+/// - **12/12 pass.** 1,349,918 to 1,373,917 CU, mean 1,359,168.
+/// - Worst observed margin against the 1,400,000 ceiling: **26,083 CU**.
+///
+/// And the thing that surprised the lane that measured it: this route is
+/// CHEAPER than the continuation, by a consistent ~32,900 CU per seed. The two
+/// Registry reauthentication CPIs it makes cost less than the Registry outer
+/// invocation a continuation pays for instead. Any plan that treats the public
+/// Direct route as the expensive one is working from a contaminated number --
+/// `hot_heap_frame_is_inert.rs` carries the continuation's own figures, and it
+/// is that route, not this one, that is over the ceiling on some key draws.
 #[tokio::test]
 async fn direct_inline_ordinary_executes_when_submitted_top_level_to_trading() {
     let artifacts = elves();
