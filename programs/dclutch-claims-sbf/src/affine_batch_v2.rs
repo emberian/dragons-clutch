@@ -282,7 +282,7 @@ fn execute_authenticated(
             accounts.registry,
             market,
             plan.product_record_digest(),
-            CorePhase::Open,
+            CorePhaseGateV3::Exactly(CorePhase::Open),
         )?
     };
     admit_principal_growth(plan, &market_before, principal_cap_sets)?;
@@ -548,7 +548,7 @@ fn authenticate_product_and_basis(
         market,
         plan.product_record_digest(),
         plan.linked_basis_record_digest(),
-        CorePhase::Open,
+        CorePhaseGateV3::Exactly(CorePhase::Open),
     )
 }
 
@@ -572,7 +572,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
     market: MarketViewV2,
     expected_product_record_digest: [u8; 32],
     expected_linked_basis_record_digest: [u8; 32],
-    expected_core_phase: CorePhase,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<u64, ProgramError> {
     let rent =
         Rent::from_account_info(rent_account).map_err(|_| AffineBatchSbfErrorV2::Accounts)?;
@@ -585,7 +585,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_v3(
         market,
         expected_product_record_digest,
         expected_linked_basis_record_digest,
-        expected_core_phase,
+        phase_gate,
     )
 }
 
@@ -599,7 +599,7 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
     market: MarketViewV2,
     expected_product_record_digest: [u8; 32],
     expected_linked_basis_record_digest: [u8; 32],
-    expected_core_phase: CorePhase,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<u64, ProgramError> {
     let runtime = authenticate_product_runtime_v2(
         registry.key,
@@ -633,8 +633,57 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
         registry,
         market,
         expected_product_record_digest,
-        expected_core_phase,
+        phase_gate,
     )
+}
+
+/// Which persisted Core phases a Claims route admits.
+///
+/// Most routes name exactly one phase. Redemption names two, and must: Core's
+/// `begin_retiring` is permissionless and refuses all signers
+/// (`programs/dclutch-core-sbf/src/begin_retiring.rs:57`), so while every
+/// redemption route demanded exact equality with `Phase::Terminal`, any
+/// stranger could end every holder's redemption right for one transaction fee
+/// -- and brick the Market doing it, because retirement needs zero outstanding
+/// supply (`market_closure_v1.rs:669-681`) and redemption is the only thing
+/// that drives supply to zero.
+///
+/// Two-phase tolerance is the documented intent rather than a relaxation. The
+/// transition's own codec doc reads "Begin retiring while retaining
+/// permissionless redemption"
+/// (`crates/dclutch-market-core-codec/src/generated.rs:1030`), it moves `phase`
+/// and nothing else -- `terminal_winner` and `terminal_receipt` both survive
+/// it (`:1041-1047`) -- and `phases_join` already admits
+/// `(CorePhase::Retiring, EconomicPhase::Retiring(w))`
+/// (`crate::phases_join`, `lib.rs:1204-1213`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CorePhaseGateV3 {
+    /// One phase, by equality. Every non-redemption route keeps this.
+    Exactly(CorePhase),
+    /// A resolved Market, whether or not retirement has begun.
+    ///
+    /// Named for the set it admits rather than for the routes that use it, so
+    /// a future phase cannot join it by the name staying plausible.
+    TerminalOrRetiring,
+}
+
+impl CorePhaseGateV3 {
+    /// Whether a persisted Core phase satisfies this gate.
+    ///
+    /// `TerminalOrRetiring` widens the phase and nothing else. `Retiring` is
+    /// reachable only from `Terminal` and carries the same `terminal_winner`,
+    /// and the payout derivation independently refuses a coordinate whose
+    /// supply or balance is already drained
+    /// (`product_basis_terminal_v3.rs:416-424`), so a holder admitted here is
+    /// paid exactly what the same holder was owed one phase earlier, once.
+    pub(crate) fn admits(self, phase: CorePhase) -> bool {
+        match self {
+            Self::Exactly(expected) => phase == expected,
+            Self::TerminalOrRetiring => {
+                matches!(phase, CorePhase::Terminal | CorePhase::Retiring)
+            }
+        }
+    }
 }
 
 /// Authenticate and return the sole Core-owned runtime principal cap.
@@ -648,7 +697,7 @@ pub(crate) fn authenticate_core_market_v3(
     registry: &AccountInfo<'_>,
     market: MarketViewV2,
     expected_product_record_digest: [u8; 32],
-    expected_core_phase: CorePhase,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<u64, ProgramError> {
     let core_data = core_market
         .try_borrow_data()
@@ -666,7 +715,7 @@ pub(crate) fn authenticate_core_market_v3(
     )
     .0;
     if expected_core != *core_market.key
-        || core.phase != expected_core_phase
+        || !phase_gate.admits(core.phase)
         || core.identity.market_id.to_bytes() != market.logical_market
         || core.identity.product_record.to_bytes() != expected_product_record_digest
         || core.identity.product_id.to_bytes() != market.product_instance_id
@@ -1090,5 +1139,63 @@ mod tests {
             Some(AFFINE_BATCH_PLAN_MAGIC_V2.as_slice())
         );
         assert!(bytes.len() > AFFINE_BATCH_PLAN_HEADER_BYTES_V2);
+    }
+
+    const EVERY_PHASE: [CorePhase; 5] = [
+        CorePhase::Founding,
+        CorePhase::Open,
+        CorePhase::Terminal,
+        CorePhase::Retiring,
+        CorePhase::Retired,
+    ];
+
+    #[test]
+    fn a_settled_gate_admits_retiring_and_an_exact_gate_admits_nothing_new() {
+        // The redemption gate: exactly the two phases a resolved Market can be
+        // in while holders are still owed, and no others. `Retired` in
+        // particular stays out -- by then `market_closure_v1` has demanded zero
+        // outstanding supply, so there is nothing left to redeem.
+        for phase in EVERY_PHASE {
+            assert_eq!(
+                CorePhaseGateV3::TerminalOrRetiring.admits(phase),
+                matches!(phase, CorePhase::Terminal | CorePhase::Retiring),
+                "settled gate admitted the wrong phase: {phase:?}"
+            );
+        }
+        // Widening redemption must not have widened anything else. Every
+        // non-redemption route still names one phase and gets equality.
+        for expected in EVERY_PHASE {
+            for actual in EVERY_PHASE {
+                assert_eq!(
+                    CorePhaseGateV3::Exactly(expected).admits(actual),
+                    expected == actual,
+                    "exact gate {expected:?} drifted on {actual:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_settled_gate_is_exactly_the_pair_the_claims_phase_model_joins() {
+        // The gate is not an independent opinion about which phases redeem. It
+        // is the Core half of `phases_join`'s two winner-bearing pairs
+        // (`crate::phases_join`), which is the Claims phase model's own
+        // statement that a resolved Market keeps its winner across
+        // `begin_retiring`. If someone narrows the join, this fails rather than
+        // leaving redemption admitting a phase the model no longer joins.
+        for phase in EVERY_PHASE {
+            let joins_a_winner_bearing_claims_phase =
+                crate::phases_join(phase, 7, dclutch_economic_slice_kernel::Phase::Terminal(7))
+                    || crate::phases_join(
+                        phase,
+                        7,
+                        dclutch_economic_slice_kernel::Phase::Retiring(7),
+                    );
+            assert_eq!(
+                CorePhaseGateV3::TerminalOrRetiring.admits(phase),
+                joins_a_winner_bearing_claims_phase,
+                "the redemption gate and the phase model disagree on {phase:?}"
+            );
+        }
     }
 }

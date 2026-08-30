@@ -31,7 +31,10 @@ use solana_program::{
     sysvar::SysvarSerialize,
 };
 
-use super::{ClaimsSbfError, liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2};
+use super::{
+    ClaimsSbfError, affine_batch_v2::CorePhaseGateV3,
+    liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct RationalProductFrameV3<'accounts, 'info> {
@@ -192,13 +195,17 @@ fn authenticate_core(
         frame.core_program.key,
     )
     .0;
-    let expected_phase = if action == RepresentationActionV2::RedeemTerminal {
-        CorePhase::Terminal
+    // Redemption admits Retiring as well as Terminal. `begin_retiring` is
+    // permissionless (`core-sbf begin_retiring.rs:57`) and moves nothing but
+    // the phase, so gating this route on Terminal alone let any stranger end
+    // every holder's redemption right for one transaction fee.
+    let phase_gate = if action == RepresentationActionV2::RedeemTerminal {
+        CorePhaseGateV3::TerminalOrRetiring
     } else {
-        CorePhase::Open
+        CorePhaseGateV3::Exactly(CorePhase::Open)
     };
     if expected != *frame.core_market.key
-        || core.phase != expected_phase
+        || !phase_gate.admits(core.phase)
         || core.identity.market_id.to_bytes() != market.logical_market
         || core.identity.product_id.to_bytes() != market.product_instance_id
         || core.identity.selected_release_set.to_bytes() != market.release_set

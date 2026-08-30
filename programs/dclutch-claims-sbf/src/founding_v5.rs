@@ -50,7 +50,9 @@ use solana_program::{
 use solana_sdk_ids::system_program;
 use solana_system_interface::instruction::{allocate, assign};
 
-use super::affine_batch_v2::authenticate_runtime_product_basis_core_with_rent_v3;
+use super::affine_batch_v2::{
+    CorePhaseGateV3, authenticate_runtime_product_basis_core_with_rent_v3,
+};
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     LiabilityBasisMarketInputV2, LiabilityBasisPositionInputV2, MarketViewV2,
@@ -815,7 +817,7 @@ fn authenticate_product_core(
         market,
         request.product_record_digest(),
         request.linked_basis_record_digest(),
-        CorePhase::Founding,
+        CorePhaseGateV3::Exactly(CorePhase::Founding),
     )
     .map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     let aggregate_seeds = ClaimsFoundingAggregateSeedsV5::new(request.market())

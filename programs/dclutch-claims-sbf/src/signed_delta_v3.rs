@@ -41,7 +41,7 @@ use solana_program::{
 use solana_sdk_ids::sysvar;
 
 use super::affine_batch_v2::{
-    authenticate_core_market_v3, authenticate_runtime_product_basis_core_v3,
+    CorePhaseGateV3, authenticate_core_market_v3, authenticate_runtime_product_basis_core_v3,
 };
 use crate::liability_basis_v2::{
     LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_MARKET_SEED_V2,
@@ -247,7 +247,7 @@ pub(super) fn process(
         plan,
         packet_digest,
         false,
-        dclutch_market_core_codec::Phase::Open,
+        CorePhaseGateV3::Exactly(dclutch_market_core_codec::Phase::Open),
     )?;
     set_return_data(&receipt.to_bytes());
     Ok(())
@@ -260,7 +260,7 @@ pub(crate) fn execute_parent_authenticated(
     account_infos: &[AccountInfo<'_>],
     instruction_data: &[u8],
     parent: AuthenticatedSignedDeltaParentV3,
-    expected_core_phase: dclutch_market_core_codec::Phase,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<SignedDeltaReceiptV3, ProgramError> {
     let plan = SignedDeltaPlanV3::decode(instruction_data)
         .map_err(|_| SignedDeltaSbfErrorV3::Instruction)?;
@@ -273,7 +273,7 @@ pub(crate) fn execute_parent_authenticated(
         plan,
         hash(instruction_data).to_bytes(),
         true,
-        expected_core_phase,
+        phase_gate,
     )
 }
 
@@ -301,7 +301,7 @@ fn execute_authenticated(
     plan: SignedDeltaPlanV3<'_>,
     packet_digest: [u8; 32],
     parent_authenticated: bool,
-    expected_core_phase: dclutch_market_core_codec::Phase,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<SignedDeltaReceiptV3, ProgramError> {
     if !parent_authenticated {
         authenticate_releases(accounts, plan)?;
@@ -322,11 +322,11 @@ fn execute_authenticated(
             accounts.registry,
             market,
             plan.product_record_digest(),
-            expected_core_phase,
+            phase_gate,
         )
         .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis)?
     } else {
-        authenticate_product_and_basis(accounts, plan, market, expected_core_phase)?
+        authenticate_product_and_basis(accounts, plan, market, phase_gate)?
     };
     admit_principal_growth(plan, &market_before, principal_cap_sets)?;
     let (mut market_candidate, mut position_candidates) =
@@ -671,7 +671,7 @@ fn authenticate_product_and_basis(
     accounts: &SignedDeltaAccountsV3<'_, '_>,
     plan: SignedDeltaPlanV3<'_>,
     market: MarketViewV2,
-    expected_core_phase: dclutch_market_core_codec::Phase,
+    phase_gate: CorePhaseGateV3,
 ) -> Result<u64, ProgramError> {
     authenticate_runtime_product_basis_core_v3(
         accounts.registry,
@@ -699,7 +699,7 @@ fn authenticate_product_and_basis(
         market,
         plan.product_record_digest(),
         plan.linked_basis_record_digest(),
-        expected_core_phase,
+        phase_gate,
     )
     .map_err(|_| SignedDeltaSbfErrorV3::ProductBasis.into())
 }
@@ -1011,7 +1011,10 @@ mod tests {
             caller_coordinate(CallerRole::Trading),
             CallerCoordinateV3::Caller
         );
-        assert_eq!(caller_coordinate(CallerRole::Core), CallerCoordinateV3::Core);
+        assert_eq!(
+            caller_coordinate(CallerRole::Core),
+            CallerCoordinateV3::Core
+        );
         assert_eq!(
             caller_coordinate(CallerRole::Claims),
             CallerCoordinateV3::Claims

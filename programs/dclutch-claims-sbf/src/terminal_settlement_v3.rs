@@ -81,9 +81,7 @@ use dclutch_custody_contract::{
     CUSTODY_AUTHORITY_PDA_DOMAIN_V1, CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CompartmentV1,
     CustodyReplaySeedsV1, CustodyReplayV1, CustodyVaultSeedsV1,
 };
-use dclutch_market_core_codec::{
-    CoreState, MarketCoreStateSeedsV2, Phase as CorePhase, STATE_BYTES,
-};
+use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, STATE_BYTES};
 use dclutch_product_runtime_v2::ContentId as ProductContentId;
 use dclutch_product_runtime_v2_svm_reader::{
     FinalizedRecordFrameV2, ProductRuntimeFrameV3, authenticate_product_runtime_v3,
@@ -108,6 +106,7 @@ use solana_sdk_ids::system_program;
 
 use super::{
     ClaimsSbfError,
+    affine_batch_v2::CorePhaseGateV3,
     liability_basis_v2::LIABILITY_BASIS_MARKET_SEED_V2,
     rational_terminal_v3::{
         RationalTerminalFrameV3, TerminalCustodyInputV3, execute_terminal_custody_v3,
@@ -404,10 +403,13 @@ fn execute(
             parent_request_digest: request_digest,
         },
         // A terminal settlement necessarily runs on a resolved Market, so the
-        // enclosed signed delta must expect Phase::Terminal. Expecting Open here
-        // is unsatisfiable: CoreState only carries the terminal receipt this
-        // route requires once the Market has left Open.
-        dclutch_market_core_codec::Phase::Terminal,
+        // enclosed signed delta must expect a settled phase. Expecting Open
+        // here is unsatisfiable: CoreState only carries the terminal receipt
+        // this route requires once the Market has left Open. It admits
+        // Retiring as well as Terminal because `begin_retiring` is
+        // permissionless, and a redemption that refused there would hand any
+        // stranger the power to end this holder's claim.
+        CorePhaseGateV3::TerminalOrRetiring,
     )?;
     let packet_digest = hash(&prepared.packet).to_bytes();
     if signed_receipt.packet_digest() != packet_digest
@@ -594,7 +596,7 @@ fn authenticate_core(
         .try_borrow_data()
         .map_err(|_| ClaimsSbfError::Accounts)?;
     let core = CoreState::decode(&bytes).map_err(|_| ClaimsSbfError::Identity)?;
-    if core.phase != CorePhase::Terminal
+    if !CorePhaseGateV3::TerminalOrRetiring.admits(core.phase)
         || accounts[11].key
             != &Pubkey::find_program_address(
                 &MarketCoreStateSeedsV2::new(core.identity).as_slices(),

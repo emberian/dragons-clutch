@@ -43,6 +43,7 @@ use solana_program::{
 
 use super::{
     ClaimsSbfError,
+    affine_batch_v2::CorePhaseGateV3,
     rational_product_v3::AuthenticatedRationalProductV3,
     signed_delta_v3::{
         AuthenticatedSignedDeltaParentV3, ParentAuthorityV3, SIGNED_DELTA_FIXED_ACCOUNT_COUNT_V3,
@@ -256,10 +257,13 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
             parent_request_digest: request_digest,
         },
         // A terminal settlement necessarily runs on a resolved Market, so the
-        // enclosed signed delta must expect Phase::Terminal. Expecting Open here
-        // is unsatisfiable: CoreState only carries the terminal receipt this
-        // route requires once the Market has left Open.
-        dclutch_market_core_codec::Phase::Terminal,
+        // enclosed signed delta must expect a settled phase. Expecting Open
+        // here is unsatisfiable: CoreState only carries the terminal receipt
+        // this route requires once the Market has left Open. It admits
+        // Retiring as well as Terminal because `begin_retiring` is
+        // permissionless, and a redemption that refused there would hand any
+        // stranger the power to end this holder's claim.
+        CorePhaseGateV3::TerminalOrRetiring,
     )?;
     let candidate_digest = hashv(&[
         TERMINAL_CANDIDATE_DOMAIN_V3,
