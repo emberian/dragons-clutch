@@ -3,7 +3,7 @@
 
 Which generated files a byte-identity check script actually guards, and which are generated with nothing watching them. Regenerate with `tools/emission-guard/emission_guard.py --write`; byte-gate with `--verify`. This census is cheap — it reads first lines and shell scripts, and never runs Lean.
 
-**70 generated files from 68 emitters. 29 guarded (27 emitters), 41 unguarded (41 emitters).**
+**72 generated files from 70 emitters. 31 guarded (29 emitters), 41 unguarded (41 emitters).**
 
 An unguarded row is not a bug in itself — it is a file that can be hand-edited, or drift behind the Lean source it claims to come from, with nothing in the repository noticing. The number above is the thing to drive down, and this file being byte-gated is what stops it drifting up unremarked: a new emission with no check script changes this census and reds `--verify` until someone decides, on purpose, which it is going to be.
 
@@ -62,6 +62,8 @@ Each runs its emitter and compares the output against the committed bytes. All o
 | `crates/dclutch-market-core-codec/src/generated_physical.rs` | `EmitMarketCorePhysicalRust.lean` |
 | `crates/dclutch-market-core-codec/src/generated_retirement_v1.rs` | `EmitMarketRetirementV1Rust.lean` |
 | `crates/dclutch-product-payoff-codec/src/generated.rs` | `EmitProductPayoffRust.lean` |
+| `crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs` | `EmitProductGradedBasisAdmissionV3AbiRust.lean` |
+| `crates/dclutch-product-runtime-v2/src/generated.rs` | `EmitProductRuntimeV2Rust.lean` |
 | `crates/dclutch-realm-contract/src/generated_abi.rs` | `EmitRealmPositionAbiRust.lean` |
 | `crates/dclutch-release-set-contract/src/generated_capability_execution.rs` | `EmitCapabilityExecutionAbiRust.lean` |
 | `crates/dclutch-release-set-contract/src/generated_protocol_infrastructure.rs` | `EmitProtocolInfrastructureProfileAbiRust.lean` |
