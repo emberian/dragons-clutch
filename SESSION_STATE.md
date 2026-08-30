@@ -31,24 +31,33 @@ CPI boundary*: Trading finds an address, discards the bump, and the child
 searches for the same address again. The Market PDA alone is searched four
 times from identical seeds.
 
-- **CUCUT** (agent `ada700a9591280bf4`) — the ~16 key-varying searches: carry
-  the Market bump Trading→children through the spare zeroed reserved bytes both
-  child wires already have (5 in Claims, 24 in Custody — no wire-length change,
-  just relaxing a `require_zero` to a typed read), plus stored bumps in Claims
-  state, Custody state, CoreState. Owns `hot_v3.rs`, the trading program-test,
-  and the margin gate (a **ratchet**: lower the constant as cost drops).
-  Precedent in-tree: `borrow_finalized_record_at`.
+- **CUCUT — DONE (reported ~17:00).** Delivered the full design as
+  `docs/evidence/DIRECT_HOT_BUMP_CARRY_DESIGN_2026-08-30.md` (ba80646f +
+  dc028078) but **did not land the carries**, with the number that justifies
+  it: one new field on `CustodyRequestV1` breaks **107 struct-literal sites in
+  48 files** (Claims: 15), in a contract crate a dozen lanes build from. Each
+  carry alone is ~1/16 of the band. The caller-authority circularity is
+  SOLVED, not open: `role_request_digest` hashes only the request-struct
+  bytes, so a bump appended AFTER them sits outside the fixed point (needs
+  the digest-width pin test the doc specifies). CoreState **cannot** take a
+  bump as a Rust change — it is Lean-generated
+  (`EmitMarketCoreRust.lean`), so that path is a formal-spec change + regen +
+  account migration, its own lane.
+- **THE CARRY WAVE (next on critical path, not yet spawned)**: doc §1+§2+§4
+  as ONE worktree wave, Claims before Custody, digest-width test included,
+  branched from main only **after BUMPREC lands** (same child entrypoints —
+  do not run both in flight). Landing wave + BUMPREC ⇒ worst ≈1,338,000 +
+  15,000 tolerance ≈ **1,353,000 — bar met.** Then TRADE-2 cuts cohort-7 →
+  market19 → activate → admit → **the first trade, with whatever keys the
+  participants actually have.** Gate ratchet stays OFF until the key-varying
+  searches are gone (a measured worst is a sample, not a bound, while the
+  rebuild lottery is live).
 - **BUMPREC** (agent `a2bb9fa1946bb506f`) — the 18 *constant* record searches
   (~27,000 CU of mean) via `authenticate_record_at`: authenticate a record at a
-  supplied address instead of deriving one. Fenced out of `hot_v3.rs`.
-- Landing both puts worst ≈1,338,000 + 15,000 tolerance ≈ **1,353,000 — bar
-  met.** Then TRADE-2 cuts cohort-7 → market19 → activate → admit → **the first
-  trade, with whatever keys the participants actually have.**
-- **Still unspecified**: the caller-authority bump is circular (its seeds
-  include `hash(request_bytes)`), so it needs a carrier outside the hashed
-  region. CUCUT writes the design note; nobody builds it yet.
+  supplied address instead of deriving one. Fenced out of `hot_v3.rs`. Still
+  running.
 
-## THE RISK NOBODY HAS ROUTED YET — TELL TRADE-2 BEFORE THE CUT
+## THE REBUILD LOTTERY — ROUTED TO TRADE-2 ~17:05, CUT IS HELD
 
 `release_set_id` is a hash of the deployed ELF digests, and it seeds the
 activation cache directly and the Market identity transitively — which seeds
@@ -64,13 +73,19 @@ MEASURE the actual cohort ELFs after building them and before relying on the
 route, rather than assuming main's numbers carry. If the draw is bad, rebuild
 is a legitimate remedy — but only if someone knows to look.
 
+**Status: routed.** TRADE-2 was told (SendMessage ~17:05): measure the cohort
+ELFs at 32 seeds, the 13:54 gate-ratchet handoff is amended (never ratchet to
+one build's draw), and the cohort-7 cut is HELD until the carry wave + BUMPREC
+land and the measured worst clears ~1,353,000.
+
 ## LIVE LANES (resume with SendMessage to the agent id)
 
 | lane | agent id | doing |
 |---|---|---|
-| TRADE-2 | `a7c1ba28ecbf894d9` | caller sweep (SDK/web byte-identical pair + tests, devnet driver's 6 wire sites + count-of-3 gate, `preflight.py` grep anchor + geometry table, 2 stale `rpc.rs` doc comments), then market19/activate/admit/trade. **Owns**: the cohort-7 cut, all devnet writes, `tools/release`, the public-cut fixture, `OPEN_LABEL`, and the ONE authorized whole-tree refusals regeneration (at the cut, on a quiet tree, announced first). |
-| CUCUT | `ada700a9591280bf4` | child-bump plan, above |
+| TRADE-2 | `a7c1ba28ecbf894d9` | caller sweep (SDK/web byte-identical pair + tests, devnet driver's 6 wire sites + count-of-3 gate, `preflight.py` grep anchor + geometry table, 2 stale `rpc.rs` doc comments). **Cut is held** pending carry wave. **Owns**: the cohort-7 cut, all devnet writes, `tools/release`, the public-cut fixture, `OPEN_LABEL`, and the ONE authorized whole-tree refusals regeneration (at the cut, on a quiet tree, announced first). |
+| CUCUT | `ada700a9591280bf4` | DONE — design doc landed, carries deferred to the carry wave |
 | BUMPREC | `a2bb9fa1946bb506f` | the 18 constant record searches |
+| census | `a465c2a63f6f1d864` | record-PDA search census against the margin gate |
 | CI-2 | `a8abf0f1f1f6b761a` | wiring the four gates that exist and do not run |
 | MEMBRANE | `a5e9b10376d59fbf3` | Structured publication/authenticator/seam module; Rational founded market via `DCLUTCH_RATIONAL_COLLATERAL_MINT`; General hot commit half. No report yet. |
 | STORY-2 | `ae1b54b8aaee446db` | graduation wall (Core `0x3003`, identity linkage, evidence `/tank/dregg-build/story-walk3/run.log` on hbox); relayer public submission run; story-page truthfulness. No report yet. |
