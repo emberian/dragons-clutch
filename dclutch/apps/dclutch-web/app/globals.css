@@ -766,6 +766,21 @@ footer { display: flex; justify-content: space-between; gap: 20px; margin-top: 3
 
 /* market discovery */
 .market-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 11px; }
+/* A named, collapsed group of markets that are not the headline. The summary
+   carries the count and the reason before anything is expanded, so collapsing
+   compresses the record without concealing any part of it. */
+.listing-group { margin-top: 11px; border: 1px solid var(--line); border-radius: 13px; background: rgba(8,16,11,.7); }
+.listing-group + .listing-group { margin-top: 9px; }
+.listing-group > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 12px; padding: 15px 18px; cursor: pointer; list-style: none; }
+.listing-group > summary::-webkit-details-marker { display: none; }
+.listing-group > summary::before { content: '+'; width: 11px; color: #69776e; font: 11px var(--font-geist-mono); }
+.listing-group[open] > summary::before { content: '−'; }
+.listing-group > summary span { color: #c9e2cd; font: 11px var(--font-geist-mono); }
+.listing-group > summary small { color: #68766d; font: 8px/1.45 var(--font-geist-mono); }
+.listing-group > summary:hover span { color: var(--acid); }
+.listing-group > summary:focus-visible { outline: 1px solid var(--signal); outline-offset: -1px; border-radius: 13px; }
+.listing-group > div { padding: 0 18px 18px; }
+.listing-group .market-empty { margin: 0 0 13px; }
 .market-discovery-card { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: rgba(8,16,11,.96); }
 .market-discovery-card.refused { border-color: rgba(255,126,102,.28); }
 .market-card-top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }

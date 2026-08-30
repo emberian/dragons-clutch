@@ -67,6 +67,14 @@
 .viz-strip small { margin-top: 5px; color: #68766d; font: 8px/1.45 var(--font-geist-mono); }
 .viz-strip-note { margin: 7px 0 0; color: #75837a; font: 9px/1.55 var(--font-geist-mono); max-width: 900px; }
 
+/* A tile whose quantity has no single unit: one exact figure per unit, stacked.
+   Each figure steps down from the single-value size so the tile still reads as
+   one stat rather than as a second strip nested inside the first. */
+.viz-strip-parts { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.viz-strip-parts li { min-width: 0; }
+.viz-strip-parts strong { margin: 0; font-size: 15px; }
+.viz-strip-parts small { margin-top: 2px; }
+
 @media (max-width: 760px) {
   .viz-strip { grid-template-columns: 1fr; }
 }

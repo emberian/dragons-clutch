@@ -17,6 +17,8 @@ mod generated_ordinary_v3;
 #[cfg(not(target_os = "solana"))]
 #[rustfmt::skip]
 mod generated_registered_fill_v4;
+#[cfg(not(target_os = "solana"))]
+pub mod activation_bundle_v1;
 pub mod artifacts_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod begin_retiring_bundle_v1;

@@ -1113,7 +1113,10 @@ pub(crate) fn publish_record(
             // refund wallet was the one that did it.
             .refusing(0x100C)?);
         }
-        let label = format!("publish record: {:?}", plan.action);
+        // The raw record address keeps every publication row's label distinct
+        // across the many records one campaign publishes; classifiers match
+        // only the "publish record: " prefix.
+        let label = format!("publish record: {:?} {raw}", plan.action);
         let evidence = rpc.send(&label, &[instruction], payer)?;
         minimum_slot = evidence.slot;
         transactions.push(evidence);

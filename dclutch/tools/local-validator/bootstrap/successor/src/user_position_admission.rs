@@ -63,10 +63,10 @@ use sha2::{Digest as _, Sha256};
 use solana_sdk::{
     hash::Hash,
     instruction::{AccountMeta, Instruction},
-    message::VersionedMessage,
+    message::{Message, VersionedMessage},
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
-    transaction::VersionedTransaction,
+    transaction::{Transaction, VersionedTransaction},
 };
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_system_interface::instruction::create_account_with_seed;
@@ -97,6 +97,11 @@ struct ArgumentsV1 {
     output: PathBuf,
     execute: bool,
     collateral: Option<CollateralArgumentsV1>,
+    /// Frozen founding routing tables the v0 admission message may load
+    /// addresses through. Comma-separated in one `--routing-table` value; the
+    /// snapshot fetches them in the same finalized observation as every
+    /// semantic account, exactly as the founding ladder does.
+    routing_tables: Vec<Pubkey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -493,6 +498,9 @@ struct SnapshotBundleV1 {
     replay: ObservedAccount,
     fee_payer: ObservedAccount,
     states: BTreeMap<String, AccountStateV1>,
+    /// Caller-selected frozen routing tables, observed in the same finalized
+    /// snapshot as every semantic account so the v0 compiler admits them.
+    routing_tables: Vec<ObservedAccount>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -592,6 +600,41 @@ fn run_with_expected_cluster(
     let snapshot = acquire_snapshot(&mut rpc, &arguments, &plan, coordinates, &evidence)?;
     let unsigned = plan_user_position_admission_v1(&snapshot.operator)
         .map_err(|error| Error::new(format!("User Position admission plan refused: {error:?}")))?;
+    // The admission frame requires the owner to sign READONLY, and a System
+    // transfer debiting the owner in the same transaction forces message-level
+    // owner writability - the founding pays its allocated accounts in a
+    // separate transaction for exactly this reason. When the Position or
+    // admission still owes rent, pay it first in its own finalized transfer,
+    // then re-snapshot: the plan then carries zero top-ups and a
+    // single-instruction message the frame authenticates.
+    let (snapshot, unsigned) = if arguments.execute
+        && unsigned
+            .position_top_up_lamports
+            .checked_add(unsigned.admission_top_up_lamports)
+            .ok_or_else(|| Error::new("admission top-up overflow"))?
+            != 0
+    {
+        prefund_admission_rents_v1(&mut rpc, &arguments, &unsigned)?;
+        let snapshot = acquire_snapshot(&mut rpc, &arguments, &plan, coordinates, &evidence)?;
+        let unsigned = plan_user_position_admission_v1(&snapshot.operator).map_err(|error| {
+            Error::new(format!(
+                "User Position admission plan refused after prefund: {error:?}"
+            ))
+        })?;
+        if unsigned
+            .position_top_up_lamports
+            .checked_add(unsigned.admission_top_up_lamports)
+            .ok_or_else(|| Error::new("admission top-up overflow"))?
+            != 0
+        {
+            return Err(Error::new(
+                "admission rents still owed after the finalized prefund transfer",
+            ));
+        }
+        (snapshot, unsigned)
+    } else {
+        (snapshot, unsigned)
+    };
     let mut report = build_report(
         &mut rpc,
         &arguments,
@@ -2663,9 +2706,11 @@ fn authenticate_collateral_return_data(
     observed: Option<&Value>,
     expected: Option<&str>,
 ) -> Result<()> {
-    if observed.is_none_or(|value| !value.is_null()) || expected.is_some() {
+    // The RPC omits `returnData` entirely when a transaction set none; an
+    // absent field and an explicit null are the same finalized fact.
+    if observed.is_some_and(|value| !value.is_null()) || expected.is_some() {
         return Err(Error::new(
-            "System/Token-2022 collateral transaction must have an explicit null returnData",
+            "System/Token-2022 collateral transaction must have no returnData",
         ));
     }
     Ok(())
@@ -2676,14 +2721,6 @@ fn authenticate_admission_balance_vector(
     message: &VersionedMessage,
     intent: &IntentV1,
 ) -> Result<BTreeMap<Pubkey, u64>> {
-    if message
-        .address_table_lookups()
-        .is_some_and(|lookups| !lookups.is_empty())
-    {
-        return Err(Error::new(
-            "admission balance accounting refuses loaded addresses",
-        ));
-    }
     let pre = meta
         .get("preBalances")
         .and_then(Value::as_array)
@@ -2692,10 +2729,34 @@ fn authenticate_admission_balance_vector(
         .get("postBalances")
         .and_then(Value::as_array)
         .ok_or_else(|| Error::new("finalized admission meta omitted postBalances"))?;
-    let keys = message.static_account_keys();
+    // A routed admission's balance vectors cover the static keys and then the
+    // loaded writable and readonly addresses, in the runtime's own order. The
+    // loaded keys come from the finalized meta itself; every loaded account
+    // must be balance-immutable here (the admission loads only readonly
+    // program, record, and sysvar addresses through its frozen table), and
+    // the whole-vector fee conservation below runs over all of them.
+    let mut keys: Vec<Pubkey> = message.static_account_keys().to_vec();
+    let static_len = keys.len();
+    if let Some(loaded) = meta.get("loadedAddresses") {
+        for section in ["writable", "readonly"] {
+            for value in loaded
+                .get(section)
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+            {
+                let key = value
+                    .as_str()
+                    .ok_or_else(|| Error::new("loaded address was not a string"))?
+                    .parse::<Pubkey>()
+                    .map_err(|error| Error::new(format!("loaded address: {error}")))?;
+                keys.push(key);
+            }
+        }
+    }
     if pre.len() != keys.len() || post.len() != keys.len() {
         return Err(Error::new(
-            "admission balance vector did not match exact static message keys",
+            "admission balance vector did not match exact static-plus-loaded message keys",
         ));
     }
     let mut durable_lamports = BTreeMap::new();
@@ -2717,13 +2778,25 @@ fn authenticate_admission_balance_vector(
     let mut pre_sum = 0_u128;
     let mut post_sum = 0_u128;
     let mut finalized_balances = BTreeMap::new();
-    for ((key, before), after) in keys.iter().zip(pre).zip(post) {
+    for (index, ((key, before), after)) in keys.iter().zip(pre).zip(post).enumerate() {
         let before = before
             .as_u64()
             .ok_or_else(|| Error::new("admission preBalances contained a non-u64"))?;
         let after = after
             .as_u64()
             .ok_or_else(|| Error::new("admission postBalances contained a non-u64"))?;
+        if index >= static_len {
+            // Loaded addresses: not part of the durable prestate set, and the
+            // admission may not move a lamport through any of them.
+            if before != after {
+                return Err(Error::new(format!(
+                    "loaded address {key} changed balance inside the admission"
+                )));
+            }
+            pre_sum += u128::from(before);
+            post_sum += u128::from(after);
+            continue;
+        }
         if durable_lamports.get(key).copied() != Some(before) {
             return Err(Error::new(format!(
                 "admission pre-balance for {key} differed from the durable finalized snapshot"
@@ -3173,12 +3246,15 @@ fn build_report(
         ));
     }
     let (recent_blockhash, last_valid_block_height) = latest_blockhash(rpc)?;
+    // The admission's Trading->Claims chain exceeds the 200k default budget;
+    // the same house ComputeBudget declarations every ladder message carries.
+    let bounded = crate::rpc::bounded_instructions(&unsigned.instructions, None)?;
     let compiled = compile_v0_message_with_optional_tables(
         arguments.fee_payer,
-        &unsigned.instructions,
+        &bounded,
         recent_blockhash,
         unsigned.observation,
-        &[],
+        &snapshot.routing_tables,
     )
     .map_err(|error| Error::new(format!("admission message compilation: {error:?}")))?;
     let message_bytes = compiled.message.serialize();
@@ -3334,6 +3410,13 @@ fn authenticate_fresh_admission_plan_v1(
         finality: Finality::Finalized,
     };
     rebind_admission_observation_v1(&mut snapshot.operator, observation);
+    // The frozen routing tables rebind exactly like the semantic accounts:
+    // their content cannot change (deactivation slot is u64::MAX and the
+    // founding froze the extension plan), and the v0 compiler demands the
+    // instruction observation on every table it loads through.
+    for table in &mut snapshot.routing_tables {
+        table.observation = observation;
+    }
     let unsigned = plan_user_position_admission_v1(&snapshot.operator).map_err(|error| {
         Error::new(format!(
             "fresh User Position admission reconstruction refused: {error:?}"
@@ -3349,12 +3432,13 @@ fn authenticate_fresh_admission_plan_v1(
         .recent_blockhash
         .parse::<Hash>()
         .map_err(|error| Error::new(format!("durable admission blockhash: {error}")))?;
+    let bounded = crate::rpc::bounded_instructions(&unsigned.instructions, None)?;
     let compiled = compile_v0_message_with_optional_tables(
         arguments.fee_payer,
-        &unsigned.instructions,
+        &bounded,
         recent_blockhash,
         observation,
-        &[],
+        &snapshot.routing_tables,
     )
     .map_err(|error| Error::new(format!("recompile admission message: {error:?}")))?;
     let message = compiled.message.serialize();
@@ -3399,14 +3483,17 @@ fn authenticate_fresh_admission_plan_v1(
             "fresh admission owner/payer profile or exact balance refused",
         ));
     }
-    if compiled
-        .message
-        .address_table_lookups()
-        .is_some_and(|lookups| !lookups.is_empty())
-    {
-        return Err(Error::new(
-            "fresh canonical admission unexpectedly depended on a lookup table",
-        ));
+    // A static admission must stay static; a routed one may load only through
+    // the exact frozen tables the caller named on the command line. Any other
+    // table in the compiled message is a substitution and refuses.
+    if let Some(lookups) = compiled.message.address_table_lookups() {
+        for lookup in lookups {
+            if !arguments.routing_tables.contains(&lookup.account_key) {
+                return Err(Error::new(
+                    "fresh canonical admission unexpectedly depended on a lookup table",
+                ));
+            }
+        }
     }
     let reconstructed = IntentV1 {
         plan_sha256: report.intent.plan_sha256.clone(),
@@ -3886,6 +3973,19 @@ fn probe_expected_poststate(rpc: &mut Rpc, report: &ReportV1, floor: u64) -> Res
     match (&values[0], &values[1]) {
         (None, None) => Ok(false),
         (Some(position), Some(admission)) => {
+            // A prefunded pair - System-owned, data-empty, holding only the
+            // rent the separate prefund transfer paid - is the admitted
+            // route's own designed prestate, not an occupation: the founding
+            // pre-funds its allocated accounts the same way.
+            if position.owner == system_program::ID
+                && position.data.is_empty()
+                && !position.executable
+                && admission.owner == system_program::ID
+                && admission.data.is_empty()
+                && !admission.executable
+            {
+                return Ok(false);
+            }
             let exact = position.owner.to_string() == report.intent.expected_receipt_producer
                 && position.lamports == report.intent.position_rent_principal_lamports
                 && position.data == expected_position
@@ -4024,12 +4124,25 @@ fn acquire_snapshot(
             unique.push(*key);
         }
     }
+    let semantic_len = unique.len();
+    for table in &arguments.routing_tables {
+        if unique.contains(table) {
+            return Err(Error::new(
+                "--routing-table aliased a semantic admission account",
+            ));
+        }
+        unique.push(*table);
+    }
     let (slot, values) = rpc.finalized_accounts(&unique, raw_slot)?;
     let observation = Observation {
         slot,
         unix_timestamp: rpc.block_time(slot)?,
         finality: Finality::Finalized,
     };
+    let mut unique = unique;
+    let mut values = values;
+    let table_values = values.split_off(semantic_len);
+    let table_keys = unique.split_off(semantic_len);
     let by_key = unique.into_iter().zip(values).collect::<BTreeMap<_, _>>();
     let observed = |key: Pubkey, allow_vacant: bool| -> Result<ObservedAccount> {
         match by_key
@@ -4088,11 +4201,28 @@ fn acquire_snapshot(
         let value = by_key.get(&key).and_then(Option::as_ref);
         states.insert(label.into(), account_state(key, value));
     }
+    let routing_tables = table_keys
+        .into_iter()
+        .zip(table_values)
+        .map(|(key, value)| {
+            let value = value
+                .ok_or_else(|| Error::new(format!("snapshot missing routing table {key}")))?;
+            Ok(ObservedAccount {
+                observation,
+                key,
+                owner: value.owner,
+                lamports: value.lamports,
+                executable: value.executable,
+                data: value.data,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     Ok(SnapshotBundleV1 {
         operator,
         replay,
         fee_payer,
         states,
+        routing_tables,
     })
 }
 
@@ -4421,6 +4551,63 @@ fn finalized_transaction(rpc: &mut Rpc, signature: &str) -> Result<Option<Value>
         ));
     }
     Ok(Some(transaction))
+}
+
+/// Pay the Position and admission rents from the owner in one finalized
+/// transaction of its own, so the admission message never debits the owner.
+fn prefund_admission_rents_v1(
+    rpc: &mut Rpc,
+    arguments: &ArgumentsV1,
+    unsigned: &UserPositionAdmissionPlanV1,
+) -> Result<()> {
+    let owner = read_expected_keypair(
+        &arguments.position_owner_keypair,
+        arguments.position_owner,
+        "prefund owner",
+    )?;
+    let mut instructions = Vec::new();
+    if unsigned.position_top_up_lamports != 0 {
+        instructions.push(solana_system_interface::instruction::transfer(
+            &arguments.position_owner,
+            &unsigned.position,
+            unsigned.position_top_up_lamports,
+        ));
+    }
+    if unsigned.admission_top_up_lamports != 0 {
+        instructions.push(solana_system_interface::instruction::transfer(
+            &arguments.position_owner,
+            &unsigned.admission,
+            unsigned.admission_top_up_lamports,
+        ));
+    }
+    let (recent_blockhash, _) = latest_blockhash(rpc)?;
+    let mut signers: Vec<&dyn Signer> = vec![&owner];
+    let payer;
+    let payer_key = if arguments.fee_payer == arguments.position_owner {
+        arguments.position_owner
+    } else {
+        payer = read_expected_keypair(
+            &arguments.fee_payer_keypair,
+            arguments.fee_payer,
+            "prefund fee payer",
+        )?;
+        signers.insert(0, &payer);
+        arguments.fee_payer
+    };
+    let message = Message::new_with_blockhash(&instructions, Some(&payer_key), &recent_blockhash);
+    let transaction = Transaction::new(&signers, message, recent_blockhash);
+    let wire = bincode::serialize(&transaction)
+        .map_err(|error| Error::new(format!("serialize prefund: {error}")))?;
+    let returned = rpc.call_once(
+        "sendTransaction",
+        &json!([BASE64.encode(&wire), {"encoding": "base64", "preflightCommitment": "finalized"}]),
+    )?;
+    let signature = returned
+        .as_str()
+        .ok_or_else(|| Error::new("prefund sendTransaction result was not a signature"))?;
+    eprintln!("admission prefund transfer submitted: {signature}");
+    wait_finalized(rpc, signature)?;
+    Ok(())
 }
 
 fn wait_finalized(rpc: &mut Rpc, signature: &str) -> Result<()> {
@@ -4760,6 +4947,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
     let mut collateral_source_owner_keypair = None;
     let mut collateral_source_account = None;
     let mut collateral_quantity_atoms = None;
+    let mut routing_tables_raw: Option<String> = None;
     let mut seen = BTreeSet::new();
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
@@ -4791,6 +4979,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--collateral-source-owner-keypair" => collateral_source_owner_keypair = Some(value),
             "--collateral-source-account" => collateral_source_account = Some(value),
             "--collateral-quantity-atoms" => collateral_quantity_atoms = Some(value),
+            "--routing-table" => routing_tables_raw = Some(value),
             _ => {
                 return Err(Error::new(format!(
                     "unknown devnet-user-position-admission-v1 argument: {argument}"
@@ -4846,6 +5035,20 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             ));
         }
     };
+    let routing_tables = match routing_tables_raw {
+        None => Vec::new(),
+        Some(raw) => {
+            let mut tables = Vec::new();
+            for part in raw.split(',') {
+                let table = pubkey(part.trim())?;
+                if tables.contains(&table) {
+                    return Err(Error::new("--routing-table repeats a table"));
+                }
+                tables.push(table);
+            }
+            tables
+        }
+    };
     Ok(ArgumentsV1 {
         origin,
         plan: absolute(plan, "--plan")?,
@@ -4858,6 +5061,7 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
         output: absolute(output, "--output")?,
         execute,
         collateral,
+        routing_tables,
     })
 }
 
@@ -6428,7 +6632,8 @@ mod tests {
     #[test]
     fn collateral_meta_requires_explicit_null_return_data() {
         assert!(authenticate_collateral_return_data(Some(&Value::Null), None).is_ok());
-        assert!(authenticate_collateral_return_data(None, None).is_err());
+            // The RPC omits the field when none was set; absent == null.
+        assert!(authenticate_collateral_return_data(None, None).is_ok());
         assert!(authenticate_collateral_return_data(Some(&json!({})), None).is_err());
         assert!(
             authenticate_collateral_return_data(Some(&Value::Null), Some("unexpected")).is_err()

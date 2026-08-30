@@ -40,6 +40,16 @@ use dclutch_direct_codec::{
     },
 };
 use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
+use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
+use dclutch_capability_program_contract::{
+    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
+};
+use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
+use dclutch_product_runtime_v2_admission::{
+    PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
+};
+use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
+use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_operator::{
     direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
     direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
@@ -504,6 +514,8 @@ struct PreparedPublicFactsV1 {
     participant_sha256: String,
     genesis_hash: String,
     market: Pubkey,
+    /// The Open Market's PDA-authenticated identity generation.
+    generation: u64,
     payer: Pubkey,
     fee_recipient: Pubkey,
     seller: Pubkey,
@@ -559,8 +571,8 @@ fn assemble_public_manifest_v1(
         || buyer_signed.intent.outcome != terms.outcome
         || seller_signed.intent.market != public.market.to_bytes()
         || buyer_signed.intent.market != public.market.to_bytes()
-        || seller_signed.intent.generation != market_input.generation
-        || buyer_signed.intent.generation != market_input.generation
+        || seller_signed.intent.generation != public.generation
+        || buyer_signed.intent.generation != public.generation
         || seller_signed.intent.nonce != public.seller_facts.next_nonce
         || buyer_signed.intent.nonce != public.buyer_facts.next_nonce
         || seller_signed.intent.valid_from > public.observation_slot
@@ -595,7 +607,7 @@ fn assemble_public_manifest_v1(
         config_content_id: hash(&public.config_bytes).to_bytes(),
         config: public.config,
         market: public.market.to_bytes(),
-        generation: market_input.generation,
+        generation: public.generation,
         outcome_count: public.aggregate_view.claim_count,
         slot: public.observation_slot,
         root_phase: 0,
@@ -675,7 +687,7 @@ fn assemble_public_manifest_v1(
         buyer: signed_manifest_v1(buyer_signed)?,
         route,
         context: ProducedDirectContextHintsV1 {
-            generation: market_input.generation,
+            generation: public.generation,
             outcome_count: public.aggregate_view.claim_count,
             root_phase: 0,
             seller_next_nonce: public.seller_facts.next_nonce,
@@ -791,7 +803,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         lifecycle: 0,
         outcome: public.outcome,
         market: public.market.to_bytes(),
-        generation: market_input.generation,
+        generation: public.generation,
         nonce: public.seller_facts.next_nonce,
         valid_from: public.observation_slot,
         valid_through,
@@ -805,7 +817,7 @@ pub(crate) fn produce_owned_loopback_direct_trade_v1(
         lifecycle: 0,
         outcome: public.outcome,
         market: public.market.to_bytes(),
-        generation: market_input.generation,
+        generation: public.generation,
         nonce: public.buyer_facts.next_nonce,
         valid_from: public.observation_slot,
         valid_through,
@@ -1840,7 +1852,16 @@ fn prepare_public_facts_v1(
         ));
     }
     let seller_position = campaign_address_v1(campaign, "founder_position")?;
-    let root = campaign_address_v1(campaign, "direct_capability_root")?;
+    // Founding-only devnet campaigns seal the Direct capability root as a
+    // checkpoint scalar rather than an accounts row; either way the address is
+    // routing only, re-read and re-authenticated from the finalized snapshot.
+    let root = match campaign_account_v1(campaign, "direct_capability_root") {
+        Ok(row) => pubkey(&row.address)?,
+        Err(missing) => match campaign.checkpoint_direct_capability_root.as_deref() {
+            Some(address) => pubkey(address)?,
+            None => return Err(missing),
+        },
+    };
     let mint = campaign_address_v1(campaign, "collateral_mint")?;
     if participant.mint != mint {
         return Err(refusal("Direct participant collateral Mint changed"));
@@ -1863,6 +1884,7 @@ fn prepare_public_facts_v1(
     let config_bytes = decode_hex_v1(&direct.execution_config_hex, "Direct execution config")?;
     require_market_body_matches_record_v1(
         plan,
+        market_input,
         campaign,
         "direct_execution_config_record",
         &config_bytes,
@@ -1908,6 +1930,7 @@ fn prepare_public_facts_v1(
     ] {
         require_market_body_matches_record_v1(
             plan,
+            market_input,
             campaign,
             label,
             &decode_hex_v1(body_hex, label)?,
@@ -1938,16 +1961,38 @@ fn prepare_public_facts_v1(
     let market_account = snapshot.account(market)?;
     let market_state = CoreState::decode(&market_account.data)
         .map_err(|error| Error::new(format!("Direct Market state: {error:?}")))?;
+    // The Market account address is the PDA of its own identity, so a decoded
+    // identity generation is chain-authenticated. It must still be the one
+    // this exact input names: either the input's own generation (a compiled
+    // input carrying the live Open generation) or the founding lane's Open
+    // generation for a founding-shaped input (`derive_founding_targets`
+    // places the DCLTGMF3 Open Market at that offset).
+    let generation = market_state.identity.generation;
+    if generation != market_input.generation
+        && generation != crate::market::open_market_generation_v1(market_input)?
+    {
+        return Err(refusal(format!(
+            "Direct Open Market generation {generation} is neither the input generation {} nor the founding lane's Open generation",
+            market_input.generation,
+        )));
+    }
     if market_account.owner != pubkey(&plan.core.program_id)?
         || market_account.executable
         || market_state.phase != CorePhase::Open
         || market_state.identity.market_id.to_bytes() != market.to_bytes()
-        || market_state.identity.generation != market_input.generation
         || market_state.identity.selected_release_set.to_bytes() != release_set
     {
-        return Err(refusal(
-            "Direct producer requires the exact finalized Open founding Market",
-        ));
+        return Err(refusal(format!(
+            "Direct producer requires the exact finalized Open founding Market (owner {} vs core {}, executable {}, phase {:?}, market id {} vs {}, release set {} vs {})",
+            market_account.owner,
+            plan.core.program_id,
+            market_account.executable,
+            market_state.phase,
+            Pubkey::new_from_array(market_state.identity.market_id.to_bytes()),
+            market,
+            hex_encode_v1(&market_state.identity.selected_release_set.to_bytes()),
+            hex_encode_v1(&release_set),
+        )));
     }
     let market_rent_beneficiary = Pubkey::new_from_array(market_state.rent_beneficiary.to_bytes());
     let root_account = snapshot.account(root)?;
@@ -1975,7 +2020,7 @@ fn prepare_public_facts_v1(
     )
     .map_err(|error| Error::new(format!("Direct root tail: {error:?}")))?;
     if root_header.market() != market.to_bytes()
-        || root_header.generation() != market_input.generation
+        || root_header.generation() != generation
         || root_header.release_set().to_bytes() != release_set
         || root_state.phase() != DirectRootPhaseV1::Open
     {
@@ -1997,7 +2042,7 @@ fn prepare_public_facts_v1(
         || buyer_position_account.owner != claims
         || aggregate_view.logical_market != market.to_bytes()
         || aggregate_view.release_set != release_set
-        || aggregate_view.generation != market_input.generation
+        || aggregate_view.generation != generation
         || seller_position_view.market_account != aggregate.to_bytes()
         || buyer_position_view.market_account != aggregate.to_bytes()
         || buyer_position_view.owner != participant.owner.to_bytes()
@@ -2068,7 +2113,7 @@ fn prepare_public_facts_v1(
     let rent_account = snapshot.account(sysvar::rent::ID)?;
     let rent: Rent = bincode::deserialize(&rent_account.data)
         .map_err(|error| Error::new(format!("Direct Rent sysvar: {error}")))?;
-    let coordinates = DirectCoordinatesV1::new(market.to_bytes(), market_input.generation)
+    let coordinates = DirectCoordinatesV1::new(market.to_bytes(), generation)
         .map_err(|error| Error::new(format!("Direct coordinates: {error:?}")))?;
     let seller_seeds = MakerReplaySeedsV1::new(coordinates, seller.to_bytes())
         .map_err(|error| Error::new(format!("seller maker seeds: {error:?}")))?;
@@ -2084,7 +2129,7 @@ fn prepare_public_facts_v1(
         seller_bump,
         trading,
         market,
-        market_input.generation,
+        generation,
         seller,
         payer,
         &rent,
@@ -2095,7 +2140,7 @@ fn prepare_public_facts_v1(
         buyer_bump,
         trading,
         market,
-        market_input.generation,
+        generation,
         participant.owner,
         payer,
         &rent,
@@ -2120,7 +2165,7 @@ fn prepare_public_facts_v1(
         aggregate_view.realm_id,
         buyer_maker,
         trading,
-        market_input.generation,
+        generation,
         market_rent_beneficiary,
     )?;
     let custody_authority = Pubkey::find_program_address(
@@ -2133,14 +2178,14 @@ fn prepare_public_facts_v1(
     }
     let seller_token_seeds = DirectTokenAccountSeedsV1::new(
         market.to_bytes(),
-        market_input.generation,
+        generation,
         seller.to_bytes(),
         DirectTokenAccountRoleV1::Seller,
     )
     .map_err(|error| Error::new(format!("seller Direct token seeds: {error:?}")))?;
     let fee_token_seeds = DirectTokenAccountSeedsV1::new(
         market.to_bytes(),
-        market_input.generation,
+        generation,
         fee_recipient.to_bytes(),
         DirectTokenAccountRoleV1::Fee,
     )
@@ -2174,8 +2219,9 @@ fn prepare_public_facts_v1(
         }
     }
 
-    let descriptor = record_coordinates_v1(plan, campaign, "direct_ordinary_descriptor_record")?;
-    let descriptor_pair = required_record_v1(plan, "direct_ordinary_descriptor_record")?;
+    let descriptor = record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_descriptor_record")?;
+    let descriptor_pair =
+        resolved_record_v1(plan, market_input, campaign, "direct_ordinary_descriptor_record")?;
     let descriptor_digest = hex32(&descriptor_pair.content_sha256)?;
     let trading_semantic_release = hex32(&plan.trading.semantic_release_id)?;
     let capability_seal = derive_capability_seal_v1(
@@ -2188,38 +2234,41 @@ fn prepare_public_facts_v1(
         fixed: ProducedDirectFixedCoordinatesV1 {
             market: market.to_string(),
             root: root.to_string(),
-            manifest: record_coordinates_v1(plan, campaign, "capability_manifest_record")?,
-            program_set: record_coordinates_v1(plan, campaign, "direct_program_set_record")?,
+            manifest: record_coordinates_v1(plan, market_input, campaign, "capability_manifest_record")?,
+            program_set: record_coordinates_v1(plan, market_input, campaign, "direct_program_set_record")?,
             descriptor,
-            config: record_coordinates_v1(plan, campaign, "direct_execution_config_record")?,
+            config: record_coordinates_v1(plan, market_input, campaign, "direct_execution_config_record")?,
             account_profile: record_coordinates_v1(
                 plan,
+                market_input,
                 campaign,
                 "direct_ordinary_account_profile_record",
             )?,
             request_profile: record_coordinates_v1(
                 plan,
+                market_input,
                 campaign,
                 "direct_ordinary_request_profile_record",
             )?,
-            transition: record_coordinates_v1(plan, campaign, "direct_ordinary_transition_record")?,
-            effect: record_coordinates_v1(plan, campaign, "direct_ordinary_effect_record")?,
+            transition: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_transition_record")?,
+            effect: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_effect_record")?,
             lifecycle: record_coordinates_v1(
                 plan,
+                market_input,
                 campaign,
                 "direct_ordinary_lifecycle_policy_record",
             )?,
-            strategy: record_coordinates_v1(plan, campaign, "direct_ordinary_strategy_record")?,
+            strategy: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_strategy_record")?,
             activation_cache: plan.activation.clone(),
             core_program: plan.core.program_id.clone(),
             core_programdata: plan.core.programdata_id.clone(),
             trading_program: plan.trading.program_id.clone(),
             trading_programdata: plan.trading.programdata_id.clone(),
             registry_program: plan.registry.program_id.clone(),
-            product: record_coordinates_v1(plan, campaign, "product_record")?,
-            result_domain: record_coordinates_v1(plan, campaign, "result_domain_record")?,
-            portfolio: record_coordinates_v1(plan, campaign, "portfolio_record")?,
-            linked_basis: record_coordinates_v1(plan, campaign, "linked_liability_basis_record")?,
+            product: record_coordinates_v1(plan, market_input, campaign, "product_record")?,
+            result_domain: record_coordinates_v1(plan, market_input, campaign, "result_domain_record")?,
+            portfolio: record_coordinates_v1(plan, market_input, campaign, "portfolio_record")?,
+            linked_basis: record_coordinates_v1(plan, market_input, campaign, "linked_liability_basis_record")?,
             capability_seal: capability_seal.to_string(),
         },
         seller_maker: seller_maker.to_string(),
@@ -2237,7 +2286,7 @@ fn prepare_public_facts_v1(
         },
         custody: ProducedDirectCustodyCoordinatesV1 {
             caller_authorities: core::array::from_fn(|_| Pubkey::default().to_string()),
-            realm: record_coordinates_v1(plan, campaign, "realm_record")?,
+            realm: record_coordinates_v1(plan, market_input, campaign, "realm_record")?,
             replay: custody_replay.to_string(),
             mint: mint.to_string(),
             buyer_token: participant.collateral_account.to_string(),
@@ -2253,7 +2302,7 @@ fn prepare_public_facts_v1(
         market: market.to_bytes(),
         maker: participant.owner.to_bytes(),
         expected_market_digest: hash(&market_account.data).to_bytes(),
-        generation: market_input.generation,
+        generation,
     };
     let replay_request_bytes = replay_request
         .to_bytes()
@@ -2276,7 +2325,7 @@ fn prepare_public_facts_v1(
         expected_claims_aggregate_digest: hash(&aggregate_account.data).to_bytes(),
         seller_owner: seller.to_bytes(),
         expected_seller_position_digest: hash(&seller_position_account.data).to_bytes(),
-        generation: market_input.generation,
+        generation,
     };
     let token_setup_request_bytes = token_setup_request
         .to_bytes()
@@ -2295,12 +2344,12 @@ fn prepare_public_facts_v1(
         trading_program: trading.to_string(),
     };
     let account_profile_bytes =
-        record_body_v1(plan, campaign, "direct_ordinary_account_profile_record")?;
-    let transition_bytes = record_body_v1(plan, campaign, "direct_ordinary_transition_record")?;
-    let effect_bytes = record_body_v1(plan, campaign, "direct_ordinary_effect_record")?;
-    let product_digest = record_digest_v1(plan, campaign, "product_record")?;
-    let realm_digest = record_digest_v1(plan, campaign, "realm_record")?;
-    let linked_basis_digest = record_digest_v1(plan, campaign, "linked_liability_basis_record")?;
+        record_body_v1(plan, market_input, campaign, "direct_ordinary_account_profile_record")?;
+    let transition_bytes = record_body_v1(plan, market_input, campaign, "direct_ordinary_transition_record")?;
+    let effect_bytes = record_body_v1(plan, market_input, campaign, "direct_ordinary_effect_record")?;
+    let product_digest = record_digest_v1(plan, market_input, campaign, "product_record")?;
+    let realm_digest = record_digest_v1(plan, market_input, campaign, "realm_record")?;
+    let linked_basis_digest = record_digest_v1(plan, market_input, campaign, "linked_liability_basis_record")?;
     let linked_basis_semantic = crate::market::semantic_basis_identity_v3(&decode_hex_v1(
         &market_input.linked_basis_hex,
         "linked liability basis",
@@ -2331,6 +2380,7 @@ fn prepare_public_facts_v1(
         participant_sha256,
         genesis_hash,
         market,
+        generation,
         payer,
         fee_recipient,
         seller,
@@ -2526,52 +2576,190 @@ fn derive_capability_seal_v1(
     .0
 }
 
+/// Resolve one finalized record pair on either evidence topology.
+///
+/// A LOCAL checked plan aggregates every market record into `plan.records`
+/// with its body. A devnet flagship plan seals only infrastructure records;
+/// the market records' bodies are authored by the Market input's own hex
+/// fields, their raw addresses by the sealed campaign account rows, and their
+/// schemas by the decoded ordinary descriptor plus the protocol's schema
+/// constants. Both coordinates are self-verifying: the raw record address is
+/// the Registry PDA of (schema, content digest), so a wrong schema or body
+/// cannot resolve.
+fn resolved_record_v1(
+    plan: &SuccessorPlan,
+    market_input: &MarketRunInput,
+    campaign: &campaign::CampaignTerminalEvidenceV1,
+    label: &str,
+) -> Result<RecordPair> {
+    if let Some(pair) = plan.records.get(label) {
+        authenticate_campaign_record_v1(campaign, label, pair, &plan.registry.program_id)?;
+        return Ok(pair.clone());
+    }
+    let row = campaign_account_v1(campaign, label)?;
+    if row.owner != plan.registry.program_id {
+        return Err(refusal(format!(
+            "campaign {label} record is not Registry-owned"
+        )));
+    }
+    let schema = devnet_market_record_schema_v1(market_input, label)?;
+    let digest = hex32(&row.data_sha256)?;
+    let registry = pubkey(&plan.registry.program_id)?;
+    let raw =
+        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry).0;
+    if raw.to_string() != row.address {
+        return Err(refusal(format!(
+            "campaign {label} is not the canonical Registry record coordinate for its schema and content"
+        )));
+    }
+    let staging =
+        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry).0;
+    let body_hex = devnet_market_record_body_hex_v1(market_input, label).unwrap_or_default();
+    if !body_hex.is_empty() {
+        let body = decode_hex_v1(&body_hex, label)?;
+        if sha256_hex(&body) != row.data_sha256 {
+            return Err(refusal(format!(
+                "Direct Market input {label} body differs from the sealed campaign record content"
+            )));
+        }
+    }
+    Ok(RecordPair {
+        raw: raw.to_string(),
+        staging: staging.to_string(),
+        schema_id: hex_encode_v1(&schema),
+        content_sha256: row.data_sha256.clone(),
+        body_hex,
+    })
+}
+
+/// The schema each devnet market record was published under; descriptor-owned
+/// schemas come from the decoded ordinary descriptor itself.
+fn devnet_market_record_schema_v1(
+    market_input: &MarketRunInput,
+    label: &str,
+) -> Result<[u8; 32]> {
+    let direct = market_input.direct_capability.as_ref().ok_or_else(|| {
+        refusal("devnet Direct record resolution requires the typed Direct capability payload")
+    })?;
+    Ok(match label {
+        "capability_manifest_record" => CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+        "direct_program_set_record" => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        "direct_ordinary_descriptor_record" => CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+        "product_record" => PRODUCT_RECORD_SCHEMA_ID_V2,
+        "result_domain_record" => RESULT_DOMAIN_SCHEMA_ID_V2,
+        "portfolio_record" => PORTFOLIO_SCHEMA_ID_V2,
+        "linked_liability_basis_record" => GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+        "realm_record" => REALM_SCHEMA_RELEASE_ID_V1,
+        "direct_execution_config_record"
+        | "direct_ordinary_account_profile_record"
+        | "direct_ordinary_request_profile_record"
+        | "direct_ordinary_transition_record"
+        | "direct_ordinary_effect_record"
+        | "direct_ordinary_lifecycle_policy_record"
+        | "direct_ordinary_strategy_record" => {
+            let descriptor_bytes = decode_hex_v1(
+                &direct.ordinary_descriptor_hex,
+                "direct_ordinary_descriptor_record",
+            )?;
+            let descriptor = CapabilityProgramV4::decode(&descriptor_bytes)
+                .map_err(|error| Error::new(format!("Direct CapabilityProgramV4: {error:?}")))?;
+            match label {
+                "direct_execution_config_record" => descriptor.config_schema().to_bytes(),
+                "direct_ordinary_account_profile_record" => {
+                    descriptor.account_profile().schema().to_bytes()
+                }
+                "direct_ordinary_request_profile_record" => {
+                    descriptor.request_profile().schema().to_bytes()
+                }
+                "direct_ordinary_transition_record" => descriptor.transition().schema().to_bytes(),
+                "direct_ordinary_effect_record" => descriptor.effect().schema().to_bytes(),
+                "direct_ordinary_lifecycle_policy_record" => {
+                    descriptor.lifecycle().schema().to_bytes()
+                }
+                "direct_ordinary_strategy_record" => descriptor.strategy().schema().to_bytes(),
+                _ => unreachable!("the outer match admitted only descriptor-owned labels"),
+            }
+        }
+        other => {
+            return Err(refusal(format!(
+                "no devnet schema author is registered for record {other}"
+            )));
+        }
+    })
+}
+
+/// The Market input field that authors one devnet record body, when one does.
+fn devnet_market_record_body_hex_v1(
+    market_input: &MarketRunInput,
+    label: &str,
+) -> Option<String> {
+    let direct = market_input.direct_capability.as_ref()?;
+    Some(match label {
+        "capability_manifest_record" => market_input.capability_manifest_hex.clone(),
+        "linked_liability_basis_record" => market_input.linked_basis_hex.clone(),
+        "direct_program_set_record" => direct.program_set_hex.clone(),
+        "direct_ordinary_descriptor_record" => direct.ordinary_descriptor_hex.clone(),
+        "direct_execution_config_record" => direct.execution_config_hex.clone(),
+        "direct_ordinary_account_profile_record" => direct.ordinary_account_profile_hex.clone(),
+        "direct_ordinary_request_profile_record" => direct.ordinary_request_profile_hex.clone(),
+        "direct_ordinary_transition_record" => direct.ordinary_transition_hex.clone(),
+        "direct_ordinary_effect_record" => direct.ordinary_effect_hex.clone(),
+        "direct_ordinary_lifecycle_policy_record" => direct.ordinary_lifecycle_policy_hex.clone(),
+        "direct_ordinary_strategy_record" => direct.ordinary_strategy_hex.clone(),
+        _ => return None,
+    })
+}
+
 fn record_coordinates_v1(
     plan: &SuccessorPlan,
+    market_input: &MarketRunInput,
     campaign: &campaign::CampaignTerminalEvidenceV1,
     label: &str,
 ) -> Result<ProducedRecordPairCoordinatesV1> {
-    let pair = required_record_v1(plan, label)?;
-    authenticate_campaign_record_v1(campaign, label, pair, &plan.registry.program_id)?;
+    let pair = resolved_record_v1(plan, market_input, campaign, label)?;
     Ok(ProducedRecordPairCoordinatesV1 {
-        raw: pair.raw.clone(),
-        staging: pair.staging.clone(),
+        raw: pair.raw,
+        staging: pair.staging,
     })
 }
 
 fn record_body_v1(
     plan: &SuccessorPlan,
+    market_input: &MarketRunInput,
     campaign: &campaign::CampaignTerminalEvidenceV1,
     label: &str,
 ) -> Result<Vec<u8>> {
-    let pair = required_record_v1(plan, label)?;
-    authenticate_campaign_record_v1(campaign, label, pair, &plan.registry.program_id)?;
+    let pair = resolved_record_v1(plan, market_input, campaign, label)?;
+    if pair.body_hex.is_empty() {
+        return Err(refusal(format!("no body author exists for record {label}")));
+    }
     let body = decode_hex_v1(&pair.body_hex, label)?;
     if sha256_hex(&body) != pair.content_sha256 {
-        return Err(refusal(format!("checked plan {label} body digest changed")));
+        return Err(refusal(format!("checked {label} body digest changed")));
     }
     Ok(body)
 }
 
 fn record_digest_v1(
     plan: &SuccessorPlan,
+    market_input: &MarketRunInput,
     campaign: &campaign::CampaignTerminalEvidenceV1,
     label: &str,
 ) -> Result<[u8; 32]> {
-    let pair = required_record_v1(plan, label)?;
-    authenticate_campaign_record_v1(campaign, label, pair, &plan.registry.program_id)?;
+    let pair = resolved_record_v1(plan, market_input, campaign, label)?;
     hex32(&pair.content_sha256)
 }
 
 fn require_market_body_matches_record_v1(
     plan: &SuccessorPlan,
+    market_input: &MarketRunInput,
     campaign: &campaign::CampaignTerminalEvidenceV1,
     label: &str,
     bytes: &[u8],
 ) -> Result<()> {
-    if record_body_v1(plan, campaign, label)? != bytes {
+    if record_body_v1(plan, market_input, campaign, label)? != bytes {
         return Err(refusal(format!(
-            "Direct Market input and checked plan {label} bodies differ"
+            "Direct Market input and checked {label} bodies differ"
         )));
     }
     Ok(())
@@ -2593,12 +2781,6 @@ fn authenticate_campaign_record_v1(
         )));
     }
     Ok(())
-}
-
-fn required_record_v1<'a>(plan: &'a SuccessorPlan, label: &str) -> Result<&'a RecordPair> {
-    plan.records
-        .get(label)
-        .ok_or_else(|| refusal(format!("checked plan omitted {label}")))
 }
 
 fn campaign_account_v1<'a>(
@@ -3200,6 +3382,14 @@ fn hex_nibble_v1(value: u8) -> Option<u8> {
         b'a'..=b'f' => Some(value - b'a' + 10),
         _ => None,
     }
+}
+
+fn hex_encode_v1(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

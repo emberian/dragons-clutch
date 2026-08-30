@@ -175,6 +175,12 @@ export type MarketHoardV1 =
     collateralMint: string;
     tokenProgram: string;
     principalAtoms: string;
+    /**
+     * The mint's own `decimals` byte, or null when the mint account was not
+     * read or did not authenticate. It is DISPLAY metadata and nothing else:
+     * `principalAtoms` is the economic quantity and is never scaled by it.
+     */
+    mintDisplayDecimals: number | null;
   }>
   | Readonly<{ status: 'unread'; reason: string }>
   | Readonly<{ status: 'refused'; address: string | null; reason: string }>;
@@ -598,6 +604,47 @@ async function readLiability(
 /** Exact base SPL Token account width, shared by both token programs. */
 const TOKEN_ACCOUNT_BYTES_V1 = 165;
 
+/** Exact base SPL Mint width, shared by both token programs. */
+const MINT_ACCOUNT_BYTES_V1 = 82;
+
+/** The Token-2022 account-type discriminator that follows a base account. */
+const TOKEN_2022_ACCOUNT_TYPE_OFFSET_V1 = 165;
+const TOKEN_2022_ACCOUNT_TYPE_MINT_V1 = 1;
+
+/**
+ * Read a collateral mint's `decimals` byte, or refuse to guess one.
+ *
+ * The mint joins the Hoard's own batched round at no extra round trip, because
+ * the Realm names it before that round is collected. It is read for one reason:
+ * a reader looking at `500000000` deserves to know the token counts in
+ * millionths. It is never used to scale a quantity -- this protocol's economics
+ * are raw u64 everywhere, and a display byte an arbitrary mint authority chose
+ * may not touch them.
+ *
+ * A base mint is exactly 82 bytes. A Token-2022 mint carrying extensions is
+ * longer and repeats the base layout, but so is a 165-byte token account, so
+ * anything past the base width must also name itself a Mint at the account-type
+ * byte before its decimals are believed.
+ */
+function readMintDisplayDecimalsV1(
+  accounts: PrefetchedAccountsV1,
+  mint: string,
+  tokenProgram: string,
+): number | null {
+  const entry = accounts.get(mint);
+  if (entry === undefined || 'failure' in entry) return null;
+  const account = entry.account;
+  if (account === null || account.executable || account.owner !== tokenProgram) return null;
+  const bytes = account.data;
+  if (bytes.length < MINT_ACCOUNT_BYTES_V1) return null;
+  if (bytes.length !== MINT_ACCOUNT_BYTES_V1) {
+    if (bytes.length <= TOKEN_2022_ACCOUNT_TYPE_OFFSET_V1) return null;
+    if (bytes[TOKEN_2022_ACCOUNT_TYPE_OFFSET_V1] !== TOKEN_2022_ACCOUNT_TYPE_MINT_V1) return null;
+  }
+  if (bytes[45] !== 1) return null;
+  return bytes[44] ?? null;
+}
+
 /**
  * Read one Market's Hoard, at the coordinate the chain itself derives.
  *
@@ -670,6 +717,7 @@ async function readHoard(
       collateralMint: mint,
       tokenProgram: collateral.tokenProgram,
       principalAtoms: readU64(bytes, 64).toString(),
+      mintDisplayDecimals: readMintDisplayDecimalsV1(accounts, mint, collateral.tokenProgram),
     });
   } catch (error) {
     return Object.freeze({
@@ -858,6 +906,9 @@ export async function inspectMarketDiscoveryV1(
       : await authenticateCapabilityManifest(records, registryProgramId, market.state.identity.capabilityManifestId);
     if (custodyProgramId !== null && collateral.status === 'bound' && liability.status === 'bound') {
       collectAddresses(hoardRound, () => [deriveMarketHoardAddressV1(custodyProgramId, market.address, market.state.identity.selectedReleaseSetId, liability.custodyContext)]);
+      // The mint rides this round rather than earning one of its own: the
+      // Realm named it in round two, so it costs no extra trip.
+      collectAddresses(hoardRound, () => [collateral.collateralMint]);
     }
     companions.push(Object.freeze({ collateral, liability, capabilities }));
   }
@@ -921,4 +972,140 @@ export async function inspectMarketDiscoveryV1(
     cards: Object.freeze(cards),
     reason: `${decoded} of ${cards.length} requested Market${cards.length === 1 ? '' : 's'} decoded at finalized floor ${floor}.`,
   });
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Curation: the same cards, arranged the way a reader meets them.
+ * ---------------------------------------------------------------------------
+ *
+ * Enumeration order is the chain's order, which is no order at all -- a Market
+ * founded in an abandoned build-out sits between the two anyone came here to
+ * see. Nothing below decides what is TRUE; every card is already decoded or
+ * refused before it gets here. It decides only what a reader meets first.
+ *
+ * The rule is that the groups partition the listing exactly. Nothing is
+ * dropped, nothing is counted twice, and the group a market lands in is a
+ * function of its own phase -- so a founding attempt cannot be quietly promoted
+ * into the headline, and a market that opened cannot be quietly buried.
+ */
+
+export type DecodedMarketDiscoveryCardV1 = Extract<MarketDiscoveryCardV1, Readonly<{ status: 'decoded' }>>;
+
+export type MarketListingV1 = Readonly<{
+  /** Founding is finished and the Market is live: phase `Open`. */
+  open: ReadonlyArray<DecodedMarketDiscoveryCardV1>;
+  /** The Market has reached or is unwinding from its answer. */
+  settled: ReadonlyArray<DecodedMarketDiscoveryCardV1>;
+  /** Founding was started and has not finished: phase `Founding`. */
+  founding: ReadonlyArray<DecodedMarketDiscoveryCardV1>;
+  /** The account exists and this reader could not decode it. */
+  unreadable: ReadonlyArray<MarketDiscoveryCardV1>;
+}>;
+
+/**
+ * Split a listing into the four groups, featured Market first among the open.
+ *
+ * `featured` is the address a deployment has published as its own headline
+ * Market. It only ever REORDERS: a featured address that is not open, or not in
+ * the listing at all, changes nothing, because promoting it would be the page
+ * asserting a phase the chain did not.
+ */
+export function curateMarketListingV1(
+  cards: ReadonlyArray<MarketDiscoveryCardV1>,
+  featured: string | null = null,
+): MarketListingV1 {
+  const open: DecodedMarketDiscoveryCardV1[] = [];
+  const settled: DecodedMarketDiscoveryCardV1[] = [];
+  const founding: DecodedMarketDiscoveryCardV1[] = [];
+  const unreadable: MarketDiscoveryCardV1[] = [];
+  for (const card of cards) {
+    if (card.status !== 'decoded') { unreadable.push(card); continue; }
+    if (card.phase === 'Open') { open.push(card); continue; }
+    if (card.phase === 'Founding') { founding.push(card); continue; }
+    settled.push(card);
+  }
+  if (featured !== null) {
+    const index = open.findIndex((card) => card.address === featured);
+    if (index > 0) open.unshift(...open.splice(index, 1));
+  }
+  return Object.freeze({
+    open: Object.freeze(open),
+    settled: Object.freeze(settled),
+    founding: Object.freeze(founding),
+    unreadable: Object.freeze(unreadable),
+  });
+}
+
+/**
+ * One collateral token's total across every Hoard this listing authenticated.
+ *
+ * `principalAtoms` is the exact sum of the raw u64 balances of vaults holding
+ * THIS mint, and of nothing else. `mintDisplayDecimals` is the mint's own
+ * display byte when it was read; it is metadata beside the total, never a
+ * scaling factor applied to it.
+ */
+export type CollateralSubtotalV1 = Readonly<{
+  collateralMint: string;
+  collateralMintShort: string;
+  principalAtoms: string;
+  vaults: number;
+  mintDisplayDecimals: number | null;
+}>;
+
+/**
+ * Total the authenticated collateral per token, and never across tokens.
+ *
+ * Atoms of different mints are different physical dimensions. A single figure
+ * spanning two of them is not a rounding compromise, it is a category error --
+ * so this returns one row per mint and leaves the reader to see that there are
+ * two of them, rather than collapsing them into a number or into a dash.
+ *
+ * Only `derived` Hoards contribute. A vault that refused authentication may
+ * still hold principal; it is absent from these rows and its absence is the
+ * caller's to disclose, because a refused read is not a zero.
+ */
+export function collateralSubtotalsV1(
+  cards: ReadonlyArray<MarketDiscoveryCardV1>,
+): ReadonlyArray<CollateralSubtotalV1> {
+  const totals = new Map<string, Readonly<{ atoms: bigint; vaults: number; decimals: number | null }>>();
+  for (const card of cards) {
+    if (card.status !== 'decoded' || card.hoard.status !== 'derived') continue;
+    const { collateralMint, principalAtoms, mintDisplayDecimals } = card.hoard;
+    const running = totals.get(collateralMint);
+    totals.set(collateralMint, Object.freeze({
+      atoms: (running?.atoms ?? 0n) + BigInt(principalAtoms),
+      vaults: (running?.vaults ?? 0) + 1,
+      // One mint has one decimals byte. If two reads of it disagree, neither is
+      // trusted rather than one being picked.
+      decimals: running === undefined || running.decimals === mintDisplayDecimals ? mintDisplayDecimals : null,
+    }));
+  }
+  return Object.freeze([...totals.entries()]
+    .map(([collateralMint, total]) => Object.freeze({
+      collateralMint,
+      collateralMintShort: shortAddressV1(collateralMint, 5),
+      principalAtoms: total.atoms.toString(),
+      vaults: total.vaults,
+      mintDisplayDecimals: total.decimals,
+    }))
+    .sort((left, right) => {
+      const leftAtoms = BigInt(left.principalAtoms);
+      const rightAtoms = BigInt(right.principalAtoms);
+      if (leftAtoms !== rightAtoms) return rightAtoms > leftAtoms ? 1 : -1;
+      return left.collateralMint < right.collateralMint ? -1 : 1;
+    }));
+}
+
+/**
+ * Render raw atoms at a mint's display precision, exactly, without floating
+ * point. The result is a presentation string; the atoms remain the quantity.
+ */
+export function formatAtomsV1(atoms: bigint | string, decimals: number): string {
+  const value = typeof atoms === 'bigint' ? atoms : BigInt(atoms);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 255) throw new Error('display decimals must be one u8');
+  const scale = 10n ** BigInt(decimals);
+  const whole = value / scale;
+  const fraction = (value % scale).toString().padStart(decimals, '0').replace(/0+$/, '');
+  return decimals === 0 || fraction === '' ? whole.toString() : `${whole}.${fraction}`;
 }

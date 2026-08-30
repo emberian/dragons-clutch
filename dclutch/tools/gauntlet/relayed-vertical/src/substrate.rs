@@ -218,6 +218,19 @@ pub(crate) fn bring_up(request: &SubstrateRequestV1<'_>) -> Result<CheckedSubstr
     })
 }
 
+/// The founding roles a fixture-liquidity-free market signs with. The
+/// graduation market carries zero fixture liquidity, so the two fixture roles
+/// (participant, direct-buyer) the prepare report also derives are refused by
+/// `campaign --founding-only` as outside this mode.
+const FOUNDING_ROLES_V1: &[&str] = &[
+    "campaign-payer",
+    "collateral-mint",
+    "collateral-wallet",
+    "founding-beneficiary",
+    "founding-projection-witness",
+    "founding-source-funder",
+];
+
 /// What the founding campaign left behind, lifted into the session's shape.
 pub(crate) struct FoundingYieldV1 {
     pub(crate) transactions: Vec<TransactionEvidence>,
@@ -232,20 +245,30 @@ pub(crate) fn found_market(
     evidence_path: &Path,
 ) -> Result<FoundingYieldV1> {
     let report = &substrate.report;
-    // The campaign never airdrops; the driver funds. Loopback lamports are
-    // free, so every founding role is funded generously rather than exactly.
-    for (role, path) in &report.campaign_founding_keypairs {
-        let keypair = load_keypair(Path::new(path))?;
-        let lamports = if role == "campaign-payer" {
-            500_000_000_000
-        } else {
-            20_000_000_000
-        };
-        rpc.airdrop(
-            &format!("relayed vertical: fund founding role {role}"),
-            keypair.pubkey(),
-            lamports,
-        )?;
+    // The campaign never airdrops; the driver funds. ONLY the campaign payer
+    // is funded — the other five founding roles are protocol-created and MUST
+    // be vacant, or the founding reads a pre-funded system account at the
+    // collateral-mint address as a started-and-unresumable founding (the
+    // lifecycle driver pins exactly this: PROTOCOL_CREATED_KEY_ROLES stay
+    // vacant, only campaign-payer gets the bankroll). The campaign still needs
+    // every role's key FILE to sign, so all six paths are handed through; the
+    // two fixture roles the prepare report also derives are excluded, since
+    // this fixture-liquidity-free founding refuses them as outside its mode.
+    let mut founding_keys: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for role in FOUNDING_ROLES_V1 {
+        let path = report
+            .campaign_founding_keypairs
+            .get(*role)
+            .ok_or_else(|| Error::new(format!("prepare report omits founding role {role}")))?;
+        if *role == "campaign-payer" {
+            let keypair = load_keypair(Path::new(path))?;
+            rpc.airdrop(
+                "relayed vertical: fund the campaign payer",
+                keypair.pubkey(),
+                500_000_000_000,
+            )?;
+        }
+        founding_keys.insert((*role).to_owned(), PathBuf::from(path));
     }
     let founder = report
         .campaign_public_identities
@@ -263,11 +286,7 @@ pub(crate) fn found_market(
         evidence_path: Some(evidence_path.to_path_buf()),
         founding_founder: Some(pubkey(founder)?),
         substituted_founder: Some(pubkey(substituted)?),
-        keypairs: report
-            .campaign_founding_keypairs
-            .iter()
-            .map(|(role, path)| (role.clone(), PathBuf::from(path)))
-            .collect(),
+        keypairs: founding_keys,
         execute: true,
         through: StageV1::Founding,
     })?;

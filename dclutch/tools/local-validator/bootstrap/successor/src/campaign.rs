@@ -127,6 +127,12 @@ pub(crate) struct CampaignTerminalEvidenceV1 {
     pub(crate) founding_custody_context: String,
     pub(crate) direct_selected_manifest_entry_index: u16,
     pub(crate) accounts: BTreeMap<String, CampaignAccountEvidenceV1>,
+    /// The Direct capability root coordinate, when the sealed report carries
+    /// it only as a founding-checkpoint scalar rather than an accounts row.
+    /// Founding-only devnet campaigns seal exactly that shape. This is a
+    /// routing coordinate, never account authority: every consumer re-reads
+    /// and re-authenticates the root account from finalized chain state.
+    pub(crate) checkpoint_direct_capability_root: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -349,11 +355,15 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
             "campaign report transaction projection exceeds 4096 rows",
         ));
     }
-    let mut transaction_labels = BTreeSet::new();
+    // A transaction row's identity is its signature. Labels are display
+    // routing only and legitimately repeat: the record-publication writer
+    // emits one Begin/Append/Finalize row per published record, and every
+    // label consumer matches prefixes rather than keying rows by label.
+    let mut transaction_signatures = BTreeSet::new();
     for transaction in &execution.transactions {
         if transaction.label.is_empty()
             || transaction.label.len() > 512
-            || !transaction_labels.insert(transaction.label.as_str())
+            || !transaction_signatures.insert(transaction.signature.as_str())
             || solana_sdk::signature::Signature::from_str(&transaction.signature).is_err()
             || transaction.logs.len() > 512
             || transaction
@@ -422,12 +432,21 @@ pub(crate) fn parse_campaign_terminal_evidence_with_expected_cluster_v1(
             )));
         }
     }
+    let checkpoint_direct_capability_root = report
+        .get("foundingCheckpoint")
+        .and_then(|checkpoint| checkpoint.get("direct_capability_root"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(root) = checkpoint_direct_capability_root.as_deref() {
+        crate::plan::pubkey(root)?;
+    }
     Ok(CampaignTerminalEvidenceV1 {
         plan_sha256,
         market_sha256,
         founding_custody_context: market.founding_custody_context,
         direct_selected_manifest_entry_index: market.direct_selected_manifest_entry_index,
         accounts: market.accounts,
+        checkpoint_direct_capability_root,
     })
 }
 

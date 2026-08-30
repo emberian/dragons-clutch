@@ -868,6 +868,7 @@ mod tests {
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
             accounts: BTreeMap::new(),
+            checkpoint_direct_capability_root: None,
         };
         let error = require_terminal_composition_evidence(&evidence)
             .expect_err("missing composition must refuse");
@@ -900,6 +901,7 @@ mod tests {
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
             accounts,
+            checkpoint_direct_capability_root: None,
         }
     }
 
@@ -1197,6 +1199,7 @@ mod tests {
             founding_custody_context: hex(&[2; 32]),
             direct_selected_manifest_entry_index: 0,
             accounts: accounts.clone(),
+            checkpoint_direct_capability_root: None,
         };
         require_direct_retirement_evidence(&exact).expect("exact Direct retirement evidence");
         for label in DIRECT_BEGIN_RETIRING_LABELS_V1 {
