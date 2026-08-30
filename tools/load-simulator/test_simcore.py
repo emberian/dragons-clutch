@@ -96,6 +96,54 @@ class RateControllerTest(unittest.TestCase):
         self.assertFalse(simcore.looks_like_backpressure("custom program error: 0x4003"))
 
 
+class RedactionTest(unittest.TestCase):
+    """The status artifact says secrets never enter it. These are the teeth."""
+
+    def test_provider_keys_never_survive_redaction(self) -> None:
+        cases = {
+            # Helius and friends: the key is a query parameter.
+            "https://devnet.helius-rpc.com/?api-key=abc123SECRET":
+                "https://devnet.helius-rpc.com/?<redacted>",
+            "https://rpc.example.com/?apiKey=abc&other=1":
+                "https://rpc.example.com/?<redacted>",
+            # Some providers put the credential in the path instead.
+            "https://x.quiknode.pro/abc123SECRET/":
+                "https://x.quiknode.pro/<redacted>",
+            # Nothing to hide stays legible.
+            "https://api.devnet.solana.com": "https://api.devnet.solana.com",
+            "http://127.0.0.1:8899/": "http://127.0.0.1:8899/",
+        }
+        for raw, expected in cases.items():
+            self.assertEqual(simcore.redact_endpoint(raw), expected, raw)
+        # Anything unparseable is withheld rather than passed through.
+        self.assertEqual(simcore.redact_endpoint("not a url"), "<redacted>")
+
+    def test_the_status_writer_cannot_be_made_to_hold_a_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "status.json"
+            w = simcore.StatusWriter(
+                path=path,
+                cluster_label="devnet",
+                rpc_url="https://devnet.helius-rpc.com/?api-key=abc123SECRET",
+                mode="sustain",
+            )
+            # Redacted at the field, so no write path can reintroduce it.
+            self.assertNotIn("abc123SECRET", w.rpc_url)
+            w.write(
+                cycles_run=1,
+                cycles_target=None,
+                trades_landed=0,
+                signatures=[],
+                wallets=[],
+                last_reconciliation=None,
+            )
+            self.assertNotIn("abc123SECRET", path.read_text())
+            self.assertEqual(
+                json.loads(path.read_text())["cluster"]["rpc_url"],
+                "https://devnet.helius-rpc.com/?<redacted>",
+            )
+
+
 class StatusWriterTest(unittest.TestCase):
     def test_status_is_complete_and_caps_signatures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

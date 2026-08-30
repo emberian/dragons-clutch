@@ -406,7 +406,9 @@ class Simulator:
         return {
             "cycle": cycle,
             "cluster": self.config["cluster"]["label"],
-            "rpc_url": self.config["cluster"]["rpc_url"],
+            # The plan is hashed into the cycle journal and read back on
+            # resume, so it records the endpoint's identity, never its key.
+            "rpc_url": simcore.redact_endpoint(self.config["cluster"]["rpc_url"]),
             "market": self.config.get("market_address"),
             "mode": "execute" if self.execute else "preflight",
             "trade_mode": self.config["cluster"]["label"],
