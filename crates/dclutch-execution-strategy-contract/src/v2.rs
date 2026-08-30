@@ -543,19 +543,17 @@ impl ExecutionStrategyCertificateV2 {
         require_zero(bytes, CERTIFICATE_RESERVED_OFFSET_V2, 4)?;
         let identity = slice(bytes, CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2, 32)?;
         let artifact = if profile == EXECUTION_STRATEGY_SEMANTIC_ARTIFACT_PROFILE_V2 {
-            CertificateArtifactBindingV2::Semantic(
-                content(bytes, CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2)?,
-            )
+            CertificateArtifactBindingV2::Semantic(content(
+                bytes,
+                CERTIFICATE_ARTIFACT_RELEASE_OFFSET_V2,
+            )?)
         } else {
             CertificateArtifactBindingV2::Release(
                 ArtifactReleaseIdV1::decode(identity).map_err(|_| Error::ZeroIdentity)?,
             )
         };
         Ok(Self {
-            account_profile_program: content(
-                bytes,
-                CERTIFICATE_ACCOUNT_PROFILE_PROGRAM_OFFSET_V2,
-            )?,
+            account_profile_program: content(bytes, CERTIFICATE_ACCOUNT_PROFILE_PROGRAM_OFFSET_V2)?,
             request_profile_schema: content(bytes, CERTIFICATE_REQUEST_PROFILE_SCHEMA_OFFSET_V2)?,
             request_profile_program: content(bytes, CERTIFICATE_REQUEST_PROFILE_PROGRAM_OFFSET_V2)?,
             transition_schema: content(bytes, CERTIFICATE_TRANSITION_SCHEMA_OFFSET_V2)?,
@@ -564,10 +562,7 @@ impl ExecutionStrategyCertificateV2 {
             artifact,
             compiler_release: content(bytes, CERTIFICATE_COMPILER_RELEASE_OFFSET_V2)?,
             toolchain: content(bytes, CERTIFICATE_TOOLCHAIN_OFFSET_V2)?,
-            translation_validation: content(
-                bytes,
-                CERTIFICATE_TRANSLATION_VALIDATION_OFFSET_V2,
-            )?,
+            translation_validation: content(bytes, CERTIFICATE_TRANSLATION_VALIDATION_OFFSET_V2)?,
         })
     }
 
@@ -2453,7 +2448,10 @@ mod tests {
             certificate().validate_artifact(artifact(99)),
             Err(Error::ArtifactMismatch)
         );
-        assert_eq!(semantic_certificate().validate_semantic_release(id(14)), Ok(()));
+        assert_eq!(
+            semantic_certificate().validate_semantic_release(id(14)),
+            Ok(())
+        );
         assert_eq!(
             semantic_certificate().validate_semantic_release(id(99)),
             Err(Error::ArtifactMismatch)

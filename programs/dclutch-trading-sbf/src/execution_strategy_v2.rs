@@ -13,12 +13,11 @@ use dclutch_capability_program_contract::v4::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
-    AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2,
+    AdmittedAotAuthorizationV2, AuthenticatedInterpreterArtifactsV2, CertificateArtifactBindingV2,
     EXECUTION_STRATEGY_ADMISSION_BYTES_V2, EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_CERTIFICATE_BYTES_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     EXECUTION_STRATEGY_PROGRAM_BYTES_V2, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
-    CertificateArtifactBindingV2, ExecutionStrategyAdmissionV2, ExecutionStrategyCertificateV2,
-    ExecutionStrategyProgramV2,
+    ExecutionStrategyAdmissionV2, ExecutionStrategyCertificateV2, ExecutionStrategyProgramV2,
     StrategyDispositionV2, validate_admitted_aot_v4,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
