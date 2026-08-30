@@ -1,7 +1,7 @@
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 
-import { SMOKE_MARKETS_V1 } from '@/lib/smokeMarkets';
+import { SMOKE_MARKETS_V1, SMOKE_WALK_BOUNTY_LAMPORTS_V1 } from '@/lib/smokeMarkets';
 import { marketDetailHrefV1 } from '@/lib/marketHref';
 import { docsHrefV1 } from '@/lib/flags';
 
@@ -79,9 +79,9 @@ export default function BountyWalk() {
     <section className="trade-v3-card">
       <header><span>02</span><div><h2>What it pays, what it costs</h2><p>The bounty is the market&apos;s own posted number, not ours — read it off the market before you act.</p></div></header>
       <div className="trade-v3-evidence">
-        <article><span>Bounty (rehearsal)</span><strong>250,000 lamports</strong><small>each market posts its own number before opening</small></article>
+        <article><span>Bounty (rehearsal)</span><strong>{SMOKE_WALK_BOUNTY_LAMPORTS_V1.toLocaleString('en-US')} lamports</strong><small>each market posts its own number before opening</small></article>
         <article><span>Your cost</span><strong>one network fee</strong><small>5,000 lamports in the rehearsal</small></article>
-        <article><span>Transaction size</span><strong>fits a plain packet</strong><small>895 bytes measured; the 1,232 limit is never close</small></article>
+        <article><span>Transaction size</span><strong>fits a plain packet</strong><small>895 bytes with your one signature; the limit is 1,232</small></article>
         <article><span>Signers</span><strong>just you</strong><small>you are also the one who gets paid</small></article>
       </div>
       <p className="direct-status">Two honest warnings. First: the walk pays once — if someone gets there before you, your transaction bounces and you lose only the fee. Second: the walk only works on a market that prepaid its certificate storage. No public devnet bounty exists today; this page will link a compatible market if that changes.</p>

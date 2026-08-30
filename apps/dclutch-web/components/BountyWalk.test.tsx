@@ -24,6 +24,14 @@ describe('the smoke story and bounty pages speak to the reader', () => {
     }
     expect(smoke).toContain('seven protocol programs are deployed at permanent addresses on Solana devnet');
     expect(smoke).toContain('None of these three smoke markets exists yet');
+    // The page used to say everything below had been rehearsed end to end,
+    // which was ahead of the machinery: the graduation market could not even be
+    // founded on a validator until the founding path's declared-vs-published
+    // manifest bug was fixed. Its founding now runs start to finish on a local
+    // test network, and the page claims exactly that and no more -- the
+    // resolution walk beyond Open is not yet executed there.
+    expect(smoke).toContain('the graduation market below now opens there, start to finish');
+    expect(smoke).not.toContain('Everything below has been rehearsed end-to-end');
     expect(smoke).not.toContain('nothing is deployed to any network');
     expect(bounty).toContain('No such market is live on any public network today');
     // The offer used to land nine lines before its correction, with a
@@ -44,7 +52,13 @@ describe('the smoke story and bounty pages speak to the reader', () => {
 
   it('labels measured numbers as measurements, and says what they were measured against', () => {
     expect(bounty).toContain('each market posts its own number before opening');
-    expect(bounty).toContain('895 bytes measured');
+    // 895 is not itself a measurement and no longer says it is. The harness
+    // measures 991 for its two-signature form; the walk's single-signer extent
+    // is that less one signature (64) and one account key (32). The page now
+    // states the number and whose signature it assumes, and leaves "measured"
+    // for the things that were.
+    expect(bounty).toContain('895 bytes with your one signature');
+    expect(bounty).not.toContain('895 bytes measured');
     // The page used to rest its numbers on one past end-to-end run on a local
     // network. That run is real but its campaign is parked, so a reader cannot
     // reproduce it — while the stronger claim went unsaid. The walk executes
