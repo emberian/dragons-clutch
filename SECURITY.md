@@ -60,32 +60,10 @@ demonstration.
 
 ## Reporting a vulnerability
 
-<!-- EMBER-CONFIRMS: the contact line below is the one thing in this file that
-     needs a human decision, and it must not be published until it is made.
-     The candidates, with the reasoning already done:
+<!-- contact ruled by ember 2026-08-30: security@ember.software
+     (candidate reasoning preserved in git history at 5a693ab3) -->
 
-       (a) ember@lunar.town — the identity that authors every commit in this
-           repository. It is ALREADY public to anyone who clones a public
-           repo and runs `git log`, so naming it here discloses nothing new.
-           Costs nothing to stand up, because it already exists.
-       (b) GitHub Private Vulnerability Reporting on emberian/dragons-clutch
-           — a real private channel needing no new infrastructure, but it is
-           OFF by default and must be enabled in the repository's Security
-           settings first. Do not publish this route until that switch is on;
-           an advertised channel that 404s is worse than none.
-       (c) A dedicated security@ mailbox — the nicest answer and the only one
-           requiring actual work (MX records on a domain that currently
-           serves only a Pages CNAME).
-
-     `security@dregg.pro` was the suggested default and is NOT used here: no
-     first-party email address exists anywhere in either repository, so there
-     is no mailbox convention to extend, and only `clutch.dregg.pro` is
-     evidenced — as a Pages CNAME, which proves DNS control and says nothing
-     about mail. Publishing it would have repeated the `portal.dregg.studio`
-     mistake this project has already documented against itself, on the one
-     page where a bounced report is worst.  -->
-
-**Email `EMBER-CONFIRMS-CONTACT-ADDRESS`.**
+**Email `security@ember.software`.**
 
 Please include:
 
