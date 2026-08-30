@@ -107,6 +107,31 @@ named Custody delivery leg. Board: /private/tmp/dclutch-wave2-board.md.
   invariant, revisit only if publication/founding ever decouple.
 
 ## Done-log
+- *** THE LOAD SIMULATOR IS RUNNING ON LIVE DEVNET *** (TRADE-2, --sustain,
+  9+ cycles, censuses chaining L1-L6, zero divergences). status.json at
+  /private/tmp/dclutch-sim-devnet-market18/; stop with
+  `kill $(cat /private/tmp/dclutch-sim-devnet-market18/sustain.pid)` (SIGTERM
+  seals). /pulse reads that schema — the site's heartbeat is beating.
+- TRADE-2: SEVEN OF THE FIRST TRADE'S EIGHT STAGES FINALIZED on devnet
+  (token-setup, lookup-create, 3 extends, lookup-freeze — the ALT is
+  authority-less forever — lookup-activation, capability-seal 789,336 CU).
+  Four walls fixed at their authors, incl. the inherited one being sharper
+  than reported (expected_payer_lamports omitted the TRANSACTION FEE, false
+  on every run — measured short by exactly 5,000) and a driver that refused
+  its own successful transactions (devnet OMITS returnData; the parser
+  accepted explicit null but refused absence). SECRET LEAK CAUGHT BEFORE IT
+  FIRED: status.json was writing the Helius key into the exact file /pulse
+  renders — redacted, and verified zero occurrences across both repos'
+  entire git history and the live site.
+- WALL #26, the eighth stage: hot_v3.rs:3729 unwraps
+  continuation_child_programs, which :3235-3260 sets to None for every
+  top-level submission — so a Direct trade sent straight to Trading, the way
+  EVERY public caller must send it, refuses 0x4001 deterministically.
+  RULED (A): fix the bug, not route around it — the strand is already
+  sanctioned by ember's Q1 ruling; option B would make the public path a
+  permanent workaround every integrator inherits; the never-written
+  top-level ProgramTest is the finding, not a cost; and cohort-7 (carrying
+  all accumulated cohort-critical work) strands market18 anyway.
 - *** THE FIRST CAPABILITY ROOT ANY dCLUTCH MARKET HAS EVER HAD IS LIVE ***
   (TRADE, devnet): root 2oJ7DVuv..., activation sig 58kXzVY4..., finalized
   slot 490461961, 453,606 CU — first execution of Core capability -> Trading
