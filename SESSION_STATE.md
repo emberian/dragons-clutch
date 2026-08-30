@@ -43,19 +43,34 @@ times from identical seeds.
   bump as a Rust change — it is Lean-generated
   (`EmitMarketCoreRust.lean`), so that path is a formal-spec change + regen +
   account migration, its own lane.
-- **THE CARRY WAVE (next on critical path, not yet spawned)**: doc §1+§2+§4
-  as ONE worktree wave, Claims before Custody, digest-width test included,
-  branched from main only **after BUMPREC lands** (same child entrypoints —
-  do not run both in flight). Landing wave + BUMPREC ⇒ worst ≈1,338,000 +
-  15,000 tolerance ≈ **1,353,000 — bar met.** Then TRADE-2 cuts cohort-7 →
-  market19 → activate → admit → **the first trade, with whatever keys the
-  participants actually have.** Gate ratchet stays OFF until the key-varying
-  searches are gone (a measured worst is a sample, not a bound, while the
-  rebuild lottery is live).
-- **BUMPREC** (agent `a2bb9fa1946bb506f`) — the 18 *constant* record searches
-  (~27,000 CU of mean) via `authenticate_record_at`: authenticate a record at a
-  supplied address instead of deriving one. Fenced out of `hot_v3.rs`. Still
-  running.
+- **BUMPREC — DONE.** Census landed (`8a72b259`/`6367fae2`/`ff65b882`,
+  evidence only): the "18" constant searches are 14 over six record pairs,
+  **28,500 CU**, of which the **realm pair alone is 18,000** (paid twice,
+  once per Custody CPI) and two pairs are worth zero (already at 255).
+  Rebuild-invariant, control fired. A throwaway realm conversion took the
+  margin gate from refusing at seed 13 to **32/32 with 21,230 CU margin**
+  despite a 9,000-CU-worse cache draw. But every carrier is full (capability
+  root 4/4, selection 2/2, MarketRoot off-route; wire can't help — only the
+  founding ever knew the bump): **the realm fix is a CoreState widening**,
+  i.e. the formal layer.
+- **THE PLAN, CONSOLIDATED (supersedes doc §1's 122-site wire carries)**:
+  CUCUT §3 and BUMPREC independently point at the same lever, so CoreState
+  stores BOTH the market bump (kills all three §1 searches, no wire change)
+  and the realm bumps (−18,000 constant). Two lanes, chartered ~14:40:
+  **CORESTATE** — Lean spec + proofs + regeneration + zero-means-search
+  backcompat + founding writes the bumps; reader conversions (the CU
+  harvest) held as phase B until CARRY merges. Announced on the board per
+  BUMPREC's open authorization; cut is held anyway.
+  **CARRY** — doc §2 caller-authority suffix (outside the hashed request
+  prefix) + the digest-width pin test + §4 own-account bumps; worktree,
+  Claims before Custody. Owns `hot_v3.rs`.
+  Landing both collapses the band ⇒ worst ≈ low-1.34M, **bar met**; the
+  gate ratchet turns on only then (a measured worst is a sample, not a
+  bound, while varying searches remain). Then TRADE-2 cuts cohort-7 →
+  market19 → activate → admit → **the first trade with whatever keys the
+  participants actually have.** At the cut: measure with the
+  `direct_hot_top_level` margin gate, NOT `tools/gauntlet/hot-cu` — HEAPRED
+  proved that tier drives the continuation route, +35,127 CU high.
 
 ## THE REBUILD LOTTERY — ROUTED TO TRADE-2 ~17:05, CUT IS HELD
 
@@ -86,7 +101,7 @@ land and the measured worst clears ~1,353,000.
 | CUCUT | `ada700a9591280bf4` | DONE — design doc landed, carries deferred to the carry wave |
 | BUMPREC | `a2bb9fa1946bb506f` | the 18 constant record searches |
 | census | `a465c2a63f6f1d864` | record-PDA search census against the margin gate |
-| HEAPRED | `a41fbc198c5a2207c` | diagnose red `hot_heap_frame_is_inert` + fix-or-retire evidence for the Registry outer composition (ruling stays ember's) |
+| HEAPRED | `a41fbc198c5a2207c` | DONE — `8bf6ad40`, evidence in `docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md`. The heap test is red because the continuation route itself no longer fits (19/32 seeds fail; heap is innocent). The Registry outer buys NOTHING top-level lacks (same roles, same children; its one difference is a relaxation) and nothing outside the test harness can even construct it. Matched-pair control: +35,127 CU vs top-level, the same integer on all 13 comparable seeds — route plumbing, not a draw. **`tools/gauntlet/hot-cu` drives the continuation, so every "Hot CU" figure that tier ever printed is 35,127 high.** Also: `8ee544e4`'s "continuation unchanged" was false by 517 CU (heap declaration keys on forwarded instruction data). Changed zero non-comment lines. |
 | CI-2 | `a8abf0f1f1f6b761a` | DONE — `tools/ci/run.sh` tiered runner (6d599ef8) + `.github/workflows/rust.yml` (2c4a0473, committed NOT pushed); five gates proven red-and-prerequisite-missing with distinct exit codes; `emission_guard.py` exit-code defect fixed. Its margin-gate red at `8d3ca1f9` (worst seed 8 CU under budget, next seed over) independently confirms the CU wall. Its bisect handoff to CUCUT is deliberately DROPPED: while the rebuild lottery is live, bisecting per-commit CU bisects a hash draw, not a regression — the fix is the carry wave. Queued sizes it named: 4 more program-test suites in CI (~afternoon, mechanical — resume CI-2 when a build lane frees); pre-commit hook left OFF (would override ember's global `core.hooksPath`) — ember's call. |
 | MEMBRANE | `a5e9b10376d59fbf3` | DONE — Structured crossed the membrane end to end (compiler `DCSTPB01`, kind-pinning authenticator, seam module, founded market `HEanNZ1e…o2Xg` verified from chain, 491/491). Rational verified (SEL-SEAM had built it). General hot commit half NOT built: **wall #22 is family-wide** (activation demands V1-schema descriptor at `outer.rs` `authenticate…`, every family's ProgramSet stamps V4) — sound refusal, bricking risk. Findings: founding "flake" is ZFS (`/tank` kills it, ext4 clean); open-family fixture lifecycle policy parks its only plan at `action: u32::MAX` (dead plan that reads as a design — queued fix). Left a validator on hbox `127.0.0.1:29300` holding the founded market + verifier at `tools/local-validator/verify-selected-capability-binding.py`. |
 | SERIESFIX | `abee54822c4a029c5` | DONE — `3f2663b2`, 8/8 green. The stale half was the caller-supplied register bank (5→7 scalars, 1→6 identities per `8f579821`), not the artifact bytes; no assertion changed; the bank is now sized from the exported count constants so the next widening is a compile error. Deliberately did NOT make `route_commitments` author the projected slots (single-author rule; fail-closed to `Artifact`). |
@@ -108,11 +123,12 @@ Four ADRs written today, each with evidence, options and a recommendation, in
 - **0017** the reentrancy answer was never ratified; its enforcement is
   subtractive.
 
-Also open and unowned: **what does the Registry outer composition buy?** The
-continuation route is over the ceiling on 3/12 seeds, ~32,900 CU *more*
-expensive than top-level, and `hot_heap_frame_is_inert` is red on clean main.
-Answer that before deciding fix-or-retire; "which route is production" is a
-live lever, not an inheritance.
+- **Continuation route fix-or-retire** — evidence is now complete
+  (`docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md`, HEAPRED,
+  four options with sizes). Recommendation on the table: rule top-level the
+  production route, demote the continuation to harness-only, re-bar the heap
+  test on the +35,127 delta (one lane-hour), don't charter the compute fix,
+  hold full retirement until ~20 program-tests are ported off it.
 
 ## OPERATIONAL RULES THAT COST REAL DAMAGE TODAY
 
