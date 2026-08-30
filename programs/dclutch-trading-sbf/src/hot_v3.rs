@@ -10352,15 +10352,51 @@ fn authenticate_market(
         || state.identity.registry_program.to_bytes() != frame.registry.key.to_bytes()
         || state.identity.generation != envelope.generation()
         || envelope.market() != frame.market.key.to_bytes()
-        || Pubkey::find_program_address(
-            &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
-            frame.core_program.key,
-        )
-        .0 != *frame.market.key
+        || market_core_state_address_v2(state, frame.core_program.key)? != *frame.market.key
     {
         return Err(TradingSbfError::Content.into());
     }
     Ok(state)
+}
+
+/// Reproduce a Market's own Core state address, or search for it.
+///
+/// Nine seeds, all drawn from the Market identity, so every one of them moves
+/// with the key draw -- and this same address is derived once here, once in
+/// Claims and once in Custody on every Direct transaction. The founding is the
+/// only party that ever derives it from seeds it has already authenticated, and
+/// since `CoreState` carries its bump, the three readers reproduce it instead.
+///
+/// The derivation IS the check, exactly as `borrow_finalized_record_at` argues:
+/// a wrong bump reproduces a different address, which the caller compares
+/// against the account it was handed and refuses. For a non-canonical bump to
+/// pass there would have to EXIST a Core-owned account, at the non-canonical
+/// address, decoding to a valid state for this identity -- and Core creates
+/// market states only at the canonical bump. Canonicality is enforced where the
+/// account is made, not where it is read.
+///
+/// A state with no recorded bump is one the founding wrote before the tail
+/// existed, and it searches. See `StateBumpsV1`.
+fn market_core_state_address_v2(
+    state: CoreState,
+    core_program: &Pubkey,
+) -> Result<Pubkey, ProgramError> {
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
+    let base = seeds.as_slices();
+    match state.bumps.market {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    base[0], base[1], base[2], base[3], base[4], base[5], base[6], base[7],
+                    base[8], &bump_seed,
+                ],
+                core_program,
+            )
+            .map_err(|_| TradingSbfError::Content.into())
+        }
+        None => Ok(Pubkey::find_program_address(&base, core_program).0),
+    }
 }
 
 /// Ask the Registry, live, whether `role` is still the deployment it was.

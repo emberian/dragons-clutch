@@ -446,15 +446,68 @@ fn authenticate_market(
         || state.identity.selected_release_set.to_bytes() != request.release_set
         || state.identity.registry_program.to_bytes() != registry.key.to_bytes()
         || state.identity.generation != request.semantic.generation
-        || Pubkey::find_program_address(
-            &MarketCoreStateSeedsV2::new(state.identity).as_slices(),
-            &core_program,
-        )
-        .0 != *market.key
+        || market_core_state_address_v2(state, &core_program)? != *market.key
     {
         return Err(CustodySbfError::Release.into());
     }
     Ok(AuthenticatedMarketV1 { state, cache_bump })
+}
+
+/// Reproduce one Realm record address at a recorded bump, or search for it.
+///
+/// The seeds are `[domain, REALM_SCHEMA_RELEASE_ID_V1, realm_digest]` under the
+/// Registry. Only the digest varies, and the founding derived it from the very
+/// bytes this reader just hashed.
+fn registry_record_address_v1(
+    domain: &[u8],
+    realm_digest: &[u8; 32],
+    registry: &Pubkey,
+    recorded: Option<u8>,
+) -> Result<Pubkey, ProgramError> {
+    let base: [&[u8]; 3] = [domain, &REALM_SCHEMA_RELEASE_ID_V1, realm_digest];
+    match recorded {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(&[base[0], base[1], base[2], &bump_seed], registry)
+                .map_err(|_| CustodySbfError::Realm.into())
+        }
+        None => Ok(Pubkey::find_program_address(&base, registry).0),
+    }
+}
+
+/// Reproduce a Market's own Core state address, or search for it.
+///
+/// Nine seeds, all drawn from the Market identity, so all nine move with the
+/// key draw -- and Trading, Claims and this program each derive the same
+/// address on the same transaction. `CoreState` carries the bump the founding
+/// derived, so the readers reproduce it.
+///
+/// The derivation IS the check: a wrong bump reproduces a different address,
+/// which is compared against the account this frame was handed, and refuses.
+/// Canonicality is enforced where the account is made -- Core creates market
+/// states only at the canonical bump -- and not where it is read. A state
+/// written before the bump tail existed carries none and is searched for
+/// exactly as it used to be. See `StateBumpsV1`.
+fn market_core_state_address_v2(
+    state: CoreState,
+    core_program: &Pubkey,
+) -> Result<Pubkey, ProgramError> {
+    let seeds = MarketCoreStateSeedsV2::new(state.identity);
+    let base = seeds.as_slices();
+    match state.bumps.market {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    base[0], base[1], base[2], base[3], base[4], base[5], base[6], base[7],
+                    base[8], &bump_seed,
+                ],
+                core_program,
+            )
+            .map_err(|_| CustodySbfError::Release.into())
+        }
+        None => Ok(Pubkey::find_program_address(&base, core_program).0),
+    }
 }
 
 #[inline(never)]
@@ -639,24 +692,27 @@ fn authenticate_realm(
         .try_borrow_data()
         .map_err(|_| CustodySbfError::Realm)?;
     let realm_digest = hash(&realm_data).to_bytes();
-    let expected_realm = Pubkey::find_program_address(
-        &[
-            RAW_RECORD_PDA_SEED_V1,
-            &REALM_SCHEMA_RELEASE_ID_V1,
-            &realm_digest,
-        ],
+    // THE TWO MOST EXPENSIVE SEARCHES ON THE DIRECT ROUTE, and this function
+    // runs once per Custody invocation -- twice per canonical trade, so four
+    // searches. The founding authenticated this exact record pair and recorded
+    // both bumps in the Market state, so they are reproduced here.
+    //
+    // The derivation IS the check: a wrong bump reproduces a different address,
+    // which `require_realm_authority` compares against the account this frame
+    // was handed, and refuses. Bumps a founding never recorded are `None` and
+    // search, which is what every market opened before the tail existed does.
+    let expected_realm = registry_record_address_v1(
+        RAW_RECORD_PDA_SEED_V1,
+        &realm_digest,
         registry.key,
-    )
-    .0;
-    let expected_staging = Pubkey::find_program_address(
-        &[
-            STAGING_CURSOR_PDA_SEED_V1,
-            &REALM_SCHEMA_RELEASE_ID_V1,
-            &realm_digest,
-        ],
+        market.bumps.realm_raw_record,
+    )?;
+    let expected_staging = registry_record_address_v1(
+        STAGING_CURSOR_PDA_SEED_V1,
+        &realm_digest,
         registry.key,
-    )
-    .0;
+        market.bumps.realm_staging_record,
+    )?;
     require_realm_authority(RealmAuthorityObservation {
         registry: *registry.key,
         persisted_registry: Pubkey::new_from_array(market.identity.registry_program.to_bytes()),

@@ -593,11 +593,28 @@ fn authenticate_product_and_core(
     }
     let core =
         CoreState::decode(&core_data).map_err(|_| SparseNativeTransferSbfErrorV1::Product)?;
-    let expected = Pubkey::find_program_address(
-        &MarketCoreStateSeedsV2::new(core.identity).as_slices(),
-        accounts.core_program.key,
-    )
-    .0;
+    // Reproduced from the bump the founding recorded in the state itself, not
+    // searched for. Nine seeds, all drawn from the Market identity, so all nine
+    // move with the key draw -- and Trading and Custody derive this same address
+    // on the same transaction. A wrong bump reproduces a different address and
+    // refuses just below; a state written before the bump tail existed carries
+    // none and is searched for exactly as before. See `StateBumpsV1`.
+    let seeds = MarketCoreStateSeedsV2::new(core.identity);
+    let base = seeds.as_slices();
+    let expected = match core.bumps.market {
+        Some(bump) => {
+            let bump_seed = [bump];
+            Pubkey::create_program_address(
+                &[
+                    base[0], base[1], base[2], base[3], base[4], base[5], base[6], base[7],
+                    base[8], &bump_seed,
+                ],
+                accounts.core_program.key,
+            )
+            .map_err(|_| SparseNativeTransferSbfErrorV1::Product)?
+        }
+        None => Pubkey::find_program_address(&base, accounts.core_program.key).0,
+    };
     if expected != *accounts.core_market.key
         || core.phase != CorePhase::Open
         || core.identity.market_id.to_bytes() != input.market
