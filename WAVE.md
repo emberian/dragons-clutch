@@ -5,6 +5,10 @@ costs orientation: read it first, then `AGENTS.md`, `PROJECT_METHOD.md`,
 `docs/OMISSION_INDEX.md`. It records the current cycle, active lanes, and
 gates. It is not release evidence.
 
+`docs/INTENT.md` is the other half of that orientation and reads before all of
+them: this file is what execution has found, INTENT is what the project is
+*for*, in ember's own recoverable words. It is a DRAFT FOR EMBER'S EDIT.
+
 ## Standing decisions (2026-08-26, with ember)
 
 - Local-first for several cycles. **Devnet deploy-and-recycle is deferred**

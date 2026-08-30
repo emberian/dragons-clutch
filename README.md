@@ -130,6 +130,9 @@ harnesses.
 - [`apps/dclutch-web`](apps/dclutch-web) — the web app.
 - [`docs/decisions/`](docs/decisions) — why the architecture is the way it
   is.
+- [`docs/INTENT.md`](docs/INTENT.md) — why the project is the way it is: what
+  it is for, the design values and the boundaries, in the founder's own words
+  with the provenance of each. A draft awaiting his edit.
 
 ## The artifacts, and where they come from
 
