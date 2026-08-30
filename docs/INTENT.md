@@ -117,6 +117,14 @@ compact original thesis, written by the user"*:
 > interchangeable verified venues, and settles from proof-carrying evidence
 > without an operator."* **[T]** — `c37f7ac1`, 2026-08-18T23:17Z (ledger M-3)
 
+**Authorship caveat, because it matters here.** This sentence, and the
+twelve-item ambition ceiling it came with, reach the transcript as *user* text —
+ember pasted the answer back into the session with approval (ledger M-3). Gen-1
+therefore recorded it as *"written by the user"*; the ledger records it as
+endorsed rather than composed. Both readings are consistent with the record and
+this file cannot settle which is right. Treat it as **ember's adopted thesis**,
+not necessarily his sentence. **[REC — ember can settle this in one word.]**
+
 The project never adopted it verbatim. A gen-1 audit measured against it and
 returned *"the current tree implements much of the middle, but not the
 compiler-shaped entrance or a real public exit"* — a verdict the ledger records
@@ -197,7 +205,8 @@ value ember stated twice, in his own voice, with force:
 
 > *"Ok, but, let's definitely actually do that then, because I want to be
 > exploring that. … **it was vital to me to be able to do these properly shaped
-> dynamics**.."* **[T]** — `01a00a3d`, 2026-08-19T03:06Z (ledger M-4)
+> dynamics**.."* **[T]** — `01a00a3d`, 2026-08-19T03:06Z–03:09Z (ledger M-4;
+> the ellipsis elides a note about using `cv` to recover pre-compaction context)
 
 Gen-3's answer is `O-013` (certified nonnegative integer partition-of-unity
 bases in place of native splines). The ledger's finding is that the
@@ -381,10 +390,13 @@ in no repository file:
 > economies is one of the highest national security concerns."* **[T]** —
 > ledger M-5
 
-And the mechanism he wanted for it: a header on the filings themselves saying
-the document is *"written by AI with a human facilitator and represents the
-positions of the AI."* **[T]** — ~2026-08-20 (archaeology B.4 item 3). Recorded
-nowhere else. Docket 1388 is still unfiled, so the stance could still ride it.
+And the mechanism he wanted for it: a header on the filings themselves.
+
+> *"This document is written by AI with a human facilitator and represents the
+> positions of the AI"* **[T]** — ~2026-08-20 (archaeology B.4 item 3)
+
+Recorded nowhere else. Docket 1388 is still unfiled, so the stance could still
+ride it.
 
 This is not a protocol design value. It is here because it is the clearest
 statement in the corpus of what ember thinks the collaboration *is*, and
