@@ -269,7 +269,7 @@ struct DirectContextHintsV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DirectTradePublicManifestV1 {
+pub(crate) struct DirectTradePublicManifestV1 {
     schema: String,
     cluster: String,
     genesis_hash: String,
@@ -281,7 +281,7 @@ struct DirectTradePublicManifestV1 {
     execution_price: u64,
     fee_basis_points: u16,
     fee_recipient: String,
-    checked_execution_release_set_base64: String,
+    pub(crate) checked_execution_release_set_base64: String,
     seller: SignedIntentManifestV1,
     buyer: SignedIntentManifestV1,
     route: DirectRouteCoordinatesV1,
@@ -357,7 +357,7 @@ enum DirectTradeJournalPhaseV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct DirectTradeJournalV1 {
+pub(crate) struct DirectTradeJournalV1 {
     schema: String,
     public_manifest_sha256: String,
     private_session_sha256: String,
@@ -545,12 +545,12 @@ struct ArgumentsV1 {
     execute: bool,
 }
 
-struct ValidatedManifestV1 {
-    public: DirectTradePublicManifestV1,
+pub(crate) struct ValidatedManifestV1 {
+    pub(crate) public: DirectTradePublicManifestV1,
     public_sha256: String,
     private: DirectTradePrivateSessionV1,
     private_sha256: String,
-    plan: SuccessorPlan,
+    pub(crate) plan: SuccessorPlan,
     seller: SignedDirectIntentV3,
     buyer: SignedDirectIntentV3,
 }
@@ -587,13 +587,13 @@ pub(crate) struct AuthenticatedDevnetDirectSessionSourceV1 {
     pub(crate) checked_binaries: BTreeMap<String, ProgramPin>,
 }
 
-struct DirectTradePlanningV1 {
-    route: DirectInlineAuthenticatedRouteV3,
-    provision: DirectInlineLookupTableProvisionV3,
+pub(crate) struct DirectTradePlanningV1 {
+    pub(crate) route: DirectInlineAuthenticatedRouteV3,
+    pub(crate) provision: DirectInlineLookupTableProvisionV3,
     seal: DirectInlineCapabilitySealPlanV3,
     hot: DirectInlineHotFinalizationPlanV3,
     hot_prestates: Vec<DirectTradeExpectedPoststateV1>,
-    lookup_table: Option<ObservedAccount>,
+    pub(crate) lookup_table: Option<ObservedAccount>,
 }
 
 struct DirectTradeSetupPlanningV1 {
@@ -816,7 +816,7 @@ fn parse_arguments(
     })
 }
 
-fn load_and_validate_manifests(
+pub(crate) fn load_and_validate_manifests(
     session_path: &Path,
     expected_cluster: ExpectedClusterV1,
 ) -> Result<ValidatedManifestV1> {
@@ -1634,7 +1634,7 @@ fn direct_token_setup_observed_v1(
     }
 }
 
-fn collect_direct_trade_planning_v1(
+pub(crate) fn collect_direct_trade_planning_v1(
     rpc: &mut Rpc,
     validated: &ValidatedManifestV1,
     journal_root: Option<&DirectTradeJournalV1>,
@@ -5998,7 +5998,7 @@ fn next_action_v1(
     })
 }
 
-fn authenticate_frozen_lookup_v1(planning: &DirectTradePlanningV1) -> Result<()> {
+pub(crate) fn authenticate_frozen_lookup_v1(planning: &DirectTradePlanningV1) -> Result<()> {
     let table = planning
         .lookup_table
         .as_ref()
@@ -6286,7 +6286,7 @@ fn journal_entries_v1(validated: &ValidatedManifestV1) -> Result<Vec<std::fs::Di
 /// Load only the immutable creation root needed to rederive a request-specific
 /// table on a later finalized observation. Full journal authentication occurs
 /// again after the named route and exact table address have been rederived.
-fn journal_root_v1(validated: &ValidatedManifestV1) -> Result<Option<DirectTradeJournalV1>> {
+pub(crate) fn journal_root_v1(validated: &ValidatedManifestV1) -> Result<Option<DirectTradeJournalV1>> {
     let entries = journal_entries_v1(validated)?;
     let Some(first) = entries.first() else {
         return Ok(None);
