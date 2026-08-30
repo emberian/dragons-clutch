@@ -22,6 +22,8 @@ import {
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
 import CellStrip from '@/components/charts/CellStrip';
+import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
+import { SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
 import AggregateRetirementStatus from '@/components/AggregateRetirementStatus';
 import JoinPanel from '@/components/JoinPanel';
 import MarketTradePanel from '@/components/MarketTradePanel';
@@ -360,6 +362,15 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             </ol>
             {editorial !== null && editorial.outcomes !== null
               && <p className="market-editorial-note">The outcome names beside the claim indices are this site&apos;s editorial; the indices, atoms, and every figure above are the chain&apos;s.</p>}
+            <h3 className="detail-subhead">The issuance split</h3>
+            {/* FE-CHART mount: the same supply vector as the cell strip and
+                the ordered list, re-expressed as shares of the whole. */}
+            <SupplyShareStrip
+              supplies={decoded.liability.supplyAtoms}
+              outcomes={editorial?.outcomes ?? null}
+              caption={SUPPLY_SHARE_MEANING_V1}
+              emptyReason="No claims have been issued on this market yet, so there is no split to draw."
+            />
             <h3 className="detail-subhead">Hoard</h3>
             {decoded.hoard.status === 'derived'
               ? <dl className="detail-facts">

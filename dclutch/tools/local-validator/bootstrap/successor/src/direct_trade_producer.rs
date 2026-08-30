@@ -1852,16 +1852,22 @@ fn prepare_public_facts_v1(
         ));
     }
     let seller_position = campaign_address_v1(campaign, "founder_position")?;
-    // Founding-only devnet campaigns seal the Direct capability root as a
-    // checkpoint scalar rather than an accounts row; either way the address is
-    // routing only, re-read and re-authenticated from the finalized snapshot.
-    let root = match campaign_account_v1(campaign, "direct_capability_root") {
-        Ok(row) => pubkey(&row.address)?,
-        Err(missing) => match campaign.checkpoint_direct_capability_root.as_deref() {
-            Some(address) => pubkey(address)?,
-            None => return Err(missing),
-        },
-    };
+    // The EXECUTION capability root. This is DERIVED, never read from the
+    // campaign: the founding's recorded `direct_capability_root` is the
+    // founding-permit namespace address (its selection config is the
+    // generic-founding preimage digest, decision 0004), where no account can
+    // ever exist - both the activation and hot paths force
+    // `selection.config == entry.config_id`. The execution root's header is
+    // rebuilt here from the sealed manifest body and the live Open Market's
+    // own identity, exactly as `authenticate_header` on chain re-derives it.
+    let root = derived_direct_execution_root_v1(
+        &mut *rpc,
+        plan,
+        market_input,
+        campaign,
+        market,
+        campaign.direct_selected_manifest_entry_index,
+    )?;
     let mint = campaign_address_v1(campaign, "collateral_mint")?;
     if participant.mint != mint {
         return Err(refusal("Direct participant collateral Mint changed"));
@@ -2810,6 +2816,67 @@ fn campaign_address_v1(
     label: &str,
 ) -> Result<Pubkey> {
     pubkey(&campaign_account_v1(campaign, label)?.address)
+}
+
+/// Derive the Direct EXECUTION capability root for one Open Market.
+///
+/// The seeds are the semantic identities the on-chain `authenticate_header`
+/// re-derives from a live root's stored header: release set, market, the
+/// Open generation, and the manifest-selected entry's kind/release/config.
+/// Every input is an author's own value - the manifest body resolves through
+/// the sealed record closure, and the generation is the PDA-authenticated
+/// Market identity read at finalized commitment.
+pub(crate) fn derived_direct_execution_root_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    market_input: &MarketRunInput,
+    campaign: &campaign::CampaignTerminalEvidenceV1,
+    market: Pubkey,
+    entry_index: u16,
+) -> Result<Pubkey> {
+    let manifest_pair = resolved_record_v1(plan, market_input, campaign, "capability_manifest_record")?;
+    let manifest_body = decode_hex_v1(&manifest_pair.body_hex, "capability manifest")?;
+    if sha256_hex(&manifest_body) != manifest_pair.content_sha256 {
+        return Err(refusal("capability manifest body digest changed"));
+    }
+    let manifest = dclutch_capability_contract::CapabilityManifestV1::decode(&manifest_body)
+        .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
+    let entry = manifest
+        .entry(entry_index)
+        .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
+    let market_account = rpc.required_account(market, "Core Market state")?;
+    let market_state = CoreState::decode(&market_account.data)
+        .map_err(|error| Error::new(format!("Core Market state: {error:?}")))?;
+    if market_state.identity.capability_manifest.to_bytes() != hash(&manifest_body).to_bytes() {
+        return Err(refusal(
+            "Market identity selects another capability manifest",
+        ));
+    }
+    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+        entry_index,
+        dclutch_core_contract::ContentId::new(hash(&manifest_body).to_bytes())
+            .map_err(|_| refusal("manifest identity is zero"))?,
+        entry.kind_id(),
+        entry.release_id(),
+        entry.config_id(),
+    )
+    .map_err(|error| Error::new(format!("execution selection: {error:?}")))?;
+    let header = dclutch_capability_program_contract::CapabilityRootHeaderV1::new(
+        dclutch_core_contract::ContentId::new(
+            market_state.identity.selected_release_set.to_bytes(),
+        )
+        .map_err(|_| refusal("release set is zero"))?,
+        market.to_bytes(),
+        market_state.identity.generation,
+        selection,
+        dclutch_capability_program_contract::SelectedRecordBumpsV1::default(),
+    )
+    .map_err(|error| Error::new(format!("root header: {error:?}")))?;
+    Ok(Pubkey::find_program_address(
+        &header.seeds().as_slices(),
+        &pubkey(&plan.trading.program_id)?,
+    )
+    .0)
 }
 
 fn expected_buyer_position_v1(aggregate: Pubkey, owner: Pubkey, claims: Pubkey) -> Result<Pubkey> {

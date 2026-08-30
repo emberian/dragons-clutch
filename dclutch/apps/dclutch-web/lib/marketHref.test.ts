@@ -7,6 +7,16 @@ describe('static Market permalinks', () => {
     expect(marketDetailHrefV1(' Ab/Cd+ ')).toBe('/market?address=Ab%2FCd%2B');
   });
 
+  it('links a registry-named market to its own exported page, with the share card', () => {
+    expect(marketDetailHrefV1('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC'))
+      .toBe('/markets/7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC');
+    expect(marketDetailHrefV1('CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM'))
+      .toBe('/markets/CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM');
+    // Unregistered stays on the query route the export serves for any address.
+    expect(marketDetailHrefV1('pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB'))
+      .toBe('/market?address=pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB');
+  });
+
   it('distinguishes prerender, missing, malformed, and ready queries', () => {
     expect(marketAddressQueryV1(null)).toEqual({ kind: 'resolving' });
     expect(marketAddressQueryV1('')).toEqual({ kind: 'missing', reason: 'No Market address was supplied in this link.' });

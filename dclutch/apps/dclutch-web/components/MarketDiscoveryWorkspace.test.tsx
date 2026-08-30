@@ -65,6 +65,7 @@ describe('Market discovery route', () => {
       'There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.',
       'Claim counts come from the accounts that actually hold the claims, in raw units.',
       'No volume · no odds · no probability · no yield',
+      'Issuance shares are issuance, not odds',
     ];
     let remainder = html;
     for (const disclaimer of disclaimers) {
@@ -247,6 +248,47 @@ describe('market names on cards', () => {
     expect(html).toContain('SOL/USD range — the first public market');
     expect(html).toContain('Where does the SOL/USD price finish this market&#x27;s window');
     expect(html).toContain(FLAGSHIP);
+  });
+});
+
+/**
+ * The issuance split on a card: drawn only from a bound liability, labelled
+ * with the SDK's what-this-is-not sentence, and even splits explain
+ * themselves. The card keeps the exact supply row as its value twin.
+ */
+describe('the issuance split on cards', () => {
+  const bound = Object.freeze({
+    status: 'bound' as const,
+    observedSlot: '490435916',
+    aggregateAddress: 'agg11111111111111111111111111111111111111111',
+    claimsProgramId: DEVNET_DEPLOYMENT_V1.programs.claims,
+    claimCount: 4,
+    revision: '4',
+    generation: '2',
+    liabilityBasisId: '33'.repeat(32),
+    custodyContext: '44'.repeat(32),
+    supplyAtoms: Object.freeze(['500000000', '500000000', '500000000', '500000000']),
+    requiredBackingAtoms: '500000000',
+    requiredBackingBasis: 'maximum-claim-supply' as const,
+  });
+
+  it('draws the split with its honesty caption when the liability is bound', () => {
+    const listing = curateMarketListingV1([
+      Object.freeze({ ...card('found111111111111111111111111111111111111111', 'Founding'), liability: bound }),
+    ]);
+    const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
+    expect(html).toContain('25.00%');
+    expect(html).toContain('evenly split: issuance has not leaned toward any outcome yet');
+    expect(html).toContain('not a traded price and not a forecast');
+    // The exact-value twin stays: the raw supply row is still on the card.
+    expect(html).toContain('500000000 · 500000000 · 500000000 · 500000000');
+  });
+
+  it('draws no split at all when the liability was not read', () => {
+    const listing = curateMarketListingV1([card('found111111111111111111111111111111111111111', 'Founding')]);
+    const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
+    expect(html).not.toContain('%');
+    expect(html).not.toContain('viz-figure');
   });
 });
 

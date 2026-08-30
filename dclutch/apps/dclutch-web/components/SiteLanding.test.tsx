@@ -38,4 +38,12 @@ describe('the front door', () => {
     expect(html).toContain('The seven programs are deployed');
     expect(html).toContain('will tell you plainly that there is not one yet');
   });
+
+  it('carries the key art with a described image and an honest caption', () => {
+    expect(html).toContain('/art/dragons-clutch-key-art-v1-1672w.webp');
+    expect(html).toContain('claw cradling a glowing, faceted gem');
+    expect(html).toContain('holds like treasure');
+    // Lazy: the art must never delay the numbers the page exists to show.
+    expect(html).toContain('loading="lazy"');
+  });
 });
