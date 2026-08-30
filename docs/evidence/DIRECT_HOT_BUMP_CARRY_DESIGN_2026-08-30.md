@@ -153,7 +153,34 @@ Compared with §1 this removes MORE variance (four searches against two) and
 touches no wire, but it needs an account-format migration story where §1 needs
 none. They are independent and can be done in either order.
 
-## 5. Recommended order
+## 5. What each step costs, by counting rather than by feel
+
+The reserved bytes exist, so none of this is a wire-LENGTH change. The cost is
+in the construction sites, because both request types are plain structs with
+public fields and no builder, no `Default`, and no `#[non_exhaustive]` — so one
+new field breaks every literal:
+
+| carry | struct-literal sites | files |
+|---|---:|---:|
+| Claims, `SparseNativeTransferInputV1` | 15 | — |
+| Custody, `CustodyRequestV1` | 107 | 48 |
+
+That asymmetry is the scheduling fact. It also argues against doing these one at
+a time: each carry on its own removes ONE varying search of about sixteen, which
+is worth roughly 1,500–3,000 CU and a sixteenth of the band, in exchange for a
+wire change to a shared contract crate that many lanes build from. The
+arithmetic only becomes attractive when the carries land together with §4, and
+the band collapses far enough for the gate to ratchet.
+
+If any of this is taken piecemeal, take Claims first: fifteen sites against a
+hundred and seven, for the same shape of change and the same size of win.
+
+A cheaper-looking option that is NOT available, checked so nobody re-checks it:
+Custody searches the same replay seeds twice, at `lib.rs:629` and `lib.rs:678`,
+but the second is inside `initialize_replay` and the hot Transfer path does not
+reach it. It is not a hot-route duplicate.
+
+## 6. Recommended order
 
 1. §1, the Market bump carry. Two varying searches, no migration, reserved bytes
    already exist for it.
