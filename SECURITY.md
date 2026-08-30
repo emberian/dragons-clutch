@@ -1,4 +1,4 @@
-## Reporting a vulnerability
+## Reporting a vulnerability if you really feel like it
 
 **Email `security@ember.software`.**
 
@@ -15,10 +15,10 @@ Testing the deployed programs is welcome, within the ordinary courtesies of a
 shared public network:
 
 - Use your own keypairs and your own faucet SOL.
-- Do not attempt to reach anyone else's keys, funds, or accounts — on devnet
-  or anywhere else.
 - Do not run sustained load against public RPC endpoints; other developers
   are using them.
 - Prefer a local validator where you can. This repository's harnesses run the
-  full protocol locally: faster, unlimited, and it disturbs nobody.
+  full protocol locally: faster, unlimited, doesn't leak your hack to the Watchers.
 - Publish a writeup for the street cred.
+
+
