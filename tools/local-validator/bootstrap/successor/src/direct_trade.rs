@@ -911,7 +911,13 @@ pub(crate) fn authenticate_devnet_direct_session_source_v1(
     let plan: SuccessorPlan = serde_json::from_slice(plan_bytes)?;
     let market: MarketRunInput = serde_json::from_slice(market_bytes)?;
     crate::market::validate_market_input(&market)?;
-    if market.generation != public.context.generation {
+    // The manifest's generation is the OPEN Market's PDA-authenticated
+    // identity generation: either the input's own value (a compiled input
+    // carrying the live Open generation) or the founding lane's Open
+    // generation for a founding-shaped input, exactly as the producer admits.
+    if public.context.generation != market.generation
+        && public.context.generation != crate::market::open_market_generation_v1(&market)?
+    {
         return Err(refusal(
             "Direct public manifest changed the authenticated Market generation",
         ));
@@ -1355,6 +1361,13 @@ fn collect_direct_trade_setup_planning_v1(
         rent: rent.clone(),
         observed_replay_lamports: planned_replay_lamports,
     })?;
+    // Every prestate this build reads is consumed by the setup, so on resume a
+    // live read would re-derive a different plan than the one already signed:
+    // the two token PDAs hold exact rent once it lands, and the payer and rent
+    // refund have moved by the transaction's own deltas. The journal is
+    // therefore the authority on resume - its receipt for the token balances,
+    // its recorded rows, wound back through the receipt's deltas, for the two
+    // wallets - and the reconstruction reproduces the original plan exactly.
     let (
         planned_seller_lamports,
         planned_fee_lamports,
@@ -1368,7 +1381,7 @@ fn collect_direct_trade_setup_planning_v1(
                 .ok_or_else(|| refusal("Direct token journal omitted its planned receipt"))?;
             let receipt = DirectTokenSetupReceiptV1::decode(&returned.body()?)
                 .map_err(|error| Error::new(format!("Direct token planned receipt: {error:?}")))?;
-            let expected_lamports = |address: Pubkey| -> Result<u64> {
+            let projected_lamports = |address: Pubkey| -> Result<u64> {
                 journal
                     .expected_poststates
                     .iter()
@@ -1389,10 +1402,10 @@ fn collect_direct_trade_setup_planning_v1(
             (
                 receipt.seller_normalization.observed_lamports,
                 receipt.fee_normalization.observed_lamports,
-                expected_lamports(payer)?
+                projected_lamports(payer)?
                     .checked_add(top_up)
                     .ok_or_else(|| refusal("Direct token planned payer balance overflowed"))?,
-                expected_lamports(rent_refund)?
+                projected_lamports(rent_refund)?
                     .checked_sub(refunded)
                     .ok_or_else(|| refusal("Direct token planned refund balance underflowed"))?,
             )
@@ -1501,14 +1514,6 @@ fn collect_direct_trade_setup_planning_v1(
                 .as_ref()
                 .ok_or_else(|| refusal("Direct finalized token setup omitted receipt"))?;
             let returned_bytes = returned.body()?;
-            let expected_lamports = |address: Pubkey| -> Result<u64> {
-                journal
-                    .expected_poststates
-                    .iter()
-                    .find(|state| state.address == address.to_string())
-                    .map(|state| state.lamports)
-                    .ok_or_else(|| refusal("Direct token setup journal omitted account"))
-            };
             verify_direct_trade_token_setup_poststate_v1(
                 &token_plan,
                 DirectTradeTokenSetupPoststateV1 {
@@ -1516,8 +1521,6 @@ fn collect_direct_trade_setup_planning_v1(
                     return_data: &returned_bytes,
                     seller_token: direct_token_setup_observed_v1(&seller_token_observed),
                     fee_token: direct_token_setup_observed_v1(&fee_token_observed),
-                    payer_lamports: expected_lamports(payer)?,
-                    refund_lamports: expected_lamports(rent_refund)?,
                     market_bytes: &market_account.data,
                     root_bytes: &root_account.data,
                     realm_bytes: &realm_account.data,
@@ -2369,17 +2372,24 @@ fn direct_setup_expected_poststates_v1(
                     false,
                     &planning.tokens.expected_fee_bytes,
                 ),
+                // The payer and the rent refund are shared accounts, so these
+                // two rows carry the instruction's PROJECTED effect on them -
+                // fee-exclusive, and true of no later chain read. They are the
+                // record of what this transaction moved, and the source the
+                // resume path winds back through to rebuild the exact plan;
+                // finalization holds them to identity and to the landed
+                // transaction's own balance deltas, never to a balance.
                 DirectSetupAccountPoststateV1::new(
                     planning.tokens.coordinates.payer,
                     planning.payer_observed.owner,
-                    planning.tokens.expected_payer_lamports,
+                    planning.tokens.projected_payer_lamports,
                     planning.payer_observed.executable,
                     &planning.payer_observed.data,
                 ),
                 DirectSetupAccountPoststateV1::new(
                     planning.tokens.coordinates.rent_refund,
                     planning.rent_refund_observed.owner,
-                    planning.tokens.expected_refund_lamports,
+                    planning.tokens.projected_refund_lamports,
                     planning.rent_refund_observed.executable,
                     &planning.rent_refund_observed.data,
                 ),
@@ -2642,22 +2652,50 @@ fn direct_setup_finalization_v1(
         .map(|state| parse_key(&state.address, "Direct setup expected poststate"))
         .collect::<Result<Vec<_>>>()?;
     let (_, observed) = rpc.finalized_observed_accounts(&keys, history.slot)?;
-    let poststates = observed
-        .iter()
-        .map(|account| {
-            DirectSetupAccountPoststateV1::new(
-                account.key,
-                account.owner,
-                account.lamports,
-                account.executable,
-                &account.data,
-            )
-        })
-        .collect::<Vec<_>>();
-    if poststates != journal.expected_poststates {
+    if observed.len() != journal.expected_poststates.len() {
         return Err(refusal(
             "Direct setup finalized complete poststates changed",
         ));
+    }
+    // Accounts this transaction created are held to their exact bytes and
+    // lamports; nothing else can touch a freshly created program-owned PDA.
+    // The payer and the rent refund cannot be: their journal rows carry this
+    // instruction's projected effect, which excludes the runtime fee the payer
+    // also pays, and a live read of a shared account is a fact about the chain
+    // now rather than about this transaction. They are held to identity here,
+    // and to their exact deltas by the landed balance vectors that
+    // `authenticate_direct_setup_history_v1` has already checked; the row that
+    // goes into the record stays the projection the journal committed to.
+    let payer_address = planning.tokens.coordinates.payer.to_string();
+    let refund_address = planning.tokens.coordinates.rent_refund.to_string();
+    let mut poststates = Vec::with_capacity(observed.len());
+    for (account, expected) in observed.iter().zip(journal.expected_poststates.iter()) {
+        let live = DirectSetupAccountPoststateV1::new(
+            account.key,
+            account.owner,
+            account.lamports,
+            account.executable,
+            &account.data,
+        );
+        if expected.address == payer_address || expected.address == refund_address {
+            if live.address != expected.address
+                || live.owner != expected.owner
+                || live.executable != expected.executable
+                || live.data_base64 != expected.data_base64
+            {
+                return Err(refusal(
+                    "Direct setup finalized shared-account identity changed",
+                ));
+            }
+            poststates.push(expected.clone());
+        } else {
+            if live != *expected {
+                return Err(refusal(
+                    "Direct setup finalized complete poststates changed",
+                ));
+            }
+            poststates.push(live);
+        }
     }
     match journal.stage {
         DirectSetupStageV1::ReplaySetup => {
@@ -2687,12 +2725,6 @@ fn direct_setup_finalization_v1(
             let fee = observed
                 .get(1)
                 .ok_or_else(|| refusal("Direct token setup omitted fee poststate"))?;
-            let payer = observed
-                .get(2)
-                .ok_or_else(|| refusal("Direct token setup omitted payer poststate"))?;
-            let refund = observed
-                .get(3)
-                .ok_or_else(|| refusal("Direct token setup omitted refund poststate"))?;
             let immutable = &planning.tokens.expected_immutable_bytes;
             verify_direct_trade_token_setup_poststate_v1(
                 &planning.tokens,
@@ -2701,8 +2733,6 @@ fn direct_setup_finalization_v1(
                     return_data: &returned_bytes,
                     seller_token: direct_token_setup_observed_v1(seller),
                     fee_token: direct_token_setup_observed_v1(fee),
-                    payer_lamports: payer.lamports,
-                    refund_lamports: refund.lamports,
                     market_bytes: &immutable[0],
                     root_bytes: &immutable[1],
                     realm_bytes: &immutable[2],
