@@ -280,9 +280,9 @@ export function decodeInstructionData(data: Uint8Array, depth = 0): DecodedInstr
   if (magic === null) {
     note = 'The first eight bytes are not readable text, so they are not a dClutch instruction magic.';
   } else if (routes.length === 0 && spec === null) {
-    note = 'No dClutch route and no rendered record uses this magic.';
+    note = 'No dClutch route and no declared record uses this magic.';
   } else if (routes.length === 0) {
-    note = 'No route uses this magic; the bytes are read against the record that carries it.';
+    note = 'No route uses this magic. It belongs to the record that carries it.';
   }
 
   return Object.freeze({ magic, routes: Object.freeze(routes), body, inner, bytes: data.length, note });

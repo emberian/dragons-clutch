@@ -188,12 +188,12 @@ pub enum TradingSbfError {
     /// Instructions-sysvar or native-signature evidence was not exact.
     NativeSignature = 0x4006,
     /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
     ///
     /// Decision 0012. Not a corrupted account and not an attack: the exact
     /// upgrade authority the release names shipped new bytes, so the cached
-    /// authentication no longer describes what is deployed. Every open market
-    /// on the superseded release generation refuses until a re-release
-    /// re-authenticates the new deployment and re-pins its slot.
+    /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x4007,
     /// This route needs the extended heap and the transaction did not grant it.
     ///
@@ -271,36 +271,105 @@ pub enum TradingSbfError {
     FeeSource = 0x400E,
 }
 
+impl TradingSbfError {
+    /// Every refusal this boundary can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
+    /// to the enum does not compile until its author writes an arm there, and
+    /// the only arm that satisfies the assertions is its own index here.
+    pub const ALL: [Self; 15] = [
+        Self::UnsupportedContent,
+        Self::Release,
+        Self::Root,
+        Self::Content,
+        Self::Transition,
+        Self::Commit,
+        Self::NativeSignature,
+        Self::ReleaseSuperseded,
+        Self::HeapFrame,
+        Self::CloseSealAccount,
+        Self::CloseSealLiveRelease,
+        Self::CloseSealFrame,
+        Self::FeeNotOwed,
+        Self::FeeDestination,
+        Self::FeeSource,
+    ];
+
+    /// This refusal's position in [`TradingSbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a
+    /// sixteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::UnsupportedContent => 0,
+            Self::Release => 1,
+            Self::Root => 2,
+            Self::Content => 3,
+            Self::Transition => 4,
+            Self::Commit => 5,
+            Self::NativeSignature => 6,
+            Self::ReleaseSuperseded => 7,
+            Self::HeapFrame => 8,
+            Self::CloseSealAccount => 9,
+            Self::CloseSealLiveRelease => 10,
+            Self::CloseSealFrame => 11,
+            Self::FeeNotOwed => 12,
+            Self::FeeDestination => 13,
+            Self::FeeSource => 14,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    TradingSbfError::UnsupportedContent as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE,
-    "TradingSbfError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (TradingSbfError::FeeSource as u32)
-        < dclutch_refusal_registry::TRADING_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "TradingSbfError must not run past its registered refusal band"
-);
-// The bound above names the LAST variant by hand, so it stops bounding the enum
-// the moment a variant is appended past the one it names. That happened TWICE in
-// one week -- `CloseSeal`'s three arrived after `HeapFrame` on main, and this
-// lane's three arrived after those -- and neither would have gone red. This is
-// the arithmetic that makes the omission a compile error instead: the enum's top
-// is its base plus one less than its variant count only while the discriminants
-// are contiguous, which they are and which ADR 0007 wants them to stay.
 //
-// The count is what a lane must bump, and bumping it without moving the named
-// variant refuses here rather than silently widening the bound.
-const _: () = assert!(
-    TradingSbfError::FeeSource as u32
-        == TradingSbfError::UnsupportedContent as u32 + TRADING_REFUSAL_VARIANTS_V1 - 1,
-    "TradingSbfError discriminants are contiguous, and the band bound names the last of them"
-);
-
-/// Variants of [`TradingSbfError`], counted where the band assertion reads it.
-const TRADING_REFUSAL_VARIANTS_V1: u32 = 15;
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one", and it stopped bounding the enum the
+// moment a variant was appended past the one it named. That happened TWICE in
+// one week -- `CloseSeal`'s three arrived after `HeapFrame` on main, and the
+// fee lane's three arrived after those -- and neither went red.
+//
+// A variant COUNT was the first repair, and it was a real improvement: bumping
+// the count without moving the named variant refused. But the count was still a
+// number a human typed, and the case it could not see is the one that keeps
+// happening -- a sixteenth variant appended while the count and the named
+// ceiling are both left alone. `FeeSource` is still the fourteenth index, the
+// count still reads 15, both assertions still pass, and the new refusal is
+// checked by nothing. The count did not close the hole; it moved it.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here. The hand-typed count retires into
+// `ALL.len()`, which is the same number with nobody left to mistype it.
+const _: () = {
+    assert!(
+        TradingSbfError::ALL[0] as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE,
+        "TradingSbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < TradingSbfError::ALL.len() {
+        let variant = TradingSbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "TradingSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE + index as u32,
+            "TradingSbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::TRADING_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "TradingSbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<TradingSbfError> for ProgramError {
     fn from(value: TradingSbfError) -> Self {

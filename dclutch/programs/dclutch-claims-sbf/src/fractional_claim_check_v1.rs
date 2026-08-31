@@ -72,28 +72,114 @@ pub enum FractionalClaimCheckCompactionSbfErrorV1 {
     ShardMint = 0x564C,
 }
 
+impl FractionalClaimCheckCompactionSbfErrorV1 {
+    /// Every refusal this request family can raise, in discriminant order.
+    ///
+    /// This is what the sub-band assertions below read. It is kept honest by
+    /// [`FractionalClaimCheckCompactionSbfErrorV1::ordinal`], whose match is exhaustive: a variant
+    /// added to the enum does not compile until its author writes an arm here, and the only arm
+    /// that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 13] = [
+        Self::Accounts,
+        Self::Authority,
+        Self::Identity,
+        Self::Deadline,
+        Self::Phase,
+        Self::AlreadyCompacted,
+        Self::Conservation,
+        Self::Economic,
+        Self::Receipt,
+        Self::Escrow,
+        Self::Scope,
+        Self::Terms,
+        Self::ShardMint,
+    ];
+
+    /// This refusal's position in [`FractionalClaimCheckCompactionSbfErrorV1::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a fourteenth variant is
+    /// a COMPILE ERROR here rather than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Accounts => 0,
+            Self::Authority => 1,
+            Self::Identity => 2,
+            Self::Deadline => 3,
+            Self::Phase => 4,
+            Self::AlreadyCompacted => 5,
+            Self::Conservation => 6,
+            Self::Economic => 7,
+            Self::Receipt => 8,
+            Self::Escrow => 9,
+            Self::Scope => 10,
+            Self::Terms => 11,
+            Self::ShardMint => 12,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    FractionalClaimCheckCompactionSbfErrorV1::Accounts as u32
-        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x640,
-    "FractionalClaimCheckCompactionSbfErrorV1 must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (FractionalClaimCheckCompactionSbfErrorV1::ShardMint as u32)
-        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "FractionalClaimCheckCompactionSbfErrorV1 must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing about
+// the variants after it and goes stale silently every single time the family
+// grows -- the failure is not that the name is wrong, it is that nothing can
+// notice. Claims' own top-level band proved it the expensive way: its bound went
+// on naming `ReleaseSuperseded` after a later variant landed, so for as long as
+// that stood, the newest refusal in the program was checked by nothing.
+//
+// So the sub-band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x640;
+    assert!(
+        FractionalClaimCheckCompactionSbfErrorV1::ALL[0] as u32 == SUB_BAND,
+        "FractionalClaimCheckCompactionSbfErrorV1 must start at its registered sub-band offset"
+    );
+    let mut index = 0;
+    while index < FractionalClaimCheckCompactionSbfErrorV1::ALL.len() {
+        let variant = FractionalClaimCheckCompactionSbfErrorV1::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "FractionalClaimCheckCompactionSbfErrorV1::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == SUB_BAND + index as u32,
+            "FractionalClaimCheckCompactionSbfErrorV1 discriminants are not the contiguous run from the sub-band offset that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "FractionalClaimCheckCompactionSbfErrorV1 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 // Four sub-bands now: native compaction 0x600, native redemption 0x620,
 // fractional compaction 0x640, fractional redemption 0x660. Each is
 // independently versioned, so none may grow into the next. These assertions are
-// what would catch it.
-const _: () = assert!(
-    (crate::claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1::Vault as u32)
-        < FractionalClaimCheckCompactionSbfErrorV1::Accounts as u32,
-    "the native redemption sub-band must not run into fractional compaction"
-);
+// what would catch it, and they stay necessary after the weld above: the
+// exhaustive loop proves a family is a contiguous run from ITS OWN offset and
+// says nothing about whether that run has reached the next family's.
+//
+// Both endpoints are read off `ALL` rather than named. A separation assertion
+// that names the variants by hand is the same defect it is here to prevent.
+const _: () = {
+    const NATIVE_REDEMPTION_TOP: u32 = {
+        use crate::claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1 as Native;
+        Native::ALL[Native::ALL.len() - 1] as u32
+    };
+    const FRACTIONAL_COMPACTION_BASE: u32 = FractionalClaimCheckCompactionSbfErrorV1::ALL[0] as u32;
+    assert!(
+        NATIVE_REDEMPTION_TOP < FRACTIONAL_COMPACTION_BASE,
+        "the native redemption sub-band must not run into fractional compaction"
+    );
+};
 
 impl From<FractionalClaimCheckCompactionSbfErrorV1> for ProgramError {
     fn from(value: FractionalClaimCheckCompactionSbfErrorV1) -> Self {
@@ -132,21 +218,92 @@ pub enum FractionalClaimCheckRedemptionSbfErrorV1 {
     Vault = 0x5666,
 }
 
-const _: () = assert!(
-    FractionalClaimCheckRedemptionSbfErrorV1::Accounts as u32
-        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x660,
-    "FractionalClaimCheckRedemptionSbfErrorV1 must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (FractionalClaimCheckRedemptionSbfErrorV1::Vault as u32)
-        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "FractionalClaimCheckRedemptionSbfErrorV1 must not run past its registered refusal band"
-);
-const _: () = assert!(
-    (FractionalClaimCheckCompactionSbfErrorV1::ShardMint as u32)
-        < FractionalClaimCheckRedemptionSbfErrorV1::Accounts as u32,
-    "the fractional compaction sub-band must not run into fractional redemption"
-);
+impl FractionalClaimCheckRedemptionSbfErrorV1 {
+    /// Every refusal this request family can raise, in discriminant order.
+    ///
+    /// This is what the sub-band assertions below read. It is kept honest by
+    /// [`FractionalClaimCheckRedemptionSbfErrorV1::ordinal`], whose match is exhaustive: a variant
+    /// added to the enum does not compile until its author writes an arm here, and the only arm
+    /// that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 7] = [
+        Self::Accounts,
+        Self::Authority,
+        Self::Identity,
+        Self::Conservation,
+        Self::Receipt,
+        Self::NoWholeClaim,
+        Self::Vault,
+    ];
+
+    /// This refusal's position in [`FractionalClaimCheckRedemptionSbfErrorV1::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: an eighth variant is a
+    /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Accounts => 0,
+            Self::Authority => 1,
+            Self::Identity => 2,
+            Self::Conservation => 3,
+            Self::Receipt => 4,
+            Self::NoWholeClaim => 5,
+            Self::Vault => 6,
+        }
+    }
+}
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
+// The discriminants stay literal so a code seen in a validator log is greppable;
+// these assertions are what stops them drifting out of the allocated band.
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing about
+// the variants after it and goes stale silently every single time the family
+// grows -- the failure is not that the name is wrong, it is that nothing can
+// notice. Claims' own top-level band proved it the expensive way: its bound went
+// on naming `ReleaseSuperseded` after a later variant landed, so for as long as
+// that stood, the newest refusal in the program was checked by nothing.
+//
+// So the sub-band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x660;
+    assert!(
+        FractionalClaimCheckRedemptionSbfErrorV1::ALL[0] as u32 == SUB_BAND,
+        "FractionalClaimCheckRedemptionSbfErrorV1 must start at its registered sub-band offset"
+    );
+    let mut index = 0;
+    while index < FractionalClaimCheckRedemptionSbfErrorV1::ALL.len() {
+        let variant = FractionalClaimCheckRedemptionSbfErrorV1::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "FractionalClaimCheckRedemptionSbfErrorV1::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == SUB_BAND + index as u32,
+            "FractionalClaimCheckRedemptionSbfErrorV1 discriminants are not the contiguous run from the sub-band offset that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "FractionalClaimCheckRedemptionSbfErrorV1 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
+// Endpoints read off `ALL` for the same reason as the assertion above.
+const _: () = {
+    const COMPACTION_TOP: u32 = FractionalClaimCheckCompactionSbfErrorV1::ALL
+        [FractionalClaimCheckCompactionSbfErrorV1::ALL.len() - 1]
+        as u32;
+    const REDEMPTION_BASE: u32 = FractionalClaimCheckRedemptionSbfErrorV1::ALL[0] as u32;
+    assert!(
+        COMPACTION_TOP < REDEMPTION_BASE,
+        "the fractional compaction sub-band must not run into fractional redemption"
+    );
+};
 
 impl From<FractionalClaimCheckRedemptionSbfErrorV1> for ProgramError {
     fn from(value: FractionalClaimCheckRedemptionSbfErrorV1) -> Self {
@@ -223,32 +380,6 @@ mod tests {
     };
     use solana_program::pubkey::{Pubkey, PubkeyError};
 
-    const COMPACTION_TABLE: [FractionalClaimCheckCompactionSbfErrorV1; 13] = [
-        FractionalClaimCheckCompactionSbfErrorV1::Accounts,
-        FractionalClaimCheckCompactionSbfErrorV1::Authority,
-        FractionalClaimCheckCompactionSbfErrorV1::Identity,
-        FractionalClaimCheckCompactionSbfErrorV1::Deadline,
-        FractionalClaimCheckCompactionSbfErrorV1::Phase,
-        FractionalClaimCheckCompactionSbfErrorV1::AlreadyCompacted,
-        FractionalClaimCheckCompactionSbfErrorV1::Conservation,
-        FractionalClaimCheckCompactionSbfErrorV1::Economic,
-        FractionalClaimCheckCompactionSbfErrorV1::Receipt,
-        FractionalClaimCheckCompactionSbfErrorV1::Escrow,
-        FractionalClaimCheckCompactionSbfErrorV1::Scope,
-        FractionalClaimCheckCompactionSbfErrorV1::Terms,
-        FractionalClaimCheckCompactionSbfErrorV1::ShardMint,
-    ];
-
-    const REDEMPTION_TABLE: [FractionalClaimCheckRedemptionSbfErrorV1; 7] = [
-        FractionalClaimCheckRedemptionSbfErrorV1::Accounts,
-        FractionalClaimCheckRedemptionSbfErrorV1::Authority,
-        FractionalClaimCheckRedemptionSbfErrorV1::Identity,
-        FractionalClaimCheckRedemptionSbfErrorV1::Conservation,
-        FractionalClaimCheckRedemptionSbfErrorV1::Receipt,
-        FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim,
-        FractionalClaimCheckRedemptionSbfErrorV1::Vault,
-    ];
-
     const KINDS: [ProtocolPositionOwnerKindV2; 3] = [
         ProtocolPositionOwnerKindV2::TradingRecord,
         ProtocolPositionOwnerKindV2::User,
@@ -257,21 +388,27 @@ mod tests {
 
     #[test]
     fn every_code_is_contiguous_and_unique_within_its_sub_band() {
-        for (index, code) in COMPACTION_TABLE.iter().enumerate() {
+        for (index, code) in FractionalClaimCheckCompactionSbfErrorV1::ALL
+            .iter()
+            .enumerate()
+        {
             let expected = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x640 + index as u32;
             assert_eq!(*code as u32, expected);
             assert!(
-                !COMPACTION_TABLE
+                !FractionalClaimCheckCompactionSbfErrorV1::ALL
                     .iter()
                     .skip(index + 1)
                     .any(|other| other == code)
             );
         }
-        for (index, code) in REDEMPTION_TABLE.iter().enumerate() {
+        for (index, code) in FractionalClaimCheckRedemptionSbfErrorV1::ALL
+            .iter()
+            .enumerate()
+        {
             let expected = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x660 + index as u32;
             assert_eq!(*code as u32, expected);
             assert!(
-                !REDEMPTION_TABLE
+                !FractionalClaimCheckRedemptionSbfErrorV1::ALL
                     .iter()
                     .skip(index + 1)
                     .any(|other| other == code)
@@ -315,10 +452,10 @@ mod tests {
             0x000_u32, 0x100, 0x140, 0x160, 0x180, 0x200, 0x210, 0x260, 0x500,
         ] {
             let base = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + occupied;
-            for code in COMPACTION_TABLE {
+            for code in FractionalClaimCheckCompactionSbfErrorV1::ALL {
                 assert!(code as u32 > base);
             }
-            for code in REDEMPTION_TABLE {
+            for code in FractionalClaimCheckRedemptionSbfErrorV1::ALL {
                 assert!(code as u32 > base);
             }
         }

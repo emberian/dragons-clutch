@@ -8,6 +8,7 @@ use solana_sdk::pubkey::Pubkey;
 mod aggregate_retirement_exterior;
 mod aggregate_retirement_journal;
 mod campaign;
+mod claims_custody_replay;
 mod cluster;
 mod direct_capability_activation;
 mod direct_fee_settlement;
@@ -174,6 +175,9 @@ fn run() -> Result<()> {
         }
         Some(command) if command == family_hot_campaign::SERIES_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::Series)
+        }
+        Some(command) if command == claims_custody_replay::COMMAND_V1 => {
+            claims_custody_replay::run_owned_loopback_v1(arguments.collect())
         }
         Some(command) if command == direct_fee_settlement::COMMAND_V1 => {
             direct_fee_settlement::run_owned_loopback_v1(arguments.collect())
@@ -1629,6 +1633,7 @@ fn usage() {
     println!("{}", private_activity::usage());
     println!("{}", private_lifecycle::usage());
     println!("{}", private_lifecycle::direct_payout_schedule_usage());
+    println!("{}", claims_custody_replay::usage());
     println!("{}", direct_fee_settlement::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());

@@ -8,12 +8,12 @@ describe('operator surface presentation', () => {
     const html = renderToStaticMarkup(<OperatorSurface />);
     expect(html).toContain('Operations.');
     expect(html).toContain('Every route still requires its own preflight');
-    expect(html).toContain('does not prove that a route is executable');
+    expect(html).toContain('does not make a route executable');
     expect(html).toContain('Use checked live-devnet preset');
     expect(html).toContain('instead of typing six program addresses');
-    expect(html).toContain('never supplies a Market');
-    expect(html).toContain('loading it is not a chain observation');
-    expect(html).toContain('Each route must still authenticate its own release');
+    expect(html).toContain('supplies no Market');
+    expect(html).toContain('No chain state has been read');
+    expect(html).toContain('each route still authenticates its own release');
     expect(html).toContain('Constructor readiness map');
     expect(html).toContain('Prepare the current founding campaign');
     expect(html).toContain('Inspect a Direct route and its arithmetic');

@@ -143,19 +143,86 @@ pub enum RationalLifecycleSbfErrorV2 {
     Receipt = 0x5218,
 }
 
+impl RationalLifecycleSbfErrorV2 {
+    /// Every refusal this request family can raise, in discriminant order.
+    ///
+    /// This is what the sub-band assertions below read. It is kept honest by
+    /// [`RationalLifecycleSbfErrorV2::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only arm that satisfies
+    /// the assertions is its own index in this array.
+    pub const ALL: [Self; 9] = [
+        Self::Instruction,
+        Self::Accounts,
+        Self::Release,
+        Self::Descriptor,
+        Self::Market,
+        Self::Rent,
+        Self::Token,
+        Self::Position,
+        Self::Receipt,
+    ];
+
+    /// This refusal's position in [`RationalLifecycleSbfErrorV2::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a tenth variant is a
+    /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::Accounts => 1,
+            Self::Release => 2,
+            Self::Descriptor => 3,
+            Self::Market => 4,
+            Self::Rent => 5,
+            Self::Token => 6,
+            Self::Position => 7,
+            Self::Receipt => 8,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    RationalLifecycleSbfErrorV2::Instruction as u32
-        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x210,
-    "RationalLifecycleSbfErrorV2 must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (RationalLifecycleSbfErrorV2::Receipt as u32)
-        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "RationalLifecycleSbfErrorV2 must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing about
+// the variants after it and goes stale silently every single time the family
+// grows -- the failure is not that the name is wrong, it is that nothing can
+// notice. Claims' own top-level band proved it the expensive way: its bound went
+// on naming `ReleaseSuperseded` after a later variant landed, so for as long as
+// that stood, the newest refusal in the program was checked by nothing.
+//
+// So the sub-band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x210;
+    assert!(
+        RationalLifecycleSbfErrorV2::ALL[0] as u32 == SUB_BAND,
+        "RationalLifecycleSbfErrorV2 must start at its registered sub-band offset"
+    );
+    let mut index = 0;
+    while index < RationalLifecycleSbfErrorV2::ALL.len() {
+        let variant = RationalLifecycleSbfErrorV2::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "RationalLifecycleSbfErrorV2::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == SUB_BAND + index as u32,
+            "RationalLifecycleSbfErrorV2 discriminants are not the contiguous run from the sub-band offset that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "RationalLifecycleSbfErrorV2 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<RationalLifecycleSbfErrorV2> for ProgramError {
     fn from(value: RationalLifecycleSbfErrorV2) -> Self {

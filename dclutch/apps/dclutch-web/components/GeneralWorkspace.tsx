@@ -43,7 +43,7 @@ function LocalStatus({ title, value }: Readonly<{ title: string; value: GeneralL
 }
 
 function Receipt({ value }: Readonly<{ value: GeneralHotReceiptV3 }>) {
-  return <div className="direct-output"><dl><div><dt>Committed request</dt><dd>{compact(value.requestDigest)}</dd></div><div><dt>Selected CapabilityProgram</dt><dd>{compact(value.selectedProgram)}</dd></div><div><dt>Root transition</dt><dd>{compact(value.rootPrestateDigest)} → {compact(value.rootPoststateDigest)}</dd></div><div><dt>Execution / child-receipt commitment</dt><dd>{value.executionDigest}</dd></div></dl><p className="direct-refusal"><strong>Commit-last receipt accepted.</strong> It matches the imported request, Market, generation, release set, root, and selected program.</p></div>;
+  return <div className="direct-output"><dl><div><dt>Committed request</dt><dd>{compact(value.requestDigest)}</dd></div><div><dt>Selected CapabilityProgram</dt><dd>{compact(value.selectedProgram)}</dd></div><div><dt>Root transition</dt><dd>{compact(value.rootPrestateDigest)} → {compact(value.rootPoststateDigest)}</dd></div><div><dt>Execution / child-receipt commitment</dt><dd>{value.executionDigest}</dd></div></dl><p className="direct-refusal"><strong>Receipt accepted.</strong> It matches the imported request, Market, generation, release set, root, and selected program.</p></div>;
 }
 
 export default function GeneralWorkspace() {
@@ -53,7 +53,7 @@ export default function GeneralWorkspace() {
   const [receiptText, setReceiptText] = useState(''); const [receipt, setReceipt] = useState<GeneralHotReceiptV3 | null>(null); const [receiptStatus, setReceiptStatus] = useState('No commit-last receipt has been supplied.');
 
   async function inspect(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setInspection(null); setChain(null); setReceipt(null); setPlanStatus('Hostile-decoding the V5 operator report and unsigned v0 packet…');
+    event.preventDefault(); setInspection(null); setChain(null); setReceipt(null); setPlanStatus('Checking the plan…');
     try {
       const value = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(planText)); setInspection(value);
       setPlanStatus(`Accepted ${value.request.action} plan · N=${value.plan.outcomeCount} · ${value.transaction.wireBytes}/1232 packet bytes · no signature present.`);
@@ -61,7 +61,7 @@ export default function GeneralWorkspace() {
   }
 
   async function reacquire() {
-    setChain(null); setChainStatus('Reacquiring the exact LUT, packet dependencies, and lifecycle state at a finalized floor…');
+    setChain(null); setChainStatus('Reading finalized state…');
     try {
       if (inspection === null) throw new Error('inspect one exact General operator plan first');
       const value = await reacquireGeneralSuccessorStatusV5(new SolanaRpcClient(endpoint), inspection); setChain(value);
@@ -78,11 +78,11 @@ export default function GeneralWorkspace() {
   }
 
   return <main className="product-shell direct-workspace">
-    <ConsoleHeader path="/general" title="General clearing" purpose="An operator running settlement pastes a plan produced by the operator program, lets the browser re-check it, and downloads the unsigned packet." />
-    <section className="market-heading"><div><h1>General clearing.</h1><p>You paste a clearing plan for one of the seven settlement actions — Consider, Freeze, Initialize, Collect, Materialize, Distribute, or Close. The browser re-checks every field and dependency itself, can reacquire the plan&apos;s exact chain dependencies, and hands you the unsigned packet. It never signs or submits.</p></div></section>
+    <ConsoleHeader path="/general" title="General clearing" purpose="Re-check a settlement plan against the chain and download the unsigned packet." />
+    <section className="market-heading"><div><h1>General clearing.</h1><p>A clearing plan for one of the seven settlement actions — Consider, Freeze, Initialize, Collect, Materialize, Distribute, or Close. Every field and dependency is re-checked here, and the unsigned packet is yours to download. Nothing is signed or submitted.</p></div></section>
 
     <form className="direct-card" onSubmit={inspect} aria-labelledby="general-plan">
-      <div className="direct-card-heading"><span>01</span><div><h2 id="general-plan">Inspect one chain-derived operator plan</h2><p>The plan is an untrusted projection. The browser requires exact V5 fields, one unsigned packet-bounded v0 instruction, Hot38, CapabilityProgramV4/LifecycleV5 provenance, canonical lifecycle bumps, and action-specific DCE5 child-receipt order. After acceptance, download the unsigned v0 packet; no signing or submission occurs.</p></div></div>
+      <div className="direct-card-heading"><span>01</span><div><h2 id="general-plan">Inspect one chain-derived operator plan</h2><p>Accepted only with exact V5 fields, one packet-bounded v0 instruction, Hot38, CapabilityProgramV4/LifecycleV5 provenance, canonical lifecycle bumps, and action-specific DCE5 child-receipt order.</p></div></div>
       <label><span>Clearing plan · JSON — produced by the operator program (<code>crates/dclutch-operator</code>); paste the plan it emits</span><textarea required rows={16} value={planText} onChange={(event) => setPlanText(event.target.value)} placeholder={generalPlanTemplateV5()} /></label>
       <button>Inspect exact unsigned plan</button><p className="direct-status" aria-live="polite">{planStatus}</p>
       {inspection && <div className="direct-output"><dl><div><dt>Action / revision</dt><dd>{inspection.request.action} / {inspection.request.expectedRevision.toString()}</dd></div><div><dt>Best-valid-submitted candidate</dt><dd>{inspection.request.candidateId === null ? 'selection Freeze · candidate comes from frozen state' : compact(inspection.request.candidateId)}</dd></div><div><dt>Manifest / source coordinates</dt><dd>manifest {inspection.request.manifestOrderIndex} · page {inspection.request.pageIndex} · execution {inspection.request.executionIndex}</dd></div><div><dt>Runtime width / scratch</dt><dd>N={inspection.plan.outcomeCount} · {inspection.plan.scratchPageCount} authenticated bank page(s)</dd></div><div><dt>Packet / ALT / signers</dt><dd>{inspection.transaction.wireBytes}/1232 bytes · {compact(inspection.plan.lookupTable)} · {inspection.plan.requiredSigners.map(compact).join(', ')}</dd></div><div><dt>Checked releases</dt><dd>Trading {compact(inspection.plan.tradingArtifactRelease)} · accelerator {compact(inspection.plan.generalArtifactRelease)} · manifest {compact(inspection.plan.checkedManifestDigest)}</dd></div><div><dt>Lifecycle</dt><dd>primary {compact(inspection.plan.lifecycle.primaryState)} · bump {inspection.plan.lifecycle.primaryStateBump}{inspection.plan.lifecycle.terminalState ? ` · terminal ${compact(inspection.plan.lifecycle.terminalState)} @ ${inspection.plan.lifecycle.terminalCoordinate}` : ''}</dd></div></dl>
@@ -91,13 +91,13 @@ export default function GeneralWorkspace() {
     </form>
 
     <section className="direct-card" aria-labelledby="general-chain">
-      <div className="direct-card-heading"><span>02</span><div><h2 id="general-chain">Reacquire exact chain status</h2><p>The browser resolves the imported packet’s sole lookup table, rereads every dependency, checks program executability, and hostile-decodes the action’s Trading-owned local state. It does not scan for plausible substitutes.</p></div></div>
+      <div className="direct-card-heading"><span>02</span><div><h2 id="general-chain">Reacquire exact chain status</h2><p>The packet’s sole lookup table, every dependency, program executability, and the action’s Trading-owned local state, each read at one finalized floor. No substitute is accepted for a named account.</p></div></div>
       <div className="direct-form-grid"><label><span>Finalized RPC endpoint</span><input type="url" value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label></div><button type="button" disabled={inspection === null} onClick={() => void reacquire()}>Reacquire plan dependencies</button><p className="direct-status" aria-live="polite">{chainStatus}</p>
       {chain && <><div className="trade-v3-evidence"><article><span>Dependencies</span><strong>{chain.dependencies.dependencies.length}</strong><small>missing 0 · non-executable programs 0</small></article><article><span>Observation slot</span><strong>{chain.observedSlot}</strong><small>minimum imported floor {inspection?.plan.observedSlot.toString()}</small></article><article><span>Action prestate</span><strong>{inspection?.request.action}</strong><small>revision {inspection?.request.expectedRevision.toString()}</small></article></div><div className="registered-state-grid"><LocalStatus title="primary state" value={chain.primary} /><LocalStatus title="terminal successor" value={chain.terminal} /></div></>}
     </section>
 
     <form className="direct-card" onSubmit={inspectReceipt} aria-labelledby="general-receipt">
-      <div className="direct-card-heading"><span>03</span><div><h2 id="general-receipt">Verify the commit-last execution receipt</h2><p>Paste the exact 280-byte HotExecutionAckV3 returned by execution. The browser joins it to the request digest, selected CapabilityProgram, Market generation, root prestate, and release set before showing success.</p></div></div>
+      <div className="direct-card-heading"><span>03</span><div><h2 id="general-receipt">Verify the commit-last execution receipt</h2><p>Paste the 280-byte HotExecutionAckV3 the chain returns. It is accepted only if it joins the request digest, selected CapabilityProgram, Market generation, root prestate, and release set.</p></div></div>
       <label><span>Execution receipt · base64 — the 280-byte HotExecutionAckV3 the chain returns when the packet executes</span><textarea required value={receiptText} onChange={(event) => setReceiptText(event.target.value.trim())} /></label><button disabled={inspection === null}>Verify exact receipt</button><p className="direct-status" aria-live="polite">{receiptStatus}</p>{receipt && <Receipt value={receipt} />}
     </form>
   </main>;

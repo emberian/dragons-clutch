@@ -119,7 +119,7 @@ describe('workspace wallet boundaries', () => {
   it('keeps the read-only Direct preview free of wallet and transaction controls', () => {
     const html = renderToStaticMarkup(<DirectTradeWorkspace />);
     expect(html).not.toContain('wallet-directory');
-    expect(html).toContain('This page has no wallet connection, signature request, packet download, or submission control.');
+    expect(html).toContain('No wallet connection, signature request, packet download, or submission control.');
     expect(html).toContain('No wallet request · no packet builder · no submission path');
   });
 

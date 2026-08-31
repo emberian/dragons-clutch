@@ -21,7 +21,7 @@ use dclutch_claims_svm::{
         ProtocolPositionSeedsV2,
     },
 };
-use dclutch_market_core_codec::{CoreState, Phase as CorePhase, Readiness};
+use dclutch_market_core_codec::{CoreState, Identity, Phase as CorePhase, Readiness};
 use dclutch_operator::{
     Finality, Observation, ObservedAccount,
     provider_transport_v3::{
@@ -30,6 +30,7 @@ use dclutch_operator::{
         ProviderSubmitSnapshotV3, ProviderTransportReportV3, ProviderTransportTransactionErrorV3,
         build_provider_execute_v3, build_provider_reclaim_v3, build_provider_submit_v3,
         compile_provider_execute_v0, compile_provider_reclaim_v0, compile_provider_submit_v0,
+        provider_execute_caller_authority_v3,
     },
     resolution_core_v3::{
         ResolutionAdmitTerminalReportV3, ResolutionAdmitTerminalSnapshotV3,
@@ -63,7 +64,7 @@ use dclutch_source_contract::{
     STATISTIC_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use dclutch_source_contract::{
-    PythAdapterConfigV1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+    ProviderReleaseV1, PythAdapterConfigV1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2, SourceResolutionPhaseV1, SourceResolutionRouteV1,
     SourceResolutionStateV2, WindowSpecV1,
 };
@@ -264,6 +265,16 @@ struct PlanInputV1 {
     release_set: String,
     submitter: String,
     resolver: String,
+    /// The Execute and Reclaim fee payer, which must not be the resolver.
+    ///
+    /// Both frames pin their sole instruction signer — the resolver — readonly,
+    /// and the message compiler promotes whoever pays into a *writable* signer.
+    /// A payer of the driver's own choosing is what keeps the two compatible
+    /// (§7.13). `default` is carried so a producer checkpoint minted before wall
+    /// 10 still deserializes; an empty value never reaches a message, because
+    /// `nonzero_pubkey` refuses it in [`SelectedInputV1::parse`].
+    #[serde(default)]
+    payer: String,
     refund_recipient: String,
     terminal_sequence: u64,
     reclaim_after_unix_seconds: i64,
@@ -337,6 +348,7 @@ enum StableAddressClassV1 {
     FinalizedRecordStaging,
     ProviderConfig,
     ProviderObservation,
+    CallerAuthority,
     Sysvar,
     SystemProgram,
 }
@@ -547,6 +559,7 @@ struct SelectedInputV1 {
     release_set: [u8; 32],
     submitter: Pubkey,
     resolver: Pubkey,
+    payer: Pubkey,
     refund_recipient: Pubkey,
     terminal_sequence: u64,
     reclaim_after_unix_seconds: i64,
@@ -574,6 +587,13 @@ impl SelectedInputV1 {
         }
         let submitter = nonzero_pubkey(&input.submitter, "submitter")?;
         let resolver = nonzero_pubkey(&input.resolver, "resolver")?;
+        let payer = nonzero_pubkey(&input.payer, "payer")?;
+        if payer == resolver {
+            return Err(Error::new(
+                "payer must differ from resolver: Execute and Reclaim pin the resolver readonly, \
+                 and the fee payer is always a writable signer",
+            ));
+        }
         let refund_recipient = nonzero_pubkey(&input.refund_recipient, "refundRecipient")?;
         let post_update_body = BASE64
             .decode(&input.post_update_body_base64)
@@ -671,6 +691,7 @@ impl SelectedInputV1 {
             release_set,
             submitter,
             resolver,
+            payer,
             refund_recipient,
             terminal_sequence: input.terminal_sequence,
             reclaim_after_unix_seconds: input.reclaim_after_unix_seconds,
@@ -719,6 +740,10 @@ impl SelectedInputV1 {
         for (label, key) in [
             ("submitter", self.submitter),
             ("resolver", self.resolver),
+            // The payer must alias nothing: as the fee payer it is a writable
+            // signer, so aliasing any frame account flips that account's pinned
+            // privilege and the packet is refused on chain, not here.
+            ("payer", self.payer),
             ("refundRecipient", self.refund_recipient),
         ] {
             if let Some(other) = seen.get(&key) {
@@ -958,12 +983,53 @@ fn receiver_treasury_address(selected: &SelectedInputV1) -> Result<Pubkey> {
     )
 }
 
+/// Observe the post-state of a stage that actually ran.
+///
+/// [`observe`] answers for the accounts the *input* names. A finalized
+/// projection asks about the accounts the *transaction* touched, and for
+/// Reclaim those are not the same set: its writable frame includes a provider
+/// authority PDA that no input label carries and that the stage itself closes.
+/// Reading that as vacant is exactly the fabrication `observed_or_vacant`
+/// refuses, so the fix is to fetch it rather than to assume it — §7.8's wall,
+/// in the one stage that had never run.
+///
+/// The plan's resolved keys are the authority on what the message touched; they
+/// are already pinned byte-exact in `pre_accounts` and re-derived from the
+/// compiled message, so this widens what is *read*, never what is believed.
+fn observe_stage_poststate_v1(
+    rpc: &mut Rpc,
+    selected: &SelectedInputV1,
+    plan: &StagePlanV1,
+    minimum_slot: u64,
+) -> Result<FinalizedSnapshotV1> {
+    let mut keys = observation_keys_v1(selected)?;
+    for key in &plan.resolved_account_keys {
+        keys.insert(pubkey(key)?);
+    }
+    if keys.len() > 100 {
+        return Err(Error::new(
+            "flagship finalized snapshot exceeds the 100-account RPC bound",
+        ));
+    }
+    observe_keys(rpc, keys, minimum_slot)
+}
+
 fn observe(
     rpc: &mut Rpc,
     selected: &SelectedInputV1,
     _stage: StageV1,
     minimum_slot: u64,
 ) -> Result<FinalizedSnapshotV1> {
+    let keys = observation_keys_v1(selected)?;
+    if keys.len() > 100 {
+        return Err(Error::new(
+            "flagship finalized snapshot exceeds the 100-account RPC bound",
+        ));
+    }
+    observe_keys(rpc, keys, minimum_slot)
+}
+
+fn observation_keys_v1(selected: &SelectedInputV1) -> Result<BTreeSet<Pubkey>> {
     let mut keys = BTreeSet::new();
     keys.extend(selected.accounts.values().copied());
     keys.insert(lifecycle_address(selected)?);
@@ -977,12 +1043,7 @@ fn observe(
     keys.insert(selected.resolver);
     keys.insert(selected.refund_recipient);
     keys.insert(receiver_treasury_address(selected)?);
-    if keys.len() > 100 {
-        return Err(Error::new(
-            "flagship finalized snapshot exceeds the 100-account RPC bound",
-        ));
-    }
-    observe_keys(rpc, keys, minimum_slot)
+    Ok(keys)
 }
 
 fn snapshot_rent(snapshot: &FinalizedSnapshotV1) -> Result<Rent> {
@@ -1223,6 +1284,31 @@ fn lifecycle_address(selected: &SelectedInputV1) -> Result<Pubkey> {
     .0)
 }
 
+/// The Core caller-authority PDA the Execute instruction carries at index 0.
+///
+/// The five seed coordinates are all named by the input and all pinned against
+/// the finalized Market by `chain_facts` — `market_id == market`, `generation`,
+/// `selected_release_set`, the Source state, and `market_account.owner ==
+/// core_program` — so this derivation is authenticated by the same read that
+/// authenticates the stage. The seeds themselves are never spelled here: the
+/// transport builder's own `provider_execute_caller_authority_v3` does the work,
+/// which is what makes this a lookup rather than a second implementation.
+fn execute_caller_authority(selected: &SelectedInputV1) -> Result<Pubkey> {
+    let market = selected.account("market")?;
+    let market_id = Identity::new(market.to_bytes())
+        .map_err(|error| Error::new(format!("Market identity: {error:?}")))?;
+    provider_execute_caller_authority_v3(
+        selected.release_set,
+        market,
+        market_id,
+        selected.generation,
+        selected.account("source_state")?,
+        selected.account("core_program")?,
+    )
+    .map(|(_, caller_authority)| caller_authority)
+    .map_err(|error| Error::new(format!("Execute caller authority: {error:?}")))
+}
+
 fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec<StableAddressV1>> {
     let routed_stage = stage.routing_stage();
     let mut rows = Vec::new();
@@ -1332,6 +1418,25 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
                 "lifecycle",
                 StableAddressClassV1::ProviderObservation,
                 lifecycle_address(selected)?,
+            )?;
+            // The ninth key §7.11 measured and declined to seat, and the one
+            // wall 10 cannot do without: a distinct fee payer costs 96 bytes and
+            // unbundling the certificate top-up returns only 48, leaving 19 that
+            // have to come from somewhere. This row is worth 31.
+            //
+            // §7.13 expected this to need Core's request encoding re-derived in
+            // the producer or the builder's report plumbed out. Neither is
+            // needed. The address is a PDA over five coordinates and
+            // `chain_facts` already pins every one of them against the finalized
+            // Market before any stage runs: `market_id == market`, `generation`,
+            // `selected_release_set`, the Source state, and the Market's owner
+            // being the named Core program. So the union may derive it from the
+            // input alone — and it derives it by *calling the builder's own
+            // function*, not by reimplementing it, so the two cannot drift.
+            push(
+                "caller_authority",
+                StableAddressClassV1::CallerAuthority,
+                execute_caller_authority(selected)?,
             )?;
             provider_programs!();
         }
@@ -2339,6 +2444,10 @@ struct ProducerCommandArgumentsV1 {
     pyth_facts: Option<PathBuf>,
     producer_checkpoint: Option<PathBuf>,
     output: Option<PathBuf>,
+    /// The Execute and Reclaim fee payer. It is a caller choice, not a chain
+    /// reading — nothing on chain names it — so the producer must be told, and
+    /// what it produces is authenticated against it like any other coordinate.
+    payer: Option<String>,
 }
 
 impl ProducerCommandArgumentsV1 {
@@ -2384,6 +2493,7 @@ impl ProducerCommandArgumentsV1 {
                     "--producer-checkpoint",
                 )?,
                 "--output" => set_once(&mut parsed.output, PathBuf::from(value), "--output")?,
+                "--payer" => set_once(&mut parsed.payer, value, "--payer")?,
                 _ => {
                     return Err(Error::new(format!(
                         "unknown flagship producer argument: {argument}"
@@ -3291,6 +3401,7 @@ fn producer_selected_input(
     coherent: &FinalizedSnapshotV1,
     slots: &BTreeMap<StageV1, u64>,
     prior: Option<&ProducerCheckpointV1>,
+    payer: Pubkey,
     expected_cluster: ExpectedClusterV1,
 ) -> Result<PlanInputV1> {
     if plan.schema != PLAN_FORMAT {
@@ -3478,6 +3589,7 @@ fn producer_selected_input(
         release_set: plan.release_set_id.clone(),
         submitter: submitter.to_string(),
         resolver: resolver.to_string(),
+        payer: payer.to_string(),
         refund_recipient: beneficiary.to_string(),
         terminal_sequence,
         reclaim_after_unix_seconds,
@@ -3605,7 +3717,13 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
             Some(CampaignMarketEvidenceV1 {
                 completed: founding_campaign.completed.clone(),
                 accounts: model_rows_as_campaign_v1(effective),
-                founding_custody_context: founding_campaign.founding_custody_context.clone(),
+                // The same §3 selection the terminal sequence makes. The
+                // producer only bounds this field, but it must not hand two
+                // different documents two different custody contexts.
+                founding_custody_context: evidence_refresh::effective_custody_context_v1(
+                    Some(&refresh),
+                    &founding_campaign.founding_custody_context,
+                )?,
                 direct_selected_manifest_entry_index: founding_campaign
                     .direct_selected_manifest_entry_index,
             })
@@ -3659,6 +3777,13 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
         &coherent,
         &slots,
         prior.as_ref(),
+        nonzero_pubkey(
+            arguments
+                .payer
+                .as_deref()
+                .ok_or_else(|| Error::new("--payer is required"))?,
+            "--payer",
+        )?,
         expected_cluster,
     )?;
     let selected = SelectedInputV1::parse(&input, expected_cluster)?;
@@ -5340,21 +5465,37 @@ fn canonical_stage_semantics(
             .map_err(|error| Error::new(format!("provider lifecycle: {error:?}")))?;
             arithmetic.update_rent_lamports = lifecycle.update_rent_lamports;
             arithmetic.provider_fee_lamports = lifecycle.provider_fee_lamports;
+            // Execute cannot carry its own top-up, and the reason is not only
+            // bytes. The transfer's source has to be the account that owes the
+            // certificate its rent — the resolver — and a System transfer makes
+            // its source a writable signer, which is exactly the privilege
+            // Core's frame refuses at that index. Bundling therefore keeps the
+            // resolver writable no matter who pays the fee (§7.13, measured:
+            // the distinct-payer bundled variant still reports
+            // `numReadonlySigned: 0`, and at 1,299 bytes it does not fit
+            // either). So the top-up leaves the packet and becomes its own
+            // accounted act, and this refusal says exactly what that act is.
             if let Some(transfer) = vacant_top_up(
                 snapshot,
                 selected.account("certificate")?,
                 certificate_rent,
                 "terminal certificate",
             )? {
-                transfers.push(transfer);
+                return Err(Error::new(format!(
+                    "execute requires the terminal certificate funded ahead of the packet: \
+                     send exactly {} lamports to {} in its own transaction. The Execute frame \
+                     pins the resolver readonly, and a bundled top-up would make it writable",
+                    transfer.lamports, transfer.destination,
+                )));
             }
             let compiled = compile_provider_execute_v0(
                 &report,
                 Hash::new_from_array(GEOMETRY_BLOCKHASH),
                 std::slice::from_ref(table),
+                selected.payer,
             )
             .map_err(|error| {
-                sized_provider_geometry_refusal(stage, selected.resolver, &report, table, &error)
+                sized_provider_geometry_refusal(stage, selected.payer, &report, table, &error)
             })?;
             (
                 report.instruction,
@@ -5392,9 +5533,10 @@ fn canonical_stage_semantics(
                 &report,
                 Hash::new_from_array(GEOMETRY_BLOCKHASH),
                 std::slice::from_ref(table),
+                selected.payer,
             )
             .map_err(|error| {
-                sized_provider_geometry_refusal(stage, selected.resolver, &report, table, &error)
+                sized_provider_geometry_refusal(stage, selected.payer, &report, table, &error)
             })?;
             (
                 report.instruction,
@@ -5406,7 +5548,13 @@ fn canonical_stage_semantics(
     };
     let expected_signers = match stage {
         StageV1::Submit => vec![selected.submitter, selected.account("update_account")?],
-        StageV1::Execute | StageV1::Accept | StageV1::Reclaim => vec![selected.resolver],
+        // Execute and Reclaim name the resolver as a readonly instruction
+        // signer, so the fee payer is a second, separate key and sorts first.
+        // Accept names no signer at all — its caller authority is a readonly
+        // non-signer PDA — so the resolver may pay there and the frame is
+        // indifferent.
+        StageV1::Execute | StageV1::Reclaim => vec![selected.payer, selected.resolver],
+        StageV1::Accept => vec![selected.resolver],
         StageV1::Complete => Vec::new(),
     };
     if required_signers != expected_signers {
@@ -5612,6 +5760,7 @@ struct CommandArgumentsV1 {
     checkpoint: Option<PathBuf>,
     submitter_keypair: Option<PathBuf>,
     resolver_keypair: Option<PathBuf>,
+    payer_keypair: Option<PathBuf>,
     update_keypair: Option<PathBuf>,
     through: Option<StageV1>,
     adopt_receipts: Option<PathBuf>,
@@ -5654,6 +5803,11 @@ impl CommandArgumentsV1 {
                     PathBuf::from(value),
                     "--resolver-keypair",
                 )?,
+                "--payer-keypair" => set_once(
+                    &mut parsed.payer_keypair,
+                    PathBuf::from(value),
+                    "--payer-keypair",
+                )?,
                 "--update-keypair" => set_once(
                     &mut parsed.update_keypair,
                     PathBuf::from(value),
@@ -5675,6 +5829,7 @@ impl CommandArgumentsV1 {
         if !parsed.execute
             && (parsed.submitter_keypair.is_some()
                 || parsed.resolver_keypair.is_some()
+                || parsed.payer_keypair.is_some()
                 || parsed.update_keypair.is_some())
         {
             return Err(Error::new(
@@ -5755,6 +5910,42 @@ struct ProviderFinalizedTransactionV1 {
     compute_units_consumed: u64,
     post_balances: Vec<u64>,
     return_data_base64: String,
+}
+
+/// May this stage plan be discarded and re-planned?
+///
+/// Only when all three hold: the phase is one that has not handed a packet to
+/// the permanently poll-only recovery path, the cluster's finalized block
+/// height is past the plan's `last_valid_block_height`, and — for a plan that
+/// was actually signed — the packet is not on chain.
+///
+/// The last two together are what make this safe rather than convenient. An
+/// expired blockhash is refused by the network, not by this tool, so a packet
+/// that is both expired and absent from finalized history has no future in
+/// which it lands.
+fn discardable_expired_plan_v1(
+    rpc: &mut Rpc,
+    selected: &SelectedInputV1,
+    plan: &StagePlanV1,
+) -> Result<bool> {
+    if matches!(
+        plan.phase,
+        DurablePhaseV1::Submitted | DurablePhaseV1::Finalized
+    ) {
+        return Ok(false);
+    }
+    let height = rpc
+        .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
+        .as_u64()
+        .ok_or_else(|| Error::new("getBlockHeight result was not a u64"))?;
+    if height <= plan.last_valid_block_height {
+        return Ok(false);
+    }
+    // An unsigned plan has no packet at all, so there is nothing to look for.
+    if plan.expected_signature.is_none() {
+        return Ok(true);
+    }
+    Ok(provider_transaction_status(rpc, selected, plan)?.is_none())
 }
 
 fn provider_transaction_status(
@@ -6026,9 +6217,15 @@ fn authenticate_prestate_rows(
     let observed_clock = observed_rows.remove(&clock_key);
     let planned_clock = planned_rows.remove(&clock_key);
     if observed_rows != planned_rows {
-        return Err(Error::new(
-            "provider full resolved account prestate changed",
-        ));
+        // The relation is unchanged — every row is still required byte-exact.
+        // It now names the rows that moved. A prestate pin spanning dozens of
+        // accounts behind one string is a refusal that can be read and not
+        // acted on, which is the lesson §7.4 recorded and §7.14.1 had to learn
+        // a second time.
+        return Err(Error::new(format!(
+            "provider full resolved account prestate changed: {}",
+            describe_prestate_difference_v1(&planned_rows, &observed_rows)
+        )));
     }
     match (planned_clock, observed_clock) {
         (Some(planned_clock), Some(observed_clock)) => {
@@ -6036,10 +6233,74 @@ fn authenticate_prestate_rows(
         }
         // A stage whose message never resolves the Clock has nothing to release.
         (None, None) => Ok(()),
-        _ => Err(Error::new(
-            "provider full resolved account prestate changed",
+        (None, Some(_)) => Err(Error::new(
+            "provider full resolved account prestate changed: the Clock is resolved now and was \
+             not when this stage was planned",
+        )),
+        (Some(_), None) => Err(Error::new(
+            "provider full resolved account prestate changed: the Clock was resolved when this \
+             stage was planned and is absent now",
         )),
     }
+}
+
+/// Name the rows a prestate comparison refused on, and what moved in each.
+///
+/// Byte-equality is the whole relation and it is not relaxed here; this only
+/// reports which of the pinned accounts stopped satisfying it, so a refusal can
+/// be acted on rather than merely reported.
+fn describe_prestate_difference_v1(
+    planned: &BTreeMap<String, DurableAccountStateV1>,
+    observed: &BTreeMap<String, DurableAccountStateV1>,
+) -> String {
+    let mut notes = Vec::new();
+    for (address, planned_row) in planned {
+        let Some(observed_row) = observed.get(address) else {
+            notes.push(format!("{address} was pinned when planned and is absent now"));
+            continue;
+        };
+        if planned_row == observed_row {
+            continue;
+        }
+        let mut fields = Vec::new();
+        if planned_row.owner != observed_row.owner {
+            fields.push(format!(
+                "owner {} -> {}",
+                planned_row.owner, observed_row.owner
+            ));
+        }
+        if planned_row.lamports != observed_row.lamports {
+            fields.push(format!(
+                "lamports {} -> {}",
+                planned_row.lamports, observed_row.lamports
+            ));
+        }
+        if planned_row.executable != observed_row.executable {
+            fields.push(format!(
+                "executable {} -> {}",
+                planned_row.executable, observed_row.executable
+            ));
+        }
+        if planned_row.data_base64 != observed_row.data_base64 {
+            fields.push(format!(
+                "data ({} -> {} base64 chars)",
+                planned_row.data_base64.len(),
+                observed_row.data_base64.len()
+            ));
+        }
+        notes.push(format!("{address}: {}", fields.join(", ")));
+    }
+    for address in observed.keys() {
+        if !planned.contains_key(address) {
+            notes.push(format!(
+                "{address} is pinned now and was not when planned"
+            ));
+        }
+    }
+    if notes.is_empty() {
+        return "the row maps differ but no row reports a difference".into();
+    }
+    notes.join("; ")
 }
 
 fn authenticate_prestate_clock(
@@ -6428,7 +6689,7 @@ fn finish_provider_stage(
 ) -> Result<StageReceiptV1> {
     expected_cluster
         .authenticate_finalized_fee(finalized.fee_lamports, "Resolution finalized transaction")?;
-    let post = observe(rpc, selected, plan.stage, finalized.slot)?;
+    let post = observe_stage_poststate_v1(rpc, selected, plan, finalized.slot)?;
     let return_bytes = BASE64
         .decode(&finalized.return_data_base64)
         .map_err(|error| Error::new(format!("provider returnData base64: {error}")))?;
@@ -6646,6 +6907,34 @@ fn run_with_expected_cluster(
     loop {
         if let Some(plan) = checkpoint.stage_plan.as_mut() {
             plan.validate()?;
+            // A plan whose blockhash the cluster will no longer accept, and
+            // whose packet is not on chain, can never land: Solana refuses a
+            // transaction past its `lastValidBlockHeight` permanently. Such a
+            // plan is not a packet in flight, it is a dead one, and every
+            // authentication below it — the prestate pin first — refuses
+            // forever while naming something other than the cause. That is
+            // §7.7's lesson one frame further out than §7.7 applied it: the
+            // expiry is checked before the fee probe there, and it belongs
+            // before the prestate here for exactly the same reason.
+            //
+            // Discarding it re-plans the same stage against current chain. It
+            // cannot double-send, because the packet being discarded is
+            // unlandable by consensus rule rather than by local intent.
+            //
+            // Submitted is deliberately excluded and stays permanently
+            // poll-only: that phase's whole contract is that it never reasons
+            // about a packet it may have broadcast.
+            if discardable_expired_plan_v1(&mut rpc, &selected, plan)? {
+                let stage = plan.stage;
+                println!(
+                    "{} plan expired unlanded at block height {}; re-planning against current chain",
+                    stage.label(),
+                    plan.last_valid_block_height
+                );
+                checkpoint.stage_plan = None;
+                write_checkpoint(&checkpoint_path, &checkpoint)?;
+                continue;
+            }
             match plan.phase {
                 DurablePhaseV1::Finalized => {
                     let observed = provider_transaction_status(&mut rpc, &selected, plan)?
@@ -7140,6 +7429,7 @@ struct ReprovisionArgumentsV1 {
     plan: Option<PathBuf>,
     output: Option<PathBuf>,
     input_output: Option<PathBuf>,
+    payer: Option<String>,
 }
 
 impl ReprovisionArgumentsV1 {
@@ -7184,6 +7474,7 @@ impl ReprovisionArgumentsV1 {
                     PathBuf::from(value),
                     "--input-output",
                 )?,
+                "--payer" => set_once(&mut parsed.payer, value, "--payer")?,
                 _ => {
                     return Err(Error::new(format!(
                         "unknown reprovision argument: {argument}"
@@ -7321,10 +7612,33 @@ fn run_execute_table_reprovision(
         .ok_or_else(|| Error::new("getSlot omitted a finalized slot"))?;
     let table_key = create_lookup_table(authority, authority, creation_slot).1;
     input.lookup_tables.execute = table_key.to_string();
-    // Exactly seven fields may move. Rebase the new input back onto the prior
+    // The fee payer is the eighth movable field, and it may only be *named*,
+    // never *changed*: a checkpoint minted before wall 10 carries an empty
+    // payer, and naming one is how such a life adopts the fix. A checkpoint
+    // that already names a payer keeps it — re-pointing the payer of a life
+    // whose Execute packet may already be signed is a substitution, not a
+    // re-plan, and refuses below on byte equality like any other drift.
+    let named_payer = nonzero_pubkey(
+        arguments
+            .payer
+            .as_deref()
+            .ok_or_else(|| Error::new("--payer is required"))?,
+        "--payer",
+    )?
+    .to_string();
+    if !prior.planned_input.payer.is_empty() && prior.planned_input.payer != named_payer {
+        return Err(Error::new(format!(
+            "the producer checkpoint already names payer {}; --payer {named_payer} would \
+             substitute it",
+            prior.planned_input.payer,
+        )));
+    }
+    input.payer = named_payer;
+    // Exactly eight fields may move. Rebase the new input back onto the prior
     // one and demand byte equality: any other drift — a substituted Market, a
     // moved refund recipient, a different post body — refuses here.
     let mut rebased = input.clone();
+    rebased.payer = prior.planned_input.payer.clone();
     rebased.accounts.source_spec_staging = prior.planned_input.accounts.source_spec_staging.clone();
     rebased.accounts.source_provider_release_staging = prior
         .planned_input
@@ -7340,7 +7654,8 @@ fn run_execute_table_reprovision(
     rebased.lookup_tables.execute = prior.planned_input.lookup_tables.execute.clone();
     if rebased != prior.planned_input {
         return Err(Error::new(
-            "Execute table re-plan changed more than the six staging cursors and the Execute table",
+            "Execute table re-plan changed more than the six staging cursors, the fee payer, \
+             and the Execute table",
         ));
     }
     let selected = SelectedInputV1::parse(&input, expected_cluster)?;
@@ -7474,7 +7789,15 @@ fn load_stage_signers(
                 selected.account("update_account")?,
             )?),
         )),
-        StageV1::Execute | StageV1::Accept | StageV1::Reclaim => Ok((
+        StageV1::Execute | StageV1::Reclaim => Ok((
+            load_keypair(arguments.payer_keypair.as_ref(), "payer", selected.payer)?,
+            Some(load_keypair(
+                arguments.resolver_keypair.as_ref(),
+                "resolver",
+                selected.resolver,
+            )?),
+        )),
+        StageV1::Accept => Ok((
             load_keypair(
                 arguments.resolver_keypair.as_ref(),
                 "resolver",
@@ -7523,50 +7846,175 @@ fn verify_terminal(selected: &SelectedInputV1, snapshot: &FinalizedSnapshotV1) -
     .0;
     let source_material =
         snapshot.account(selected.account("source_material")?, "SourceMaterial")?;
-    let provider_release = snapshot.account(
+    // Wall 11: two records, one word. `certificate.route` is the *Pyth* release
+    // record's content digest — `provider_finalized_projection_v3` writes
+    // `route: request.provider_release`, and the transport builder sets that to
+    // `pyth_id`, which it reads *out of* the Source's ProviderRelease record and
+    // then pins to the Pyth release account with `authenticate_raw`. Digesting
+    // the Source's ProviderRelease here compared the wrong one of the two, and
+    // nothing caught it because no market had ever passed Execute.
+    //
+    // The join is checked whole rather than merely repointed: the Source's
+    // ProviderRelease must name the Pyth release the certificate routed
+    // through, and that Pyth release account must be the record it names. Both
+    // records stay read; neither is dropped to make a clause pass.
+    let source_provider_release = snapshot.account(
         selected.account("source_provider_release")?,
         "ProviderRelease",
     )?;
+    let pyth_release = snapshot.account(selected.account("pyth_release")?, "PythRelease")?;
+    let source_provider = ProviderReleaseV1::decode(&source_provider_release.data)
+        .map_err(|error| Error::new(format!("ProviderRelease: {error:?}")))?;
     let product = snapshot.account(selected.account("product")?, "Product")?;
-    if market.phase != CorePhase::Terminal
-        || market.readiness != Readiness::Consumed
-        || market.identity.market_id.to_bytes() != market_key.to_bytes()
-        || market.identity.generation != selected.generation
-        || market.identity.selected_release_set.to_bytes() != selected.release_set
-        || market.terminal_receipt.map(|value| value.to_bytes()) != Some(certificate_key.to_bytes())
-        || certificate.market != market_key.to_bytes()
-        || certificate.generation != selected.generation
-        || certificate.receipt_account != certificate_key.to_bytes()
-        || certificate.kind != ResolutionCertificateKindV2::ResolutionSuccess
-        || certificate.selector != market.terminal_winner
-        || certificate.route != hash(&provider_release.data).to_bytes()
-        || certificate.source_material != market.identity.resolution_policy.to_bytes()
-        || certificate.product_record_digest != market.identity.product_record.to_bytes()
-        || certificate.provider_evidence != source_terminal.resolution_evidence_id().to_bytes()
-        || certificate.funding_allocation != [0; 32]
-        || certificate.attempt_index != 0
-        || certificate.result_denominator != 1
-        || certificate.observed_at == 0
-        || source.phase() != SourceResolutionPhaseV1::Resolved
-        || source.market() != market_key.to_bytes()
-        || source.generation() != selected.generation
-        || source_terminal.route() != SourceResolutionRouteV1::Primary
-        || source_terminal.selector() != certificate.selector
-        || source_terminal.terminal_sequence() != selected.terminal_sequence
-        || source_key != expected_source
-        || certificate_key != expected_certificate
-        || source_account.owner != resolution
-        || source_account.executable
-        || certificate_account.owner != resolution
-        || certificate_account.executable
-        || certificate_account.lamports
-            != snapshot_rent(snapshot)?.minimum_balance(certificate_account.data.len())
-        || hash(&source_material.data).to_bytes() != market.identity.resolution_policy.to_bytes()
-        || hash(&product.data).to_bytes() != market.identity.product_record.to_bytes()
-    {
-        return Err(Error::new(
-            "finalized Core Terminal, receipt, winner, Source, Market, generation, or release join refused",
-        ));
+    // Thirty-four conjuncts behind one string is a refusal that can be reported
+    // and not acted on: it says the terminal join failed and nothing about
+    // *which* coordinate disagreed, which is the difference between a wall that
+    // can be driven and one that can only be described (§7.4). The relation is
+    // unchanged — every clause below is the same clause, in the same order, and
+    // all of them must hold. Only the payload is new.
+    let certificate_rent = snapshot_rent(snapshot)?.minimum_balance(certificate_account.data.len());
+    let refused: Vec<&str> = [
+        (
+            "market phase is Terminal",
+            market.phase == CorePhase::Terminal,
+        ),
+        (
+            "market readiness is Consumed",
+            market.readiness == Readiness::Consumed,
+        ),
+        (
+            "market identity names this market",
+            market.identity.market_id.to_bytes() == market_key.to_bytes(),
+        ),
+        (
+            "market generation",
+            market.identity.generation == selected.generation,
+        ),
+        (
+            "market release set",
+            market.identity.selected_release_set.to_bytes() == selected.release_set,
+        ),
+        (
+            "market terminal receipt names the certificate",
+            market.terminal_receipt.map(|value| value.to_bytes())
+                == Some(certificate_key.to_bytes()),
+        ),
+        (
+            "certificate market",
+            certificate.market == market_key.to_bytes(),
+        ),
+        (
+            "certificate generation",
+            certificate.generation == selected.generation,
+        ),
+        (
+            "certificate receipt account is itself",
+            certificate.receipt_account == certificate_key.to_bytes(),
+        ),
+        (
+            "certificate kind is ResolutionSuccess",
+            certificate.kind == ResolutionCertificateKindV2::ResolutionSuccess,
+        ),
+        (
+            "certificate selector is the market's terminal winner",
+            certificate.selector == market.terminal_winner,
+        ),
+        (
+            "certificate route digests the Pyth release record",
+            certificate.route == hash(&pyth_release.data).to_bytes(),
+        ),
+        (
+            "the Source ProviderRelease names that Pyth release",
+            source_provider.provider_deployment_release_id().to_bytes() == certificate.route,
+        ),
+        (
+            "certificate source material is the market's resolution policy",
+            certificate.source_material == market.identity.resolution_policy.to_bytes(),
+        ),
+        (
+            "certificate product-record digest",
+            certificate.product_record_digest == market.identity.product_record.to_bytes(),
+        ),
+        (
+            "certificate provider evidence is the Source terminal evidence",
+            certificate.provider_evidence == source_terminal.resolution_evidence_id().to_bytes(),
+        ),
+        (
+            "certificate funding allocation is zero",
+            certificate.funding_allocation == [0; 32],
+        ),
+        (
+            "certificate attempt index is zero",
+            certificate.attempt_index == 0,
+        ),
+        (
+            "certificate result denominator is one",
+            certificate.result_denominator == 1,
+        ),
+        (
+            "certificate observed_at is nonzero",
+            certificate.observed_at != 0,
+        ),
+        (
+            "Source phase is Resolved",
+            source.phase() == SourceResolutionPhaseV1::Resolved,
+        ),
+        ("Source market", source.market() == market_key.to_bytes()),
+        (
+            "Source generation",
+            source.generation() == selected.generation,
+        ),
+        (
+            "Source terminal route is Primary",
+            source_terminal.route() == SourceResolutionRouteV1::Primary,
+        ),
+        (
+            "Source terminal selector matches the certificate",
+            source_terminal.selector() == certificate.selector,
+        ),
+        (
+            "Source terminal sequence matches the input",
+            source_terminal.terminal_sequence() == selected.terminal_sequence,
+        ),
+        (
+            "Source state is its canonical PDA",
+            source_key == expected_source,
+        ),
+        (
+            "certificate is its canonical PDA",
+            certificate_key == expected_certificate,
+        ),
+        (
+            "Source state is Resolution-owned",
+            source_account.owner == resolution && !source_account.executable,
+        ),
+        (
+            "certificate is Resolution-owned",
+            certificate_account.owner == resolution && !certificate_account.executable,
+        ),
+        (
+            "certificate is exactly rent-exempt",
+            certificate_account.lamports == certificate_rent,
+        ),
+        (
+            "SourceMaterial digests to the market's resolution policy",
+            hash(&source_material.data).to_bytes() == market.identity.resolution_policy.to_bytes(),
+        ),
+        (
+            "Product digests to the market's product record",
+            hash(&product.data).to_bytes() == market.identity.product_record.to_bytes(),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(label, held)| (!held).then_some(label))
+    .collect();
+    if !refused.is_empty() {
+        return Err(Error::new(format!(
+            "finalized Core Terminal, receipt, winner, Source, Market, generation, or release \
+             join refused on {} of 33 clauses: {}",
+            refused.len(),
+            refused.join("; "),
+        )));
     }
     Ok(())
 }
@@ -7877,6 +8325,7 @@ mod tests {
             release_set: hex(&[90; 32]),
             submitter: Pubkey::new_from_array([70; 32]).to_string(),
             resolver: resolver.to_string(),
+            payer: Pubkey::new_from_array([71; 32]).to_string(),
             refund_recipient: Pubkey::new_from_array([81; 32]).to_string(),
             terminal_sequence: 1,
             reclaim_after_unix_seconds: 1_000,
@@ -8306,6 +8755,32 @@ mod tests {
         assert!(execute.iter().any(|row| {
             row.label == "trading_program" && row.class == StableAddressClassV1::Program
         }));
+        // Wall 10's margin is 12 bytes and it is bought by the 49th row. If this
+        // count moves, the Execute packet no longer fits and the frozen table on
+        // chain is stale — both are refusals, but neither is a surprise worth
+        // discovering on a cluster.
+        assert_eq!(execute.len(), 49);
+        let caller = execute
+            .iter()
+            .find(|row| row.label == "caller_authority")
+            .expect("Execute union seats the caller authority");
+        assert_eq!(caller.class, StableAddressClassV1::CallerAuthority);
+        // The address is bound to this life, not a constant: every seed
+        // coordinate `chain_facts` pins must move it.
+        let mut elsewhere = sample_input();
+        elsewhere.generation += 1;
+        let elsewhere = SelectedInputV1::parse(&elsewhere, ExpectedClusterV1::Devnet)
+            .expect("another generation");
+        let other = stable_lookup_union(&elsewhere, StageV1::Execute).expect("other union");
+        assert_ne!(
+            caller.address,
+            other
+                .iter()
+                .find(|row| row.label == "caller_authority")
+                .expect("caller authority")
+                .address,
+            "a caller authority that survived a generation change would not be this life's",
+        );
         let plan = build_lookup_table_plan(&selected, StageV1::Submit, 100, selected.resolver)
             .expect("lookup plan");
         assert!(authenticate_lookup_table_plan(&selected, &plan).is_ok());
@@ -8319,6 +8794,50 @@ mod tests {
         reordered.swap(0, 1);
         hostile_plan.stable_union = reordered;
         assert!(authenticate_lookup_table_plan(&selected, &hostile_plan).is_err());
+    }
+
+    /// Wall 10: the fee payer cannot be any account whose privilege a frame pins.
+    ///
+    /// Before this, `compile_provider_execute_v0` took the payer from
+    /// `required_signers.first()` — the resolver — and Solana's compiler
+    /// promoted it to a writable signer. The packet compiled, fit, reached the
+    /// cluster, and was refused with `0x3001` after 20,517 compute units. Every
+    /// refusal below now happens locally, before a key is opened.
+    #[test]
+    fn the_stage_fee_payer_must_be_distinct_from_the_readonly_resolver() {
+        let mut same = sample_input();
+        same.payer = same.resolver.clone();
+        let error = SelectedInputV1::parse(&same, ExpectedClusterV1::Devnet)
+            .expect_err("a resolver that pays is the wall-10 defect");
+        assert!(
+            format!("{error}").contains("payer must differ from resolver"),
+            "{error}",
+        );
+
+        let mut absent = sample_input();
+        absent.payer = String::new();
+        assert!(
+            SelectedInputV1::parse(&absent, ExpectedClusterV1::Devnet).is_err(),
+            "an input minted before wall 10 deserializes, but never reaches a message",
+        );
+
+        for alias in ["market", "source_state", "certificate", "update_account"] {
+            let mut aliased = sample_input();
+            let selected =
+                SelectedInputV1::parse(&sample_input(), ExpectedClusterV1::Devnet).expect("sample");
+            aliased.payer = selected.account(alias).expect("selector").to_string();
+            let error = SelectedInputV1::parse(&aliased, ExpectedClusterV1::Devnet)
+                .expect_err("a payer that aliases the frame flips a pinned privilege");
+            assert!(
+                format!("{error}").contains("address-book substitution"),
+                "{alias}: {error}",
+            );
+        }
+
+        // And the honest shape still parses, with the payer sorting first.
+        let selected =
+            SelectedInputV1::parse(&sample_input(), ExpectedClusterV1::Devnet).expect("sample");
+        assert_ne!(selected.payer, selected.resolver);
     }
 
     #[test]
@@ -9144,18 +9663,29 @@ mod tests {
             .expect("fixture resolved key");
         let mut tampered = rows(&clock_row(9_001, 200, 3, 5, 499));
         let row = tampered.get_mut(&victim).expect("fixture row");
-        row.lamports += 1;
+        let moved_to = row.lamports + 1;
+        let was = row.lamports;
+        row.lamports = moved_to;
+        // The relation is unchanged and still byte-exact. What it now does is
+        // say WHICH row stopped satisfying it, and in what field — a prestate
+        // pin spans dozens of accounts, and one string for all of them is a
+        // refusal that can be read and not acted on.
         assert_eq!(
             refusal(tampered),
-            "provider full resolved account prestate changed"
+            format!(
+                "provider full resolved account prestate changed: {victim}: lamports {was} -> {moved_to}"
+            )
         );
 
-        // A Clock the plan pinned but the reading never produced is structural.
+        // A Clock the plan pinned but the reading never produced is structural,
+        // and the refusal says which side is missing it rather than leaving the
+        // reader to guess between the two asymmetric cases.
         let mut absent = rows(&planned_clock);
         absent.remove(&clock_key);
         assert_eq!(
             refusal(absent),
-            "provider full resolved account prestate changed"
+            "provider full resolved account prestate changed: the Clock was resolved when this \
+             stage was planned and is absent now"
         );
     }
 

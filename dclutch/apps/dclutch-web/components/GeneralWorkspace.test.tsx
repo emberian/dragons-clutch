@@ -13,8 +13,8 @@ describe('General successor workspace presentation', () => {
     expect(html).toContain('Inspect one chain-derived operator plan');
     expect(html).toContain('Reacquire exact chain status');
     expect(html).toContain('Verify the commit-last execution receipt');
-    expect(html).toContain('download the unsigned v0 packet');
-    expect(html).toContain('no signing or submission occurs');
+    expect(html).toContain('the unsigned packet is yours to download');
+    expect(html).toContain('Nothing is signed or submitted.');
     expect(html).not.toContain('settlement transaction remains unavailable');
     expect(html).not.toContain('pending Claims/Custody child wires');
     expect(html).not.toContain('illustrative');

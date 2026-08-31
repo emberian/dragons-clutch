@@ -1368,3 +1368,25 @@ rather than taken from a lane's report.
   ControllerActionV3::CloseCandidate (tag 14) ships with them or not —
   ruling needed at that cut. Critical path to EXECUTION: the runtime-
   dispatch unit (invocation_v1 V3 topology + accelerator bank paths).
+
+## Consequences recorded — 2026-08-31 morning (the complete-life drive)
+
+- **WALL 22, the night's biggest protocol finding (LIFECYCLE-REDEEM):
+  `CloseMakerReplay` is ENCODER-ONLY** — the Direct dispatch refuses it in
+  two lines, the selector table has no entry 11, and both counter-writing
+  transitions are add-only (the released one structurally incapable of
+  decrementing). The zero-open-maker-roots retirement gate is enforced in
+  FIVE independent places with no override, and selected_release_set has
+  no setter — so EVERY market filled under a release set without the
+  action is PERMANENTLY UNRETIRABLE, rent unreclaimable; building it
+  helps only markets founded after the cut. The Lean model already
+  specifies the decrement and proves the invariant: spec-vs-
+  implementation divergence, 9-11 pieces, a RELEASE-SET change.
+  **COHORT-9 CHARTER (in order): (1) CloseMakerReplay end to end;
+  (2) ZeroBump seal recovery (the cohort-6 stranded seal); (3) General's
+  14-artifact re-publication when the runtime-dispatch unit lands.**
+  Devnet's stranded state is acceptable per standing ruling; pre-mainnet
+  this is mandatory.
+- The first complete redemption: collateral round-tripped 550,250,000
+  atoms to the atom; the first market ever to satisfy CoreBeginRetiring's
+  zero-claims gate. Life table: 82 acts, residual +0, drift +0.

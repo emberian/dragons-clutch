@@ -1392,3 +1392,492 @@ Every condition it fired on is still refused, by the clause that names the
 cause — and conditions it *never* fired on (a fresh life re-provisioning
 Reclaim's table; a mid-life provision naming a foreign market) are refused now
 and were not before.
+
+### 7.13 Wall (10): the Execute frame was written for a resolver that does not pay
+
+**Measured, sized, and STOPPED deliberately.** With §7.12's guard ruled and the
+48-row table frozen on chain, the Execute packet fit for the first time — 1,203
+wire bytes against 1,232 — and reached the cluster. Core refused it:
+
+```
+Program CtbPLmAcVc8xpzjZMrPZ14QfapnSMbjRdouUZLjUTBPp invoke [1]
+Program CtbPLmAcVc8xpzjZMrPZ14QfapnSMbjRdouUZLjUTBPp consumed 20517 of 1399550 compute units
+Program CtbPLmAcVc8xpzjZMrPZ14QfapnSMbjRdouUZLjUTBPp failed: custom program error: 0x3001
+```
+
+`0x3001` is `CoreSbfError::AccountFrame` — "account count, order, privilege,
+executable flag, or alias refused."
+
+**The count is right; the privilege is not.** `EXECUTE_PROVIDER_ACCOUNT_COUNT_V3`
+is 47 and the builder emits 47. The failing conjunct is in
+`validate_outer_frame` (`programs/dclutch-core-sbf/src/execute_provider_v3.rs`):
+
+```rust
+let signer = index == RESOLVER;
+let writable = matches!(index, SOURCE_STATE | CERTIFICATE | LIFECYCLE);
+```
+
+Account 1 is the resolver, and it must be a **readonly** signer. Decoded from the
+durable signed packet this lane produced:
+
+```
+numRequiredSignatures  1
+numReadonlySigned      0
+static[0]              2SVqjPNYveWR2reX11JehENyV65zYbeR88ezapQysuaA  (the resolver)
+```
+
+`compile_provider_execute_v0` sets `required_signers = vec![resolver]` and then
+`payer = required_signers.first()`, and Solana's message compiler
+unconditionally promotes the fee payer to a writable signer. The runtime derives
+every instruction account's `is_writable` from the **message**, not from the
+instruction meta. So Core sees `accounts[1].is_writable == true` and refuses.
+
+**Nothing here disagrees except the payer choice.** The builder emits
+`AccountMeta::new_readonly(intent.resolver, true)`; Core demands readonly; Core
+forwards the message's writability into the CPI
+(`let writable = index != MARKET && value.is_writable;`) and the Resolution
+program demands the same thing at its own index 1
+(`account.is_writable != (matches!(index, 2 | 3) || index == tail_start - 1)`).
+Builder and both programs agree the resolver is a readonly signer. **Only the
+transaction compiler's fee-payer default contradicts them**, so this is a
+transport wall, not a program defect — and Decision 0012's `ReleaseSuperseded`
+is *not* engaged, because nothing on chain needs redeploying.
+
+**Why Submit escaped and Reclaim will not.** Submit's frame expects its payer
+writable — `account.is_writable != matches!(index, 0 | 1 | 2 | 34)`, with the
+submitter at index 0 — which is why the landed Submit receipt has
+`numRequiredSignatures: 2, numReadonlySigned: 0` and passes. Reclaim's frame is
+Execute's shape, not Submit's: `authenticate_reclaim_privileges` demands
+`is_signer != (index == 0)` **and** `is_writable != matches!(index, 1..=4)`, so
+its sole signer at index 0 must also be readonly — and
+`compile_provider_reclaim_v0` makes that same account the fee payer. **Reclaim is
+blocked by this wall too**, and will be, on any market, the moment its packet
+fits.
+
+**Sizing, measured rather than derived.** Every row below is a real compile of
+this market's Execute action against the frozen 48-row table, packet bytes read
+off the serialized transaction:
+
+| Variant | Wire bytes | Margin | Resolver readonly? |
+| --- | --- | --- | --- |
+| as sent — resolver pays, top-up bundled | 1203 | **+29** | no (payer *and* transfer source) |
+| resolver pays, top-up unbundled | 1155 | +77 | no (payer) |
+| a distinct payer, top-up bundled | 1299 | **−67** | no (transfer source) |
+| a distinct payer, top-up unbundled | 1251 | **−19** | **yes** |
+| …plus `caller_authority` extracted (49-row table) | 1220 | **+12** | **yes** |
+
+Two facts fall out of that table and both are load-bearing:
+
+- **The certificate top-up must leave the packet, for a reason beyond bytes.**
+  Its `from` is the resolver, signer and writable
+  (`transfers: [{destination: certificate, lamports: 3_062_400, purpose:
+  "terminal certificate"}]`). Bundling it keeps the resolver writable no matter
+  who pays. Measured: the distinct-payer bundled variant still reports
+  `numReadonlySigned: 0`.
+- **The fix does not fit in the 48-row table.** A distinct payer costs 96 bytes
+  — 64 for a second signature, 32 for its static key — and unbundling returns
+  only 48. The remaining 19 must come from `caller_authority`, the ninth key
+  §7.11 measured and declined to plumb, worth 31 bytes. The margin afterwards is
+  **12 bytes**.
+
+**The lane this needs, and why this one did not take it.** Three coupled changes,
+none of them local:
+
+1. A fee payer distinct from the resolver, through `compile_provider_execute_v0`
+   and `compile_provider_reclaim_v0` — which means the driver signs Execute with
+   two keys, and the payer's debit joins the stage's exact arithmetic.
+2. The certificate top-up unbundled into its own prior transaction, with its own
+   prestate authentication and its own receipt — the bundled top-up is currently
+   part of the stage's conserved arithmetic, so this moves a lamport-flow across
+   a transaction boundary.
+3. `caller_authority` named in `input.json` and so in the union — §7.11's "one
+   genuinely awkward one": a PDA over
+   `(release_set, market, role, source_state, role_request_digest)` whose digest
+   is the hash of a `Request` encoded inside the transport builder. Naming it
+   means either re-deriving Core's request encoding in the producer or plumbing
+   the builder's report out. It becomes load-bearing here, where §7.11 could
+   still decline it.
+
+And a new table: the union grows to 49 rows at a new slot-derived address, which
+is exactly the mid-life provision §7.12 just made admissible — so wall 9's ruling
+is what makes wall 10's fix reachable at all.
+
+§7.9 ruled of wall 8 that *"this is a lane, not a patch."* The same ruling
+applies here. This lane declined to invent a payer-and-arithmetic change at the
+end of a driving session, with a 12-byte margin and a conservation ledger that
+would have to be re-derived across a new transaction boundary.
+
+**What this means for the life.** The market stays at `classify == Execute` with
+its Submit receipt landed, its widened Execute table frozen on chain, and no
+further stage reachable: Execute refuses on the frame, Accept is behind Execute,
+and Reclaim carries the same defect. Redemption and retirement both require Core's
+terminal receipt, so both are behind wall 10 as well. The complete life table this
+session can honour therefore ends at the routing tables, not at retirement — and
+every lamport it does cover conserves.
+
+### 7.14 Wall (10), driven — and the four walls standing behind it
+
+**Driven.** §7.13 measured wall 10, sized its fix at three coupled changes with a
+12-byte margin, and declined to invent a payer-and-arithmetic change at the end
+of a driving session. This section records that lane. Execute compiled at
+**1,220 wire bytes** against 1,232 — §7.13's derived figure to the byte — and
+landed. Accept landed behind it. **The market holds an accepted, verified
+terminal receipt**, and the complete life table stands at 44 acts, conserved,
+residual and drift exactly zero.
+
+#### What the three changes cost, measured
+
+1. **A payer distinct from the resolver.** `compile_provider_execute_v0` and
+   `compile_provider_reclaim_v0` take it explicitly and refuse, locally, any
+   payer that is the resolver, is zero, or aliases an instruction account.
+   Each of those compiled a sendable packet before; each would have been
+   refused on chain after 20,517 compute units and a cluster round trip.
+   Measured in the crate's own test: **exactly 96 bytes**, 64 for the second
+   signature and 32 for its static key — §7.13's arithmetic, confirmed.
+
+2. **The certificate top-up, unbundled.** Execute refuses a required top-up by
+   naming the exact lamports and destination, because the transfer's source
+   must be the resolver and a System transfer makes its source a writable
+   signer. The top-up became its own accounted act (slot 125,210, 150 CU),
+   and the stage's conserved arithmetic is unchanged: with no bundled
+   transfer, `StageV1::Execute => top_ups` is zero and the distinct payer's
+   only debit is its fee.
+
+3. **`caller_authority`, and it was cheaper than §7.13 expected.** §7.13 said
+   naming it meant "either re-deriving Core's request encoding in the producer
+   or plumbing the builder's report out." **Neither is needed.** The address is
+   a PDA over five coordinates and `chain_facts` already pins every one of them
+   against the finalized Market before any stage runs: `market_id == market`,
+   `generation`, `selected_release_set`, the Source state, and
+   `market_account.owner == core_program`. So the union derives it from the
+   authenticated input alone — and derives it by calling the transport
+   builder's own extracted `provider_execute_caller_authority_v3`, not a second
+   implementation. **The derived address reproduced the failed packet's fourth
+   static key byte for byte:** `7WYY28aqi1bLHxd5qUzcWJXNqkX9Er11fJjzbtEymhRw`.
+
+Reclaim carried the identical defect and got the identical fix preemptively.
+**Accept did not need it**: `admit_accounts` places the caller authority at
+index 0 as a readonly *non-signer* and names no signer at all, so the resolver
+may pay there and the frame is indifferent. §7.13's "Accept is behind Execute"
+was true only in ordering.
+
+#### 7.14.1 Wall (11): two records, one word
+
+Accept landed and its post-finalization `verify_terminal` refused. The failing
+clause, once the refusal could name it, was `certificate.route`.
+
+`provider_finalized_projection_v3` writes `route: request.provider_release`, and
+the transport builder sets that to `pyth_id` — which it reads *out of* the
+Source's ProviderRelease record and then pins to the Pyth release account with
+`authenticate_raw`. So `certificate.route` is the **Pyth release record's**
+digest. `verify_terminal` compared it against the **Source ProviderRelease's**.
+Measured on chain: the certificate's bytes at offset 48..80 are exactly
+`sha256(pythRelease)`. Two records, one word, and nothing had ever caught it
+because no market had ever passed Execute.
+
+Repointed, and strengthened rather than merely repointed: the Source
+ProviderRelease must name the Pyth release the certificate routed through. Both
+records stay read; neither is dropped to make a clause pass.
+
+**And the refusal was given a payload.** Thirty-three conjuncts behind one
+string is a refusal that can be reported and not acted on — §7.4's lesson,
+unlearned in a second place. The relation is unchanged, in the same order, with
+every clause still required; it now names the ones that failed. It named wall 11
+on the first re-run.
+
+#### 7.14.2 Wall (12): Reclaim wants a substrate this ledger is not
+
+Reclaim refuses with `0x8006 ResolutionDeployment`. Exactly one conjunct of the
+registry-deployment gate fails, and all the others were checked against chain:
+
+```
+registry_programdata.upgrade_authority() = Some(6H8Ks96rr…)   the gate demands None
+```
+
+This is **not a defect**. `DEVNET_DEMO_DEPLOY.md` is explicit — *"Registry and
+Rent must already be immutable when Core initializes its infrastructure
+profile"* — and this is the **only** `upgrade_authority().is_some()` refusal in
+the entire program set: the sole site enforcing that documented invariant. The
+local ledger was deployed with a live authority, which is the local-validator
+convenience, and Reclaim is where that convenience is finally read.
+
+The remedy is one command and it is **irreversible on the substrate every wall
+of this session was driven on**: `set-upgrade-authority --final` on the
+Registry. It is not a transport change, it would permanently forbid any redeploy
+on this ledger, and it was deliberately not taken. Reclaim is the one stage of
+this life that this substrate cannot complete.
+
+#### 7.14.3 Walls (14) and (15): the retirement path, two walls further on
+
+Redemption and retirement sit behind Core's terminal receipt, not behind
+Reclaim, so both became reachable. Two more walls fell on the way.
+
+**Wall 14 — the refresh existed and the terminal sequence could not read it.**
+The sequence refused before touching chain, on the all-or-none pairing:
+*"It carries `direct_trading_funding_ledger` and omits `direct_capability_root`."*
+That is **this document's own §3**, whose ruling was already made — the label
+names two different addresses, and the refresh is the document that emits the
+execution root under it. Only the threading was missing: `--refreshed-evidence`
+reached the flagship producer and never reached here. Threaded with the same
+mechanism and no new ruling; the session binds the refresh digest, because a
+resumable sequence must not change which document carried its rows between
+invocations any more than it may change the founding bytes.
+
+**Wall 15 — the sequence was retiring a Market one generation short.** Past wall
+14 it refused that the Market's generation was not the founding input's. It was
+right, and it was comparing the wrong two things: `market.rs` is explicit that
+the founding's product is *"the DCLTGMF3 Market at generation + 1 … the one that
+ends Open, which is the product of the whole founding"* (`PrestateLaneV1::
+Founding`, offset 1). All **eight** uses of the input's generation in that
+module mean that Market — its identity, its Source state PDA twice, the Direct
+BeginRetiring request twice, and the Resolution closure receipt. All eight were
+one short: a Source state that does not exist, an identity that never matches.
+They now pass through one named derivation, and the chain comparison it feeds
+became a *check* of that derivation instead of an assumption.
+
+With both landed the sequence passes evidence admission, the market join, and
+ALT projection, and reaches Direct native-close coordinate planning.
+
+#### 7.14.4 Wall (13/16): one hash short, and one undriven route
+
+**Measured, sized, and STOPPED deliberately.** Redemption and the terminal
+sequence's fourth stage refuse for a single shared root cause, and it needs a
+ruling this lane will not invent.
+
+`derive_founding_coordinates` computes two values. The Custody coordinates are
+all derived from `context_digest = SHA256(PROJECTED_HOARD_CONTEXT_DOMAIN_V1 ||
+context)`. The campaign evidence records the **raw `context`**. Reproduced
+exactly at this market's generation:
+
+```
+evidence founding_custody_context = 637d53a4…7080cda2   (the pre-image)
+SHA256(domain || that)            = 82306216…4b3b200d   (what chain uses)
+```
+
+Three independent chain facts confirm the second: the Claims aggregate's
+`custody_context` field, the founding Trading-role replay's own stored
+`context`, and the Hoard vault holding the market's 500.000000 collateral.
+Market, release set, role and program id are all correct — **only this one seed
+is a hash step short**, and every consumer that reads
+`evidence.founding_custody_context` is therefore addressing an empty universe.
+
+Behind it sits a second, independent blocker: the Claims-role replay
+`6REWMhjH…` does not exist and **nothing under `tools/` drives the route that
+creates it.** `programs/dclutch-claims-sbf/src/custody_replay_v1.rs` is a
+dedicated first-use creation route — *"Only the Claims program can create the
+Claims-role replay"* — and `terminal_settlement_v3` decodes the replay rather
+than creating it, deliberately: creation is never a side effect of a payout. The
+terminal payout lane has no step that initializes it.
+
+So the ruling this needs is not small. Which document is authoritative for the
+custody context, and which side converts — fixing the emitter changes the digest
+of every founding artifact that exists; fixing the consumers spreads the
+projection across every reader. And the missing lane step is a lane, not a patch.
+§7.9's ruling applies again, and this lane declined to invent a second one at
+the union.
+
+**What this means for the life.** The complete life table this session can
+honour runs from the controller funding ledgers to **Core's accepted terminal
+receipt** — 44 acts, every lamport and atom read back out of the chain's own
+finalized records, residual `+0` and drift `+0`. Redemption and retirement stand
+behind 7.14.4; Reclaim stands behind 7.14.2, which is a property of this ledger
+and not of the protocol.
+
+### 7.15 Walls (12) through (22): redemption, and the life at 82 acts
+
+**Driven.** §7.14.4 stopped at redemption and retirement with two blockers and no
+ruling. Both were ruled, both fell, and six more stood behind them. Every one had
+never executed on any market, which is what driving a path nothing has driven
+looks like.
+
+**Wall (12) ruled and driven.** The immutable-Registry command Reclaim demands
+was approved *for this substrate only* — a local scratch chain that exists to be
+driven. The command and its rationale were recorded before it ran, at
+`jobs/dclutch-fill2/retire/wall12/`, along with the before-state of all seven
+programs and the four things checked because it cannot be undone: nothing left
+to redeploy, Registry is not an `ExecutionRoleV1` so no release-record authority
+pin covers it, the retirement paths only *observe* a live authority rather than
+comparing it to a stored one, and the direction is toward
+`DEVNET_DEMO_DEPLOY.md`'s own step 1. Registry only. **Reclaim landed at slot
+146,219, 76,667 CU**, and the resolution lane is complete at four receipts with
+`verifiedTerminal` true.
+
+**Wall (13/16), ruled.** The chain's persisted form is authoritative. Measured
+rather than argued: every raw-form address is vacant, and the two live
+objects — the Trading-role replay and the Hoard vault holding the market's
+500.000000 collateral — are both at `SHA256(projected-hoard-context ‖
+pre-image)`. This is §3's hazard a second time, one label naming two values, so
+it gets §3's remedy: the refresh emits the value the terminal consumers mean,
+under `chain_persisted_custody_context`, read from the Claims aggregate's own
+persisted field and admitted only if the chain agrees it is the founding
+pre-image's digest. The consumer re-derives that digest and demands
+byte-equality, so a refresh can *select* which of a founding's two values its
+label meant and cannot introduce a third.
+
+The founding evidence of an already-founded market cannot be rewritten — its
+digest is pinned inside the refresh's own lineage field — so the refresh is the
+only document that could have carried this at all.
+
+**Wall (16)'s second half was a driver, and it was built.** `DCLCCR01` had a
+program, a codec, and two program tests, and no caller anywhere under `tools/`.
+The driver follows fc31812c's shape and takes nothing economic: release set,
+Realm, generation and custody context come off the aggregate, the rent refund off
+Core's `rent_beneficiary`, the rent off the Rent sysvar. It calls the program's
+own `expected_request_v1` rather than restating it, because the caller
+authority's fifth seed is that request's digest. **The projected address
+reproduced `6REWMhjH` — the exact replay §7.14.4 named as nonexistent —
+independently of the probe that first derived it.** Created at slot 155,467.
+
+**Wall (17): an expired plan was a permanent dead end.** Finalizing the Registry
+moved one pinned prestate row, and the Reclaim plan — signed, never sent, its
+blockhash long past `lastValidBlockHeight` — refused forever on the prestate
+while naming something other than the cause. A packet the network refuses by
+consensus rule has no future in which it lands, so it may be discarded and
+re-planned. That is §7.7's own lesson, which checked expiry before the fee probe
+for exactly this reason and stopped one frame short. `Submitted` stays
+permanently poll-only.
+
+**Wall (18): a label that reads semantic and is ordinal.**
+`founding_funding_ledger_v2_N` is indexed by the campaign's own sort of
+controller subsets, and the selected trade entry sits at manifest index 0, so
+ordinal 0 is the **Trading** ledger. Three sites read it as the Resolution one —
+one while labelling its own error *"Resolution FundingLedger"* — which aliased
+two of the native-close frame's thirty-eight accounts and tripped a distinctness
+clause that names nothing. Admission now refuses the aliasing by name.
+
+**Wall (19): the System Program is the one address that reads as unset.** Its id
+IS the all-zero pubkey, so the ALT closure's vacancy guard refused
+`ResolutionCloseFund` at frame index 18 of 19 for naming it. Every closure names
+it as a constant and classes it `InlineProgram`, a class no derived coordinate
+carries, so exempting exactly that position keeps the guard meaningful.
+
+**Wall (20): the ALT intent would not admit that its authority is the fee
+payer.** Solana promotes the fee payer to a writable signer at index 0 whatever
+the meta asked for, so an intent built from raw metas described a packet that
+cannot exist. §7.13 met this promotion from the other side, where Core demanded a
+readonly signer and the fix had to be a distinct payer at 96 bytes; the Address
+Lookup Table program asks only that its authority sign, so here the only defect
+was the bookkeeping. One named projection records what the message will carry, so
+the comparison stays an exact equality instead of being taught to forgive.
+
+**Wall (21): every payout ever attempted would have died at 200,000 CU.** The
+payout compiler emitted one instruction and no compute budget. Measured:
+*exceeded CUs meter at BPF instruction*, with the program still running. It had
+never been observed because the replay this route decodes had no creation caller
+until one existed. The route costs **314,539 CU when it pays nothing and 463,809
+when it moves the collateral**. The declaration is the transaction ceiling on
+purpose — the cost is a function of claim count and composition graph, which the
+compiler does not see, and there is no priority fee here for a tight limit to
+save. The ComputeBudget program id compiles static, so the canonical lookup
+census is unchanged and a table frozen before the prefix existed stays valid.
+
+The payout input also took its custody context from campaign evidence and so
+addressed the raw-form replay. Decision 0008 §1 says the aggregate is the sole
+persisted owner of a Market's Custody namespace and no route may re-guess it, and
+that command already holds a finalized RPC — so it reads the owner directly. The
+decision applied, rather than a document threaded past it.
+
+#### Redemption, complete
+
+Both positions read `[0,0,0,0]`; the Claims aggregate reads `[0,0,0,0]`; the
+Hoard vault is drained to zero atoms. The market resolved to claim index 2, so
+the founder took the whole 500.000000 collateral and the participant's
+100,000,000 of claim 0 paid nothing — a real outcome, not a degenerate one. Five
+payouts, slots 159,735 through 161,684.
+
+Zeroing the aggregate is what made `CoreBeginRetiring` reachable: its zero-claims
+gate is not a formality, and this is the first time it has ever been satisfied.
+**It landed at slot 165,065, 88,414 CU**, and the market is Retiring.
+
+#### 7.15.1 Wall (22): `CloseMakerReplay` is not a driver, and not a patch
+
+**Measured, sized, and STOPPED.** `DirectBeginRetiring` refuses with
+`InvalidRootState`. Read from chain, the Direct root's
+`open_maker_root_count` is **2** — the two maker roots the fill opened — and
+`direct_begin_retiring_v1.rs` requires zero.
+
+The route that would decrement it is named by this tree's own documentation, at
+`crates/dclutch-direct-codec/src/execution_v3.rs:118`:
+
+> `CloseMakerReplay`: the ONLY action that could ever decrement
+> `DirectRootStateLayoutV1::OPEN_MAKER_ROOT_COUNT`, **which every artifact in the
+> tree today only increases**. Its absence is what makes `CloseDirectRoot` dead
+> rather than merely unbuilt.
+
+This is not §7.14.4's shape. The Claims replay had a real program route and
+merely lacked a caller, so a driver closed it. Here the thing the discriminant
+names does not exist, and an audit of the whole tree confirms it three ways:
+
+- **No handler.** The Direct dispatch is not a match over the action space; it is
+  a two-line refusal. `programs/dclutch-trading-sbf/src/hot_v3.rs:3961` returns
+  `UnsupportedContent` for anything that is not `InlineOrdinary`. The string
+  `CloseMakerReplay` appears **zero times anywhere under `programs/`**.
+- **No artifact, and the selector table cannot name it.** The published
+  `ordinary_lifecycle_entries()` is a `[CapabilityProgramSetEntryV2; 4]` —
+  `InlineOrdinary`, BeginRetiring, NativeClose, Activation. A request carrying
+  selector 11 fails `select_descriptor` in the ProgramSet before any program
+  logic runs.
+- **No decrement on chain.** Both Effect instructions that write the counter are
+  fed by add-only transitions; the released one is a `checked_add` of two values
+  each proven `<= 1`, so it is *structurally incapable* of producing a smaller
+  number. The tree's only `checked_sub` on the counter lives in
+  `successor.rs:2479` `close_maker_replay_v2`, whose only callers are its own
+  three unit tests.
+
+**And it is worse than "unbuilt".** The gate is enforced in five independent
+places — twice in the operator, once natively in
+`programs/dclutch-trading-sbf/src/direct_begin_retiring_v1.rs:518`, once in
+`terminal_retirement_v1.rs:1136`, and once as an on-chain artifact transition in
+`native_close_bundle_v1.rs:409` — so bypassing the host is not available. There
+is no admin override anywhere in the tree, and `selected_release_set` is part of
+`CoreState.identity` with no setter: it is only ever compared.
+
+**So building the action later cannot rescue a market that already exists.** New
+artifacts mean a new `program_set_id`, existing roots are bound to the old one,
+and `require_close_selection` refuses any proposal whose `capability_release()`
+differs from the persisted one. **Every market that has ever been filled under
+the current release set is permanently unretirable, and its rent permanently
+unreclaimable.** Building `CloseMakerReplay` fixes markets founded after the cut,
+and only those.
+
+**The specification already has the decrement.** `DirectSuccessor.lean:434-455`
+models `openMakerRootCount := root.openMakerRootCount - 1` and proves
+`result.root.openMakerRootCount + 1 = root.openMakerRootCount`. The Lean model
+and the host codec both describe a close; the chain has no route that performs
+one. This is a spec-versus-implementation divergence, not an oversight in the
+driving.
+
+**Sizing.** Nine to eleven distinct pieces: the transition/economics program that
+emits the only decrement in the tree, a codec bundle module, three published
+records (AccountProfile, Effect, descriptor), a fifth ProgramSet entry at
+ascending selector 11, a program handler or a new native route, an operator plan
+builder — which needs a way to *enumerate* live maker replays, and no index for
+them exists today — bootstrap authoring and publication, a new release set and
+fresh activation, and fixtures. `CloseDirectRoot` is not additional work: the
+physical root close already ships as the native-close selector, and only its
+precondition is unreachable.
+
+**What this means for the life.** Retirement's remaining five stages sit behind a
+protocol capability that has never existed on chain. That is a property of the
+protocol, not of this ledger and not of this market.
+
+#### What the life table says now
+
+**82 acts, conserved, residual `+0` and drift `+0`** — founding, fill, fee,
+resolution through Reclaim, the Claims-replay creation, five redemptions, and
+`CoreBeginRetiring`. The sweep that built it also found **five acts the 44-act
+table had missed**: two collateral-funding transfers, a position prefund, a
+participant wallet funding, and a wallet-and-delegate creation. Completeness is
+now checked rather than assumed — every finalized transaction touching any
+market-specific account in the table is in the table.
+
+The atom column is the proof the whole session was for: 550,250,000 atoms in from
+the collateral wallet and the participant's stake, 550,250,000 out to the
+founder's payout and the fee, and **every intermediate — the founding source, the
+Hoard, the participant's wallet — nets exactly zero.** The collateral made a
+complete round trip.
+
+One transaction is deliberately outside the table and named here rather than
+silently dropped: slot 1,119 creates the mint and mints the collateral universe,
+~4,200 slots before this market's first act, and is shared with every other
+market on this ledger. It is the substrate's genesis, not this market's life.

@@ -202,6 +202,8 @@ struct TerminalSequenceSessionV1 {
     plan_sha256: String,
     market_input_sha256: String,
     evidence_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refreshed_evidence_sha256: Option<String>,
     market: String,
     payer: String,
     source_receipt: String,
@@ -221,6 +223,10 @@ struct TerminalSequenceArgumentsV1 {
     plan: PathBuf,
     market_input: PathBuf,
     evidence: PathBuf,
+    /// The optional post-founding evidence refresh
+    /// (`docs/design/EVIDENCE_REFRESH_V1.md`). Absent, this command behaves
+    /// byte-for-byte as it did before the refresh existed.
+    refreshed_evidence: Option<PathBuf>,
     market: Pubkey,
     payer: Pubkey,
     payer_keypair: PathBuf,
@@ -987,6 +993,39 @@ struct DurableInstructionAccountV1 {
     class: TerminalAddressClassV1,
 }
 
+/// One instruction meta, as the COMPILED MESSAGE will actually carry it.
+///
+/// Solana's message compiler unconditionally promotes the fee payer to a
+/// writable signer at static index 0, whatever privileges the instruction meta
+/// asked for. An intent built from the raw metas therefore describes a packet
+/// that cannot exist whenever the frame names the payer — and the ALT routes
+/// name it exactly there, as the table's own authority.
+///
+/// Recording the promotion here keeps the compiled-versus-intent comparison an
+/// exact equality rather than teaching that comparison to forgive a difference;
+/// a frame that disagrees for any OTHER reason still refuses, and still names
+/// which conjunct failed.
+///
+/// This is a statement about the transaction format, not a relaxation of any
+/// frame. §7.13 met the same promotion from the other side, where a program
+/// demanded a readonly signer and no bookkeeping could help: there the fix had
+/// to be a payer distinct from the account. Here the Address Lookup Table
+/// program asks only that its authority sign, so the promotion is harmless and
+/// the defect was only that the intent did not admit to it.
+fn durable_instruction_account_v1(
+    meta: &AccountMeta,
+    class: TerminalAddressClassV1,
+    payer: Pubkey,
+) -> DurableInstructionAccountV1 {
+    let is_fee_payer = meta.pubkey == payer;
+    DurableInstructionAccountV1 {
+        address: meta.pubkey.to_string(),
+        signer: meta.is_signer || is_fee_payer,
+        writable: meta.is_writable || is_fee_payer,
+        class,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DurableExpectedAccountV1 {
@@ -1339,12 +1378,7 @@ pub(crate) fn build_protocol_stage_journal_v1(
             .accounts
             .iter()
             .zip(fresh_closure.classes.iter().copied())
-            .map(|(meta, class)| DurableInstructionAccountV1 {
-                address: meta.pubkey.to_string(),
-                signer: meta.is_signer,
-                writable: meta.is_writable,
-                class,
-            })
+            .map(|(meta, class)| durable_instruction_account_v1(meta, class, payer))
             .collect(),
         instruction_data_base64: BASE64.encode(&mutation.instruction.data),
         instruction_data_sha256: sha256_hex(&mutation.instruction.data),
@@ -1603,16 +1637,12 @@ fn authenticate_planned_protocol_owner_v1(
         ));
     }
     closure.authenticate_instruction(&mutation.instruction)?;
+    let journal_payer = pubkey(&journal.intent.payer)?;
     let instruction_accounts = closure
         .accounts
         .iter()
         .zip(closure.classes.iter().copied())
-        .map(|(meta, class)| DurableInstructionAccountV1 {
-            address: meta.pubkey.to_string(),
-            signer: meta.is_signer,
-            writable: meta.is_writable,
-            class,
-        })
+        .map(|(meta, class)| durable_instruction_account_v1(meta, class, journal_payer))
         .collect::<Vec<_>>();
     if journal.intent.program_id != closure.program_id.to_string()
         || journal.intent.program_class != closure.program_class
@@ -2432,9 +2462,48 @@ fn authenticate_terminal_message_decompilation_v1(intent: &DurableTerminalIntent
             || writable != expected.writable
             || !class_placement_ok
         {
-            return Err(refusal(
-                "terminal compiled account key, order, privilege, or address-class placement differed from intent",
-            ));
+            // Four independent conjuncts over every account in the frame. The
+            // relation is unchanged; it now says which account and which of the
+            // four stopped holding, because "something in this frame differed"
+            // is a refusal that cannot be acted on.
+            let mut differed = Vec::new();
+            if *key != expected_key {
+                differed.push(format!("key {key} != intended {expected_key}"));
+            }
+            if signer != expected.signer {
+                differed.push(format!(
+                    "signer {signer} != intended {}",
+                    expected.signer
+                ));
+            }
+            if writable != expected.writable {
+                differed.push(format!(
+                    "writable {writable} != intended {}",
+                    expected.writable
+                ));
+            }
+            if !class_placement_ok {
+                differed.push(format!(
+                    "class {:?} requires {} placement but this key is {}",
+                    expected.class,
+                    match expected.class {
+                        TerminalAddressClassV1::LookupStable => "lookup-loaded",
+                        _ => "static",
+                    },
+                    if loaded { "lookup-loaded" } else { "static" }
+                ));
+            }
+            return Err(refusal(&format!(
+                "terminal {:?} compiled account {key} at frame index {} (resolved index {index} \
+                 of {static_len} static) differed from intent: {}",
+                intent.mutation,
+                instruction
+                    .accounts
+                    .iter()
+                    .position(|value| usize::from(*value) == index)
+                    .unwrap_or_default(),
+                differed.join("; ")
+            )));
         }
     }
     match &intent.lookup_table {
@@ -3233,8 +3302,74 @@ fn pubkey_vector_sha256(addresses: &[Pubkey]) -> String {
     hex_bytes(&hasher.finalize())
 }
 
+/// The generation of the Market this sequence retires.
+///
+/// The founding input names the generation the **founding lane** occupies. Its
+/// product — "the DCLTGMF3 Market at generation + 1 … the one that ends Open,
+/// which is the product of the whole founding" (`market.rs`,
+/// `FoundingTargetsV1::open_market`, derived through
+/// `PrestateLaneV1::Founding`, whose offset is 1) — is one past it.
+///
+/// Every coordinate this sequence retires belongs to that Market: its own
+/// identity, its Source state PDA, the Direct BeginRetiring request, and the
+/// Resolution closure receipt. Reading the input's own generation for any of
+/// them addressed a Market one short — a Source state that does not exist and
+/// an identity that never matches. Nothing caught it because no market had ever
+/// reached this stage with a life behind it.
+///
+/// The chain comparison this feeds is therefore a *check* of the derivation and
+/// not an assumption: `state.identity.generation` must equal what this returns.
+fn retired_market_generation_v1(founding_generation: u64) -> Result<u64> {
+    founding_generation
+        .checked_add(1)
+        .ok_or_else(|| refusal("retired Market generation overflow"))
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     hex_bytes(&Sha256::digest(bytes))
+}
+
+/// The two row shapes are field-identical; only their owning modules differ.
+fn terminal_rows_as_model_v1(
+    rows: &BTreeMap<String, crate::campaign::CampaignAccountEvidenceV1>,
+) -> BTreeMap<String, crate::model::AccountEvidence> {
+    rows.iter()
+        .map(|(label, row)| {
+            (
+                label.clone(),
+                crate::model::AccountEvidence {
+                    address: row.address.clone(),
+                    owner: row.owner.clone(),
+                    lamports: row.lamports,
+                    executable: row.executable,
+                    data_len: row.data_len,
+                    data_sha256: row.data_sha256.clone(),
+                    account_sha256: row.account_sha256.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn model_rows_as_terminal_v1(
+    rows: BTreeMap<String, crate::model::AccountEvidence>,
+) -> BTreeMap<String, crate::campaign::CampaignAccountEvidenceV1> {
+    rows.into_iter()
+        .map(|(label, row)| {
+            (
+                label,
+                crate::campaign::CampaignAccountEvidenceV1 {
+                    address: row.address,
+                    owner: row.owner,
+                    lamports: row.lamports,
+                    executable: row.executable,
+                    data_len: row.data_len,
+                    data_sha256: row.data_sha256,
+                    account_sha256: row.account_sha256,
+                },
+            )
+        })
+        .collect()
 }
 
 fn hex_bytes(bytes: &[u8]) -> String {
@@ -3482,7 +3617,7 @@ pub(crate) fn plan_direct_begin_retiring_from_chain_v1(
         manifest,
         program_set,
         config,
-        market_input.generation,
+        retired_market_generation_v1(market_input.generation)?,
         evidence.direct_selected_manifest_entry_index,
     );
     let placeholder_request = DirectBeginRetiringRequestV1 {
@@ -3499,7 +3634,7 @@ pub(crate) fn plan_direct_begin_retiring_from_chain_v1(
         // and authenticates the real finalized digests.
         expected_market_digest: [1; 32],
         expected_root_digest: [2; 32],
-        generation: market_input.generation,
+        generation: retired_market_generation_v1(market_input.generation)?,
         entry_index: evidence.direct_selected_manifest_entry_index,
     };
     let closure = direct_begin_retiring_meta_closure_v1(DirectBeginRetiringCoordinateInputV1 {
@@ -3725,7 +3860,7 @@ pub(crate) fn plan_resolution_close_from_chain_v1(
         .ok_or_else(|| refusal("Retiring Market omitted terminal receipt"))?;
     let certificate = Pubkey::new_from_array(certificate.to_bytes());
     let beneficiary = Pubkey::new_from_array(preliminary_market.rent_beneficiary.to_bytes());
-    let funding_ledger = evidence_pubkey(evidence, "founding_funding_ledger_v2_0")?;
+    let funding_ledger = evidence_pubkey(evidence, "resolution_funding_ledger")?;
     let core_programdata = pubkey(&plan.core.programdata_id)?;
     let resolution_programdata = pubkey(&plan.resolution.programdata_id)?;
     let activation = pubkey(&plan.activation)?;
@@ -4330,7 +4465,7 @@ pub(crate) fn direct_native_close_discovery_from_chain_v1(
         realm.staging,
         manifest.raw,
         manifest.staging,
-        evidence_pubkey(evidence, "founding_funding_ledger_v2_0")?,
+        evidence_pubkey(evidence, "resolution_funding_ledger")?,
         evidence_pubkey(evidence, "direct_trading_funding_ledger")?,
         evidence_pubkey(evidence, "direct_capability_root")?,
         pubkey(&plan.activation)?,
@@ -4998,7 +5133,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
             market.as_ref(),
-            &market_input.generation.to_le_bytes(),
+            &retired_market_generation_v1(market_input.generation)?.to_le_bytes(),
         ],
         &resolution,
     )
@@ -5006,7 +5141,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
     let rent_credit = evidence_pubkey(evidence, "founding_lifecycle_rent_credit")?;
     let initial = finalized_snapshot(rpc, &[market, source_state, rent_credit])?;
     let state = decode_routed_market(initial.account(market)?, core, plan)?;
-    if state.identity.generation != market_input.generation
+    if state.identity.generation != retired_market_generation_v1(market_input.generation)?
         || !matches!(state.phase, Phase::Terminal | Phase::Retiring)
     {
         return Err(refusal(
@@ -5082,7 +5217,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
         direct_manifest,
         program_set_digest,
         config_digest,
-        market_input.generation,
+        retired_market_generation_v1(market_input.generation)?,
         evidence.direct_selected_manifest_entry_index,
     );
     let begin = direct_begin_retiring_meta_closure_v1(DirectBeginRetiringCoordinateInputV1 {
@@ -5096,7 +5231,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
             config: config_digest,
             expected_market_digest: [1; 32],
             expected_root_digest: [2; 32],
-            generation: market_input.generation,
+            generation: retired_market_generation_v1(market_input.generation)?,
             entry_index: evidence.direct_selected_manifest_entry_index,
         },
         descriptor: evidence_digest(evidence, "direct_begin_retiring_descriptor_record")?,
@@ -5154,7 +5289,7 @@ pub(crate) fn project_terminal_lookup_closures_from_chain_v1(
             programdata: pubkey(&program.programdata_id)?,
         })
     };
-    let resolution_funding = evidence_pubkey(evidence, "founding_funding_ledger_v2_0")?;
+    let resolution_funding = evidence_pubkey(evidence, "resolution_funding_ledger")?;
     let trading_funding = evidence_pubkey(evidence, "direct_trading_funding_ledger")?;
     let close = direct_native_close_meta_closure_v1(&DirectNativeCloseCoordinateInputV1 {
         release_set,
@@ -6026,12 +6161,7 @@ pub(crate) fn build_lookup_infrastructure_journal_v1(
             .accounts
             .iter()
             .zip(classes)
-            .map(|(meta, class)| DurableInstructionAccountV1 {
-                address: meta.pubkey.to_string(),
-                signer: meta.is_signer,
-                writable: meta.is_writable,
-                class,
-            })
+            .map(|(meta, class)| durable_instruction_account_v1(meta, class, payer.key))
             .collect(),
         instruction_data_base64: BASE64.encode(&instruction.data),
         instruction_data_sha256: sha256_hex(&instruction.data),
@@ -6173,12 +6303,7 @@ pub(crate) fn authenticate_lookup_infrastructure_planned_journal_v1(
         .accounts
         .iter()
         .zip(classes)
-        .map(|(meta, class)| DurableInstructionAccountV1 {
-            address: meta.pubkey.to_string(),
-            signer: meta.is_signer,
-            writable: meta.is_writable,
-            class,
-        })
+        .map(|(meta, class)| durable_instruction_account_v1(meta, class, payer.key))
         .collect::<Vec<_>>();
     if journal.intent.mutation != mutation
         || payer.observation.slot < journal.intent.observation_slot
@@ -6340,11 +6465,36 @@ pub(crate) fn terminal_lookup_union_from_closures_v1(
             closure.program_id,
             TerminalAddressClassV1::InlineProgram,
         )?;
-        for (account, class) in closure.accounts.iter().zip(closure.classes.iter().copied()) {
-            if account.pubkey == Pubkey::default() {
-                return Err(refusal(
-                    "ALT coordinate closure contains a vacant account identity",
-                ));
+        for (index, (account, class)) in closure
+            .accounts
+            .iter()
+            .zip(closure.classes.iter().copied())
+            .enumerate()
+        {
+            // The System Program's id IS the all-zero pubkey, so a frame that
+            // legitimately names it is byte-indistinguishable from one that
+            // left a coordinate unset. Every closure here names it as the
+            // `system_program::ID` constant and classes it InlineProgram — a
+            // class no derived coordinate carries, since those are LookupStable
+            // — so exempting exactly that position keeps the vacancy refusal
+            // meaningful everywhere it can still mean anything.
+            //
+            // Without this, `ResolutionCloseFund` refuses at frame index 18 of
+            // 19 on its own System Program, which is why no market had ever
+            // reached the stage behind it.
+            let names_system_program = class == TerminalAddressClassV1::InlineProgram
+                && !account.is_signer
+                && !account.is_writable;
+            if account.pubkey == Pubkey::default() && !names_system_program {
+                // Which stage, and which index within its frame. A closure set
+                // spanning six stages and a couple of hundred metas behind one
+                // string is a refusal nobody can act on.
+                return Err(refusal(&format!(
+                    "ALT coordinate closure for {:?} carries a vacant account identity at frame \
+                     index {index} of {}",
+                    closure.stage,
+                    closure.accounts.len()
+                )));
             }
             match class {
                 TerminalAddressClassV1::LookupStable => {
@@ -6773,7 +6923,7 @@ fn run_terminal_sequence_with_expected_cluster_v1(
     let evidence_source = fs::read(&arguments.evidence)?;
     let plan: SuccessorPlan = serde_json::from_slice(&plan_source)?;
     let market_input: MarketRunInput = serde_json::from_slice(&market_source)?;
-    let evidence = if expected_cluster == ExpectedClusterV1::Devnet {
+    let founding_evidence = if expected_cluster == ExpectedClusterV1::Devnet {
         parse_campaign_terminal_evidence_v1(&evidence_source)?
     } else {
         parse_campaign_terminal_evidence_with_expected_cluster_v1(
@@ -6781,9 +6931,12 @@ fn run_terminal_sequence_with_expected_cluster_v1(
             expected_cluster,
         )?
     };
-    authenticate_plan_source(&plan_source, &evidence.plan_sha256)?;
-    require_direct_retirement_evidence(&evidence)?;
-    authenticate_campaign_market_v1(&evidence, arguments.market)?;
+    authenticate_plan_source(&plan_source, &founding_evidence.plan_sha256)?;
+    let refreshed_source = arguments
+        .refreshed_evidence
+        .as_ref()
+        .map(fs::read)
+        .transpose()?;
     let mut rpc = Rpc::connect_cluster(
         &arguments.origin,
         if arguments.execute {
@@ -6793,10 +6946,55 @@ fn run_terminal_sequence_with_expected_cluster_v1(
         },
     )?;
     authenticate_terminal_cluster_v1(&mut rpc, &arguments.origin, expected_cluster)?;
+    // The refresh widens *which document may carry a row*, never what is then
+    // demanded of the row: `require_direct_retirement_evidence` and
+    // `authenticate_campaign_market_v1` below run unchanged, against the
+    // effective map. `docs/design/EVIDENCE_REFRESH_V1.md` §2, and §3 for why
+    // this stage in particular needs it — `direct_capability_root` names two
+    // different addresses, the founding checkpoint's founding-permit root (at
+    // which no account can ever exist) and the execution root this stage means,
+    // and the refresh is the document that emits the second under that label.
+    //
+    // These two checks moved below the cluster connect because the refresh must
+    // be admitted against a finalized slot before the evidence it produces can
+    // be judged. Nothing between them was reordered, and with no refresh
+    // supplied the sequence is byte-for-byte what it was.
+    let evidence = match refreshed_source.as_deref() {
+        None => founding_evidence,
+        Some(bytes) => {
+            let refresh = crate::evidence_refresh::parse_refresh_v1(bytes)?;
+            let effective = crate::evidence_refresh::effective_accounts_v1(
+                &refresh,
+                &evidence_source,
+                &terminal_rows_as_model_v1(&founding_evidence.accounts),
+                &founding_evidence.plan_sha256,
+                expected_cluster,
+                rpc.finalized_slot()?,
+            )?;
+            // §3's remedy, applied to the second label that names two values.
+            // `founding_custody_context` records the founding's own action
+            // pre-image; Custody addresses the Hoard and every post-founding
+            // role replay under its projected-hoard digest, and every consumer
+            // below means that one. The refresh selects which, and cannot
+            // introduce a third: the equality is re-derived here.
+            let founding_custody_context = crate::evidence_refresh::effective_custody_context_v1(
+                Some(&refresh),
+                &founding_evidence.founding_custody_context,
+            )?;
+            CampaignTerminalEvidenceV1 {
+                accounts: model_rows_as_terminal_v1(effective),
+                founding_custody_context,
+                ..founding_evidence
+            }
+        }
+    };
+    require_direct_retirement_evidence(&evidence)?;
+    authenticate_campaign_market_v1(&evidence, arguments.market)?;
     let input_digests = (
         sha256_hex(&plan_source),
         sha256_hex(&market_source),
         sha256_hex(&evidence_source),
+        refreshed_source.as_deref().map(sha256_hex),
     );
     let session = load_or_create_terminal_session_v1(
         &mut rpc,
@@ -7460,7 +7658,7 @@ fn load_or_create_terminal_session_v1(
     plan: &SuccessorPlan,
     market_input: &MarketRunInput,
     evidence: &CampaignTerminalEvidenceV1,
-    input_digests: &(String, String, String),
+    input_digests: &(String, String, String, Option<String>),
 ) -> Result<TerminalSequenceSessionV1> {
     if arguments.session.exists() {
         let session = read_terminal_session_v1(&arguments.session)?;
@@ -7526,6 +7724,7 @@ fn load_or_create_terminal_session_v1(
         plan_sha256: input_digests.0.clone(),
         market_input_sha256: input_digests.1.clone(),
         evidence_sha256: input_digests.2.clone(),
+        refreshed_evidence_sha256: input_digests.3.clone(),
         market: arguments.market.to_string(),
         payer: arguments.payer.to_string(),
         source_receipt: source_receipt.to_string(),
@@ -7546,7 +7745,7 @@ fn load_or_create_terminal_session_v1(
 fn authenticate_terminal_session_inputs_v1(
     session: &TerminalSequenceSessionV1,
     arguments: &TerminalSequenceArgumentsV1,
-    input_digests: &(String, String, String),
+    input_digests: &(String, String, String, Option<String>),
 ) -> Result<()> {
     authenticate_terminal_session_v1(session)?;
     if terminal_session_cluster_v1(session)? != arguments.expected_cluster
@@ -7554,6 +7753,9 @@ fn authenticate_terminal_session_inputs_v1(
         || session.plan_sha256 != input_digests.0
         || session.market_input_sha256 != input_digests.1
         || session.evidence_sha256 != input_digests.2
+        // A resumable sequence must not change which refresh carried its rows
+        // between invocations, exactly as it must not change the founding bytes.
+        || session.refreshed_evidence_sha256 != input_digests.3
         || session.market != arguments.market.to_string()
         || session.payer != arguments.payer.to_string()
         || session.supplied_lookup_table != arguments.supplied_lookup_table.is_some()
@@ -7656,7 +7858,7 @@ fn authenticate_source_receipt_journal_v1(
         &[
             SOURCE_RESOLUTION_STATE_PDA_DOMAIN_V2,
             market.as_ref(),
-            &market_input.generation.to_le_bytes(),
+            &retired_market_generation_v1(market_input.generation)?.to_le_bytes(),
         ],
         &resolution,
     )
@@ -7672,7 +7874,7 @@ fn authenticate_source_receipt_journal_v1(
         || Pubkey::new_from_array(decoded.receipt_account) != receipt
         || Pubkey::new_from_array(decoded.market) != market
         || Pubkey::new_from_array(decoded.source_state) != source_state
-        || decoded.generation != market_input.generation
+        || decoded.generation != retired_market_generation_v1(market_input.generation)?
     {
         return Err(refusal(
             "Resolution CloseFund journal carried a substituted receipt identity, bytes, owner, rent, or generation",
@@ -8597,6 +8799,7 @@ fn parse_terminal_sequence_arguments_v1(
     let mut plan = None;
     let mut market_input = None;
     let mut evidence = None;
+    let mut refreshed_evidence = None;
     let mut market = None;
     let mut payer = None;
     let mut payer_keypair = None;
@@ -8623,6 +8826,7 @@ fn parse_terminal_sequence_arguments_v1(
             "--plan" => &mut plan,
             "--market-input" => &mut market_input,
             "--evidence" => &mut evidence,
+            "--refreshed-evidence" => &mut refreshed_evidence,
             "--market" => &mut market,
             "--fee-payer" => &mut payer,
             "--fee-payer-keypair" => &mut payer_keypair,
@@ -8658,6 +8862,9 @@ fn parse_terminal_sequence_arguments_v1(
         plan: absolute(plan, "--plan")?,
         market_input: absolute(market_input, "--market-input")?,
         evidence: absolute(evidence, "--evidence")?,
+        refreshed_evidence: refreshed_evidence
+            .map(|value| absolute(Some(value), "--refreshed-evidence"))
+            .transpose()?,
         market: Pubkey::from_str(&required(market, "--market")?)
             .map_err(|error| Error::new(format!("--market: {error}")))?,
         payer: Pubkey::from_str(&required(payer, "--fee-payer")?)
@@ -8686,7 +8893,8 @@ fn terminal_stdout_v1(value: Value) -> Result<()> {
 pub(crate) fn usage() -> &'static str {
     "\n  dclutch-local-successor-bootstrap devnet-terminal-sequence-v1 --rpc-url URL \\
      [--i-mean-devnet DEVNET_GENESIS_HASH] --plan ABSOLUTE_JSON \\
-     --market-input ABSOLUTE_JSON --evidence ABSOLUTE_JSON --market PUBKEY \\
+     --market-input ABSOLUTE_JSON --evidence ABSOLUTE_JSON \\
+     [--refreshed-evidence ABSOLUTE_JSON] --market PUBKEY \\
      --fee-payer PUBKEY --fee-payer-keypair ABSOLUTE_KEYPAIR \\
      --session ABSOLUTE_JSON --journal-dir ABSOLUTE_DIRECTORY \\
      --completion ABSOLUTE_JSON \\
@@ -8991,6 +9199,7 @@ mod tests {
             plan_sha256: "11".repeat(32),
             market_input_sha256: "22".repeat(32),
             evidence_sha256: "33".repeat(32),
+            refreshed_evidence_sha256: None,
             market: key(3).to_string(),
             payer: key(1).to_string(),
             source_receipt: key(4).to_string(),

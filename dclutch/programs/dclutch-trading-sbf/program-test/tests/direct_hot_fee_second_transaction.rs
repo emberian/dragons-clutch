@@ -10,17 +10,21 @@
 //! sysvar is never read on that path, and the only sequencing is the replay
 //! revision plus the delegated allowance -- and it had never been run.
 //!
-//! It could not be run by the shipped route. The Direct inline transition
-//! derives `SellerIntermediate` and `FeeContinuation` from the SAME fee register
-//! (`fixture::custody_registers`, `intermediate = fee_nonzero && seller_net !=
-//! 0`), so a fee-bearing fill projects both legs into one Hot execution and
-//! there is no admissible scenario at this market's 50 bps that projects the
-//! fee leg alone -- `FeeSole` needs `seller_net == 0`, which needs `gross ==
-//! fee`, which needs the rate to be the whole 10,000. And that one execution
-//! does not fit: `direct_hot_fee_bearing_margin_gate.rs` measured a
-//! key-independent floor of 1,493,027 CU against a 1,400,000 ceiling, so on
-//! this substrate the fee-bearing route has never COMPLETED and the second
-//! Custody CPI has never returned.
+//! When this file was written it could not be run by the shipped route. The
+//! Direct inline transition derived `SellerIntermediate` and `FeeContinuation`
+//! from the SAME fee register, so a fee-bearing fill projected both legs into
+//! one Hot execution -- and that one execution did not fit:
+//! `direct_hot_fee_bearing_margin_gate.rs` measured a key-independent floor of
+//! 1,493,027 CU against a 1,400,000 ceiling, so the fee-bearing route had never
+//! COMPLETED and the second Custody CPI had never returned.
+//!
+//! **That is history now, and the change is why this file needs reading with a
+//! date attached.** The band became protocol: the transition pins the fee
+//! continuation's enable register to zero, `FeeSole` is retired, and the fee
+//! settles in a transaction of its own through the shipped `DCLTDFS1` route.
+//! `direct_hot_fee_pair.rs` executes that pair on the five REAL role ELFs and
+//! is the file to read for what TRADING does. This one keeps a narrower
+//! question that the pair cannot ask, below.
 //!
 //! # Why the caller here is a stand-in, and what that costs the result
 //!
@@ -36,18 +40,24 @@
 //! request, derives its caller authority from the request's own seeds, and
 //! forwards those exact bytes to the real Custody ELF. Everything else in the
 //! world is the real thing: real Custody, real Core state, real Registry
-//! activation cache, the real Realm record, the real token program, and the
-//! fixture's own byte-exact projected request for each route.
+//! activation cache, the real Realm record, the real token program, and
+//! byte-exact projected requests: the fixture's own for the seller leg, and
+//! `project_direct_fee_request_v1` -- the one function the shipped route also
+//! calls -- for the fee leg.
 //!
-//! What that buys: the Custody admission for the fee leg is executed exactly as
-//! Custody would execute it, in a transaction that contains nothing else.
+//! What that buys, and it is the reason this file outlived the route it was
+//! written against: the Custody admission for the fee leg is executed with
+//! NOTHING ELSE IN THE TRANSACTION and nothing else in the instruction. The
+//! pair's tx2 goes through Trading, so a Trading authentication, a config read
+//! and a maker-replay write sit between the caller and Custody. Here they do
+//! not, so what Custody admits and what it refuses is attributable to Custody.
 //!
 //! What it does NOT buy, stated so nobody reads more out of this file than is
 //! in it:
 //!
 //! * it says nothing about whether Trading can BUILD a fee request in tx2 --
-//!   that route does not exist, this lane was told not to write it, and this
-//!   program is not a sketch of one;
+//!   `direct_hot_fee_pair.rs` is where that is answered, and this program is
+//!   not a sketch of the route that answers it;
 //! * its CU figures are Custody's leg plus a thin caller, not the design's tx2,
 //!   which would additionally carry a Trading route's own authentication;
 //! * the release set differs from the shipped one by the Trading ELF digest, so
@@ -62,8 +72,14 @@
 
 use std::{env, fs, path::PathBuf};
 
-use dclutch_custody_contract::{CustodyReplayV1, TRANSFER_ACCOUNT_COUNT_V1};
+use dclutch_core_contract::ContentId;
+use dclutch_custody_contract::{
+    CustodyReplayV1, DelegatedCustodyRequestV2, TRANSFER_ACCOUNT_COUNT_V1,
+};
 use dclutch_custody_sbf::CustodySbfError;
+use dclutch_direct_codec::fee_settlement_v1::{
+    DirectFeeProjectionV1, project_direct_fee_request_v1,
+};
 use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_direct_hot_program_test_support::fixture::{
     DirectCustodyLegV1, DirectTradeScenarioV1, direct_hot_custody_legs_v1,
@@ -74,8 +90,10 @@ use dclutch_direct_hot_program_test_support::waist::{
     direct_chain_input_v5, elves, fixture_substrate, program_test_without_forced_budget,
     start_with_substrate, submit_v0_observed, with_fixture_seed,
 };
+use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_token_svm::{COption, TokenAccount};
 use solana_program::{
+    hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
 };
@@ -196,6 +214,27 @@ async fn arrange() -> ProbeV1 {
             "leg {slot} request digest",
         );
     }
+    // WHY tx2 does not carry slot 2's bytes, pinned rather than left in prose,
+    // because prose is what let this rot silently once. The transition retired
+    // the fee continuation, so slot 2 is an inactive projection whose
+    // `resulting_revision` does not advance and which therefore is not a
+    // request. It is still hashed to seed the slot's caller-authority
+    // coordinate, which is why the fixture still mirrors it and why deleting it
+    // is not the fix. If this ever decodes again, the fee continuation is back
+    // in the fill and `fee_leg` is answering a question nobody is asking.
+    assert!(
+        DelegatedCustodyRequestV2::decode(&legs.get(FEE_CONTINUATION).expect("fee slot").request,)
+            .is_err(),
+        "slot {FEE_CONTINUATION} decodes as a Custody request again: the fee \
+         continuation is no longer retired, so what tx2 should carry is a \
+         decision to remake rather than a projection to follow",
+    );
+    // Addresses only. The seller entry is the instruction tx1 submits; the fee
+    // entry is here for its FRAME, which is the fourteen coordinates tx2 also
+    // carries -- its request bytes are the retired slot-2 shape and `fee_leg`
+    // rather than this is what tx2 sends. The caller authority tx2 derives
+    // depends on the replay it is projected against, so it differs per arm and
+    // rides as a static key, exactly as the sibling fee-pair settlement does.
     let instructions = [
         leg_instruction(&legs, SELLER_INTERMEDIATE),
         leg_instruction(&legs, FEE_CONTINUATION),
@@ -242,6 +281,95 @@ fn leg_instruction(legs: &[DirectCustodyLegV1; 4], slot: usize) -> Instruction {
         program_id: TRADING_PROGRAM_ID,
         accounts,
         data: leg.request.clone(),
+    }
+}
+
+/// The fee leg of the SECOND transaction, projected from the live replay.
+///
+/// # Why this is not `leg_instruction(&legs, FEE_CONTINUATION)`
+///
+/// It was, until the fee left the fill. `CUSTODY_ROUTES_V3` slot 2 used to
+/// carry a real `DelegatedCustodyRequestV2`: the transition enabled
+/// `FeeContinuation` and projected the fee transfer beside the seller's. Since
+/// the band became protocol the fee settles in a transaction of its own, so the
+/// transition PINS that enable register to zero and slot 2 is inactive
+/// projection bytes -- `ordinary_route_projection_v3`'s own canonical test now
+/// asserts that slots 0, 2 and 3 do not decode. Those bytes are still hashed to
+/// seed the slot's caller-authority coordinate, which is why the fixture keeps
+/// mirroring them, but they are not a request any more: their
+/// `resulting_revision` no longer advances past `expected_revision`, so
+/// `CustodyRequestV1::validate` refuses them `RevisionOverflow`. Forwarded
+/// here, they died inside the caller program on `InvalidInstructionData`
+/// without Custody ever being reached, which is a probe measuring nothing.
+///
+/// So the bytes come from `project_direct_fee_request_v1`. That is the ONE
+/// function that projects this request, for the reason its own docstring gives:
+/// the caller authority's sixth seed is the digest of these bytes, so a second
+/// builder addresses a PDA nothing signs the moment the two drift. It is the
+/// same function the shipped `DCLTDFS1` route calls, which is what keeps this
+/// probe pointed at the request Custody actually receives in tx2 rather than at
+/// a retired shape. Every value it reads is read off the bank.
+async fn fee_leg(context: &mut ProgramTestContext, legs: &[DirectCustodyLegV1; 4]) -> Instruction {
+    let frame = legs
+        .get(FEE_CONTINUATION)
+        .expect("declared Custody route")
+        .frame
+        .clone();
+    let at = |index: usize| -> Pubkey {
+        frame
+            .get(index)
+            .copied()
+            .expect("a Transfer frame coordinate")
+    };
+    let live = replay(context, at(8)).await;
+    let source = at(10);
+    let destination = at(11);
+    let source_owner = token(context, source).await.owner;
+    let destination_owner = token(context, destination).await.owner;
+    let request = project_direct_fee_request_v1(DirectFeeProjectionV1 {
+        replay: live,
+        // The obligation the design's §2.1 ledger predicts, and the same number
+        // this file asserts standing as the residual delegation after tx1.
+        fee_owed: ledger::COMBINED_FEE,
+        source: source.to_bytes(),
+        source_owner,
+        destination: destination.to_bytes(),
+        destination_owner,
+        mint: at(9).to_bytes(),
+        token_program: at(13).to_bytes(),
+        custody_authority: at(12).to_bytes(),
+    })
+    .expect("the projected fee request");
+    let data = request.encode().expect("encoded fee request").to_vec();
+    // The caller program re-derives this from the bytes and refuses if it
+    // disagrees, so coordinate zero is the one the digest names and not the
+    // slot's own retired authority.
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(live.release_set).expect("release set"),
+        live.market,
+        ExecutionRoleV1::Trading,
+        live.context,
+        hash(&data).to_bytes(),
+    )
+    .expect("caller authority seeds");
+    let (authority, _) = Pubkey::find_program_address(&seeds.as_slices(), &TRADING_PROGRAM_ID);
+    let mut accounts = frame
+        .iter()
+        .enumerate()
+        .map(|(coordinate, key)| {
+            let key = if coordinate == 0 { authority } else { *key };
+            if matches!(coordinate, 8 | 10 | 11) {
+                AccountMeta::new(key, false)
+            } else {
+                AccountMeta::new_readonly(key, false)
+            }
+        })
+        .collect::<Vec<_>>();
+    accounts.push(AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false));
+    Instruction {
+        program_id: TRADING_PROGRAM_ID,
+        accounts,
+        data,
     }
 }
 
@@ -423,9 +551,9 @@ async fn the_fee_leg_executes_in_its_own_later_transaction() {
         .warp_to_slot(fixture_substrate().bank_slot() + 1)
         .expect("one block between the legs");
 
-    // tx2: the fee leg, in a transaction of its own, built from the same
-    // projected bytes and carrying no new authority.
-    let second = leg_instruction(&legs, FEE_CONTINUATION);
+    // tx2: the fee leg, in a transaction of its own, projected from the replay
+    // tx1 left behind and carrying no authority a keypair could sign.
+    let second = fee_leg(&mut context, &legs).await;
     let landed = executed(
         submit_v0_observed(
             &mut context,
@@ -479,7 +607,9 @@ async fn the_fee_leg_executes_in_its_own_later_transaction() {
     assert_eq!(settled_replay.next_revision, ledger::REVISION_BEFORE + 2);
     assert_eq!(
         settled_replay.last_request_digest,
-        legs.get(FEE_CONTINUATION).expect("fee leg").request_digest,
+        hash(&second.data).to_bytes(),
+        "the replay records the fee request this transaction carried, which is \
+         the digest that seeded the authority Custody just admitted",
     );
 }
 
@@ -496,7 +626,11 @@ async fn the_fee_leg_refuses_before_the_seller_leg_has_landed() {
         addresses,
     } = arrange().await;
     let (buyer, _, fee) = collateral(&direct);
-    let second = leg_instruction(&legs, FEE_CONTINUATION);
+    // Projected against the replay as it stands BEFORE the fill, which is what
+    // a caller who ran ahead of the seller leg would have to present: the
+    // revision it names is admissible, and the allowance it declares is the
+    // obligation rather than the whole staged debit.
+    let second = fee_leg(&mut context, &legs).await;
     let refusal = refused(
         submit_v0_observed(&mut context, &[second], addresses, Some(&direct.payer), &[]).await,
         "a fee leg with no seller leg before it",
@@ -536,27 +670,38 @@ async fn the_fee_leg_refuses_when_it_is_replayed() {
         addresses,
     } = arrange().await;
     let (buyer, _, fee) = collateral(&direct);
-    for slot in [SELLER_INTERMEDIATE, FEE_CONTINUATION] {
-        let instruction = leg_instruction(&legs, slot);
-        executed(
-            submit_v0_observed(
-                &mut context,
-                &[instruction],
-                addresses.clone(),
-                Some(&direct.payer),
-                &[],
-            )
-            .await,
-            "a leg of the pair this arm then replays",
-        );
-    }
+    executed(
+        submit_v0_observed(
+            &mut context,
+            &[leg_instruction(&legs, SELLER_INTERMEDIATE)],
+            addresses.clone(),
+            Some(&direct.payer),
+            &[],
+        )
+        .await,
+        "the seller leg this arm's fee leg continues",
+    );
+    // Built once and submitted twice, because "replayed" means these exact
+    // bytes: re-projecting after the revision advanced would build a DIFFERENT
+    // request, and the refusal it earned would be about the new one.
+    let second = fee_leg(&mut context, &legs).await;
+    executed(
+        submit_v0_observed(
+            &mut context,
+            std::slice::from_ref(&second),
+            addresses.clone(),
+            Some(&direct.payer),
+            &[],
+        )
+        .await,
+        "the fee leg this arm then replays",
+    );
     let settled = token(&mut context, fee).await.amount;
     // A new block, so the replayed transaction is a new transaction rather than
     // a duplicate signature the bank rejects before it reaches any program.
     context
         .warp_to_slot(fixture_substrate().bank_slot() + 1)
         .expect("one block forward");
-    let second = leg_instruction(&legs, FEE_CONTINUATION);
     let refusal = refused(
         submit_v0_observed(&mut context, &[second], addresses, Some(&direct.payer), &[]).await,
         "a replayed fee leg",

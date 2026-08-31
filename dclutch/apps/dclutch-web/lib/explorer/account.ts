@@ -144,11 +144,11 @@ export async function inspectAccount(
     const header = leadingMagic(data);
     note =
       header === null
-        ? 'The first eight bytes are not readable text, so this account carries no dClutch record magic. Its bytes are shown raw.'
-        : `The protocol declares no record with the magic ${header}, so no layout is applied and the bytes are shown raw.`;
+        ? 'The first eight bytes are not readable text, so this account carries no dClutch record magic.'
+        : `The protocol declares no record with the magic ${header}.`;
   } else if (derivations.length === 0) {
     note =
-      'This record does not carry the seeds its address would be derived from, so no derivation is shown.';
+      'This record does not carry the seeds its address would be derived from.';
   }
 
   return Object.freeze({

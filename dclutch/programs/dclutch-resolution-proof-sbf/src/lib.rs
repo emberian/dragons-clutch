@@ -110,12 +110,12 @@ pub enum ResolutionError {
     /// "come back later": nothing about waiting changes it.
     ProviderConfiguration = 0x8013,
     /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
     ///
     /// Decision 0012. Not a corrupted account and not an attack: the exact
     /// upgrade authority the release names shipped new bytes, so the cached
-    /// authentication no longer describes what is deployed. Every open market
-    /// on the superseded release generation refuses until a re-release
-    /// re-authenticates the new deployment and re-pins its slot.
+    /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x8014,
     /// Sponsored-push candidate, head, release, or deadline authentication failed.
     SponsoredPush = 0x8015,
@@ -136,18 +136,114 @@ pub enum ResolutionError {
     RecordStillConsumable = 0x8016,
 }
 
+impl ResolutionError {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`ResolutionError::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only
+    /// arm that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 23] = [
+        Self::AccountFrame,
+        Self::Instruction,
+        Self::OutputState,
+        Self::MarketAuthority,
+        Self::FinalizedRecord,
+        Self::ResolutionRelease,
+        Self::ResolutionDeployment,
+        Self::SourceMaterial,
+        Self::ProductDomain,
+        Self::ProviderRelease,
+        Self::ProviderObservation,
+        Self::Sysvar,
+        Self::Transition,
+        Self::Arithmetic,
+        Self::Funding,
+        Self::RelayedRecord,
+        Self::RelayedWindow,
+        Self::ProviderWindow,
+        Self::ProviderFreshness,
+        Self::ProviderConfiguration,
+        Self::ReleaseSuperseded,
+        Self::SponsoredPush,
+        Self::RecordStillConsumable,
+    ];
+
+    /// This refusal's position in [`ResolutionError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism:
+    /// a twenty-fourth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::AccountFrame => 0,
+            Self::Instruction => 1,
+            Self::OutputState => 2,
+            Self::MarketAuthority => 3,
+            Self::FinalizedRecord => 4,
+            Self::ResolutionRelease => 5,
+            Self::ResolutionDeployment => 6,
+            Self::SourceMaterial => 7,
+            Self::ProductDomain => 8,
+            Self::ProviderRelease => 9,
+            Self::ProviderObservation => 10,
+            Self::Sysvar => 11,
+            Self::Transition => 12,
+            Self::Arithmetic => 13,
+            Self::Funding => 14,
+            Self::RelayedRecord => 15,
+            Self::RelayedWindow => 16,
+            Self::ProviderWindow => 17,
+            Self::ProviderFreshness => 18,
+            Self::ProviderConfiguration => 19,
+            Self::ReleaseSuperseded => 20,
+            Self::SponsoredPush => 21,
+            Self::RecordStillConsumable => 22,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    ResolutionError::AccountFrame as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE,
-    "ResolutionError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (ResolutionError::RecordStillConsumable as u32)
-        < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "ResolutionError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        ResolutionError::ALL[0] as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE,
+        "ResolutionError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < ResolutionError::ALL.len() {
+        let variant = ResolutionError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "ResolutionError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE + index as u32,
+            "ResolutionError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::RESOLUTION_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "ResolutionError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<ResolutionError> for ProgramError {
     fn from(value: ResolutionError) -> Self {

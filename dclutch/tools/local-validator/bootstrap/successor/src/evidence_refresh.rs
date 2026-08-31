@@ -44,6 +44,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use dclutch_claims_svm::liability_basis_state_v2::LiabilityBasisMarketViewV2;
+use dclutch_custody_contract::PROJECTED_HOARD_CONTEXT_DOMAIN_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -55,7 +57,7 @@ use crate::{
     direct_capability_activation::direct_execution_root_v1,
     direct_trade_producer::resolved_record_v1,
     model::{AccountEvidence, MarketRunInput, SuccessorPlan},
-    plan::pubkey,
+    plan::{hex, hex32, pubkey},
     rpc::{Rpc, WritePolicyV1, account_evidence, parse_json_without_duplicate_keys_v1},
 };
 
@@ -149,7 +151,76 @@ pub(crate) struct EvidenceRefreshV1 {
     /// The founding-permit namespace address, reported for the record. No
     /// account can exist here; nothing derives authority from it.
     pub(crate) founding_permit_capability_root: Option<String>,
+    /// The custody context **as the chain persists it**, read from the Claims
+    /// aggregate's own `custody_context` field at [`Self::as_of_slot`].
+    ///
+    /// This is the second instance of §3's two-values-one-label hazard, and it
+    /// gets §3's remedy rather than a new one. The founding campaign records,
+    /// under `founding_custody_context`, its own action-context **pre-image** —
+    /// the scalar that seeds the founding permit and the transient source
+    /// compartment. Custody addresses the objects that *outlive* the founding —
+    /// the Hoard vault holding the principal, and every post-founding role
+    /// replay — under `SHA256(PROJECTED_HOARD_CONTEXT_DOMAIN_V1 || pre-image)`
+    /// instead. One label, two values, and every terminal consumer means this
+    /// one. So the refresh is the document that emits it, exactly as it is the
+    /// document that emits the Direct *execution* root.
+    ///
+    /// `None` says this refresh does not speak to the custody context and the
+    /// founding row stands — the same shape as an absent execution root.
+    ///
+    /// It buys no trust. Generation reads it from chain and requires it to be
+    /// the founding pre-image's digest; [`effective_custody_context_v1`]
+    /// re-derives that digest at every consumer and demands byte-equality. A
+    /// forged value is refused by arithmetic the consumer does itself.
+    pub(crate) chain_persisted_custody_context: Option<String>,
     pub(crate) accounts: BTreeMap<String, AccountEvidence>,
+}
+
+/// The chain-persisted custody context, from the founding pre-image.
+///
+/// One named derivation, so the projection lives in exactly one place rather
+/// than at each of the five terminal readers that need it.
+pub(crate) fn chain_persisted_custody_context_v1(pre_image: [u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(PROJECTED_HOARD_CONTEXT_DOMAIN_V1);
+    hasher.update(pre_image);
+    hasher.finalize().into()
+}
+
+/// Resolve the custody context a terminal consumer must address, or refuse.
+///
+/// With no refresh, or a refresh that does not speak to it, the founding row
+/// stands unchanged. With one, the value is admitted only if it is exactly the
+/// digest of the founding document's own pre-image — which the caller re-derives
+/// here. The refresh therefore selects *which* of the two values this founding's
+/// label meant; it cannot introduce a third.
+pub(crate) fn effective_custody_context_v1(
+    refresh: Option<&EvidenceRefreshV1>,
+    founding_custody_context: &str,
+) -> Result<String> {
+    let Some(persisted) =
+        refresh.and_then(|refresh| refresh.chain_persisted_custody_context.as_deref())
+    else {
+        return Ok(founding_custody_context.to_owned());
+    };
+    let pre_image = hex32(founding_custody_context).map_err(|error| {
+        refusal(
+            "refresh/custody-preimage",
+            format!("founding custody context is not 32 hex bytes: {error}"),
+        )
+    })?;
+    let derived = hex(&chain_persisted_custody_context_v1(pre_image));
+    if persisted != derived {
+        return Err(refusal(
+            "refresh/custody-context",
+            format!(
+                "refreshed custody context {persisted} is not SHA256(projected-hoard-context \
+                 || {founding_custody_context}) = {derived}; the refresh may select which value \
+                 this founding's label meant, never introduce a third"
+            ),
+        ));
+    }
+    Ok(derived)
 }
 
 /// Merge an admitted refresh over founding rows, or refuse.
@@ -497,7 +568,12 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
             )
         })?;
     let entry_index = evidence.direct_selected_manifest_entry_index;
-    let manifest_pair = resolved_record_v1(&plan, &market_input, &evidence, "capability_manifest_record")?;
+    let manifest_pair = resolved_record_v1(
+        &plan,
+        &market_input,
+        &evidence,
+        "capability_manifest_record",
+    )?;
 
     // Every coordinate below is re-derived from the pinned plan and finalized
     // chain state. Nothing is taken from a flag, and the founding checkpoint's
@@ -566,14 +642,60 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         "direct_trading_funding_ledger".into(),
         account_evidence(ledger, &ledger_account),
     );
+    let mut claims_aggregate_data = None;
     for label in ["claims_admission", "claims_aggregate", "founder_position"] {
         let Some(founding_row) = evidence.accounts.get(label) else {
             continue;
         };
         let address = pubkey(&founding_row.address)?;
         let account = rpc.required_account(address, label)?;
+        if label == "claims_aggregate" {
+            claims_aggregate_data = Some(account.data.clone());
+        }
         accounts.insert(label.into(), account_evidence(address, &account));
     }
+    // The custody context, read from the chain's own record of it. The Claims
+    // aggregate is the authority here: `custody_context` is the scalar Claims
+    // itself persisted at admission, and it is what the Hoard vault and every
+    // post-founding role replay are addressed under.
+    //
+    // Emitting it is conditional on the chain agreeing that it is the founding
+    // pre-image's digest. That single equality is what makes this a *reading*
+    // of the founded world rather than an assertion about it: an author who
+    // hands over a context the chain does not hold, or one the founding
+    // document is not the pre-image of, gets a refusal naming both values.
+    let chain_persisted_custody_context = match claims_aggregate_data {
+        None => None,
+        Some(data) => {
+            let aggregate = LiabilityBasisMarketViewV2::decode(&data).map_err(|error| {
+                refusal(
+                    "chain/claims-aggregate",
+                    format!("Claims aggregate: {error:?}"),
+                )
+            })?;
+            let recorded = hex32(&evidence.founding_custody_context)?;
+            if aggregate.custody_context == recorded {
+                // The founding document already records the form the chain
+                // persists. There is nothing for the refresh to select, and
+                // saying so is more honest than restating the founding row.
+                None
+            } else if aggregate.custody_context == chain_persisted_custody_context_v1(recorded) {
+                Some(hex(&aggregate.custody_context))
+            } else {
+                return Err(refusal(
+                    "chain/custody-context",
+                    format!(
+                        "the Claims aggregate persists custody context {}, which is neither the \
+                         founding campaign's recorded {} nor its projected-hoard digest {}; this \
+                         refresh is not describing that founding's world",
+                        hex(&aggregate.custody_context),
+                        evidence.founding_custody_context,
+                        hex(&chain_persisted_custody_context_v1(recorded)),
+                    ),
+                ));
+            }
+        }
+    };
     // The execution root. Its absence is not a failed read: it is the statement
     // that activation has not run, and a refresh of a market advanced only by
     // admission has no root to append. Emitting it half-present would trip the
@@ -626,6 +748,7 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
         market: market.to_string(),
         direct_execution_capability_root: root.to_string(),
         founding_permit_capability_root: evidence.checkpoint_direct_capability_root.clone(),
+        chain_persisted_custody_context,
         accounts,
     };
     let rendered = format!("{}\n", serde_json::to_string_pretty(&refresh)?);
@@ -662,7 +785,10 @@ mod tests {
         map.insert("founding_market".to_string(), row(MARKET, &"aa".repeat(32)));
         map.insert(
             "direct_trading_funding_ledger".to_string(),
-            row("SysvarRent111111111111111111111111111111111", &"bb".repeat(32)),
+            row(
+                "SysvarRent111111111111111111111111111111111",
+                &"bb".repeat(32),
+            ),
         );
         for label in ["claims_admission", "claims_aggregate", "founder_position"] {
             map.insert(label.to_string(), row(MARKET, &"33".repeat(32)));
@@ -683,7 +809,10 @@ mod tests {
         accounts.insert("founding_market".to_string(), row(MARKET, &"dd".repeat(32)));
         accounts.insert(
             "direct_trading_funding_ledger".to_string(),
-            row("SysvarRent111111111111111111111111111111111", &"ee".repeat(32)),
+            row(
+                "SysvarRent111111111111111111111111111111111",
+                &"ee".repeat(32),
+            ),
         );
         accounts.insert(
             DIRECT_EXECUTION_ROOT_LABEL_V1.to_string(),
@@ -706,8 +835,69 @@ mod tests {
             market: MARKET.into(),
             direct_execution_capability_root: ROOT.into(),
             founding_permit_capability_root: None,
+            chain_persisted_custody_context: None,
             accounts,
         }
+    }
+
+    /// The founding pre-image these custody tests project from.
+    const PRE_IMAGE: &str = "637d53a4873a57fce5d95efbc69480bc1ec4bb81edec8ef0427e9afa7080cda2";
+
+    #[test]
+    fn absent_refresh_leaves_the_founding_custody_context_alone() {
+        assert_eq!(
+            effective_custody_context_v1(None, PRE_IMAGE).expect("no refresh"),
+            PRE_IMAGE
+        );
+        // A refresh that does not speak to the custody context is the same
+        // statement as no refresh at all.
+        let silent = admissible_refresh();
+        assert!(silent.chain_persisted_custody_context.is_none());
+        assert_eq!(
+            effective_custody_context_v1(Some(&silent), PRE_IMAGE).expect("silent refresh"),
+            PRE_IMAGE
+        );
+    }
+
+    #[test]
+    fn a_refresh_may_select_the_projected_hoard_digest() {
+        // The value this market's chain actually persists, measured from the
+        // live Hoard vault and Trading replay on the driven substrate.
+        const PERSISTED: &str =
+            "82306216694facaf3322cb94f1051d62bc9ef48d13b454218238a08b4b3b200d";
+        assert_eq!(
+            hex(&chain_persisted_custody_context_v1(
+                hex32(PRE_IMAGE).expect("pre-image")
+            )),
+            PERSISTED
+        );
+        let mut refresh = admissible_refresh();
+        refresh.chain_persisted_custody_context = Some(PERSISTED.into());
+        assert_eq!(
+            effective_custody_context_v1(Some(&refresh), PRE_IMAGE).expect("admissible"),
+            PERSISTED
+        );
+    }
+
+    #[test]
+    fn a_refresh_cannot_introduce_a_third_custody_context() {
+        // Neither the pre-image nor its digest: the one thing the selection
+        // must never be able to smuggle. The consumer re-derives the digest
+        // itself, so this is refused by arithmetic and not by a list.
+        let mut refresh = admissible_refresh();
+        refresh.chain_persisted_custody_context = Some("5a".repeat(32));
+        let error = effective_custody_context_v1(Some(&refresh), PRE_IMAGE)
+            .expect_err("a third value must be refused");
+        assert!(
+            error.to_string().contains("refresh/custody-context"),
+            "refusal must name its cause: {error}"
+        );
+        // Re-asserting the pre-image is a third value too: the founding row
+        // already says that, and selecting it would be a no-op dressed as a
+        // correction.
+        let mut echo = admissible_refresh();
+        echo.chain_persisted_custody_context = Some(PRE_IMAGE.into());
+        assert!(effective_custody_context_v1(Some(&echo), PRE_IMAGE).is_err());
     }
 
     fn admit(refresh: &EvidenceRefreshV1) -> Result<BTreeMap<String, AccountEvidence>> {
@@ -763,7 +953,9 @@ mod tests {
                 .data_sha256 = "99".repeat(32);
             let error = admit(&refresh).expect_err("altered immutable record");
             assert!(
-                error.to_string().contains("altered immutable founding record"),
+                error
+                    .to_string()
+                    .contains("altered immutable founding record"),
                 "{label}: {error}"
             );
         }
@@ -776,7 +968,9 @@ mod tests {
             refresh.accounts.remove(label);
             let error = admit(&refresh).expect_err("omitted immutable record");
             assert!(
-                error.to_string().contains("altered immutable founding record"),
+                error
+                    .to_string()
+                    .contains("altered immutable founding record"),
                 "{label}: {error}"
             );
         }
@@ -834,7 +1028,10 @@ mod tests {
         assert!(admit(&wrong_plan).is_err(), "another plan was admitted");
         let mut wrong_cluster = admissible_refresh();
         wrong_cluster.cluster = "devnet".into();
-        assert!(admit(&wrong_cluster).is_err(), "another cluster was admitted");
+        assert!(
+            admit(&wrong_cluster).is_err(),
+            "another cluster was admitted"
+        );
         let mut wrong_mode = admissible_refresh();
         wrong_mode.mode = "preflight".into();
         assert!(admit(&wrong_mode).is_err(), "a preflight was admitted");
@@ -848,7 +1045,10 @@ mod tests {
         refresh.direct_execution_capability_root =
             "SysvarS1otHashes111111111111111111111111111".into();
         let error = admit(&refresh).expect_err("root scalar disagreement");
-        assert!(error.to_string().contains("execution-root scalar"), "{error}");
+        assert!(
+            error.to_string().contains("execution-root scalar"),
+            "{error}"
+        );
     }
 
     /// A refresh may advance only what this design examined. Overriding some
@@ -950,6 +1150,9 @@ mod tests {
             ExpectedClusterV1::OwnedLoopback,
         )
         .expect_err("loopback acknowledgment");
-        assert!(error.to_string().contains("needs no acknowledgment"), "{error}");
+        assert!(
+            error.to_string().contains("needs no acknowledgment"),
+            "{error}"
+        );
     }
 }

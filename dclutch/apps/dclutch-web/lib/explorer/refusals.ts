@@ -92,11 +92,11 @@ export function attributeCustomCode(code: number): RefusalAttribution {
 export function describeAttribution(attribution: RefusalAttribution): string {
   switch (attribution.disposition) {
     case 'named':
-      return attribution.refusal.meaning ?? `${attribution.refusal.id} — the enum declares no doc comment.`;
+      return attribution.refusal.meaning ?? `${attribution.refusal.id} — no meaning is declared for this code.`;
     case 'banded':
-      return `Band ${hexCode(attribution.band.base)} belongs to ${attribution.band.package}, but the census enumerates no refusal at this code. The program is known; the meaning is not.`;
+      return `Band ${hexCode(attribution.band.base)} belongs to ${attribution.band.package}, but no refusal is declared at this code.`;
     case 'foreign':
-      return 'Below 0x1000, which no dClutch band covers. This refusal came from a program outside the protocol — SPL Token, the loader, the System program, or another third party. This client will not guess which.';
+      return 'Below 0x1000, which no dClutch band covers. This refusal came from a program outside the protocol — SPL Token, the loader, the System program, or another third party.';
     case 'unbanded':
       return `Band ${hexCode(bandIndex(attribution.code) << REFUSAL_BAND_SHIFT)} is not allocated to any dClutch program. This is not a first-party refusal.`;
   }

@@ -643,7 +643,8 @@
       "tools/local-validator/bootstrap/successor/src/wallet_terminal_payout_exterior.rs": "inventory-guard-present",
       "tools/relayer/src/config.rs": "inventory-guard-present",
       "tools/relayer/src/id32.rs": "inventory-guard-present",
-      "tools/relayer/src/skew.rs": "inventory-guard-present"
+      "tools/relayer/src/skew.rs": "inventory-guard-present",
+      "crates/dclutch-provider-transport-v3-operator/src/lib.rs": "inventory-guard-present"
     },
     "UNSET_PUBKEY_UNGUARDED": {
       "crates/dclutch-operator/src/terminal_retirement_v1.rs\tauthenticate_handoff_custody": "hazard-unset-pin",

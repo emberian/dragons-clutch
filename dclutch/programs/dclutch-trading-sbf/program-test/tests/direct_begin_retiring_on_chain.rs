@@ -105,7 +105,7 @@ use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
     STATE_BYTES, StateBumpsV1,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::Account;
 use solana_program::{
@@ -189,12 +189,19 @@ struct Record {
 
 /// Derive one finalized record's raw/staging pair under the Registry, exactly
 /// the way `authenticate_finalized_record` re-derives it.
+///
+/// The seed tuple is NOT restated here: `dclutch-record-contract` owns the
+/// domain constants and exports the constructors that place them, so this
+/// reader takes the domain from `seeds.domain()` rather than naming it. A
+/// second spelling is a second source of truth (`DOMAIN_RAW_RESTATEMENT`).
 fn record(registry: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> Record {
     let digest = hash(&bytes).to_bytes();
-    let (raw, raw_bump) =
-        Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &registry);
-    let (staging, staging_bump) =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &registry);
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(schema).expect("schema release id is nonzero"),
+        ContentDigest::new(digest).expect("content digest is nonzero"),
+    );
+    let (raw, raw_bump) = record_address(key.raw_record_pda_seeds(), registry);
+    let (staging, staging_bump) = record_address(key.staging_cursor_pda_seeds(), registry);
     Record {
         raw,
         staging,
@@ -203,6 +210,18 @@ fn record(registry: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> Record {
         digest,
         bytes,
     }
+}
+
+/// One record address and bump from the contract-owned seed material.
+fn record_address(seeds: RecordPdaSeedsV1, registry: Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            seeds.schema_release_id().as_bytes(),
+            seeds.expected_digest().as_bytes(),
+        ],
+        &registry,
+    )
 }
 
 /// Install one Registry-owned raw record, rent exempt at its exact width.

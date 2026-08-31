@@ -1,5 +1,46 @@
 # GOAL — work until 11am: the protocol as good as it can be, all debt burned down
 
+## ☀ MORNING REPORT (written ~10:4x; two lanes still closing)
+
+**THE FIRST PUBLIC TRADE IS ON DEVNET.** `4YQLY9ts…`, slot 490,907,340,
+1,309,797 CU, conservation cell-by-cell — and its fee was settled BY A
+STRANGER (the permissionless two-tx design, live on a public chain). The
+final wall was one byte: a bump hint correct for every zero-fee fill ever
+assembled, wrong for the first real fee.
+
+**Cohort-8 is live** (five roles, the seal fix this cut existed for —
+THE FIRST CAPABILITY SEAL EVER now on chain — plus CloseSeal, the fee
+protocol, the CU floor cut). Two markets with buckets derived from
+measured volatility, per your steer. New evidence kind: AlreadyCurrent
+(a chain dump outranks a receipt).
+
+**The first market LIFE: 82 acts CONSERVED** — found → filled →
+fee-settled → resolved → REDEEMED IN FULL (a real outcome: claim 2 won,
+the collateral round-tripped 550,250,000 atoms to the atom) → the first
+CoreBeginRetiring ever. TWENTY-ONE walls convicted one honest lane at a
+time. The stop is the night's biggest protocol finding — **wall 22:
+CloseMakerReplay is encoder-only** (the Lean spec proves the decrement;
+chain never implemented it; five-way-enforced gate, no override) — so
+every filled market is unretirable until COHORT-9 ships it. Charter
+recorded in WAVE.md: CloseMakerReplay, ZeroBump seal recovery, General's
+re-publication.
+
+**The site shipped twice** (strike-five copy + the full type rebuild +
+AGPL footer; the trade cut is in flight) and **public CI is green for the
+first time** — after four decorated gates learned to tell the truth.
+
+**Protocol completion:** General 12/14 actions authored (order book at
+artifact level, 15 execution theorems); basis option-D executed wire-free
+(de Boor ported, rounding ruled); 0017 tripwires incl. Core's first
+continuation coverage; 50 unmerged branches → 3 with tombstones; ledgers
+evidence-true; every bound classified (CLIFF_DOCTRINE; K=3 was already
+unissuable — the packet, not the record bound).
+
+**Spend:** ~1.34 SOL total across the cut + trade; deployer never signed.
+**Yours only:** Helius rotation; the vm_compressor=2 call; cohort-9
+riders (ZeroBump seal recovery, General's 68→131 re-publication).
+The planned-but-not-launched list you asked for is the next section.
+
 Refreshed 2026-08-31 ~05:1x (ember re-issued /goal; was "excellent and
 complete until 10am"). Standing steer: all public drivable, load simulator
 on live devnet, copy at the strike-five bar, design at the Linear/Stripe
@@ -85,6 +126,47 @@ mainnet, CFTC, assurance park, dead-market deletion, monolith benchmark.
 
 ## Done-log (07:4x additions)
 
+- GRICE-2 done (6 commits, web 1231/1 vs 1227/1 baseline): all eight
+  consoles + explorer catalogue at both bars (~82 strings, ~100 CSS
+  rules to tokens, zero sub-13px sentences). The routeCensus fix was
+  upstream-but-not-as-predicted: the census tool flattened doc
+  paragraphs — one fix cleaned four layers AND moved every refusal's
+  REMEDY into its summary line (a refusal a reader can't act on is a
+  mystery); Rust docs untouched. Two over-cuts self-caught and
+  restored. Sole red: sbomVerify awaiting LIFECYCLE-REDEEM's lock
+  commit.
+- CEILINGS done (5 commits): ZERO hand-named refusal ceilings left —
+  38 sites (the class was bigger than nine: shape-sweep found four more
+  + one enum with NO ceiling a BAND_SPAN grep structurally couldn't
+  see); red-proved on trading where FEE-TX2's gate compiled a planted
+  16th variant GREEN; 263 codes before = after; 0 frame diagnostics.
+  Debt named: occupancy walks' hardcoded offset lists (design — the
+  sub-band table becomes registry-readable).
+- ★ THE MARKET RESOLVED (LIFECYCLE-PAYER, 3 commits): Execute landed at
+  EXACTLY the derived 1,220/1,232 bytes (VDA1g6wd…, 323,836 CU), Core
+  ACCEPTED the verified terminal receipt (58qGA2MX…, 91,264 CU). Wall 10
+  = 3 measured coupled changes (+96 bytes exact; the 49th row reproduced
+  the failed key byte-for-byte); walls 11/14/15 fell behind it. Life
+  table 35→44 acts CONSERVED. Stops RULED by orch: wall 12 (irreversible
+  Registry record — approved on the scratch substrate) + walls 13/16
+  (chain's hashed form is authoritative; evidence author fixes) →
+  LIFECYCLE-REDEEM spawned: redemption + retirement + THE COMPLETE LIFE.
+- FEEFIX done (fcc8b733, 3/3 local + runner exit 0): my handed suspects
+  INNOCENT (host-side tools can't reach a program-test); cause =
+  b74fabb1 retiring Custody slot 2 — the probe died in its own caller at
+  3,158 CU and measured nothing. Rewired onto project_direct_fee_request
+  _v1 (the sixth-seed single-builder rule) + a decode tripwire; tx2 now
+  reaches Custody at 147,749 CU. CI row greens at the next subtree cut.
+- ★ PUBLISH-5 LIVE (de399bf92, pages 33387895228 green, zero console
+  errors): market22 renders as THE TRADED MARKET — /live links the exact
+  trade signature, the explorer decodes it from chain (78 accounts).
+  Caught a real hazard: the shared checkout's agent branch would have
+  clobbered main — cut from origin/main in a disposable worktree.
+  GATES's fixes greened the compute-margin row. Its two attributed
+  live-tree debts both taken: seam restatement FIXED BY ORCH (964549dd —
+  seeds from their owner + one new guard tripwired; seam PASS) and the
+  3 fee-settlement reds → FEEFIX spawned (attribution open: host-side
+  commits shouldn't touch a program-test).
 - ★★ THE FIRST PUBLIC TRADE IS ON CHAIN (TRADE-7): sig 4YQLY9ts…, slot
   490,907,340, err None, 1,309,797 CU — local replay predicted it within
   115 CU. Fee settled by A STRANGER (participant-2, tx2 64c5Ev8T…,

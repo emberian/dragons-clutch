@@ -64,20 +64,80 @@ pub enum FractionalAtomicTestCallerError {
     DeliberateLateFailure = 0x10_B004,
 }
 
+impl FractionalAtomicTestCallerError {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`FractionalAtomicTestCallerError::ordinal`], whose match is exhaustive: a variant added to
+    /// the enum does not compile until its author writes an arm here, and the only arm that
+    /// satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 5] = [
+        Self::Instruction,
+        Self::AccountFrame,
+        Self::Root,
+        Self::ClaimsCpi,
+        Self::DeliberateLateFailure,
+    ];
+
+    /// This refusal's position in [`FractionalAtomicTestCallerError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a sixth variant is a
+    /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::AccountFrame => 1,
+            Self::Root => 2,
+            Self::ClaimsCpi => 3,
+            Self::DeliberateLateFailure => 4,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    FractionalAtomicTestCallerError::Instruction as u32
-        == dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE,
-    "FractionalAtomicTestCallerError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (FractionalAtomicTestCallerError::DeliberateLateFailure as u32)
-        < dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE
-            + dclutch_refusal_registry::BAND_SPAN,
-    "FractionalAtomicTestCallerError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        FractionalAtomicTestCallerError::ALL[0] as u32
+            == dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE,
+        "FractionalAtomicTestCallerError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < FractionalAtomicTestCallerError::ALL.len() {
+        let variant = FractionalAtomicTestCallerError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "FractionalAtomicTestCallerError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32
+                == dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE
+                    + index as u32,
+            "FractionalAtomicTestCallerError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "FractionalAtomicTestCallerError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<FractionalAtomicTestCallerError> for ProgramError {
     fn from(value: FractionalAtomicTestCallerError) -> Self {

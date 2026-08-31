@@ -140,7 +140,14 @@ pub struct Refusal {
     pub enum_name: String,
     pub variant: String,
     pub code: Option<i64>,
-    pub doc: Option<String>,
+    /// The variant's doc summary: its first paragraph, and the whole of what
+    /// the refusal MEANS. This is the caption every consumer renders — a table
+    /// cell in `docs/reference/refusals.md`, a line in a browser.
+    pub summary: Option<String>,
+    /// The doc comment's remaining paragraphs. Rationale addressed to someone
+    /// reading the enum, never a caption: it is carried so the enumeration
+    /// stays complete, and rendered where whole paragraphs belong.
+    pub detail: Option<String>,
     pub provenance: Provenance,
 }
 

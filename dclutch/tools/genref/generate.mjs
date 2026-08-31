@@ -555,7 +555,7 @@ routes are in that last group.
     const rows = refusals.map((r) => [
       `\`${codeHex(r.code)}\``,
       `\`${r.enum_name}::${r.variant}\``,
-      r.doc || "(no doc comment)",
+      r.summary || "(no doc comment)",
       `\`${r.provenance}\``,
     ]);
     return (

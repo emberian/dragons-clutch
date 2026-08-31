@@ -59,19 +59,72 @@ pub enum DirectAotSbfError {
     InvalidAck = 0xA003,
 }
 
-// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
-// The discriminants stay literal so a code seen in a validator log is greppable;
-// these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    DirectAotSbfError::NonStatelessFrame as u32
-        == dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE,
-    "DirectAotSbfError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (DirectAotSbfError::InvalidAck as u32)
-        < dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "DirectAotSbfError must not run past its registered refusal band"
-);
+impl DirectAotSbfError {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`DirectAotSbfError::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only
+    /// arm that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 4] = [
+        Self::NonStatelessFrame,
+        Self::InvalidRequest,
+        Self::InvalidBank,
+        Self::InvalidAck,
+    ];
+
+    /// This refusal's position in [`DirectAotSbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism:
+    /// a fifth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::NonStatelessFrame => 0,
+            Self::InvalidRequest => 1,
+            Self::InvalidBank => 2,
+            Self::InvalidAck => 3,
+        }
+    }
+}
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        DirectAotSbfError::ALL[0] as u32 == dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE,
+        "DirectAotSbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < DirectAotSbfError::ALL.len() {
+        let variant = DirectAotSbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "DirectAotSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE + index as u32,
+            "DirectAotSbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::DIRECT_AOT_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "DirectAotSbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<DirectAotSbfError> for ProgramError {
     fn from(value: DirectAotSbfError) -> Self {

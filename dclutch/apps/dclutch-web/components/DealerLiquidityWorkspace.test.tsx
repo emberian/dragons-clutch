@@ -6,7 +6,7 @@ import DealerLiquidityWorkspace from './DealerLiquidityWorkspace';
 describe('Dealer V3 liquidity workbench', () => {
   it('exposes only executable chain-derived equity routes and the explicit wallet boundary', () => {
     const html = renderToStaticMarkup(<DealerLiquidityWorkspace />);
-    expect(html).toContain('A dealer with an equity request in hand');
+    expect(html).toContain('Check an equity request against the chain');
     expect(html).toContain('Selectors 1–6 only.');
     expect(html).toContain('Dealer equity request');
     expect(html).toContain('produced by the operator program');

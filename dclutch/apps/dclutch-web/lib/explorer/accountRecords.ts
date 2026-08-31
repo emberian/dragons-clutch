@@ -612,14 +612,14 @@ const GENERAL_PHASES: ReadonlyArray<EnumTag> = Object.freeze([
   Object.freeze({ tag: GENERAL_PHASE_COLLECTING_V2, name: 'Collecting' }),
   Object.freeze({ tag: GENERAL_PHASE_MATERIALIZING_V2, name: 'Materializing' }),
   Object.freeze({ tag: GENERAL_PHASE_DISTRIBUTING_V2, name: 'Distributing' }),
-  Object.freeze({ tag: GENERAL_PHASE_READY_TO_CLOSE_V2, name: 'ReadyToClose' }),
+  Object.freeze({ tag: GENERAL_PHASE_READY_TO_CLOSE_V2, name: 'Ready to close' }),
   Object.freeze({ tag: GENERAL_PHASE_TERMINAL_V2, name: 'Terminal' }),
 ]);
 
 const GENERAL_ACTIONS: ReadonlyArray<EnumTag> = Object.freeze([
   Object.freeze({ tag: ACTION_CONSIDER_V2, name: 'Consider' }),
   Object.freeze({ tag: ACTION_FREEZE_V2, name: 'Freeze' }),
-  Object.freeze({ tag: ACTION_INITIALIZE_SETTLEMENT_V2, name: 'InitializeSettlement' }),
+  Object.freeze({ tag: ACTION_INITIALIZE_SETTLEMENT_V2, name: 'Initialize settlement' }),
   Object.freeze({ tag: ACTION_COLLECT_V2, name: 'Collect' }),
   Object.freeze({ tag: ACTION_MATERIALIZE_V2, name: 'Materialize' }),
   Object.freeze({ tag: ACTION_DISTRIBUTE_V2, name: 'Distribute' }),
@@ -696,7 +696,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'The body of a Core instruction — transaction data, not an account you can look up.',
     width: { kind: 'fixed', bytes: CORE_REQUEST_BYTES },
     fields: [],
-    note: 'No field layout is published for this body, so its bytes are shown raw.',
+    note: 'No field layout is published for this body.',
   },
   {
     magic: LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2,
@@ -709,7 +709,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
         tags: [{ tag: LIFECYCLE_RENT_ACTION_CREATE_V2, name: 'Create' }],
       }),
     ],
-    note: 'Only Create has a published name and size. A sweep or a close shares this magic, so it shows an unnamed action byte and a width that disagrees.',
+    note: 'Only Create has a published name and size. A sweep or a close shares this magic and declares a different width.',
   },
   {
     magic: LIFECYCLE_RENT_CREDIT_MAGIC_V2,
@@ -718,7 +718,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'Rent a market paid up front, refundable to one named wallet.',
     width: { kind: 'fixed', bytes: LIFECYCLE_RENT_CREDIT_BYTES_V2 },
     fields: [],
-    note: 'No field layout is published for this record, so its bytes are shown raw.',
+    note: 'No field layout is published for this record.',
   },
   {
     magic: MANIPULATION_FLOOR_V1_MAGIC,
@@ -742,7 +742,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Floor', MANIPULATION_FLOOR_V1_FLOOR_ATOMS_OFFSET, 'u64'),
       field('Reserved', MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET, 'reserved'),
     ],
-    note: 'The three identities above say what this floor was measured against; one measured against a different source or collateral answers a different question. Zero means nothing was found. Nothing on chain enforces this bound today.',
+    note: 'A floor measured against a different source or collateral answers a different question. Zero means nothing was found. Nothing on chain enforces this bound today.',
   },
   {
     magic: REALM_MAGIC_V1,
@@ -884,7 +884,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Capability count', CAPABILITY_MANIFEST_COUNT_OFFSET_V1, 'u16'),
       field('Reserved', CAPABILITY_MANIFEST_RESERVED_OFFSET_V1, 'reserved'),
     ],
-    note: 'Only the header is decoded here. The entries themselves are read out on the market page.',
+    note: 'The entries themselves are read out on the market page.',
   },
   {
     magic: CAPABILITY_FUNDING_QUOTE_MAGIC_V1,
@@ -921,7 +921,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Reserved', CAPABILITY_FUNDING_LEDGER_RESERVED_OFFSET_V2, 'reserved'),
       field('Manifest identity', CAPABILITY_FUNDING_LEDGER_MANIFEST_ID_OFFSET_V2, 'identity'),
     ],
-    note: 'The rows are not expanded: how many there are is the number of bits set in the mask above, not a count the record stores.',
+    note: 'How many rows there are is the number of bits set in the mask, not a count the record stores.',
   },
   {
     magic: CAPABILITY_FUNDING_STATE_MAGIC_V1,
@@ -949,7 +949,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'Proof that every capability was switched on. A market cannot open without it.',
     width: { kind: 'fixed', bytes: MARKET_OPENING_READINESS_BYTES_V1 },
     fields: [],
-    note: 'No field layout is published for this record, so its bytes are shown raw.',
+    note: 'No field layout is published for this record.',
   },
   {
     magic: CAPABILITY_ROOT_MAGIC_V1,
@@ -1098,7 +1098,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'A direct trade: two signed orders and the fill they agree on.',
     width: { kind: 'header-only', headerBytes: DIRECT_EXECUTION_REQUEST_HEADER_BYTES_V3, note: 'the two orders follow the header' },
     fields: [field('Action selector', DIRECT_EXECUTION_REQUEST_SELECTOR_OFFSET_V3, 'u32')],
-    note: 'The two orders after the header have no published field layout, so they are not broken out.',
+    note: 'The two orders after the header have no published field layout.',
   },
   {
     magic: COMPACT_INTENT_MAGIC_V2,
@@ -1145,7 +1145,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: "The scale a market's claims are paid out against.",
     width: { kind: 'header-only', headerBytes: BASIS_HEADER_BYTES_V3, note: 'knot and term rows follow the header' },
     fields: [field('Categorical width', BASIS_WIDTH_OFFSET_V3, 'u32')],
-    note: 'Only one field of this header has a published offset. The rest of the header is shown raw.',
+    note: 'Only one field of this header has a published offset.',
   },
   {
     magic: REQUEST_PROFILE_MAGIC_V1,
@@ -1181,7 +1181,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'A request profile, plus the signatures a request has to carry.',
     width: { kind: 'header-only', headerBytes: REQUEST_PROFILE_V2_HEADER_BYTES, note: 'an embedded V1 profile and the requirement rows follow' },
     fields: [],
-    note: 'No field layout is published against this record’s own magic, so its header is shown raw.',
+    note: 'No field layout is published against this record’s own magic.',
   },
   {
     magic: EXECUTION_STRATEGY_PROGRAM_MAGIC_V2,
@@ -1203,7 +1203,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'The rules a capability checks its accounts against before it touches them.',
     width: { kind: 'header-only', headerBytes: ACCOUNT_PROFILE_HEADER_BYTES_V2, note: 'rule and operation rows follow; which shape they take depends on the profile' },
     fields: [],
-    note: 'No field layout is published for this header, so its bytes are shown raw.',
+    note: 'No field layout is published for this header.',
   },
 
   // -------------------------------------------------------- Registered Direct
@@ -1437,7 +1437,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Selector', DEALER_EQUITY_SELECTOR_OFFSET_V3, 'u8'),
       field('Claims packet bytes', DEALER_EQUITY_CLAIMS_PACKET_BYTES_OFFSET_V3, 'u64'),
     ],
-    note: 'Only two fields of this header have published offsets. The rest of the header is shown raw.',
+    note: 'Only two fields of this header have published offsets.',
   },
   {
     magic: DEALER_LP_POSITION_MAGIC_V3,
@@ -1446,7 +1446,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: "One backer's share of a market-making pool.",
     width: { kind: 'fixed', bytes: DEALER_LP_POSITION_BYTES_V3 },
     fields: [],
-    note: 'No field layout is published for this record, so its bytes are shown raw.',
+    note: 'No field layout is published for this record.',
   },
   {
     magic: DEALER_OBLIGATION_MAGIC_V3,
@@ -1455,7 +1455,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'What a market-making pool still owes the market.',
     width: { kind: 'header-only', headerBytes: DEALER_OBLIGATION_HEADER_BYTES_V3, note: 'a per-position tail follows the header' },
     fields: [],
-    note: 'No field layout is published for this record, so its bytes are shown raw.',
+    note: 'No field layout is published for this record.',
   },
   {
     magic: SIGNED_DELTA_PLAN_MAGIC_V3,
@@ -1464,7 +1464,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
     summary: 'A batch of signed balance changes, applied all at once or not at all.',
     width: { kind: 'header-only', headerBytes: SIGNED_DELTA_PLAN_HEADER_BYTES_V3, note: 'position and delta rows follow the header' },
     fields: [],
-    note: 'No field layout is published for this record, so its bytes are shown raw.',
+    note: 'No field layout is published for this record.',
   },
 
   // ----------------------------------------------------------------- Rational
@@ -1526,7 +1526,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Caller role', RATIONAL_TERMINAL_HOT_CALLER_ROLE_OFFSET_V3, 'u8'),
       field('Parent context', RATIONAL_TERMINAL_HOT_PARENT_CONTEXT_OFFSET_V3, 'identity'),
     ],
-    note: 'Past these fields the layout is the same as the rational representation request; it is not repeated here.',
+    note: 'Past these fields the layout is the same as the rational representation request.',
   },
 
   // ---------------------------------------------------------------- Product V2
@@ -1540,7 +1540,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Knots', PRODUCT_V2_KNOTS_OFFSET, 'span', { note: 'up to 16 knots, 16 bytes each' }),
       field('Terms', PRODUCT_V2_TERMS_OFFSET, 'span', { note: 'up to 16 terms, 16 bytes each' }),
     ],
-    note: 'The header before the knots has no published field layout and is shown raw.',
+    note: 'The header before the knots has no published field layout.',
   },
   {
     magic: ADMISSION_REQUEST_MAGIC_V2,
@@ -1649,7 +1649,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Identities', GENERIC_FOUNDING_ACK_IDENTITIES_OFFSET_V1, 'span'),
       field('Scalars', GENERIC_FOUNDING_ACK_SCALARS_OFFSET_V1, 'span'),
     ],
-    note: 'The two regions have no published field names, so their contents are shown but not labelled.',
+    note: 'The two regions have no published field names.',
   },
 ]);
 

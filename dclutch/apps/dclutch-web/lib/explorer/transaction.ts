@@ -129,7 +129,7 @@ export function projectTransaction(
   let note: string | null = null;
 
   if (outer === null) {
-    note = 'The transaction bytes could not be read, so its top-level instructions are missing. The inner calls below come from the chain’s own record of the run.';
+    note = 'The transaction bytes could not be read, so its top-level instructions are missing. The inner calls come from the chain’s own record of the run.';
   } else if (outer.length === 0) {
     note = 'The transaction carries no instructions.';
   }
