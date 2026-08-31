@@ -1,8 +1,8 @@
 # Dragon's Clutch
 
 dClutch is a Solana protocol for prediction markets that are fully backed by
-collateral. Pick an outcome — where the SOL/USD price lands on Friday, say —
-and buy claims on it. If you are right, each claim pays you one unit of
+collateral. Pick an outcome — where the SOL price lands on Friday, say — and
+buy claims on it. If you are right, each claim pays you one unit of
 collateral. If you are wrong, it pays nothing.
 
 Every claim is backed by collateral locked up before the claim exists. So
