@@ -1,0 +1,75 @@
+[package]
+name = "dclutch-cli"
+version = "0.1.0-devnet.1"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "Read-only inspection of dClutch markets and capability roots on a Solana cluster"
+repository = "https://github.com/emberian/dragons-clutch"
+readme = "README.md"
+publish = false
+
+# Its own workspace, like every other host tool under `tools/`. The protocol
+# workspace is `no_std` kernel and contract crates; this binary needs `std`, a
+# TLS stack and an HTTP client, and adding that tree to the root `members` list
+# is an integration decision this crate does not get to make for everyone else.
+[workspace]
+
+# The released binary is `dclutch`. The package is `dclutch-cli` because the
+# name `dclutch` belongs to the protocol, not to one program that reads it.
+[[bin]]
+name = "dclutch"
+path = "src/main.rs"
+
+# `publish = false` keeps this off crates.io (it could not go there anyway --
+# every protocol dependency below is a path dependency). It is still the
+# distributed artifact, so say so where dist looks rather than leaving the two
+# facts to be reconciled by a reader.
+[package.metadata.dist]
+dist = true
+
+# The profile `dist` builds released binaries with. It has to live here rather
+# than beside the release configuration, because `dist-workspace.toml` at the
+# repository root names this crate as a member and cargo profiles are only read
+# from a Cargo workspace root -- which, for this crate, is this file.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[dependencies]
+# The three decoders. Every byte this binary interprets is interpreted by one
+# of these; this crate lays out nothing and parses no wire format of its own.
+# `CoreState` and `DirectRootStateV1` are emitted from the Lean semantics, so
+# the tool cannot drift from the programs without the emitter drifting first.
+dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
+dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
+
+base64 = "=0.22.1"
+reqwest = { version = "=0.12.28", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
+serde_json = "=1.0.149"
+# Base58 addresses, parsed and printed by the same implementation the cluster
+# uses. Nothing here re-derives an address.
+solana-program = { version = "=3.0.0", default-features = false }
+
+[dev-dependencies]
+# Only the tests construct accounts to decode; the binary never builds one.
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"
