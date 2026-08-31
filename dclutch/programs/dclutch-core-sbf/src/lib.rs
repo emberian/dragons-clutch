@@ -151,6 +151,34 @@ pub enum CoreSbfError {
     /// untouched, so any state that already exists keeps every route it has.
     /// The weld lifts when the ladder gets a live route.
     RecoveryWalkUnavailable = 0x3011,
+    /// A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate
+    /// certificate account offered.
+    ///
+    /// Degree <= 1 is exempt from the no-arbitrage gate **by proof**: at that
+    /// degree the simplex condition is still the whole no-arbitrage condition.
+    /// Above it that stops being true, so founding a curved basis without a
+    /// certificate would admit an executable arbitrage.
+    PriceGateRequired = 0x3012,
+    /// The certificate account offered was not the one the authenticated basis
+    /// record names.
+    ///
+    /// The digest is read off the basis, never off the caller, so this covers
+    /// a wrong account, a **byte-identical certificate at a non-canonical
+    /// address**, a Registry-unowned or writable account, and one below rent
+    /// exemption for its exact 320-byte width.
+    PriceGateBasisMismatch = 0x3013,
+    /// **The hull identity failed.** `price * mass != sum(weight * payout)` at
+    /// some claim, with every payout recomputed through the production
+    /// evaluator rather than read from the certificate. This is the refusal a
+    /// forged certificate earns.
+    PriceGateHullRefused = 0x3014,
+    /// The certificate carried no hull atoms, or more than the
+    /// affine-Caratheodory capacity of ten permits.
+    PriceGateCapacity = 0x3015,
+    /// The certificate's body was non-canonical: padding past a declared
+    /// width, coordinates not strictly increasing, a zero atom weight, a
+    /// non-primitive weight scale, or prices not partitioning the scale.
+    PriceGateNonCanonical = 0x3016,
 }
 
 impl CoreSbfError {
@@ -160,7 +188,7 @@ impl CoreSbfError {
     /// [`CoreSbfError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 23] = [
         Self::Instruction,
         Self::AccountFrame,
         Self::FinalizedRecord,
@@ -179,12 +207,17 @@ impl CoreSbfError {
         Self::Infrastructure,
         Self::ReleaseSuperseded,
         Self::RecoveryWalkUnavailable,
+        Self::PriceGateRequired,
+        Self::PriceGateBasisMismatch,
+        Self::PriceGateHullRefused,
+        Self::PriceGateCapacity,
+        Self::PriceGateNonCanonical,
     ];
 
     /// This refusal's position in [`CoreSbfError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a nineteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// a twenty-fourth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -206,6 +239,11 @@ impl CoreSbfError {
             Self::Infrastructure => 15,
             Self::ReleaseSuperseded => 16,
             Self::RecoveryWalkUnavailable => 17,
+            Self::PriceGateRequired => 18,
+            Self::PriceGateBasisMismatch => 19,
+            Self::PriceGateHullRefused => 20,
+            Self::PriceGateCapacity => 21,
+            Self::PriceGateNonCanonical => 22,
         }
     }
 }

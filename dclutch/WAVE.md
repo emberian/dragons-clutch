@@ -861,13 +861,46 @@ QUEUED with owners:
   unconstructed variants beyond the 5 deleted (SN6's flag, named in its
   yield) — verdict each (dead vs awaiting-constructor) and act.
 
-- κ ENFORCEMENT (trigger: the LBV2 layout slice / RECORDS-MIGRATE cluster):
-  the predicate exists and is proven (KAPPA), but no on-chain route calls it —
-  Found sees the Source not the principal; FoundingV5 the reverse; and a
-  founding-only check is not a cap since principal grows per complete-set
-  split. Real shape: the cap on the Market root, checked at founding AND at
-  split. Interacts with the founding-root ADR; design queued at
-  MAINNET_STATE_RELAY §11.2.
+- κ ENFORCEMENT — **CLOSED, and it closed earlier than this file said**
+  (KAPPA-CAP, 2026-08-31, correcting a row that read "no on-chain route calls
+  it" for four days after routes did). The ruled shape landed whole in
+  `ff008fea`/`e5933c4d`: `CoreState.principal_cap_sets` at offset 288 INSIDE
+  the existing 368 bytes (so κ never moved `STATE_BYTES` — the widening this
+  file kept queueing was already spent); the Found frame carrying the three
+  `(raw, staging)` pairs at indices 16-21 that let `Found` authenticate the
+  profile and the named floor and derive the cap; and the check at founding
+  AND at all three growth sites — `founding_v5`, `signed_delta_v3`,
+  `affine_batch_v2`, plus the legacy complete-set mint. A zero cap refuses at
+  `Found` outright.
+  RECORDS-MIGRATE row (b), `SourceCapacityProfileV1.floor_content_id`, is
+  **superseded, not owed**: the hole it was ruled to close — two floors with
+  identical bindings both validating, caller picks the biggest — is closed at
+  a better site by `SourceMaterialV3.principal_policy =
+  BoundedByFloor(selected_floor_id)`, which `derive_principal_cap_sets`
+  refuses to run against any other floor id, and which requires `None` under
+  `ExplicitlyUnbounded` so no floor can be smuggled into that policy. It also
+  could not be built as ruled: the profile's free tail is 16 bytes at offset
+  96 and a `ContentId` is 32.
+  What KAPPA-CAP itself added is the missing half — the refusal had no NAME.
+  All four sites flattened the kernel's named refusals into a neighbouring
+  generic variant, so a capacity refusal read like a malformed record. Four
+  appended `PrincipalCapacity` variants (`0x500D`, `0x5168`, `0x518A`,
+  `0x5208`) now say it, proved red before green.
+  The vacuity that hid all this is also closed at one site: every program-test
+  fixture founded at `u64::MAX`, so the refusing arm had never executed on a
+  real ELF. `affine_batch_v2`'s program test now founds at an exact cap — with
+  supply 7 and cap 10, a credit of 3 commits and 4 refuses as
+  `PrincipalCapacity`, refused bytes unchanged — and was proved red twice
+  (unbound the cap and the excess commits; the code is matched structurally).
+  **Still owed, and named as debt:** the other three enforcement sites —
+  `founding_v5`, `signed_delta_v3`, and the legacy complete-set mint — are
+  enforced but still have no on-chain test that founds a BOUNDED market; their
+  fixtures remain at `u64::MAX`. The affine-batch test is the pattern to copy
+  (bind the cap into `core_state`, credit past it, assert the named code).
+  Also standing: κ = 1/4 is still **Provisional** and its lifting plan —
+  measure the realisable fraction per venue, then state a `Measured` envelope
+  — is unstarted, so AGENTS.md:125 is satisfied only in the sense that the
+  plan is written down.
 
 - Next small batch: series-shadow-sbf + the fractional crates still carry
   production sha2 — convert to dclutch-sha256-adapter (the landed backend;
@@ -1390,3 +1423,66 @@ rather than taken from a lane's report.
 - The first complete redemption: collateral round-tripped 550,250,000
   atoms to the atom; the first market ever to satisfy CoreBeginRetiring's
   zero-claims gate. Life table: 82 acts, residual +0, drift +0.
+
+- **HELIUS KEY RULED (ember, 2026-08-31 morning): not compromised; rotate
+  on an appropriate schedule as mitigation.** On-disk keys are fine and
+  local printing is fine here — the file already lives on the filesystem
+  and the key carries strict spending limits. No lane re-raises this.
+- **COHORT-9 AUTHORITY (ember): any bumps and any/all breaks needed to
+  make things live are authorized.** Plan review chartered to a Fable
+  lane before the design-sensitive items build.
+
+- **FRAC-RULE §17.8 SIGNED OFF (orchestrator, veto window exercised):**
+  ruling 2's removal of TradingCallerAuthority from the compaction frame
+  is APPROVED — the root's signature (ruling 1's extended gate) is the
+  strictly stronger Trading anchor, the native sibling requires nothing
+  from Trading, the close is owner-signed and deadline-entitled, and
+  witness w8 pins that a no-Trading entry still refuses at the burn
+  hand-off. "Trading-composed" for this route = composed for SIGNATURE,
+  not authority. Witnesses w1-w8 are binding on the builder.
+
+- **CLOSEMAKER's RETIRING AMENDMENT BLESSED (orchestrator, veto window
+  exercised):** the four begin-retiring count gates relax (incl. the
+  fourth site the review missed — the transition bytecode in release
+  content); the invariant stands unmoved and Lean-proved
+  (retired_requires_zero_open_makers; begin_retiring_admits_open_maker_
+  roots; close_conserves_fee_receivable — a close is never the event
+  that ends a nonzero obligation). Donation slice provisionally 0 (all
+  principal to rent_owner) pending ember's ruling 1 — the refusal
+  alternative rejected as a 1-lamport permanent-stranding grief.
+
+- **CANONICAL-GENERATION MANDATE (ember, 2026-08-31 afternoon, on the
+  Talisman panel refusal):** "it seems like we could be doing better to
+  be generating from something canonical." Standing design rule for
+  every client expectation: an expectation is either (a) DERIVED from
+  chain state and verified for internal consistency the way the chain
+  verifies it, (b) GENERATED from the single Lean/Rust author with a
+  byte-identity gate, or (c) one of the irreducible roots (program ids,
+  decode-grammar versions) — and (c) gets release-aware selection with
+  self-describing refusals ("this build predates release X") rather
+  than schema accusations. Hand-carried pins are a defect class, not a
+  style choice. CANON lane executes this against the surface PANEL-FIX
+  names.
+
+- **FRACCHECK 50th-ACCOUNT RULED (orchestrator): the Rent program joins
+  the compaction frame NOW (49→50), before the cut freezes the
+  declaration.** Grounds: the route decodes a LifecycleRentCreditV2 it
+  cannot fully authenticate (PDA derivation under the Rent program id
+  unproven — the same class as the raw/staging lesson: a record is not
+  authenticated by its content alone); one read-only account is cheap
+  pre-cut and a re-digest after. FRACCHECK-7 implements it with the
+  campaign; authenticate_rent_credit runs; the foreign-credit refusals
+  stay.
+
+- **PROFILE-RULE BLESSED (orchestrator, veto window exercised):
+  ProfileV2 succession rides the cohort-9 cut** (f985bede; P-008
+  documented). Slot-tolerance REFUSED AS UNSOUND — it would let the
+  deployer key alone put arbitrary bytes behind every route while the
+  authentication returned a digest no longer true. The ceremony:
+  DeclareSuccessor's conjunct geometry applied to the infrastructure
+  pair, V1 never mutated, consumers read V2 only. Resolution-proof
+  JOINS the redeploy set (else every cohort-9 market is unresolvable);
+  Custody = the unmoved role exercising d6e43b11's fixed arm; Rent's
+  pent-up debt ruled OUT of this cut (deferral now a decision). For
+  ember, non-blocking: the ceremony's dual-signer estates question
+  (mainnet-era) and Rent's deferral list (§9 of the ruling).

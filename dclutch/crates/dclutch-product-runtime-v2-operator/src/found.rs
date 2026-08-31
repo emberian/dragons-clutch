@@ -55,7 +55,7 @@ use crate::{
 };
 
 /// Exact number of accounts in the Runtime V2 ordinary Core Found V3 frame.
-pub use dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3;
+pub use dclutch_market_core_codec::{FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3};
 
 /// One non-Product finalized raw/staging record observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,6 +173,13 @@ pub struct FoundStateV2<'a> {
     pub rent_artifact: FinalizedRecordObservationV2<'a>,
     /// Current Rent ProgramData observation.
     pub rent_programdata: AccountObservationV2<'a>,
+    /// Finalized `DCLTPGT1` no-arbitrage certificate, when the basis needs one.
+    ///
+    /// `None` is the ordinary case and produces the canonical 37-account
+    /// frame, byte-for-byte as before. A basis declaring degree >= 2 requires
+    /// one, and supplying it appends the pair at the end of the frame -- so
+    /// nothing an existing caller builds moves.
+    pub price_gate: Option<FinalizedRecordObservationV2<'a>>,
 }
 
 impl<'a> FoundStateV2<'a> {
@@ -283,7 +290,12 @@ pub fn build_found_instruction_v2(
         return Err(Error::InvalidRecord);
     }
     let accounts = found_metas(state);
-    if accounts.len() != FOUND_ACCOUNT_COUNT_V3 {
+    let expected = if state.price_gate.is_some() {
+        FOUND_PRICE_GATE_ACCOUNT_COUNT_V3
+    } else {
+        FOUND_ACCOUNT_COUNT_V3
+    };
+    if accounts.len() != expected {
         return Err(Error::AccountAuthority);
     }
     Ok(FoundInstructionPlanV2 {
@@ -875,12 +887,34 @@ fn found_metas(state: FoundStateV2<'_>) -> Vec<AccountMeta> {
         AccountMeta::new_readonly(state.rent_artifact.staging.key, false),
         AccountMeta::new_readonly(state.rent_programdata.key, false),
     ];
+    // **The canonical projection above is one literal and stays one.** The
+    // SDK and web ABI generators read `found_metas` by regex and derive the
+    // 37 account labels and roles from exactly that `vec![...]`; splitting the
+    // extension into its own step is what keeps the canonical frame something
+    // a machine can still recognise, and what keeps a TypeScript client that
+    // never founds curvature working with no change at all.
+    let accounts = extend_with_price_gate(accounts, state.price_gate);
     debug_assert_eq!(
         accounts
             .get(FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
             .map(|meta| meta.pubkey),
         Some(state.capability_manifest.record.raw.key),
     );
+    accounts
+}
+
+/// Append the `DCLTPGT1` certificate pair, when the basis needs one.
+///
+/// Last, and only when offered, so every coordinate a deployed caller already
+/// builds keeps its index.
+fn extend_with_price_gate(
+    mut accounts: Vec<AccountMeta>,
+    certificate: Option<FinalizedRecordObservationV2<'_>>,
+) -> Vec<AccountMeta> {
+    if let Some(certificate) = certificate {
+        accounts.push(AccountMeta::new_readonly(certificate.raw.key, false));
+        accounts.push(AccountMeta::new_readonly(certificate.staging.key, false));
+    }
     accounts
 }
 

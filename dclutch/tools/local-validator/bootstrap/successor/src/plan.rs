@@ -720,21 +720,21 @@ fn validate_checked_upgrade_set(
             // -- it fixes the width the equality was judged at -- and NO receipt,
             // because no Upgrade exists or can exist for a payload that is already
             // the candidate. Neither may carry the carry-forward transport fields.
-            let common = pin.baseline_path.is_some()
-                && pin.baseline_sha256.is_some()
-                && pin.artifact_release_body_hex.is_none()
-                && pin.artifact_release_id.is_none()
-                && pin.carried_programdata_base64.is_none();
-            common
-                && match pin.disposition {
-                    CheckedDeploymentDispositionV1::Upgrade => {
-                        pin.receipt_path.is_some() && pin.receipt_sha256.is_some()
-                    }
-                    CheckedDeploymentDispositionV1::AlreadyCurrent => {
-                        pin.receipt_path.is_none() && pin.receipt_sha256.is_none()
-                    }
-                    CheckedDeploymentDispositionV1::CarryForward => false,
+            match pin.disposition {
+                CheckedDeploymentDispositionV1::Upgrade => {
+                    pin.baseline_path.is_some()
+                        && pin.baseline_sha256.is_some()
+                        && pin.carries_no_transport_fields()
+                        && pin.receipt_path.is_some()
+                        && pin.receipt_sha256.is_some()
                 }
+                // The baseline and the absent receipt are the shared rule; the
+                // transport fields are this row kind's own conjunct.
+                CheckedDeploymentDispositionV1::AlreadyCurrent => {
+                    pin.already_current_closure().holds() && pin.carries_no_transport_fields()
+                }
+                CheckedDeploymentDispositionV1::CarryForward => false,
+            }
         };
         if !exact_tag {
             return Err(Error::new(format!(

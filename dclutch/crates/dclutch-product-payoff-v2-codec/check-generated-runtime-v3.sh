@@ -26,9 +26,17 @@ grep -q '^pub const BASIS_HEADER_BYTES_V3: usize = 256;$' "$temporary"
 grep -q '^pub const BASIS_SCHEMA_V3: u16 = 3;$' "$temporary"
 grep -q '^pub const BASIS_KIND_OFFSET_V3: usize = 16;$' "$temporary"
 grep -q '^pub const BASIS_ROUNDING_OFFSET_V3: usize = 17;$' "$temporary"
-grep -q '^pub const BASIS_HEADER_RESERVED_OFFSET_V3: usize = 18;$' "$temporary"
+# The reserved spans, now SPENT and pinned where they were spent. Byte 18 is
+# the degree, byte 19 its flags, and 208 the certificate digest; sixteen
+# reserved bytes survive at 240. No offset moved -- every field a deployed
+# decoder reads is where it was -- which is what makes an old decoder refuse a
+# curved record rather than misread one.
+grep -q '^pub const BASIS_SPLINE_DEGREE_OFFSET_V3: usize = 18;$' "$temporary"
+grep -q '^pub const BASIS_SPLINE_FLAGS_OFFSET_V3: usize = 19;$' "$temporary"
+grep -q '^pub const BASIS_PRICE_GATE_DIGEST_OFFSET_V3: usize = 208;$' "$temporary"
+grep -q '^pub const BASIS_SPLINE_INTERIOR_MULTIPLICITY_FLAG_V3: u8 = 1;$' "$temporary"
 grep -q '^pub const BASIS_WIDTH_OFFSET_V3: usize = 20;$' "$temporary"
-grep -q '^pub const BASIS_HEADER_TAIL_RESERVED_OFFSET_V3: usize = 208;$' "$temporary"
+grep -q '^pub const BASIS_HEADER_TAIL_RESERVED_OFFSET_V3: usize = 240;$' "$temporary"
 grep -q '^pub const TERM_BYTES_V3: usize = 32;$' "$temporary"
 grep -q '^pub const TERM_AMPLITUDE_OFFSET_V3: usize = 24;$' "$temporary"
 

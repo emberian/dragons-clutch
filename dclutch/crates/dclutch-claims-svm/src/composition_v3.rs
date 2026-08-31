@@ -1406,7 +1406,10 @@ mod tests {
     #[test]
     fn external_once_admits_only_exact_bytes_geometry_and_single_mutation() {
         let mut external_request = vec![0_u8; 416];
-        external_request[..8].copy_from_slice(b"DCFREQ02");
+        external_request
+            .get_mut(..8)
+            .expect("the fixture is wider than its magic")
+            .copy_from_slice(b"DCFREQ02");
         let fixture = RouteFixture {
             role: 1,
             kind: 0,

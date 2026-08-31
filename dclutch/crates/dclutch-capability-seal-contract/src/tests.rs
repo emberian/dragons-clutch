@@ -425,13 +425,16 @@ fn the_ownership_verdict_covers_only_its_four_artifacts_and_its_own_action() {
 }
 
 #[test]
-fn the_close_request_is_a_discriminator_and_carries_no_coordinate() {
-    let canonical = CapabilitySealCloseRequestV1.to_bytes();
+fn the_close_request_is_a_discriminator_and_carries_one_bump_candidate() {
+    let canonical =
+        CapabilitySealCloseRequestV1::new(CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1).to_bytes();
     assert_eq!(canonical.len(), CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1);
     assert!(is_capability_seal_close_request_v1(&canonical));
     assert_eq!(
         CapabilitySealCloseRequestV1::decode(&canonical),
-        Ok(CapabilitySealCloseRequestV1)
+        Ok(CapabilitySealCloseRequestV1::new(
+            CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1
+        ))
     );
 
     // The two seal outers must never be reachable from one another's bytes.
@@ -476,9 +479,11 @@ fn the_close_request_is_a_discriminator_and_carries_no_coordinate() {
         Err(Error::UnsupportedArtifactProfile)
     );
 
-    for offset in 12..16 {
+    for offset in CAPABILITY_SEAL_CLOSE_RESERVED_OFFSET_V1
+        ..CAPABILITY_SEAL_CLOSE_RESERVED_OFFSET_V1 + CAPABILITY_SEAL_CLOSE_RESERVED_BYTES_V1
+    {
         let mut dirty = canonical;
-        dirty[offset] = 1;
+        *dirty.get_mut(offset).expect("reserved byte") = 1;
         assert_eq!(
             CapabilitySealCloseRequestV1::decode(&dirty),
             Err(Error::NonCanonicalReserved),
@@ -493,4 +498,210 @@ fn the_close_request_is_a_discriminator_and_carries_no_coordinate() {
         CapabilitySealCloseRequestV1::decode(&short),
         Err(Error::InvalidLength)
     );
+}
+
+/// The same 968 bytes with byte 20 zeroed, which is what the pre-bump layout
+/// left behind.
+fn defunct() -> Vec<u8> {
+    let mut bytes = canonical();
+    *bytes
+        .get_mut(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+        .expect("sealed canonical bump") = 0;
+    bytes
+}
+
+/// The disjointness witness, and it is one byte wide.
+///
+/// The same body is accepted by exactly one of the two arms depending on the
+/// value at [`CAPABILITY_SEAL_BUMP_OFFSET_V1`], and the swap runs both ways in
+/// one test so neither direction can be satisfied by a decoder that just got
+/// looser. No byte string reaches both arms, which is the partition the close
+/// route's two arms rest on.
+#[test]
+fn one_byte_separates_a_defunct_body_from_a_well_formed_one() {
+    let mut bytes = canonical();
+    SealedDescriptorClosureV1::decode(&bytes).expect("the canonical body decodes");
+    assert_eq!(
+        SealedDescriptorClosureV1::decode_defunct(&bytes),
+        Err(Error::NotDefunct)
+    );
+
+    *bytes
+        .get_mut(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+        .expect("sealed canonical bump") = 0;
+    assert_eq!(
+        SealedDescriptorClosureV1::decode(&bytes),
+        Err(Error::ZeroBump)
+    );
+    let defunct = SealedDescriptorClosureV1::decode_defunct(&bytes).expect("the defunct body");
+    // Every other coordinate is intact: this is a real seal that cannot state
+    // the bump reproducing its own address, not a damaged one.
+    assert_eq!(defunct.key(), Ok(key()));
+    assert_eq!(defunct.bump(), Ok(0));
+    for role in SealedRoleV1::canonical_order() {
+        assert_eq!(defunct.row(role).map(|row| row.role()), Ok(role));
+    }
+
+    *bytes
+        .get_mut(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+        .expect("sealed canonical bump") = CANONICAL_BUMP;
+    SealedDescriptorClosureV1::decode(&bytes).expect("the restored body decodes");
+    assert_eq!(
+        SealedDescriptorClosureV1::decode_defunct(&bytes),
+        Err(Error::NotDefunct)
+    );
+
+    // Not just the one bump a search happened to return: every value a
+    // derivation can produce is refused by the defunct arm.
+    for bump in [1_u8, 0x7f, 0x80, 0xfe, 0xff] {
+        let mut bytes = canonical();
+        *bytes
+            .get_mut(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+            .expect("sealed canonical bump") = bump;
+        assert_eq!(
+            SealedDescriptorClosureV1::decode_defunct(&bytes),
+            Err(Error::NotDefunct),
+            "bump {bump} reached the defunct arm"
+        );
+    }
+
+    // Route 2 of the disjointness argument, checked rather than asserted: no
+    // writer in this crate can produce the zero the defunct arm reads.
+    let mut written = vec![0_u8; CAPABILITY_SEAL_BYTES_V1];
+    assert_eq!(
+        SealedDescriptorClosureV1::encode(key(), rows(), 0, &mut written),
+        Err(Error::ZeroBump)
+    );
+}
+
+/// The defunct arm relaxes the bump byte and nothing else.
+///
+/// Each case mutates the defunct body at one field the canonical decoder pins
+/// and requires the SAME named refusal, so a caller cannot smuggle a
+/// non-canonical body past the close by zeroing byte 20. The controls are the
+/// unmutated `decode_defunct` in the test above and the identical case table in
+/// `every_header_field_is_canonicality_checked`.
+#[test]
+fn the_defunct_arm_pins_every_field_the_canonical_arm_pins() {
+    let cases: [(usize, u8, Error); 6] = [
+        (CAPABILITY_SEAL_MAGIC_OFFSET_V1, 0xff, Error::InvalidMagic),
+        (
+            CAPABILITY_SEAL_SCHEMA_VERSION_OFFSET_V1,
+            0x09,
+            Error::UnsupportedSchema,
+        ),
+        (
+            CAPABILITY_SEAL_PROFILE_OFFSET_V1,
+            0x09,
+            Error::UnsupportedArtifactProfile,
+        ),
+        (
+            CAPABILITY_SEAL_ROW_COUNT_OFFSET_V1,
+            0x09,
+            Error::InvalidRowCount,
+        ),
+        (
+            CAPABILITY_SEAL_VERDICTS_OFFSET_V1,
+            0x09,
+            Error::InvalidVerdicts,
+        ),
+        (
+            CAPABILITY_SEAL_RESERVED_OFFSET_V1,
+            0x01,
+            Error::NonCanonicalReserved,
+        ),
+    ];
+    for (offset, value, expected) in cases {
+        let mut bytes = defunct();
+        *bytes.get_mut(offset).expect("header byte") = value;
+        assert_eq!(
+            SealedDescriptorClosureV1::decode_defunct(&bytes),
+            Err(expected),
+            "header byte {offset} was not enforced on the defunct arm"
+        );
+    }
+
+    for width in [CAPABILITY_SEAL_BYTES_V1 - 1, CAPABILITY_SEAL_BYTES_V1 + 1] {
+        let mut bytes = defunct();
+        bytes.resize(width, 0);
+        assert_eq!(
+            SealedDescriptorClosureV1::decode_defunct(&bytes),
+            Err(Error::InvalidLength)
+        );
+    }
+
+    // The descriptor row still has to be the key the body is filed under: this
+    // is the conjunct that stops a defunct body naming somebody else's
+    // artifacts under its own address.
+    let mut bytes = defunct();
+    let digest = CAPABILITY_SEAL_HEADER_BYTES_V1 + CAPABILITY_SEAL_ROW_DIGEST_OFFSET_V1;
+    bytes
+        .get_mut(digest..digest + 32)
+        .expect("descriptor row digest")
+        .copy_from_slice(&id(0x99));
+    assert_eq!(
+        SealedDescriptorClosureV1::decode_defunct(&bytes),
+        Err(Error::DescriptorMismatch)
+    );
+
+    let role = CAPABILITY_SEAL_HEADER_BYTES_V1
+        + CAPABILITY_SEAL_ROW_BYTES_V1
+        + CAPABILITY_SEAL_ROW_ROLE_OFFSET_V1;
+    let mut bytes = defunct();
+    *bytes.get_mut(role).expect("row role") =
+        u8::try_from(SealedRoleV1::EffectProgram.tag()).expect("role tag");
+    assert_eq!(
+        SealedDescriptorClosureV1::decode_defunct(&bytes),
+        Err(Error::NonCanonicalRowOrder)
+    );
+    let mut bytes = defunct();
+    *bytes.get_mut(role).expect("row role") = 0x7f;
+    assert_eq!(
+        SealedDescriptorClosureV1::decode_defunct(&bytes),
+        Err(Error::UnknownRole)
+    );
+    let mut bytes = defunct();
+    let reserved = CAPABILITY_SEAL_HEADER_BYTES_V1 + CAPABILITY_SEAL_ROW_RESERVED_OFFSET_V1;
+    *bytes.get_mut(reserved).expect("row reserved") = 1;
+    assert_eq!(
+        SealedDescriptorClosureV1::decode_defunct(&bytes),
+        Err(Error::NonCanonicalReserved)
+    );
+}
+
+/// The bump candidate rides a byte the wire already reserved, and the ordinary
+/// request is byte-for-byte the one already deployed.
+#[test]
+fn the_close_request_bump_candidate_spends_one_reserved_byte() {
+    // The deployed wire, written out rather than rebuilt, so a change to the
+    // builder cannot quietly move it.
+    let deployed: [u8; CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1] = [
+        b'D', b'C', b'L', b'T', b'C', b'S', b'X', b'1', 1, 0, 1, 0, 0, 0, 0, 0,
+    ];
+    assert_eq!(
+        CapabilitySealCloseRequestV1::new(CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1).to_bytes(),
+        deployed,
+        "the ordinary close request stopped being the wire already deployed"
+    );
+    assert_eq!(CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1, 0);
+
+    // Every candidate a bump search can return, and the whole u8 besides.
+    for candidate in 0..=u8::MAX {
+        let wire = CapabilitySealCloseRequestV1::new(candidate).to_bytes();
+        assert_eq!(
+            wire.get(CAPABILITY_SEAL_CLOSE_BUMP_CANDIDATE_OFFSET_V1),
+            Some(&candidate)
+        );
+        assert!(is_capability_seal_close_request_v1(&wire));
+        assert_eq!(
+            CapabilitySealCloseRequestV1::decode(&wire).map(|request| request.bump_candidate()),
+            Ok(candidate)
+        );
+        // The candidate rides byte 12 and nothing else moves with it.
+        let mut expected = deployed;
+        *expected
+            .get_mut(CAPABILITY_SEAL_CLOSE_BUMP_CANDIDATE_OFFSET_V1)
+            .expect("bump candidate") = candidate;
+        assert_eq!(wire, expected);
+    }
 }

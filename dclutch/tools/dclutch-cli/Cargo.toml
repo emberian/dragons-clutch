@@ -1,6 +1,6 @@
 [package]
 name = "dclutch-cli"
-version = "0.1.0-devnet.2"
+version = "0.1.0-devnet.3"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.89"

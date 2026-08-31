@@ -22,6 +22,9 @@ pub mod activation_bundle_v1;
 pub mod artifacts_v4;
 #[cfg(not(target_os = "solana"))]
 pub mod begin_retiring_bundle_v1;
+#[cfg(not(target_os = "solana"))]
+pub mod close_maker_bundle_v1;
+pub mod close_maker_v1;
 pub mod direct_finalization_v3;
 pub mod execution_v3;
 pub mod fee_settlement_v1;

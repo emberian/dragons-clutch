@@ -1600,11 +1600,67 @@ CHAIN_STATE_DEFAULT_KAPPA_DENOMINATOR_V1)?` and the graph gains a
 `ManipulationFloorV1` beside it — both calls are already executed by
 `tools/gauntlet/relayed-vertical/src/input.rs`, which is the copy source.
 
-### 12.7 What is still owed
+### 12.7 What was owed, and what actually happened (updated 2026-08-31, KAPPA-CAP)
 
-One RECORDS-MIGRATE batch: the `CoreState` cap field, the
-`SourceCapacityProfileV1` `floor_content_id` widening, the Found-frame growth,
-the two split checks, and the request-tail declaration — with `admit_principal_growth`
-as the single accessor at every site so the founding half and the split half
-cannot drift. Until it lands, κ is enforced host-side by the campaign that founds
-the market, and `docs/evidence/DEVNET_SMOKE_0.md` §6 item 8 stands as written.
+This section read, until today, as an open batch: "the `CoreState` cap field,
+the `SourceCapacityProfileV1` `floor_content_id` widening, the Found-frame
+growth, the two split checks, and the request-tail declaration." Four of those
+five landed in `ff008fea`/`e5933c4d` without this section being updated, and the
+fifth turned out to be the wrong shape. The record, corrected:
+
+- **The `CoreState` cap: LANDED** — `principal_cap_sets` at offset 288, *inside*
+  the 368 bytes CoreState already had. §12.2's census ("352, no reserved") was
+  overtaken by the bump-tail widening, so the cap cost no width move of its own.
+  This is why the migration everyone kept queueing never needed to happen.
+- **The Found-frame growth: LANDED** — `frame.rs:33-38`, the three `(raw,
+  staging)` pairs at indices 16-21. §12.3's "+3 pairs → 37 accounts" was paid.
+- **The split checks: LANDED, and there are three, not two** — `signed_delta_v3`
+  and `affine_batch_v2` as predicted, plus the legacy complete-set mint at
+  `lib.rs`'s `authenticate_complete_set_growth`. Founding checks too.
+- **The request-tail declaration: NOT BUILT, AND NOT NEEDED IN THAT FORM.**
+  §12.6 proposed `ClaimsFoundingRequestV5.declared_principal_cap_sets` so a
+  founder could declare unboundedness rather than leave a zero. The tree instead
+  put the declaration where it is authenticated rather than asserted:
+  `SourceMaterialV3.principal_policy` is `ExplicitlyUnbounded` or
+  `BoundedByFloor(selected_floor_id)`, and `Found` refuses a derived cap of zero
+  outright. The founder still cannot found by leaving zeroes — which was the
+  requirement — but the statement is now a content-addressed property of the
+  Source graph instead of a number on a wire the founder fills in.
+- **`floor_content_id`: SUPERSEDED.** §12.4 ruled it onto the profile to stop a
+  caller choosing among floors with identical bindings. `BoundedByFloor` pins
+  the exact floor id in the material, which is strictly stronger; and the
+  profile's free tail is 16 bytes against the 32 a `ContentId` needs, so the
+  ruled form was not buildable as written.
+
+**What KAPPA-CAP added on 2026-08-31.** The bound was enforced and unnamed:
+every site mapped the kernel's `PrincipalCapacityUnstated` /
+`PrincipalExceedsCapacity` / `ZeroCapacity` onto a neighbouring generic refusal,
+so on chain a capacity refusal was indistinguishable from a malformed record.
+Four `PrincipalCapacity` variants now carry it.
+
+It also closed the vacuity at one site. Every program-test fixture founded at
+`u64::MAX` — the explicitly-unbounded sentinel — so an unbounded Market admitted
+every growth and the refusing arm had never executed on a real ELF, in the only
+gate that runs them. `affine_batch_v2`'s program test now founds at an exact cap:
+against the fixture's supply of 7 at outcome 0 and a cap of 10, a complete-set
+credit of 3 commits and 4 refuses as `PrincipalCapacity`, with every Claims byte
+unchanged across the refusal. Both halves are asserted, because a bound that
+refused everything would pass an excess-only test; and it was proved red twice,
+once by unbinding the cap (the excess then commits, so the bound is what refuses)
+and once by matching the code structurally rather than by log substring.
+
+**What is genuinely still owed.**
+
+1. **Three of the four sites have no on-chain bounded test.** `founding_v5`,
+   `signed_delta_v3` and the legacy complete-set mint are enforced, and their
+   refusals are named, but their fixtures still found at `u64::MAX`. The
+   affine-batch test is the pattern: bind the cap into `core_state` (it is not
+   part of the Market's address derivation, so this forges nothing), grow past
+   it, assert the named code.
+2. **κ = 1/4 is still Provisional.** §11.1's lifting plan — measure the fraction
+   an attacker can actually realise on a given venue, then state a per-venue κ
+   with a `Measured` envelope — is unchanged and unstarted.
+3. **The demo market is still unbounded by declaration.** §12.6's observation
+   stands: the demo Source publishes no floor, so it founds `ExplicitlyUnbounded`.
+   That is now an honest on-chain statement rather than a silent zero, but it is
+   not the same thing as the flagship market being bounded.

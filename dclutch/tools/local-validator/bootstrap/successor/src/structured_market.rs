@@ -260,6 +260,9 @@ mod tests {
                 knots: &[],
                 terms: &[],
                 failure_payouts: &[],
+                // Exempt by proof: degree 0 and 1 need no price gate,
+                // and a digest offered alongside one is refused.
+                price_gate_certificate_digest: [0_u8; 32],
             },
             &mut output,
         )
@@ -376,7 +379,11 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for record in &payload.records {
             assert!(record.label.ends_with("_record"), "{}", record.label);
-            assert!(seen.insert(record.label.clone()), "{} repeats", record.label);
+            assert!(
+                seen.insert(record.label.clone()),
+                "{} repeats",
+                record.label
+            );
             assert!(!record.body_hex.is_empty());
         }
         for reserved in [

@@ -604,7 +604,16 @@ fn create_escrow_accounts(
         .ok_or_else(|| ClaimCheckCompactionSbfErrorV1::Conservation.into())
 }
 
-fn allocate_and_assign<'info>(
+/// Allocate one account to an exact width and assign it an owner, signed.
+///
+/// Shared with the fractional route unmodified, being generic over seeds, width
+/// and owner (design §17.9's correction to hazard 2). It is the *honest* share
+/// of `write_claim_check`, which cannot itself be shared: that one is hard-typed
+/// to [`ClaimCheckSeedsV1`], [`ClaimCheckV1`] and the native 288-byte width,
+/// while the fractional record is 320 bytes under its own seed type. A thin
+/// fractional writer over this function is not duplication; re-deriving the seed
+/// order would be.
+pub(crate) fn allocate_and_assign<'info>(
     destination: &AccountInfo<'info>,
     system: &AccountInfo<'info>,
     width: usize,
@@ -635,6 +644,13 @@ fn allocate_and_assign<'info>(
 
 /// Terminal-frame width this route wraps before its own accounts begin.
 const TERMINAL_FRAME_V1: usize = TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
+/// Where the Position being compacted sits inside the wrapped terminal frame.
+///
+/// Named once here and read by both compaction routes. It used to be the bare
+/// literal `20` written twice in this file; the fractional route needs the same
+/// account, and a third hand-written copy of an index into somebody else's frame
+/// is how two routes end up closing two different accounts under one name.
+pub(crate) const COMPACT_TERMINAL_POSITION_ACCOUNT_V1: usize = 20;
 /// The escrow record, whose counter and opener debt this crank moves.
 pub const COMPACT_ESCROW_ACCOUNT_V1: usize = TERMINAL_FRAME_V1;
 /// The claim-check this crank mints, when the payout is nonzero.
@@ -901,7 +917,7 @@ fn commit_compaction(
     let rent_credit_account = at(COMPACT_RENT_CREDIT_ACCOUNT_V1)?;
     let opener_account = at(COMPACT_OPENER_ACCOUNT_V1)?;
     let system_account = at(COMPACT_SYSTEM_ACCOUNT_V1)?;
-    let position_account = at(20)?;
+    let position_account = at(COMPACT_TERMINAL_POSITION_ACCOUNT_V1)?;
     let escrow = prepared.escrow;
     let CollateralMovementV1 {
         hoard_before,
@@ -1009,14 +1025,23 @@ fn commit_compaction(
     Ok(())
 }
 
-fn observation(account: &AccountInfo<'_>) -> ClaimCheckAccountObservationV1 {
+/// One account's identity and live lamports, as the conservation plan reads it.
+///
+/// Shared with the fractional route unmodified (design §17.9's correction to
+/// hazard 2): the observation type is the native plan's, and the fractional plan
+/// embeds that plan rather than restating it.
+pub(crate) fn observation(account: &AccountInfo<'_>) -> ClaimCheckAccountObservationV1 {
     ClaimCheckAccountObservationV1 {
         identity: account.key.to_bytes(),
         lamports: account.lamports(),
     }
 }
 
-fn token_balance(account: &AccountInfo<'_>) -> Result<u64, ProgramError> {
+/// Base-layer balance of one SPL/Token-2022 token account.
+///
+/// Shared with the fractional route unmodified. The offset is the base account
+/// layout's, which both Token programs share and no extension moves.
+pub(crate) fn token_balance(account: &AccountInfo<'_>) -> Result<u64, ProgramError> {
     let data = account
         .try_borrow_data()
         .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?;
@@ -1066,7 +1091,24 @@ fn write_claim_check<'info>(
     Ok(())
 }
 
-fn close_and_split<'info>(
+/// Zero both closed accounts and pay the sweep out in the amended order.
+///
+/// **Shared with the fractional route unmodified, and it is the share that
+/// matters** (design §17.9's correction to hazard 2). It takes a
+/// `&ClaimCheckCompactionPlanV1`, and `FractionalClaimCheckCompactionPlanV1::shared()`
+/// returns exactly that type by value, so the fractional route calls this with
+/// `&plan.shared()` and no signature moves. That is what gives the amended
+/// four-credit order -- rent, crank, opener debt, residue -- **one author across
+/// both routes**, which is the whole of what hazard 2 was protecting: an order
+/// with two authors is an order that drifts, and the drift is somebody's money.
+///
+/// One consequence, taken deliberately rather than inherited: the refusals
+/// raised in here are [`ClaimCheckCompactionSbfErrorV1`], the `0x5600` band. A
+/// fractional caller therefore surfaces native-band codes for a close failure
+/// rather than its own `0x5640` band. That is arguably correct -- it *is* the
+/// native close -- and the alternative, wrapping at the call site, would cost
+/// exactly the shared authorship this sharing exists for.
+pub(crate) fn close_and_split<'info>(
     position: &AccountInfo<'info>,
     admission: &AccountInfo<'info>,
     cranker: &AccountInfo<'info>,

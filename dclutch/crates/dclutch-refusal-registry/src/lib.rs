@@ -203,6 +203,8 @@ pub const TEST_RESOLUTION_RECEIPT_CALLER_BASE: u32 = 0x0010_A000;
 pub const TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE: u32 = 0x0010_B000;
 /// Band 0x10C — `dclutch-claims-sbf` test signer `claim-check-escrow-signer`.
 pub const TEST_CLAIMS_CLAIM_CHECK_ESCROW_SIGNER_BASE: u32 = 0x0010_C000;
+/// Band 0x10D — `dclutch-claims-sbf` test caller `fractional-compaction-caller`.
+pub const TEST_CLAIMS_FRACTIONAL_COMPACTION_CALLER_BASE: u32 = 0x0010_D000;
 
 // --------------------------------------------------------------- band table
 
@@ -391,6 +393,13 @@ pub const BANDS: &[RefusalBand] = &[
         span: BAND_SPAN,
         tier: BandTier::TestCaller,
     },
+    RefusalBand {
+        label: "test/claims-fractional-compaction-caller",
+        package: "dclutch-fractional-compaction-test-caller-sbf",
+        base: TEST_CLAIMS_FRACTIONAL_COMPACTION_CALLER_BASE,
+        span: BAND_SPAN,
+        tier: BandTier::TestCaller,
+    },
 ];
 
 // -------------------------------------------------------------- deliberate aliases
@@ -552,13 +561,14 @@ mod tests {
             TEST_RESOLUTION_RECEIPT_CALLER_BASE,
             TEST_CLAIMS_FRACTIONAL_ATOMIC_CALLER_BASE,
             TEST_CLAIMS_CLAIM_CHECK_ESCROW_SIGNER_BASE,
+            TEST_CLAIMS_FRACTIONAL_COMPACTION_CALLER_BASE,
         ] {
             assert!(
                 BANDS.iter().any(|band| band.base == base),
                 "named base {base:#x} is not in BANDS"
             );
         }
-        assert_eq!(BANDS.len(), 26, "BANDS gained or lost an entry");
+        assert_eq!(BANDS.len(), 27, "BANDS gained or lost an entry");
     }
 
     #[test]

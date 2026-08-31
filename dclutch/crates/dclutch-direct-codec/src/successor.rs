@@ -2475,7 +2475,14 @@ pub struct MakerReplayCloseResultV2 {
     pub plan: MakerReplayClosePlanV2,
 }
 
-/// Close one zero-live maker root after global retirement begins.
+/// Close one zero-live, zero-debt maker root after global retirement begins.
+///
+/// The `fee_owed` refusal is the FEE-TX2 amendment (cohort-9 review item 1,
+/// amendment 2): this account is the SOLE record of the receivable, so a close
+/// that ignored it would erase a debt with no residue. `fee_settlement_v1` is
+/// deliberately phase-free, so settle-then-close is always available in
+/// Retiring; the refusal strands nobody. Lean: `closeMaker` /
+/// `close_conserves_fee_receivable` in `DirectSuccessor.lean`.
 pub fn close_maker_replay_v2(
     root: DirectRootStateV1,
     maker_root: MakerReplayRootV1,
@@ -2487,6 +2494,9 @@ pub fn close_maker_replay_v2(
     maker_root.validate()?;
     if maker_root.live_count != 0 {
         return Err(SuccessorError::LiveCountInvariant);
+    }
+    if maker_root.fee_owed != 0 {
+        return Err(SuccessorError::FeeOwedOutstanding);
     }
     if observed_lamports < maker_root.rent_principal {
         return Err(SuccessorError::InvalidRent);
@@ -3554,6 +3564,74 @@ mod tests {
             close_maker_replay_v2(closed.root, created.maker_root, 111),
             Err(SuccessorError::MakerRootCountInvariant)
         );
+    }
+
+    /// FEE-TX2 amendment red-proof, both ways (cohort-9 review item 1,
+    /// amendment 2): a debtor's close refuses by name -- the replay is the
+    /// SOLE record of the receivable, and `fee_settlement_v1` needs this
+    /// account's projection, so a close that ignored the debt would erase it
+    /// with no residue -- and the exact settlement unlocks the very same
+    /// close. Lean twin: `DirectSuccessor.Examples.debtor_settles_before_closing`.
+    #[test]
+    fn debtor_close_refuses_by_name_and_settle_then_close_succeeds() {
+        let created = consume_nonce_v2(
+            DirectRootStateV1::new(),
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(8, 3)),
+            intent(id(2), 0),
+            NonceConsumptionV2::Inline,
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: id(9),
+                rent_principal: 100,
+            }),
+        )
+        .expect("create");
+        let owing = created.maker_root.record_fee_owed(4).expect("record");
+        let retiring = created.root.begin_retiring().expect("retiring");
+        assert_eq!(
+            close_maker_replay_v2(retiring, owing, 111),
+            Err(SuccessorError::FeeOwedOutstanding)
+        );
+        // A short settlement cannot clear the flag on the way past.
+        assert_eq!(
+            owing.settle_fee_owed(3),
+            Err(SuccessorError::FeeOwedOutstanding)
+        );
+        let settled = owing.settle_fee_owed(4).expect("exact settlement");
+        let closed = close_maker_replay_v2(retiring, settled, 111).expect("settled close");
+        assert_eq!(closed.root.open_maker_root_count(), 0);
+        assert_eq!(closed.plan.rent_owner, id(9));
+    }
+
+    /// Reachability red-proof (cohort-9 review item 1, amendment 1): the
+    /// filled market's path -- begin retiring with the count STANDING, then
+    /// drain it inside Retiring -- is now the semantic function's own happy
+    /// path, where the old ordering made `close_maker_replay_v2` dead code.
+    #[test]
+    fn begin_retiring_over_standing_makers_reaches_the_close() {
+        let created = consume_nonce_v2(
+            DirectRootStateV1::new(),
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(8, 3)),
+            intent(id(2), 0),
+            NonceConsumptionV2::Inline,
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: id(9),
+                rent_principal: 100,
+            }),
+        )
+        .expect("create");
+        assert_eq!(created.root.open_maker_root_count(), 1);
+        let retiring = created.root.begin_retiring().expect("retiring over makers");
+        assert_eq!(retiring.open_maker_root_count(), 1);
+        assert_eq!(
+            retiring.require_closable(),
+            Err(SuccessorError::MakerRootCountInvariant),
+            "Retired stays gated on zero makers -- the invariant never moved",
+        );
+        let closed = close_maker_replay_v2(retiring, created.maker_root, 111).expect("close");
+        closed
+            .root
+            .require_closable()
+            .expect("drained root closable");
     }
 
     #[test]

@@ -21,14 +21,17 @@
 //! 2. **The cumulative-floor apportionment agrees**, atom for atom. The port
 //!    carries the kernel's boundary across unchanged, so this pins the rounding
 //!    too and not merely the weights.
-//! 3. **Both candidate boundaries partition the scale exactly**, and the gap
-//!    between them is *measured* rather than asserted away — see
-//!    `the_two_candidate_boundaries_diverge_and_here_is_by_how_much`.
+//! 3. **The blessed rule's two defining properties hold** — it partitions the
+//!    scale exactly, and every claim lands within one atom of its exact
+//!    rational share. Those are the grounds WAVE `76e2ca3f` ruled on, asserted
+//!    as properties of the surviving rule rather than as a comparison against
+//!    the deleted one.
 
 use dclutch_liability_basis_v2_kernel::spline as kernel;
+use dclutch_product_payoff_v2_codec::runtime_v3::Error;
 use dclutch_product_payoff_v2_codec::spline_eval_v3::{
-    SplineWeightsV3, apportion_cumulative_v3, apportion_floor_complement_v3,
-    apportionment_divergence_v3, evaluate_spline_weights_v3,
+    SPLINE_COORDINATE_DENOMINATOR_CEILING_V3, SplineWeightsV3, apportion_cumulative_v3,
+    evaluate_spline_weights_v3, spline_arithmetic_envelope_v3,
 };
 
 const SPLINE_REQUEST_BYTES: usize = 144;
@@ -179,7 +182,7 @@ fn width_of(case: &Case) -> u32 {
 fn port_weights(case: &Case) -> SplineWeightsV3 {
     let knots: Vec<i128> = case.knots.iter().map(|knot| i128::from(*knot)).collect();
     evaluate_spline_weights_v3(
-        &knots,
+        knots.as_slice(),
         u64::from(case.knot_denominator),
         i128::from(case.coordinate_numerator),
         u64::from(case.coordinate_denominator),
@@ -245,28 +248,20 @@ fn the_port_and_the_kernel_agree_on_the_cumulative_apportionment() {
     }
 }
 
-/// Both candidate boundaries partition the scale exactly. This is the property
-/// that makes either of them admissible at all.
+/// **The blessed rule partitions the scale exactly**, on every case. This is
+/// the property that makes an apportionment admissible at all: the claims sum
+/// to `Q` with no residue placed anywhere by hand.
 #[test]
-fn both_candidate_boundaries_partition_the_scale_exactly() {
+fn the_blessed_boundary_partitions_the_scale_exactly() {
     for case in CASES {
         let weights = port_weights(case);
         let scale = u64::from(case.scale);
         let mut cumulative = vec![0_u64; weights.width];
-        let mut floored = vec![0_u64; weights.width];
         apportion_cumulative_v3(&weights, scale, &mut cumulative).expect("cumulative apportions");
-        apportion_floor_complement_v3(&weights, scale, &mut floored)
-            .expect("floor-complement apportions");
         assert_eq!(
             cumulative.iter().sum::<u64>(),
             scale,
             "cumulative sums to Q, {}",
-            case.note
-        );
-        assert_eq!(
-            floored.iter().sum::<u64>(),
-            scale,
-            "floor-complement sums to Q, {}",
             case.note
         );
     }
@@ -296,40 +291,44 @@ fn the_cumulative_boundary_pays_nothing_outside_the_support() {
     }
 }
 
-/// **The measured divergence.** The two candidate boundaries are different
-/// functions, and this records by how much rather than leaving it to a comment.
+/// **The first ground of the cumulative-floor ruling, kept as a property.**
 ///
-/// If this ever reports zero across every case, the rounding question this
-/// module raises would be moot — so the test asserts that at least one case
-/// genuinely diverges, which is what keeps the open question honest.
+/// WAVE `76e2ca3f` ruled cumulative-floor the spline rounding rule on a
+/// measurement: over eleven cases at both degrees it kept every claim within
+/// one atom of its exact rational share, and floor-plus-complement did not
+/// (2 of 11 diverged, worst 2 atoms). The rejected implementation is deleted,
+/// so the comparison that produced that number cannot be re-run here — but the
+/// property it was measuring can be, and directly.
+///
+/// Each claim's exact share is `Q * w_i / D`. Cumulative-floor's telescoping
+/// guarantees `|payout_i - share_i| < 1` for every claim; asserting that is
+/// strictly stronger than asserting it beat the alternative, and it stays true
+/// no matter what the alternative was.
 #[test]
-fn the_two_candidate_boundaries_diverge_and_here_is_by_how_much() {
-    let mut worst_overall = 0_u64;
-    let mut diverging = 0_usize;
+fn every_claim_lands_within_one_atom_of_its_exact_share() {
     for case in CASES {
         let weights = port_weights(case);
-        let mut cumulative = vec![0_u64; weights.width];
-        let mut floored = vec![0_u64; weights.width];
-        let gap = apportionment_divergence_v3(
-            &weights,
-            u64::from(case.scale),
-            &mut cumulative,
-            &mut floored,
-        )
-        .expect("both boundaries apportion");
-        if gap > 0 {
-            diverging += 1;
+        let scale = u128::from(case.scale);
+        let mut output = vec![0_u64; weights.width];
+        apportion_cumulative_v3(&weights, u64::from(case.scale), &mut output)
+            .expect("cumulative apportions");
+        for claim in 0..weights.width {
+            let paid = u128::from(output[claim]);
+            // The exact share is `Q * w / D`. Compared without dividing, and
+            // symmetrically: telescoping floors may land either side of the
+            // exact value, so the claim is `|paid - share| < 1`, which scaled
+            // by `D` is `|paid * D - Q * w| < D`.
+            let share_numerator = scale
+                .checked_mul(weights.numerator_at(claim))
+                .expect("share fits");
+            let paid_numerator = paid.checked_mul(weights.denominator).expect("bound fits");
+            assert!(
+                paid_numerator.abs_diff(share_numerator) < weights.denominator,
+                "claim {claim} paid {paid} is a full atom or more from its exact share, {}",
+                case.note
+            );
         }
-        worst_overall = worst_overall.max(gap);
-        println!("{:<70} worst per-claim gap {gap}", case.note);
     }
-    println!("cases diverging: {diverging} of {}", CASES.len());
-    println!("worst per-claim gap across the corpus: {worst_overall} atoms");
-    assert!(
-        diverging > 0,
-        "the two boundaries must actually differ somewhere, or the open rounding \
-         question in spline_eval_v3 is not a real question"
-    );
 }
 
 /// **Hostile 22, as the design states it.** Every case in the Lean-emitted
@@ -344,10 +343,31 @@ fn the_two_candidate_boundaries_diverge_and_here_is_by_how_much() {
 /// chains the port to the specification: Lean emits the expectation, the guard
 /// pins the emission, and this test says the port meets it.
 ///
-/// Degree-1 cases are skipped because the degree-2-to-3 family does not claim
-/// them — degree 1 is the graded family's, reached through `BasisShapeV3`. The
-/// count of cases actually exercised is asserted, so the skip cannot quietly
-/// grow until the test covers nothing.
+/// # Why this is 19 of 28, and why 28 of 28 would be the wrong target
+///
+/// Nine cases are at degree 1, which this family does not claim: degree 1 is
+/// the graded family's, reached through `BasisShapeV3`. It is tempting to route
+/// them through the graded evaluator so the number reads 28, and that would be
+/// **wrong**, not merely awkward.
+///
+/// A degree-1 B-spline basis function is exactly a tent, so the record is
+/// constructible — `Tent { left: i, peak: i + 1, right: i + 2 }` per claim. But
+/// the graded family rounds by flooring each term and handing the residue to
+/// its structurally reserved last claim, and this corpus's expectations were
+/// computed with **cumulative-floor**. WAVE `76e2ca3f` ruled those are
+/// different functions, on a measurement showing they diverge on 2 of 11 cases.
+/// So asserting the degree-1 cases against the graded evaluator would assert an
+/// agreement that does not hold, and making it hold would mean changing the
+/// live graded family's rounding — a money change nobody has ruled.
+///
+/// The corpus is fully executed across the tree regardless: the kernel's own
+/// suite (`dclutch-liability-basis-v2-kernel/tests/spline.rs`) runs all 28 with
+/// no skip, and it is the differential reference under `O-005`. What this test
+/// says is the narrower and truer thing — every case the *ported* evaluator
+/// claims, it reproduces exactly.
+///
+/// The split is pinned rather than floored, so a case cannot quietly move from
+/// exercised to skipped.
 #[test]
 fn the_port_reproduces_the_lean_emitted_agreement_corpus() {
     use dclutch_liability_basis_v2_kernel::SPLINE_AGREEMENT_CASES_V2;
@@ -383,7 +403,7 @@ fn the_port_reproduces_the_lean_emitted_agreement_corpus() {
         let width = u32::try_from(case.width).expect("width fits");
 
         let weights = evaluate_spline_weights_v3(
-            &knots,
+            knots.as_slice(),
             u64::from(knot_denominator),
             i128::from(coordinate_numerator),
             u64::from(coordinate_denominator),
@@ -413,9 +433,19 @@ fn the_port_reproduces_the_lean_emitted_agreement_corpus() {
         SPLINE_AGREEMENT_CASES_V2.len(),
         "every emitted case must be either exercised or explicitly skipped"
     );
-    assert!(
-        exercised >= 10,
-        "only {exercised} cases exercised; the corpus link has gone vacuous"
+    // **Pinned exactly, not floored loosely.** This assertion used to read
+    // `exercised >= 10`, which let nine currently-exercised cases turn into
+    // skips -- or let the emitter reclassify them -- without going red. The
+    // corpus is 28 cases: 9 at degree 1 (the graded family's, reached through
+    // `BasisShapeV3` and executed in full by the kernel's own suite), 2 at
+    // degree 2 and 17 at degree 3. Those numbers are facts about an emitted,
+    // byte-guarded artifact, so pinning them costs nothing and catches a
+    // silent shrink. If the emitter grows the corpus, this is the line that
+    // says so.
+    assert_eq!(
+        (exercised, skipped_degree_one),
+        (19, 9),
+        "the Lean corpus split moved; a case was added, removed, or reclassified"
     );
 }
 
@@ -426,7 +456,7 @@ fn a_degree_outside_the_family_refuses() {
     let knots: Vec<i128> = vec![0, 0, 0, 1, 2, 3, 3, 3];
     for degree in [0_u8, 1, 4, 255] {
         assert!(
-            evaluate_spline_weights_v3(&knots, 1, 1, 1, degree, 5).is_err(),
+            evaluate_spline_weights_v3(knots.as_slice(), 1, 1, 1, degree, 5).is_err(),
             "degree {degree} must refuse"
         );
     }
@@ -437,8 +467,8 @@ fn a_degree_outside_the_family_refuses() {
 #[test]
 fn a_width_the_knot_vector_does_not_derive_refuses() {
     let knots: Vec<i128> = vec![0, 0, 0, 1, 2, 3, 3, 3];
-    assert!(evaluate_spline_weights_v3(&knots, 1, 1, 1, 2, 4).is_err());
-    assert!(evaluate_spline_weights_v3(&knots, 1, 1, 1, 2, 6).is_err());
+    assert!(evaluate_spline_weights_v3(knots.as_slice(), 1, 1, 1, 2, 4).is_err());
+    assert!(evaluate_spline_weights_v3(knots.as_slice(), 1, 1, 1, 2, 6).is_err());
 }
 
 /// A knot vector with no non-degenerate span at all refuses rather than
@@ -446,5 +476,112 @@ fn a_width_the_knot_vector_does_not_derive_refuses() {
 #[test]
 fn a_wholly_degenerate_knot_vector_refuses() {
     let knots: Vec<i128> = vec![5, 5, 5, 5, 5, 5, 5, 5];
-    assert!(evaluate_spline_weights_v3(&knots, 1, 5, 1, 2, 5).is_err());
+    assert!(evaluate_spline_weights_v3(knots.as_slice(), 1, 5, 1, 2, 5).is_err());
+}
+
+/// **The strand the pre-scaling saturation closes, red-proofed.**
+///
+/// The coordinate used to be carried onto the common denominator with a
+/// `checked_mul`, so a coordinate numerator large enough to overflow `i128`
+/// when multiplied by the knot denominator refused with `ArithmeticOverflow` —
+/// at *settlement*, on a Market that had already taken deposits. The multiply
+/// is now saturating, and saturation is exact here because the clamp on the
+/// next line discards the magnitude anyway.
+///
+/// The assertion is not merely "it no longer errors": it is that an enormous
+/// coordinate lands on **exactly** the same weights as a coordinate sitting on
+/// the top knot, which is what "clamped to the domain" has to mean.
+#[test]
+fn an_enormous_coordinate_saturates_onto_the_domain_instead_of_trapping() {
+    let knots: Vec<i128> = vec![0, 0, 0, 1, 2, 3, 3, 3];
+    let denominator = 1_000_000_u64;
+
+    // Large enough that `coordinate_numerator * knot_denominator` leaves i128.
+    let enormous = evaluate_spline_weights_v3(knots.as_slice(), denominator, i128::MAX, 1, 2, 5)
+        .expect("an out-of-domain coordinate must clamp, not trap");
+    let at_top = evaluate_spline_weights_v3(knots.as_slice(), denominator, 3, 1, 2, 5)
+        .expect("the top of the domain evaluates");
+    assert_eq!(
+        enormous, at_top,
+        "a coordinate above the domain must evaluate exactly as the top knot does"
+    );
+
+    // And symmetrically below.
+    let tiny = evaluate_spline_weights_v3(knots.as_slice(), denominator, i128::MIN, 1, 2, 5)
+        .expect("an under-domain coordinate must clamp, not trap");
+    let at_bottom = evaluate_spline_weights_v3(knots.as_slice(), denominator, 0, 1, 2, 5)
+        .expect("the bottom of the domain evaluates");
+    assert_eq!(
+        tiny, at_bottom,
+        "a coordinate below the domain must evaluate exactly as the first knot does"
+    );
+}
+
+/// The residue, named rather than left to arrive as a generic overflow: a
+/// coordinate denominator above the published ceiling refuses by its own code.
+/// This is the boundary a `SignedU256` accumulation would retire, and the test
+/// exists so that widening is visibly a *change of this constant* rather than a
+/// silent relaxation.
+#[test]
+fn a_coordinate_denominator_above_the_ceiling_refuses_by_name() {
+    let knots: Vec<i128> = vec![0, 0, 0, 1, 2, 3, 3, 3];
+    assert_eq!(
+        evaluate_spline_weights_v3(
+            knots.as_slice(),
+            1,
+            1,
+            SPLINE_COORDINATE_DENOMINATOR_CEILING_V3 + 1,
+            2,
+            5
+        ),
+        Err(Error::SplineCoordinateOutOfEnvelope)
+    );
+    assert!(
+        evaluate_spline_weights_v3(
+            knots.as_slice(),
+            1,
+            1,
+            SPLINE_COORDINATE_DENOMINATOR_CEILING_V3,
+            2,
+            5
+        )
+        .is_ok(),
+        "the ceiling itself is admitted; it is a closed bound"
+    );
+}
+
+/// **The envelope's promise, stated as a property rather than an example.**
+/// Every basis the envelope admits evaluates without overflow at every
+/// coordinate denominator up to the ceiling — that is the whole claim, and it
+/// is what makes a founding-time check a substitute for a settlement-time one.
+#[test]
+fn what_the_envelope_admits_evaluates_everywhere_it_promised() {
+    let knots: Vec<i128> = vec![0, 0, 0, 1, 2, 3, 3, 3];
+    let scale = 1_000_000_u64;
+    spline_arithmetic_envelope_v3(knots.as_slice(), 2, 5, scale).expect("this basis is admissible");
+
+    for denominator in [
+        1_u64,
+        2,
+        1_000,
+        1_000_000,
+        SPLINE_COORDINATE_DENOMINATOR_CEILING_V3,
+    ] {
+        for numerator in [i128::MIN, -7, 0, 1, 2, 3, i128::MAX] {
+            let weights =
+                evaluate_spline_weights_v3(knots.as_slice(), 1, numerator, denominator, 2, 5)
+                    .unwrap_or_else(|error| {
+                        panic!("admitted basis refused at {numerator}/{denominator}: {error:?}")
+                    });
+            let mut output = vec![0_u64; 5];
+            apportion_cumulative_v3(&weights, scale, &mut output).unwrap_or_else(|error| {
+                panic!("admitted basis failed to apportion at {numerator}/{denominator}: {error:?}")
+            });
+            assert_eq!(
+                output.iter().sum::<u64>(),
+                scale,
+                "apportionment must be exact at {numerator}/{denominator}"
+            );
+        }
+    }
 }

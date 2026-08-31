@@ -138,7 +138,25 @@ impl<'accounts, 'info> DeclareFrame<'accounts, 'info> {
             }
         }
         for slot in self.authority {
-            if slot.is_writable || slot.executable {
+            // The executable refusal is what keeps a program out of a consent
+            // slot: a program holds no private key, so a program standing here
+            // could only ever look like a consent nothing was able to give.
+            //
+            // The System Program is the one account this route itself REQUIRES
+            // in a consent slot -- conjunct 6 asks for exactly
+            // `system_program::ID` in an unmoved role's slot -- and every runtime
+            // presents that account as executable. Refusing it here made the two
+            // conjuncts mutually unsatisfiable and left every hop with an unmoved
+            // role undeclarable by any caller.
+            //
+            // The exemption concedes nothing, because it decides nothing.
+            // Whether that account may stand in a given slot is still conjunct
+            // 6's, and there it is admitted only for a role that did NOT move,
+            // where it must not sign and no consent is recorded. In a moved
+            // role's slot conjunct 6 refuses it, needing a signature that account
+            // cannot produce. Every other executable account is refused here
+            // exactly as before.
+            if slot.is_writable || (slot.executable && slot.key != &system_program::ID) {
                 return Err(RegistryError::AccountFrame.into());
             }
         }
@@ -382,6 +400,18 @@ pub(crate) fn authenticate_pristine_lineage_account_for_test(
     lineage: ReleaseLineageV1,
 ) -> Result<u8, ProgramError> {
     authenticate_pristine_lineage_account(program_id, lineage_account, lineage)
+}
+
+/// Conjunct 1 alone: the width and the privilege sweep, nothing decoded.
+///
+/// Exported because conjunct 1 has an ADMITTING direction that no refusal test
+/// can reach. Every other unit test here observes it only by the error that does
+/// not come back, and the canonical frame cannot be driven through
+/// `process_instruction` to the end because the creation is a System CPI no
+/// unit-test runtime serves.
+#[cfg(test)]
+pub(crate) fn validate_declaration_frame_for_test(accounts: &[AccountInfo<'_>]) -> ProgramResult {
+    DeclareFrame::parse(accounts).map(|_| ())
 }
 
 #[cfg(test)]

@@ -22,14 +22,15 @@ mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
 mod evidence_refresh;
 mod family_hot_campaign;
+mod flagship_resolution;
 mod fractional_market;
+mod funding_readiness;
 mod general_capability_activation;
 mod general_market;
 mod general_settlement_fixture;
-mod series_consume_campaign;
-mod flagship_resolution;
-mod funding_readiness;
 mod local_mutable;
+mod release_lineage;
+mod series_consume_campaign;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
 // helpers stay allowed the way every #[path] include here is.
@@ -39,11 +40,10 @@ mod ledger;
 mod market;
 mod model;
 mod plan;
-mod rational_market;
-mod structured_market;
 mod private_activity;
 mod private_lifecycle;
 mod pyth_vaa_provisioning;
+mod rational_market;
 mod relayed;
 mod release_capture;
 mod release_identity;
@@ -53,6 +53,7 @@ mod seed;
 mod selected_capability;
 mod source_abort_exterior;
 mod sponsored_push;
+mod structured_market;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
 mod terminal_sequence;
@@ -184,6 +185,12 @@ fn run() -> Result<()> {
         }
         Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
             direct_fee_settlement::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == release_lineage::COMMAND_V1 => {
+            release_lineage::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == release_lineage::COMMAND_DEVNET_V1 => {
+            release_lineage::run_devnet_v1(arguments.collect())
         }
         Some("local-private-validator-direct-trade-v1") => {
             direct_trade::run_owned_loopback(arguments.collect())
@@ -1635,6 +1642,7 @@ fn usage() {
     println!("{}", private_lifecycle::direct_payout_schedule_usage());
     println!("{}", claims_custody_replay::usage());
     println!("{}", direct_fee_settlement::usage());
+    println!("{}", release_lineage::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", sponsored_push::usage());
@@ -1646,7 +1654,10 @@ fn usage() {
     println!("{}", direct_trade_producer::devnet_session_usage());
     println!("{}", direct_trade_producer::devnet_direct_usage());
     println!("{}", direct_ticket::usage());
-    println!("{}", direct_hot_route_manifest::checked_execution_release_usage());
+    println!(
+        "{}",
+        direct_hot_route_manifest::checked_execution_release_usage()
+    );
     println!("{}", direct_hot_route_manifest::hot_route_manifest_usage());
     println!("{}", direct_capability_activation::usage());
     println!("{}", direct_capability_activation::owned_loopback_usage());

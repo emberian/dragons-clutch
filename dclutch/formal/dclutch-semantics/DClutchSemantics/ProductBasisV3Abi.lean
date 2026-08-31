@@ -52,9 +52,9 @@ decoder *refuse* rather than misread a record written by a newer one. -/
 
 inductive HeaderField where
   | magic | schemaVersion | headerBytes | recordBytes | kind | rounding
-  | headerReserved | basisWidth | knotCount | termCount | product
+  | splineDegree | splineFlags | basisWidth | knotCount | termCount | product
   | resultDomain | coordinateDomain | resultUnit | payoutScale
-  | knotDenominator | evaluatorRelease | tailReserved
+  | knotDenominator | evaluatorRelease | priceGateDigest | tailReserved
   deriving DecidableEq, Repr
 
 def headerSchema : List (FieldSpec HeaderField) := [
@@ -64,7 +64,8 @@ def headerSchema : List (FieldSpec HeaderField) := [
   ⟨.recordBytes, .u32⟩,
   ⟨.kind, .u8⟩,
   ⟨.rounding, .u8⟩,
-  ⟨.headerReserved, .reserved 2⟩,
+  ⟨.splineDegree, .u8⟩,
+  ⟨.splineFlags, .u8⟩,
   ⟨.basisWidth, .u32⟩,
   ⟨.knotCount, .u32⟩,
   ⟨.termCount, .u32⟩,
@@ -75,7 +76,8 @@ def headerSchema : List (FieldSpec HeaderField) := [
   ⟨.payoutScale, .u64⟩,
   ⟨.knotDenominator, .u64⟩,
   ⟨.evaluatorRelease, .bytes 32⟩,
-  ⟨.tailReserved, .reserved 48⟩
+  ⟨.priceGateDigest, .bytes 32⟩,
+  ⟨.tailReserved, .reserved 16⟩
 ]
 
 def headerLayout : List (PlacedField HeaderField) := specialize headerSchema
@@ -90,7 +92,8 @@ def rustName : HeaderField → String
   | .recordBytes => "BASIS_RECORD_BYTES_OFFSET_V3"
   | .kind => "BASIS_KIND_OFFSET_V3"
   | .rounding => "BASIS_ROUNDING_OFFSET_V3"
-  | .headerReserved => "BASIS_HEADER_RESERVED_OFFSET_V3"
+  | .splineDegree => "BASIS_SPLINE_DEGREE_OFFSET_V3"
+  | .splineFlags => "BASIS_SPLINE_FLAGS_OFFSET_V3"
   | .basisWidth => "BASIS_WIDTH_OFFSET_V3"
   | .knotCount => "BASIS_KNOT_COUNT_OFFSET_V3"
   | .termCount => "BASIS_TERM_COUNT_OFFSET_V3"
@@ -101,6 +104,7 @@ def rustName : HeaderField → String
   | .payoutScale => "BASIS_PAYOUT_SCALE_OFFSET_V3"
   | .knotDenominator => "BASIS_KNOT_DENOMINATOR_OFFSET_V3"
   | .evaluatorRelease => "BASIS_EVALUATOR_RELEASE_ID_OFFSET_V3"
+  | .priceGateDigest => "BASIS_PRICE_GATE_DIGEST_OFFSET_V3"
   | .tailReserved => "BASIS_HEADER_TAIL_RESERVED_OFFSET_V3"
 
 end HeaderField
@@ -165,12 +169,12 @@ over the kind to state, at compile time, what it does with a family it cannot
 evaluate — which is how a refusal becomes a build failure rather than a
 runtime surprise.
 
-The reserved span at offset 18 is deliberately **not** spent here.  Degree is a
-property of this variant in the Rust type, not yet a field on the wire: a
-`DCLTPAY3` record carrying kind byte 3 is refused at the kind byte, before a
-degree would be read.  The set of byte strings this ABI accepts is therefore
-unchanged, which is what keeps this a type-level allocation rather than a wire
-migration. -/
+The reserved span at offset 18 **is** spent here, and that is what turns this
+from an allocation into a wire migration.  Byte 18 carries the degree and byte
+19 the flags; both are zero for the two shipping kinds, which a deployed
+decoder already enforces, so an old decoder confronted with a curved record
+refuses it rather than misreading one.  The schema identity bumps in the same
+commit for the converse direction. -/
 def splineDegree2To3Kind : Nat := 3
 
 /-- The closed degree interval the third family names.  Degree 0 is `Constant`
@@ -181,10 +185,46 @@ development and its price gate are proved over. -/
 def splineMinimumDegree : Nat := 2
 def splineMaximumDegree : Nat := 3
 
+/-- Header byte 19, bit 0: this basis permits repeated **interior** knots.
+
+Interior multiplicity is how a spline lowers continuity -- a knot of
+multiplicity `r` collapses `r - 1` spans and puts a corner inside an otherwise
+smooth basis.  It is a permission rather than a fact so that the relaxation is
+*declared by the record* and visible in its digest, not inferred by an
+evaluator noticing a repeat.  The two shipping kinds keep their strictly
+increasing knot rule unconditionally; this bit does not exist for them and
+their flags byte is forced zero.
+
+Bits 1-7 are unallocated and required zero, so the byte keeps refusing what it
+does not understand. -/
+def splineInteriorMultiplicityFlag : Nat := 1
+
 /-- Header byte 17 names the rounding boundary, and the live decoder requires
 it to *agree with* the kind rather than merely be in range. -/
 def exactCategoricalBoundary : Nat := 0
 def termFloorExactComplementBoundary : Nat := 1
+
+/-- Header byte 17 value 2: **cumulative-floor**, the spline family's rounding.
+
+The orchestrator ruled this on measurement (WAVE `76e2ca3f`).  The graded
+family's rule -- floor each primary term, hand the residue to the last claim --
+is well defined only because that family *structurally reserves* its last
+claim.  A spline reserves nothing: every one of its claims carries a de Boor
+weight, and the claims outside the local support carry an exact zero.
+Transliterating the graded rule would pay rounding residue to a claim the basis
+says is unsupported.
+
+It is a distinct boundary tag rather than a reuse of tag 1 because the decoder
+requires the rounding byte to *agree with* the kind rather than merely be in
+range.  Giving the blessed rule its own value is what makes "which rounding
+did this record use" a question the wire answers. -/
+def cumulativeFloorBoundary : Nat := 2
+
+theorem rounding_boundaries_distinct :
+    exactCategoricalBoundary ≠ termFloorExactComplementBoundary ∧
+      exactCategoricalBoundary ≠ cumulativeFloorBoundary ∧
+      termFloorExactComplementBoundary ≠ cumulativeFloorBoundary := by
+  refine ⟨?_, ?_, ?_⟩ <;> decide
 
 /-- Term byte 4 selects the shape. -/
 def constantShape : Nat := 0
@@ -226,7 +266,8 @@ theorem basisHeaderCoordinates : coordinates headerLayout = [
     (.recordBytes, 12, 4),
     (.kind, 16, 1),
     (.rounding, 17, 1),
-    (.headerReserved, 18, 2),
+    (.splineDegree, 18, 1),
+    (.splineFlags, 19, 1),
     (.basisWidth, 20, 4),
     (.knotCount, 24, 4),
     (.termCount, 28, 4),
@@ -237,7 +278,8 @@ theorem basisHeaderCoordinates : coordinates headerLayout = [
     (.payoutScale, 160, 8),
     (.knotDenominator, 168, 8),
     (.evaluatorRelease, 176, 32),
-    (.tailReserved, 208, 48)
+    (.priceGateDigest, 208, 32),
+    (.tailReserved, 240, 16)
   ] := by native_decide
 
 theorem basisTermCoordinates : coordinates termLayout = [
@@ -269,22 +311,41 @@ theorem term_fields_bounded (placed : PlacedField TermField)
   simpa [termLayout, specialize, show schemaWidth termSchema = 32 from
     term_width_is_exact] using specializeFrom_bounded 0 termSchema placed member
 
-/-! ## The two properties the third kind depends on
+/-! ## The reserved spans, and what spending them bought
 
-Both were stated before a kind was added, as the reason the reserved spans had
-to stay reserved.  The third kind now spends neither of them: it lives entirely
-in the byte at offset 16, and the fifty reserved bytes are still fifty. -/
+The fifty reserved bytes existed for exactly this.  They are now spent, by the
+commit that makes the third kind evaluable rather than merely allocated:
 
-/-- The header's slack is exactly fifty bytes, in two spans.  A future degree
-byte and interior-multiplicity bit have somewhere to go without moving a field,
-and a certificate digest has somewhere to go without a new header.
+- **offset 18** becomes the spline degree, and **offset 19** its flags byte,
+  whose bit 0 permits repeated interior knots.  Both are kind-inactive for the
+  two shipping kinds and forced canonical there, which is the same discipline
+  `payout_scale == 1` already takes for a categorical record.
+- **offset 208** becomes the 32-byte `DCLTPGT1` certificate digest, leaving
+  **sixteen** reserved bytes at 240.
 
-Restated after the third kind landed, and it is the same fifty.  The evaluator
-lane is what spends the two bytes at offset 18; allocating the kind did not. -/
-theorem header_reserved_span_is_fifty :
+No offset moved and no width changed -- every field a deployed decoder reads is
+where it was.  What changed is that two spans an old decoder refuses on nonzero
+now carry meaning, which is exactly why the schema identity had to bump in the
+same commit: see `ProductGradedBasisAdmissionV3Abi`.  An old decoder confronted
+with a new record refuses rather than misreads it, and a new decoder confronted
+with a record finalized under the old identity refuses it outright. -/
+
+/-- The header's remaining slack is sixteen bytes, in one span.
+
+This was fifty, in two spans, and the theorem said so as the reason the spans
+had to stay reserved until a lane genuinely needed them.  The degree byte, the
+flags byte and the certificate digest are that need.  Sixteen bytes are left,
+and leaving *some* is deliberate: a record with no slack at all is the
+`CoreState` situation, where adding a field is an account-size migration. -/
+theorem header_reserved_span_is_sixteen :
     ((headerSchema.filter fun field =>
         match field.kind with | .reserved _ => true | _ => false).map
-      fun field => field.kind.byteWidth).sum = 50 := by native_decide
+      fun field => field.kind.byteWidth).sum = 16 := by native_decide
+
+/-- The spend is exact: degree, flags and digest account for the whole
+difference, so nothing was quietly taken beyond what this commit names. -/
+theorem header_reserved_spend_is_thirty_four :
+    50 - 16 = 1 + 1 + 32 := by decide
 
 /-- The three kind discriminants are pairwise distinct and all fit a `u8`, so
 the byte at offset 16 names three families without widening. -/

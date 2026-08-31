@@ -61,8 +61,8 @@ use crate::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, MAINNET_BETA_GENESIS_HASH,
     },
     model::{
-        CheckedDeploymentDispositionV1, CheckedInfrastructureCarryForwardPinV1,
-        CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
+        AlreadyCurrentClosureV1, CheckedDeploymentDispositionV1,
+        CheckedInfrastructureCarryForwardPinV1, CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
     },
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
@@ -2090,9 +2090,7 @@ fn audit_set_journal_with_runner(
             return Err(Error::new(format!(
                 "deployment-set role {} is journaled AlreadyCurrent but its live payload {} is not \
                  the checked candidate {}; an AlreadyCurrent row is admitted on byte equality alone",
-                role.args.role,
-                observation.loader.live_elf_sha256,
-                role.admission.live_elf_sha256
+                role.args.role, observation.loader.live_elf_sha256, role.admission.live_elf_sha256
             )));
         }
         if pinned.live_elf_sha256 != observation.loader.live_elf_sha256 {
@@ -2108,13 +2106,16 @@ fn audit_set_journal_with_runner(
                 role.args.role, pinned.observed_slot, observation.context_slot
             )));
         }
-        if role.receipt_phase.is_some() {
-            return Err(Error::new(format!(
-                "deployment-set role {} is AlreadyCurrent yet a one-role Upgrade receipt exists; \
-                 the two kinds of evidence are exclusive",
-                role.args.role
-            )));
+        // Same rule, a different source: here the receipt is the one loaded off
+        // disk rather than the one the journal row claims. The baseline is not
+        // an Option on this shape -- `UpgradeAdmissionV1` holds one by
+        // construction -- so it is present, not merely assumed present.
+        AlreadyCurrentClosureV1 {
+            role: &role.args.role,
+            receipt_claimed: role.receipt_phase.is_some(),
+            baseline_present: true,
         }
+        .audit()?;
     }
     let completed_upgrades = first_incomplete.unwrap_or(local_roles.len());
     for role in local_roles.iter().take(completed_upgrades) {
@@ -2363,15 +2364,19 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
             }
             (CheckedDeploymentDispositionV1::AlreadyCurrent, Some(pin)) => {
                 require_digest(&pin.live_elf_sha256, "set AlreadyCurrent live ELF SHA-256")?;
-                // No receipt, because there was no Upgrade. A dump IS required:
-                // the deployed bytes read back from the cluster are the whole
+                // The shared closure: no receipt, and the baseline present.
+                // Presence is pure data, so it belongs here rather than in the
+                // evidence-opening pass below -- nothing is read to check it.
+                AlreadyCurrentClosureV1 {
+                    role: expected_role,
+                    receipt_claimed: role.receipt.sha256.is_some(),
+                    baseline_present: role.baseline.is_some(),
+                }
+                .audit()?;
+                // A dump IS required, and only this projection can say so: the
+                // deployed bytes read back from the cluster are the whole
                 // evidence, and evidence that lives only in a JSON field is not
                 // evidence at all.
-                if role.receipt.sha256.is_some() {
-                    return Err(Error::new(format!(
-                        "set journal {expected_role} is AlreadyCurrent and must claim no Upgrade receipt"
-                    )));
-                }
                 if role.dump.sha256.as_deref() != Some(pin.live_elf_sha256.as_str()) {
                     return Err(Error::new(format!(
                         "set journal {expected_role} is AlreadyCurrent and its dump digest must be the pinned live payload"
@@ -2424,9 +2429,13 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
                     ))
                 })?;
                 read_pinned_reference(baseline, &format!("{} baseline", role.role))?;
-                if role.receipt.sha256.is_some() || role.dump.sha256.is_none() {
+                // The receipt half of this rule is the shared closure, already
+                // audited above before any file was opened. What is left is the
+                // dump, which only this row shape carries.
+                if role.dump.sha256.is_none() {
                     return Err(Error::new(format!(
-                        "AlreadyCurrent role {} must contain one live dump and no Upgrade receipt",
+                        "AlreadyCurrent role {}: the live dump is absent, and the deployed bytes \
+                         read back from the cluster are the whole evidence",
                         role.role
                     )));
                 }
@@ -3422,8 +3431,9 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
                 .already_current
                 .as_ref()
                 .expect("journal closure checked AlreadyCurrent evidence");
-            let dump_bytes = read_optional_reference(&role.dump, &format!("{} dump", role.role))?
-                .ok_or_else(|| Error::new(format!("{} dump is not present", role.role)))?;
+            let dump_bytes =
+                read_optional_reference(&role.dump, &format!("{} dump", role.role))?
+                    .ok_or_else(|| Error::new(format!("{} dump is not present", role.role)))?;
             let elf_path = set_role_elf_path(&gate_path, &role.role)?;
             let role_args = UpgradeArgsV1 {
                 origin: offline_origin.clone(),
@@ -3460,9 +3470,7 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
             };
             let admission = admit_upgrade(&role_args)?;
             let dump_sha256 = digest(&dump_bytes);
-            if dump_sha256 != admission.live_elf_sha256
-                || dump_sha256 != pinned.live_elf_sha256
-            {
+            if dump_sha256 != admission.live_elf_sha256 || dump_sha256 != pinned.live_elf_sha256 {
                 return Err(Error::new(format!(
                     "AlreadyCurrent role {} dump {} is neither the checked candidate {} nor the pinned live payload {}",
                     role.role, dump_sha256, admission.live_elf_sha256, pinned.live_elf_sha256

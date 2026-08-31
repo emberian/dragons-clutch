@@ -178,3 +178,44 @@ fn the_corpus_reaches_both_clamps_and_the_interior() {
         "corpus must reach the interior, which is the only place rounding happens"
     );
 }
+
+/// **The founding gate runs on every specification record.**
+///
+/// `admit_selection_v3` is the conjunct `authenticate_product_basis_v3` calls
+/// before Core commits a founding permit. Today it is a total `Ok` for both
+/// shipping kinds — the wire cannot yet carry a kind that needs a certificate,
+/// and the tail the digest will live in is zero-enforced. That is exactly why
+/// this test matters: it says the gate is on the route and admits everything
+/// the specification says is admissible, so the commit that first accepts
+/// curvature changes what the gate *decides* rather than introducing the gate.
+///
+/// A gate whose first execution is also the first execution of the thing it
+/// guards has never been observed to pass. The cohort-9 review found this
+/// cascade green in tests and called by nothing; this is the other half of
+/// closing that.
+#[test]
+fn every_specification_record_passes_the_founding_admission_gate() {
+    let mut admitted = 0_usize;
+    for (index, case) in BASIS_AGREEMENT_CASES_V3.iter().enumerate() {
+        let basis = ProductBasisV3::decode(case.record)
+            .unwrap_or_else(|error| panic!("case {index}: record refused: {error:?}"));
+        basis
+            .admit_selection_v3()
+            .unwrap_or_else(|error| panic!("graded case {index} refused at founding: {error:?}"));
+        admitted += 1;
+    }
+    for (index, case) in BASIS_CATEGORICAL_CASES_V3.iter().enumerate() {
+        let basis = ProductBasisV3::decode(case.record)
+            .unwrap_or_else(|error| panic!("categorical case {index}: record refused: {error:?}"));
+        basis.admit_selection_v3().unwrap_or_else(|error| {
+            panic!("categorical case {index} refused at founding: {error:?}")
+        });
+        admitted += 1;
+    }
+    assert_eq!(
+        admitted,
+        BASIS_AGREEMENT_CASES_V3.len() + BASIS_CATEGORICAL_CASES_V3.len(),
+        "every emitted record must reach the gate"
+    );
+    assert!(admitted >= 25, "the corpus link has gone vacuous");
+}

@@ -658,6 +658,389 @@ impl FractionalClaimCheckRedemptionRoleV1 {
     }
 }
 
+/// Terminal-settlement frame width one fractional compaction wraps verbatim.
+///
+/// Named here and never re-enumerated. The terminal frame's roles, order and
+/// privileges belong to [`crate::terminal_settlement_v3`], which is the crate
+/// that decodes the header this route carries; a second enumeration of them
+/// here would be a second author for one frame, and the design's rule about the
+/// payout derivation -- *call it, never re-implement it* -- is the same rule one
+/// level up. The native compaction wraps the same frame the same way
+/// (`claim_check_compaction_v1::TERMINAL_FRAME_V1`).
+pub const FRACTIONAL_COMPACT_TERMINAL_FRAME_V1: usize =
+    crate::terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3;
+
+/// Accounts one fractional compaction adds past the terminal frame.
+///
+/// **Thirteen, and the number moved twice for opposite reasons.**
+///
+/// *Up, from twelve to fourteen: what authentication costs.* The first
+/// declaration gave `ExposureTerms` and `TokenBehavior` one account each. Both
+/// are *finalized Registry records*, and this tree authenticates a finalized
+/// record by a raw/staging **pair** -- `authenticate_finalized_rational_record`
+/// derives both PDAs, requires the raw one to hash to the expected digest, and
+/// requires the staging cursor to be vacant, which is what proves the record is
+/// not mid-update. Every sibling route carries the pair:
+/// `fractional_retirement_v3` does it three times over, in its begin,
+/// coordinate and finish frames, and the terminal frame this one wraps carries
+/// its own exposure raw/staging at indices 21 and 22. A frame holding only the
+/// raw halves cannot run that check at all -- it could derive the raw address
+/// and compare a digest, silently dropping the "not mid-update" proof on a
+/// route that resolves an entire coordinate's outstanding collateral. That is
+/// the shape of weakening that is invisible afterwards, because the route still
+/// looks like it authenticates its terms. So the frame grew by two rather than
+/// the check shrinking by one.
+///
+/// *Down, from fourteen to thirteen: what ceremony cost.* Design §17.8 ruling 2
+/// dropped [`FractionalCompactionRoleV1::TradingCallerAuthority`]. It was
+/// declared a required signer for a close that turns out to be owner-signed
+/// without it: the reserve Position's owner **is** the capability root, the root
+/// signs this frame for the burn hand-off, and a caller-authority PDA proves
+/// only that Trading processed this request -- which the root's own signature
+/// already proves, strictly more strongly, because Trading marks the root a
+/// signer only after `fractional_root_signer` authenticates the root's bytes
+/// against that same request. Two Trading signers where one carries the proof is
+/// O-016's exact shape of ceremony: inclusion mistaken for authority. The role
+/// stays *declared*, refused with its own reason, so the account cannot come
+/// back by being forgotten about.
+pub const FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1: usize = 13;
+
+/// Exact fractional compaction frame width.
+pub const FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1: usize =
+    FRACTIONAL_COMPACT_TERMINAL_FRAME_V1 + FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1;
+
+/// Largest account count one transaction may lock without an address table.
+///
+/// Restated rather than imported because this crate is `no_std` and holds no
+/// SDK: the number is the runtime's, and a frame at or over it is not a tight
+/// frame but an unusable one.
+pub const MAX_TRANSACTION_LOCKS_V1: usize = 64;
+
+// A frame that cannot be locked is not a frame. This route already serialises
+// through the address lookup table the fractional campaigns use, and the
+// assertion is here so that a further account has to argue with the limit at
+// compile time rather than at a validator.
+const _: () = assert!(
+    FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 < MAX_TRANSACTION_LOCKS_V1,
+    "the fractional compaction frame must fit inside one transaction's locks"
+);
+
+/// Why one role is or is not in the fractional compaction frame.
+///
+/// Every declared role answers this, exhaustively, so that a further account
+/// has to state its reason rather than inherit the arm it was written beside --
+/// C0's lesson (compaction design §15.5), which
+/// [`crate::fractional_claim_check_v1`]'s route table and FRACR3's owner-kind
+/// weld both already apply. The refusals are the point: an absent account with
+/// no recorded reason is indistinguishable from one nobody thought of.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalCompactionAdmissionV1 {
+    /// In the frame, at the stated index.
+    Admitted,
+    /// Refused: it names one shard holder, and compaction names none.
+    ///
+    /// The premise that lets a single transaction stand in for every holder at
+    /// once (design §1.3: positions are never enumerated on chain). A frame
+    /// carrying a holder's account would make this route per-holder, unbounded
+    /// in the number of transactions a coordinate needs, and would burn one
+    /// holder's shards at a moment they did not choose.
+    RefusedNamesOneHolder,
+    /// Refused: the record it names answers to a payee who cannot sign.
+    ///
+    /// FRACR3's weld, from the other side. The reserve Position's owner kind is
+    /// `TradingRecord`, `owner_kind_can_open_a_claim_check` refuses it, and
+    /// that refusal is correct -- a native claim-check minted here would be
+    /// collateral written to a PDA with no private key. This whole route exists
+    /// because the refusal stands, so reaching for the native record inside it
+    /// would be undoing the reason it was written.
+    RefusedUnsignablePayee,
+    /// Refused: it belongs to the ordered-retirement walk, not to compaction.
+    ///
+    /// Compaction is permissionless and unordered by design; retirement's
+    /// cursor is ordered and stateful. A frame carrying the cursor would let a
+    /// stalled or absent walk block a crank whose whole purpose is to run when
+    /// nobody is minding the market.
+    RefusedNotThisRoute,
+    /// Refused: a deadline-entitled crank takes no parent's authority.
+    ///
+    /// Design §17.8 ruling 2, and the reason is that this signer would refuse
+    /// nothing. The crank is *anybody* -- under
+    /// `(CallerRole::Claims, ParentAuthorityV3::ClaimCheckCrank)` coordinate 0
+    /// is asked only that somebody signed, which is the deliberate relaxation
+    /// that makes the crank permissionless. A caller-authority PDA derived from
+    /// the caller's own request digest proves that Trading processed this exact
+    /// request; the capability root's signature proves the same thing and more,
+    /// because Trading marks the root a signer only after
+    /// `fractional_root_signer` authenticates the root's bytes against that
+    /// request. A stranger arriving without Trading dies at the `SetAuthority`
+    /// hand-off with `MissingRequiredSignature`; a cranker arriving through
+    /// Trading is legitimate by design. Neither outcome moves if a second
+    /// Trading signer stands beside the first.
+    ///
+    /// And the close it was declared for does not need it. The reserve
+    /// Position's owner **is** [`FractionalCompactionRoleV1::FractionalCapabilityRoot`],
+    /// which signs this frame -- so the compaction close is owner-signed,
+    /// deadline-entitled and record-authenticated, strictly stronger than the
+    /// native sibling's `close_and_split`, which authenticates nothing inside
+    /// itself because entitlement was proved before it is called.
+    /// `execute_parent_authenticated_close` and `authenticate_parent_authority`
+    /// are untouched and remain retirement's own, where the caller-PDA-plus-root
+    /// pair is real because the close is *ordered by Trading's retirement walk*
+    /// rather than entitled by an elapsed deadline.
+    RefusedTakesNoParentAuthority,
+}
+
+/// One account role the fractional compaction frame has an opinion about.
+///
+/// The enumeration covers **only the accounts compaction adds**; indices below
+/// [`FRACTIONAL_COMPACT_TERMINAL_FRAME_V1`] are the terminal frame's, and are
+/// its to name. [`Self::index`] states where each one sits, so the constants a
+/// route indexes by have one author here rather than one per program.
+///
+/// # The seven the Fractional family adds over the native crank
+///
+/// The native compaction needs six accounts past the terminal frame: the
+/// escrow, the record it mints, the admission it reads the owner kind off, the
+/// RentCredit, the opener it repays, and the System program. Every one of those
+/// is here too, for the same reason. The other seven are what §17.4's hand-off
+/// costs:
+///
+/// - [`Self::FractionalCapabilityRoot`], alone, because it is what
+///   "Trading-composed" means for this route: composed **for signature, not for
+///   authority** (design §17.8). The root's signature exists only inside
+///   Trading, and the route needs it for exactly one thing no other key can do.
+///   What *authorizes* the crank is the elapsed deadline and the records -- the
+///   same authorizer as the native sibling, which requires nothing from Trading
+///   at all. [`Self::TradingCallerAuthority`] was declared here beside the root
+///   and is now refused; see its own arm.
+/// - [`Self::ShardMint`] and [`Self::ShardTokenProgram`], because the burn
+///   authority hand-off is a `SetAuthority` against the Mint, and the shard
+///   Mint's Token program is not necessarily the collateral's.
+/// - [`Self::ExposureTerms`], because the denominator has exactly one author
+///   and the record persists it forever.
+/// - [`Self::TokenBehavior`], because the profile the split-controller reader
+///   runs is terms-selected, and reading it from anywhere else would be a
+///   second author for the same fact.
+/// - [`Self::ExposureTermsStaging`] and [`Self::TokenBehaviorStaging`], because
+///   the two records above are *finalized Registry records* and this tree
+///   authenticates one by its raw/staging pair -- the raw half must hash to the
+///   expected digest and the staging cursor must be vacant. Without the cursors
+///   the route could compare a digest but could not prove the record is settled,
+///   which on the terms account means reading a denominator mid-rewrite.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FractionalCompactionRoleV1 {
+    /// The per-market escrow: outstanding-count bookkeeper and future approver.
+    Escrow,
+    /// The fractional claim-check this crank mints, addressed by the Mint.
+    FractionalClaimCheckRecord,
+    /// The reserve Position's admission, carrying the persisted owner kind.
+    ReserveAdmission,
+    /// The market's RentCredit, residual beneficiary of the sweep.
+    RentCredit,
+    /// The escrow's opener, repaid from the sweep after the crank is paid.
+    Opener,
+    /// System program, for the record's allocation.
+    SystemProgram,
+    /// The Trading-derived Fractional capability root, signing for itself.
+    ///
+    /// **One job, and its once is the hand-off** (design §17.8 ruling 1). The
+    /// root is the shard Mint's `PermissionedBurn` authority, and
+    /// `SetAuthority(PermissionedBurn)`, root -> escrow, is refused by
+    /// Token-2022 without the *current* authority's signature. Nothing but a
+    /// Trading `invoke_signed` can produce that signature and nothing can
+    /// produce it after the market retires, which is the entire reason the
+    /// hand-off happens at compaction and not later -- and the reason §17.4
+    /// made this route Trading-composed at all. After the hand-off the root
+    /// signs nothing ever again: redemption is holder plus escrow.
+    ///
+    /// The root is *also* the reserve Position's owner, which is what entitles
+    /// this route's close -- but that is the owner's own signature doing an
+    /// owner's work, not a second job needing a second signer. §17.7 read it as
+    /// two jobs and declared [`Self::TradingCallerAuthority`] beside it; §17.8
+    /// ruling 2 refused that role for exactly this reason.
+    FractionalCapabilityRoot,
+    /// The Trading caller-authority PDA: declared, and refused.
+    ///
+    /// It has no program to derive it against and nothing to refuse.
+    /// `CallerAuthoritySeedsV1` must be derived under the **Trading program
+    /// id**, and no Trading program account is in this frame: the terminal
+    /// frame's caller program is read only on the `CallerRole::Trading` path,
+    /// and a fractional compaction request pins `CallerRole::Claims`. So the
+    /// frame would have carried a signer nothing could check. See
+    /// [`FractionalCompactionAdmissionV1::RefusedTakesNoParentAuthority`] for
+    /// why adding the program account to check it was refused too.
+    TradingCallerAuthority,
+    /// The shard Mint: `SetAuthority` target, and the supply the record pins.
+    ShardMint,
+    /// The Token program owning the shard Mint.
+    ///
+    /// Separate from the terminal frame's Token program on purpose: that one is
+    /// the *collateral* mint's, and a market may hold collateral under a
+    /// different Token program than the one its shards are minted by. Folding
+    /// the two would work until the first market where they differ.
+    ShardTokenProgram,
+    /// The finalized exposure terms: the denominator's sole author.
+    ExposureTerms,
+    /// The exposure terms' staging cursor, proving the record is not mid-update.
+    ///
+    /// Not decoration, and not symmetry for its own sake. A finalized Registry
+    /// record is authenticated by the raw/staging pair together: the raw half
+    /// carries the bytes and must hash to the expected digest, and the staging
+    /// half must be **vacant**, which is what proves nobody is part-way through
+    /// replacing those bytes. Carrying only the raw half would leave a route
+    /// that reads a denominator from a record mid-rewrite, and the denominator
+    /// is the sole divisor every holder's payout is computed with.
+    ExposureTermsStaging,
+    /// The terms-selected TokenBehavior record the shard profile is read under.
+    TokenBehavior,
+    /// The TokenBehavior record's staging cursor, for the same reason.
+    TokenBehaviorStaging,
+    /// A shard holder's own shard token account: declared, and refused.
+    HolderShardTokens,
+    /// A shard holder's own collateral token account: declared, and refused.
+    HolderCollateralTokens,
+    /// The native claim-check record for the reserve's owner: declared, refused.
+    NativeClaimCheckRecord,
+    /// The ordered-retirement cursor: declared, and refused.
+    RetirementCursor,
+}
+
+impl FractionalCompactionRoleV1 {
+    /// The exact ordered frame past the wrapped terminal accounts.
+    #[must_use]
+    pub const fn frame() -> [Self; FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1] {
+        [
+            Self::Escrow,
+            Self::FractionalClaimCheckRecord,
+            Self::ReserveAdmission,
+            Self::RentCredit,
+            Self::Opener,
+            Self::SystemProgram,
+            Self::FractionalCapabilityRoot,
+            Self::ShardMint,
+            Self::ShardTokenProgram,
+            Self::ExposureTerms,
+            Self::ExposureTermsStaging,
+            Self::TokenBehavior,
+            Self::TokenBehaviorStaging,
+        ]
+    }
+
+    /// Every role this route has an opinion about, admitted or refused.
+    #[must_use]
+    pub const fn declared() -> [Self; FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1 + 5] {
+        [
+            Self::Escrow,
+            Self::FractionalClaimCheckRecord,
+            Self::ReserveAdmission,
+            Self::RentCredit,
+            Self::Opener,
+            Self::SystemProgram,
+            Self::FractionalCapabilityRoot,
+            Self::TradingCallerAuthority,
+            Self::ShardMint,
+            Self::ShardTokenProgram,
+            Self::ExposureTerms,
+            Self::ExposureTermsStaging,
+            Self::TokenBehavior,
+            Self::TokenBehaviorStaging,
+            Self::HolderShardTokens,
+            Self::HolderCollateralTokens,
+            Self::NativeClaimCheckRecord,
+            Self::RetirementCursor,
+        ]
+    }
+
+    /// Whether this role is in the frame, and if not, why not.
+    #[must_use]
+    pub const fn admission(self) -> FractionalCompactionAdmissionV1 {
+        match self {
+            Self::Escrow
+            | Self::FractionalClaimCheckRecord
+            | Self::ReserveAdmission
+            | Self::RentCredit
+            | Self::Opener
+            | Self::SystemProgram
+            | Self::FractionalCapabilityRoot
+            | Self::ShardMint
+            | Self::ShardTokenProgram
+            | Self::ExposureTerms
+            | Self::ExposureTermsStaging
+            | Self::TokenBehavior
+            | Self::TokenBehaviorStaging => FractionalCompactionAdmissionV1::Admitted,
+            Self::HolderShardTokens | Self::HolderCollateralTokens => {
+                FractionalCompactionAdmissionV1::RefusedNamesOneHolder
+            }
+            Self::NativeClaimCheckRecord => FractionalCompactionAdmissionV1::RefusedUnsignablePayee,
+            Self::RetirementCursor => FractionalCompactionAdmissionV1::RefusedNotThisRoute,
+            Self::TradingCallerAuthority => {
+                FractionalCompactionAdmissionV1::RefusedTakesNoParentAuthority
+            }
+        }
+    }
+
+    /// Absolute index of an admitted role in the whole compaction frame.
+    ///
+    /// `None` for a refused role, which is what makes an accidental index
+    /// impossible to spell: there is no number to write down for an account the
+    /// route must never reach for.
+    #[must_use]
+    pub fn index(self) -> Option<usize> {
+        let mut position = 0;
+        while position < FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1 {
+            // `get` rather than an index: this crate denies `indexing_slicing`,
+            // and a frame lookup is exactly where a silent panic would hide.
+            if Self::frame().get(position) == Some(&self) {
+                return FRACTIONAL_COMPACT_TERMINAL_FRAME_V1.checked_add(position);
+            }
+            position = position.checked_add(1)?;
+        }
+        None
+    }
+
+    /// Exact privileges an admitted role carries in the frame.
+    ///
+    /// `(signer, writable)`, and there is exactly **one** signer: the
+    /// capability root, which is what "Trading-composed" means for this route
+    /// (design §17.8 -- composed for signature, not for authority). Nothing a
+    /// human holds signs a fractional compaction; the one signature is
+    /// program-derived, which is what keeps the crank permissionless in the
+    /// sense that matters -- anybody may *send* it, and nobody may direct where
+    /// it pays.
+    ///
+    /// The root is a signer and **not writable**: a compaction revises nothing
+    /// about the root. That is the inversion `fractional_root_signer`'s
+    /// compaction arm enforces, against the exposure arms next to it, which
+    /// require a writable root because their effect program commits a revision.
+    #[must_use]
+    pub const fn privileges(self) -> (bool, bool) {
+        match self {
+            Self::FractionalCapabilityRoot => (true, false),
+            Self::Escrow
+            | Self::FractionalClaimCheckRecord
+            | Self::ReserveAdmission
+            | Self::RentCredit
+            | Self::Opener
+            | Self::ShardMint => (false, true),
+            // Every one of these is read and never written, and the two staging
+            // cursors are read precisely to confirm they hold nothing.
+            Self::SystemProgram
+            | Self::ShardTokenProgram
+            | Self::ExposureTerms
+            | Self::ExposureTermsStaging
+            | Self::TokenBehavior
+            | Self::TokenBehaviorStaging => (false, false),
+            // Not in the frame. Stated so an edit that admits one has to delete
+            // its arm here rather than merely append an account.
+            Self::HolderShardTokens
+            | Self::HolderCollateralTokens
+            | Self::NativeClaimCheckRecord
+            | Self::RetirementCursor
+            | Self::TradingCallerAuthority => (false, false),
+        }
+    }
+}
+
 fn require_nonzero(value: [u8; 32]) -> ClaimCheckResultV1<()> {
     if value.iter().all(|byte| *byte == 0) {
         Err(ClaimCheckErrorV1::InvalidIdentity)
@@ -1245,6 +1628,245 @@ mod tests {
         // market's.
         assert_eq!(FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1, 9);
         assert!(FRACTIONAL_CLAIM_CHECK_REDEMPTION_ACCOUNT_COUNT_V1 < 44);
+    }
+
+    #[test]
+    fn the_compaction_frame_wraps_the_terminal_frame_and_adds_exactly_thirteen() {
+        // The shape §17.5 names, as arithmetic rather than a "~". The terminal
+        // half is not re-enumerated here on purpose -- it has one author, and
+        // this asserts that this module agrees with that author rather than
+        // restating it.
+        assert_eq!(
+            FRACTIONAL_COMPACT_TERMINAL_FRAME_V1,
+            crate::terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3
+        );
+        assert_eq!(FRACTIONAL_COMPACT_TERMINAL_FRAME_V1, 36);
+        // WITNESS w6 (design §17.8 ruling 2): the frame is 49, and the dropped
+        // role has no index. Pinned as literals, not derived from the enum --
+        // deriving 49 from `frame().len()` would agree with any frame at all.
+        assert_eq!(FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1, 13);
+        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, 49);
+        assert_eq!(
+            FractionalCompactionRoleV1::TradingCallerAuthority.index(),
+            None,
+            "ruling 2 dropped the caller authority; an index for it is the frame \
+             growing the account back"
+        );
+        assert_eq!(
+            FractionalCompactionRoleV1::frame().len(),
+            FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1
+        );
+        // Six of the thirteen are the native crank's own; the other seven are
+        // what the §17.4 hand-off costs. The native frame is 42; this one is 49,
+        // and both fit one transaction's locks without an address table.
+        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 - 7, 42);
+        assert!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 < MAX_TRANSACTION_LOCKS_V1);
+        // Both finalized Registry records are carried as raw/staging PAIRS, the
+        // way every sibling route carries them. Stated as a property over the
+        // frame rather than as a count, so a later edit that drops one staging
+        // half to save an account has to argue with this line -- the failure it
+        // would cause is silent, because a route missing a staging cursor still
+        // authenticates its raw record and merely stops proving it is settled.
+        for (record, staging) in [
+            (
+                FractionalCompactionRoleV1::ExposureTerms,
+                FractionalCompactionRoleV1::ExposureTermsStaging,
+            ),
+            (
+                FractionalCompactionRoleV1::TokenBehavior,
+                FractionalCompactionRoleV1::TokenBehaviorStaging,
+            ),
+        ] {
+            let raw = record.index().expect("a finalized record is in the frame");
+            let cursor = staging.index().expect("its staging cursor is too");
+            assert_eq!(
+                cursor,
+                raw + 1,
+                "{record:?} and its staging cursor must be adjacent, as the pair every \
+                 authenticate_finalized_rational_record caller passes"
+            );
+            assert_eq!(record.privileges(), (false, false));
+            assert_eq!(staging.privileges(), (false, false));
+        }
+    }
+
+    #[test]
+    fn every_declared_role_is_either_indexed_or_refused_with_a_reason() {
+        // The property that keeps the enum honest in both directions: an
+        // admitted role has exactly one index inside the compaction half, and a
+        // refused role has none at all -- so there is no number to write down
+        // for an account this route must never reach for.
+        let mut admitted = 0;
+        for role in FractionalCompactionRoleV1::declared() {
+            match role.admission() {
+                FractionalCompactionAdmissionV1::Admitted => {
+                    admitted += 1;
+                    let index = role.index().expect("an admitted role sits somewhere");
+                    assert!(
+                        index >= FRACTIONAL_COMPACT_TERMINAL_FRAME_V1,
+                        "{role:?} claims an index inside the terminal frame's half"
+                    );
+                    assert!(index < FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1);
+                    assert!(FractionalCompactionRoleV1::frame().contains(&role));
+                }
+                FractionalCompactionAdmissionV1::RefusedNamesOneHolder
+                | FractionalCompactionAdmissionV1::RefusedUnsignablePayee
+                | FractionalCompactionAdmissionV1::RefusedNotThisRoute
+                | FractionalCompactionAdmissionV1::RefusedTakesNoParentAuthority => {
+                    assert_eq!(role.index(), None, "{role:?} is refused and yet indexed");
+                    assert!(!FractionalCompactionRoleV1::frame().contains(&role));
+                    assert_eq!(role.privileges(), (false, false));
+                }
+            }
+        }
+        assert_eq!(admitted, FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1);
+        // Non-vacuous in the direction that matters: there ARE refusals, and
+        // all three reasons are exercised rather than one standing in for the
+        // set. A refusal nobody reaches proves nothing about the frame.
+        for reason in [
+            FractionalCompactionAdmissionV1::RefusedNamesOneHolder,
+            FractionalCompactionAdmissionV1::RefusedUnsignablePayee,
+            FractionalCompactionAdmissionV1::RefusedNotThisRoute,
+            FractionalCompactionAdmissionV1::RefusedTakesNoParentAuthority,
+        ] {
+            assert!(
+                FractionalCompactionRoleV1::declared()
+                    .iter()
+                    .any(|role| role.admission() == reason),
+                "{reason:?} is declared and never reached"
+            );
+        }
+    }
+
+    #[test]
+    fn the_indices_are_consecutive_from_the_terminal_frame_and_never_collide() {
+        // The route indexes accounts by these numbers, so a duplicate or a gap
+        // is a route reading the wrong account rather than a tidiness defect.
+        let mut expected = FRACTIONAL_COMPACT_TERMINAL_FRAME_V1;
+        for role in FractionalCompactionRoleV1::frame() {
+            assert_eq!(role.index(), Some(expected), "{role:?} is out of order");
+            expected += 1;
+        }
+        assert_eq!(expected, FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1);
+
+        // AND THE ORDER ITSELF, SPELLED OUT. The loop above derives its
+        // expectation from `frame()`, so it holds under any permutation --
+        // proved by mutation: swapping two entries left it green. The order is
+        // load-bearing (a caller builds the account vector from it and the
+        // route reads by index), so a swap has to fail somewhere, and this is
+        // the only place that can see one.
+        assert_eq!(
+            FractionalCompactionRoleV1::frame(),
+            [
+                FractionalCompactionRoleV1::Escrow,
+                FractionalCompactionRoleV1::FractionalClaimCheckRecord,
+                FractionalCompactionRoleV1::ReserveAdmission,
+                FractionalCompactionRoleV1::RentCredit,
+                FractionalCompactionRoleV1::Opener,
+                FractionalCompactionRoleV1::SystemProgram,
+                FractionalCompactionRoleV1::FractionalCapabilityRoot,
+                FractionalCompactionRoleV1::ShardMint,
+                FractionalCompactionRoleV1::ShardTokenProgram,
+                FractionalCompactionRoleV1::ExposureTerms,
+                FractionalCompactionRoleV1::ExposureTermsStaging,
+                FractionalCompactionRoleV1::TokenBehavior,
+                FractionalCompactionRoleV1::TokenBehaviorStaging,
+            ]
+        );
+        // The first six are the native crank's own six, in the native crank's
+        // own order, so the two routes' tails can be read side by side.
+        assert_eq!(
+            FractionalCompactionRoleV1::Escrow.index(),
+            Some(FRACTIONAL_COMPACT_TERMINAL_FRAME_V1)
+        );
+        assert_eq!(
+            FractionalCompactionRoleV1::SystemProgram.index(),
+            Some(FRACTIONAL_COMPACT_TERMINAL_FRAME_V1 + 5)
+        );
+    }
+
+    #[test]
+    fn compaction_names_no_holder_and_its_one_signer_is_program_derived() {
+        // §1.3, as a frame property. One transaction stands in for every holder
+        // of a coordinate, which is only true while it names none of them; a
+        // frame that grew a holder account would make this route per-holder and
+        // would burn one holder's shards at a moment they did not choose.
+        for role in [
+            FractionalCompactionRoleV1::HolderShardTokens,
+            FractionalCompactionRoleV1::HolderCollateralTokens,
+        ] {
+            assert_eq!(
+                role.admission(),
+                FractionalCompactionAdmissionV1::RefusedNamesOneHolder
+            );
+        }
+        // And the mirror of the redemption frame, which is the pairing worth
+        // asserting: redemption names exactly one holder and no market account;
+        // compaction names every market account and no holder.
+        assert!(
+            FractionalClaimCheckRedemptionRoleV1::frame()
+                .contains(&FractionalClaimCheckRedemptionRoleV1::HolderShardTokens)
+        );
+
+        // WITNESS w5 (design §17.8 ruling 2): among the thirteen added roles
+        // there is EXACTLY ONE signer, and it is the capability root. Written
+        // as a scan of the whole frame rather than a check of the root alone,
+        // because the property that ruling 2 bought is the *absence* of a
+        // second Trading signer -- a test naming only the root would stay green
+        // if the caller authority came back.
+        let mut signers = [None; FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1];
+        let mut found = 0;
+        for role in FractionalCompactionRoleV1::frame() {
+            if role.privileges().0 {
+                *signers.get_mut(found).expect("a frame-sized signer table") = Some(role);
+                found += 1;
+            }
+        }
+        assert_eq!(
+            found, 1,
+            "a fractional compaction has one program-derived signature, not two: \
+             the root's, which Trading adds only after authenticating the root \
+             against this same request"
+        );
+        assert_eq!(
+            signers.first().copied().flatten(),
+            Some(FractionalCompactionRoleV1::FractionalCapabilityRoot)
+        );
+        // And it is a signer that is NOT writable -- the inversion the gate's
+        // compaction arm enforces, because a compaction revises nothing.
+        assert_eq!(
+            FractionalCompactionRoleV1::FractionalCapabilityRoot.privileges(),
+            (true, false)
+        );
+        // The dropped role is still declared, still refused, and refused for
+        // its own stated reason rather than by falling into a neighbour's arm.
+        assert_eq!(
+            FractionalCompactionRoleV1::TradingCallerAuthority.admission(),
+            FractionalCompactionAdmissionV1::RefusedTakesNoParentAuthority
+        );
+        assert!(
+            FractionalCompactionRoleV1::declared()
+                .contains(&FractionalCompactionRoleV1::TradingCallerAuthority),
+            "refused is not the same as forgotten: the role stays declared so the \
+             account cannot return by nobody having written down why it left"
+        );
+    }
+
+    #[test]
+    fn the_native_record_is_declared_here_and_refused_for_frac_r3s_reason() {
+        // The two routes' welds, joined. FRACR3 refused a `TradingRecord`-owned
+        // Position a native claim-check because its payee could not sign; this
+        // route exists because that refusal is right. Reaching for the native
+        // record from inside it would undo the reason it was written, so the
+        // role is named and refused rather than merely absent.
+        assert_eq!(
+            FractionalCompactionRoleV1::NativeClaimCheckRecord.admission(),
+            FractionalCompactionAdmissionV1::RefusedUnsignablePayee
+        );
+        assert_eq!(
+            FractionalCompactionRoleV1::RetirementCursor.admission(),
+            FractionalCompactionAdmissionV1::RefusedNotThisRoute
+        );
     }
 
     #[test]

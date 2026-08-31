@@ -13,6 +13,7 @@ use dclutch_claims_affine_batch_program_test::{
 };
 use dclutch_claims_svm::affine_batch_v2::{DeltaDirectionV2, SignedMagnitudeV2};
 use dclutch_core_contract::ContentId;
+use dclutch_market_core_codec::CoreStateLayoutV2;
 use dclutch_program_test_evidence::TransactionEvidence;
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -37,7 +38,7 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::{instruction::InstructionError, signature::Signer, transaction::TransactionError};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_transaction::{Transaction, versioned::VersionedTransaction};
 
@@ -246,6 +247,18 @@ fn observed<'a>(slot: u64, key: Pubkey, account: &'a Account) -> ObservedAccount
 }
 
 fn fixture() -> (ProgramTest, Fixture) {
+    fixture_with_principal_cap(u64::MAX)
+}
+
+/// Build the shared fixture with an exact runtime principal cap on the Core root.
+///
+/// `u64::MAX` is the explicitly-unbounded sentinel every other test in this file
+/// founds under, which is precisely why the cap's refusing arm had never run on a
+/// real ELF: an unbounded Market admits every growth, so the check was green by
+/// vacuity on chain even though it was live in the program. The cap is not part
+/// of the Market's address derivation -- `MarketCoreStateSeedsV2` is built from
+/// `MarketIdentity` -- so writing it here rebinds no PDA and forges nothing.
+fn fixture_with_principal_cap(cap_sets: u64) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -298,6 +311,13 @@ fn fixture() -> (ProgramTest, Fixture) {
         destination_owner: DESTINATION_OWNER,
     })
     .expect("shared Product/LBV2 fixture");
+    let mut shared = shared;
+    put(
+        &mut shared.core_state,
+        CoreStateLayoutV2::PRINCIPAL_CAP_SETS,
+        &cap_sets.to_le_bytes(),
+    );
+    let shared = shared;
     for record in [
         &shared.product,
         &shared.result_domain,
@@ -431,6 +451,56 @@ fn canonical_mutations() -> [AffineMutationInputV2; 2] {
         },
     ]
 }
+
+/// One complete-set credit: aggregate supply grows, and the whole growth lands
+/// in the destination Position. This is the shape the principal cap exists to
+/// bound, and the shape `canonical_mutations` deliberately is not -- those rows
+/// carry a `Neutral` aggregate delta, so they move claims between Positions
+/// without growing principal and never reach the cap at all.
+fn aggregate_credit_mutation(quantity: u64) -> [AffineMutationInputV2; 2] {
+    // Two rows, not one, and the reason is a pair of validator rules that pull
+    // against each other. A growth row must have NO source: `validate_endpoint`
+    // requires a present source to be a nonzero Debit, and a mint debits nobody.
+    // But `validate` requires every entry in the Position table to be referenced
+    // by some row, and the table is built from the two Positions the chain
+    // observation carries. So each Position gets its own credit row.
+    //
+    // Outcome 1 carries the second row because the fixture's supply vector is
+    // 7 at outcome 0 and `u64::MAX` at outcome 257: crediting the saturated
+    // coordinate would refuse on the checked-add overflow arm and prove nothing
+    // about the bound.
+    [
+        AffineMutationInputV2 {
+            source_present: false,
+            destination_present: true,
+            outcome: 0,
+            source_position_index: 0,
+            destination_position_index: 0,
+            aggregate_delta: delta(DeltaDirectionV2::Credit, quantity),
+            source_delta: delta(DeltaDirectionV2::Neutral, 0),
+            destination_delta: delta(DeltaDirectionV2::Credit, quantity),
+        },
+        AffineMutationInputV2 {
+            source_present: false,
+            destination_present: true,
+            outcome: 1,
+            source_position_index: 0,
+            destination_position_index: 1,
+            aggregate_delta: delta(DeltaDirectionV2::Credit, 1),
+            source_delta: delta(DeltaDirectionV2::Neutral, 0),
+            destination_delta: delta(DeltaDirectionV2::Credit, 1),
+        },
+    ]
+}
+
+/// The refusal a bounded Market raises when growth would pass its cap.
+///
+/// Derived from the registered band rather than written as a literal, per
+/// `docs/decisions/0007-namespaced-refusal-codes.md`: `AffineBatchSbfErrorV2`
+/// starts at `CLAIMS_REFUSAL_BASE + 0x160` and `PrincipalCapacity` is its ninth
+/// variant. The program crate is an SBF cdylib and cannot be imported here, so
+/// the band arithmetic is the closest thing to the enum itself.
+const PRINCIPAL_CAPACITY_REFUSAL: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x160 + 8;
 
 async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
     context
@@ -734,7 +804,10 @@ async fn submit_v0(
         .first()
         .ok_or(BanksClientError::ClientError("unsigned transaction"))?
         .to_string();
-    let wire_bytes = wire_extent(transaction.signatures.len(), &transaction.message.serialize());
+    let wire_bytes = wire_extent(
+        transaction.signatures.len(),
+        &transaction.message.serialize(),
+    );
     let slot = context
         .banks_client
         .get_sysvar::<Clock>()
@@ -926,4 +999,153 @@ async fn real_sbf_affine_batch_is_runtime_width_exact_and_atomic() {
     .expect("stale affine transaction");
     assert!(!accepted, "stale aggregate/Position revisions must refuse");
     assert_eq!(claims_snapshot(&mut context, &fixture).await, after);
+}
+
+/// Process one instruction that must refuse, and return its exact custom code.
+///
+/// Structural rather than textual on purpose: `logs.contains("Custom(21352)")`
+/// would also match `Custom(213520)`, and a refusal assertion that can match the
+/// wrong refusal is not an assertion.
+async fn process_expecting_refusal(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    table: Pubkey,
+    addresses: &[Pubkey],
+    label: &str,
+) -> u32 {
+    // A v0 message over the live lookup table, for the same reason the accepting
+    // path uses one: this frame serialises to 1,314 bytes as a legacy
+    // transaction, past Solana's 1,232-byte packet maximum.
+    let blockhash: Hash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let message = VersionedMessage::V0(
+        v0::Message::try_compile(
+            &context.payer.pubkey(),
+            &[instruction],
+            &[AddressLookupTableAccount {
+                key: table,
+                addresses: addresses.to_vec(),
+            }],
+            blockhash,
+        )
+        .expect("v0 message"),
+    );
+    let transaction =
+        VersionedTransaction::try_new(message, &[&context.payer]).expect("signed v0 transaction");
+    let signature = transaction
+        .signatures
+        .first()
+        .expect("signed transaction")
+        .to_string();
+    let transaction_signatures = transaction.signatures.len();
+    let transaction_message_bytes = transaction.message.serialize();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
+    let processed = context
+        .banks_client
+        .process_transaction_with_metadata(transaction)
+        .await
+        .expect("refused transaction still processes");
+    let failure = processed
+        .result
+        .clone()
+        .err()
+        .map(|error| format!("{error:?}"));
+    let (logs, units) = processed
+        .metadata
+        .map(|metadata| (metadata.log_messages, metadata.compute_units_consumed))
+        .unwrap_or_default();
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_extent(
+            transaction_signatures,
+            &transaction_message_bytes,
+        )),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
+    match processed
+        .result
+        .expect_err("this growth must be refused, not committed")
+    {
+        TransactionError::InstructionError(_, InstructionError::Custom(code)) => Some(code),
+        _ => None,
+    }
+    .expect("the refusal must be a custom program error carrying its own code")
+}
+
+/// The manipulation-capacity bound, refusing on a real ELF.
+///
+/// Every other fixture in this file founds at the explicitly-unbounded sentinel,
+/// so until this test existed the cap's refusing arm had never executed on chain:
+/// the check was live in the program and green by vacuity in the gate. That is
+/// WAVE.md's STRUCT-CAMP doctrine ("no caller outside its own crate is not
+/// landed, it is PARKED") applied to an enforcement path rather than a builder.
+///
+/// The shared fixture opens with an aggregate supply of 7 complete sets on
+/// outcome 0, so a cap of 10 admits a credit of exactly 3 and refuses 4. Both
+/// halves matter: a bound that refuses everything would pass an
+/// excess-refuses-only test.
+#[tokio::test]
+async fn a_bounded_market_refuses_the_growth_past_its_cap_and_admits_the_growth_to_it() {
+    let (test, fixture) = fixture_with_principal_cap(10);
+    let mut context = test.start_with_context().await;
+    let chain = chain_snapshot(&mut context, &fixture).await;
+    let before = claims_snapshot(&mut context, &fixture).await;
+
+    let excess = build_from_chain(&chain, &fixture, &aggregate_credit_mutation(4))
+        .expect("chain-derived excess plan");
+    let boundary = build_from_chain(&chain, &fixture, &aggregate_credit_mutation(3))
+        .expect("chain-derived boundary plan");
+    let excess_instruction = wrapper_instruction(&excess, false);
+    let boundary_instruction = wrapper_instruction(&boundary, false);
+    let addresses = lookup_addresses(
+        context.payer.pubkey(),
+        &[excess_instruction.clone(), boundary_instruction.clone()],
+    );
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+
+    let code = process_expecting_refusal(
+        &mut context,
+        excess_instruction,
+        table,
+        &addresses,
+        "affine-batch-principal-cap-excess",
+    )
+    .await;
+    assert_eq!(
+        code, PRINCIPAL_CAPACITY_REFUSAL,
+        "growth past the cap must refuse as PrincipalCapacity, not as a neighbouring generic code"
+    );
+    assert_eq!(
+        claims_snapshot(&mut context, &fixture).await,
+        before,
+        "a refused growth must leave every Claims byte untouched"
+    );
+
+    let (accepted, _) = submit_v0(
+        &mut context,
+        boundary_instruction,
+        table,
+        &addresses,
+        "affine-batch-principal-cap-boundary",
+    )
+    .await
+    .expect("boundary affine transaction");
+    assert!(accepted, "growth exactly to the cap must commit");
+    assert_ne!(
+        claims_snapshot(&mut context, &fixture).await,
+        before,
+        "an admitted growth must move Claims bytes"
+    );
 }

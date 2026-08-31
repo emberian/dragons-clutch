@@ -8,8 +8,8 @@ use dclutch_market_core_codec::{
     STATE_BYTES, StateBumpsV1, VacantAccount, found,
 };
 use dclutch_product_runtime_v2_svm_reader::{
-    AuthenticatedProductRuntimeV2, FinalizedRecordFrameV2, ProductRuntimeFrameV2,
-    authenticate_product_basis_v3,
+    AuthenticatedProductRuntimeV2, Error as ProductRuntimeReaderError, FinalizedRecordFrameV2,
+    ProductRuntimeFrameV2, authenticate_product_basis_v3,
 };
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
@@ -455,6 +455,23 @@ fn plan_found(
     })
 }
 
+/// Map the reader's basis refusals onto Core's registered band.
+///
+/// Everything that is not a price-gate refusal stays `Reference`, exactly as
+/// before; the five price-gate codes are the ones section 7 reserves for this
+/// program, and they exist so the hostile table can be exercised through the
+/// ELF rather than only through the codec's own tests.
+fn price_gate_refusal(error: ProductRuntimeReaderError) -> CoreSbfError {
+    match error {
+        ProductRuntimeReaderError::PriceGateRequired => CoreSbfError::PriceGateRequired,
+        ProductRuntimeReaderError::PriceGateBasisMismatch => CoreSbfError::PriceGateBasisMismatch,
+        ProductRuntimeReaderError::PriceGateHullRefused => CoreSbfError::PriceGateHullRefused,
+        ProductRuntimeReaderError::PriceGateCapacity => CoreSbfError::PriceGateCapacity,
+        ProductRuntimeReaderError::PriceGateNonCanonical => CoreSbfError::PriceGateNonCanonical,
+        _ => CoreSbfError::Reference,
+    }
+}
+
 #[inline(never)]
 fn authenticate_references(
     frame: &FoundAccounts<'_, '_>,
@@ -509,8 +526,20 @@ fn authenticate_references(
             raw: frame.linked_basis_raw,
             staging: frame.linked_basis_staging,
         },
+        // **The certificate pair, when the caller offered one.** Whether it was
+        // REQUIRED is not this call's decision: the authenticated basis record
+        // carries the digest, and a curved basis with no pair here refuses with
+        // `PriceGateRequired` rather than founding ungated.
+        frame
+            .price_gate
+            .map(|(raw, staging)| FinalizedRecordFrameV2 { raw, staging }),
     )
-    .map_err(|_| CoreSbfError::Reference)?;
+    // **The price-gate refusals keep their own names.** Collapsing them into
+    // `Reference` would leave a founder who supplied a forged certificate
+    // debugging the same code as one who supplied the wrong Product -- and
+    // section 7's hostile table is only testable through the ELF if the codes
+    // are distinct.
+    .map_err(price_gate_refusal)?;
 
     let resolution_data = frame
         .resolution_raw

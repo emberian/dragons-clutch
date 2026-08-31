@@ -172,8 +172,10 @@ pub(crate) fn demo_rational_market_input(
     let mut input =
         crate::market::demo_market_input_base_shaped(registry, resolution_release, shape)?;
 
-    let capacity_profile: [u8; 32] =
-        Sha256::digest(crate::runtime::decode_hex(&input.source_capacity_profile_hex)?).into();
+    let capacity_profile: [u8; 32] = Sha256::digest(crate::runtime::decode_hex(
+        &input.source_capacity_profile_hex,
+    )?)
+    .into();
     let lab = |label: &str| -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"dclutch:lab:rational-selection:v1");
@@ -252,6 +254,9 @@ mod tests {
                 knots: &[],
                 terms: &[],
                 failure_payouts: &[],
+                // Exempt by proof: degree 0 and 1 need no price gate,
+                // and a digest offered alongside one is refused.
+                price_gate_certificate_digest: [0_u8; 32],
             },
             &mut output,
         )

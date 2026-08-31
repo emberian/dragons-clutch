@@ -1548,6 +1548,7 @@ dependencies = [
  "dclutch-product-runtime-v2-operator",
  "dclutch-program-test-evidence",
  "dclutch-record-contract",
+ "dclutch-refusal-registry",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "solana-account 4.3.2",
@@ -1680,6 +1681,10 @@ version = "0.1.0"
 
 [[package]]
 name = "dclutch-record-contract"
+version = "0.1.0"
+
+[[package]]
+name = "dclutch-refusal-registry"
 version = "0.1.0"
 
 [[package]]

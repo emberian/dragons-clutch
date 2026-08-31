@@ -6,7 +6,10 @@ use solana_sdk_ids::{system_program, sysvar};
 use crate::CoreSbfError;
 
 /// Exact ordinary mutating Found V3 and readonly ProjectFound V2 account counts.
-pub use dclutch_market_core_codec::{FOUND_ACCOUNT_COUNT_V3, PROJECT_FOUND_ACCOUNT_COUNT_V2};
+pub use dclutch_market_core_codec::{
+    FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3, PROJECT_FOUND_ACCOUNT_COUNT_V2,
+    PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2,
+};
 /// Exact projected generic-Found V2 prefix account count.
 pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 24;
 /// Exact account count for one-time infrastructure-profile initialization.
@@ -52,6 +55,13 @@ pub(crate) struct FoundAccounts<'accounts, 'info> {
     pub rent_artifact_raw: &'accounts AccountInfo<'info>,
     pub rent_artifact_staging: &'accounts AccountInfo<'info>,
     pub rent_programdata: &'accounts AccountInfo<'info>,
+    /// The `DCLTPGT1` no-arbitrage certificate pair, present exactly when
+    /// the caller offered the extended frame.
+    ///
+    /// `None` is not "no certificate needed" -- it is "none offered". Whether
+    /// one was *required* is a property of the basis record, decided in
+    /// `authenticate_references` once the basis has been authenticated.
+    pub price_gate: Option<(&'accounts AccountInfo<'info>, &'accounts AccountInfo<'info>)>,
 }
 
 impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
@@ -84,12 +94,26 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         mutating: bool,
         rent_elided: bool,
     ) -> Result<Self, CoreSbfError> {
-        let expected_accounts = if rent_elided {
-            PROJECT_FOUND_ACCOUNT_COUNT_V2
+        // **Two admissible widths, not one**, exactly as the Rent sysvar
+        // already does. The trailing pair carries a `DCLTPGT1` no-arbitrage
+        // certificate, which a Market needs precisely when its basis declares
+        // degree >= 2. Every categorical and graded founding has no such record
+        // and would otherwise have to invent a placeholder for it.
+        //
+        // Nothing before the pair moves, so a caller that forwards the
+        // canonical frame is unaffected -- and correspondingly cannot found a
+        // curved basis, which `authenticate_references` refuses by name rather
+        // than by a length mismatch.
+        let (bare, extended) = if rent_elided {
+            (
+                PROJECT_FOUND_ACCOUNT_COUNT_V2,
+                PROJECT_FOUND_PRICE_GATE_ACCOUNT_COUNT_V2,
+            )
         } else {
-            FOUND_ACCOUNT_COUNT_V3
+            (FOUND_ACCOUNT_COUNT_V3, FOUND_PRICE_GATE_ACCOUNT_COUNT_V3)
         };
-        if accounts.len() != expected_accounts {
+        let price_gate_offered = accounts.len() == extended;
+        if accounts.len() != bare && !price_gate_offered {
             return Err(CoreSbfError::AccountFrame);
         }
         let ordinary = |index: usize| {
@@ -144,6 +168,14 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
         let rent_artifact_raw = ordinary(34)?;
         let rent_artifact_staging = ordinary(35)?;
         let rent_programdata = ordinary(36)?;
+        let price_gate = if price_gate_offered {
+            Some((
+                ordinary(dclutch_market_core_codec::FOUND_PRICE_GATE_RAW_INDEX_V3)?,
+                ordinary(dclutch_market_core_codec::FOUND_PRICE_GATE_STAGING_INDEX_V3)?,
+            ))
+        } else {
+            None
+        };
         debug_assert_eq!(
             accounts
                 .get(dclutch_market_core_codec::FOUND_CAPABILITY_MANIFEST_RAW_INDEX_V3)
@@ -226,6 +258,17 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
                 return Err(CoreSbfError::AccountFrame);
             }
         }
+        // The certificate pair is authenticated in full by
+        // `authenticate_record` -- ownership, PDA, digest and rent exemption --
+        // but its account-shape discipline belongs here with every other
+        // readonly record in the frame.
+        if let Some((raw, staging)) = price_gate {
+            for account in [raw, staging] {
+                if account.is_signer || account.is_writable || account.executable {
+                    return Err(CoreSbfError::AccountFrame);
+                }
+            }
+        }
         Ok(Self {
             payer,
             market,
@@ -264,6 +307,7 @@ impl<'accounts, 'info> FoundAccounts<'accounts, 'info> {
             rent_artifact_raw,
             rent_artifact_staging,
             rent_programdata,
+            price_gate,
         })
     }
 }

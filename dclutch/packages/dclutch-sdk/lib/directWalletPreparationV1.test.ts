@@ -257,9 +257,14 @@ function participant(
     tokenProgram: key(67),
     positionRevision: 4n,
     positionBalances: positionBalancesFor(candidate),
+    // The balance is a floor the debit must fit under; the delegation is an
+    // equality. These crossings debit 1,002 atoms, and a single-use
+    // authorization for any other amount is a state the chain refuses, so the
+    // fixture cannot hold a round 10,000 delegation and still describe a
+    // participant a packet could be prepared for.
     collateralAtoms: 10_000n,
-    delegatedCollateralAtoms: 10_000n,
-    spendableCollateralAtoms: 10_000n,
+    delegatedCollateralAtoms: 1_002n,
+    spendableCollateralAtoms: 1_002n,
     reason: 'authenticated test participant',
   });
 }

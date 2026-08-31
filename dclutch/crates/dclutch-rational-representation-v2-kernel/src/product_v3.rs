@@ -38,9 +38,14 @@ use crate::{
 };
 
 pub use crate::generated_product_v3::{
+    ADMISSION_SPLINE_DEGREE_OFFSET_V3, ADMISSION_SPLINE_FLAGS_OFFSET_V3,
     PRODUCT_REPRESENTATION_ADMISSION_BYTES_V3, PRODUCT_REPRESENTATION_ADMISSION_MAGIC_V3,
     PRODUCT_REPRESENTATION_ADMISSION_VERSION_V3, PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3,
     PRODUCT_REPRESENTATION_GRADED_KIND_V3, PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3,
+};
+use dclutch_product_payoff_v2_codec::runtime_v3::{
+    BASIS_SPLINE_INTERIOR_MULTIPLICITY_FLAG_V3, BASIS_SPLINE_MAXIMUM_DEGREE_V3,
+    BASIS_SPLINE_MINIMUM_DEGREE_V3,
 };
 
 /// Stable refusal from Product V3 representation admission or solvency.
@@ -182,16 +187,34 @@ impl RepresentationAdmissionV3 {
         {
             return Err(Error::InvalidAdmission);
         }
-        require_zero(input, ADMISSION_RESERVED_HEADER_OFFSET_V3, 5)?;
+        require_zero(input, ADMISSION_RESERVED_HEADER_OFFSET_V3, 3)?;
         require_zero(input, ADMISSION_RESERVED_SCALARS_OFFSET_V3, 4)?;
         let basis_kind = match byte(input, ADMISSION_BASIS_KIND_OFFSET_V3)? {
             PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3 => BasisKindV3::CategoricalQ1,
             PRODUCT_REPRESENTATION_GRADED_KIND_V3 => BasisKindV3::GradedExactComplement,
-            // Allocated and refused. The receipt carries no degree field, so
-            // there is nothing to decode the variant's payload from even
-            // before the question of an evaluator arises.
+            // **The receipt round-trips the whole variant, degree included.**
+            // It used to refuse, on the honest grounds that there was nowhere
+            // to decode the payload from: the record carried a kind byte and
+            // no degree. Two of its five reserved header bytes are now spent
+            // on the degree and its flags, mirroring the basis record's own
+            // spend, so `to_bytes` and `decode` are inverse for every kind
+            // rather than for two of three. A receipt this crate writes is a
+            // receipt this crate reads back.
             PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3 => {
-                return Err(Error::SplineEvaluatorAbsent);
+                let degree = byte(input, ADMISSION_SPLINE_DEGREE_OFFSET_V3)?;
+                if !(BASIS_SPLINE_MINIMUM_DEGREE_V3..=BASIS_SPLINE_MAXIMUM_DEGREE_V3)
+                    .contains(&degree)
+                {
+                    return Err(Error::NonCanonical);
+                }
+                let flags = byte(input, ADMISSION_SPLINE_FLAGS_OFFSET_V3)?;
+                if flags & !BASIS_SPLINE_INTERIOR_MULTIPLICITY_FLAG_V3 != 0 {
+                    return Err(Error::NonCanonical);
+                }
+                BasisKindV3::SplineDegree2To3 {
+                    degree,
+                    interior_multiplicity: flags & BASIS_SPLINE_INTERIOR_MULTIPLICITY_FLAG_V3 != 0,
+                }
             }
             _ => return Err(Error::NonCanonical),
         };
@@ -240,17 +263,23 @@ impl RepresentationAdmissionV3 {
             ADMISSION_VERSION_OFFSET_V3,
             &PRODUCT_REPRESENTATION_ADMISSION_VERSION_V3.to_le_bytes(),
         );
+        // The degree and flags travel beside the kind byte, so the pair the
+        // decoder reads back is the pair that was written.
+        if let BasisKindV3::SplineDegree2To3 {
+            degree,
+            interior_multiplicity,
+        } = self.basis_kind
+        {
+            output[ADMISSION_SPLINE_DEGREE_OFFSET_V3] = degree;
+            output[ADMISSION_SPLINE_FLAGS_OFFSET_V3] = if interior_multiplicity {
+                BASIS_SPLINE_INTERIOR_MULTIPLICITY_FLAG_V3
+            } else {
+                0
+            };
+        }
         output[ADMISSION_BASIS_KIND_OFFSET_V3] = match self.basis_kind {
             BasisKindV3::CategoricalQ1 => PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3,
             BasisKindV3::GradedExactComplement => PRODUCT_REPRESENTATION_GRADED_KIND_V3,
-            // Unreachable: this struct's fields are private and its only
-            // constructor is the join below, which is fed by a
-            // `ProductBasisV3` whose decoder refuses kind byte 3. The arm
-            // writes the allocated tag rather than refusing because
-            // `to_bytes` is total and cannot refuse -- and writing the
-            // allocated tag is the fail-closed choice, since `decode` above
-            // refuses exactly that byte. A receipt written here is a receipt
-            // this crate will not read back.
             BasisKindV3::SplineDegree2To3 { .. } => {
                 PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3
             }
@@ -869,6 +898,9 @@ mod tests {
                 knots,
                 terms,
                 failure_payouts: failures,
+                // Exempt by proof: degree 0 and 1 need no price gate,
+                // and a digest offered alongside one is refused.
+                price_gate_certificate_digest: [0_u8; 32],
             },
             &mut output,
         )

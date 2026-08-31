@@ -53,7 +53,14 @@ fn generated_product_representation_v3_abi_is_exact() {
         "pub const PRODUCT_REPRESENTATION_ADMISSION_VERSION_V3: u16 = 3;",
         "pub const PRODUCT_REPRESENTATION_ADMISSION_BYTES_V3: usize = 528;",
         "pub const ADMISSION_BASIS_KIND_OFFSET_V3: usize = 10;",
-        "pub const ADMISSION_RESERVED_HEADER_OFFSET_V3: usize = 11;",
+        // The degree and its flags travel beside the kind byte, spending two
+        // of the five reserved header bytes. Before that spend this receipt
+        // carried a kind byte and no degree, so a spline receipt could be
+        // written and not read back; `to_bytes` and `decode` are now inverse
+        // for every kind. Three reserved bytes survive at 13.
+        "pub const ADMISSION_SPLINE_DEGREE_OFFSET_V3: usize = 11;",
+        "pub const ADMISSION_SPLINE_FLAGS_OFFSET_V3: usize = 12;",
+        "pub const ADMISSION_RESERVED_HEADER_OFFSET_V3: usize = 13;",
         "pub const PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3: u8 = 1;",
         "pub const PRODUCT_REPRESENTATION_GRADED_KIND_V3: u8 = 2;",
         "pub const PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3: u8 = 3;",

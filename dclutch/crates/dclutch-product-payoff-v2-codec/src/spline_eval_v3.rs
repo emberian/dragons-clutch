@@ -16,46 +16,76 @@
 //! is owned, under the corpus, with its agreement against the kernel measured
 //! rather than assumed.
 //!
-//! # The weights are ported; the rounding rule is not yet ruled
+//! # The rounding rule is cumulative-floor, and that is ruled
 //!
-//! The port stops at the exact rational weights on purpose, and this is the
-//! one substantive thing the implementing lane found that the design could not
-//! have known.
+//! The option-D directive said to adopt "the live wire's rounding rule". That
+//! was under-determined for splines, and the reason is worth keeping.
 //!
-//! The ruling says to adopt "the live wire's rounding rule". Measured, that
-//! rule is: floor each primary term independently, then hand the *last* claim
-//! `Q - sum(primary)` (`runtime_v3.rs`, `evaluate_rational`). It is
-//! well-defined there because the live graded family **structurally reserves**
-//! that last claim — `primary_count = basis_width - 1`, and a term whose
-//! `claim_index` reaches it is refused, so the complement claim never carries a
-//! curve of its own.
+//! The live rule is: floor each primary term independently, then hand the
+//! *last* claim `Q - sum(primary)` (`runtime_v3.rs`, `evaluate_rational`). It
+//! is well-defined there because the live graded family **structurally
+//! reserves** that last claim — `primary_count = basis_width - 1`, and a term
+//! whose `claim_index` reaches it is refused, so the complement claim never
+//! carries a curve of its own.
 //!
-//! **A spline has no such claim.** Every one of its `K = knot_count - degree - 1`
-//! claims carries a structural de Boor weight, and the claims outside the local
-//! support carry an *exact zero* that
-//! `SplineProfile.evaluate_zero_outside_support` is stated about. Transliterating
-//! the live rule would hand the rounding residue to whichever claim happens to
-//! be last — frequently one whose exact weight is zero. That is not the live
-//! rule ported; it is a different rule that happens to compile.
+//! **A spline reserves nothing.** Every one of its
+//! `K = knot_count - degree - 1` claims carries a structural de Boor weight,
+//! and the claims outside the local support carry an *exact zero* that
+//! `SplineProfile.evaluate_zero_outside_support` is stated about.
+//! Transliterating the live rule would hand the rounding residue to whichever
+//! claim happens to be last — frequently one whose exact weight is zero. That
+//! is not the live rule ported; it is a different rule that happens to compile,
+//! and it pays a claim the basis says is unsupported.
 //!
-//! So both candidate boundaries are implemented here, neither is blessed, and
-//! [`apportionment_divergence_v3`] measures the gap between them. Which one the
-//! family ships is a money decision and a price-gate soundness decision — the
-//! gate's hull identity recomputes every atom through the production evaluator
-//! — and it belongs to the commit that first *accepts* a kind-3 body, not to
-//! this one.
+//! So both boundaries were implemented and measured, and the orchestrator ruled
+//! on the measurement (WAVE `76e2ca3f`): **cumulative-floor is the spline
+//! rounding rule**, binding on the commit that first accepts a kind-3 body.
+//! Over eleven cases at both degrees, cumulative-floor kept every claim within
+//! one atom of its exact share and preserved zero-outside-support;
+//! floor-plus-complement did neither (2 of 11 diverged, worst 2 atoms).
 //!
-//! # Overflow
+//! [`apportion_cumulative_v3`] is therefore the only apportionment this module
+//! offers. The rejected implementation is **deleted rather than deprecated** —
+//! a second rounding rule sitting next to the blessed one is a second author of
+//! the money, and the two differ by real atoms. What survives the deletion is
+//! the *grounds*: the two properties that decided the ruling are asserted
+//! directly as properties of the blessed rule, so the ruling stays checkable
+//! without the code it ruled against.
+//!
+//! # Overflow, and why a checked refusal was not enough
 //!
 //! As in the kernel, overflow has no Lean counterpart: the specification
 //! quantifies over unbounded `Int`. This module evaluates inside an
 //! `i128`/`u128` envelope and refuses [`Error::ArithmeticOverflow`] the moment
-//! a checked operation would leave it. The envelope is genuinely narrower than
-//! the live record's declared types permit — a knot near `i128::MAX` scaled by
-//! a `u64` coordinate denominator does not fit — so this is a fail-closed
-//! refusal, not a proof of totality. Widening the accumulation to the crate's
-//! `SignedU256` is named in the report as remaining work rather than quietly
-//! assumed away.
+//! a checked operation would leave it. No wrong number is reachable.
+//!
+//! **But a checked refusal at the wrong moment is still principal stranding.**
+//! A basis admitted at founding whose triangle overflows at some coordinate
+//! refuses at *settlement*, when the money is already in — the E5 class
+//! wall 22 was about. Fail-closed arithmetically, a trap operationally. So the
+//! envelope is closed twice over:
+//!
+//! 1. **The coordinate is saturated against the knot range before it is
+//!    scaled.** The pre-scaling multiply at the coordinate is
+//!    order-preserving-saturating rather than checked, and the clamp that
+//!    immediately follows discards the magnitude. That is exact, not
+//!    approximate: see [`evaluate_spline_weights_v3`]'s clamp for the argument.
+//!    An oracle coordinate of any magnitude whatsoever can no longer trap.
+//! 2. **The triangle's magnitude is bounded at admission, over the
+//!    founding-fixed quantities only** — [`spline_arithmetic_envelope_v3`].
+//!    The knots, the degree and the payout scale are all fixed when the Market
+//!    is founded; the only settlement-time input left is the coordinate
+//!    *denominator*, which the envelope quantifies over up to
+//!    [`SPLINE_COORDINATE_DENOMINATOR_CEILING_V3`]. A basis that could overflow
+//!    at any admissible coordinate is refused at founding, where refusing costs
+//!    nobody their principal.
+//!
+//! What that leaves, stated rather than hidden: a coordinate denominator
+//! *above* the published ceiling still refuses at settlement. That residue is
+//! the price of a `u128` accumulation, and widening to the crate's `SignedU256`
+//! is what retires it — see the measured consequence in
+//! [`spline_arithmetic_envelope_v3`], which is that degree 3 is essentially
+//! unfoundable at `u128` widths and degree 2 is comfortable.
 
 use crate::runtime_v3::{
     BASIS_SPLINE_MAXIMUM_DEGREE_V3, BASIS_SPLINE_MINIMUM_DEGREE_V3, Error, Result,
@@ -67,6 +97,172 @@ pub const SPLINE_MAX_SUPPORT_V3: usize = (BASIS_SPLINE_MAXIMUM_DEGREE_V3 as usiz
 
 /// Weights one Cox-de-Boor level carries at most: `degree` of them.
 const LEVEL_CAPACITY: usize = SPLINE_MAX_SUPPORT_V3 - 1;
+
+/// Largest coordinate denominator a spline basis is admitted against.
+///
+/// The envelope in [`spline_arithmetic_envelope_v3`] quantifies over every
+/// coordinate denominator up to this value, so a basis that passes admission
+/// evaluates without overflow at all of them. It is `2^20`, chosen to cover the
+/// six-decimal fixed-point denominators real price feeds publish (`1_000_000`
+/// is `2^19.93`) with a little room, and it is a *published* boundary rather
+/// than an incidental one: a coordinate denominator above it refuses, by name,
+/// at [`Error::SplineCoordinateOutOfEnvelope`].
+///
+/// It is deliberately a constant and not a wire field. Putting it on the wire
+/// would let a founder buy a wider coordinate domain by narrowing their knots,
+/// which is a trade nobody should be able to make silently; and the record has
+/// no room for it (the 50 reserved bytes are spent by the degree and the
+/// certificate digest).
+pub const SPLINE_COORDINATE_DENOMINATOR_CEILING_V3: u64 = 1 << 20;
+
+/// A knot vector the arithmetic envelope can read by index.
+///
+/// The envelope is called from **founding, on chain**, where the knots live in
+/// a borrowed Registry-owned account body and there is no allocator to collect
+/// them into a slice. So it reads them by index from wherever they already are
+/// rather than requiring a `&[i128]`: `ProductBasisV3` implements this directly
+/// over its own record bytes, and `[i128]` implements it for callers that do
+/// hold a slice.
+///
+/// [`evaluate_spline_weights_v3`] reads its knots the same way, for the same
+/// reason: the price gate's hull identity recomputes every atom **through the
+/// production evaluator**, from a record, at founding.
+pub trait SplineKnotsV3 {
+    /// The knot numerator at `index`, or `None` past the end.
+    fn knot_at(&self, index: usize) -> Option<i128>;
+    /// How many knots there are.
+    fn knot_count(&self) -> usize;
+}
+
+impl SplineKnotsV3 for [i128] {
+    fn knot_at(&self, index: usize) -> Option<i128> {
+        self.get(index).copied()
+    }
+
+    fn knot_count(&self) -> usize {
+        self.len()
+    }
+}
+
+/// Whether this basis evaluates without overflow at *every* admissible
+/// coordinate.
+///
+/// # Why this exists at all
+///
+/// Every arithmetic operation in this module is checked, so no wrong number is
+/// reachable. That is not the same as safe. The quantities the de Boor triangle
+/// multiplies are the knots, the degree and the payout scale — **all three
+/// fixed when the Market is founded** — together with the coordinate, which
+/// arrives at settlement from the resolution. Without this check a basis is
+/// admitted at founding and discovers at settlement that its triangle does not
+/// fit, which strands principal that is already in. Fail-closed arithmetically,
+/// a trap operationally.
+///
+/// So this conjunct moves the discovery to founding, where a refusal costs
+/// nobody anything, and quantifies away the one settlement-time input by
+/// bounding it at [`SPLINE_COORDINATE_DENOMINATOR_CEILING_V3`].
+///
+/// # What it checks, and why that is exactly the right bound
+///
+/// For each span [`locate_span`] could select, it replays the triangle's
+/// *denominator* recursion — the same knot differences [`level_weights`] takes
+/// its supports from, carried onto the ceiling — and requires two things:
+///
+/// - every level's support is strictly positive, so no selectable span is
+///   degenerate (a degenerate one refuses at settlement, which is the same
+///   strand by another name);
+/// - `payout_scale * denominator` fits `u128`.
+///
+/// That second bound is tight rather than conservative. The triangle's step is
+/// sum-preserving, so after each level the values sum to exactly the running
+/// denominator; every value, and every partial product the loop forms on the
+/// way to one, is therefore bounded by the final denominator. The only thing
+/// multiplied by anything larger afterwards is the apportionment's
+/// `payout_scale * running`, which is the product checked here.
+///
+/// # The measured consequence, which is not a small one
+///
+/// The denominator grows as `span^(d(d+1)/2)` — cubic in the span at degree 2,
+/// **sixth power at degree 3**. With the ceiling above and a realistic payout
+/// scale, degree 2 admits comfortably wide knot vectors and degree 3 admits
+/// almost nothing. That is a true statement about a `u128` accumulation, not a
+/// defect in this check, and it is the honest form of the sizing note in
+/// `BASIS_ABI_UNIFICATION_V1` section 11.2: widening to `SignedU256` is not
+/// tidying, it is **what makes degree 3 foundable at all**. Until it lands,
+/// degree 3 is allocated, specified, proved, and refused here — which is the
+/// right place to refuse it.
+pub fn spline_arithmetic_envelope_v3<K: SplineKnotsV3 + ?Sized>(
+    knots: &K,
+    degree: u8,
+    width: u32,
+    payout_scale: u64,
+) -> Result<()> {
+    if !(BASIS_SPLINE_MINIMUM_DEGREE_V3..=BASIS_SPLINE_MAXIMUM_DEGREE_V3).contains(&degree) {
+        return Err(Error::SplineDegreeOutOfProfile);
+    }
+    if payout_scale == 0 {
+        return Err(Error::ZeroScale);
+    }
+    let degree = usize::from(degree);
+    let width = usize::try_from(width).map_err(|_| Error::InvalidCount)?;
+    let derived = knots
+        .knot_count()
+        .checked_sub(degree)
+        .and_then(|value| value.checked_sub(1))
+        .filter(|value| *value > 0)
+        .ok_or(Error::SplineWidthDerivationMismatch)?;
+    if derived != width {
+        return Err(Error::SplineWidthDerivationMismatch);
+    }
+
+    let ceiling = u128::from(SPLINE_COORDINATE_DENOMINATOR_CEILING_V3);
+    let knot_at =
+        |index: usize| -> Result<i128> { knots.knot_at(index).ok_or(Error::SplineDegenerateSpan) };
+    let mut selectable = 0_usize;
+    for span in degree..width {
+        // Only spans `locate_span` can actually return are worth bounding; the
+        // rest are collapsed by interior multiplicity and never evaluated.
+        if knot_at(span)? >= knot_at(step(span)?)? {
+            continue;
+        }
+        selectable = step(selectable)?;
+        let mut denominator = 1_u128;
+        for level in 1..=degree {
+            for offset in 0..level {
+                let index = span
+                    .checked_add(1)
+                    .and_then(|shifted| shifted.checked_add(offset))
+                    .and_then(|shifted| shifted.checked_sub(level))
+                    .ok_or(Error::SplineDegenerateSpan)?;
+                let high = knot_at(
+                    index
+                        .checked_add(level)
+                        .ok_or(Error::SplineDegenerateSpan)?,
+                )?;
+                let support = nonnegative(
+                    high.checked_sub(knot_at(index)?)
+                        .ok_or(Error::ArithmeticOverflow)?,
+                )?;
+                if support == 0 {
+                    // A span the coordinate can land in whose triangle divides
+                    // by zero. Refused here rather than at settlement.
+                    return Err(Error::SplineDegenerateSpan);
+                }
+                denominator = denominator
+                    .checked_mul(support)
+                    .and_then(|value| value.checked_mul(ceiling))
+                    .ok_or(Error::SplineEnvelopeExceeded)?;
+            }
+        }
+        u128::from(payout_scale)
+            .checked_mul(denominator)
+            .ok_or(Error::SplineEnvelopeExceeded)?;
+    }
+    if selectable == 0 {
+        return Err(Error::SplineDegenerateSpan);
+    }
+    Ok(())
+}
 
 /// The exact rational B-spline weights of one coordinate.
 ///
@@ -123,8 +319,8 @@ impl SplineWeightsV3 {
 /// smooth basis, expressible at all. That is a property of this evaluator
 /// only; the two shipping kinds keep their strict knot ordering, which is
 /// [`crate::runtime_v3`]'s business and is unchanged.
-pub fn evaluate_spline_weights_v3(
-    knots: &[i128],
+pub fn evaluate_spline_weights_v3<K: SplineKnotsV3 + ?Sized>(
+    knots: &K,
     knot_denominator: u64,
     coordinate_numerator: i128,
     coordinate_denominator: u64,
@@ -142,7 +338,7 @@ pub fn evaluate_spline_weights_v3(
     // `width = knot_count - degree - 1`, the standard B-spline count and the
     // sole binding between the degree and the knot vector.
     let derived = knots
-        .len()
+        .knot_count()
         .checked_sub(degree)
         .and_then(|value| value.checked_sub(1))
         .filter(|value| *value > 0)
@@ -152,7 +348,7 @@ pub fn evaluate_spline_weights_v3(
     }
 
     let scaled = |index: usize| -> Result<i128> {
-        match knots.get(index) {
+        match knots.knot_at(index) {
             Some(knot) => knot
                 .checked_mul(i128::from(coordinate_denominator))
                 .ok_or(Error::ArithmeticOverflow),
@@ -163,9 +359,23 @@ pub fn evaluate_spline_weights_v3(
             None => Ok(0),
         }
     };
-    let coordinate = coordinate_numerator
-        .checked_mul(i128::from(knot_denominator))
-        .ok_or(Error::ArithmeticOverflow)?;
+    if coordinate_denominator > SPLINE_COORDINATE_DENOMINATOR_CEILING_V3 {
+        return Err(Error::SplineCoordinateOutOfEnvelope);
+    }
+    // **Saturating, and exact.** The only thing this product is ever read
+    // through is the clamp on the next line, whose two bounds are `scaled`
+    // knots and so are exactly representable. Saturation is monotone, so it
+    // preserves the order relation the clamp asks about: if the true product
+    // exceeds `i128::MAX` it certainly exceeds `scaled(width)`, and
+    // `i128::MAX` does too, so `min` picks the same branch either way. The
+    // clamped value is therefore bit-identical to the one unbounded
+    // arithmetic would produce -- this discards magnitude the computation was
+    // going to discard anyway.
+    //
+    // A `checked_mul` here refused instead, which is how an oracle coordinate
+    // far outside the knot range became a settlement-time trap on a Market
+    // that had already taken money. That is the strand this saturation closes.
+    let coordinate = coordinate_numerator.saturating_mul(i128::from(knot_denominator));
     // Below the domain the first claims pay their full weight, above it the
     // last ones do, rather than the coordinate falling off a half-open span.
     let clamped = scaled(degree)?.max(coordinate.min(scaled(width)?));
@@ -267,82 +477,6 @@ pub fn apportion_cumulative_v3(
         return Err(Error::NonPartition);
     }
     Ok(())
-}
-
-/// Apportion `payout_scale` atoms by per-claim floor with an exact complement.
-///
-/// **The live family's discipline, transliterated as closely as a spline
-/// admits.** Each claim's exact share is floored independently; the residue
-/// `Q - sum(floors)` goes to the *last locally supported* claim rather than to
-/// the last claim of the width.
-///
-/// That deviation from `runtime_v3`'s literal `output.last_mut()` is forced,
-/// and it is the reason this module does not simply declare the live rule
-/// ported. The live rule's absorber is a structurally term-free complement
-/// claim; a spline has none, and its trailing claims routinely carry an exact
-/// zero. Sending residue to a zero-weight claim would pay a claim the basis
-/// says is unsupported. Sending it to the last supported claim keeps the
-/// support exact and keeps the partition exact, at the cost of letting that one
-/// claim sit up to `degree` atoms above its exact share — which is precisely
-/// what [`apportion_cumulative_v3`] does not do, and precisely what the price
-/// gate's hull identity would have to be re-checked against.
-pub fn apportion_floor_complement_v3(
-    weights: &SplineWeightsV3,
-    payout_scale: u64,
-    output: &mut [u64],
-) -> Result<()> {
-    preflight(weights, payout_scale, output)?;
-    let mut total = 0_u64;
-    for claim in 0..weights.width {
-        let floored = u128::from(payout_scale)
-            .checked_mul(weights.numerator_at(claim))
-            .ok_or(Error::ArithmeticOverflow)?
-            .checked_div(weights.denominator)
-            .ok_or(Error::ZeroDenominator)?;
-        let payout = u64::try_from(floored).map_err(|_| Error::ArithmeticOverflow)?;
-        let slot = output.get_mut(claim).ok_or(Error::InvalidLength)?;
-        *slot = payout;
-        total = total.checked_add(payout).ok_or(Error::ArithmeticOverflow)?;
-    }
-    let residue = payout_scale.checked_sub(total).ok_or(Error::NonPartition)?;
-    // The last claim the local support covers. `local_len >= 1` and the
-    // support was bounds-checked into the width by the evaluator, so this
-    // index is in range.
-    let absorber = weights
-        .offset
-        .checked_add(weights.local_len)
-        .and_then(|end| end.checked_sub(1))
-        .ok_or(Error::ArithmeticOverflow)?;
-    let slot = output.get_mut(absorber).ok_or(Error::InvalidLength)?;
-    *slot = slot.checked_add(residue).ok_or(Error::ArithmeticOverflow)?;
-    Ok(())
-}
-
-/// The largest per-claim gap between the two candidate boundaries, in atoms.
-///
-/// Zero means the two rules agree exactly on this coordinate. This exists so
-/// the divergence between the kernel's boundary and the live family's
-/// discipline is a measured number in a test rather than a claim in a comment,
-/// and so the commit that rules on the rounding rule can see what it is
-/// choosing between.
-pub fn apportionment_divergence_v3(
-    weights: &SplineWeightsV3,
-    payout_scale: u64,
-    cumulative: &mut [u64],
-    floor_complement: &mut [u64],
-) -> Result<u64> {
-    apportion_cumulative_v3(weights, payout_scale, cumulative)?;
-    apportion_floor_complement_v3(weights, payout_scale, floor_complement)?;
-    let mut worst = 0_u64;
-    for claim in 0..weights.width {
-        let left = *cumulative.get(claim).ok_or(Error::InvalidLength)?;
-        let right = *floor_complement.get(claim).ok_or(Error::InvalidLength)?;
-        let gap = left.abs_diff(right);
-        if gap > worst {
-            worst = gap;
-        }
-    }
-    Ok(worst)
 }
 
 fn preflight(weights: &SplineWeightsV3, payout_scale: u64, output: &[u64]) -> Result<()> {

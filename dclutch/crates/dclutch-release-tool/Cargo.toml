@@ -14,12 +14,18 @@ name = "dclutch-release-tool"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "=0.22.1"
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
+# The seal probe reads a dumped account with the SAME decoder the chain runs;
+# it lays out no byte of a seal itself.
+dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }
 dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }
 dclutch-pyth-svm = { path = "../dclutch-pyth-svm" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+# Account dumps arrive as the JSON `solana account --output json` writes.
+serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 solana-program = { version = "=3.0.0", default-features = false }
 

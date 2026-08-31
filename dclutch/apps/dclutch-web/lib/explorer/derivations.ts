@@ -44,7 +44,8 @@ import {
   DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
   DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3,
   DIRECT_ROOT_SCHEMA_ID_V1,
-  EFFECT_SCHEMA_RELEASE_ID,
+  EFFECT_SCHEMA_RELEASE_ID_V3,
+  EFFECT_SCHEMA_RELEASE_ID_V4,
   EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2,
   GRADED_BASIS_RECORD_SCHEMA_ID_V3,
   LIFECYCLE_SCHEMA_RELEASE_ID,
@@ -159,8 +160,12 @@ const SCHEMA_IDS: ReadonlyArray<Readonly<{ name: string; id: Uint8Array }>> = Ob
   { name: 'Capability program V4', id: CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID },
   { name: 'Request profile V2', id: REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID },
   { name: 'Transition', id: TRANSITION_SCHEMA_RELEASE_ID },
-  { name: 'Effect', id: EFFECT_SCHEMA_RELEASE_ID },
-  { name: 'Lifecycle', id: LIFECYCLE_SCHEMA_RELEASE_ID },
+  { name: 'Effect V3', id: EFFECT_SCHEMA_RELEASE_ID_V3 },
+  { name: 'Effect V4', id: EFFECT_SCHEMA_RELEASE_ID_V4 },
+  // Three generations of state-lifecycle policy exist; this table names the
+  // one whose id it actually holds, so a V5 record is not mis-labelled by an
+  // unversioned row sitting above it.
+  { name: 'Lifecycle V3', id: LIFECYCLE_SCHEMA_RELEASE_ID },
   { name: 'Selected lifecycle V5', id: SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5 },
   { name: 'Execution strategy program', id: EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2 },
 ]);

@@ -63,6 +63,9 @@ pub mod direct;
 /// Permissionless, release-authenticated Direct Open-to-Retiring transition.
 #[cfg(feature = "families")]
 pub mod direct_begin_retiring_v1;
+/// Permissionless, release-authenticated close of one drained maker replay.
+#[cfg(feature = "families")]
+pub mod direct_close_maker_v1;
 /// Permissionless settlement of one Direct fee, in a transaction of its own.
 #[cfg(feature = "families")]
 pub mod direct_fee_settlement_v1;
@@ -269,6 +272,38 @@ pub enum TradingSbfError {
     /// design's section 1.4 refusal table does not enumerate this row; it is
     /// added here rather than left to the reader.
     FeeSource = 0x400E,
+    /// The `CloseMakerReplay` frame was not the exact permissionless shape.
+    ///
+    /// Wall 22. The account count, a privilege, or a duplicate address is
+    /// wrong; the Trading program account is not this executable; the Rent
+    /// sysvar is not the Rent sysvar; or the rent destination is not the plain
+    /// System wallet the replay's own `rent_owner` field records. The remedy
+    /// is the caller's: rebuild the 22-account frame from the replay's own
+    /// recorded facts.
+    CloseMakerFrame = 0x400F,
+    /// The account offered as the maker replay is not the canonical one.
+    ///
+    /// Wall 22. It is absent, System-owned, carries a body that is not a
+    /// canonical replay for the request's market/generation/maker coordinate,
+    /// or sits at an address its own persisted bump does not reproduce.
+    /// `CloseMakerReplay` is permissionless and racing is expected, so **a
+    /// second close of the same replay refuses here, by absence** -- the same
+    /// double-close story as [`TradingSbfError::CloseSealAccount`].
+    CloseMakerReplayAccount = 0x4010,
+    /// The maker replay still owes its recorded Direct fee.
+    ///
+    /// Cohort-9 review item 1, amendment 2. This account is the SOLE record of
+    /// the FEE-TX2 receivable -- `fee_settlement_v1` reads the amount off it
+    /// and nothing else -- so a close that ignored `fee_owed` would erase a
+    /// debt with no residue. The remedy is always available: fee settlement is
+    /// deliberately phase-free, so settle (permissionlessly), then close.
+    CloseMakerFeeOutstanding = 0x4011,
+    /// The maker replay still has registered live intents.
+    ///
+    /// Wall 22. `live_count` is nonzero: registered records under this replay
+    /// have not all closed. Close them first -- older ones are permissionlessly
+    /// closable once `cancel-through` passes them -- then close the replay.
+    CloseMakerLiveIntents = 0x4012,
 }
 
 impl TradingSbfError {
@@ -278,7 +313,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 19] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -294,6 +329,10 @@ impl TradingSbfError {
         Self::FeeNotOwed,
         Self::FeeDestination,
         Self::FeeSource,
+        Self::CloseMakerFrame,
+        Self::CloseMakerReplayAccount,
+        Self::CloseMakerFeeOutstanding,
+        Self::CloseMakerLiveIntents,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -318,6 +357,10 @@ impl TradingSbfError {
             Self::FeeNotOwed => 12,
             Self::FeeDestination => 13,
             Self::FeeSource => 14,
+            Self::CloseMakerFrame => 15,
+            Self::CloseMakerReplayAccount => 16,
+            Self::CloseMakerFeeOutstanding => 17,
+            Self::CloseMakerLiveIntents => 18,
         }
     }
 }
@@ -517,6 +560,14 @@ pub fn process_instruction(
     #[cfg(feature = "families")]
     if dclutch_direct_codec::retirement_v1::is_direct_begin_retiring_v1(instruction_data) {
         return direct_begin_retiring_v1::process_direct_begin_retiring_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
+    if dclutch_direct_codec::close_maker_v1::is_direct_close_maker_v1(instruction_data) {
+        return direct_close_maker_v1::process_direct_close_maker_v1(
             program_id,
             accounts,
             instruction_data,

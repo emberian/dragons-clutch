@@ -57,6 +57,21 @@ pub(crate) const DIRECT_NATIVE_CLOSE_LABELS_V1: [&str; 3] = [
     "direct_native_close_descriptor_record",
 ];
 
+/// The maker-replay close artifact records, published at founding since the
+/// five-entry Direct ProgramSet landed (cohort-9, wall 22).
+///
+/// Deliberately NOT chained into `require_direct_retirement_evidence`, for the
+/// activation trio's reason: markets founded on earlier sets carry sealed
+/// campaign evidence that legitimately lacks these labels, and their terminal
+/// paths must stay drivable. The on-chain close route demands a ProgramSet
+/// entry those markets never selected, which is refusal enough.
+#[allow(dead_code)]
+pub(crate) const DIRECT_CLOSE_MAKER_LABELS_V1: [&str; 3] = [
+    "direct_close_maker_account_profile_record",
+    "direct_close_maker_effect_record",
+    "direct_close_maker_descriptor_record",
+];
+
 /// The capability-activation artifact records, published at founding since the
 /// four-entry Direct ProgramSet landed.
 ///
@@ -1332,7 +1347,9 @@ mod tests {
             .expect_err("one address for both funding ledgers must refuse");
         assert!(
             error.to_string().contains(&shared)
-                && error.to_string().contains("funding ledgers the same address"),
+                && error
+                    .to_string()
+                    .contains("funding ledgers the same address"),
             "refusal must name the shared address: {error}"
         );
     }

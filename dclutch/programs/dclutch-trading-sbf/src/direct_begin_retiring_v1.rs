@@ -514,10 +514,13 @@ fn authenticate_market_bytes(
 }
 
 fn prepare_retiring_tail(tail: &[u8]) -> Result<[u8; DIRECT_ROOT_STATE_BYTES_V1], ProgramError> {
+    // Deliberately NO open-maker-root-count gate (cohort-9 review item 1,
+    // amendment 1): retirement begins over standing maker roots, which wind
+    // down INSIDE Retiring -- `consume_nonce_v2` refuses every non-Open phase,
+    // and the count gate that protects Retired lives at both physical-close
+    // sites. Gating count here made `close_maker_replay_v2` unreachable for
+    // every filled market (wall 22).
     let pre = DirectRootStateV1::decode(tail).map_err(|_| TradingSbfError::Root)?;
-    if pre.open_maker_root_count() != 0 {
-        return Err(TradingSbfError::Root.into());
-    }
     pre.begin_retiring()
         .map(DirectRootStateV1::encode)
         .map_err(|_| TradingSbfError::Root.into())
@@ -961,6 +964,10 @@ mod tests {
         assert!(prepare_retiring_tail(&replay_preimage).is_err());
         assert_eq!(post, replay_preimage);
 
+        // The intentional flip (cohort-9 review item 1, amendment 1): a
+        // standing maker root no longer blocks begin-retiring. The transition
+        // preserves the count exactly and moves only the phase; the count
+        // drains inside Retiring via the maker-replay close.
         let mut maker_live = open;
         maker_live
             .get_mut(
@@ -969,7 +976,10 @@ mod tests {
             )
             .expect("maker count word")
             .copy_from_slice(&1_u64.to_le_bytes());
-        assert!(prepare_retiring_tail(&maker_live).is_err());
+        let over_makers = prepare_retiring_tail(&maker_live).expect("retiring over makers");
+        let decoded_over_makers = DirectRootStateV1::decode(&over_makers).expect("poststate");
+        assert_eq!(decoded_over_makers.phase(), DirectRootPhaseV1::Retiring);
+        assert_eq!(decoded_over_makers.open_maker_root_count(), 1);
         let mut hostile_reserved = open;
         *hostile_reserved
             .get_mut(DirectRootStateLayoutV1::RESERVED)

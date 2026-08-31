@@ -1048,6 +1048,9 @@ fn authenticate_generic_product(
             raw: frame.suffix.linked_basis_raw,
             staging: frame.suffix.linked_basis_staging,
         },
+        // The generic route reads its basis from its own suffix, which has no
+        // certificate slot; a curved basis refuses by name.
+        None,
     )
     .map_err(|_| CoreSbfError::Reference)?;
     if product.runtime.product_record.content_digest.to_bytes() != prepared.product_record_id

@@ -125,6 +125,16 @@ pub enum ClaimsFoundingSbfErrorV5 {
     Receipt = 0x5188,
     /// State-last copy or immutable postcondition refused.
     Commit = 0x5189,
+    /// The founding principal exceeded the Market's carried manipulation-capacity
+    /// cap, or that cap was never stated.
+    ///
+    /// Separate from [`Self::ProductBasis`] because it is the one refusal in this
+    /// family that is a *policy* answer rather than a malformed-input answer: the
+    /// records all decoded, the graph all joined, and the founding was refused
+    /// because the principal it asked for is larger than the venue behind its
+    /// Source can be manipulated for. A reader of a validator log that cannot
+    /// tell those two apart cannot tell a broken founding from a refused one.
+    PrincipalCapacity = 0x518A,
 }
 
 impl ClaimsFoundingSbfErrorV5 {
@@ -134,7 +144,7 @@ impl ClaimsFoundingSbfErrorV5 {
     /// [`ClaimsFoundingSbfErrorV5::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only arm that satisfies
     /// the assertions is its own index in this array.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Instruction,
         Self::Accounts,
         Self::Release,
@@ -145,11 +155,12 @@ impl ClaimsFoundingSbfErrorV5 {
         Self::Allocation,
         Self::Receipt,
         Self::Commit,
+        Self::PrincipalCapacity,
     ];
 
     /// This refusal's position in [`ClaimsFoundingSbfErrorV5::ALL`].
     ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: an eleventh variant is
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a twelfth variant is
     /// a COMPILE ERROR here rather than a discriminant no assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -163,6 +174,7 @@ impl ClaimsFoundingSbfErrorV5 {
             Self::Allocation => 7,
             Self::Receipt => 8,
             Self::Commit => 9,
+            Self::PrincipalCapacity => 10,
         }
     }
 }
@@ -848,9 +860,13 @@ fn authenticate_product_core(
         .map_err(|_| ClaimsFoundingSbfErrorV5::Accounts)?;
     let core = CoreState::decode(&core_data).map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
     drop(core_data);
+    // The manipulation-capacity bound, at the one moment principal first exists.
+    // `outstanding` is 0 because a founding is the Market's first principal; the
+    // same accessor re-runs at every later complete-set split, which is what makes
+    // this a cap rather than a founding-time formality.
     MarketPrincipalCapSetsV1::read(core.principal_cap_sets)
         .admit_growth(0, request.quantity())
-        .map_err(|_| ClaimsFoundingSbfErrorV5::ProductBasis)?;
+        .map_err(|_| ClaimsFoundingSbfErrorV5::PrincipalCapacity)?;
     let market = MarketViewV2 {
         claim_count: request.claim_count(),
         revision: request.post_aggregate_revision(),

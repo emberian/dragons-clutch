@@ -7540,6 +7540,49 @@ fn decode_claims_composition_boxed_v3<'request>(
             )
             .map_err(|_| TradingSbfError::Content)?,
         )
+    } else if family_request.get(..8)
+        == Some(
+            dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+                .as_slice(),
+        )
+    {
+        // The second external once-route this family has ever had, and the
+        // first that is not an exposure action. It is here rather than beside
+        // the exposure arm because its wire is a different type at a different
+        // width: a fractional compaction carries a TerminalSettlementRequestV3
+        // verbatim, so `FractionalExposureRequestV2::decode` would refuse it,
+        // and a shared arm would have to decode by shape rather than by magic.
+        let request =
+            dclutch_claims_svm::fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1::decode(
+                family_request,
+            )
+            .map_err(|_| TradingSbfError::Content)?;
+        // The frame width has ONE author, and it is not this function. The
+        // exposure arm above selects between two widths by action; compaction
+        // has exactly one, declared beside the roles that occupy it, so a
+        // further account changes the constant and this arm follows.
+        let fixed_account_count =
+            dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1;
+        // The same three bindings the exposure arm makes, and they are what
+        // make admitting an external route safe at all: the caller has already
+        // authenticated release/Market/parent facts, and these assert the bytes
+        // in hand are the bytes that were authenticated. The digest equality is
+        // the load-bearing one -- without it a caller could authenticate one
+        // request and hand the composer another of the same width.
+        let input = request.input();
+        if input.release_set != parent.release_set
+            || input.market != parent.market
+            || dclutch_sha256_adapter::digest(family_request) != parent.parent_request_digest
+        {
+            return Err(TradingSbfError::Content.into());
+        }
+        Some(
+            ClaimsExternalOnceV3::new(
+                family_request,
+                u16::try_from(fixed_account_count).map_err(|_| TradingSbfError::Content)?,
+            )
+            .map_err(|_| TradingSbfError::Content)?,
+        )
     } else {
         None
     };
@@ -9246,6 +9289,10 @@ fn claims_receipt_digest_v3(receipt: ClaimsRouteReceiptV3) -> Result<[u8; 32], P
         ClaimsRouteReceiptV3::FractionalAtomic(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::FractionalTerminalAtomic(value) => Vec::from(value.to_bytes()),
         ClaimsRouteReceiptV3::FractionalRetirementCoordinate(value) => Vec::from(value.to_bytes()),
+        ClaimsRouteReceiptV3::FractionalClaimCheckCompaction(value) => value
+            .to_bytes()
+            .map(Vec::from)
+            .map_err(|_| TradingSbfError::Transition)?,
         ClaimsRouteReceiptV3::Close(value) => value
             .to_bytes()
             .map(Vec::from)

@@ -592,8 +592,15 @@ fn evaluate(
         (BasisKindV3::CategoricalQ1, TerminalScenarioV3::Categorical(selector)) => basis
             .evaluate_categorical(selector, output)
             .map_err(|_| Error::ProductBasis),
+        // **Curvature settles here.** Both curve-bearing families take the same
+        // two terminals and produce the same width-sized partition; the spline
+        // arm differs only in which evaluator `evaluate_rational` dispatches
+        // to internally, and in the rounding its record's own boundary byte
+        // names. Sharing the arms is what keeps hostile 19 answered: a kind-3
+        // record can no longer reach the wildcard below and refuse generically,
+        // because it no longer reaches it at all.
         (
-            BasisKindV3::GradedExactComplement,
+            BasisKindV3::GradedExactComplement | BasisKindV3::SplineDegree2To3 { .. },
             TerminalScenarioV3::Rational {
                 numerator,
                 denominator,
@@ -601,14 +608,12 @@ fn evaluate(
         ) => basis
             .evaluate_rational(numerator, denominator, output)
             .map_err(|_| Error::ProductBasis),
-        (BasisKindV3::GradedExactComplement, TerminalScenarioV3::Failure) => basis
+        (
+            BasisKindV3::GradedExactComplement | BasisKindV3::SplineDegree2To3 { .. },
+            TerminalScenarioV3::Failure,
+        ) => basis
             .evaluate_failure(output)
             .map_err(|_| Error::ProductBasis),
-        // Named before the wildcard, which is what turns hostile 19 from a
-        // late generic refusal into a legible one. This is the *only* site in
-        // the tree where a spline basis could have reached evaluation, because
-        // it is the one that decodes a record and then evaluates it.
-        (BasisKindV3::SplineDegree2To3 { .. }, _) => Err(Error::SplineEvaluatorAbsent),
         // Still fail-closed for every remaining (kind, terminal) mismatch: a
         // categorical basis handed a rational coordinate, and so on.
         _ => Err(Error::ProductBasis),
@@ -751,6 +756,9 @@ mod tests {
                 knots,
                 terms,
                 failure_payouts: failures,
+                // Exempt by proof: degree 0 and 1 need no price gate,
+                // and a digest offered alongside one is refused.
+                price_gate_certificate_digest: [0_u8; 32],
             },
             &mut output,
         )

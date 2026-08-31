@@ -113,6 +113,14 @@ pub enum AffineBatchSbfErrorV2 {
     Commit = 0x5166,
     /// The canonical success receipt could not be constructed.
     Receipt = 0x5167,
+    /// A positive aggregate delta would grow total principal past the Market's
+    /// carried manipulation-capacity cap, or that cap was never stated.
+    ///
+    /// Separate from [`Self::Candidate`], which is arithmetic that does not fit a
+    /// resource. This one fits perfectly well and is refused anyway, because the
+    /// Market may not carry that much principal against the venue behind its
+    /// Source. Splitting is exactly where a founding-time-only bound would leak.
+    PrincipalCapacity = 0x5168,
 }
 
 impl AffineBatchSbfErrorV2 {
@@ -122,7 +130,7 @@ impl AffineBatchSbfErrorV2 {
     /// [`AffineBatchSbfErrorV2::ordinal`], whose match is exhaustive: a variant added to the enum
     /// does not compile until its author writes an arm here, and the only arm that satisfies the
     /// assertions is its own index in this array.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Instruction,
         Self::Accounts,
         Self::Release,
@@ -131,11 +139,12 @@ impl AffineBatchSbfErrorV2 {
         Self::Candidate,
         Self::Commit,
         Self::Receipt,
+        Self::PrincipalCapacity,
     ];
 
     /// This refusal's position in [`AffineBatchSbfErrorV2::ALL`].
     ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: a ninth variant is a
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a tenth variant is a
     /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -147,6 +156,7 @@ impl AffineBatchSbfErrorV2 {
             Self::Candidate => 5,
             Self::Commit => 6,
             Self::Receipt => 7,
+            Self::PrincipalCapacity => 8,
         }
     }
 }
@@ -679,8 +689,18 @@ pub(crate) fn authenticate_runtime_product_basis_core_with_rent_v3(
     )
     .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     let product =
-        authenticate_product_basis_v3(registry.key, rent, runtime, product_frame.linked_basis)
-            .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
+        // Claims' founding frame carries no certificate slot, so a curved
+        // basis refuses here by name. Curvature is admitted on Core's Found
+        // route, which is the frame that was widened; widening this one is a
+        // frame change rather than a wire change and can follow.
+        authenticate_product_basis_v3(
+            registry.key,
+            rent,
+            runtime,
+            product_frame.linked_basis,
+            None,
+        )
+        .map_err(|_| AffineBatchSbfErrorV2::ProductBasis)?;
     if product.runtime.product_record.content_digest.to_bytes() != expected_product_record_digest
         || product.runtime.product_id.to_bytes() != market.product_instance_id
         || product.runtime.liability_basis_id.to_bytes() != market.basis_id
@@ -819,7 +839,7 @@ fn admit_principal_growth(
             .and_then(|relative| LIABILITY_BASIS_MARKET_HEADER_BYTES_V2.checked_add(relative))
             .ok_or(AffineBatchSbfErrorV2::Candidate)?;
         cap.admit_growth(read_u64(market, offset)?, delta.magnitude())
-            .map_err(|_| AffineBatchSbfErrorV2::Candidate)?;
+            .map_err(|_| AffineBatchSbfErrorV2::PrincipalCapacity)?;
     }
     Ok(())
 }
@@ -1131,7 +1151,7 @@ mod tests {
         let excess = AffineBatchPlanV2::decode(&excess_bytes).expect("excess plan");
         assert_eq!(
             admit_principal_growth(excess, &market, 10),
-            Err(AffineBatchSbfErrorV2::Candidate.into())
+            Err(AffineBatchSbfErrorV2::PrincipalCapacity.into())
         );
         assert_eq!(market, before, "cap refusal cannot mutate aggregate bytes");
 
@@ -1146,7 +1166,7 @@ mod tests {
         let overflow = AffineBatchPlanV2::decode(&overflow_bytes).expect("overflow plan");
         assert_eq!(
             admit_principal_growth(overflow, &market, u64::MAX),
-            Err(AffineBatchSbfErrorV2::Candidate.into())
+            Err(AffineBatchSbfErrorV2::PrincipalCapacity.into())
         );
         assert_eq!(market, overflow_before);
     }

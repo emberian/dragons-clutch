@@ -364,9 +364,10 @@ pub struct DirectBeginRetiringCompleteV1 {
 /// Resumable result of authenticating one finalized lifecycle snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DirectBeginRetiringPlanV1 {
-    /// The root is exactly Open with zero makers and needs one submission.
+    /// The root is exactly Open and needs one submission; any standing maker
+    /// roots wind down inside Retiring.
     Submit(Box<DirectBeginRetiringSubmitV1>),
-    /// The root is already exactly Retiring with zero makers.
+    /// The root is already exactly Retiring.
     Complete(Box<DirectBeginRetiringCompleteV1>),
 }
 
@@ -681,9 +682,9 @@ fn authenticate_root_and_artifacts(
             .ok_or(DirectBeginRetiringPlanErrorV1::InvalidRoot)?,
     )
     .map_err(|_| DirectBeginRetiringPlanErrorV1::InvalidRootState)?;
-    if root_state.open_maker_root_count() != 0 {
-        return Err(DirectBeginRetiringPlanErrorV1::InvalidRootState);
-    }
+    // Deliberately NO open-maker-root-count gate (cohort-9 review item 1,
+    // amendment 1): maker roots wind down inside Retiring; the count gate
+    // stays at the physical-close sites.
 
     let selection = header.selection();
     authenticate_persisted_raw(
@@ -862,9 +863,8 @@ fn assemble_plan(
     snapshot: &DirectBeginRetiringSnapshotV1,
     authenticated: AuthenticatedLifecycleV1,
 ) -> Result<DirectBeginRetiringPlanV1, DirectBeginRetiringPlanErrorV1> {
-    if authenticated.root_state.open_maker_root_count() != 0 {
-        return Err(DirectBeginRetiringPlanErrorV1::InvalidRootState);
-    }
+    // Deliberately NO open-maker-root-count gate here either -- see the
+    // authenticate stage above; both relaxed by cohort-9 review item 1.
     let selection = authenticated.header.selection();
     let release_set = authenticated.header.release_set().to_bytes();
     match authenticated.root_state.phase() {
@@ -1368,7 +1368,13 @@ mod tests {
     }
 
     #[test]
-    fn nonzero_maker_count_refuses_even_after_authenticated_fact_construction() {
+    fn standing_maker_roots_admit_begin_retiring() {
+        // The intentional flip of the old `nonzero_maker_count_refuses...`
+        // assertion (cohort-9 review item 1, amendment 1): retirement now
+        // BEGINS over standing maker roots -- they wind down inside Retiring,
+        // where `close_maker_replay_v2` finally has a legal phase. The count
+        // gate protecting Retired stays at both physical-close sites
+        // (`terminal_retirement_v1` and the native-close bundle transition).
         let mut bytes = DirectRootStateV1::new().encode();
         bytes
             .get_mut(
@@ -1386,9 +1392,21 @@ mod tests {
             .get_mut(CAPABILITY_ROOT_HEADER_BYTES_V1..)
             .expect("root tail")
             .copy_from_slice(&bytes);
+        let plan = match assemble_plan(&snapshot, authenticated).expect("submit over makers") {
+            DirectBeginRetiringPlanV1::Submit(plan) => plan,
+            DirectBeginRetiringPlanV1::Complete(_) => panic!("Open root must submit"),
+        };
+        let post = DirectRootStateV1::decode(
+            plan.expected_post_root_data
+                .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+                .expect("post tail"),
+        )
+        .expect("post root state");
+        assert_eq!(post.phase(), DirectRootPhaseV1::Retiring);
         assert_eq!(
-            assemble_plan(&snapshot, authenticated),
-            Err(DirectBeginRetiringPlanErrorV1::InvalidRootState)
+            post.open_maker_root_count(),
+            1,
+            "begin-retiring preserves the standing count; only the phase moves",
         );
     }
 }

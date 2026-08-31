@@ -137,6 +137,14 @@ pub enum SignedDeltaSbfErrorV3 {
     Commit = 0x5206,
     /// The canonical success receipt could not be constructed.
     Receipt = 0x5207,
+    /// A positive aggregate delta would grow total principal past the Market's
+    /// carried manipulation-capacity cap, or that cap was never stated.
+    ///
+    /// Separate from [`Self::Candidate`], which is arithmetic that does not fit a
+    /// resource. This one fits perfectly well and is refused anyway, because the
+    /// Market may not carry that much principal against the venue behind its
+    /// Source. Splitting is exactly where a founding-time-only bound would leak.
+    PrincipalCapacity = 0x5208,
 }
 
 impl SignedDeltaSbfErrorV3 {
@@ -146,7 +154,7 @@ impl SignedDeltaSbfErrorV3 {
     /// [`SignedDeltaSbfErrorV3::ordinal`], whose match is exhaustive: a variant added to the enum
     /// does not compile until its author writes an arm here, and the only arm that satisfies the
     /// assertions is its own index in this array.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Instruction,
         Self::Accounts,
         Self::Release,
@@ -155,11 +163,12 @@ impl SignedDeltaSbfErrorV3 {
         Self::Candidate,
         Self::Commit,
         Self::Receipt,
+        Self::PrincipalCapacity,
     ];
 
     /// This refusal's position in [`SignedDeltaSbfErrorV3::ALL`].
     ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: a ninth variant is a
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a tenth variant is a
     /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -171,6 +180,7 @@ impl SignedDeltaSbfErrorV3 {
             Self::Candidate => 5,
             Self::Commit => 6,
             Self::Receipt => 7,
+            Self::PrincipalCapacity => 8,
         }
     }
 }
@@ -822,7 +832,7 @@ fn admit_principal_growth(
             .and_then(|relative| LIABILITY_BASIS_MARKET_HEADER_BYTES_V2.checked_add(relative))
             .ok_or(SignedDeltaSbfErrorV3::Candidate)?;
         cap.admit_growth(read_u64(market, offset)?, delta.magnitude())
-            .map_err(|_| SignedDeltaSbfErrorV3::Candidate)?;
+            .map_err(|_| SignedDeltaSbfErrorV3::PrincipalCapacity)?;
     }
     Ok(())
 }
@@ -1225,7 +1235,7 @@ mod tests {
         let excess = SignedDeltaPlanV3::decode(&excess_bytes).expect("excess plan");
         assert_eq!(
             admit_principal_growth(excess, &market, 10),
-            Err(SignedDeltaSbfErrorV3::Candidate.into())
+            Err(SignedDeltaSbfErrorV3::PrincipalCapacity.into())
         );
         assert_eq!(market, before, "cap refusal cannot mutate aggregate bytes");
 
@@ -1240,7 +1250,7 @@ mod tests {
         let overflow = SignedDeltaPlanV3::decode(&overflow_bytes).expect("overflow plan");
         assert_eq!(
             admit_principal_growth(overflow, &market, u64::MAX),
-            Err(SignedDeltaSbfErrorV3::Candidate.into())
+            Err(SignedDeltaSbfErrorV3::PrincipalCapacity.into())
         );
         assert_eq!(market, overflow_before);
     }

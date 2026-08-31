@@ -31,7 +31,7 @@ import {
   DIRECT_ORDINARY_COMMON_IDENTITIES_V3,
   DIRECT_ORDINARY_COMMON_SCALARS_V3,
   DIRECT_SUCCESSOR_KIND_ID_V3,
-  EFFECT_SCHEMA_RELEASE_ID,
+  EFFECT_SCHEMA_RELEASE_ID_V4,
   EXECUTION_STRATEGY_ARTIFACT_PROFILE_V2,
   EXECUTION_STRATEGY_PROGRAM_BYTES_V2,
   EXECUTION_STRATEGY_PROGRAM_MAGIC_V2,
@@ -590,7 +590,7 @@ export function decodeDirectDescriptorV4(bytes: Uint8Array): Readonly<{
       || !same(lifecycle.schema, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5)
       || !same(strategy.schema, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)
       || !same(transition.schema, TRANSITION_SCHEMA_RELEASE_ID)
-      || !same(effect.schema, EFFECT_SCHEMA_RELEASE_ID)
+      || !same(effect.schema, EFFECT_SCHEMA_RELEASE_ID_V4)
       || !same(accountProfile.program, DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3)
       || !same(requestProfile.program, DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3)
       || !same(lifecycle.program, DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5)
@@ -649,9 +649,17 @@ export function validateDirectSignedRequestProfileV2(bytes: Uint8Array): void {
   const itemScalarStride = u16(embedded, DirectAbi.REQUEST_PROFILE_ITEM_SCALAR_STRIDE_OFFSET);
   const commonIdentities = u16(embedded, DirectAbi.REQUEST_PROFILE_COMMON_IDENTITIES_OFFSET);
   const itemIdentityStride = u16(embedded, DirectAbi.REQUEST_PROFILE_ITEM_IDENTITY_STRIDE_OFFSET);
+  // The register file is affine in the Product's outcome count --
+  // `common + stride * tail_count` -- so the two strides are geometry the
+  // InlineOrdinary emitter carries as named constants
+  // (`encode_inline_ordinary_request_profile_v3_atomic` in
+  // `dclutch-direct-codec`'s `ordinary_artifacts_v3.rs` passes them into
+  // `RequestGeometryV1::new`). Pinning them as literal zero refused every
+  // Market whose scalars grow per outcome; cohort-8's stride is 2.
   if (fixedRequestBytes !== DirectAbi.DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3
       || itemRequestBytes !== 0 || fixedOperations === 0 || itemOperations !== 0
-      || itemScalarStride !== 0 || itemIdentityStride !== 0
+      || itemScalarStride !== DirectAbi.DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3
+      || itemIdentityStride !== DirectAbi.DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3
       || commonScalars !== DIRECT_ORDINARY_COMMON_SCALARS_V3
       || commonIdentities !== DIRECT_ORDINARY_COMMON_IDENTITIES_V3
       || embedded.length !== DirectAbi.REQUEST_PROFILE_HEADER_BYTES_V1

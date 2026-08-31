@@ -299,6 +299,9 @@ fn product_graph() -> (Record, Record, Record, Record, [u8; 32]) {
         knots: &[],
         terms: &[],
         failure_payouts: &[],
+        // Exempt by proof: degree 0 and 1 need no price gate,
+        // and a digest offered alongside one is refused.
+        price_gate_certificate_digest: [0_u8; 32],
     };
     let basis_width =
         basis_record_bytes_v3(BasisKindV3::CategoricalQ1, 258, 0, 0).expect("basis width");

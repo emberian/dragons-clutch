@@ -742,7 +742,7 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Floor', MANIPULATION_FLOOR_V1_FLOOR_ATOMS_OFFSET, 'u64'),
       field('Reserved', MANIPULATION_FLOOR_V1_TAIL_RESERVED_OFFSET, 'reserved'),
     ],
-    note: 'A floor measured against a different source or collateral answers a different question. Zero means nothing was found. Nothing on chain enforces this bound today.',
+    note: 'A floor measured against a different source or collateral answers a different question. Zero means nothing was found. Founding derives the Market’s principal cap from the one floor its Source names, and every later complete-set split is checked against the cap the Market carries.',
   },
   {
     magic: REALM_MAGIC_V1,

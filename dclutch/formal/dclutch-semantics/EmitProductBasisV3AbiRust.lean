@@ -35,9 +35,11 @@ def main : IO Unit := do
   IO.println s!"pub const BASIS_SPLINE_DEGREE_2_TO_3_KIND_V3: u8 = {splineDegree2To3Kind};"
   IO.println s!"pub const BASIS_SPLINE_MINIMUM_DEGREE_V3: u8 = {splineMinimumDegree};"
   IO.println s!"pub const BASIS_SPLINE_MAXIMUM_DEGREE_V3: u8 = {splineMaximumDegree};"
+  IO.println s!"pub const BASIS_SPLINE_INTERIOR_MULTIPLICITY_FLAG_V3: u8 = {splineInteriorMultiplicityFlag};"
   IO.println s!"pub const EXACT_CATEGORICAL_BOUNDARY_V3: u8 = {exactCategoricalBoundary};"
   IO.println
     s!"pub const TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3: u8 = {termFloorExactComplementBoundary};"
+  IO.println s!"pub const CUMULATIVE_FLOOR_BOUNDARY_V3: u8 = {cumulativeFloorBoundary};"
   IO.println s!"pub const TERM_CONSTANT_SHAPE_V3: u8 = {constantShape};"
   IO.println s!"pub const TERM_RAMP_UP_SHAPE_V3: u8 = {rampUpShape};"
   IO.println s!"pub const TERM_RAMP_DOWN_SHAPE_V3: u8 = {rampDownShape};"

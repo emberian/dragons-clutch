@@ -14,11 +14,15 @@
 
 use core::{cmp::Ordering, convert::TryInto};
 
+/// Admission for the allocated-but-unevaluated degree-2-to-3 spline kind.
+/// The `DCLTPGT1` no-arbitrage price certificate, ported into the crate that
+/// owns the basis wire because founding cannot reach the kernel under `O-005`.
+pub mod price_gate_v1;
 /// Registry-finalized graded-basis and projection-certificate admission.
 pub mod registry_v3;
 /// Data-defined runtime-width categorical and graded liability bases.
 pub mod runtime_v3;
-/// Admission for the allocated-but-unevaluated degree-2-to-3 spline kind.
+
 pub mod spline_admission_v3;
 /// Integer Cox-de-Boor for the degree-2-to-3 kind, at the live wire's widths.
 pub mod spline_eval_v3;

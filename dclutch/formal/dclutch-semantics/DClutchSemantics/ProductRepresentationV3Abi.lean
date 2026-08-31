@@ -46,7 +46,7 @@ theorem kind_tags_agree_with_the_basis_record :
   refine ⟨?_, ?_, ?_⟩ <;> decide
 
 inductive Field where
-  | magic | version | basisKind | reservedHeader
+  | magic | version | basisKind | splineDegree | splineFlags | reservedHeader
   | descriptorId | graphId | graphDigest
   | productId | resultDomainId | coordinateDomainId | resultUnitId
   | semanticBasisId | linkedBasisRecordDigest
@@ -59,7 +59,9 @@ def schema : List (FieldSpec Field) := [
   ⟨.magic, .bytes 8⟩,
   ⟨.version, .u16⟩,
   ⟨.basisKind, .u8⟩,
-  ⟨.reservedHeader, .reserved 5⟩,
+  ⟨.splineDegree, .u8⟩,
+  ⟨.splineFlags, .u8⟩,
+  ⟨.reservedHeader, .reserved 3⟩,
   ⟨.descriptorId, .bytes 32⟩,
   ⟨.graphId, .bytes 32⟩,
   ⟨.graphDigest, .bytes 32⟩,
@@ -88,7 +90,7 @@ def bytes : Nat := schemaWidth schema
 namespace Field
 
 def all : List Field := [
-  .magic, .version, .basisKind, .reservedHeader,
+  .magic, .version, .basisKind, .splineDegree, .splineFlags, .reservedHeader,
   .descriptorId, .graphId, .graphDigest,
   .productId, .resultDomainId, .coordinateDomainId, .resultUnitId,
   .semanticBasisId, .linkedBasisRecordDigest,
@@ -101,6 +103,8 @@ def rustName : Field → String
   | .magic => "ADMISSION_MAGIC_OFFSET_V3"
   | .version => "ADMISSION_VERSION_OFFSET_V3"
   | .basisKind => "ADMISSION_BASIS_KIND_OFFSET_V3"
+  | .splineDegree => "ADMISSION_SPLINE_DEGREE_OFFSET_V3"
+  | .splineFlags => "ADMISSION_SPLINE_FLAGS_OFFSET_V3"
   | .reservedHeader => "ADMISSION_RESERVED_HEADER_OFFSET_V3"
   | .descriptorId => "ADMISSION_DESCRIPTOR_ID_OFFSET_V3"
   | .graphId => "ADMISSION_GRAPH_ID_OFFSET_V3"
@@ -133,8 +137,8 @@ theorem schema_wellFormed : WellFormed schema := by
   · decide
   · intro field member
     simp [schema] at member
-    rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rcases member with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
       rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
-      rfl | rfl | rfl | rfl <;> decide
+      rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> decide
 
 end DClutch.ProductRepresentationV3Abi

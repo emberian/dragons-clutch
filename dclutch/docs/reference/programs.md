@@ -13,8 +13,8 @@ reachable inside an entry route's request.
 
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 20 | 121 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:62) |
-| `core` | `dclutch-core-sbf` | 0x3 | 19 | 14 | 18 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:277) |
+| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 21 | 125 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:62) |
+| `core` | `dclutch-core-sbf` | 0x3 | 19 | 14 | 23 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:315) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 10 | 11 | 13 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:245) |
 | `dealer` | `dclutch-dealer-sbf` | 0x7 | 1 | 0 | 11 | `process_instruction` (programs/dclutch-dealer-sbf/src/lib.rs:415) |
 | `dealer-accelerator` | `dclutch-dealer-accelerator-sbf` | 0xD | 1 | 0 | 3 | `program_entrypoint` (programs/dclutch-dealer-accelerator-sbf/src/lib.rs:123) |
@@ -25,4 +25,4 @@ reachable inside an entry route's request.
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:201) |
 | `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 10 | 17 | 23 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:261) |
 | `series-shadow` | `dclutch-series-shadow-sbf` | 0xB | 1 | 0 | 5 | `program_entrypoint` (programs/dclutch-series-shadow-sbf/src/lib.rs:24) |
-| `trading` | `dclutch-trading-sbf` | 0x4 | 25 | 0 | 20 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1849) |
+| `trading` | `dclutch-trading-sbf` | 0x4 | 26 | 0 | 24 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1849) |

@@ -45,6 +45,7 @@ dclutch-record-contract = { path = "../dclutch-record-contract" }
 dclutch-rational-lifecycle-hot-v3 = { path = "../dclutch-rational-lifecycle-hot-v3" }
 dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
 dclutch-rational-representation-v2-lifecycle-contract = { path = "../dclutch-rational-representation-v2-lifecycle-contract" }
+dclutch-registry-activation-auth-v1 = { path = "../dclutch-registry-activation-auth-v1" }
 dclutch-registry-contract = { path = "../dclutch-registry-contract" }
 dclutch-request-profile-contract = { path = "../dclutch-request-profile-contract" }
 dclutch-registry-svm = { path = "../dclutch-registry-svm" }

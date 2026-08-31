@@ -12,23 +12,25 @@ use std::{
     process::ExitCode,
 };
 
+use dclutch_capability_seal_contract::CAPABILITY_SEAL_BYTES_V1;
 use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProtocolInfrastructureProfileV1};
 use dclutch_release_tool::{
     BuildMetadataV1, CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1,
     CHECKED_TRANSLATION_VALIDATION_LABELS_V1, CheckedCapabilityExecutionV1,
     CheckedExecutionReleaseSetV1, CheckedInfrastructureV1, CheckedReleaseV1,
-    CheckedTranslationValidationV1, LoaderV3AuthorityStateV1, ReleaseEvidenceV1,
+    CheckedTranslationValidationV1, LoaderV3AuthorityStateV1, ReleaseEvidenceV1, SealAccountDumpV1,
     TranslationValidationEvidenceV1, build_checked_capability_execution_from_bytes_v1,
     build_checked_execution_release_set, build_checked_infrastructure_v1, build_checked_release,
     build_checked_translation_validation, derive_execution_release_set,
     derive_protocol_infrastructure_profile_v1, loader_v3_program_account_data_v1,
-    loader_v3_programdata_account_data_v1, loader_v3_programdata_address_v1,
+    loader_v3_programdata_account_data_v1, loader_v3_programdata_address_v1, probe_defunct_seal_v1,
     verify_checked_capability_execution_v1, verify_checked_execution_release_set,
     verify_checked_infrastructure_v1, verify_checked_release,
     verify_checked_translation_validation,
 };
+use solana_program::pubkey::Pubkey;
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
 
 fn main() -> ExitCode {
     match run() {
@@ -71,6 +73,7 @@ fn run() -> Result<(), String> {
         "create-translation" => create_translation(&mut flags),
         "verify-translation" => verify_translation(&mut flags),
         "inspect-translation" => inspect_translation(&mut flags),
+        "seal-probe" => seal_probe(&mut flags),
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -354,6 +357,133 @@ fn derive_infrastructure_profile(flags: &mut BTreeMap<String, PathBuf>) -> Resul
         .map_err(|error| format!("failed writing {}: {error}", output.display()))
 }
 
+/// Probe one dumped account against the ZeroBump seal-close arm, offline.
+///
+/// The cohort-9 plan review gates that arm on this check: the one stranded seal
+/// must be shown, before the cut is built, to be exactly the shape the arm
+/// reads. Everything the probe decides is decided by the real seal contract and
+/// by `create_program_address`, so a PASS here is a statement about the code the
+/// chain will run rather than about this tool's reading of it.
+///
+/// It opens no socket. Fetch the account once with
+/// `solana account <ADDRESS> --output json --output-file <PATH>` and hand the
+/// file over; `--address` is only needed for a dump that carries no `pubkey`,
+/// and `--program-id` only to check the dump against a Program named
+/// independently of what the dump itself claims owns it.
+///
+/// The projection ends in `verdict=PASS` or `verdict=DOA`, and a DOA also exits
+/// non-zero with the failing conjunct named, so a gate script can use either.
+fn seal_probe(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
+    let account_path = required(flags, "--account")?;
+    let live_release = required_identity32(flags, "--live-release")?;
+    let address = optional_identity32(flags, "--address")?;
+    let named_program = optional_identity32(flags, "--program-id")?;
+    let text_output = flags.remove("--text-out");
+    require_no_flags(flags)?;
+
+    let json = fs::read_to_string(&account_path)
+        .map_err(|error| format!("failed reading {}: {error}", account_path.display()))?;
+    let account = SealAccountDumpV1::parse(&json, address)?;
+    // A seal is derived under the Program that owns it, so the dump's owner is
+    // the derivation's program unless the caller names one to check against.
+    let program = named_program.unwrap_or_else(|| account.owner());
+    let verdict = probe_defunct_seal_v1(&account, program, live_release);
+
+    let mut text = String::new();
+    push_line(&mut text, "format", "dclutch-zerobump-seal-probe-v1");
+    push_line(&mut text, "account", &base58(account.address()));
+    push_line(&mut text, "owner", &base58(account.owner()));
+    push_line(&mut text, "program_id", &base58(program));
+    push_line(
+        &mut text,
+        "owner_is_program",
+        yes_no(verdict.owner_is_program),
+    );
+    push_line(&mut text, "lamports", &account.lamports().to_string());
+    push_line(&mut text, "data_bytes", &account.data().len().to_string());
+    push_line(
+        &mut text,
+        "seal_bytes",
+        &CAPABILITY_SEAL_BYTES_V1.to_string(),
+    );
+    push_line(&mut text, "rent_exempt", yes_no(verdict.rent_exempt));
+    push_line(
+        &mut text,
+        "decode",
+        &conjunct(verdict.canonical.map(|_| ())),
+    );
+    push_line(
+        &mut text,
+        "persisted_bump",
+        &verdict
+            .canonical
+            .map_or_else(|_| "unwritten".to_owned(), |bump| bump.to_string()),
+    );
+    push_line(&mut text, "decode_defunct", &conjunct(verdict.defunct));
+    if let Some(key) = verdict.key {
+        push_line(
+            &mut text,
+            "descriptor_schema",
+            &hex(&key.descriptor_schema()),
+        );
+        push_line(
+            &mut text,
+            "descriptor_digest",
+            &hex(&key.descriptor_digest()),
+        );
+        push_line(&mut text, "action", &key.action().to_string());
+        push_line(
+            &mut text,
+            "sealed_trading_release",
+            &hex(&key.trading_semantic_release()),
+        );
+        push_line(&mut text, "registry_program", &hex(&key.registry_program()));
+    }
+    push_line(&mut text, "live_trading_release", &hex(&live_release));
+    push_line(
+        &mut text,
+        "release_is_live",
+        verdict.release_is_live.map_or("unknown", yes_no),
+    );
+    push_line(
+        &mut text,
+        "bump_candidate",
+        &verdict
+            .bump_candidate
+            .map_or_else(|| "none".to_owned(), |bump| bump.to_string()),
+    );
+    push_line(
+        &mut text,
+        "verdict",
+        if verdict.closable() { "PASS" } else { "DOA" },
+    );
+    let refusal = verdict.refusal();
+    if let Some(reason) = refusal.as_deref() {
+        push_line(&mut text, "reason", reason);
+    }
+    write_text(text, text_output)?;
+    match refusal {
+        None => Ok(()),
+        Some(reason) => Err(format!("this seal is not closable at the cut: {reason}")),
+    }
+}
+
+fn base58(identity: [u8; 32]) -> String {
+    Pubkey::new_from_array(identity).to_string()
+}
+
+const fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+/// Render one seal-contract conjunct, naming its refusal when it refused.
+fn conjunct(result: Result<(), dclutch_capability_seal_contract::Error>) -> String {
+    match result {
+        Ok(()) => "ok".to_owned(),
+        Err(error) => format!("refused:{error:?}"),
+    }
+}
+
 fn write_text(text: String, output: Option<PathBuf>) -> Result<(), String> {
     if let Some(path) = output {
         fs::write(&path, text)
@@ -410,6 +540,43 @@ fn required_u64(flags: &mut BTreeMap<String, PathBuf>, name: &str) -> Result<u64
         .to_string_lossy()
         .parse::<u64>()
         .map_err(|error| format!("{name} must be a decimal u64: {error}"))
+}
+
+fn required_identity32(
+    flags: &mut BTreeMap<String, PathBuf>,
+    name: &str,
+) -> Result<[u8; 32], String> {
+    let value = required(flags, name)?;
+    decode_identity32(&value.to_string_lossy(), name)
+}
+
+fn optional_identity32(
+    flags: &mut BTreeMap<String, PathBuf>,
+    name: &str,
+) -> Result<Option<[u8; 32]>, String> {
+    flags
+        .remove(name)
+        .map(|value| decode_identity32(&value.to_string_lossy(), name))
+        .transpose()
+}
+
+/// Read one 32-byte identity in either form an operator has it to hand.
+///
+/// Manifests here print hex and a cluster prints base58, and the probe below is
+/// fed from both at once — an account address off an explorer beside a semantic
+/// release out of a manifest. The two encodings cannot be confused: a base58
+/// 32-byte identity is 32 to 44 characters, so 64 hexadecimal digits is
+/// unambiguous.
+fn decode_identity32(value: &str, name: &str) -> Result<[u8; 32], String> {
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return decode_hex32(&value.to_ascii_lowercase(), name);
+    }
+    value
+        .parse::<Pubkey>()
+        .map(|identity| identity.to_bytes())
+        .map_err(|_| {
+            format!("{name} must be 64 hexadecimal digits or a base58 32-byte identity: `{value}`")
+        })
 }
 
 fn decode_hex32(value: &str, name: &str) -> Result<[u8; 32], String> {

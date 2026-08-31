@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **263** codes, with meanings taken
+The tables below carry all **276** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -69,6 +69,7 @@ from the source code's own documentation.
 | `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-claims-sbf/src/lib.rs:195` |
 | `0x500B` | `ClaimsSbfError::SelectionConfig` | The execution terms disagree with the Market-selected config. | `programs/dclutch-claims-sbf/src/lib.rs:206` |
 | `0x500C` | `ClaimsSbfError::BasisEvaluatorAbsent` | The Market's basis names the degree-2-to-3 spline family, for which this deployment carries no evaluator. | `programs/dclutch-claims-sbf/src/lib.rs:220` |
+| `0x500D` | `ClaimsSbfError::PrincipalCapacity` | Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/lib.rs:230` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::Instruction` | Instruction bytes were not the sole canonical V2 action. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:53` |
 | `0x5101` | `LiabilityBasisSbfErrorV2::Accounts` | Account count, order, privilege, owner, or alias checks refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:55` |
 | `0x5102` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:57` |
@@ -99,6 +100,7 @@ from the source code's own documentation.
 | `0x5165` | `AffineBatchSbfErrorV2::Candidate` | An exact delta overflowed, underflowed, or selected an invalid coordinate. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:111` |
 | `0x5166` | `AffineBatchSbfErrorV2::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:113` |
 | `0x5167` | `AffineBatchSbfErrorV2::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:115` |
+| `0x5168` | `AffineBatchSbfErrorV2::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:123` |
 | `0x5180` | `ClaimsFoundingSbfErrorV5::Instruction` | Instruction bytes did not decode as the sole FoundingV5 ABI. | `programs/dclutch-claims-sbf/src/founding_v5.rs:109` |
 | `0x5181` | `ClaimsFoundingSbfErrorV5::Accounts` | Account count, privileges, executable flags, or aliases refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:111` |
 | `0x5182` | `ClaimsFoundingSbfErrorV5::Release` | Core caller authority or current release selection refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:113` |
@@ -109,6 +111,7 @@ from the source code's own documentation.
 | `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:123` |
 | `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:125` |
 | `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:127` |
+| `0x518A` | `ClaimsFoundingSbfErrorV5::PrincipalCapacity` | The founding principal exceeded the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/founding_v5.rs:137` |
 | `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:125` |
 | `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:127` |
 | `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:129` |
@@ -117,6 +120,7 @@ from the source code's own documentation.
 | `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:135` |
 | `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:137` |
 | `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:139` |
+| `0x5208` | `SignedDeltaSbfErrorV3::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:147` |
 | `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:127` |
 | `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:129` |
 | `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:131` |
@@ -157,26 +161,26 @@ from the source code's own documentation.
 | `0x5623` | `ClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit did not equal the record's entitlement. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:54` |
 | `0x5624` | `ClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:56` |
 | `0x5625` | `ClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while claim-checks were still live. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:58` |
-| `0x5640` | `FractionalClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:44` |
-| `0x5641` | `FractionalClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present, or a required one absent. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:50` |
-| `0x5642` | `FractionalClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:52` |
-| `0x5643` | `FractionalClaimCheckCompactionSbfErrorV1::Deadline` | The compaction deadline had not elapsed at the observed slot. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:54` |
-| `0x5644` | `FractionalClaimCheckCompactionSbfErrorV1::Phase` | The Core phase, or the absence of a terminal receipt, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:56` |
-| `0x5645` | `FractionalClaimCheckCompactionSbfErrorV1::AlreadyCompacted` | The fractional claim-check address was already occupied. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:58` |
-| `0x5646` | `FractionalClaimCheckCompactionSbfErrorV1::Conservation` | A plan's atoms, shards or lamports did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:60` |
-| `0x5647` | `FractionalClaimCheckCompactionSbfErrorV1::Economic` | The terminal payout derivation refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:62` |
-| `0x5648` | `FractionalClaimCheckCompactionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:64` |
-| `0x5649` | `FractionalClaimCheckCompactionSbfErrorV1::Escrow` | The escrow was absent, or its mint or token program did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:66` |
-| `0x564A` | `FractionalClaimCheckCompactionSbfErrorV1::Scope` | A position kind this route does not fractionally compact. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:68` |
-| `0x564B` | `FractionalClaimCheckCompactionSbfErrorV1::Terms` | The finalized exposure terms, or the coordinate they declare, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:70` |
-| `0x564C` | `FractionalClaimCheckCompactionSbfErrorV1::ShardMint` | The shard Mint's profile, supply, or burn-authority hand-off refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:72` |
-| `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:198` |
-| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:203` |
-| `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:205` |
-| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:207` |
-| `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:209` |
-| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:216` |
-| `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:218` |
+| `0x5640` | `FractionalClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:91` |
+| `0x5641` | `FractionalClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present, or a required one absent. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:97` |
+| `0x5642` | `FractionalClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:99` |
+| `0x5643` | `FractionalClaimCheckCompactionSbfErrorV1::Deadline` | The compaction deadline had not elapsed at the observed slot. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:101` |
+| `0x5644` | `FractionalClaimCheckCompactionSbfErrorV1::Phase` | The Core phase, or the absence of a terminal receipt, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:103` |
+| `0x5645` | `FractionalClaimCheckCompactionSbfErrorV1::AlreadyCompacted` | The fractional claim-check address was already occupied. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:105` |
+| `0x5646` | `FractionalClaimCheckCompactionSbfErrorV1::Conservation` | A plan's atoms, shards or lamports did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:107` |
+| `0x5647` | `FractionalClaimCheckCompactionSbfErrorV1::Economic` | The terminal payout derivation refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:109` |
+| `0x5648` | `FractionalClaimCheckCompactionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:111` |
+| `0x5649` | `FractionalClaimCheckCompactionSbfErrorV1::Escrow` | The escrow was absent, or its mint or token program did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:113` |
+| `0x564A` | `FractionalClaimCheckCompactionSbfErrorV1::Scope` | A position kind this route does not fractionally compact. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:115` |
+| `0x564B` | `FractionalClaimCheckCompactionSbfErrorV1::Terms` | The finalized exposure terms, or the coordinate they declare, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:117` |
+| `0x564C` | `FractionalClaimCheckCompactionSbfErrorV1::ShardMint` | The shard Mint's profile, supply, or burn-authority hand-off refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:119` |
+| `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:245` |
+| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:250` |
+| `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:252` |
+| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:254` |
+| `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:256` |
+| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:263` |
+| `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:265` |
 
 ## core
 
@@ -200,6 +204,11 @@ from the source code's own documentation.
 | `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | `programs/dclutch-core-sbf/src/lib.rs:126` |
 | `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:134` |
 | `0x3011` | `CoreSbfError::RecoveryWalkUnavailable` | A Source material bought a recovery walk that no live route can walk. | `programs/dclutch-core-sbf/src/lib.rs:153` |
+| `0x3012` | `CoreSbfError::PriceGateRequired` | A basis declaring degree >= 2 was founded with no `DCLTPGT1` price-gate certificate account offered. | `programs/dclutch-core-sbf/src/lib.rs:161` |
+| `0x3013` | `CoreSbfError::PriceGateBasisMismatch` | The certificate account offered was not the one the authenticated basis record names. | `programs/dclutch-core-sbf/src/lib.rs:169` |
+| `0x3014` | `CoreSbfError::PriceGateHullRefused` | **The hull identity failed.** `price * mass != sum(weight * payout)` at some claim, with every payout recomputed through the production evaluator rather than read from the certificate. This is the refusal a forged certificate earns. | `programs/dclutch-core-sbf/src/lib.rs:174` |
+| `0x3015` | `CoreSbfError::PriceGateCapacity` | The certificate carried no hull atoms, or more than the affine-Caratheodory capacity of ten permits. | `programs/dclutch-core-sbf/src/lib.rs:177` |
+| `0x3016` | `CoreSbfError::PriceGateNonCanonical` | The certificate's body was non-canonical: padding past a declared width, coordinates not strictly increasing, a zero atom weight, a non-primitive weight scale, or prices not partitioning the scale. | `programs/dclutch-core-sbf/src/lib.rs:181` |
 
 ## custody
 
@@ -359,21 +368,25 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:177` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:179` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:181` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:183` |
-| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:185` |
-| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:187` |
-| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:189` |
-| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:197` |
-| `0x4008` | `TradingSbfError::HeapFrame` | This route needs the extended heap and the transaction did not grant it. | `programs/dclutch-trading-sbf/src/lib.rs:210` |
-| `0x4009` | `TradingSbfError::CloseSealAccount` | The account offered to `CloseSeal` is not a live canonical seal. | `programs/dclutch-trading-sbf/src/lib.rs:220` |
-| `0x400A` | `TradingSbfError::CloseSealLiveRelease` | `CloseSeal` was aimed at a seal the live Trading release still addresses. | `programs/dclutch-trading-sbf/src/lib.rs:236` |
-| `0x400B` | `TradingSbfError::CloseSealFrame` | The `CloseSeal` frame was not the exact permissionless closing shape. | `programs/dclutch-trading-sbf/src/lib.rs:245` |
-| `0x400C` | `TradingSbfError::FeeNotOwed` | The maker replay this fee settlement names records no obligation. | `programs/dclutch-trading-sbf/src/lib.rs:254` |
-| `0x400D` | `TradingSbfError::FeeDestination` | The fee destination is not a token account of the configured recipient. | `programs/dclutch-trading-sbf/src/lib.rs:262` |
-| `0x400E` | `TradingSbfError::FeeSource` | The fee source is not a token account of the debtor. | `programs/dclutch-trading-sbf/src/lib.rs:271` |
+| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:180` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:182` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:184` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:186` |
+| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:188` |
+| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:190` |
+| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:192` |
+| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:200` |
+| `0x4008` | `TradingSbfError::HeapFrame` | This route needs the extended heap and the transaction did not grant it. | `programs/dclutch-trading-sbf/src/lib.rs:213` |
+| `0x4009` | `TradingSbfError::CloseSealAccount` | The account offered to `CloseSeal` is not a live canonical seal. | `programs/dclutch-trading-sbf/src/lib.rs:223` |
+| `0x400A` | `TradingSbfError::CloseSealLiveRelease` | `CloseSeal` was aimed at a seal the live Trading release still addresses. | `programs/dclutch-trading-sbf/src/lib.rs:239` |
+| `0x400B` | `TradingSbfError::CloseSealFrame` | The `CloseSeal` frame was not the exact permissionless closing shape. | `programs/dclutch-trading-sbf/src/lib.rs:248` |
+| `0x400C` | `TradingSbfError::FeeNotOwed` | The maker replay this fee settlement names records no obligation. | `programs/dclutch-trading-sbf/src/lib.rs:257` |
+| `0x400D` | `TradingSbfError::FeeDestination` | The fee destination is not a token account of the configured recipient. | `programs/dclutch-trading-sbf/src/lib.rs:265` |
+| `0x400E` | `TradingSbfError::FeeSource` | The fee source is not a token account of the debtor. | `programs/dclutch-trading-sbf/src/lib.rs:274` |
+| `0x400F` | `TradingSbfError::CloseMakerFrame` | The `CloseMakerReplay` frame was not the exact permissionless shape. | `programs/dclutch-trading-sbf/src/lib.rs:283` |
+| `0x4010` | `TradingSbfError::CloseMakerReplayAccount` | The account offered as the maker replay is not the canonical one. | `programs/dclutch-trading-sbf/src/lib.rs:292` |
+| `0x4011` | `TradingSbfError::CloseMakerFeeOutstanding` | The maker replay still owes its recorded Direct fee. | `programs/dclutch-trading-sbf/src/lib.rs:300` |
+| `0x4012` | `TradingSbfError::CloseMakerLiveIntents` | The maker replay still has registered live intents. | `programs/dclutch-trading-sbf/src/lib.rs:306` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |

@@ -54,6 +54,31 @@ fn account(
     )
 }
 
+/// The System Program account as a runtime presents it, and nowhere else.
+///
+/// Every fixture that stands this account up goes through here, because a
+/// fixture that gets it wrong is invisible: the whole point of the account is
+/// that a caller cannot substitute anything for it, so a test can only ever
+/// compare the program against whatever fiction the fixture supplies.
+///
+/// The two coordinates that are easy to get wrong and were: it is EXECUTABLE --
+/// a native program account is a program -- and it carries its own name as
+/// data rather than being empty. A consent slot built without the executable
+/// bit let the lineage route's conjuncts 1 and 6 both pass here while being
+/// mutually unsatisfiable on any real runtime, and a `DATALESS` clause once
+/// admitted only synthesized accounts and refused every real one.
+fn system_program_account() -> AccountInfo<'static> {
+    account(
+        system_program::ID,
+        false,
+        false,
+        1,
+        Vec::from(&b"system_program"[..]),
+        native_loader::ID,
+        true,
+    )
+}
+
 fn loader_program_bytes(programdata: Pubkey) -> Vec<u8> {
     let mut output = vec![0_u8; 36];
     output
@@ -278,15 +303,7 @@ impl Fixture {
     }
 
     fn runtime_plumbing(&self) -> (AccountInfo<'static>, AccountInfo<'static>) {
-        let system = account(
-            system_program::ID,
-            false,
-            false,
-            1,
-            Vec::new(),
-            native_loader::ID,
-            true,
-        );
+        let system = system_program_account();
         let mut rent = account(
             sysvar::rent::ID,
             false,
@@ -1191,15 +1208,13 @@ impl LineageFixture {
                 false,
             )
         } else {
-            account(
-                system_program::ID,
-                false,
-                false,
-                1,
-                Vec::new(),
-                native_loader::ID,
-                false,
-            )
+            // Conjunct 6 requires exactly this account here, and it is the SAME
+            // account the frame's System slot holds -- so it is built the same
+            // way. Building it without the executable bit is what let this suite
+            // pass every unmoved-role assertion against a frame no runtime can
+            // present, and hid a route that refused `AccountFrame` on chain for
+            // every hop with an unmoved role.
+            system_program_account()
         }
     }
 
@@ -1231,15 +1246,7 @@ impl LineageFixture {
     }
 
     fn runtime_plumbing(&self) -> (AccountInfo<'static>, AccountInfo<'static>) {
-        let system = account(
-            system_program::ID,
-            false,
-            false,
-            1,
-            Vec::new(),
-            native_loader::ID,
-            true,
-        );
+        let system = system_program_account();
         let mut rent = account(
             sysvar::rent::ID,
             false,
@@ -1656,6 +1663,98 @@ fn the_declaration_frame_is_exactly_eleven_accounts_with_tabled_privileges() {
     assert_eq!(
         refusal(declare(&wrong_address, &fixture.registry)),
         Some(RegistryError::AccountFrame as u32)
+    );
+}
+
+#[test]
+fn a_consent_slot_admits_the_system_program_and_refuses_every_other_program() {
+    // Conjunct 1's executable refusal keeps a program out of a consent slot: a
+    // program holds no private key, so one standing here could only ever look
+    // like a consent nothing was able to give. It has exactly one exception, the
+    // account conjunct 6 itself REQUIRES for a role that did not move -- and
+    // every runtime presents that account as executable.
+    //
+    // Both directions are checked, because an exemption exercised only in its
+    // admitting direction is a hole nobody sees. The refusing direction is the
+    // whole guarantee the exemption must not cost.
+    let fixture = LineageFixture::new();
+    let moved = [true, false, true, false, false];
+    let unmoved_slot = crate::lineage_v1::authority_account_index(ExecutionRoleV1::Claims);
+    let moved_slot = crate::lineage_v1::authority_account_index(ExecutionRoleV1::Core);
+
+    // Admitting. Three of these five slots hold the real System Program account,
+    // executable bit and all, and the frame is admitted.
+    let canonical = fixture.accounts(moved);
+    for role in [
+        ExecutionRoleV1::Claims,
+        ExecutionRoleV1::Resolution,
+        ExecutionRoleV1::Custody,
+    ] {
+        let slot = canonical
+            .get(crate::lineage_v1::authority_account_index(role))
+            .expect("consent slot");
+        assert_eq!(slot.key, &system_program::ID);
+        assert!(
+            slot.executable,
+            "{role:?}'s unmoved slot holds the account a runtime presents, which is executable"
+        );
+    }
+    assert_eq!(
+        crate::lineage_v1::validate_declaration_frame_for_test(&canonical),
+        Ok(()),
+        "an unmoved role's slot is the one executable account this frame admits"
+    );
+
+    // Refusing. Any OTHER program in the same slot is refused, by name, before
+    // anything is decoded -- including one owned by the loader that owns the
+    // System Program, so the exemption is the KEY and not the pedigree.
+    for (label, key, owner) in [
+        ("a native program", Pubkey::new_from_array(bytes(0xc0)), native_loader::ID),
+        ("a deployed program", Pubkey::new_from_array(bytes(0xc1)), bpf_loader_upgradeable::ID),
+    ] {
+        for slot in [unmoved_slot, moved_slot] {
+            let mut smuggled = fixture.accounts(moved);
+            *smuggled.get_mut(slot).expect("consent slot") =
+                account(key, false, false, 1, Vec::from(&b"a program"[..]), owner, true);
+            assert_eq!(
+                crate::lineage_v1::validate_declaration_frame_for_test(&smuggled),
+                Err(RegistryError::AccountFrame.into()),
+                "{label} in a consent slot is still refused at the frame"
+            );
+            assert_eq!(
+                refusal(declare(&smuggled, &fixture.registry)),
+                Some(RegistryError::AccountFrame as u32),
+                "{label} refuses through the whole route too"
+            );
+        }
+    }
+
+    // The exemption is the executable bit and nothing else: a WRITABLE consent
+    // slot is refused whatever stands in it.
+    let mut writable = fixture.accounts(moved);
+    *writable.get_mut(unmoved_slot).expect("consent slot") = account(
+        system_program::ID,
+        false,
+        true,
+        1,
+        Vec::from(&b"system_program"[..]),
+        native_loader::ID,
+        true,
+    );
+    assert_eq!(
+        refusal(declare(&writable, &fixture.registry)),
+        Some(RegistryError::AccountFrame as u32)
+    );
+
+    // And conjunct 1 conceded no decision by admitting the account: a MOVED
+    // role's slot carrying it is refused by conjunct 6, which needs a signature
+    // the System Program cannot produce. A role cannot be faked as unmoved.
+    let mut faked = fixture.accounts(moved);
+    *faked.get_mut(moved_slot).expect("consent slot") = system_program_account();
+    assert_eq!(
+        refusal(declare(&faked, &fixture.registry)),
+        Some(RegistryError::ReleaseLineageAuthorityMissing as u32),
+        "the System Program in a moved role's slot is not that role's consent"
     );
 }
 

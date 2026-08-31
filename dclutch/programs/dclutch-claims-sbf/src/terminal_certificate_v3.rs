@@ -89,32 +89,35 @@ pub(crate) fn authenticate_terminal_certificate_scenario_v3(
             ResolutionCertificateKindV2::ResolutionSuccess
             | ResolutionCertificateKindV2::ResolutionFailure,
         ) => Ok(TerminalScenarioV3::Categorical(core.terminal_winner)),
-        (BasisKindV3::GradedExactComplement, ResolutionCertificateKindV2::ResolutionSuccess) => {
-            Ok(TerminalScenarioV3::Rational {
-                numerator: certificate.result_numerator,
-                denominator: certificate.result_denominator,
-            })
-        }
-        (BasisKindV3::GradedExactComplement, ResolutionCertificateKindV2::ResolutionFailure) => {
-            Ok(TerminalScenarioV3::Failure)
-        }
+        // **The spline family settles exactly as the graded family does**, and
+        // that is a result rather than a convenience. `TerminalScenarioV3` has
+        // three variants -- categorical selection, a rational coordinate, and
+        // failure -- and the design flagged that a curved basis might need a
+        // fourth, which would have cascaded into the settlement evaluator's
+        // wildcard and the wallet driver.
+        //
+        // It does not. A spline consumes the same rational coordinate the
+        // graded family does and returns the same width-sized partition, and it
+        // carries an explicit failure payout vector in the same tail slot. So
+        // the two families share these arms outright, which is the strongest
+        // available statement that no new terminal shape was invented: the
+        // pairs are widened, not added to.
         (
-            BasisKindV3::CategoricalQ1 | BasisKindV3::GradedExactComplement,
+            BasisKindV3::GradedExactComplement | BasisKindV3::SplineDegree2To3 { .. },
+            ResolutionCertificateKindV2::ResolutionSuccess,
+        ) => Ok(TerminalScenarioV3::Rational {
+            numerator: certificate.result_numerator,
+            denominator: certificate.result_denominator,
+        }),
+        (
+            BasisKindV3::GradedExactComplement | BasisKindV3::SplineDegree2To3 { .. },
+            ResolutionCertificateKindV2::ResolutionFailure,
+        ) => Ok(TerminalScenarioV3::Failure),
+        (
+            BasisKindV3::CategoricalQ1
+            | BasisKindV3::GradedExactComplement
+            | BasisKindV3::SplineDegree2To3 { .. },
             ResolutionCertificateKindV2::RecoveryAdvanced | ResolutionCertificateKindV2::Exhausted,
         ) => Err(ClaimsSbfError::Identity.into()),
-        // All four certificate kinds, one refusal. A spline basis has no
-        // `TerminalScenarioV3` -- the enum's three variants are categorical
-        // selection, a rational coordinate and failure, and which of them a
-        // curved payoff settles through is the evaluator's question, not this
-        // match's. Answering it with `Rational` because the shape rhymes would
-        // settle a market against a curve nothing computed.
-        //
-        // Its off-chain twin in
-        // `crates/dclutch-rational-representation-v2-operator/src/lib.rs`
-        // refuses the same four pairs; `terminal_pairs_agree_off_chain` in
-        // that crate's tests is what keeps the two from drifting.
-        (BasisKindV3::SplineDegree2To3 { .. }, _) => {
-            Err(ClaimsSbfError::BasisEvaluatorAbsent.into())
-        }
     }
 }

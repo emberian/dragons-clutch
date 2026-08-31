@@ -632,13 +632,32 @@ export function admitDirectParticipantCrossingV1(
   }
   if (plan.takerSide === 'buy') {
     const required = plan.preview.buyerCollateralDebit;
-    if (participant.spendableCollateralAtoms < required) {
-      throw new Error(`this buy needs ${required} delegated collateral atoms; your current finalized allowance is ${participant.spendableCollateralAtoms}`);
+    // The chain states these as two separate conditions, so this states them
+    // as two. `validate_collateral` in `dclutch-direct-codec`'s
+    // `inline_candidate_v2.rs` requires `buyer_source.balance >= debit` and
+    // `buyer_source.delegated_amount == debit` -- an equality, not a ceiling.
+    // The delegation is a single-use authorization sized to one crossing, so a
+    // standing allowance larger than the debit is refused exactly as loudly as
+    // one that is too small. Reading them through a `min(balance, delegated)`
+    // spendable ceiling admits every over-delegation and hands the reader a
+    // packet the chain will not take.
+    if (participant.collateralAtoms < required) {
+      throw new Error(`this buy debits ${required} collateral atoms; your finalized token balance is ${participant.collateralAtoms}`);
+    }
+    if (participant.delegatedCollateralAtoms !== required) {
+      const direction = participant.delegatedCollateralAtoms > required ? 'more than' : 'less than';
+      throw new Error(
+        `this buy needs a delegation of exactly ${required} collateral atoms to the Market's Custody authority `
+        + `${participant.coordinates.custodyAuthority}; your finalized delegation is `
+        + `${participant.delegatedCollateralAtoms}, which is ${direction} the debit. The Direct route spends a `
+        + `single-use authorization and refuses any other amount in either direction, so approve exactly `
+        + `${required} atoms — a fresh approve replaces the standing delegation.`,
+      );
     }
     return Object.freeze({
       resource: 'collateral allowance', requiredAtoms: required,
-      availableAtoms: participant.spendableCollateralAtoms,
-      note: `Your current finalized collateral allowance covers ${required} atoms for this buy.`,
+      availableAtoms: participant.delegatedCollateralAtoms,
+      note: `Your finalized collateral delegation is exactly ${required} atoms, the amount this buy debits.`,
     });
   }
   const available = participant.positionBalances[plan.taker.outcome];

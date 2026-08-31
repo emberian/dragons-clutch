@@ -436,7 +436,11 @@ fn authenticate_resolved_founding_message_v1(
             operation.label(),
             operation.exact_unique_accounts(recovery_policy),
             resolved.len(),
-            if recovery_policy { "carries" } else { "does not carry" },
+            if recovery_policy {
+                "carries"
+            } else {
+                "does not carry"
+            },
         )));
     }
     Ok(())
@@ -1707,6 +1711,9 @@ pub(crate) fn compile_linked_basis_v3(
             knots: &[],
             terms: &[],
             failure_payouts: &[],
+            // Exempt by proof: degree 0 and 1 need no price gate,
+            // and a digest offered alongside one is refused.
+            price_gate_certificate_digest: [0_u8; 32],
         },
         &mut bytes,
     )
@@ -3357,7 +3364,9 @@ fn publish_market_records(
             }
         }
     } else {
-        for record in crate::direct_market::direct_publication_records_v1(input, native_composition)? {
+        for record in
+            crate::direct_market::direct_publication_records_v1(input, native_composition)?
+        {
             let published = publish_record(
                 rpc,
                 registry,
@@ -4557,11 +4566,17 @@ fn authenticate_cleanup_compiled_census_v1(
 ) -> Result<()> {
     let admitted = projected_bootstrap_compiled_geometry_v2(
         payer,
-        &append_distinct_census_accounts_v1(instruction, CONTROLLER_FUNDING_CLEANUP_CENSUS_PADDING_V1),
+        &append_distinct_census_accounts_v1(
+            instruction,
+            CONTROLLER_FUNDING_CLEANUP_CENSUS_PADDING_V1,
+        ),
     )?;
     let refused = projected_bootstrap_compiled_geometry_v2(
         payer,
-        &append_distinct_census_accounts_v1(instruction, CONTROLLER_FUNDING_CLEANUP_CENSUS_PADDING_V1 + 1),
+        &append_distinct_census_accounts_v1(
+            instruction,
+            CONTROLLER_FUNDING_CLEANUP_CENSUS_PADDING_V1 + 1,
+        ),
     )?;
     if base.complete_keys != CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1
         || admitted.complete_keys != DEVNET_ACCOUNT_LOCK_LIMIT_V1
@@ -4659,9 +4674,8 @@ fn selected_founding_controller_masks_v1(
             )));
         }
     }
-    let selected_index = selected_index.ok_or_else(|| {
-        Error::new("the founding manifest omitted its selected capability entry")
-    })?;
+    let selected_index = selected_index
+        .ok_or_else(|| Error::new("the founding manifest omitted its selected capability entry"))?;
     let trading_mask = 1_u16
         .checked_shl(u32::from(selected_index))
         .ok_or_else(|| Error::new("selected capability entry mask overflow"))?;
@@ -7336,22 +7350,23 @@ fn execute_source_abort_v1(
     )?;
 
     let rollback_recipient = crate::seed::fresh_probe_address();
-    let refused = rpc.send_v0_expected_failure_with_signers(
-        "DCLTPCA1 refuses to abort a funded source before expiry",
-        &[
-            transfer(&payer.pubkey(), &rollback_recipient, 1),
-            abort.clone(),
-        ],
-        payer,
-        &[beneficiary],
-        routing,
-        &tables,
-    )?
-    // CustodySbfError::Expiry. The kernel distinguishes "too early" from every
-    // other reason an abort can be refused, and this probe is about the clock
-    // alone -- a selection or frame refusal here would mean the abort never
-    // reached the expiry gate and the wait below proves nothing.
-    .refusing(0x600B)?;
+    let refused = rpc
+        .send_v0_expected_failure_with_signers(
+            "DCLTPCA1 refuses to abort a funded source before expiry",
+            &[
+                transfer(&payer.pubkey(), &rollback_recipient, 1),
+                abort.clone(),
+            ],
+            payer,
+            &[beneficiary],
+            routing,
+            &tables,
+        )?
+        // CustodySbfError::Expiry. The kernel distinguishes "too early" from every
+        // other reason an abort can be refused, and this probe is about the clock
+        // alone -- a selection or frame refusal here would mean the abort never
+        // reached the expiry gate and the wait below proves nothing.
+        .refusing(0x600B)?;
     let fee_only = refused.fee_only_balance_change;
     if rpc.account(rollback_recipient)?.is_some() || fee_only != Some(true) {
         return Err(Error::new(format!(
@@ -8046,8 +8061,7 @@ const GENERIC_MARKET_OPEN_INSTRUCTION_BYTES_V1: usize = 8 + 1;
 /// Two readonly raw requests — the selected Found artifact and the Claims
 /// request — then Core's exact 21-account Open window. Small enough for
 /// inline v0 with no lookup table and no extended heap.
-const GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1: usize =
-    2 + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+const GENERIC_MARKET_OPEN_FRAME_ACCOUNTS_V1: usize = 2 + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
 
 /// The Market, the permit, and the RentCredit: Core Open's sole mutations.
 const GENERIC_MARKET_OPEN_DISTINCT_WRITABLE_V1: usize = 3;
@@ -10979,8 +10993,13 @@ fn execute_split_market_founding(
             );
         }
         Err(error) if error.to_string().contains("dropped") => {
-            eprintln!("campaign: EVIDENCE GAP, recorded: the interleaving hostile was undeliverable ({error})");
-            completed.push("EVIDENCE GAP: the stage-interleaving hostile was undeliverable on this cluster".into());
+            eprintln!(
+                "campaign: EVIDENCE GAP, recorded: the interleaving hostile was undeliverable ({error})"
+            );
+            completed.push(
+                "EVIDENCE GAP: the stage-interleaving hostile was undeliverable on this cluster"
+                    .into(),
+            );
         }
         Err(error) => return Err(error),
     }
@@ -11020,7 +11039,9 @@ fn execute_split_market_founding(
             );
         }
         Err(error) if error.to_string().contains("dropped") => {
-            eprintln!("campaign: EVIDENCE GAP, recorded: the stage-1 substituted-Claims hostile was undeliverable ({error})");
+            eprintln!(
+                "campaign: EVIDENCE GAP, recorded: the stage-1 substituted-Claims hostile was undeliverable ({error})"
+            );
             completed.push("EVIDENCE GAP: the stage-1 substituted-Claims hostile was undeliverable on this cluster".into());
         }
         Err(error) => return Err(error),
@@ -11088,8 +11109,12 @@ fn execute_split_market_founding(
             );
         }
         Err(error) if error.to_string().contains("dropped") => {
-            eprintln!("campaign: EVIDENCE GAP, recorded: the wrong-permit hostile was undeliverable ({error})");
-            completed.push("EVIDENCE GAP: the wrong-permit hostile was undeliverable on this cluster".into());
+            eprintln!(
+                "campaign: EVIDENCE GAP, recorded: the wrong-permit hostile was undeliverable ({error})"
+            );
+            completed.push(
+                "EVIDENCE GAP: the wrong-permit hostile was undeliverable on this cluster".into(),
+            );
         }
         Err(error) => return Err(error),
     }
@@ -11144,8 +11169,12 @@ fn execute_split_market_founding(
             );
         }
         Err(error) if error.to_string().contains("dropped") => {
-            eprintln!("campaign: EVIDENCE GAP, recorded: the permit-replay hostile was undeliverable ({error})");
-            completed.push("EVIDENCE GAP: the permit-replay hostile was undeliverable on this cluster".into());
+            eprintln!(
+                "campaign: EVIDENCE GAP, recorded: the permit-replay hostile was undeliverable ({error})"
+            );
+            completed.push(
+                "EVIDENCE GAP: the permit-replay hostile was undeliverable on this cluster".into(),
+            );
         }
         Err(error) => return Err(error),
     }
@@ -12776,7 +12805,8 @@ mod tests {
             entry(second_kind, [0x32; 32], 4),
         ];
         let mut bytes = vec![0_u8; MANIFEST_HEADER_BYTES + entries.len() * CAPABILITY_ENTRY_BYTES];
-        CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("five distinct kinds encode");
+        CapabilityManifestV1::encode_into(&entries, &mut bytes)
+            .expect("five distinct kinds encode");
         let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
         for selected in [first_kind, second_kind] {
             selected_founding_controller_masks_v1(manifest, resolution, selected)
@@ -12814,12 +12844,8 @@ mod tests {
         let manifest = CapabilityManifestV1::decode(&bytes).expect("manifest");
         let expected = dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V7;
         assert!(
-            selected_founding_controller_masks_v1(
-                manifest,
-                expected,
-                DIRECT_SUCCESSOR_KIND_ID_V3
-            )
-            .is_ok()
+            selected_founding_controller_masks_v1(manifest, expected, DIRECT_SUCCESSOR_KIND_ID_V3)
+                .is_ok()
         );
         assert!(
             selected_founding_controller_masks_v1(
@@ -12830,8 +12856,12 @@ mod tests {
             .is_err()
         );
         assert!(
-            selected_founding_controller_masks_v1(manifest, [0x5a; 32], DIRECT_SUCCESSOR_KIND_ID_V3)
-                .is_err()
+            selected_founding_controller_masks_v1(
+                manifest,
+                [0x5a; 32],
+                DIRECT_SUCCESSOR_KIND_ID_V3
+            )
+            .is_err()
         );
     }
 
@@ -13217,9 +13247,8 @@ mod tests {
         // Splice the 21-account Open window out of the composed frame; the
         // stage-1 assembly must reproduce the remainder meta for meta,
         // privilege for privilege — the shared windows were not perturbed.
-        let open_start = composed.instruction.accounts.len()
-            - 1
-            - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+        let open_start =
+            composed.instruction.accounts.len() - 1 - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
         let mut spliced = composed.instruction.accounts.clone();
         spliced.drain(open_start..open_start + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1);
         assert_eq!(spliced, stage1.instruction.accounts);
@@ -13230,7 +13259,10 @@ mod tests {
         );
 
         // Same program, same bumps in execution order, no Open bump.
-        assert_eq!(stage1.instruction.program_id, composed.instruction.program_id);
+        assert_eq!(
+            stage1.instruction.program_id,
+            composed.instruction.program_id
+        );
         let mut expected_data = GENERIC_FOUND_AND_PERMIT_MAGIC_V1.to_vec();
         expected_data.extend_from_slice(&[
             fixture.outer.lock_caller_bump,
@@ -13285,9 +13317,8 @@ mod tests {
         // Key order of the window is byte-identical to the composed route's
         // Open section; writability is the standalone minimum instead of the
         // composed frame's union privileges.
-        let open_start = composed.instruction.accounts.len()
-            - 1
-            - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
+        let open_start =
+            composed.instruction.accounts.len() - 1 - GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1;
         let composed_window: Vec<Pubkey> = composed.instruction.accounts
             [open_start..open_start + GENERIC_FOUNDING_OPEN_WINDOW_ACCOUNTS_V1]
             .iter()
@@ -13300,7 +13331,11 @@ mod tests {
         assert_eq!(composed_window, stage2_window);
         for (index, meta) in stage2.instruction.accounts[2..].iter().enumerate() {
             // Window positions 1, 2, 3: the Market, the permit, the RentCredit.
-            assert_eq!(meta.is_writable, matches!(index, 1 | 2 | 3), "window index {index}");
+            assert_eq!(
+                meta.is_writable,
+                matches!(index, 1 | 2 | 3),
+                "window index {index}"
+            );
         }
 
         let mut expected_data = GENERIC_MARKET_OPEN_MAGIC_V1.to_vec();
@@ -13366,7 +13401,10 @@ mod tests {
             composed_census.complete_keys - stage1_census.complete_keys,
             1
         );
-        assert_eq!(composed_census.loaded_writable, stage1_census.loaded_writable);
+        assert_eq!(
+            composed_census.loaded_writable,
+            stage1_census.loaded_writable
+        );
         assert_eq!(
             composed_census.loaded_readonly - stage1_census.loaded_readonly,
             1
@@ -13651,7 +13689,10 @@ mod tests {
                 std::slice::from_ref(&table),
             )
             .expect("routed geometry");
-            assert_eq!(geometry.complete_keys, operation.exact_unique_accounts(true));
+            assert_eq!(
+                geometry.complete_keys,
+                operation.exact_unique_accounts(true)
+            );
             assert_eq!(geometry.required_signatures, 1);
             assert_eq!(geometry.message_bytes, expected_message_bytes);
             assert_eq!(geometry.packet_bytes, expected_packet_bytes);
@@ -13846,7 +13887,10 @@ mod tests {
                 .expect("cleanup base census");
             authenticate_cleanup_compiled_census_v1(payer, &instruction, base)
                 .expect("cleanup boundary census");
-            assert_eq!(base.complete_keys, CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1);
+            assert_eq!(
+                base.complete_keys,
+                CONTROLLER_FUNDING_CLEANUP_COMPLETE_KEYS_V1
+            );
             assert_eq!(base.required_signatures, 1);
             assert_eq!(base.static_keys, 3);
             assert_eq!(base.loaded_writable, 5);

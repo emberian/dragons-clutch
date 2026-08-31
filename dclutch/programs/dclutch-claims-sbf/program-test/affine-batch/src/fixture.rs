@@ -180,6 +180,9 @@ pub fn compile_product_lbv2_fixture_v2(
         knots: &[],
         terms: &[],
         failure_payouts: &[],
+        // Exempt by proof: degree 0 and 1 need no price gate,
+        // and a digest offered alongside one is refused.
+        price_gate_certificate_digest: [0_u8; 32],
     };
     let basis_bytes = basis_record_bytes_v3(BasisKindV3::CategoricalQ1, OUTCOME_COUNT_V2, 0, 0)
         .map_err(|_| FixtureError::Basis)?;

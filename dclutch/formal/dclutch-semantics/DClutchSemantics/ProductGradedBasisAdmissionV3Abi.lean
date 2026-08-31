@@ -18,14 +18,50 @@ open DClutch.AbiSchema
 
 def schemaVersion : Nat := 3
 
+/-- **Bumped from `-v3` to `-v4` by the commit that accepts kind byte 3.**
+
+The identity is `sha256` of this *name*, not of the layout bytes, so it does
+not move on its own when the layout does.  `ProductBasisV3Abi` just spent the
+reserved span at offset 18 as a degree and the span at 208 as a certificate
+digest: a record whose kind byte may now be 3 is a different body language, and
+under the old name one identity would stand for two.  A `DCLTPAY3` record
+finalized under `-v3` would then be accepted by a decoder that reads byte 18 as
+a degree -- reading a zeroed reserved span as degree 0 and refusing it only by
+luck of the degree interval.
+
+Bumping the name re-derives the identity, so every record finalized under the
+old body language is refused outright rather than reinterpreted.  Nothing else
+in the tree would have caught this; §1.6.2 is the measurement that found it. -/
 def basisSchemaPreimage : List UInt8 :=
-  "dclutch/schema/product-runtime-graded-basis-v3".toUTF8.toList
+  "dclutch/schema/product-runtime-graded-basis-v4".toUTF8.toList
 def basisSchemaId : List UInt8 := [
-  0x0b, 0x68, 0xd1, 0xa8, 0x31, 0xe9, 0xee, 0x4b,
-  0x7c, 0x7f, 0x04, 0x7f, 0x69, 0x82, 0xea, 0xde,
-  0x18, 0x01, 0xc7, 0x59, 0x68, 0xcd, 0x2e, 0x49,
-  0x8b, 0x76, 0x62, 0xe7, 0xee, 0x62, 0xd0, 0xe8
+  0xdf, 0x28, 0x9f, 0x73, 0xe2, 0xe9, 0xbc, 0x91,
+  0xc7, 0x1d, 0x5e, 0x1b, 0x2a, 0xd7, 0x23, 0x97,
+  0x8c, 0x1f, 0xe7, 0xbe, 0x20, 0x62, 0x56, 0xe7,
+  0xdb, 0x10, 0x4f, 0x16, 0xa9, 0xc4, 0x34, 0x92
 ]
+/-- Registry schema identity of the `DCLTPGT1` no-arbitrage price certificate.
+
+The certificate is its own Registry-finalized record class -- the tree's own
+rule from §6.1, that a new *record class* gets a new magic while a new *body
+form* gets a new kind byte. It could not be inlined: a field-map walk of this
+record family shows every one is gapless and exactly its declared width, and
+320 bytes do not fit in anyone's slack.
+
+The basis record carries a 32-byte digest of it, and Core resolves the
+certificate account through THAT digest rather than through anything the caller
+supplies. The caller chooses which account to pass; the authenticated basis
+chooses which digest it must have. That is what makes the binding sound, and it
+is why a byte-identical certificate at a non-canonical address still refuses. -/
+def priceGateSchemaPreimage : List UInt8 :=
+  "dclutch/schema/product-runtime-price-gate-certificate-v1".toUTF8.toList
+def priceGateSchemaId : List UInt8 := [
+  0x88, 0x8a, 0xf6, 0x9e, 0xda, 0xe1, 0x4f, 0x8d,
+  0x58, 0x99, 0x33, 0x79, 0x6e, 0x39, 0x4b, 0xe1,
+  0x42, 0x70, 0x5a, 0xd9, 0x00, 0xbe, 0x96, 0x8a,
+  0xfa, 0x2a, 0x03, 0xbb, 0xd5, 0x24, 0xae, 0x47
+]
+
 def certificateSchemaPreimage : List UInt8 :=
   "dclutch/schema/product-runtime-graded-projection-certificate-v3".toUTF8.toList
 def certificateSchemaId : List UInt8 := [

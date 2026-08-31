@@ -367,7 +367,30 @@ const READ_METHODS: &[&str] = &[
     "getSlot",
     "getTransaction",
     "getVersion",
+    // A simulation commits nothing: it is executed against a snapshot and is
+    // never a block entry, which is exactly why it belongs on a connection that
+    // *cannot* write. Admitting it here is what lets a preflight answer "would
+    // this frame be accepted" without first opening a key to sign with.
+    "simulateTransaction",
 ];
+
+/// What the cluster reported about a frame it executed but did not commit.
+#[derive(Clone, Debug)]
+pub(crate) struct SimulationOutcomeV1 {
+    /// The runtime's refusal, verbatim, or `None` when the frame was accepted.
+    pub(crate) error: Option<Value>,
+    /// Program logs, in order.
+    pub(crate) logs: Vec<String>,
+    /// Compute units the frame actually consumed, when the cluster reports it.
+    pub(crate) units_consumed: Option<u64>,
+}
+
+impl SimulationOutcomeV1 {
+    /// Whether the runtime accepted the frame.
+    pub(crate) const fn accepted(&self) -> bool {
+        self.error.is_none()
+    }
+}
 
 pub(crate) struct Rpc {
     url: Url,
@@ -731,12 +754,9 @@ impl Rpc {
                         "{label} return data encoding was not canonical base64"
                     )));
                 }
-                let encoded = pair
-                    .first()
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        Error::new(format!("{label} return data payload was not a string"))
-                    })?;
+                let encoded = pair.first().and_then(Value::as_str).ok_or_else(|| {
+                    Error::new(format!("{label} return data payload was not a string"))
+                })?;
                 let data = BASE64
                     .decode(encoded)
                     .map_err(|error| Error::new(format!("{label} return data base64: {error}")))?;
@@ -1369,6 +1389,7 @@ impl Rpc {
             tables,
             false,
             None,
+            false,
         )
     }
 
@@ -1389,6 +1410,7 @@ impl Rpc {
             tables,
             true,
             None,
+            false,
         )
     }
 
@@ -1419,6 +1441,36 @@ impl Rpc {
             tables,
             false,
             None,
+            false,
+        )
+    }
+
+    /// Submit one v0 transaction that uses NO address lookup table.
+    ///
+    /// Separate from [`Rpc::send_v0_with_signers`] rather than a special case
+    /// inside it, because the difference is a claim about the route: this one
+    /// asserts the frame fits the packet inline, and every other caller asserts
+    /// a table it supplied actually earned its place. `compile_v0_message`
+    /// refuses an empty table list outright, so a route with no table has to
+    /// say so rather than pass one and hope.
+    pub(crate) fn send_v0_inline_with_signers(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        payer: &Keypair,
+        additional_signers: &[&Keypair],
+        observation: Observation,
+    ) -> Result<TransactionEvidence> {
+        self.send_v0_inner(
+            label,
+            instructions,
+            payer,
+            additional_signers,
+            observation,
+            &[],
+            false,
+            None,
+            true,
         )
     }
 
@@ -1446,6 +1498,7 @@ impl Rpc {
             tables,
             true,
             None,
+            false,
         )
     }
 
@@ -1480,6 +1533,7 @@ impl Rpc {
             tables,
             false,
             Some(FOUNDING_HEAP_FRAME_BYTES),
+            false,
         )
     }
 
@@ -1507,7 +1561,83 @@ impl Rpc {
             tables,
             true,
             Some(FOUNDING_HEAP_FRAME_BYTES),
+            false,
         )
+    }
+
+    /// Execute one v0 frame against the cluster without a key, a signature, or
+    /// a send.
+    ///
+    /// The signature vector is zeros and `sigVerify` is false, which is the
+    /// whole point: this is callable before any signing key has been fetched.
+    /// A route whose frame demands a signature it does not yet have still
+    /// executes here, and the runtime answers the question the caller actually
+    /// has — *would every other conjunct admit this?* — leaving the signature
+    /// as the one remaining unknown instead of the first blocker.
+    /// `replaceRecentBlockhash` lets the cluster supply its own, so a
+    /// simulation cannot fail for staleness on the way to that answer.
+    ///
+    /// What it proves is what a simulator thinks, and that is deliberately not
+    /// the same claim as landing. This tool's rule that *a hostile is only
+    /// evidence if it reaches consensus* is unchanged and lives at
+    /// [`Rpc::submit_signed_v0_packet_expecting_failure`]; a simulation is a
+    /// decision aid before a write, never the evidence that one happened.
+    pub(crate) fn simulate_v0(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        fee_payer: Pubkey,
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<SimulationOutcomeV1> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, _) = self.latest_blockhash_with_height()?;
+        // Optional-tables, because a route small enough to simulate without a
+        // lookup table must be able to. `compile_v0_message` requires a table
+        // to contribute an address and refuses an empty list outright.
+        let plan = dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+            fee_payer,
+            &bounded,
+            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            observation,
+            tables,
+        )
+        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+        let signatures = vec![Signature::default(); usize::from(plan.required_signatures.max(1))];
+        let transaction = VersionedTransaction {
+            signatures,
+            message: plan.message,
+        };
+        let encoded = BASE64.encode(
+            bincode::serialize(&transaction)
+                .map_err(|error| Error::new(format!("serialize transaction: {error}")))?,
+        );
+        let result = self
+            .call(
+                "simulateTransaction",
+                &json!([encoded, {
+                    "encoding": "base64",
+                    "sigVerify": false,
+                    "replaceRecentBlockhash": true,
+                    "commitment": "confirmed",
+                }]),
+            )
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let value = result.get("value").unwrap_or(&result);
+        Ok(SimulationOutcomeV1 {
+            error: value.get("err").filter(|err| !err.is_null()).cloned(),
+            logs: value
+                .get("logs")
+                .and_then(Value::as_array)
+                .map(|logs| {
+                    logs.iter()
+                        .filter_map(|entry| entry.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            units_consumed: value.get("unitsConsumed").and_then(Value::as_u64),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1521,6 +1651,7 @@ impl Rpc {
         tables: &[ObservedAccount],
         expect_failure: bool,
         heap_frame_bytes: Option<u32>,
+        inline: bool,
     ) -> Result<TransactionEvidence> {
         let bounded = bounded_instructions(instructions, heap_frame_bytes)
             .map_err(|error| Error::new(format!("{label}: {error}")))?;
@@ -1533,14 +1664,28 @@ impl Rpc {
         );
         for attempt in 0..REBUILD_ON_DROP_ATTEMPTS {
             let (blockhash, last_valid) = self.latest_blockhash_with_height()?;
-            let plan = dclutch_versioned_message_operator::compile_v0_message(
-                payer.pubkey(),
-                &bounded,
-                solana_hash::Hash::new_from_array(blockhash.to_bytes()),
-                observation,
-                tables,
-            )
-            .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+            // A route with no lookup table compiles inline; every other caller
+            // supplies one and must still be refused if it contributes nothing.
+            let compiled = if inline {
+                dclutch_versioned_message_operator::compile_v0_message_with_optional_tables(
+                    payer.pubkey(),
+                    &bounded,
+                    solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+                    observation,
+                    tables,
+                )
+            } else {
+                dclutch_versioned_message_operator::compile_v0_message(
+                    payer.pubkey(),
+                    &bounded,
+                    solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+                    observation,
+                    tables,
+                )
+            };
+            let plan = compiled.map_err(|error| {
+                Error::new(format!("{label}: v0 message compilation: {error:?}"))
+            })?;
             let transaction = VersionedTransaction::try_new(plan.message, &signers)
                 .map_err(|error| Error::new(format!("{label}: sign v0 transaction: {error}")))?;
             let (signature, encoded) = self.submit(label, &transaction, expect_failure)?;

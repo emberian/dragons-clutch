@@ -1,5 +1,214 @@
 # GOAL — work until 11am: the protocol as good as it can be, all debt burned down
 
+## COHORT-9 OPENS (~11:0x, ember's steer: "fix up more of them bugs";
+## all bumps/breaks authorized; Helius ruled scheduled-rotation)
+
+★ PROFILE-RULE ruled + BLESSED (f985bede + WAVE cd666f42): ProfileV2
+SUCCESSION rides the cut — slot-tolerance refused as UNSOUND (deployer
+alone could rebind everything behind a lying digest); the ceremony =
+DeclareSuccessor's conjunct geometry on the infrastructure pair; V1
+never mutated; consumers V2-only. Discoveries: the deployed Registry
+is DEPLOY-1's ORIGINAL BYTES (cohort-9 ships DeclareSuccessor to chain
+for the first time); resolution-proof joins the redeploy set (else no
+cohort-9 market can resolve); Custody = the unmoved role; Rent's debt
+ruled OUT (deferral is now a decision); P-008 documents the constraint.
+→ PROFILE-BUILD spawned (fable, ~3-4 lane-days critical path, defines
+the cut's deploy ORDER). For ember non-blocking: the dual-signer
+estates question; Rent's deferral list.
+★ PANEL-FIX convicted BOTH pins (6 commits): effect.schema pinned to
+effect-kernel V3 while chain+Rust bind V4 — the generator was POINTED
+AT THE WRONG FILE so the byte gate was green while mirroring a
+superseded author (the naming trap: v3.rs's preimage reads "effect-
+program-v4-…"); plus itemScalarStride hand-literal 0 vs emitted 2;
+plus the allowance ceiling → exact-debit equality with the remedy
+named. Both markets reach tradable=true/walls=0 headlessly against
+live devnet, real-chain vectors + red proofs now gate offline. Dealer
+LIFECYCLE_SCHEMA suspect (ZERO Rust binders) flagged-not-guessed →
+CANON. → PUBLISH-7 spawned (regen-debt cleanup + the cut so ember can
+retry from Talisman); CANON spawned (the mandate, surfaces named:
+generator-source binding gates, literal sweep, the six TS-only pins,
+the dealer suspect, release-aware selection).
+FRACCHECK-6 landed the ROUTE (5 commits: 8cb9e6c5 the 1,000 security-
+critical lines over the 49-frame, 6b's verifier, mutation-proven
+guards; w8 refuses 0x5641 EARLIER and better than §17.8 predicted) and
+refused the campaign a FIFTH time for the right reason — fixture gaps
+now precisely pre-paid (home = fractional-atomic crate; the one missing
+admission artifact; the RENT_CREDIT fixture was unfaithful). 50th
+account RULED (WAVE b4546291): the Rent program joins the frame while
+it's cheap → FRACCHECK-7 spawned (the ruled account + THE CAMPAIGN +
+the conservation table from real transactions).
+★ LINEAGE-FIX landed (d6e43b11, 5/5 mutants killed on real ELFs): the
+one clause — system_program::ID exempt from conjunct 1's executable
+refusal, nothing else; the unmoved-role hop frames, lands, records.
+AND THE DISCOVERY: the Registry was never casually upgradable — the
+write-once ProtocolInfrastructureProfileV1 pins its release BY CONTENT
+incl. deployment slot; an upgrade bricks Found/retire/provider-resolve
+with no in-tree repair (both escapes dead). The every-cohort carry-
+forward was an UNDOCUMENTED LOAD-BEARING CONSTRAINT → PROFILE-RULE
+spawned (fable): the invariant, the consumer map, succession vs
+slot-tolerance vs defer, the ruling that gates the cut.
+★ CURVATURE LANDED ON MAIN (821f5dc6): tag 3 accepted end to end —
+a degree-2 market founds on a real Core ELF with its DCLTPGT1
+certificate, refuses 0x3012 by name without; 276 refusal codes held
+through FOUR merge rounds; seam true; 14/14 found_program_test, zero
+frame diagnostics. The landing's own lesson: regeneration found the
+AUTHOR'S five codes had never reached any surface on any branch —
+a text-merge ships that hole silently. Doctrine added: TS registry
+regenerates BEFORE genref (the abi doc derives from TS — wrong order
+gives a stale doc with a green check). Frame deviation (optional
+37/39) recorded. genref-stale handback = PANEL-FIX's live WIP, left
+to its owner.
+★ EMBER HIT A LIVE PANEL BUG (Talisman, market21/22): "selected
+CapabilityProgramV4 is not the schema-bound signed Direct InlineOrdinary
+bundle" — the RUST route accepted these exact records this morning (the
+trade landed through them), so the TS authenticator drifted behind
+cohort-8's publication (mirror disease, panel edition) → PANEL-FIX
+spawned (fix at the author + chain-record vector + the known
+allowance-equality bug in the same visit + headless verify against live
+market22); publication cut follows its green.
+LINEAGE-WRITER done (5 commits on main): the pen exists — builder
+(reads authorities from the successor's cache, deployer only via
+keypair-env, checked against what the CHAIN named; simulation needs no
+key), operator subcommand with --i-mean-devnet, real-SVM campaign 4/4
+(which caught two vacuous hostiles of its own, one of which LANDED the
+record it meant to refuse), loopback end to end at 81,942 CU. BLOCKER
+MEASURED: the deployed Registry refuses the exact hop gate 6 needs —
+conjuncts 1+6 mutually unsatisfiable for an unmoved role (the System
+Program IS executable; the fixture that hid it presented what no
+runtime presents) → LINEAGE-FIX spawned (one clause, red-proofs both
+ways + the skipped mutation-testing); REGISTRY JOINS THE COHORT-9
+REDEPLOY SET — its first upgrade since carry-forward began.
+★ CLOSEMAKER LANDED ON MAIN (502f5a06, self-landed via regenerate-on-
+merged-tree — the regen UNIONED refusal registries 267→271 where a text
+merge had left stale outputs). The decrement is in the tree; wall-22's
+sequence green on real ELFs. DIST CUT by orch: v0.1.0-devnet.3 tagged +
+pushed (ebd14cf8b, subtree from live 6c9d46f6, sweep CLEAN) — dclutch
+ticket author/verify ships. RELEASE GREEN + VERIFIED: the installed
+binary reports 0.1.0-devnet.3 and `dclutch ticket --help` speaks (3
+platforms + installer + checksums live).
+FRACCHECK-5 done (5 commits on main): both §17.8 rulings implemented —
+frame 49=36+13, gate arm with writability inverted, w1-w6 each killed
+by a targeted mutation (the predicate-drop mutation redding ONLY w3 is
+the witness doing its job); action_geometry exhaustive; hazard 2
+CORRECTED (write_claim_check cannot share — 288 vs 320; close_and_split
+can, via plan.shared()). Route again honestly refused (unblocked but
+undriveable without commit 10) → FRACCHECK-6 spawned: the route, the
+verifier, THE CAMPAIGN, w7-w8.
+★ CLOSEMAKER BUILT (4 commits on its branch): THE MISSING DECREMENT
+EXISTS — Lean-first (feeOwed added, E5 lockout in consumeNonce, fee
+receivable conserved: "a close is never the event that ends a nonzero
+obligation"), FOUR gates relaxed (found the fourth the review missed —
+the transition bytecode in release content), the decrement authored AS
+release content cross-derived by the ELF, ZeroBump riding, wall-22's
+stop drained on a real bank (~98k CU close). Retiring amendment
+BLESSED (WAVE 5c091953); donation slice provisionally 0 pending
+ember's ruling. My merge aborted on generated-file conflicts → lane
+re-landing via regenerate-on-merged-tree. Queued: devnet close
+plan-builder (~1 lane-day); 2 pre-existing reds routed (fractional-
+claim-kernel emission drift → FRACCHECK-5's territory; market-core
+clippy-1.97 → small).
+FRAC-RULE done (§17.8, 564d2d31): ruling 1 — the root's signature is
+load-bearing EXACTLY ONCE (the SetAuthority burn hand-off; extend the
+gate, writability INVERTS); ruling 2 — TradingCallerAuthority dropped
+as ceremony (the root signature proves more than the PDA did; native-
+sibling parity; O-016). Veto window EXERCISED: signed off (WAVE
+794b2eda), w8 pins the no-Trading door. "Trading-composed" = composed
+for signature, not authority. → FRACCHECK-5 spawned (both rulings +
+5c + the route + the campaign, witnesses w1-w8 binding).
+LINEAGE-DEVNET done (96615596, ZERO spend/writes): the "missing ids"
+were TYPE CONFUSION — d202e1f4/97d49888 are checked-upgrade PLAN
+digests, not set ids; the real ids were on chain all along (cohort-7
+91dcbefd…, cohort-8 559f26e6…, both routes agree, address-derivation
+proven). market22 walks to the current world in 0 HOPS today — it owes
+a declaration only when cohort-9 activates. Declarations blocked on:
+conjunct 6 wants the roles' shared upgrade authority's signature (the
+deployer — a legitimate cut-day act), and NO DeclareSuccessor builder
+exists anywhere → LINEAGE-WRITER spawned (cut prerequisite: builder +
+subcommand + dry-run, 8 hostiles by name, walk-follows-the-hop test).
+Passing finds queued to it: the 352-vs-360 help string; the
+alreadyCurrent-on-stranded trap.
+FRACCHECK-4 refused honestly + LANDED (3 commits, merged): the
+"assembly" premise died on contact — frame corrected 48→50 (a finalized
+record isn't authenticated without its raw/STAGING pair; only raw
+halves can't prove the denominator's terms are settled), and TWO
+unnamed gaps verified: fractional_root_signer never admits the
+compaction kind, and TradingCallerAuthority has nothing in-frame to
+derive against (while the crank is permissionless BY DESIGN — so what
+does "Trading-composed" mean here?) → FRAC-RULE spawned (fable
+adjudication, §17.8). It reverted its own near-complete commit 6
+rather than land a stub. Brief drift caught: 5c lives in the operator
+crate, not trading-sbf.
+SPLINE-WIRE stopped at the right seam (4 commits on its branch:
+overflow envelope, cumulative-floor blessed + other deleted, admission
+cascade's FIRST production caller, DCLTPGT1 ported into founding's
+reach). MEASURED: degree 3 is unfoundable under u128 (span^6 —
+SignedU256 is the unlock, not tidying). Its frame question RULED: take
+its own +2 (KAPPA's inversion mooted the ride-along; one cut = one
+restrand). Proceeding to the atomic stack, seam LAST.
+MIGRATE done (4 commits): the lineage READER half real — the walk
+authority + SDK mirror (a market's history followable, `path` = the
+traversed sets), the AlreadyCurrent 5-site dedup (two had DRIFTED:
+the weaker admitted what the stronger refused, nothing compared them;
+and GOAL's "red-proofed both ways" claim was wrong — SetAlreadyCurrentV1
+had never been constructed by any test until its five), retroactive
+authoring proven sound (the record deliberately carries no clock).
+BLOCKER FOUND: cohort-7/8 full 32-byte release-set ids exist NOWHERE
+in the repo (8-hex prose only — a truncation can't seed a PDA) →
+LINEAGE-DEVNET spawned (sole devnet writer: recover by address-proof,
+declare the hops, walk market22's history from the current world).
+Commit-4+ (weeks, wire) correctly out of the cut; its CoreState field
+must join one batched widening when it comes.
+KAPPA done (4 commits, no wire break — premise inverted with evidence):
+the chartered widening was ALREADY AT HEAD (principalCapSets at 288
+since ff008fea; it corrected C9-REVIEW's stale batching row in place).
+What was missing: the capacity refusals were FLATTENED into neighbors
+at all four sites (now named 0x500D/0x5168/0x518A/0x5208) and the check
+was green BY VACUITY (every fixture founded at u64::MAX) — first real-
+ELF red-proof shipped (unbind the cap → the excess commits). Cut debt
+named: 3 fixtures still found at MAX; κ=1/4 Provisional; THE FLAGSHIP
+REFOUND AT THE CUT SHOULD BE BOUNDED (vol-derived floor → real cap) —
+added to the cut charter.
+FRACCHECK-3 done + LANDED by orch (merge 5ab11648): both gating Trading
+layers closed (composition decode + execution arms + the named 48=36+12
+frame); the route deliberately NOT written ("1000 lines I couldn't
+demonstrate would look like progress"). CLASS FINDING: a 744-byte
+request grew a shared frame 3,072→3,712 with ZERO diagnostics — CI's
+grep cannot see below-4096 growth → QUEUED: FRAMEGUARD (delta-ratchet
+gate on sbf-frame-sizes.py output). Also queued: 7 pre-existing
+slicing-may-panic clippy reds in two codec crates. → FRACCHECK-4
+spawned (the 8 assembly commits + the campaign; hazards binding).
+C9-REVIEW landed (1ce14755): ALL FIVE BUILD, NONE AS SIZED. Headline
+finds: CloseMakerReplay was UNREACHABLE as sized (begin-retiring demands
+count==0 before Retiring while the close is gated ON Retiring) + must
+refuse fee_owed!=0 (close erases the receivable, launders E5; Lean
+MakerRoot lacks feeOwed); spline must carry the founding price-gate
+conjunct (removing the decode refusal is today's ONLY gate) + overflow
+arm; KAPPA batches with floor_content_id + Found-frame +6 (routed to the
+live lane); migration premise FALSE — design exists, lineage
+retroactively authorable (dissolves the traded-market worry). ONE CUT,
+9 gates. → SPAWNED per verdicts: CLOSEMAKER (fable, amendments binding,
+ZeroBump rides its Trading upgrade), SPLINE-WIRE, MIGRATE. Rulings for
+ember: donation-slice payee; RECORDS-MIGRATE split; Retiring amendment
+(orch veto window).
+
+Earlier in flight: C9-REVIEW (Fable teardown of the plan's creative/challenging
+aspects — CloseMakerReplay×fee-debt, selector blast radius, ZeroBump
+write-once tension, spline sequencing, what's missing, one-cut-or-two);
+FRACCHECK-3 (the 9 remaining compaction commits, the 48-account frame);
+KAPPA (manipulation bound onto CoreState via the emitter, version-gated).
+HELD for the review's verdicts: CLOSEMAKER, SPLINE-WIRE, ZEROBUMP.
+
+## ☀ GOAL CLOSED 10:32 EDT — every lane landed, every board green
+
+Final state: **all public CI green simultaneously for the first time**
+(checks 4/4, rust 4/4, pages; three rows flipped red→green in the last
+cut, nothing regressed; sbomVerify's last red cleared at a3d28f2d).
+The site at clutch.dregg.pro serves the first public trade, the console
+copy, and the full type system (final content-sync 405709b64). The
+first market life stands at **82 acts, redeemed in full, conserved to
+the atom**, stopped only by cohort-9's chartered CloseMakerReplay.
+Twenty-one walls fell tonight; each left a red-proofed gate behind it.
+
 ## ☀ MORNING REPORT (written ~10:4x; two lanes still closing)
 
 **THE FIRST PUBLIC TRADE IS ON DEVNET.** `4YQLY9ts…`, slot 490,907,340,

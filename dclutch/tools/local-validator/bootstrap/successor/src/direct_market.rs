@@ -13,6 +13,7 @@ use dclutch_custody_contract::CustodyReplayLayoutV1;
 use dclutch_direct_codec::{
     activation_bundle_v1::DirectActivationBundleV1,
     begin_retiring_bundle_v1::DirectBeginRetiringBundleV1,
+    close_maker_bundle_v1::DirectCloseMakerBundleV1,
     execution_v3::DIRECT_SUCCESSOR_KIND_ID_V3,
     native_close_bundle_v1::DirectNativeCloseBundleV1,
     ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
@@ -848,6 +849,9 @@ pub(crate) fn attach_direct_market_capability_v1(
         activation_account_profile_hex: hex(&release.activation.account_profile),
         activation_effect_hex: hex(&release.activation.effect),
         activation_descriptor_hex: hex(&release.activation.descriptor),
+        close_maker_account_profile_hex: hex(&release.close_maker.account_profile),
+        close_maker_effect_hex: hex(&release.close_maker.effect),
+        close_maker_descriptor_hex: hex(&release.close_maker.descriptor),
         program_set_hex: hex(&release.program_set),
         activation_deadline_slot: compiler.activation_deadline_slot,
         root_rent_minimum_lamports: compiler.root_rent_minimum_lamports,
@@ -1023,6 +1027,21 @@ pub(crate) fn direct_publication_records_v1(
             &release.activation.descriptor,
         ),
         record(
+            "direct_close_maker_account_profile_record",
+            dclutch_direct_codec::close_maker_bundle_v1::direct_close_maker_account_profile_schema_v1(),
+            &release.close_maker.account_profile,
+        ),
+        record(
+            "direct_close_maker_effect_record",
+            dclutch_direct_codec::close_maker_bundle_v1::direct_close_maker_effect_schema_v1(),
+            &release.close_maker.effect,
+        ),
+        record(
+            "direct_close_maker_descriptor_record",
+            dclutch_direct_codec::close_maker_bundle_v1::direct_close_maker_descriptor_schema_v1(),
+            &release.close_maker.descriptor,
+        ),
+        record(
             "direct_program_set_record",
             dclutch_capability_program_contract::set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
             &release.program_set,
@@ -1129,12 +1148,27 @@ fn decode_direct_release_v1(
         effect: activation_effect,
         descriptor: activation_descriptor,
     };
+    let close_maker_descriptor = decode_hex(&payload.close_maker_descriptor_hex)?;
+    let close_maker_program = CapabilityProgramV1::decode(&close_maker_descriptor)
+        .map_err(|error| Error::new(format!("Direct close-maker descriptor: {error:?}")))?;
+    let close_maker_account_profile = decode_hex(&payload.close_maker_account_profile_hex)?;
+    let close_maker_effect = decode_hex(&payload.close_maker_effect_hex)?;
+    let close_maker = DirectCloseMakerBundleV1 {
+        account_profile_id: Sha256::digest(&close_maker_account_profile).into(),
+        effect_id: Sha256::digest(&close_maker_effect).into(),
+        descriptor_id: Sha256::digest(&close_maker_descriptor).into(),
+        account_profile: close_maker_account_profile,
+        transition: close_maker_program.transition_program().bytes().to_vec(),
+        effect: close_maker_effect,
+        descriptor: close_maker_descriptor,
+    };
     let program_set = decode_hex(&payload.program_set_hex)?;
     let release = DirectInlineOrdinaryLifecycleProgramSetV1 {
         ordinary,
         begin_retiring,
         native_close,
         activation,
+        close_maker,
         program_set_id: Sha256::digest(&program_set).into(),
         program_set,
     };
@@ -2333,7 +2367,7 @@ mod tests {
             },
         )
         .expect("publication closure");
-        assert_eq!(publication.len(), 22);
+        assert_eq!(publication.len(), 25);
         let labels = publication
             .iter()
             .map(|record| record.label)

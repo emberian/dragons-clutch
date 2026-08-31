@@ -912,7 +912,12 @@ describe('the 360-byte Core generation, from scan to bucket', () => {
     // A different refusal from the 352-byte generation's, which is exactly why
     // this needed its own case: that one is caught by magic, this one only by
     // the width, and the message a reader gets says so.
-    expect(card.refusal).toBe('Core Market state is 360 bytes; the exact current width is 368.');
+    expect(card.refusal).toBe(
+      // The card now says WHICH kind of wrong the width is. A stranded
+      // devnet Market reading as a bare byte count looks like corruption;
+      // reading as an older generation is the fact and the repair hint.
+      'Core Market state is 360 bytes; the exact current width is 368. This older devnet Market generation is incompatible.',
+    );
     expect(provenanceChipV1(card.provenance)).toBe('REFUSED');
   });
 

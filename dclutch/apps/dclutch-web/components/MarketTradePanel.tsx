@@ -692,7 +692,7 @@ export default function MarketTradePanel({
 
       {participant !== null && participant.status === 'ready' && <div className="trade-v3-evidence">
         <article><span>Your claim balance</span><strong>{outcome === null ? 'pick a claim' : (participant.positionBalances[outcome] ?? 0n).toString()}</strong><small>finalized Position revision {participant.positionRevision.toString()}</small></article>
-        <article><span>Your collateral</span><strong>{participant.collateralAtoms.toString()}</strong><small>{participant.spendableCollateralAtoms.toString()} atoms currently delegated</small></article>
+        <article><span>Your collateral</span><strong>{participant.collateralAtoms.toString()}</strong><small>{participant.delegatedCollateralAtoms.toString()} atoms currently delegated — a buy needs this to equal its debit exactly</small></article>
         <article><span>Your Position</span><strong>{participant.coordinates.position.slice(0, 8)}…</strong><small>derived from this Market and your wallet</small></article>
         <article><span>Your collateral account</span><strong>{participant.coordinates.collateral.slice(0, 8)}…</strong><small>derived from this Market, wallet, and release</small></article>
       </div>}

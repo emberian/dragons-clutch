@@ -279,6 +279,9 @@ mod tests {
             knots: &knots,
             terms: &terms,
             failure_payouts: &[1, 2, 97],
+            // Exempt by proof: degree 0 and 1 need no price gate,
+            // and a digest offered alongside one is refused.
+            price_gate_certificate_digest: [0_u8; 32],
         };
         let basis_bytes =
             basis_record_bytes_v3(input.kind, 3, knots.len(), terms.len()).expect("basis bytes");

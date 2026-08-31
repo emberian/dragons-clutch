@@ -218,6 +218,16 @@ pub enum ClaimsSbfError {
     /// It is allocated now because the alternative is that the first person to
     /// reach it debugs a settlement failure with no signal at all.
     BasisEvaluatorAbsent = 0x500C,
+    /// Minting a complete set would grow total principal past the Market's
+    /// carried manipulation-capacity cap, or that cap was never stated.
+    ///
+    /// Distinct from [`ClaimsSbfError::Economic`], which is conservation: an
+    /// amount that does not add up. This one adds up exactly and is refused
+    /// anyway, because the Market may not carry that much principal against the
+    /// venue behind its Source. Conflating the two would hide the single
+    /// refusal this protocol exists to make -- a reader who cannot separate
+    /// them cannot tell a broken mint from a bounded one.
+    PrincipalCapacity = 0x500D,
 }
 
 impl ClaimsSbfError {
@@ -228,7 +238,7 @@ impl ClaimsSbfError {
     /// to the enum does not compile until its author writes an arm here, and
     /// the only arm that satisfies the assertions is its own index in this
     /// array.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Instruction,
         Self::Accounts,
         Self::Identity,
@@ -242,12 +252,13 @@ impl ClaimsSbfError {
         Self::ReleaseSuperseded,
         Self::SelectionConfig,
         Self::BasisEvaluatorAbsent,
+        Self::PrincipalCapacity,
     ];
 
     /// This refusal's position in [`ClaimsSbfError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism: a
-    /// fourteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// fifteenth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -264,6 +275,7 @@ impl ClaimsSbfError {
             Self::ReleaseSuperseded => 10,
             Self::SelectionConfig => 11,
             Self::BasisEvaluatorAbsent => 12,
+            Self::PrincipalCapacity => 13,
         }
     }
 }
@@ -470,6 +482,27 @@ fn process_remaining_instruction(
         == Some(dclutch_claims_svm::claim_check_v1::CLAIM_CHECK_COMPACT_MAGIC_V1.as_slice())
     {
         return claim_check_compaction_v1::process_compaction(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    // The fractional half of the same family, dispatched here beside its native
+    // sibling rather than up with the two Fractional families in
+    // `process_instruction`. It is reached by its OWN magic (`DCLTFCC1`), which
+    // is declared beside the other claim-check magics and is not a prefix of any
+    // of them; grouping it with the family whose escrow, deadline and sweep it
+    // shares is what keeps the two compaction routes readable side by side. The
+    // Fractional exposure and retirement magics stay where they are because they
+    // are different families, not because dispatch order is load-bearing.
+    if instruction_data.get(
+        ..dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+            .len(),
+    ) == Some(
+        dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+            .as_slice(),
+    ) {
+        return fractional_claim_check_v1::process_fractional_compaction(
             program_id,
             accounts,
             instruction_data,
@@ -1300,7 +1333,7 @@ fn authenticate_complete_set_growth(
     let added_sets = plan.quantity(0).map_err(|_| ClaimsSbfError::Instruction)?;
     MarketPrincipalCapSetsV1::read(core.principal_cap_sets)
         .admit_growth(outstanding_sets, added_sets)
-        .map_err(|_| ClaimsSbfError::Economic.into())
+        .map_err(|_| ClaimsSbfError::PrincipalCapacity.into())
 }
 
 pub(crate) fn authenticate_core_market(
@@ -1763,7 +1796,13 @@ mod tests {
         core.principal_cap_sets = 12;
         assert_eq!(
             authenticate_complete_set_growth(&view, plan, BasketAction::MintCompleteSet, core),
-            Err(ClaimsSbfError::Economic.into())
+            // `0815ca11` gave the capacity refusal its own name at all four
+            // sites and this expectation was not moved with them, so the test
+            // has been asserting the code the refusal USED to carry. The
+            // distinction is the point of that commit: `Economic` is
+            // conservation, `PrincipalCapacity` is the manipulation-capacity
+            // bound, and an unreadable cap encoding is the second one.
+            Err(ClaimsSbfError::PrincipalCapacity.into())
         );
         assert_eq!(
             view.market

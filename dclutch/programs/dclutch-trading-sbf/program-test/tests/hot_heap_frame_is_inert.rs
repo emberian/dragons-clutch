@@ -153,7 +153,21 @@ const PACKET_LIMIT: usize = 1_232;
 /// reauthentication the continuation never paid and the top level no longer
 /// pays either. The outer composition is unchanged; what it is being compared
 /// against got 5% cheaper.
-const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 103_307;
+///
+/// # Why it is now 103,589: cohort-9's dispatch ladder, +282 exactly
+///
+/// CLOSEMAKER added two native predicates to Trading's entry dispatch (the
+/// maker-replay close and, upstream of it in the ladder, nothing else -- the
+/// ZeroBump arm rides an existing route). The continuation transaction enters
+/// Trading through the Registry outer and pays the entry ladder differently
+/// than the bare top-level instruction does, and the difference is
+/// key-independent: re-measured over twelve seeds on this tree, EVERY residual
+/// sits exactly 282 CU above the old floor on a clean 3,000 grid -- 103,589
+/// five times, 106,589 three times, 109,589 twice, 112,589 twice, with zero
+/// seed-to-seed jitter. That is the "code motion" shape this constant's own
+/// protocol names, one order of magnitude past the jitter bar, so the floor
+/// moves rather than the tolerance.
+const CONTINUATION_ROUTE_DELTA_FLOOR_V1: u64 = 103_589;
 
 /// How far the floor may drift before this gate calls it a change.
 ///

@@ -32,6 +32,8 @@ def main : IO Unit := do
   emitBytes "GRADED_BASIS_ADMISSION_MAGIC_V3" admissionMagic
   emitSlice "GRADED_BASIS_RECORD_SCHEMA_PREIMAGE_V3" basisSchemaPreimage
   emitBytes "GRADED_BASIS_RECORD_SCHEMA_ID_V3" basisSchemaId
+  emitSlice "PRICE_GATE_RECORD_SCHEMA_PREIMAGE_V1" priceGateSchemaPreimage
+  emitBytes "PRICE_GATE_RECORD_SCHEMA_ID_V1" priceGateSchemaId
   emitSlice "GRADED_BASIS_CERTIFICATE_SCHEMA_PREIMAGE_V3" certificateSchemaPreimage
   emitBytes "GRADED_BASIS_CERTIFICATE_SCHEMA_ID_V3" certificateSchemaId
   emitSlice "GRADED_BASIS_ADMISSION_SCHEMA_PREIMAGE_V3" admissionSchemaPreimage

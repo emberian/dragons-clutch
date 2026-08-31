@@ -320,10 +320,37 @@ function crossing(participant: DirectParticipantReadinessV1, side: 'buy' | 'sell
 }
 
 describe('Direct crossing participant admission', () => {
-  it('checks buys against delegated collateral and sales against exact outcome claims', async () => {
+  /**
+   * The delegation is a single-use authorization, so `validate_collateral` in
+   * `dclutch-direct-codec`'s `inline_candidate_v2.rs` requires
+   * `delegated_amount == debit` and refuses either direction. This fixture
+   * holds 20,000 collateral atoms with 12,000 delegated, so exactly one debit
+   * is admissible and both neighbours must refuse for their own stated reason.
+   */
+  it('admits only the buy whose debit equals the delegation exactly, and sales against exact outcome claims', async () => {
     const participant = await inspectDirectParticipantReadinessV1(await client(), request());
-    expect(admitDirectParticipantCrossingV1(participant, crossing(participant, 'buy', 11_000n))).toMatchObject({ resource: 'collateral allowance', requiredAtoms: 11_000n });
-    expect(() => admitDirectParticipantCrossingV1(participant, crossing(participant, 'buy', 12_001n))).toThrow('current finalized allowance');
+    if (participant.status !== 'ready') throw new Error(participant.reason);
+    expect(participant.collateralAtoms).toBe(20_000n);
+    expect(participant.delegatedCollateralAtoms).toBe(12_000n);
+
+    expect(admitDirectParticipantCrossingV1(participant, crossing(participant, 'buy', 12_000n)))
+      .toMatchObject({ resource: 'collateral allowance', requiredAtoms: 12_000n, availableAtoms: 12_000n });
+
+    // Under the standing delegation. A ceiling would have admitted this, and
+    // the chain would then have refused the reader's packet.
+    expect(() => admitDirectParticipantCrossingV1(participant, crossing(participant, 'buy', 11_000n)))
+      .toThrow('more than the debit');
+    expect(() => admitDirectParticipantCrossingV1(participant, crossing(participant, 'buy', 11_000n)))
+      .toThrow('approve exactly 11000 atoms');
+
+    // Over it, but still inside the balance: the delegation is what refuses.
+    expect(() => admitDirectParticipantCrossingV1(participant, crossing(participant, 'buy', 13_000n)))
+      .toThrow('less than the debit');
+
+    // Past the balance: the balance refuses on its own terms, not as allowance.
+    expect(() => admitDirectParticipantCrossingV1(participant, crossing(participant, 'buy', 20_001n)))
+      .toThrow('your finalized token balance is 20000');
+
     expect(() => admitDirectParticipantCrossingV1(participant, { ...crossing(participant, 'buy', 1n), takerAddress: MARKET })).toThrow('another participant');
     if (participant.status !== 'ready') throw new Error(participant.reason);
     const available = participant.positionBalances[0] ?? 0n;

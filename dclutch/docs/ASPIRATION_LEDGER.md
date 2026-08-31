@@ -847,6 +847,35 @@ before a market accepts principal.
 `AGENTS.md:125` makes this a rule the tree is currently violating: *"Provisional
 bounds require a lifting plan."*
 
+**RESOLVED 2026-08-31 (KAPPA-CAP).** The row is closed, and the closure is worth
+recording precisely because of how it read while it was open. κ is enforced on
+chain: the Market root carries the bound (`CoreState.principal_cap_sets`, offset
+288), `Found` derives it from the one floor record the Source names and refuses
+a zero outright, and the bound is re-checked at founding and at all three
+principal-growing routes — so it is a cap and not a founding-time formality. The
+substitution attack the floor record was designed against is closed by
+`SourcePrincipalPolicyV1::BoundedByFloor(selected_floor_id)`. Since 2026-08-31
+the refusal also has its own name at each site rather than borrowing a
+neighbour's, which is what makes it legible in a validator log.
+
+Two honest caveats travel with the closure. **κ = 1/4 is still Provisional** —
+the lifting plan (measure the realisable fraction per venue, then state a
+`Measured` envelope) is unchanged and unstarted, so the AGENTS.md rule is
+satisfied only in the sense that the plan is written down. And the bound is
+**demonstrated on a real ELF at one site of four**: `affine_batch_v2`'s program
+test now founds at an exact cap and shows a credit past it refusing by name with
+no byte moved, proved red by unbinding the cap; `founding_v5`, `signed_delta_v3`
+and the legacy complete-set mint are enforced but still found at `u64::MAX` in
+their fixtures, so their refusing arms have not executed on chain.
+
+The row's own history is the lesson worth keeping. M-16 sat open through the
+window in which the work was *done* — `WAVE.md` still said "no on-chain route
+calls it" four days after routes called it, `CHAIN_STATE_SOURCES` §12.7 still
+listed landed items as owed, and the explorer told visitors "nothing on chain
+enforces this bound today". A ledger that lags in that direction is not merely
+untidy: the KAPPA-CAP lane was chartered to build a wire break that had already
+shipped, and nearly did.
+
 ### M-17. `OddScheduledMedian`'s cadence tolerance blocks a whole product class
 
 > `OddScheduledMedian` currently requires **strict equal cadence**. Under Solana
@@ -2762,7 +2791,7 @@ sources did not carry.
 | **M-4**, earlier still | `a81b609b`, 2026-08-18, `research/claim-algebra-model/ONE_HOT_VS_DERIVED.md` is the dated head-to-head that chose one-hot **on argument** and gated the derived branch's promotion on a benchmark that never ran — **N-7**. |
 | **M-5** | See **G-10**. The Aug 24/26/27 calendar is in a committed decision record, not only in `cv`. |
 | **M-8** | `PRODUCT_THEORY_REDIRECTION`'s seven upgrades are largely gen-1's `INSTRUMENT…` §9 re-derived; the gen-1 original is committed on `main` and was never swept, so the successor lost the same content twice, by two different mechanisms (branch-only, then generation boundary). |
-| **M-16** | See **C-4**. `κ` is a gen-1 P1 row, so it has survived two generations. |
+| **M-16** | See **C-4**. `κ` is a gen-1 P1 row, so it has survived two generations. **RESOLVED 2026-08-31 (KAPPA-CAP)** — enforced at founding and all three growth routes, refusal named, and demonstrated refusing on a real ELF at the affine-batch site; κ = 1/4 still Provisional, and the other three sites still found unbounded in their fixtures. |
 | **M-55** | See **G-2** and **N-9**. Succinct verification was *move 2 of exactly two* in gen-1's strategy document, its two gating quantities are named and explicitly must-not-be-estimated, and `SWARM_ROADMAP` §6 makes Breadstuffs' *"expensive proof freeze/MPC ceremony"* step 5 of its own five-step plan. |
 | **M-26** | Two sharpenings. `3e818be8` and `15122506` show the treasury was made **structurally** undecidable — *"the treasury pubkey **DEFERRED** as the structural `REVENUE-TREASURY-UNSET-SENTINEL1` byte string"*, and `525ec13f` makes `RevenueTreasuryUnset` fire *"on EVERY fee-bearing admission… **unreachable until ember binds a key in a new const**"*. Gen-1 built a protocol that could not take a fee until ember answered. And three more: **N-1**, the base geometry silently changed under the rate question; **N-15**, a formalization gate stands in front of it; and **§D.1 item 5**, gen-2 built `RevenuePolicyV2` — the immutable fee-bearing Realm record, streamed recipient allocation V3, registered calibrations, and treasury Position custody, all zero in the successor. M-26 reads as never-attempted. It was selected in gen-1, built in gen-2, and discarded in gen-3, three times without a decision record. |
 | **M-46** | Gen-1 had the abandonment problem too and solved it structurally rather than socially: `SWARM_ROADMAP` §8 rule 4 requires *"each lane to report: exact paths, commit, evidence plane, commands, test counts, artifact identity, negative boundaries, and remaining STOPs."* A lane that must report an artifact identity cannot vanish silently. Gen-3's `AGENTS.md` carries `semantic owner` (§8 rule 3) and none of rule 4. |

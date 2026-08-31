@@ -16,11 +16,13 @@ mod activation;
 mod artifact;
 mod immutable_registry;
 mod lineage;
+mod lineage_walk;
 
 pub use activation::*;
 pub use artifact::*;
 pub use immutable_registry::*;
 pub use lineage::*;
+pub use lineage_walk::*;
 
 /// Bytes in every identity and digest coordinate.
 pub const IDENTITY_BYTES: usize = 32;
@@ -103,6 +105,12 @@ pub enum Error {
     NonCanonicalLineageConsent,
     /// A lineage record declared a hop in which no role's artifact moved.
     LineageWithoutMovedRole,
+    /// A lineage record named a predecessor other than the set it was sought under.
+    LineageMisaddressed,
+    /// A lineage chain ended before reaching the set it was walked toward.
+    LineageSuccessorUndeclared,
+    /// A lineage chain ran past the hop bound one walk will follow.
+    LineageWalkTooLong,
     /// The referenced execution-release-set codec refused.
     ReleaseSet(dclutch_release_set_contract::Error),
 }

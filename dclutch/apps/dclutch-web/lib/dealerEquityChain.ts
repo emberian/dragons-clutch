@@ -370,7 +370,7 @@ export async function inspectDealerEquityRouteV3(
     HotAbi.TRANSITION_SCHEMA_RELEASE_ID, transitionDigest, 'Dealer TransitionVM');
   await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HotAbi.HOT_EFFECT_RAW_ACCOUNT_V3]?.address ?? '', fixed[HotAbi.HOT_EFFECT_STAGING_ACCOUNT_V3]?.address ?? '',
-    HotAbi.EFFECT_SCHEMA_RELEASE_ID, descriptor.effect, 'Dealer EffectProgram');
+    HotAbi.EFFECT_SCHEMA_RELEASE_ID_V4, descriptor.effect, 'Dealer EffectProgram');
 
   const logicalMetas = [
     fixed[HotAbi.HOT_ROOT_ACCOUNT_V3], fixed[HotAbi.HOT_CONFIG_RAW_ACCOUNT_V3], fixed[HotAbi.HOT_PRODUCT_RAW_ACCOUNT_V3],

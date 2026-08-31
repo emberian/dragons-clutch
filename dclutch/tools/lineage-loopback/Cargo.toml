@@ -1,0 +1,25 @@
+[package]
+name = "dclutch-lineage-loopback"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+publish = false
+
+# Localhost-only host utility. Resolves independently of the protocol workspace,
+# like every other tool under tools/.
+[workspace]
+
+[dependencies]
+dclutch-core-contract = { path = "../../crates/dclutch-core-contract" }
+dclutch-registry-activation-auth-v1 = { path = "../../crates/dclutch-registry-activation-auth-v1" }
+dclutch-registry-contract = { path = "../../crates/dclutch-registry-contract" }
+dclutch-release-set-contract = { path = "../../crates/dclutch-release-set-contract" }
+base64 = "0.22"
+serde_json = "1"
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk = "=3.0.0"
+solana-sdk-ids = "=3.1.0"
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -924,7 +924,15 @@ HEAD: the Registry band `0x1xxx` is contiguous through
 `RegistryError::ReleaseSuperseded = 0x100D` (`registry-sbf/src/lib.rs:104`),
 first free `0x100E`; the Core band `0x3xxx` is contiguous through
 `CoreSbfError::RecoveryWalkUnavailable = 0x3011` (`core-sbf/src/lib.rs:153`),
-first free `0x3012`.
+first free `0x3017`.
+
+> **Renumbered 2026-08-31.** This design reserved `0x3012`–`0x3014`, but the
+> cohort-9 spline wire landed first and its founding-time price-gate conjunct
+> now owns `0x3012`–`0x3016` (`PriceGateRequired` through
+> `PriceGateNonCanonical`). Nothing enforced the reservation — the census checks
+> uniqueness among codes that *exist*, not among codes a design doc has spoken
+> for — so this is the paperwork catching up with the code rather than a
+> conflict. The three codes below move up by five; no other change.
 
 **No eight-reader fan-out is needed.** The existing `ReleaseSuperseded` refusal
 has eight banded discriminants because eight programs read the cache. Every
@@ -940,9 +948,9 @@ Core for migration — because no other program participates in either route.
 | `0x1010` | `ReleaseLineageSelfSuccession` | registry | §4.5 c3 — `A == B` |
 | `0x1011` | `ReleaseLineageAuthorityMissing` | registry | §4.5 c6 — a moved role's authority slot is absent, not a signer, not the bound key, or the artifact is `Immutable` |
 | `0x1012` | `ReleaseLineageNotForward` | registry | §4.5 c5 — a moved role's successor slot is not strictly greater |
-| `0x3012` | `ReleaseLineageAbsent` | core | §5.3 c3 — no lineage record exists for the market's active set |
-| `0x3013` | `ReleaseLineageMismatch` | core | §5.3 c3 — the record decoded but `predecessor != active_release_set` |
-| `0x3014` | `ReleaseSuccessorNotActivated` | core | §5.3 c4 — the successor cache is absent, undecodable, wrongly owned, or names another set |
+| `0x3017` | `ReleaseLineageAbsent` | core | §5.3 c3 — no lineage record exists for the market's active set |
+| `0x3018` | `ReleaseLineageMismatch` | core | §5.3 c3 — the record decoded but `predecessor != active_release_set` |
+| `0x3019` | `ReleaseSuccessorNotActivated` | core | §5.3 c4 — the successor cache is absent, undecodable, wrongly owned, or names another set |
 
 Reused rather than duplicated: `RegistryError::AccountFrame` `0x1001` and
 `ActivationCache` `0x1005`; `CoreSbfError::AccountFrame` `0x3001`,
@@ -965,12 +973,12 @@ instead, which is why they are in the table rather than omitted from it.
 
 | # | hostile | attack | verdict |
 |---|---|---|---|
-| H1 | **wrong-lineage** | migrate a market on `A` supplying a valid lineage record declared for some other predecessor `X` | refused `0x3013` — the record's address is `PDA(X)`, the route derives `PDA(A)` |
+| H1 | **wrong-lineage** | migrate a market on `A` supplying a valid lineage record declared for some other predecessor `X` | refused `0x3018` — the record's address is `PDA(X)`, the route derives `PDA(A)` |
 | H2 | **forged-lineage** | publish a lineage record for `A` naming an attacker-built successor, without holding any upgrade authority | refused `0x1011` |
-| H3 | **skip-generation** | market on `A`, lineage `A→B→C`; migrate straight to `C` by supplying `C`'s activation cache | refused `0x3014` — the cache's id is `C`, the record at `PDA(A)` names `B` |
+| H3 | **skip-generation** | market on `A`, lineage `A→B→C`; migrate straight to `C` by supplying `C`'s activation cache | refused `0x3019` — the cache's id is `C`, the record at `PDA(A)` names `B` |
 | H4 | **sideways-set** | declare `A→B'` where `B'` names a different Trading program id | refused `0x100F` |
 | H5 | **backward-set** | declare `B→A`, or any successor whose deployment slots are older | refused `0x1012` |
-| H6 | **replay-migration** | resubmit the identical successful migration transaction | refused `0x3013` — `active` is now `B`, so the supplied record at `PDA(A)` no longer matches |
+| H6 | **replay-migration** | resubmit the identical successful migration transaction | refused `0x3018` — `active` is now `B`, so the supplied record at `PDA(A)` no longer matches |
 | H7 | **lineage fork** | `DeclareSuccessor(A→B)` then `DeclareSuccessor(A→C)` | refused `0x100E` — the account is no longer pristine |
 | H8 | **self-succession** | declare `A→A` | refused `0x1010` |
 | H9 | **partial-cache successor** | declare `A→B` where `B`'s cache has only 3 of 5 roles activated | refused `0x1005` — a partial cache cannot `decode` (`activation.rs:309-316`) |
@@ -1111,7 +1119,7 @@ own method: classify before you edit.
 | 3 | **registry-sbf: `DeclareSuccessor`** | New magic `DCLRLND1`, fourth sub-dispatcher branch, the 11-account frame, conjuncts 1–8, codes `0x100E`–`0x1012`, band assertion update at `lib.rs:110-118` | hostiles H2, H4, H5, H7, H8, H9, H10, H11 — each refused at its own named conjunct with its pinned code; `cargo build-sbf` produces the ELF |
 | 4 | **Lean: the `active_release_set` field** | `MarketCore.lean` — add the field to the state (**not** to `MarketIdentity`), its nonzero invariant, and its write in `found`; add the migrate transition to `Action`. `MarketCoreAbi.lean` — append the `StateField` variant + schema entry + `rustName` arm; `state_schema_width : stateBytes = 392`. Regenerate. Ships with the mechanical fixes to every exhaustive `Action` match, including `trading-sbf/src/outer.rs:209,228,548` | `lake build` green with zero `sorry`; regenerated `generated.rs` byte-compared against the emitter; the whole workspace builds |
 | 5 | **codec: newtypes, and apply M1** | `SelectedReleaseSet` / `ActiveReleaseSet` newtypes; switch the join sites at `generated.rs:226-227`, `:281-282`, `:1217`, `:1219` and `physical.rs:725` to the active field via the emitter. `:804`/`:807` stay on `selected` — founding authors both | the type change is the control: a mix-up cannot compile. Existing Core tests stay green because at founding the two are equal |
-| 6 | **core-sbf: `MigrateMarket`** | New magic `DCLTMIG1`, dispatcher branch, the 5-account zero-signer frame, conjuncts, codes `0x3012`–`0x3014`, band assertions at `lib.rs:156-159` and `tests.rs:372` | hostiles H1, H3, H6, H12, H13, H14, H15, H18, plus the §7.3 permit trace. H12 and H13 **assert admission** |
+| 6 | **core-sbf: `MigrateMarket`** | New magic `DCLTMIG1`, dispatcher branch, the 5-account zero-signer frame, conjuncts, codes `0x3017`–`0x3019`, band assertions at `lib.rs:156-159` and `tests.rs:372` | hostiles H1, H3, H6, H12, H13, H14, H15, H18, plus the §7.3 permit trace. H12 and H13 **assert admission** |
 | 7 | **core-sbf: the migration bounty** | `MigrationBountyV1` (88 bytes), `FundMigration`, and the payout leg. Beneficiary and `bounty_per_hop` fixed at creation | hostiles H16 (vacant escrow still migrates) and H17 |
 | 8 | **release tool: author the lineage** | Emit `DeclareSuccessor` as a required step of the deployment plan, derived in `authenticate_complete_upgrade_set_for_prepare` — the one function already holding both cohorts' revisions and every role's pre- and post-upgrade observation. Refuse to *plan* an in-place upgrade that cannot be followed by a declaration. Fund the bounty | plan-time hostiles; the refusal lands at the desk, not the validator |
 | 9 | **mirrors and generated docs** | operator, SDK and TS mirrors; `abi:*:verify`; refusal registry regen (`tools/genref/generate.sh` → `docs/reference/refusals.md`); route census `--check-unique` | the existing verify gates |
@@ -1324,3 +1332,68 @@ document's line citations, and the census's own, decay within hours in a
 twelve-lane tree. The census's rent-credit row was accurate when written and
 drifted about sixty lines the same afternoon when an unrelated rent commit
 landed. **Cite by symbol and function name; treat every line number as a hint.**
+
+### 14.8 What the reader half needed, and the two ids that block the rest
+
+Added by the MIGRATE lane, 2026-08-31, after commits 1-3 had been in the tree
+through two further cuts. Four corrections and one finding.
+
+**§5.2's widths are stale, and the pattern will repeat.** `STATE_BYTES` is
+**368** at HEAD, not the 360 §5.2 records, and `state_schema_width` proves
+`stateBytes = 368` (`formal/dclutch-semantics/DClutchSemantics/MarketCoreAbi.lean`).
+`active_release_set` therefore lands at offset 368 and takes the state to 400,
+not 392. More usefully: CoreState has now widened twice while this design sat,
+so commit 4's `+32` must **join whatever batched widening the cut is already
+making** rather than open a third restrand of its own. A lane picking this up
+should confirm the current width from `generated.rs` and the Lean theorem
+rather than from any prose, including this paragraph.
+
+**The Registry codes are allocated; the Core codes are not.** §8.1's
+`0x100E`-`0x1012` are live in `programs/dclutch-registry-sbf/src/lib.rs` and
+mirrored into `docs/reference/refusals.md` and both TypeScript refusal
+registries. `0x3017`-`0x3019` remain unallocated: the Core band is contiguous
+through `PriceGateNonCanonical = 0x3016`, which the cohort-9 spline wire landed
+after this section was written, so §8.1's Core rows have been renumbered up by
+five and are accurate as they now read.
+
+**Commits 1-3 left the record with no reader, and that was the real gap.**
+`release_lineage_address_v1` and `is_lineage_account_v1` had zero production
+callers, because a link is not a history: nothing in the tree could follow two
+hops. `crates/dclutch-registry-contract/src/lineage_walk.rs` is now the single
+authority for turning links into a chain, and
+`packages/dclutch-sdk/lib/releaseLineage.ts` mirrors it for the SDK and the
+site. The walk deliberately is not a fetcher — its three callers (an on-chain
+route reading its own frame, a host tool reading RPC, a test reading a fixture)
+cannot share one, but they must share the rule.
+
+Two things fell out of writing it that this document should own. The **gap**
+deserves its own refusal and gets one: a chain that ends before reaching the
+world names the set that still owes a declaration, which is a repair
+instruction rather than a complaint. And the **hop bound refuses only once a
+further hop is offered** — a chain of exactly the bound arrives — which is not
+what the first implementation did, and a test caught it.
+
+**Retroactive authoring is admitted, and §4.2 is why.** The clause that omitted
+`declared_at_slot` on the grounds that no conjunct would read it has a
+consequence §4.2 did not draw: **lineage is retroactively authorable, honestly.**
+A hop declared today for two cohorts that superseded each other weeks ago
+encodes to exactly the bytes it would have encoded to at the time, so there is
+no stamp to backdate and no contemporaneity to counterfeit. That is now asserted
+in both languages rather than argued. It also dissolves the traded-market
+worry: market22 does not need to survive a cut, it needs its history to be
+followable across one, and a declaration authored after the fact does that.
+
+**The finding, and it blocks the rest.** The full 32-byte release-set ids of
+**cohort-7 and cohort-8 are not recorded anywhere in this repository** — they
+exist only as eight-character truncations in `SESSION_STATE.md:14,665` and
+`GOAL.md:280`. A truncation authors nothing: the lineage PDA seeds on all 32
+bytes and both endpoints are derived from activation-cache accounts rather than
+supplied. So the declarations that would make market22 followable cannot be
+built from the tree as it stands, and this is a hard prerequisite rather than
+an untidiness. Both ids are mechanically recoverable from chain — a market's own
+bytes carry its founding set and prove it by its address, and superseded
+activation caches are never deleted — and
+`docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md` records the mapping,
+the three ids that ARE recorded, and the exact recovery route for the two that
+are not. That file is also where cut gate 6's durable predecessor mapping
+belongs.

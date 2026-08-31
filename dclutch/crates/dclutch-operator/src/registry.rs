@@ -38,6 +38,8 @@ use solana_sdk_ids::{bpf_loader_upgradeable, native_loader, system_program, sysv
 
 use crate::{Finality, Observation, ObservedAccount, versioned::PACKET_DATA_BYTES};
 
+/// Chain-derived unsigned release-set successor declaration.
+pub mod declare_successor_v1;
 /// Chain-derived Core+Trading Registry continuation construction.
 pub mod hot_continuation_v1;
 /// Headerless chain-derived Core+Trading Registry continuation construction.
@@ -295,6 +297,20 @@ pub enum Error {
     Encoding,
     /// The fully signed transaction exceeded the current packet limit.
     PacketTooLarge,
+    /// The supplied lineage account was not the address the predecessor derives.
+    InvalidLineageAddress,
+    /// The lineage account is no longer pristine: this hop is already declared.
+    LineageAlreadyDeclared,
+    /// Both endpoints named the same release set.
+    LineageSelfSuccession,
+    /// A role's program identity differs across the hop.
+    LineageRoleIdentityMoved,
+    /// A moved role's deployment slot did not strictly advance.
+    LineageNotForward,
+    /// A moved role's release binds no upgrade authority to ask consent of.
+    LineageAuthorityMissing,
+    /// The composed lineage record refused its own coherence check.
+    LineageIncoherent,
 }
 
 /// Build the exact permissionless 26-account Registry activation instruction.
@@ -790,12 +806,22 @@ fn authenticate_payer(payer: &ObservedAccount) -> Result<(), Error> {
     Ok(())
 }
 
+/// Require the canonical executable System Program.
+///
+/// The identity triple is the whole check: exactly one account is
+/// `system_program::ID` owned by `native_loader::ID` and executable, so nothing
+/// else can stand here.
+///
+/// It deliberately does NOT require the account to be dataless. A native
+/// program account carries its own NAME as data -- the runtime writes
+/// `b"system_program"` at genesis -- so an emptiness requirement admits only
+/// hand-synthesized accounts and refuses every real one. That went unnoticed
+/// because no caller had ever fed this function an account read off a chain:
+/// the devnet writer assembles the activation frame's metas directly, and the
+/// tests supplied a dataless fiction. The first caller to observe the real
+/// account (the successor-declaration program test) refused on it immediately.
 fn authenticate_system_program(system: &ObservedAccount) -> Result<(), Error> {
-    if system.key != system_program::ID
-        || system.owner != native_loader::ID
-        || !system.executable
-        || !system.data.is_empty()
-    {
+    if system.key != system_program::ID || system.owner != native_loader::ID || !system.executable {
         return Err(Error::InvalidRuntimePlumbing);
     }
     Ok(())

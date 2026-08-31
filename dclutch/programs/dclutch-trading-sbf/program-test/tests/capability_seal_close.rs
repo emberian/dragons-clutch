@@ -39,6 +39,16 @@
 //!   The close refuses with `ReleaseSuperseded` rather than accepting a cache
 //!   that describes a deployment that has moved.
 //!
+//! - **A seal that cannot state its own bump is still closable, and only it.**
+//!   A body written before the bump moved into offset 20 carries an unwritten
+//!   zero there, so the ordinary decoder refuses it and its rent is stranded
+//!   twice over. The defunct arm reads exactly that shape — every canonical
+//!   conjunct, the bump byte required to be zero — and reproduces the address
+//!   from a candidate the closer mined offline. The four cases at the end of
+//!   this file close one such seal, refuse it when the live release still
+//!   addresses it, refuse a WELL-FORMED seal offered under a candidate (even its
+//!   own bump), and refuse a wrong candidate.
+//!
 //! # What this file does not do
 //!
 //! It takes no CU measurement. `CloseSeal` touches one account this Program
@@ -50,8 +60,9 @@ use dclutch_capability_program_contract::hot_v3::{
 };
 use dclutch_capability_seal_contract::{
     CAPABILITY_SEAL_BUMP_OFFSET_V1, CAPABILITY_SEAL_BYTES_V1,
-    CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1, CapabilitySealCloseRequestV1, CapabilitySealKeyV1,
-    CapabilitySealRequestV1, SealedDescriptorClosureV1,
+    CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1, CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1,
+    CapabilitySealCloseRequestV1, CapabilitySealKeyV1, CapabilitySealRequestV1,
+    Error as CapabilitySealError, SealedDescriptorClosureV1,
 };
 use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
 use dclutch_trading_sbf::TradingSbfError;
@@ -188,6 +199,38 @@ fn seal_instruction(direct: &DirectCase, aimed_at: Option<Pubkey>) -> Instructio
 /// request — a request field carrying a refund destination is a field a griefer
 /// fills in with someone else's address.
 fn close_instruction(seal: Pubkey, closer: Pubkey, releases: Releases) -> Instruction {
+    close_instruction_under(
+        seal,
+        closer,
+        releases,
+        CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1,
+    )
+}
+
+/// Build the seal CLOSE outer for a body that never recorded its own bump.
+///
+/// The only difference from the ordinary close is the one request byte: the
+/// caller supplies the bump the body cannot state, and the route reproduces the
+/// address from it. Same seven accounts, same signer, same beneficiary.
+fn defunct_close_instruction(
+    seal: Pubkey,
+    closer: Pubkey,
+    releases: Releases,
+    bump_candidate: u8,
+) -> Instruction {
+    assert_ne!(
+        bump_candidate, CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1,
+        "candidate zero is the ordinary close, not the defunct arm"
+    );
+    close_instruction_under(seal, closer, releases, bump_candidate)
+}
+
+fn close_instruction_under(
+    seal: Pubkey,
+    closer: Pubkey,
+    releases: Releases,
+    bump_candidate: u8,
+) -> Instruction {
     Instruction {
         program_id: TRADING_PROGRAM_ID,
         accounts: vec![
@@ -199,7 +242,9 @@ fn close_instruction(seal: Pubkey, closer: Pubkey, releases: Releases) -> Instru
             AccountMeta::new_readonly(releases.trading_programdata, false),
             AccountMeta::new_readonly(sysvar::rent::ID, false),
         ],
-        data: CapabilitySealCloseRequestV1.to_bytes().to_vec(),
+        data: CapabilitySealCloseRequestV1::new(bump_candidate)
+            .to_bytes()
+            .to_vec(),
     }
 }
 
@@ -214,33 +259,15 @@ fn close_instruction(seal: Pubkey, closer: Pubkey, releases: Releases) -> Instru
 /// key, so the account this plants is exactly what the predecessor release's
 /// own seal outer would have left behind.
 fn stranded_seal(direct: &DirectCase, release: [u8; 32]) -> (Pubkey, Vec<u8>) {
-    let mut bytes = direct.chain.capability_seal_bytes.clone();
-    let live = SealedDescriptorClosureV1::decode(&bytes)
-        .expect("the fixture's own seal body")
-        .key()
-        .expect("the fixture's own seal key");
     assert_ne!(
         release,
-        live.trading_semantic_release(),
+        fixture_seal_key(direct).trading_semantic_release(),
         "a 'stranded' seal filed under the live release proves nothing"
     );
-    let key = CapabilitySealKeyV1::new(
-        live.descriptor_schema(),
-        live.descriptor_digest(),
-        live.action(),
-        release,
-        live.registry_program(),
-    )
-    .expect("stranded seal key");
+    let key = seal_key_under(direct, release);
     let (address, bump) =
         Pubkey::find_program_address(&key.seeds().as_slices(), &TRADING_PROGRAM_ID);
-    bytes
-        .get_mut(
-            CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1
-                ..CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1 + 32,
-        )
-        .expect("sealed Trading release field")
-        .copy_from_slice(&release);
+    let mut bytes = seal_body_under(direct, release);
     *bytes
         .get_mut(CAPABILITY_SEAL_BUMP_OFFSET_V1)
         .expect("sealed canonical bump") = bump;
@@ -249,6 +276,99 @@ fn stranded_seal(direct: &DirectCase, release: [u8; 32]) -> (Pubkey, Vec<u8>) {
         "the release seed did not move the address"
     );
     (address, bytes)
+}
+
+/// The same body with the bump byte left UNWRITTEN, which is the one shape the
+/// pre-bump layout produced and the ordinary close cannot read.
+///
+/// Before the bump moved into offset 20 that byte was reserved, so a seal
+/// written then is canonical in every field a reader checks except the one that
+/// reproduces its own address. Its account is a real seal at the address
+/// `find_program_address` names for its own key — the rent is stranded not
+/// because anything is wrong with the account but because nothing on chain can
+/// say which bump it lives under. The mined candidate is returned because the
+/// closer has to supply exactly that byte.
+///
+/// Both halves are asserted here rather than assumed: the ordinary decoder
+/// refuses this body with `ZeroBump`, and the defunct decoder accepts it.
+fn defunct_seal(direct: &DirectCase, release: [u8; 32]) -> (Pubkey, Vec<u8>, u8) {
+    let key = seal_key_under(direct, release);
+    let (address, bump) =
+        Pubkey::find_program_address(&key.seeds().as_slices(), &TRADING_PROGRAM_ID);
+    let mut bytes = seal_body_under(direct, release);
+    *bytes
+        .get_mut(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+        .expect("sealed canonical bump") = 0;
+    assert_eq!(
+        SealedDescriptorClosureV1::decode(&bytes),
+        Err(CapabilitySealError::ZeroBump),
+        "the planted body is readable by the ordinary decoder"
+    );
+    SealedDescriptorClosureV1::decode_defunct(&bytes).expect("the planted defunct body");
+    assert_eq!(
+        mine_bump_candidate(key, address),
+        bump,
+        "the bump a closer mines offline is not the one the address was derived under"
+    );
+    (address, bytes, bump)
+}
+
+/// The fixture's own seal key, as the fixture's own body states it.
+fn fixture_seal_key(direct: &DirectCase) -> CapabilitySealKeyV1 {
+    SealedDescriptorClosureV1::decode(&direct.chain.capability_seal_bytes)
+        .expect("the fixture's own seal body")
+        .key()
+        .expect("the fixture's own seal key")
+}
+
+/// The fixture's own seal key, re-filed under another Trading semantic release.
+fn seal_key_under(direct: &DirectCase, release: [u8; 32]) -> CapabilitySealKeyV1 {
+    let live = fixture_seal_key(direct);
+    CapabilitySealKeyV1::new(
+        live.descriptor_schema(),
+        live.descriptor_digest(),
+        live.action(),
+        release,
+        live.registry_program(),
+    )
+    .expect("seal key under the named release")
+}
+
+/// The fixture's own seal body with only the release field moved.
+fn seal_body_under(direct: &DirectCase, release: [u8; 32]) -> Vec<u8> {
+    let mut bytes = direct.chain.capability_seal_bytes.clone();
+    bytes
+        .get_mut(
+            CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1
+                ..CAPABILITY_SEAL_TRADING_RELEASE_OFFSET_V1 + 32,
+        )
+        .expect("sealed Trading release field")
+        .copy_from_slice(&release);
+    bytes
+}
+
+/// Recover the bump one address was derived under, the way a closer does it.
+///
+/// This is `find_program_address`'s own search written out, because that search
+/// is exactly the offline chore the defunct arm asks the caller to have done:
+/// walk 255 down to 1 and keep the first candidate whose
+/// `create_program_address` IS the account's address. No chain state is
+/// consulted, which is why the probe that gates this item can run without a
+/// cluster.
+fn mine_bump_candidate(key: CapabilitySealKeyV1, address: Pubkey) -> u8 {
+    let seeds = key.seeds();
+    let base = seeds.as_slices();
+    for candidate in (1..=u8::MAX).rev() {
+        let tail = [candidate];
+        let derived = Pubkey::create_program_address(
+            &[base[0], base[1], base[2], base[3], base[4], base[5], &tail],
+            &TRADING_PROGRAM_ID,
+        );
+        if derived == Ok(address) {
+            return candidate;
+        }
+    }
+    panic!("no bump candidate reproduces the seal address")
 }
 
 fn plant(context: &mut ProgramTestContext, address: Pubkey, data: Vec<u8>) {
@@ -634,5 +754,191 @@ async fn a_superseded_cache_cannot_witness_the_release_the_close_needs() {
         .await
         .expect("the refused close deleted the seal");
     assert_eq!(after.data, body);
+    assert_eq!(lamports_of(&mut context, stranger.pubkey()).await, 0);
+}
+
+/// The defunct arm: a seal whose bump byte was never written closes under a
+/// bump the closer mined offline, and the closer keeps exactly the rent.
+///
+/// This is the shape of the one account the class contains — canonical in every
+/// field, at the address `find_program_address` names for its own key, and
+/// unreadable by the ordinary decoder for the single reason that the byte
+/// reproducing that address was reserved when the body was written. `defunct_seal`
+/// asserts both halves of that before the account is planted, so the close below
+/// is the only thing under test.
+///
+/// The control is `a_stranger_closes_a_stranded_seal_and_keeps_the_rent`: the
+/// same fixture, the same planted release, the same seven accounts, differing in
+/// the one request byte and the one body byte.
+#[tokio::test]
+async fn a_defunct_seal_closes_under_a_mined_bump_candidate() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
+    let (defunct, body, candidate) = defunct_seal(&direct, STRANDED_TRADING_SEMANTIC_RELEASE);
+    let stranger = Keypair::new();
+    let close = defunct_close_instruction(defunct, stranger.pubkey(), releases, candidate);
+    let addresses = lookup_union(core::slice::from_ref(&close), direct.payer.pubkey());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    plant(&mut context, defunct, body);
+
+    assert_eq!(
+        lamports_of(&mut context, stranger.pubkey()).await,
+        0,
+        "the closer must start with nothing, or the payout below proves nothing"
+    );
+
+    submit(&mut context, &direct, close, &addresses, &[&stranger])
+        .await
+        .expect("a defunct seal refused to close under its own mined bump");
+
+    assert_eq!(
+        lamports_of(&mut context, stranger.pubkey()).await,
+        seal_rent(),
+        "the closer was not paid exactly the rent the close liberated"
+    );
+    assert!(
+        is_vacant(&mut context, defunct).await,
+        "the closed defunct seal is still readable as a seal"
+    );
+}
+
+/// The defunct arm relaxes the decode and NOTHING else: a defunct body the live
+/// release still addresses refuses on the release comparison.
+///
+/// The live-release refusal is where this close's soundness lives, so the
+/// tolerant arm must reach it unchanged. The body here is the fixture's own seal
+/// with one byte zeroed, so its four seeds are the live ones and its address is
+/// literally the address the live seal outer writes — asserted, not assumed.
+#[tokio::test]
+async fn a_defunct_seal_the_live_release_addresses_still_refuses() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
+    assert_eq!(
+        fixture_seal_key(&direct).trading_semantic_release(),
+        LIVE_TRADING_SEMANTIC_RELEASE,
+        "the fixture's live Trading semantic release moved; the constant is stale"
+    );
+    let (defunct, body, candidate) = defunct_seal(&direct, LIVE_TRADING_SEMANTIC_RELEASE);
+    assert_eq!(
+        defunct, direct.chain.capability_seal,
+        "a defunct body under the live seeds must sit at the live seal's address"
+    );
+    let stranger = Keypair::new();
+    let close = defunct_close_instruction(defunct, stranger.pubkey(), releases, candidate);
+    let addresses = lookup_union(core::slice::from_ref(&close), direct.payer.pubkey());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    plant(&mut context, defunct, body.clone());
+
+    let refused = submit(&mut context, &direct, close, &addresses, &[&stranger])
+        .await
+        .expect_err("the defunct arm closed a seal the live release addresses");
+    assert_refusal(&refused, CLOSE_SEAL_LIVE_RELEASE_REFUSAL_CODE);
+    let after = maybe_account(&mut context, defunct)
+        .await
+        .expect("the refused close deleted the seal");
+    assert_eq!(after.data, body);
+    assert_eq!(after.lamports, seal_rent());
+    assert_eq!(lamports_of(&mut context, stranger.pubkey()).await, 0);
+}
+
+/// A well-formed seal cannot be dragged onto the tolerant arm, and the candidate
+/// offered here is the seal's OWN bump.
+///
+/// This is the disjointness the two arms rest on, executed rather than argued: a
+/// nonzero candidate selects `decode_defunct`, which requires the persisted bump
+/// to be the unwritten zero, so a body that records its own bump refuses with
+/// `NotDefunct` and lands on `CloseSealAccount`. The right byte does not help,
+/// because the arm is chosen before the byte is used.
+///
+/// The control is in the same test and on the same planted account: the ordinary
+/// close, candidate zero, executes and pays the rent.
+#[tokio::test]
+async fn a_well_formed_seal_refuses_a_bump_candidate_and_closes_without_one() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
+    let (stranded, body) = stranded_seal(&direct, STRANDED_TRADING_SEMANTIC_RELEASE);
+    let own_bump = *body
+        .get(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+        .expect("sealed canonical bump");
+    assert_ne!(own_bump, CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1);
+    let stranger = Keypair::new();
+    let hostile = defunct_close_instruction(stranded, stranger.pubkey(), releases, own_bump);
+    let ordinary = close_instruction(stranded, stranger.pubkey(), releases);
+    let addresses = lookup_union(&[hostile.clone(), ordinary.clone()], direct.payer.pubkey());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    plant(&mut context, stranded, body.clone());
+
+    let refused = submit(&mut context, &direct, hostile, &addresses, &[&stranger])
+        .await
+        .expect_err("a well-formed seal was closed through the defunct arm");
+    assert_refusal(&refused, CLOSE_SEAL_ACCOUNT_REFUSAL_CODE);
+    let after = maybe_account(&mut context, stranded)
+        .await
+        .expect("the refused close deleted the seal");
+    assert_eq!(after.data, body);
+    assert_eq!(lamports_of(&mut context, stranger.pubkey()).await, 0);
+
+    submit(&mut context, &direct, ordinary, &addresses, &[&stranger])
+        .await
+        .expect("the ordinary close refused the same account");
+    assert_eq!(
+        lamports_of(&mut context, stranger.pubkey()).await,
+        seal_rent()
+    );
+    assert!(is_vacant(&mut context, stranded).await);
+}
+
+/// A wrong bump candidate reproduces some other address and buys nothing.
+///
+/// This is what makes the candidate a memo rather than an authority. The seal
+/// account is fixed by the frame and the seeds come from the body, so a
+/// candidate that is not the one the address was derived under either fails
+/// `create_program_address` outright or names a different address; both refuse
+/// with `CloseSealAccount`, and the account is untouched afterwards.
+///
+/// The control is `a_defunct_seal_closes_under_a_mined_bump_candidate`: the same
+/// planted account, the same request, the mined candidate.
+#[tokio::test]
+async fn the_defunct_close_refuses_a_wrong_bump_candidate() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
+    let (defunct, body, candidate) = defunct_seal(&direct, STRANDED_TRADING_SEMANTIC_RELEASE);
+    let stranger = Keypair::new();
+    let wrong: Vec<u8> = [255_u8, 254, 253, 1]
+        .into_iter()
+        .filter(|value| *value != candidate)
+        .take(2)
+        .collect();
+    let hostile: Vec<Instruction> = wrong
+        .iter()
+        .map(|value| defunct_close_instruction(defunct, stranger.pubkey(), releases, *value))
+        .collect();
+    let addresses = lookup_union(&hostile, direct.payer.pubkey());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    plant(&mut context, defunct, body.clone());
+
+    for instruction in hostile {
+        let refused = submit(&mut context, &direct, instruction, &addresses, &[&stranger])
+            .await
+            .expect_err("a wrong bump candidate closed a defunct seal");
+        assert_refusal(&refused, CLOSE_SEAL_ACCOUNT_REFUSAL_CODE);
+        let after = maybe_account(&mut context, defunct)
+            .await
+            .expect("a refused close deleted the seal");
+        assert_eq!(after.data, body);
+        assert_eq!(after.lamports, seal_rent());
+    }
     assert_eq!(lamports_of(&mut context, stranger.pubkey()).await, 0);
 }

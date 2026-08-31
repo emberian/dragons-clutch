@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "dclutch-cli"
-version = "0.1.0-devnet.2"
+version = "0.1.0-devnet.3"
 dependencies = [
  "base64",
  "dclutch-capability-program-contract",

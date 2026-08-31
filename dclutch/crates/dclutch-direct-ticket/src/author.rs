@@ -345,7 +345,18 @@ pub fn keypair_seed_from_file_v1(path: &Path, label: &str) -> Result<[u8; 32]> {
 /// The variable NAME is an argument; the path is not, and neither ever appears
 /// in a receipt. A refusal here names the variable the caller chose, because
 /// that is the only thing they can act on that is already theirs.
-fn keypair_path_from_environment_v1(variable: &str) -> Result<PathBuf> {
+///
+/// Public because this discipline is not the ticket author's private habit. It
+/// is what the project does with any key whose exposure is not recoverable, and
+/// the successor-declaration caller needs it for the retained Loader deployer --
+/// the one key that can strand every market in the protocol. A second copy of
+/// these four refusals would be a second place for them to drift.
+///
+/// # Errors
+///
+/// If `variable` is not an uppercase environment-variable name, or the variable
+/// is unset, empty, or does not hold an absolute path.
+pub fn keypair_path_from_environment_v1(variable: &str) -> Result<PathBuf> {
     if !is_environment_variable_name_v1(variable) {
         return Err(refusal(
             "--keypair-env must name one uppercase environment variable, not a path",

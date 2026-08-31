@@ -36,10 +36,10 @@ use dclutch_market_core_codec::{
     SeriesFoundingPermitSeedsV1, SeriesFoundingPermitV1,
 };
 use dclutch_product_payoff_v2_codec::{
-    registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+    registry_v3::{GRADED_BASIS_RECORD_SCHEMA_ID_V3, PRICE_GATE_RECORD_SCHEMA_ID_V1},
     runtime_v3::{
-        BasisInputV3, BasisKindV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, basis_record_bytes_v3,
-        compile_basis_v3, semantic_basis_preimage_v3,
+        BasisInputV3, BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        basis_record_bytes_v3, compile_basis_v3, semantic_basis_preimage_v3,
     },
 };
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
@@ -240,6 +240,8 @@ struct Fixture {
     domain: Record,
     portfolio: Record,
     linked_basis: Record,
+    /// The `DCLTPGT1` certificate, present only for a curved basis.
+    price_gate: Option<Record>,
     source: Record,
     source_spec: Record,
     capacity_profile: Record,
@@ -522,6 +524,153 @@ fn funded_manifest_record() -> Record {
     Record::new(CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, bytes)
 }
 
+/// A degree-2 curved Product graph, and the `DCLTPGT1` certificate that admits
+/// it.
+///
+/// The certificate is built the cheapest genuinely-valid way: **one atom, with
+/// `weight == mass == 1`**. The hull identity then collapses to
+/// `price_j * 1 == 1 * payout_j`, so the certified price vector *is* the payout
+/// vector the basis produces at that coordinate -- and it partitions the scale
+/// for free, because a payout vector already does.
+///
+/// The basis is compiled three times, which is not waste but ordering: the
+/// certificate's prices depend on the basis's payouts, and the basis's digest
+/// field depends on the certificate. Neither the digest nor the result domain
+/// changes what the evaluator pays, so the fixed point is reached in one pass
+/// rather than iterated.
+fn curved_product_graph() -> (Record, Record, Record, Record, Record, u32, [u8; 32]) {
+    // Small enough that the fixture's principal capacity yields at least one
+    // complete set: `derive_principal_cap_sets` divides the cap by the basis
+    // scale, and this fixture's hoard principal is 5_000.
+    const SCALE: u64 = 100;
+    const WIDTH: u32 = 5;
+    let knots: Vec<i128> = vec![0, 0, 0, 1, 2, 3, 3, 3];
+    let failure = vec![SCALE / u64::from(WIDTH); WIDTH as usize];
+    let kind = BasisKindV3::SplineDegree2To3 {
+        degree: 2,
+        interior_multiplicity: false,
+    };
+    let basis_bytes =
+        basis_record_bytes_v3(kind, WIDTH as usize, knots.len(), 0).expect("basis width");
+
+    let base_input = BasisInputV3 {
+        kind,
+        product_id: product_id(1).to_bytes(),
+        result_domain_id: [0xf2; 32],
+        coordinate_domain_id: product_id(2).to_bytes(),
+        result_unit_id: product_id(3).to_bytes(),
+        evaluator_release_id: [0xf3; 32],
+        basis_width: WIDTH,
+        payout_scale: SCALE,
+        knot_denominator: 1,
+        knots: &knots,
+        terms: &[],
+        failure_payouts: &failure,
+        price_gate_certificate_digest: [1_u8; 32],
+    };
+
+    // Pass one: a placeholder digest, purely to read the payouts off the live
+    // evaluator at the atom coordinate.
+    let (atom_numerator, atom_denominator) = (3_i64, 2_u32);
+    let mut probe = vec![0_u8; basis_bytes];
+    compile_basis_v3(base_input, &mut probe).expect("probe basis");
+    let mut payouts = vec![0_u64; WIDTH as usize];
+    ProductBasisV3::decode(&probe)
+        .expect("probe decodes")
+        .evaluate_rational(
+            i128::from(atom_numerator),
+            u64::from(atom_denominator),
+            &mut payouts,
+        )
+        .expect("the live evaluator pays");
+    assert_eq!(payouts.iter().sum::<u64>(), SCALE, "an exact partition");
+
+    let mut certificate = [0_u8; 320];
+    certificate[0..8].copy_from_slice(b"DCLTPGT1");
+    certificate[8..10].copy_from_slice(&1_u16.to_le_bytes());
+    certificate[10..12].copy_from_slice(&1_u16.to_le_bytes());
+    certificate[12..16].copy_from_slice(&u32::try_from(SCALE).expect("scale").to_le_bytes());
+    certificate[16..24].copy_from_slice(&1_u64.to_le_bytes());
+    certificate[24] = 2;
+    certificate[25] = u8::try_from(WIDTH).expect("width");
+    certificate[26] = 1;
+    for (claim, payout) in payouts.iter().enumerate() {
+        certificate[40 + claim * 8..48 + claim * 8].copy_from_slice(&payout.to_le_bytes());
+    }
+    certificate[120..128].copy_from_slice(&1_u64.to_le_bytes());
+    certificate[200..208].copy_from_slice(&atom_numerator.to_le_bytes());
+    certificate[280..284].copy_from_slice(&atom_denominator.to_le_bytes());
+    let price_gate = Record::new(PRICE_GATE_RECORD_SCHEMA_ID_V1, certificate.to_vec());
+
+    // Pass two: the real digest, for the semantic identity the Product commits.
+    let provisional_input = BasisInputV3 {
+        price_gate_certificate_digest: price_gate.digest,
+        ..base_input
+    };
+    let mut provisional = vec![0_u8; basis_bytes];
+    compile_basis_v3(provisional_input, &mut provisional).expect("provisional basis");
+    let semantic = semantic_basis_preimage_v3(&provisional).expect("semantic basis");
+    let liability_basis_id = ContentId::new(
+        hashv(&[
+            SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+            semantic.prefix(),
+            semantic.suffix(),
+        ])
+        .to_bytes(),
+    )
+    .expect("semantic basis ID");
+
+    // `outcome_count == cuts.len() + 2`, and it must equal the basis width.
+    let cuts: Vec<i128> = (0_i128..i128::from(WIDTH) - 2).collect();
+    let coefficients = vec![7_u64; cuts.len() + 2];
+    let mut product = [0_u8; PRODUCT_RECORD_BYTES_V2];
+    let mut domain = vec![0_u8; result_domain_record_bytes(cuts.len()).expect("domain bytes")];
+    let mut portfolio =
+        vec![0_u8; portfolio_record_bytes(coefficients.len()).expect("portfolio bytes")];
+    let report = compile_product_records_v2(
+        REGISTRY_PROGRAM_ID,
+        ProductCompilationInputV2 {
+            product_id: product_id(1),
+            coordinate_domain_id: product_id(2),
+            result_unit_id: product_id(3),
+            claim_basis_id: product_id(4),
+            liability_basis_id,
+            representation_release_id: product_id(6),
+            mapping_release_id: product_id(7),
+            cut_denominator: 1,
+            cuts: &cuts,
+            portfolio_denominator: 9,
+            coefficients: &coefficients,
+        },
+        &mut product,
+        &mut domain,
+        &mut portfolio,
+    )
+    .expect("curved Product graph");
+    assert_eq!(
+        report.outcome_count, WIDTH,
+        "the basis width is the outcome count"
+    );
+
+    // Pass three: the real result domain, which the semantic preimage omits so
+    // the identity above still stands.
+    let final_input = BasisInputV3 {
+        result_domain_id: report.receipt.result_domain.content_digest.to_bytes(),
+        ..provisional_input
+    };
+    let mut linked_basis = vec![0_u8; basis_bytes];
+    compile_basis_v3(final_input, &mut linked_basis).expect("linked curved basis");
+    (
+        Record::from_coordinate(report.receipt.product, product.to_vec()),
+        Record::from_coordinate(report.receipt.result_domain, domain),
+        Record::from_coordinate(report.receipt.portfolio, portfolio),
+        Record::new(GRADED_BASIS_RECORD_SCHEMA_ID_V3, linked_basis),
+        price_gate,
+        report.outcome_count,
+        product_id(1).to_bytes(),
+    )
+}
+
 fn product_graph() -> (Record, Record, Record, Record, u32, [u8; 32]) {
     let provisional_input = BasisInputV3 {
         kind: BasisKindV3::CategoricalQ1,
@@ -536,6 +685,9 @@ fn product_graph() -> (Record, Record, Record, Record, u32, [u8; 32]) {
         knots: &[],
         terms: &[],
         failure_payouts: &[],
+        // Exempt by proof: degree 0 and 1 need no price gate,
+        // and a digest offered alongside one is refused.
+        price_gate_certificate_digest: [0_u8; 32],
     };
     let basis_width =
         basis_record_bytes_v3(BasisKindV3::CategoricalQ1, 258, 0, 0).expect("basis width");
@@ -1149,6 +1301,15 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
 }
 
 fn fixture(core_mutable: bool) -> Fixture {
+    fixture_with(core_mutable, false)
+}
+
+/// The same fixture, over a degree-2 curved basis and its certificate.
+fn curved_fixture() -> Fixture {
+    fixture_with(false, true)
+}
+
+fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
     let artifacts = artifacts();
     let mutable_authority = core_mutable.then(|| Pubkey::new_from_array([0xd1; 32]));
     let mut test = ProgramTest::default();
@@ -1247,8 +1408,14 @@ fn fixture(core_mutable: bool) -> Fixture {
         },
     );
 
-    let (product, domain, portfolio, linked_basis, outcome_count, stable_product_id) =
-        product_graph();
+    let (product, domain, portfolio, linked_basis, price_gate, outcome_count, stable_product_id) =
+        if curved {
+            let (product, domain, portfolio, basis, gate, outcomes, id) = curved_product_graph();
+            (product, domain, portfolio, basis, Some(gate), outcomes, id)
+        } else {
+            let (product, domain, portfolio, basis, outcomes, id) = product_graph();
+            (product, domain, portfolio, basis, None, outcomes, id)
+        };
     let realm_value = RealmV1::new(RealmV1Input {
         token_program: dclutch_token_svm::LEGACY_TOKEN_PROGRAM_ID,
         collateral_mint: [0xb2; 32],
@@ -1327,6 +1494,9 @@ fn fixture(core_mutable: bool) -> Fixture {
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         rent_release.to_bytes().to_vec(),
     );
+    if let Some(certificate) = price_gate.as_ref() {
+        certificate.add(&mut test);
+    }
     for record in [
         &realm,
         &product,
@@ -1440,6 +1610,7 @@ fn fixture(core_mutable: bool) -> Fixture {
         domain,
         portfolio,
         linked_basis,
+        price_gate,
         source,
         source_spec,
         capacity_profile,
@@ -1516,7 +1687,18 @@ fn found_instruction(fixture: &Fixture, swap_artifacts: bool) -> Instruction {
             AccountMeta::new_readonly(rent_raw, false),
             AccountMeta::new_readonly(rent_staging, false),
             AccountMeta::new_readonly(fixture.rent_programdata, false),
-        ],
+        ]
+        .into_iter()
+        // **Appended last, and only when the basis needs one.** The canonical
+        // 37-account frame is byte-for-byte what it always was; a curved basis
+        // makes it 39. Nothing before the pair moves.
+        .chain(fixture.price_gate.iter().flat_map(|certificate| {
+            [
+                AccountMeta::new_readonly(certificate.raw, false),
+                AccountMeta::new_readonly(certificate.staging, false),
+            ]
+        }))
+        .collect(),
         data: Request::administrative(
             Action::Found,
             GENERATION,
@@ -2596,5 +2778,98 @@ async fn a_market_short_of_its_occurrences_budgeted_rent_still_refuses() {
     assert!(
         market.data.is_empty(),
         "the refused found allocated nothing"
+    );
+}
+
+/// **Curvature founds, on a real Core ELF.**
+///
+/// This is the acceptance condition the cut exists for: a degree-2 basis, a
+/// `DCLTPGT1` no-arbitrage certificate whose hull identity Core recomputes
+/// through the production evaluator, and a Market that reaches `Founding`.
+///
+/// The frame is 39 accounts rather than 37 — the certificate pair, appended
+/// last — and every coordinate before it is unmoved, which is why the twelve
+/// tests above still pass untouched.
+#[tokio::test]
+async fn a_degree_two_market_founds_with_a_valid_price_gate_certificate() {
+    let fixture = curved_fixture();
+    assert!(
+        fixture.price_gate.is_some(),
+        "the curved fixture carries a certificate"
+    );
+    let instruction = found_instruction(&fixture, false);
+    assert_eq!(
+        instruction.accounts.len(),
+        dclutch_market_core_codec::FOUND_PRICE_GATE_ACCOUNT_COUNT_V3,
+        "the extended frame is the canonical one plus the certificate pair"
+    );
+
+    let (fixture, context, accepted) = execute(fixture, instruction).await;
+    assert!(accepted, "a curved basis with a valid certificate founds");
+    assert_eq!(fixture.outcome_count, 5);
+
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("Market");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+    let state = CoreState::decode(&market.data).expect("CoreState");
+    assert_eq!(state.phase, Phase::Founding);
+}
+
+/// **And without the certificate it refuses, by name.**
+///
+/// The same curved basis, the same 37-account canonical frame every graded
+/// market uses. The refusal is `PriceGateRequired` (0x3012) and not a length
+/// mismatch or a generic `Reference`: the frame is well formed, the basis is
+/// well formed, and what is missing is the no-arbitrage witness.
+///
+/// This is the red-proof for the founding gate. Without it the conjunct could
+/// be unreachable and every test above would still pass.
+#[tokio::test]
+async fn a_degree_two_market_without_its_certificate_refuses_by_name() {
+    let mut fixture = curved_fixture();
+    // Drop only the certificate, so the instruction builds the canonical frame.
+    fixture.price_gate = None;
+    let instruction = found_instruction(&fixture, false);
+    assert_eq!(
+        instruction.accounts.len(),
+        dclutch_market_core_codec::FOUND_ACCOUNT_COUNT_V3,
+        "the canonical frame, exactly as a graded founding builds it"
+    );
+
+    // Executed inline rather than through `execute`, which returns only a
+    // boolean: the whole point of this test is WHICH refusal.
+    let mut fixture = fixture;
+    let mut test = fixture.test.take().expect("ProgramTest");
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+    let context = test.start_with_context().await;
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let outcome = context
+        .banks_client
+        .process_transaction(signed_v0(
+            &context.payer.pubkey(),
+            &[instruction],
+            &lookup,
+            blockhash,
+            &[&context.payer, &fixture.payer],
+        ))
+        .await;
+    let refusal = format!(
+        "{:?}",
+        outcome.expect_err("a curved basis with no certificate")
+    );
+    assert!(
+        refusal.contains(&format!(
+            "Custom({})",
+            dclutch_core_sbf::CoreSbfError::PriceGateRequired as u32
+        )),
+        "expected PriceGateRequired (0x3012), got {refusal}"
     );
 }

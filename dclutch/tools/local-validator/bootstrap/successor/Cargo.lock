@@ -422,6 +422,45 @@ name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-claims-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-economic-slice-kernel",
+ "dclutch-fractional-claim-contract",
+ "dclutch-fractional-claim-kernel",
+ "dclutch-fractional-claims-kernel",
+ "dclutch-market-core-codec",
+ "dclutch-product-contract",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2",
+ "dclutch-product-runtime-v2-svm-reader",
+ "dclutch-rational-representation-v2-contract",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-rational-representation-v2-lifecycle-contract",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-refusal-registry",
+ "dclutch-registry-activation-auth-v1",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-resolution-codec",
+ "dclutch-sha256-adapter",
+ "dclutch-source-contract",
+ "dclutch-token-svm",
+ "solana-program",
+ "solana-sdk-ids",
+ "solana-system-interface",
+ "spl-associated-token-account-interface",
+ "spl-token-2022-interface",
+]
+
+[[package]]
 name = "dclutch-claims-svm"
 version = "0.1.0"
 dependencies = [
@@ -630,6 +669,7 @@ dependencies = [
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",
+ "dclutch-claims-sbf",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
@@ -777,6 +817,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-relay-contract",
@@ -1037,12 +1078,15 @@ dependencies = [
 name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
  "dclutch-core-contract",
  "dclutch-execution-strategy-contract",
  "dclutch-pyth-svm",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
+ "serde_json",
  "sha2 0.10.9",
  "solana-program",
 ]
@@ -2455,9 +2499,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.149"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "itoa",
  "memchr",

@@ -42,8 +42,7 @@ pub const DIRECT_FEE_SETTLEMENT_RECEIPT_BYTES_V1: usize = 360;
 /// Implemented wire version.
 pub const DIRECT_FEE_SETTLEMENT_VERSION_V1: u16 = 1;
 /// Domain separating the synthetic order tag carried by the fee request.
-pub const DIRECT_FEE_SETTLEMENT_ORDER_DOMAIN_V1: &[u8] =
-    b"dclutch/direct/fee-settlement-order/v1";
+pub const DIRECT_FEE_SETTLEMENT_ORDER_DOMAIN_V1: &[u8] = b"dclutch/direct/fee-settlement-order/v1";
 
 /// The design's §4.4 ceiling for this wire, asserted rather than described.
 const _: () = assert!(DIRECT_FEE_SETTLEMENT_REQUEST_BYTES_V1 < 128);
@@ -146,10 +145,7 @@ impl DirectFeeSettlementRequestV1 {
     pub fn to_bytes(self) -> Result<[u8; DIRECT_FEE_SETTLEMENT_REQUEST_BYTES_V1]> {
         Self::new(self)?;
         let mut output = [0_u8; DIRECT_FEE_SETTLEMENT_REQUEST_BYTES_V1];
-        write_header(
-            &mut output,
-            DIRECT_FEE_SETTLEMENT_REQUEST_MAGIC_V1,
-        );
+        write_header(&mut output, DIRECT_FEE_SETTLEMENT_REQUEST_MAGIC_V1);
         output[MARKET_OFFSET..MARKET_OFFSET + IDENTITY_BYTES].copy_from_slice(&self.market);
         output[MAKER_OFFSET..MAKER_OFFSET + IDENTITY_BYTES].copy_from_slice(&self.maker);
         output[GENERATION_OFFSET..GENERATION_OFFSET + SCALAR_BYTES]
@@ -588,7 +584,9 @@ mod tests {
         }
         assert_eq!(
             DirectFeeSettlementRequestV1::decode(
-                bytes.get(..DIRECT_FEE_SETTLEMENT_REQUEST_BYTES_V1 - 1).expect("prefix")
+                bytes
+                    .get(..DIRECT_FEE_SETTLEMENT_REQUEST_BYTES_V1 - 1)
+                    .expect("prefix")
             ),
             Err(DirectFeeSettlementErrorV1::InvalidLength)
         );

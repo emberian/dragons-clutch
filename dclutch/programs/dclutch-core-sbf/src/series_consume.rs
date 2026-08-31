@@ -965,6 +965,10 @@ fn authenticate_product_facts<'accounts, 'info>(
             raw: frame.found.linked_basis_raw,
             staging: frame.found.linked_basis_staging,
         },
+        // SeriesConsume slices a fixed-width Found prefix, so the extended
+        // frame's trailing pair is not reachable here and a curved basis
+        // refuses by name.
+        None,
     )
     .map_err(|_| CoreSbfError::Reference)?;
     if product.runtime.product_record.content_digest.to_bytes() != prepared.product_record_id

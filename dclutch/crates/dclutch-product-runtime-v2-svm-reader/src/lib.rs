@@ -37,11 +37,14 @@
 /// Exact Product/representation Registry authentication.
 pub mod representation_v3;
 
+use dclutch_product_payoff_v2_codec::price_gate_v1::verify_price_gate_v1;
+use dclutch_product_payoff_v2_codec::registry_v3::PRICE_GATE_RECORD_SCHEMA_ID_V1;
 pub use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use dclutch_product_payoff_v2_codec::{
     registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3,
     runtime_v3::{
-        BasisKindV3, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3, semantic_basis_preimage_v3,
+        BasisKindV3, Error as BasisError, ProductBasisV3, SEMANTIC_BASIS_CONTENT_DOMAIN_V3,
+        semantic_basis_preimage_v3,
     },
 };
 use dclutch_product_runtime_v2::{ContentId, PortfolioV2, ResultDomainV2};
@@ -86,6 +89,38 @@ pub enum Error {
     ReceiptMismatch,
     /// Account data could not be borrowed.
     Borrow,
+    /// A basis declaring degree >= 2 was founded with no price-gate
+    /// certificate account offered.
+    ///
+    /// Degree <= 1 is exempt from the gate **by proof**; above it the simplex
+    /// condition stops being the no-arbitrage condition, so founding without a
+    /// certificate would admit an executable arbitrage.
+    PriceGateRequired,
+    /// The certificate account offered was not the one the authenticated basis
+    /// record names.
+    ///
+    /// The digest is read off the basis, never off the caller, so this covers
+    /// a wrong account, a byte-identical certificate at a non-canonical
+    /// address, a Registry-unowned account, and a certificate below rent
+    /// exemption for its exact width.
+    PriceGateBasisMismatch,
+    /// **The hull identity failed.** `price * mass != sum(weight * payout)` at
+    /// some claim, with every payout recomputed through the production
+    /// evaluator rather than read from the certificate.
+    PriceGateHullRefused,
+    /// The certificate carried no hull atoms, or more than the
+    /// affine-Caratheodory capacity of ten permits.
+    PriceGateCapacity,
+    /// The certificate's **body** was non-canonical: padding past a declared
+    /// width, coordinates not strictly increasing, a zero atom weight, a
+    /// non-primitive weight scale, prices not partitioning the scale, or an
+    /// unimplemented profile.
+    ///
+    /// Distinct from [`Error::PriceGateBasisMismatch`], which is about the
+    /// certificate's *address and authenticity* -- wrong PDA, wrong owner,
+    /// writable, or below rent exemption. One says the record is not the one
+    /// the basis names; this one says the record is malformed.
+    PriceGateNonCanonical,
 }
 
 /// Reader result alias.
@@ -376,7 +411,11 @@ pub fn authenticate_product_runtime_v3<'accounts, 'info>(
             portfolio: frame.portfolio,
         },
     )?;
-    authenticate_product_basis_v3(registry_program, rent, runtime, frame.linked_basis)
+    // The canonical continuation offers no certificate: a caller that reaches
+    // the basis through this wrapper has not been given a place to put one, so
+    // a curved basis refuses here by name rather than by silently skipping the
+    // gate.
+    authenticate_product_basis_v3(registry_program, rent, runtime, frame.linked_basis, None)
 }
 
 /// Authenticate only the finalized ProductBasisV3 selected by an already
@@ -393,6 +432,7 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
     rent: &Rent,
     runtime: AuthenticatedProductRuntimeV2,
     linked_basis: FinalizedRecordFrameV2<'accounts, 'info>,
+    price_gate: Option<FinalizedRecordFrameV2<'accounts, 'info>>,
 ) -> Result<AuthenticatedProductRuntimeV3<'accounts, 'info>> {
     require_basis_distinct(runtime, linked_basis)?;
     let basis_data = linked_basis
@@ -414,6 +454,70 @@ pub fn authenticate_product_basis_v3<'accounts, 'info>(
         .try_borrow_data()
         .map_err(|_| Error::Borrow)?;
     let basis = ProductBasisV3::decode(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
+    // **The basis-admission gate, on the route founding actually takes.**
+    //
+    // `BASIS_ABI_UNIFICATION_V1` section 6.3 puts the degree->=2 price gate at
+    // founding, once, and never on the hot path -- and this is founding's join,
+    // the place Core reaches before it commits a founding permit. No trade ever
+    // verifies a certificate and the hot path gains exactly zero CU.
+    basis
+        .admit_selection_v3()
+        .map_err(|_| Error::LinkedBasisComposition)?;
+    // **The no-arbitrage conjunct.** At degree >= 2 the simplex condition stops
+    // being the no-arbitrage condition, so a curved basis without a valid
+    // certificate is an executable arbitrage. Degree <= 1 is exempt by proof,
+    // not by assumption.
+    //
+    // The digest is read from the AUTHENTICATED BASIS RECORD, never from the
+    // caller. The caller chooses which account to pass; the basis chooses which
+    // digest that account must hash to. A byte-identical certificate at a
+    // non-canonical address therefore still refuses, because the PDA the
+    // digest derives is the only address this will accept.
+    let certificate_digest = basis.price_gate_certificate_digest_v3();
+    if certificate_digest != [0_u8; 32] {
+        let frame = price_gate.ok_or(Error::PriceGateRequired)?;
+        authenticate_record(
+            registry_program,
+            rent,
+            frame,
+            PRICE_GATE_RECORD_SCHEMA_ID_V1,
+            content(certificate_digest).map_err(|_| Error::PriceGateBasisMismatch)?,
+            Error::PriceGateBasisMismatch,
+        )?;
+        let degree = match basis.kind() {
+            BasisKindV3::SplineDegree2To3 { degree, .. } => degree,
+            // Unreachable: `decode` requires the digest zero for every kind the
+            // gate exempts, so a nonzero digest is a curved basis. Stated as a
+            // refusal rather than assumed away.
+            _ => return Err(Error::PriceGateBasisMismatch),
+        };
+        let certificate_data = frame.raw.try_borrow_data().map_err(|_| Error::Borrow)?;
+        // Every atom is recomputed through the production evaluator here.
+        // Nothing about a payout vector is taken from the certificate.
+        verify_price_gate_v1(
+            &basis,
+            basis.knot_denominator(),
+            basis.payout_scale(),
+            degree,
+            basis.basis_width(),
+            &certificate_data,
+        )
+        .map_err(|error| match error {
+            BasisError::PriceGateCapacity => Error::PriceGateCapacity,
+            BasisError::PriceGateBasisMismatch => Error::PriceGateBasisMismatch,
+            BasisError::PriceGateUnsupportedProfile
+            | BasisError::NonCanonicalReserved
+            | BasisError::PriceGateNonCanonicalPadding
+            | BasisError::PriceGateNonCanonicalAtomOrder
+            | BasisError::PriceGateZeroAtomWeight
+            | BasisError::PriceGateZeroMass
+            | BasisError::PriceGateWidthOutOfRange
+            | BasisError::PriceGateNonPrimitiveWeightScale
+            | BasisError::PriceGateWeightMassMismatch
+            | BasisError::PriceGatePriceNotPartition => Error::PriceGateNonCanonical,
+            _ => Error::PriceGateHullRefused,
+        })?;
+    }
     let semantic =
         semantic_basis_preimage_v3(&basis_data).map_err(|_| Error::LinkedBasisComposition)?;
     let semantic_basis_id = content(

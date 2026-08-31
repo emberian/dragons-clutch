@@ -20,9 +20,10 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_capability_seal_contract::{
-    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealCloseRequestV1,
-    CapabilitySealKeyV1, CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1,
-    SealedRecordRowV1, SealedRoleV1,
+    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1,
+    CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealCloseRequestV1, CapabilitySealKeyV1,
+    CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1, SealedRecordRowV1,
+    SealedRoleV1,
 };
 use dclutch_registry_activation_auth_v1::{
     authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
@@ -260,6 +261,26 @@ pub const CLOSE_SEAL_ACCOUNT_COUNT_V1: usize = 7;
 /// would hand a griefer a 1-lamport transfer that re-strands the account
 /// permanently, which is the exact outcome this route exists to prevent.
 ///
+/// # The second arm, for a seal that cannot state its own bump
+///
+/// A seal written before the bump moved into the byte at offset 20 carries an
+/// unwritten zero there, so the address it lives at cannot be reproduced from
+/// the body alone and the ordinary arm refuses it. Those accounts are real
+/// seals at real canonical addresses whose rent nothing could reclaim. The
+/// request's bump candidate opens the second arm for exactly them:
+/// `decode_defunct` requires every canonical field the ordinary decode does and
+/// requires the bump byte to be zero, and the address is reproduced from the
+/// candidate instead of the body.
+///
+/// The arms partition rather than overlap, on the one byte: candidate zero
+/// selects the ordinary arm, which requires a nonzero persisted bump and never
+/// looks at the candidate; any other candidate selects the defunct arm, which
+/// requires a zero persisted bump. A well-formed seal offered under a nonzero
+/// candidate is refused, so the tolerant arm can never be turned on a seal the
+/// strict one governs. Nothing else is relaxed — in particular the live-release
+/// refusal below applies identically, which is where this close's soundness
+/// lives.
+///
 /// # What makes this sound, and it is one conjunct
 ///
 /// A seal is write-once, and a close that let a *different* verdict be written
@@ -289,7 +310,7 @@ pub fn process_capability_seal_close_v1(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
-    CapabilitySealCloseRequestV1::decode(instruction_data)
+    let request = CapabilitySealCloseRequestV1::decode(instruction_data)
         .map_err(|_| TradingSbfError::CloseSealFrame)?;
     if accounts.len() != CLOSE_SEAL_ACCOUNT_COUNT_V1 {
         return Err(TradingSbfError::CloseSealFrame.into());
@@ -337,7 +358,16 @@ pub fn process_capability_seal_close_v1(
     {
         return Err(TradingSbfError::CloseSealAccount.into());
     }
-    let key = require_own_seal_address_v1(program_id, seal)?;
+    // The two arms partition on the request's bump candidate, and each one
+    // reads the body its own decoder admits. Nothing below this line differs
+    // between them: the same Registry agreement, the same live-release refusal,
+    // the same whole-balance close.
+    let key = match request.bump_candidate() {
+        CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1 => {
+            require_own_seal_address_v1(program_id, seal)?
+        }
+        candidate => require_defunct_seal_address_v1(program_id, seal, candidate)?,
+    };
     if registry.key.to_bytes() != key.registry_program() {
         return Err(TradingSbfError::CloseSealFrame.into());
     }
@@ -403,9 +433,64 @@ fn require_own_seal_address_v1(
     let key = closure
         .key()
         .map_err(|_| TradingSbfError::CloseSealAccount)?;
-    let bump_seed = [closure
+    let bump = closure
         .bump()
-        .map_err(|_| TradingSbfError::CloseSealAccount)?];
+        .map_err(|_| TradingSbfError::CloseSealAccount)?;
+    require_reproduced_seal_address_v1(program_id, seal, key, bump)?;
+    Ok(key)
+}
+
+/// The same reproduction for a seal whose body never recorded its own bump.
+///
+/// A seal written before the bump moved into
+/// [`dclutch_capability_seal_contract::CAPABILITY_SEAL_BUMP_OFFSET_V1`] carries
+/// an unwritten zero there. `SealedDescriptorClosureV1::decode_defunct` reads
+/// exactly those bodies — every conjunct of `decode` except that the bump byte
+/// must be zero, so a well-formed seal offered here refuses with `NotDefunct`
+/// and lands on [`TradingSbfError::CloseSealAccount`] like every other body
+/// this route will not act on. The two decoders partition the byte, so the two
+/// arms can never both admit one account.
+///
+/// The caller-supplied `bump_candidate` replaces only the byte the body could
+/// not state, and it is checked the same way the persisted byte is: the address
+/// is reproduced from the body's own seeds plus the candidate and must BE the
+/// account being closed. At most one candidate satisfies that equality, so a
+/// hostile caller can name any byte it likes and reach nothing but a mismatch —
+/// the candidate is a memo of a search anyone can repeat offline, never an
+/// authority. In particular it cannot aim the close at a different account:
+/// the seal account is fixed by the frame, and the seeds come from the body.
+#[inline(never)]
+fn require_defunct_seal_address_v1(
+    program_id: &Pubkey,
+    seal: &AccountInfo<'_>,
+    bump_candidate: u8,
+) -> Result<CapabilitySealKeyV1, ProgramError> {
+    let bytes = seal
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::CloseSealAccount)?;
+    let closure = SealedDescriptorClosureV1::decode_defunct(&bytes)
+        .map_err(|_| TradingSbfError::CloseSealAccount)?;
+    let key = closure
+        .key()
+        .map_err(|_| TradingSbfError::CloseSealAccount)?;
+    require_reproduced_seal_address_v1(program_id, seal, key, bump_candidate)?;
+    Ok(key)
+}
+
+/// Refuse unless a key and one bump reproduce the seal account's own address.
+///
+/// Both arms reproduce the address the same way and out of line, so the
+/// argument is stated once and neither arm can drift from it: a body that lies
+/// about any seed, or a bump that is not the one that address was derived
+/// under, names some other address and refuses here.
+#[inline(never)]
+fn require_reproduced_seal_address_v1(
+    program_id: &Pubkey,
+    seal: &AccountInfo<'_>,
+    key: CapabilitySealKeyV1,
+    bump: u8,
+) -> Result<(), ProgramError> {
+    let bump_seed = [bump];
     let seeds = key.seeds();
     let base = seeds.as_slices();
     let expected = Pubkey::create_program_address(
@@ -418,7 +503,7 @@ fn require_own_seal_address_v1(
     if seal.key != &expected {
         return Err(TradingSbfError::CloseSealAccount.into());
     }
-    Ok(key)
+    Ok(())
 }
 
 /// Read the Trading semantic release the live deployment is currently activated

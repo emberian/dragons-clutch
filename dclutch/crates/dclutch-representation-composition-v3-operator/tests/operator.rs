@@ -200,6 +200,9 @@ fn categorical_basis(width: u32, product_id: [u8; 32], result_domain: [u8; 32]) 
         knots: &[],
         terms: &[],
         failure_payouts: &[],
+        // Exempt by proof: degree 0 and 1 need no price gate,
+        // and a digest offered alongside one is refused.
+        price_gate_certificate_digest: [0_u8; 32],
     };
     let mut bytes = vec![
         0;

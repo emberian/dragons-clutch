@@ -78,7 +78,16 @@ const sources = Object.freeze({
   request: readFileSync(new URL('crates/dclutch-request-profile-contract/src/v2.rs', root), 'utf8'),
   requestGenerated: readFileSync(new URL('crates/dclutch-request-profile-contract/src/generated.rs', root), 'utf8'),
   transition: readFileSync(new URL('crates/dclutch-transition-vm/src/v3.rs', root), 'utf8'),
+  // The effect kernel has three live generations and their names do not track
+  // their preimages: `v3.rs`'s schema preimage reads
+  // `effect-program-v4-ordered-receipt-dependencies-v1`, while `v4.rs`'s reads
+  // `effect-program-v5-...`. Both are emitted, under names that say which
+  // generation they are, because the two are not interchangeable: every current
+  // authenticator binds V4 (`dclutch-direct-codec/src/artifacts_v4.rs`,
+  // `dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs`), and V3 is
+  // kept only so the explorer can still name records published before cohort-8.
   effect: readFileSync(new URL('crates/dclutch-effect-kernel/src/v3.rs', root), 'utf8'),
+  effectV4: readFileSync(new URL('crates/dclutch-effect-kernel/src/v4.rs', root), 'utf8'),
   lifecycle: readFileSync(new URL('crates/dclutch-account-profile-contract/src/lifecycle_v3.rs', root), 'utf8'),
   strategy: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/v2.rs', root), 'utf8'),
   strategyGenerated: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/generated_v2.rs', root), 'utf8'),
@@ -216,6 +225,11 @@ const scalars = Object.freeze([
   ['intent', 'COMPACT_INTENT_MAXIMUM_FILL_OFFSET_V2'], ['intent', 'COMPACT_INTENT_LIMIT_PRICE_OFFSET_V2'],
   ['intent', 'COMPACT_INTENT_FEE_BASIS_POINTS_OFFSET_V2'], ['intent', 'COMPACT_INTENT_COLLATERAL_ACCOUNT_OFFSET_V2'],
   ['ordinary', 'DIRECT_ORDINARY_COMMON_SCALARS_V3'], ['ordinary', 'DIRECT_ORDINARY_COMMON_IDENTITIES_V3'],
+  // The register file is affine in the Product's outcome count --
+  // `common + stride * tail_count` -- so these two strides are geometry the
+  // emitter carries as named constants, not incidental zeroes. The browser
+  // read them as literal 0 and refused cohort-8, whose scalar stride is 2.
+  ['ordinary', 'DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3'], ['ordinary', 'DIRECT_ORDINARY_ITEM_IDENTITY_STRIDE_V3'],
   ['ordinary', 'IDENTITY_SELLER_NATIVE_SIGNER_V3'], ['ordinary', 'IDENTITY_BUYER_NATIVE_SIGNER_V3'],
   ['successorGenerated', 'DIRECT_EXECUTION_CONFIG_BYTES_V1'], ['successorGenerated', 'DIRECT_ROOT_STATE_BYTES_V1'],
   ['successorGenerated', 'DIRECT_CONFIG_MAGIC_OFFSET_V1'], ['successorGenerated', 'DIRECT_CONFIG_VERSION_OFFSET_V1'],
@@ -349,7 +363,8 @@ for (const [source, name] of [
   ['accountProfile14', 'FIXED_DATA_PREDICATE_PROFILE_ID'],
   ['request', 'REQUEST_PROFILE_V2_MAGIC'], ['request', 'REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID'],
   ['requestGenerated', 'REQUEST_PROFILE_MAGIC_V1'], ['transition', 'SCHEMA_RELEASE_ID'],
-  ['effect', 'SCHEMA_RELEASE_ID'], ['lifecycle', 'SCHEMA_RELEASE_ID'],
+  ['effect', 'SCHEMA_RELEASE_ID'], ['effectV4', 'SCHEMA_RELEASE_ID_V4'],
+  ['lifecycle', 'SCHEMA_RELEASE_ID'],
   ['strategy', 'EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2'],
   ['strategyGenerated', 'EXECUTION_STRATEGY_PROGRAM_MAGIC_V2'],
   ['lifecycle', 'CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5'],
@@ -364,9 +379,13 @@ for (const [source, name] of [
     ? 'CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID'
     : source === 'lifecycle' && name === 'CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5'
       ? 'SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5'
-      : name === 'SCHEMA_RELEASE_ID'
-        ? `${source.toUpperCase()}_SCHEMA_RELEASE_ID`
-        : name;
+      : source === 'effect' && name === 'SCHEMA_RELEASE_ID'
+        ? 'EFFECT_SCHEMA_RELEASE_ID_V3'
+        : source === 'effectV4' && name === 'SCHEMA_RELEASE_ID_V4'
+          ? 'EFFECT_SCHEMA_RELEASE_ID_V4'
+          : name === 'SCHEMA_RELEASE_ID'
+            ? `${source.toUpperCase()}_SCHEMA_RELEASE_ID`
+            : name;
   output += array(alias, bytes(source, name));
 }
 

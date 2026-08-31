@@ -1455,24 +1455,36 @@ fn authenticate_terminal_scenario(
             ResolutionCertificateKindV2::ResolutionSuccess
             | ResolutionCertificateKindV2::ResolutionFailure,
         ) => Ok(TerminalScenarioV3::Categorical(common.core.terminal_winner)),
-        (BasisKindV3::GradedExactComplement, ResolutionCertificateKindV2::ResolutionSuccess) => {
-            Ok(TerminalScenarioV3::Rational {
-                numerator: certificate.result_numerator,
-                denominator: certificate.result_denominator,
-            })
-        }
-        (BasisKindV3::GradedExactComplement, ResolutionCertificateKindV2::ResolutionFailure) => {
-            Ok(TerminalScenarioV3::Failure)
-        }
+        // **The spline family settles exactly as the graded family does**, and
+        // that is a result rather than a convenience. `TerminalScenarioV3` has
+        // three variants -- categorical selection, a rational coordinate, and
+        // failure -- and the design flagged that a curved basis might need a
+        // fourth, which would have cascaded into the settlement evaluator's
+        // wildcard and the wallet driver.
+        //
+        // It does not. A spline consumes the same rational coordinate the
+        // graded family does and returns the same width-sized partition, and it
+        // carries an explicit failure payout vector in the same tail slot. So
+        // the two families share these arms outright, which is the strongest
+        // available statement that no new terminal shape was invented: the
+        // pairs are widened, not added to.
         (
-            BasisKindV3::CategoricalQ1 | BasisKindV3::GradedExactComplement,
+            BasisKindV3::GradedExactComplement | BasisKindV3::SplineDegree2To3 { .. },
+            ResolutionCertificateKindV2::ResolutionSuccess,
+        ) => Ok(TerminalScenarioV3::Rational {
+            numerator: certificate.result_numerator,
+            denominator: certificate.result_denominator,
+        }),
+        (
+            BasisKindV3::GradedExactComplement | BasisKindV3::SplineDegree2To3 { .. },
+            ResolutionCertificateKindV2::ResolutionFailure,
+        ) => Ok(TerminalScenarioV3::Failure),
+        (
+            BasisKindV3::CategoricalQ1
+            | BasisKindV3::GradedExactComplement
+            | BasisKindV3::SplineDegree2To3 { .. },
             ResolutionCertificateKindV2::RecoveryAdvanced | ResolutionCertificateKindV2::Exhausted,
         ) => Err(Error::InvalidTerminal),
-        // The twin of `terminal_certificate_v3.rs`'s spline arm in
-        // `programs/dclutch-claims-sbf`. These two matches are the second
-        // author of the settlement rule and they must move together or the
-        // operator and the program disagree about what the chain accepts.
-        (BasisKindV3::SplineDegree2To3 { .. }, _) => Err(Error::SplineEvaluatorAbsent),
     }
 }
 

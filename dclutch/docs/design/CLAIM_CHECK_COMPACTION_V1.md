@@ -1904,3 +1904,471 @@ family to copy.
 > the Claims compaction route, a ~48-account frame wrapping the 36-account
 > terminal frame — is a lane on its own. Everything §17.3 says about compute,
 > frames and the already-paid terminal fixture still holds.
+
+---
+
+### 17.6 Two of the three layers, and the frame cost no build reports
+
+Written by FRACCHECK-3, 2026-08-31, from building §17.5's two missing arms.
+Evidence: `docs/evidence/FRACTIONAL_COMPACTION_COMPOSITION_2026_08_31.md`.
+
+**A fractional compaction request now reaches route selection.** The composition
+decode builds a `ClaimsExternalOnceV3` for `DCLTFCC1`, and `route_authority`
+resolves it to its own caller authority and its own receipt kind. What stops the
+transaction is one named place: the receipt verifier refuses, because no receipt
+type exists to verify against, and admitting the route unverified would make
+"verified" mean "unchecked" for one kind.
+
+**The frame is 48, and 48 is 36 + 12.**
+`FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1` reads the terminal frame's own constant and
+adds twelve declared roles; the terminal half is never re-enumerated, for the
+reason the payout derivation is called rather than re-implemented. Six of the
+twelve are the native crank's own. The other six are what §17.4's hand-off costs:
+the capability root and the Trading caller authority (which together *are* what
+"Trading-composed" means), the shard Mint and **its own** Token program — separate
+from the terminal frame's, which is the collateral mint's — the exposure terms,
+and the terms-selected TokenBehavior.
+
+Four more roles are declared and **refused**, each with a stated reason rather
+than a bool: the two holder token accounts because §1.3's "positions are never
+enumerated" is exactly what lets one transaction stand in for every holder; the
+native claim-check record because FRACR3's unsignable-payee weld is the reason
+this route exists at all; and the retirement cursor because a stalled ordered
+walk must not block a permissionless crank.
+
+**§17.5's table put the composition gap one crate too wide.**
+`decode_selected_with_external` needed **no edit**: it already admits any
+caller-authenticated external request at an exact fixed count and counts it as
+the single mutation. The hole was that nobody ever *built* the value for anything
+but the exposure magic. Edits in `dclutch-claims-svm` for that layer: zero.
+
+**THE FINDING WORTH CARRYING: a 640-byte frame cost that every build reported as
+zero.** The compaction request is 744 bytes and decodes into a struct embedding
+the whole terminal header. Written as an ordinary arm, it put that struct on
+`route_authority`'s frame — **3,072 bytes before, 3,712 after**, spare 1,024 down
+to 384, on a link whose deepest function already sits at 4,032 of 4,096.
+`cargo build-sbf` emits its diagnostic only at or past 4,096, so the jump was
+invisible to the gate `tools/ci/run.sh` runs. `#[inline(never)]` on the arm
+restores the exact base frame.
+
+**So: any arm decoding a wire that embeds the terminal header must be split
+behind `#[inline(never)]`, and the split must be measured.** Commit 6 decodes the
+same 744-byte request inside a 48-account frame, and `claims-sbf`'s deepest
+function already holds 3,776 of 4,096.
+
+> **AMENDED — seventeen becomes nineteen, and both additions are surface.** The
+> frame declaration was inside commit 6 and is separable (every layer above
+> consumes it). And **5c is two commits**: `encode_request_profile` pins the
+> exposure magic and action byte into the profile itself, so a compaction wire at
+> a different width with different offsets needs its **own request profile**, not
+> a fourth arm in a geometry match. **Nineteen commits, eleven landed, eight
+> remain.** Commit 6 is still a lane, but it is now assembly rather than
+> invention: every piece it calls exists and is named in the evidence.
+
+---
+
+### 17.7 Assembly met the frame, and the frame was not finished
+
+Written by FRACCHECK-4, 2026-08-31, from attempting §17.6's commit 6.
+
+§17.6 sized commit 6 as *"assembly rather than invention — every piece it calls
+exists and is named."* Every piece does exist. Assembling them found **three
+places where the declared frame cannot support the route it was declared for**,
+and none of the three is visible from reading the declaration. They are recorded
+here in the order the assembly hit them.
+
+**1. The frame could not authenticate two of the records it carries. FIXED.**
+`ExposureTerms` and `TokenBehavior` each had one account. Both are finalized
+Registry records, and this tree authenticates one by its **raw/staging pair**:
+`authenticate_finalized_rational_record` derives both PDAs, requires the raw
+half to hash to the expected digest, and requires the staging cursor to be
+*vacant* — the half that proves the record is not mid-update. Every sibling
+carries the pair; `fractional_retirement_v3` carries it three times over
+(`TERMS_RAW`/`TERMS_STAGING`, `TOKEN_BEHAVIOR_RAW`/`TOKEN_BEHAVIOR_STAGING` in
+each of its begin, coordinate and finish frames), and the terminal frame this
+route wraps carries its own exposure raw/staging at 21 and 22.
+
+With only the raw halves the route can compare a digest and cannot prove the
+record is settled — on the account that authors the denominator every holder's
+payout is divided by. That weakening is invisible afterwards, because such a
+route still reads its terms and still looks authenticated. **The frame is
+therefore 50, not 48: `36 + 14`.** Still far below the lock limit, which the
+existing compile-time assertion goes on proving.
+
+**2. Trading never gives the root its signature on this route. CLEARED
+2026-08-31** — ruled in §17.8 (ruling 1) and landed by FRACCHECK-5 in
+`b3e3821c`; the gate admits the compaction kind, writability inverted, w1–w4
+green and mutation-checked. See §17.9.
+§17.6's third hazard says the root's signature "arrives because Trading's
+`fractional_root_signer` adds it." It does not. That function's `matches!` gate
+admits `FractionalAtomic`, `FractionalTerminalAtomic` and
+`FractionalRetirementCoordinate`; `FractionalClaimCheckCompaction` falls to the
+early `Ok(None)` and the root's meta is never marked a signer. The route
+requires that signature for two jobs it cannot do without — the `SetAuthority`
+that re-points `PermissionedBurn`, and the reserve Position's close — and Claims
+can never produce a Trading PDA's signature. **The route is unreachable until
+that gate gains the compaction kind**, with root index
+`FractionalCompactionRoleV1::FractionalCapabilityRoot.index()` and the revision
+read from the request's own `expected_root_revision`, which is the field's only
+purpose.
+
+Note the arm must *not* copy the exposure arms' `!root_account.is_writable`
+requirement: those need a writable root because their effect program writes the
+revision commit-last. A compaction revises nothing, and the frame accordingly
+declares the root `(signer, not writable)`.
+
+**3. `TradingCallerAuthority` has no program to derive it against. CLEARED
+2026-08-31** — ruled in §17.8 (ruling 2, veto window exercised and signed off
+in WAVE.md `794b2eda`) and landed by FRACCHECK-5 in `fa964511`: resolution
+three, the role dropped to declared-and-refused, frame 49. w5–w6 green;
+w7–w8 await the route. See §17.9.
+The role is declared a required signer, its doc naming it as what "the
+parent-authenticated close requires". Two facts collide. First, hazard 2 says
+to *share* `close_and_split` rather than copy it — and `close_and_split`
+performs no parent authentication; it zeroes two accounts' lamports and splits
+the rent. Second, `execute_parent_authenticated_close`, which does authenticate
+a parent, parses `CloseAccounts` out of whatever slice it is handed and so needs
+the borrowed 15-account close frame to be a slice the caller can produce.
+`fractional_retirement_v3` can hand it one because that frame *begins* with the
+close frame (`accounts.get(..PROTOCOL_POSITION_CLOSE_ACCOUNT_COUNT_V2)`). A
+compaction frame begins with the 36-account terminal frame instead, so there is
+no such prefix to hand over.
+
+And the derivation is not available either way: `CallerAuthoritySeedsV1` must be
+derived under the **Trading program id**, and no Trading program account is in
+the frame. The terminal frame's `accounts[14]` is the caller program, but it is
+read only on the `CallerRole::Trading` path; a fractional compaction request
+pins `caller_role == CallerRole::Claims`, and under
+`ParentAuthorityV3::ClaimCheckCrank` coordinate 0 is *the cranker, who is
+anybody* — the deliberate relaxation that makes the crank permissionless.
+
+So the frame carries a signer nothing can check. Whoever resolves this chooses
+between: adding a Trading program account and verifying the authority directly
+(51 accounts); restructuring so the borrowed close frame is presented at its own
+coordinates; or **dropping the role**, on the ground that a permissionless crank
+authorized by an elapsed deadline and a derived recipient does not additionally
+need a parent's signature, and the reserve Position's close is entitled by the
+root's own signature which the route already requires. The third is the smallest
+and most likely correct, but it is a design decision and not a lane's to take
+silently — it changes what "Trading-composed" means for this route.
+
+> **AMENDED — commit 6 is not assembly, and the count is unchanged only because
+> nothing was added.** Nineteen commits, twelve landed (FRACCHECK-3's eleven plus
+> this frame correction), seven remain. Commit 6 stays a lane, and it is blocked
+> on findings 2 and 3 rather than on effort: both are decisions about what
+> authorizes this crank, and both must be answered before the route can be
+> written truthfully. §17.3's compute and frame numbers are untouched.
+
+---
+
+### 17.8 Adjudication: one signature is load-bearing, the other never was
+
+Ruled by FRAC-RULE, 2026-08-31, on §17.7's findings 2 and 3. Ground truth
+read: `fractional_root_signer` and the receipt table
+(`claims_composition_v3.rs`), `authenticate_parent_authority` /
+`execute_parent_authenticated_close` / `authenticate_authority`
+(`protocol_position_v2.rs`), the native crank and its `close_and_split`
+(`claim_check_compaction_v1.rs`), the crank relaxation (`signed_delta_v3.rs`),
+the role declaration (`fractional_claim_check_v1.rs`), and O-016.
+
+**The sibling's answer first, because it is the measuring stick.** The native
+compaction requires from Trading **nothing**: no Trading account in its frame,
+`0x5601 Authority` refusing any signer the route does not admit, and a close —
+`close_and_split` — with no authentication inside it, because the entitlement
+(elapsed compiled deadline, coordinate re-derivation, zero balances,
+conservation plan) was proved before it is called. That is the authority model
+of a permissionless crank, and it is O-016 kept: every authoritative fact from
+records, no caller input becoming authority by inclusion. Fractional differs in
+exactly one fact the sibling does not have: a shard Mint whose
+`PermissionedBurn` authority is a Trading PDA. Everything below follows from
+letting it differ in only that.
+
+**RULING 1 — finding 2: extend the gate. The root's signature is load-bearing
+exactly once, and its once is the hand-off.** On this route the root signs one
+thing that can happen no other way: `SetAuthority(PermissionedBurn)`, root →
+escrow, which Token-2022 refuses without the *current* authority's signature
+(`permissioned_burn_wall.rs`) and which nothing but a Trading `invoke_signed`
+can produce — and nothing can produce after retirement. Not ceremonial
+inheritance; it is the reason §17.4 made compaction Trading-composed at all.
+The reserve Position's close is **not** a second job for it (ruling 2), and
+after the hand-off the root signs nothing ever again — redemption is holder +
+escrow. So: `fractional_root_signer`'s `matches!` gate gains
+`FractionalClaimCheckCompaction`, and the kind-match gains an arm decoding the
+compaction request — revision from the request's own `expected_root_revision`
+(the field's only purpose), root index
+`FractionalCompactionRoleV1::FractionalCapabilityRoot.index()`. Every existing
+root-authentication predicate is retained — derivation, Trading ownership,
+non-signer-on-entry, non-executable, release-set/market/terms/bump/revision —
+except writability, which **inverts**: the exposure arms demand a writable root
+because their effect program commits a revision; a compaction revises nothing
+and the frame declares `(signer, not writable)`, so this arm requires root and
+meta non-writable. Witnesses the builder must land: **(w1)** the arm marks the
+meta signer and returns the root's seeds+bump (sibling of the gate's existing
+tests); **(w2)** `expected_root_revision` mismatch refused; **(w3)** a
+*writable* root refused on this kind — the inversion witnessed, so nobody later
+"fixes" it back toward the exposure arms; **(w4)** the kept control: absent the
+arm, the route refuses — today's state, preserved as the mutation witness. No
+authority pin weakens — the gate grows one arm under the same checks, one of
+them strictly tighter. No veto-window needed.
+
+**RULING 2 — finding 3: drop the role. `TradingCallerAuthority` refuses no
+attack, and the close it was declared for is owner-signed without it.**
+Resolution three of §17.7's three, taken on this ground:
+
+- *What it would refuse: nothing.* The crank is anybody —
+  `signed_delta_v3.rs` asks of coordinate 0 under `(Claims, ClaimCheckCrank)`
+  only that somebody signed. A caller-authority PDA is derived from the
+  caller's own request digest; it proves Trading processed this exact request
+  — and the root's signature already proves that, strictly more strongly,
+  because Trading marks the root signer only after `fractional_root_signer`
+  authenticates the root's bytes against the same request. A stranger without
+  Trading dies at the hand-off (`MissingRequiredSignature`); a cranker through
+  Trading is legitimate by design. A second Trading signer standing beside the
+  first is O-016's exact shape of ceremony: inclusion mistaken for authority.
+- *The close is entitled without it.* The reserve Position's owner **is** the
+  root, and the root signs this frame for the hand-off — so the compaction
+  close is owner-signed, deadline-entitled, and record-authenticated: strictly
+  stronger than the native close whose `close_and_split` it shares (§17.6
+  hazard 2, kept). `execute_parent_authenticated_close` and
+  `authenticate_parent_authority` remain untouched, retirement's own: their
+  caller-PDA-plus-root pair is real *there*, where the close is ordered by
+  Trading's retirement walk rather than entitled by a deadline.
+- *What "Trading-composed" now means for this route:* composed **for
+  signature, not for authority**. Trading is where the root's signature
+  exists; the deadline and the records are what authorize the crank — the same
+  authorizer as the native sibling, which is the agreement the design wanted.
+
+The builder lands: the role flips from admitted to **declared-and-refused**
+with its own reason variant beside `RefusedNamesOneHolder` and kin — refused
+because a deadline-entitled permissionless crank takes no parent's authority,
+and the owner's own signature, the root's, already covers the close. The
+`FractionalCapabilityRoot` doc-comment's "whose signature the
+parent-authenticated close requires" ground is rewritten to this section's in
+the same commit. Frame becomes **49 = 36 + 13**; the lock assertion and the
+indexed-or-refused test carry it. Witnesses: **(w5)** exactly one signer among
+the thirteen added roles — the root; **(w6)** frame count 49 and
+`TradingCallerAuthority.index() == None`; **(w7)** the route executes with no
+caller-authority account anywhere in frame — the drop run, not asserted;
+**(w8)** direct-entry hostile: the Claims route without Trading, root
+unsigned, refuses at the hand-off — Trading-composition enforced by the root
+signer alone.
+
+**⚠ VETO-WINDOW REQUIRED for ruling 2.** It removes a declared required signer
+from a landed frame declaration. The analysis says that signer authorized
+nothing; removing it is still a weakening of the declared authority surface,
+and it ships only with the orchestrator's sign-off — not on a lane's judgment,
+including this one's.
+
+**Refused, and deliberately not done.** Refused: the 51-account
+Trading-program addition (an account whose only job is deriving a PDA that
+authorizes nothing) and restructuring the frame to expose a close prefix
+(terminal-frame-first is why the payout derivation is called rather than
+re-implemented). Not done: no change to retirement's close path, to the native
+crank's `TradingRecord` refusal, or to any §17.3 compute number; the root
+keeps its hand-off job — the close stops needing parent ceremony, not the
+root. Count unchanged: nineteen commits, twelve landed, seven remain — both
+rulings are edits inside commit 6's lane plus the frame-declaration amendment
+it must carry; nothing added.
+
+---
+
+### 17.9 Both signatures settled, and the frame measured rather than assumed
+
+Written by FRACCHECK-5, 2026-08-31, building §17.8's two rulings.
+Both landed. Witnesses w1–w6 are green and every one of them was checked by
+mutation; w7 and w8 are route and campaign witnesses and remain unwritten
+because the route does.
+
+**Ruling 1 landed** (`b3e3821c`). `fractional_root_signer`'s gate admits
+`FractionalClaimCheckCompaction`. Revision comes from the request's own
+`expected_root_revision`, root index from
+`FractionalCompactionRoleV1::FractionalCapabilityRoot.index()`, and every
+existing root predicate is retained except writability, which inverts.
+
+The inversion is **not** a second `matches!` beside the predicates. The arm
+that decodes a request now returns a `FractionalRootExpectationV3` carrying its
+own `writable`, so a kind cannot acquire one arm's revision and another arm's
+privileges — the two facts have one author each, which is the same rule the
+frame declaration applies one level down. The meta check inverts with the
+account check, because authenticating a read-only root and then handing the
+child a writable one is precisely what checking the meta separately is *for*.
+
+**Ruling 2 landed** (`fa964511`). `TradingCallerAuthority` is
+declared-and-refused under its own reason, `RefusedTakesNoParentAuthority`, and
+the frame is **49 = 36 + 13**. `execute_parent_authenticated_close` and
+`authenticate_parent_authority` are untouched.
+
+#### The frame cost, measured on both sides of the split
+
+§17.6 left commit 6's author a hazard and a method: any arm decoding a wire
+that embeds the terminal header must be split behind `#[inline(never)]`, and
+the split must be *measured*. Ruling 1's arm is the first such arm, and it was
+measured — three real builds of the Trading link, not two:
+
+| function | base | `#[inline(never)]` | `#[inline(always)]` |
+|---|---:|---:|---:|
+| `fractional_root_signer` | 1,088 | **1,088** | 1,408 |
+| `fractional_compaction_root_expectation` | — | 1,984 | inlined away |
+| `claims_composition_v3::route_authority` | 3,072 | 3,072 | 3,072 |
+| deepest frame in the link | 4,032 | **4,032** | 4,032 |
+
+So the split is load-bearing rather than ritual: without it the shared signer
+function pays **+320 bytes** for a route most of its callers never take, and
+`cargo build-sbf` reports zero either way. The third build is the point — the
+hazard §17.6 wrote down was previously supported by one observation on
+`route_authority`; it now has a second, on a different function, in the same
+link, with the cost isolated to the attribute.
+
+The Claims link's baseline is unchanged and re-measured for whoever writes the
+route: `custody_replay_v1::process` at **3,776 of 4,096, 320 spare** — exactly
+where §17.6 left it.
+
+#### What the witnesses actually caught
+
+Every witness below was run against a mutation that should red it. This matters
+more than the count: §17.6's own lane found a consecutive-index test whose name
+described a property it did not have, and only the mutation could tell.
+
+| # | property | mutation that reds it |
+|---|---|---|
+| w1 | the arm authenticates a read-only root, marks the meta signer, returns seeds that re-derive that root | remove the kind from the `matches!` → fails at "returns a signer rather than None" |
+| w2 | `expected_root_revision` off by one is refused | — (direct assertion) |
+| w3 | a **writable** root is refused on this kind | **drop the writability predicate entirely** → w1, w2, w4 stay green and ONLY w3 reds |
+| w4 | a kind the gate does not name gets `Ok(None)`, meta untouched | (is itself the control preserved from before ruling 1) |
+| w5 | exactly one signer among the thirteen, and it is the root | make `ShardMint` a signer → `left: 2, right: 1` |
+| w6 | frame count 49, `TradingCallerAuthority.index() == None` | restore the role properly → **fails to compile** on the spelled-out order array |
+
+w3 is the one worth keeping in view. Its neighbours require the opposite
+writability, so the plausible future edit is not malice but tidiness — a reader
+"restoring consistency" with the three arms above. The permissive mutation
+(deleting the predicate rather than inverting it) is invisible to every other
+witness in the file.
+
+#### Two pieces of arithmetic that were already wrong
+
+Found while editing, not looked for, and recorded because both had survived a
+lane each:
+
+- the role enum's doc said "the other **six** are what §17.4's hand-off costs"
+  while FRACCHECK-4's raw/staging pairs had made it eight. It is seven now.
+- three comments said "a **thirteenth** account", meaning the next one past
+  twelve, and had been wrong since the frame reached fourteen. They are
+  count-independent now, so they stop rotting on the next change.
+
+Neither was load-bearing. Both are the kind of drift that makes a reader trust
+a number they should have recomputed.
+
+#### `action_geometry` no longer has a wildcard
+
+(`e6467b91`, part of 5c-ii.) It ended in `_ => Err(InvalidInput)`, which
+conflated two different facts: an action refused because somebody looked at it
+and it has no Claims frame, and an action refused because nobody has looked at
+it yet. An eighth `FractionalExposureActionV2` would have compiled and been
+silently unsupported by the file whose job is to say what each action's
+artifacts are. All seven variants answer now; `Transfer`, `Terminalize` and
+`ZeroSupplyRetire` are refused in a named arm with a reason each. Verified by
+mutation: dropping one arm is E0004 at `artifacts_v4.rs:888`. The test that
+covered the wildcard covers all three refusals instead of `Transfer` alone.
+
+#### The honest state, and it is narrower than §17.7's
+
+**Nineteen commits, twelve landed, seven remain — the count does not move, and
+that is §17.8's own accounting, not a lane's modesty.** Both rulings are "edits
+inside commit 6's lane plus the frame-declaration amendment it must carry;
+nothing added". So the three commits below buy commit 6 its preconditions and
+part of 5c-ii; they do not retire a numbered commit between them.
+
+| # | commit | status |
+|---|---|---|
+| 1–4, 5a, 5b/5, 5d, 10a, 12 | FRACCHECK…FRACCHECK-4's twelve | landed |
+| — | ruling 1: the gate's compaction arm | **landed** (`b3e3821c`), inside 6's lane |
+| — | ruling 2: the frame at 49, the role refused | **landed** (`fa964511`), the frame amendment |
+| 5c-ii *(part)* | `action_geometry` made exhaustive | **landed** (`e6467b91`) |
+| 5c-i | a request profile for the compaction wire | not written |
+| 5c-ii *(rest)* | `encode_effect` / `encode_account_profile` + the lock-count row | not written |
+| 6 | the Claims compaction route | not written — **still a lane**, now unblocked |
+| 6b | the receipt type, and the verifier arm it turns green | not written |
+| 7, 8, 9, 10, 11 | redemption, `RetireCoordinate`, escrow close, campaign, operator | not written |
+
+The one number that *did* move is the one §17.7 left open: commit 6's blockers
+went from two to zero.
+
+**Commit 6 is unblocked and is still not assembly.** §17.7 reported it blocked
+on two decisions; both are now made and implemented, so the two named stops are
+gone. What is left is what §17.6 sized: the frame guard and authentication
+walk, the `SetAuthority` CPI and its post-hand-off re-read, the plan, the record
+write, the escrow increment, the close-and-split, and the dispatch arm — against
+a native sibling of 1,190 lines, carrying seven more accounts and one more CPI
+leg. That is a lane, and this lane did not open it. A route written but not
+driven would be the thing §17.6's own evidence warns about: green, and unproved
+where it counts.
+
+**One thing the next lane should not rediscover.** The private-native-helpers
+hazard (§17.6 hazard 2) still stands — `write_claim_check`, `close_and_split`,
+`allocate_and_assign`, `observation` and `token_balance` are all bare `fn`
+inside `claim_check_compaction_v1`. This lane deliberately did **not** widen
+their visibility, because widening it for a caller that does not exist yet is a
+change with no test behind it; the sharing and its first consumer belong in one
+commit, so the amended lamport order (rent, crank, opener debt, residue) never
+has two authors even briefly.
+
+> **CORRECTION to hazard 2, checked against the signatures: the five do not
+> share alike. Four can; one cannot.**
+>
+> - **`close_and_split` shares unmodified, and it is the one that matters.** It
+>   takes `&ClaimCheckCompactionPlanV1`, and
+>   `FractionalClaimCheckCompactionPlanV1::shared()` returns exactly that type
+>   *by value* — so `close_and_split(position, admission, cranker, opener,
+>   rent_credit, &plan.shared())` type-checks today with no signature change.
+>   This is what gives the amended four-credit order one author across both
+>   routes, which is the whole of what hazard 2 was protecting.
+> - **`allocate_and_assign` shares unmodified**, being generic over seeds,
+>   width and owner. `observation` and `token_balance` likewise.
+> - **`write_claim_check` cannot be shared, and asking it to would be the
+>   mirror.** It is hard-typed to `ClaimCheckSeedsV1`, `ClaimCheckV1` and
+>   `CLAIM_CHECK_BYTES_V1` (**288**). The fractional record is
+>   `FractionalClaimCheckV1` at `FRACTIONAL_CLAIM_CHECK_BYTES_V1` (**320**)
+>   under `FractionalClaimCheckSeedsV1`. Both seed types do return `[&[u8]; 3]`,
+>   so the *body shape* matches — but the honest share is
+>   `allocate_and_assign`, which `write_claim_check` already delegates to.
+>   Writing a thin fractional writer over it is not duplication; re-deriving
+>   the seed order would be.
+>
+> And one decision the sharing forces, so it is taken deliberately rather than
+> inherited: `close_and_split`'s internal refusals are
+> `ClaimCheckCompactionSbfErrorV1` (the `0x5600` band). A fractional route
+> calling it surfaces native-band codes for a close failure rather than its own
+> `0x5640` band. That is arguably correct — it *is* the native close — but it
+> is a visible consequence in a validator log, and the alternative (wrapping at
+> the call site) costs the shared authorship this correction is about.
+>
+> `execute_claim_check_compaction` needs no change at all: already
+> `pub(crate)`, already the right shape, already pinning
+> `caller_role == CallerRole::Claims`. Neither does the SBF refusal enum —
+> `FractionalClaimCheckCompactionSbfErrorV1` and its `0x5640`–`0x564C` band
+> assertions are landed and waiting for a route to raise them.
+
+#### Not verified
+
+- **No route, so no route CU.** §17.3's ~928k projection is still a lower bound
+  on a route that does not exist, and the 49 is still a declaration rather than
+  an observation: nothing has yet built a 49-account transaction.
+- **w7 and w8 are unwritten**, and they are the two that would make ruling 2
+  empirical rather than argued — w7 that the route runs with no caller-authority
+  account in frame, w8 that a direct Claims entry without Trading refuses at the
+  `SetAuthority` hand-off. Ruling 2's analysis stands on the ground §17.8 gives
+  it; it has not been driven.
+- **The gate arm is unit-tested only**, at exactly the level its three
+  neighbours are: no Trading program-test drives `fractional_root_signer` for
+  any kind, because fractional retirement is reachable from a test caller and
+  not from a `Market*` (§17.5). The four witnesses run over real encoded
+  requests and a real decoded root, not a mock; they do not run on chain.
+- **`cargo check --workspace --all-targets` is clean** and the three existing
+  gate tests are green, which is the umbrella control for the 50→49 change.
+- **Unrelated pre-existing red, not this lane's:** `cargo clippy -p
+  dclutch-direct-codec` fails with three `slicing may panic` denials. Identical
+  at this lane's base commit and after; recorded so the next lane does not
+  attribute it.
+- **The remainder still goes nowhere**, the 180-day deadline is unchanged, and
+  **`ClaimsCapability` is still stranded** — all three exactly as ruled.
+- **No devnet write.**

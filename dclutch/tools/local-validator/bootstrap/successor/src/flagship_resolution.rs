@@ -3248,19 +3248,7 @@ fn authenticate_checked_upgrade_plan(plan: &SuccessorPlan) -> Result<()> {
             // receipt absent (there is no Upgrade), and none of the
             // carry-forward-only transport fields.
             CheckedDeploymentDispositionV1::AlreadyCurrent => {
-                observed
-                    .baseline_sha256
-                    .as_deref()
-                    .is_some_and(|digest| hex32(digest).is_ok())
-                    && observed
-                        .baseline_path
-                        .as_deref()
-                        .is_some_and(|path| !path.is_empty())
-                    && observed.receipt_path.is_none()
-                    && observed.receipt_sha256.is_none()
-                    && observed.artifact_release_body_hex.is_none()
-                    && observed.artifact_release_id.is_none()
-                    && observed.carried_programdata_base64.is_none()
+                observed.already_current_closure().holds() && observed.carries_no_transport_fields()
             }
             CheckedDeploymentDispositionV1::CarryForward => {
                 observed.baseline_path.is_none()
@@ -6256,7 +6244,9 @@ fn describe_prestate_difference_v1(
     let mut notes = Vec::new();
     for (address, planned_row) in planned {
         let Some(observed_row) = observed.get(address) else {
-            notes.push(format!("{address} was pinned when planned and is absent now"));
+            notes.push(format!(
+                "{address} was pinned when planned and is absent now"
+            ));
             continue;
         };
         if planned_row == observed_row {
@@ -6292,9 +6282,7 @@ fn describe_prestate_difference_v1(
     }
     for address in observed.keys() {
         if !planned.contains_key(address) {
-            notes.push(format!(
-                "{address} is pinned now and was not when planned"
-            ));
+            notes.push(format!("{address} is pinned now and was not when planned"));
         }
     }
     if notes.is_empty() {

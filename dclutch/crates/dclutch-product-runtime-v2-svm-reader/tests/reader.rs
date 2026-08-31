@@ -249,6 +249,9 @@ fn basis_bytes(
         knots: active_knots,
         terms: active_terms,
         failure_payouts: failure,
+        // Exempt by proof: degree 0 and 1 need no price gate,
+        // and a digest offered alongside one is refused.
+        price_gate_certificate_digest: [0_u8; 32],
     };
     let width = basis_record_bytes_v3(
         kind,
@@ -640,6 +643,9 @@ fn authenticate_v3_continuation(runtime: &mut RuntimeV3Backing) -> Result<Runtim
             raw: &basis_raw,
             staging: &basis_staging,
         },
+        // A graded basis is exempt from the price gate by proof, so no
+        // certificate is offered and none is required.
+        None,
     )?;
     let linked_basis_body_digest = content_id(
         hash(
