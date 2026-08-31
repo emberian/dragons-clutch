@@ -18,8 +18,12 @@ import {
 } from './directMakerReplay';
 import {
   admitDirectParticipantCrossingV1,
+  deriveDirectSellerTokenAddressV1,
   type DirectParticipantCoordinatesV1,
   type DirectParticipantReadinessV1,
+  type DirectSellerCollateralPrestateV1,
+  type DirectSellerCoordinatesV1,
+  type DirectSellerReadinessV1,
 } from './directParticipant';
 import { type DirectCrossingPlanV1 } from './directTicket';
 
@@ -57,6 +61,25 @@ export type DirectWalletParticipantBindingV1 = Readonly<{
   nonce: bigint;
 }>;
 
+/**
+ * The seller half of one binding.
+ *
+ * It carries no admission coordinate because the seller route has none, and it
+ * reports which prestate the seller's Direct token account was observed in, so
+ * a caller can say out loud that the route's permissionless Trading token setup
+ * still has to land before this trade can execute.
+ */
+export type DirectWalletSellerBindingV1 = Readonly<{
+  owner: string;
+  participantObservedSlot: string;
+  coordinates: DirectSellerCoordinatesV1;
+  positionRevision: bigint;
+  collateralPrestate: DirectSellerCollateralPrestateV1;
+  nonceAddress: string;
+  nonceObservedSlot: string;
+  nonce: bigint;
+}>;
+
 export type DirectWalletExecutionBindingV1 = Readonly<{
   rpcEndpoint: string;
   genesisHash: string;
@@ -75,7 +98,7 @@ export type DirectWalletExecutionBindingV1 = Readonly<{
   lastValidBlockHeight: bigint;
   currentFinalizedSlot: bigint;
   currentBlockHeight: bigint;
-  seller: DirectWalletParticipantBindingV1;
+  seller: DirectWalletSellerBindingV1;
   taker: DirectWalletParticipantBindingV1;
 }>;
 
@@ -100,7 +123,7 @@ export type DirectWalletPreparationInputV1 = Readonly<{
   routeInspection: DirectHotRouteInspectionV3;
   ticketInspection: DirectTicketInspectionV1;
   crossingPlan: DirectCrossingPlanV1;
-  sellerParticipant: DirectParticipantReadinessV1;
+  sellerParticipant: DirectSellerReadinessV1;
   takerParticipant: DirectParticipantReadinessV1;
   noncePair: AuthenticatedDirectMakerNoncePairV1;
   signedSeller: SignedDirectIntentV3;
@@ -198,6 +221,13 @@ function requireReadyParticipant(
   return participant;
 }
 
+function requireReadySeller(
+  seller: DirectSellerReadinessV1,
+): Extract<DirectSellerReadinessV1, { status: 'ready' }> {
+  if (seller.status !== 'ready') throw new Error(`seller Direct state is ${seller.status}, not ready`);
+  return seller;
+}
+
 function participantBinding(
   participant: Extract<DirectParticipantReadinessV1, { status: 'ready' }>,
   nonce: AuthenticatedDirectMakerNonceV1,
@@ -207,6 +237,22 @@ function participantBinding(
     participantObservedSlot: participant.observedSlot,
     coordinates: Object.freeze({ ...participant.coordinates }),
     positionRevision: participant.positionRevision,
+    nonceAddress: nonce.address,
+    nonceObservedSlot: nonce.observedSlot,
+    nonce: nonce.nextNonce,
+  });
+}
+
+function sellerBinding(
+  seller: Extract<DirectSellerReadinessV1, { status: 'ready' }>,
+  nonce: AuthenticatedDirectMakerNonceV1,
+): DirectWalletSellerBindingV1 {
+  return Object.freeze({
+    owner: seller.owner,
+    participantObservedSlot: seller.observedSlot,
+    coordinates: Object.freeze({ ...seller.coordinates }),
+    positionRevision: seller.positionRevision,
+    collateralPrestate: seller.collateralPrestate,
     nonceAddress: nonce.address,
     nonceObservedSlot: nonce.observedSlot,
     nonce: nonce.nextNonce,
@@ -322,7 +368,25 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
     throw new Error('route, ticket, and taker intent disagree on exact Market, generation, outcome, price, fill, or fee');
   }
 
-  const sellerParticipant = requireReadyParticipant(input.sellerParticipant, 'seller');
+  // The two halves of a Direct crossing do not have the same shape on chain, so
+  // they are not checked here as if they did.
+  //
+  // A BUYER spends collateral through Custody: it needs a Claims admission
+  // record and an admission-created Token-2022 account delegated to this
+  // Market's Custody authority, and `admitDirectParticipantCrossingV1` still
+  // holds its spendable allowance against the exact planned debit.
+  //
+  // A SELLER spends CLAIMS. Its collateral is a DESTINATION, and the address is
+  // one Trading owns: `direct_token_setup_v1::authenticate_semantics` derives
+  // `find_program_address(DirectTokenAccountSeedsV1::new(market, generation,
+  // position.owner, Seller), trading)` and CREATES it, permissionlessly, off one
+  // precondition -- `authenticate_seller_position`, the canonical Claims
+  // aggregate and the seller's Position under it. That route's frame has
+  // twenty-three account indices and an admission record is not one of them, and
+  // the account it creates via `initialize_account3` has no delegate at all, so
+  // demanding a Custody-delegated participant account of the seller refused the
+  // very account the chain builds. See `inspectDirectSellerReadinessV1`.
+  const sellerParticipant = requireReadySeller(input.sellerParticipant);
   const takerParticipant = requireReadyParticipant(input.takerParticipant, 'taker');
   for (const [field, participant, signed] of [
     ['seller', sellerParticipant, input.signedSeller],
@@ -340,6 +404,16 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
       throw new Error(`${field} participant substitutes another owner, Market, generation, collateral, or outcome width`);
     }
   }
+  // Re-derive the seller's collateral here rather than believing the readiness
+  // that reported it. The readiness is one authority; this route, the ticket the
+  // seller signed, and Trading's own seeds are three more, and they have to name
+  // one address. This is the join whose absence let a ticket authored with the
+  // BUYER's `create_with_seed` derivation reach the producer and refuse there.
+  if (sellerParticipant.coordinates.collateral !== deriveDirectSellerTokenAddressV1(
+    route.tradingProgram, route.market, route.generation, input.signedSeller.maker,
+  )) {
+    throw new Error('seller collateral is not the Direct token account Trading derives for this Market, generation, and seller');
+  }
   if (sellerParticipant.coordinates.aggregate !== takerParticipant.coordinates.aggregate
       || sellerParticipant.coordinates.custodyAuthority !== takerParticipant.coordinates.custodyAuthority
       || sellerParticipant.collateralMint !== takerParticipant.collateralMint
@@ -349,9 +423,9 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
   if (new Set([
     sellerParticipant.owner, takerParticipant.owner,
     sellerParticipant.coordinates.position, takerParticipant.coordinates.position,
-    sellerParticipant.coordinates.admission, takerParticipant.coordinates.admission,
+    takerParticipant.coordinates.admission,
     sellerParticipant.coordinates.collateral, takerParticipant.coordinates.collateral,
-  ]).size !== 8) {
+  ]).size !== 7) {
     throw new Error('seller and taker participant authorities or owned accounts alias');
   }
   const sellerClaims = sellerParticipant.positionBalances[sellerIntent.outcome];
@@ -425,7 +499,7 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
     lastValidBlockHeight: route.lastValidBlockHeight,
     currentFinalizedSlot: currentSlot,
     currentBlockHeight,
-    seller: participantBinding(sellerParticipant, sellerNonceObservation),
+    seller: sellerBinding(sellerParticipant, sellerNonceObservation),
     taker: participantBinding(takerParticipant, takerNonceObservation),
   });
 

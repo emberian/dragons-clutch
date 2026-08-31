@@ -316,6 +316,23 @@ slots need the projection port: **10,643 measured non-test Rust lines across
 4 crates** (queued; miner exported for callers with a projection; those
 draws are per-request, so no key is ever permanently stuck).
 
+## WALL4 LANDED (`997c51d0`+`41502df3`) — the panel is ready for the trade
+
+The seller model matches the chain: readiness = what `direct_token_setup_v1`
+actually requires (Position covering the fill; the Direct token PDA vacant
+OR initialized-base — the only two prestates the chain admits); the
+admission demand DELETED with its backstop named per clause; one clause
+STRENGTHENED (PDA re-derived from the route's own facts). Cross-language
+control = PAIRFIX's `2xGo6Cxt…` byte-for-byte. Bonus catch: the participant
+decoder refused the very account Trading creates (no delegate) — third
+layer of the same disease, reconciled. Seed domain + role byte now
+GENERATED from `token_setup_v1.rs` incl. pinning the seed ORDER. Caveat
+carried in the binding: vacant-prestate acceptance moves that refusal to
+the validator (setup is the producer's separate permissionless tx). Sweep
+note: WALL4's mid-flight files rode GRICE's `ce410b1d` and ORCH's
+`1fec26b8` — content correct, attribution muddied (moving-tree hazard).
+**Remaining before ember's click: TRADE-4's manifest + PUBLISH-3.**
+
 ## FILLWIDTH LANDED (`7fc47e73`) — the readiness wave is 6/6
 
 Composed with PAIRFIX properly: adopted collect-all-clauses (an occupied
