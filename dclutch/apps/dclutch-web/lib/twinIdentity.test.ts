@@ -93,7 +93,6 @@ const DIVERGED_MODULES: Readonly<Record<string, string>> = Object.freeze({
   'lib/directTicket.test.ts': BACKLOG,
   'lib/directTradeSpine.ts': BACKLOG,
   'lib/founding/lookupTable.ts': BACKLOG,
-  'lib/generated/refusalRegistryV1.ts': BACKLOG,
   'lib/rationalRetireReceiptV4.ts': BACKLOG,
   'lib/rationalRetireReceiptV4.test.ts': BACKLOG,
   'lib/resolutionCertificateV2.ts': BACKLOG,
