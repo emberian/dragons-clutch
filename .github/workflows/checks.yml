@@ -54,9 +54,86 @@ jobs:
   hygiene:
     name: repository hygiene (no build)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      # -------------------------------------------------------------------
+      # WHY A JOB NAMED "no build" NOW WARMS A CARGO REGISTRY.
+      #
+      # `sbom_check.py` resolves every workspace with `cargo metadata --locked
+      # --offline`. The `--offline` is deliberate and should stay: the tool's
+      # committed output must be byte-stable and must not depend on what a
+      # network returns on a given morning. But offline resolution reads the
+      # LOCAL registry cache, and a fresh hosted runner has none.
+      #
+      # So this gate reported `failures=50` against main, and every one of the
+      # fifty was the same shape:
+      #
+      #     no matching package named `solana-program` found
+      #     location searched: crates.io index
+      #     note: offline mode (via `--offline`) can sometimes cause
+      #           surprising resolution failures
+      #
+      # None of that is a license finding. It is the gate saying it could not
+      # read the dependency graph at all — while `status=STOP`, a red X and the
+      # words "SBOM reports classification failures" claimed it had. Three
+      # manifests out of fifty-three were examined; the other fifty were
+      # reported as though they had been. A gate that fails for a reason
+      # unrelated to the thing it gates is worse than no gate, because the
+      # eventual fix is someone widening it until the red goes away.
+      #
+      # `cargo fetch --locked` populates exactly what offline resolution needs
+      # and nothing more: it downloads, it does not build. Measured against an
+      # empty CARGO_HOME, this takes the gate from
+      #
+      #     manifests=3   unique_rows=826    failures=50  unresolvable=0
+      # to  manifests=49  unique_rows=2054   failures=0   unresolvable=4
+      #
+      # The second effect is the one actually worth having. With a warm
+      # registry a genuinely stale lock stops looking like the above and starts
+      # producing cargo's own "because --locked was passed to prevent this",
+      # which `sbom_check.py` already routes to `unresolvable` instead of
+      # `failures` (its STALE_LOCK_MARKER). Those four are real, reportable
+      # debt owed by the lanes that own those locks — and a different defect
+      # from a license question, which is why they warn instead of failing.
+      # The tool's classification was never wrong. Its environment was.
+      # -------------------------------------------------------------------
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: sbom-registry-${{ hashFiles('dclutch/**/Cargo.lock') }}
+          restore-keys: sbom-registry-
+
+      - name: Warm the registry the SBOM gate resolves against
+        working-directory: dclutch
+        run: |
+          # Exactly the set sbom_check.py visits: a tracked Cargo.toml with a
+          # Cargo.lock beside it. Deliberately not fatal on a single refusal —
+          # that is a real finding about one workspace's lock, and it is handed
+          # to the gate below to classify rather than aborting the job before
+          # the gate gets to speak at all.
+          warmed=0
+          refused=0
+          for manifest in $(git ls-files '*Cargo.toml'); do
+            [ -f "$(dirname "$manifest")/Cargo.lock" ] || continue
+            if cargo fetch --locked --manifest-path "$manifest" >/dev/null 2>warm.err; then
+              warmed=$((warmed + 1))
+            else
+              refused=$((refused + 1))
+              echo "fetch refused: $manifest"
+              sed -n '1,3p' warm.err | sed 's/^/    /'
+            fi
+          done
+          rm -f warm.err
+          echo "registry warmed for $warmed workspaces; $refused refused"
+          echo "registry warmed for $warmed workspaces; $refused refused" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$refused" -gt 0 ]; then
+            echo "::warning::$refused workspace(s) would not fetch under --locked. Their locks do not match their manifests; the gate below reports what that costs in coverage."
+          fi
 
       - name: SBOM classification (gate) and drift (report)
         working-directory: dclutch
@@ -67,11 +144,29 @@ jobs:
           echo "$summary"
           grep '^FAILURE' sbom.log || true
 
-          # The gate: a genuinely unclassified license, a forbidden dependency
-          # source, or an unexpected metadata failure. These are wrong wherever
-          # the tree came from, so they fail the build.
+          # Coverage as a number, not a vibe. `manifests=` is how many workspace
+          # roots were actually resolved and classified, and it is printed so
+          # that "green" is never separable from "and it looked at this many
+          # things" — which is the exact failure this step was built to stop
+          # making.
+          resolved=$(printf '%s\n' "$summary" | grep -o 'manifests=[0-9]*' | cut -d= -f2)
+          echo "SBOM resolved and classified $resolved workspace roots" >> "$GITHUB_STEP_SUMMARY"
+
+          # An offline-resolution failure AFTER the warm-up above is no longer
+          # explainable as an empty registry, so it is no longer excused. It
+          # means a lock names something unfetchable. Still a real finding — it
+          # just gets its own accurate sentence instead of being filed as a
+          # license problem.
+          stranded=$(grep -c 'offline mode' sbom.log || true)
+          if [ "$stranded" -gt 0 ]; then
+            echo "::error::$stranded manifest(s) still would not resolve offline after the registry was warmed — a lock references a package that cannot be fetched. That is a reproducibility defect, NOT a license classification finding; do not fix it by widening the license gate."
+          fi
+
+          # The gate proper: a genuinely unclassified license, a forbidden
+          # dependency source, or an unexpected metadata failure. These are
+          # wrong wherever the tree came from, so they fail the build.
           case "$summary" in
-            *failures=0*) echo "license classification: clean" ;;
+            *failures=0*) echo "license classification: clean across $resolved workspace roots" ;;
             *) echo "::error::SBOM reports classification failures — see FAILURE lines above"; exit 1 ;;
           esac
 
@@ -131,6 +226,72 @@ jobs:
           else
             echo "::warning::tools/seam-audit is not in the published subtree yet — refresh the subtree to gate the seam register here"
           fi
+
+  # -------------------------------------------------------------------------
+  # The release tooling's REFUSAL suites.
+  #
+  # `dclutch/tools/release/` decides whether a build may be released at all,
+  # and four test scripts sit directly beside the tools they test. Nothing ran
+  # any of them — no CI, no runner, no schedule, no hook. They are hermetic
+  # (stub binaries on PATH, RPC pointed at `https://example.invalid`) and about
+  # five seconds for all four, so they belong on the cheap lane and every push.
+  #
+  # What they gate is refusals: stale or forged build evidence must not be
+  # admitted, and a market must not be founded at a fee rate that can never
+  # trade or against a founder key nobody holds. Both irreversible. A refusal
+  # test that never runs cannot be told apart from a tool that has quietly
+  # stopped refusing.
+  #
+  # Like the Rust jobs this calls `tools/ci/run.sh` rather than listing the four
+  # scripts here. One definition, two callers — a list in this file would be a
+  # second inventory to keep in sync, and it would go stale silently.
+  # -------------------------------------------------------------------------
+  release:
+    name: release tooling refusals
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The stager suite re-runs two of its red controls against the last
+          # revision BEFORE its guards existed — a control pinned to HEAD stops
+          # discriminating the moment the fix lands. A depth-1 clone cannot give
+          # it that. It degrades honestly and names the cases it skipped, but
+          # history is cheap here and makes those two controls real.
+          fetch-depth: 0
+
+      - name: Is the release tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ] \
+            && dclutch/tools/ci/run.sh --list 2>/dev/null | grep -q '^release '; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::the release tier is not in the published subtree yet, so the four release-tooling refusal suites did NOT run. That is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
+            echo "release tier: NOT RUN (not in the published subtree)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: the release-tooling refusal suites
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        run: |
+          set +e
+          tools/ci/run.sh release
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "release: passed" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::the release tier declined to run, or some of its suites are absent from this tree. Nothing was proven for the missing ones — an unrun refusal test is not a passing one."
+              echo "release: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::a release-tooling REFUSAL suite failed. Each one proves the release machinery still says no to something irreversible: forged build evidence, a market founded at a fee rate that can never trade, a founder key nobody holds. Read the failing case before you change either side of it."
+              echo "release: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
 
   suites:
     name: web + SDK test suites
