@@ -61,6 +61,26 @@ def cursorPhaseTerminal : Nat := 8
 def lifecycleActive : Nat := 1
 /-- `OperationV1::Transfer` as the Custody operation tag. -/
 def custodyOperationTransfer : Nat := 2
+/-- `GeneralLocalStateKindV3::Batch.tag()`. -/
+def kindBatch : Nat := 3
+/-- `GeneralLocalStateKindV3::Order.tag()`. -/
+def kindOrder : Nat := 4
+/-- `GeneralLocalStateKindV3::Candidate.tag()`. -/
+def kindCandidate : Nat := 5
+/-- `GeneralLocalStateKindV3::Verifier.tag()`. -/
+def kindVerifier : Nat := 6
+/-- `GeneralBatchV1::record_magic_u64()` -- little-endian `DCGBAT01`. -/
+def batchRecordMagicWord : Nat := 3544425546002154308
+/-- `GeneralBatchV1::record_version_value()`; also the constant one the
+transition loads into the `one` register, and they are deliberately the same
+value so one `loadConst` serves both. -/
+def batchRecordVersion : Nat := 1
+/-- `GeneralBatchV1::record_phase_value()`. -/
+def batchRecordPhase : Nat := 20
+/-- `BatchStatusV1::Collecting.tag()`. -/
+def batchStatusCollecting : Nat := 1
+/-- `BatchStatusV1::Closed.tag()`. -/
+def batchStatusClosed : Nat := 2
 
 inductive ScalarSlot where
   | action | completeSetMove | claimsAffineActive | custodyActive
@@ -86,6 +106,25 @@ inductive ScalarSlot where
   | terminalRentPrincipal | localStateMagic | localStateVersion | localStateKind
   | selectionBestFilledLots | selectionBestQuoteSurplus | inputScratchPageCount | manifestOrderIndex
   | rootLifecycleObservation | rootLifecycleActive
+  -- The GEN-SEVEN widening. Everything below serves the seven collection and
+  -- candidate actions; the settlement seven never address these coordinates,
+  -- so widening the bank changes their header bytes and none of their conjuncts.
+  | currentSlot | one | scratchA | scratchB
+  | rootExpectedRevision | rootRevisionObservation | rootPostRevision | rootNextBatchSequenceObservation
+  | rootPostBatchSequence | rootOpenBatchesObservation | rootPostOpenBatches | configCollectionSlots
+  | configSelectionSlots | configSettlementSlots | configMaxOrders | batchStatusObservation
+  | batchPostStatus | batchOrderCountObservation | batchPostOrderCount | batchCancelledCountObservation
+  | batchPostCancelledCount | batchQuoteReserveObservation | batchPostQuoteReserve | batchCollectionCloseSlot
+  | batchSettlementCloseSlot | orderMaxLots | orderMaxQuoteDebitPerLot | orderQuoteReserve
+  | orderValidUntilSlot | orderPhaseObservation | orderPostPhase | orderAdmittedSlotObservation
+  | orderPostReleasedSlot | escrowBalanceObservation | candidatePageCount | candidatePageRevision
+  | candidateRowCount | candidateRewardRate | candidateStatusObservation | candidatePostStatus
+  | candidateVerificationRemainingObservation | candidatePostVerificationRemaining | candidateCleanupRemainingObservation | candidatePostCleanupRemaining
+  | candidateSubmittedSlot | verifyTerminal | verifyRevisionObservation | verifyPostRevision
+  | verifyPageObservation | verifyPostPage | verifyRowObservation | verifyPostRow
+  | verifyOrderCountObservation | verifyPostOrderCount | verifyManifestOrderCount | resultStateBump
+  | resultBumpObservation | resultPrincipalObservation | resultCreated | resultCanonicalBump
+  | resultRentPrincipal
   deriving DecidableEq, Repr
 
 namespace ScalarSlot
@@ -114,7 +153,23 @@ def all : List ScalarSlot := [
   .terminalBumpObservation, .terminalPrincipalObservation, .terminalCreated, .terminalCanonicalBump,
   .terminalRentPrincipal, .localStateMagic, .localStateVersion, .localStateKind,
   .selectionBestFilledLots, .selectionBestQuoteSurplus, .inputScratchPageCount, .manifestOrderIndex,
-  .rootLifecycleObservation, .rootLifecycleActive
+  .rootLifecycleObservation, .rootLifecycleActive,
+  .currentSlot, .one, .scratchA, .scratchB,
+  .rootExpectedRevision, .rootRevisionObservation, .rootPostRevision, .rootNextBatchSequenceObservation,
+  .rootPostBatchSequence, .rootOpenBatchesObservation, .rootPostOpenBatches, .configCollectionSlots,
+  .configSelectionSlots, .configSettlementSlots, .configMaxOrders, .batchStatusObservation,
+  .batchPostStatus, .batchOrderCountObservation, .batchPostOrderCount, .batchCancelledCountObservation,
+  .batchPostCancelledCount, .batchQuoteReserveObservation, .batchPostQuoteReserve, .batchCollectionCloseSlot,
+  .batchSettlementCloseSlot, .orderMaxLots, .orderMaxQuoteDebitPerLot, .orderQuoteReserve,
+  .orderValidUntilSlot, .orderPhaseObservation, .orderPostPhase, .orderAdmittedSlotObservation,
+  .orderPostReleasedSlot, .escrowBalanceObservation, .candidatePageCount, .candidatePageRevision,
+  .candidateRowCount, .candidateRewardRate, .candidateStatusObservation, .candidatePostStatus,
+  .candidateVerificationRemainingObservation, .candidatePostVerificationRemaining, .candidateCleanupRemainingObservation, .candidatePostCleanupRemaining,
+  .candidateSubmittedSlot, .verifyTerminal, .verifyRevisionObservation, .verifyPostRevision,
+  .verifyPageObservation, .verifyPostPage, .verifyRowObservation, .verifyPostRow,
+  .verifyOrderCountObservation, .verifyPostOrderCount, .verifyManifestOrderCount, .resultStateBump,
+  .resultBumpObservation, .resultPrincipalObservation, .resultCreated, .resultCanonicalBump,
+  .resultRentPrincipal
 ]
 
 @[simp] def index : ScalarSlot → Nat
@@ -208,6 +263,67 @@ def all : List ScalarSlot := [
   | .manifestOrderIndex => 87
   | .rootLifecycleObservation => 88
   | .rootLifecycleActive => 89
+  | .currentSlot => 90
+  | .one => 91
+  | .scratchA => 92
+  | .scratchB => 93
+  | .rootExpectedRevision => 94
+  | .rootRevisionObservation => 95
+  | .rootPostRevision => 96
+  | .rootNextBatchSequenceObservation => 97
+  | .rootPostBatchSequence => 98
+  | .rootOpenBatchesObservation => 99
+  | .rootPostOpenBatches => 100
+  | .configCollectionSlots => 101
+  | .configSelectionSlots => 102
+  | .configSettlementSlots => 103
+  | .configMaxOrders => 104
+  | .batchStatusObservation => 105
+  | .batchPostStatus => 106
+  | .batchOrderCountObservation => 107
+  | .batchPostOrderCount => 108
+  | .batchCancelledCountObservation => 109
+  | .batchPostCancelledCount => 110
+  | .batchQuoteReserveObservation => 111
+  | .batchPostQuoteReserve => 112
+  | .batchCollectionCloseSlot => 113
+  | .batchSettlementCloseSlot => 114
+  | .orderMaxLots => 115
+  | .orderMaxQuoteDebitPerLot => 116
+  | .orderQuoteReserve => 117
+  | .orderValidUntilSlot => 118
+  | .orderPhaseObservation => 119
+  | .orderPostPhase => 120
+  | .orderAdmittedSlotObservation => 121
+  | .orderPostReleasedSlot => 122
+  | .escrowBalanceObservation => 123
+  | .candidatePageCount => 124
+  | .candidatePageRevision => 125
+  | .candidateRowCount => 126
+  | .candidateRewardRate => 127
+  | .candidateStatusObservation => 128
+  | .candidatePostStatus => 129
+  | .candidateVerificationRemainingObservation => 130
+  | .candidatePostVerificationRemaining => 131
+  | .candidateCleanupRemainingObservation => 132
+  | .candidatePostCleanupRemaining => 133
+  | .candidateSubmittedSlot => 134
+  | .verifyTerminal => 135
+  | .verifyRevisionObservation => 136
+  | .verifyPostRevision => 137
+  | .verifyPageObservation => 138
+  | .verifyPostPage => 139
+  | .verifyRowObservation => 140
+  | .verifyPostRow => 141
+  | .verifyOrderCountObservation => 142
+  | .verifyPostOrderCount => 143
+  | .verifyManifestOrderCount => 144
+  | .resultStateBump => 145
+  | .resultBumpObservation => 146
+  | .resultPrincipalObservation => 147
+  | .resultCreated => 148
+  | .resultCanonicalBump => 149
+  | .resultRentPrincipal => 150
 
 end ScalarSlot
 
@@ -245,6 +361,8 @@ inductive IdentitySlot where
   | selectionProduct | selectionBatch | selectionPolicy | bestVerifiedDigest
   | primaryBeneficiaryObservation | primaryBeneficiary | primaryState | primaryOwner
   | terminalBeneficiaryObservation | terminalBeneficiary | terminalState | terminalOwner
+  | generalConfigId | resultBeneficiaryObservation | resultBeneficiary | resultState
+  | resultOwner
   deriving DecidableEq, Repr
 
 namespace IdentitySlot
@@ -260,7 +378,9 @@ def all : List IdentitySlot := [
   .custodyDestinationOwner, .positionZeroOwner, .positionOneOwner, .generalRoot,
   .selectionProduct, .selectionBatch, .selectionPolicy, .bestVerifiedDigest,
   .primaryBeneficiaryObservation, .primaryBeneficiary, .primaryState, .primaryOwner,
-  .terminalBeneficiaryObservation, .terminalBeneficiary, .terminalState, .terminalOwner
+  .terminalBeneficiaryObservation, .terminalBeneficiary, .terminalState, .terminalOwner,
+  .generalConfigId, .resultBeneficiaryObservation, .resultBeneficiary, .resultState,
+  .resultOwner
 ]
 
 @[simp] def index : IdentitySlot → Nat
@@ -304,6 +424,11 @@ def all : List IdentitySlot := [
   | .terminalBeneficiary => 37
   | .terminalState => 38
   | .terminalOwner => 39
+  | .generalConfigId => 40
+  | .resultBeneficiaryObservation => 41
+  | .resultBeneficiary => 42
+  | .resultState => 43
+  | .resultOwner => 44
 
 end IdentitySlot
 
@@ -320,10 +445,18 @@ def commonIdentities : Nat := IdentitySlot.all.length
 /-- General has no per-outcome identity tail. -/
 def itemIdentityStride : Nat := 0
 
-/-- The two state kinds the seven settlement actions select between. -/
+/-- The local-state kind each action's PRIMARY state envelope carries.
+
+The batch four share the Batch envelope because their primary state is the
+batch window itself -- `PlaceOrder` and `CancelOrder` authenticate it and touch
+their order as a SECONDARY state. The candidate pair's primary is the
+submission record, and `ReleaseOrder`'s is the order it refunds. -/
 def stateKind (action : Action) : Nat :=
   match action with
   | .consider | .freeze => kindSelection
+  | .openBatch | .placeOrder | .cancelOrder | .closeBatch => kindBatch
+  | .submitCandidate | .verifyCandidateRow => kindCandidate
+  | .releaseOrder => kindOrder
   | _ => kindSettlement
 
 /-- Every action's shared prelude.
@@ -390,8 +523,8 @@ def vaultContextOps (action : Action) : List Op :=
 
 /-- The action-selected half of each prelude.
 
-Exhaustive by name, and the seven collection and candidate actions answer with
-the empty list: they have no authored program, and `authoredActions` below is
+Exhaustive by name, and the five still-unauthored actions answer with the
+empty list: they have no authored program, and `authoredActions` below is
 what says so rather than a silently inherited default. -/
 def actionOps (action : Action) : List Op :=
   match action with
@@ -445,6 +578,68 @@ def actionOps (action : Action) : List Op :=
       .nonzero (s .cursorTerminalCoordinate),
       .nonzero (s .terminalCoordinate)
     ] ++ vaultContextOps .close
+  | .openBatch => [
+      -- The caller's optimistic root revision must be the observed one, and
+      -- the three root advances are exact: this is `GeneralRootV2::open_batch`
+      -- stated as conjuncts. The EffectProgram writes the successor root tail
+      -- from the three POST registers and the new batch record from the
+      -- observation registers, so a program that skipped an increment would
+      -- write a root that replays.
+      .scalarEq (s .rootExpectedRevision) (s .rootRevisionObservation),
+      .incrementInto (s .rootRevisionObservation) (s .rootPostRevision),
+      .incrementInto (s .rootNextBatchSequenceObservation) (s .rootPostBatchSequence),
+      .incrementInto (s .rootOpenBatchesObservation) (s .rootPostOpenBatches),
+      -- A zero window or a zero admission bound is a batch that can admit
+      -- nothing and never close by fullness; the config refuses it at
+      -- construction and this refuses a projection that lost it.
+      .nonzero (s .configCollectionSlots),
+      .nonzero (s .configSelectionSlots),
+      .nonzero (s .configSettlementSlots),
+      .nonzero (s .configMaxOrders),
+      -- The windows are config-derived, never caller-chosen:
+      -- collection close = now + collection, settlement close = collection
+      -- close + selection + settlement. `checkedAddInto` refuses overflow, so
+      -- the close slots always lie strictly after the current slot.
+      .checkedAddInto (s .currentSlot) (s .configCollectionSlots) (s .batchCollectionCloseSlot),
+      .checkedAddInto (s .batchCollectionCloseSlot) (s .configSelectionSlots) (s .scratchA),
+      .checkedAddInto (s .scratchA) (s .configSettlementSlots) (s .batchSettlementCloseSlot),
+      -- The record constants the EffectProgram writes into the vacant account:
+      -- status Collecting, and the batch record's own magic/version/phase.
+      -- `one` doubles as the record version, which is 1.
+      .loadConst (s .batchPostStatus) batchStatusCollecting,
+      .loadConst (s .one) batchRecordVersion,
+      .loadConst (s .scratchA) batchRecordMagicWord,
+      .loadConst (s .scratchB) batchRecordPhase
+    ]
+  | .closeBatch => [
+      -- `GeneralRootV2::close_batch` as conjuncts: revision advances by one
+      -- and the open-batch count decrements by exactly one -- `subInto`
+      -- refuses at zero, which is the root refusing a close it never opened.
+      .scalarEq (s .rootExpectedRevision) (s .rootRevisionObservation),
+      .incrementInto (s .rootRevisionObservation) (s .rootPostRevision),
+      .loadConst (s .one) 1,
+      .subInto (s .rootOpenBatchesObservation) (s .one) (s .rootPostOpenBatches),
+      -- Only a collecting batch closes, and it closes to Closed.
+      .loadConst (s .scratchA) batchStatusCollecting,
+      .scalarEq (s .batchStatusObservation) (s .scratchA),
+      .loadConst (s .batchPostStatus) batchStatusClosed,
+      -- `close_is_permissionless`: the window is over, OR the batch is full.
+      -- A disjunction over an all-conjunct vocabulary, built exactly:
+      --   d1 := close - min(now, close)        (zero iff the window is over)
+      --   d2 := bound - min(count, bound)      (zero iff the batch is full)
+      --   min(d1,1) * min(d2,1) = 0            (the disjunction, clamped so
+      --                                         the product cannot overflow)
+      -- Anything else is an early close that truncates a maker's window.
+      .minInto (s .currentSlot) (s .batchCollectionCloseSlot) (s .scratchA),
+      .subInto (s .batchCollectionCloseSlot) (s .scratchA) (s .scratchA),
+      .minInto (s .scratchA) (s .one) (s .scratchA),
+      .minInto (s .batchOrderCountObservation) (s .configMaxOrders) (s .scratchB),
+      .subInto (s .configMaxOrders) (s .scratchB) (s .scratchB),
+      .minInto (s .scratchB) (s .one) (s .scratchB),
+      .checkedMulInto (s .scratchA) (s .scratchB) (s .scratchA),
+      .loadConst (s .scratchB) 0,
+      .scalarEq (s .scratchA) (s .scratchB)
+    ]
   | _ => []
 
 /-- The Product-owned item body, folded once per authenticated outcome. -/
@@ -478,14 +673,20 @@ def program (action : Action) : Program := {
   epilogue := []
 }
 
-/-- The seven actions whose transition program is authored here. -/
+/-- The actions whose transition program is authored here, in tag order.
+
+`openBatch` and `closeBatch` are the root-writing pair of GEN-SEVEN: the two
+that advance the `GeneralRootV2` tail and route to no Claims or Custody child.
+The remaining five keep their place in `unauthoredActions` until each one's
+complete quadruple lands. -/
 def authoredActions : List Action := [
-  .consider, .freeze, .initializeSettlement, .collect, .materialize, .distribute, .close
+  .consider, .freeze, .initializeSettlement, .collect, .materialize, .distribute, .close,
+  .openBatch, .closeBatch
 ]
 
-/-- The seven that are not, and whose triple is the open work. -/
+/-- The five that are not, and whose quadruple is the open work. -/
 def unauthoredActions : List Action := [
-  .openBatch, .placeOrder, .cancelOrder, .closeBatch,
+  .placeOrder, .cancelOrder,
   .submitCandidate, .verifyCandidateRow, .releaseOrder
 ]
 
@@ -496,7 +697,7 @@ def programs : List Program := authoredActions.map program
 -- ---------------------------------------------------------------------------
 
 theorem the_register_schema_is_the_declared_bank :
-    commonScalars = 90 ∧ itemScalarStride = 6 ∧ commonIdentities = 40 ∧
+    commonScalars = 151 ∧ itemScalarStride = 6 ∧ commonIdentities = 45 ∧
       itemIdentityStride = 0 := by native_decide
 
 /-- Every constructor list is its own index sequence, so a reordered enum is a
@@ -517,7 +718,8 @@ theorem authored_section_counts :
         (fun action =>
           ((program action).prelude.length, (program action).itemBody.length,
             (program action).epilogue.length)) =
-      [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0)] := by
+      [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
+        (26, 1, 0), (27, 1, 0)] := by
   native_decide
 
 /-- No two authored actions emit the same program. A shared prelude plus an
@@ -526,7 +728,7 @@ the digest is what the descriptor and the capability seal name. -/
 theorem authored_programs_are_pairwise_distinct :
     programs.Nodup := by native_decide
 
-/-- The seven unauthored actions carry no program, and this is what says so.
+/-- The unauthored actions carry no program, and this is what says so.
 
 `program` is total, so it answers for all fourteen; what it must never do is
 answer with something an emitter could mistake for an artifact. An unauthored
@@ -561,7 +763,95 @@ theorem exactly_the_fixed_direction_actions_bind_their_vault_context :
 def encodedWidth (action : Action) : Nat := (Codec.encodeProgram (program action)).length
 
 theorem authored_encoded_widths :
-    authoredActions.map encodedWidth = [416, 464, 584, 632, 440, 632, 824] := by
+    authoredActions.map encodedWidth = [416, 464, 584, 632, 440, 632, 824, 680, 704] := by
   native_decide
+
+-- ---------------------------------------------------------------------------
+-- The root-writing pair, executed
+-- ---------------------------------------------------------------------------
+
+/-- One register bank at Product width 1: every named coordinate set, the rest
+zero. Identities are the abstract `Nat` identities of the VM model. -/
+private def bankOf (values : List (Nat × Nat)) (identities : List (Nat × Nat)) : State :=
+  ⟨values.foldl (fun bank (coordinate, value) => bank.setIfInBounds coordinate value)
+      ((List.replicate (commonScalars + itemScalarStride) 0).toArray),
+    identities.foldl (fun bank (coordinate, value) => bank.setIfInBounds coordinate value)
+      ((List.replicate commonIdentities 0).toArray)⟩
+
+/-- The shared prelude's demands at width one, plus a live root. -/
+private def commonBank : List (Nat × Nat) := [
+  (ScalarSlot.index .rootLifecycleObservation, lifecycleActive),
+  (ScalarSlot.index .outcomeCount, 1), (ScalarSlot.index .zero, 1),
+  (ScalarSlot.index .stateBump, 7), (ScalarSlot.index .primaryCanonicalBump, 7),
+  (ScalarSlot.index .primaryRentPrincipal, 1)
+]
+
+private def commonIdentityBank : List (Nat × Nat) := [
+  (IdentitySlot.index .primaryOwner, 9), (IdentitySlot.index .tradingProgram, 9)
+]
+
+/-- An OpenBatch bank whose optimistic revision matches the observed root. -/
+private def openBatchBank (expectedRevision : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .currentSlot, 1000),
+      (ScalarSlot.index .rootExpectedRevision, expectedRevision),
+      (ScalarSlot.index .rootRevisionObservation, 5),
+      (ScalarSlot.index .rootNextBatchSequenceObservation, 3),
+      (ScalarSlot.index .rootOpenBatchesObservation, 0),
+      (ScalarSlot.index .configCollectionSlots, 10),
+      (ScalarSlot.index .configSelectionSlots, 10),
+      (ScalarSlot.index .configSettlementSlots, 10),
+      (ScalarSlot.index .configMaxOrders, 8)
+    ]) commonIdentityBank
+
+/-- OpenBatch accepts the exact bank and computes the three root advances and
+the two config-derived windows. -/
+theorem open_batch_accepts_and_advances_the_root :
+    ((program .openBatch).execute 1 (openBatchBank 5)).map (fun state =>
+        (state.scalars[ScalarSlot.index .rootPostRevision]!,
+          state.scalars[ScalarSlot.index .rootPostBatchSequence]!,
+          state.scalars[ScalarSlot.index .rootPostOpenBatches]!,
+          state.scalars[ScalarSlot.index .batchCollectionCloseSlot]!,
+          state.scalars[ScalarSlot.index .batchSettlementCloseSlot]!)) =
+      some (6, 4, 1, 1010, 1030) := by native_decide
+
+/-- The replay guard is real: a stale optimistic revision refuses. -/
+theorem open_batch_refuses_a_stale_root_revision :
+    (program .openBatch).execute 1 (openBatchBank 4) = none := by native_decide
+
+/-- A CloseBatch bank: window state and batch counters are the parameters. -/
+private def closeBatchBank (currentSlot orderCount openBatches : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .currentSlot, currentSlot),
+      (ScalarSlot.index .rootExpectedRevision, 6),
+      (ScalarSlot.index .rootRevisionObservation, 6),
+      (ScalarSlot.index .rootOpenBatchesObservation, openBatches),
+      (ScalarSlot.index .batchStatusObservation, batchStatusCollecting),
+      (ScalarSlot.index .batchCollectionCloseSlot, 500),
+      (ScalarSlot.index .batchOrderCountObservation, orderCount),
+      (ScalarSlot.index .configMaxOrders, 8)
+    ]) commonIdentityBank
+
+/-- After the window, a close accepts and the decrement is exact. -/
+theorem close_batch_accepts_after_the_window :
+    ((program .closeBatch).execute 1 (closeBatchBank 1000 0 1)).map (fun state =>
+        (state.scalars[ScalarSlot.index .rootPostRevision]!,
+          state.scalars[ScalarSlot.index .rootPostOpenBatches]!,
+          state.scalars[ScalarSlot.index .batchPostStatus]!)) =
+      some (7, 0, batchStatusClosed) := by native_decide
+
+/-- A full batch may close early: nobody's window is truncated. -/
+theorem close_batch_accepts_a_full_batch_early :
+    ((program .closeBatch).execute 1 (closeBatchBank 100 8 1)).isSome = true := by
+  native_decide
+
+/-- A live, unfull batch refuses an early close: this is the griefing arm of
+`close_is_permissionless`, and it is the disjunction's only refusing branch. -/
+theorem close_batch_refuses_an_early_close_of_a_live_batch :
+    (program .closeBatch).execute 1 (closeBatchBank 100 7 1) = none := by native_decide
+
+/-- A close the root never opened refuses: the decrement has no minuend. -/
+theorem close_batch_refuses_when_no_batch_is_open :
+    (program .closeBatch).execute 1 (closeBatchBank 1000 0 0) = none := by native_decide
 
 end DClutch.General.TransitionV3

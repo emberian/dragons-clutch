@@ -95,6 +95,34 @@ reads the prefix.  Truncation drops whole array ELEMENTS and never edits one,
 which `test_simcore.py` proves by round-tripping a real market18 observation
 to the census tool's own bytes.
 
+## The spend ceiling
+
+```json
+ "budget": {"max_lamports_spent": 250000000}
+```
+
+A run whose fee payers have spent more than this **dies**: `HALT.json` on disk,
+exit **6**, `EXIT.json` outcome `overspent`, and a restart refused until a human
+clears the halt — an unattended lane must not resume spending on its own. It is
+the fourth kill condition and it was the missing one: `HALT.json` catches a
+broken law, `EXIT.json` catches an ending, the heartbeat deadline catches a
+SIGKILL, and nothing at all caught a run that was merely expensive. Without it a
+devnet world is bounded only by cadence times fee, which is a number you have to
+compute rather than one you can read.
+
+**Spend is cumulative outflow, not a delta from the first balance.** Every fall
+in a payer's balance is added; every rise is recorded separately and never
+subtracted. A run that airdrops its payer mid-way must not have its earlier
+spend forgiven, and under a first-observation delta one refill would do exactly
+that.
+
+The numbers come from the census's own `payer_lamports` — the field `L7` already
+watches — so this adds no read and invents no source. The census that crossed
+the ceiling is written to disk **before** the halt, so the balance that stopped
+the run is part of its history rather than a hole in it. Omitting the field
+leaves the run unbounded, and both the status artifact and the ledger say
+`"bounded": false` rather than leaving a null to interpret.
+
 ## Death, honestly
 
 The run that died on 2026-08-30 left `halted: false`, `stopping: false` and no
@@ -164,9 +192,50 @@ deliberately.
    python3 tools/load-simulator/simulator.py run \
      --config /private/tmp/dclutch-sim-run-NN.config.json --cycles 3 --execute
    ```
-3. Teardown: `kill -CONT <run.py pid>` (the supervisor is in state T); it
+   For a **population** rather than one market, the same adapter emits the
+   `lifecycle` config — no bindings, because a market that run founds is bound
+   from the founding's own evidence:
+   ```
+   python3 tools/load-simulator/build_config_from_probe.py --simlife \
+     --probe-work /private/tmp/dclutch-sim-hold-NN \
+     --sim-work /private/tmp/dclutch-sim-run-NN \
+     --output /private/tmp/dclutch-sim-run-NN.config.json \
+     --seed 'dclutch/simlife/DATE/name' --markets 16 --ticks 48 \
+     --slots-per-tick 900 --period-seconds 12 \
+     --solana-keygen "$(command -v solana-keygen)" \
+     --max-lamports-spent 200000000000
+   python3 tools/load-simulator/simlife_drive.py plan \
+     --config /private/tmp/dclutch-sim-run-NN.config.json
+   python3 tools/load-simulator/simlife_drive.py run \
+     --config /private/tmp/dclutch-sim-run-NN.config.json --execute
+   ```
+3. Between the hold and the run, provision the chain's Pyth update account
+   once — it is a fact about the CHAIN, not about a market, so one provisioning
+   serves every market on that validator, and without it every resolution
+   refuses:
+   ```
+   <bootstrap> local-private-validator-pyth-vaa-provision-v1 \
+     --rpc-url <held rpc> --payer <core-upgrade-authority pubkey> \
+     --encoded-vaa <pyth-encoded-vaa pubkey> --update-account <pyth-update-account pubkey> \
+     --journal-dir <dir> --facts-output <dir>/pyth-update-facts.json \
+     --payer-keypair <keys>/core-upgrade-authority.json \
+     --encoded-vaa-keypair <keys>/pyth-encoded-vaa.json --execute
+   ```
+   It executes ONE journaled action per invocation, so call it until the facts
+   document appears (eight actions plus one reauthenticating pass), then pass
+   the document to the adapter with `--pyth-facts`.
+4. Teardown: `kill -CONT <run.py pid>` (the supervisor is in state T); it
    authenticates the handoff and tears the validator group down itself.
    Never kill the validator directly.
+
+**A long run needs its history.** Every driver here re-verifies its earlier
+stages from transaction history, and the Direct trade and the flagship
+resolution advance one durable action per invocation with minutes between them.
+`run.py` launches the validator with `--limit-ledger-size` for exactly that
+reason: under the validator's own default those roots are purged in
+multi-thousand-slot chunks, and a purge landing between two stages strands the
+journal permanently — the later stage can no longer authenticate the earlier
+one, and no retry recovers it.
 
 ## Devnet flip
 
@@ -261,19 +330,38 @@ Folding the last three together would turn one wall into a hundred failures.
 Each is a bundle of **distributions**, not a market: two markets of the same
 archetype differ in every number.
 
-| archetype | cells | basis | deadline (slots) | destinies |
-|---|---|---|---|---|
-| `coin-flip` | 2 | categorical | log-uniform 2,000–20,000 | resolves 8 / fails 1 / sleepy 1 |
-| `short-fuse` | 2–4 | categorical | log-uniform 120–1,200 | fails 6 / resolves 3 / sleepy 1 |
-| `ladder` | 4–8 | **ramp, degree 1** | log-uniform 8,000–60,000 | resolves 7 / sleepy 2 / fails 1 |
-| `tent-band` | 3–6 | **tent, degree 1** | log-uniform 4,000–30,000 | resolves 6 / fails 2 / sleepy 2 |
-| `wide-field` | 6–12 | categorical | log-uniform 10,000–80,000 | resolves 5 / sleepy 4 / fails 1 |
-| `quiet-corner` | 2 | categorical | log-uniform 40,000–200,000 | sleepy always |
+| archetype | cells | basis | deadline (slots) | band | destinies |
+|---|---|---|---|---|---|
+| `coin-flip` | 3 | categorical | log-uniform 2,000–20,000 | 40–900 bp, mixed profile | resolves 8 / fails 1 / sleepy 1 |
+| `short-fuse` | 2–4 | categorical | log-uniform 120–1,200 | 40–900 bp, mixed | fails 6 / resolves 3 / sleepy 1 |
+| `hairline` | 3 | categorical | log-uniform 600–6,000 | **15–120 bp**, uniform | resolves 8 / fails 1 / sleepy 1 |
+| `ladder` | 4–8 | **ramp, degree 1** | log-uniform 8,000–60,000 | 40–900 bp, mixed | resolves 7 / sleepy 2 / fails 1 |
+| `tent-band` | 3–6 | **tent, degree 1** | log-uniform 4,000–30,000 | 40–900 bp, mixed | resolves 6 / fails 2 / sleepy 2 |
+| `long-tail` | 5–7 | categorical | log-uniform 3,000–40,000 | 200–900 bp, **tight-centre** | resolves 6 / sleepy 3 / fails 1 |
+| `wide-field` | 6–12 | categorical | log-uniform 10,000–80,000 | 40–900 bp, mixed | resolves 5 / sleepy 4 / fails 1 |
+| `quiet-corner` | 2 | categorical | log-uniform 40,000–200,000 | 60–300 bp, uniform | sleepy always |
 
-Every archetype is **zero-fee** and the draw refuses a nonzero rate where it is
-drawn: fee-bearing founding does not fit in one transaction on today's wire
-(`docs/evidence/FEE_SECOND_TRANSACTION_FOUNDATION_2026_08_30.md`), so a world
-that drew a rate would be a world whose markets cannot be founded at all.
+`coin-flip` is **three** cells and not two. A width-2 market has no cuts — the
+whole coordinate domain as one region plus the explicit failure cell — so its
+only ordinary answer is "it did not fail", which is not a coin flip and cannot
+land in two places. Width 2 stays reachable through `quiet-corner`.
+
+### The fee rate is a band, and only one rate can trade
+
+Every archetype used to be `Constant(0)`, on the reading that fee-bearing
+founding does not fit in one transaction. That reading was wrong:
+`FEE_SECOND_TRANSACTION_FOUNDATION_2026_08_30.md` is about the Direct **fill**'s
+fee leg, not about founding, and fee-bearing foundings were measured landing on
+a loopback validator on 2026-08-30.
+
+It also made every market untradeable. The owned-loopback Direct producer has no
+ticket to read, authors its own terms, and admits exactly **50 bps**
+(`direct_trade_producer.rs`, `FEE_BASIS_POINTS_V1`); the chain agrees, because
+`direct_token_setup_v1` is the sole creator of the seller and venue Direct token
+accounts and refuses at any other rate. **Zero is the one rate that can never be
+filled.** Each archetype now draws a band weighted towards 50 with a deliberate
+tail (0, 25, 100), so the producer's rate clause is exercised rather than
+described.
 
 **Only `CategoricalQ1` is FOUNDABLE today.** Degree-0 and degree-1 graded bases
 — `Constant`, `RampUp`, `RampDown`, `Tent` — decode, evaluate and settle on the
@@ -286,6 +374,55 @@ kinds it can **express**, and a founding it cannot express is `unattempted` with
 that sentence — never a failure, and never quietly redrawn as a categorical
 market wearing a ladder's name. Use `archetype_mix: "foundable-today"` for a
 world a real substrate can drive end to end.
+
+### The band, and the coordinate it is drawn around
+
+**Where a band sits is relative to the coordinate the substrate will observe**,
+and getting that wrong once made every market in every world resolve into the
+same cell — not as a skew, as a constant.
+
+`PythAdapterConfigV1::validate_update` returns `Ok(i128::from(price))`: the raw
+signed price atoms, with no rescaling to any denominator. The committed local
+fixture (`fixtures/pyth/local-upgraded-2026-08-22`) carries price `100000000` at
+exponent `-8`, so a local market's observed coordinate is 100,000,000 exactly,
+on every chain, forever. The old rule drew cuts from `IntUniform(4_000, 40_000)`
+under a comment about USD cents per SOL — three to five orders of magnitude
+below the observation — so the observation landed above the top cut in one
+hundred percent of markets, and `selected_cell`, drawn uniformly and
+independently of the band, never disagreed with anything.
+
+What replaces it:
+
+- `WorldSpec.coordinate_anchor` carries the coordinate this world's substrate
+  will observe, so a world drawn for one chain cannot be run against another by
+  accident. The default is the committed local fixture's own.
+- **spacing** is a per-market volatility in basis points of the anchor, scaled
+  by the **square root** of the market's own window — the random walk's own
+  scaling, so twenty times the horizon is about four and a half times the band.
+- **placement** is drawn in units of the band's own spacing, wide enough to put
+  the observation in any cell of the market including both open tails. That draw
+  is what makes outcomes distribute.
+- **gaps vary by profile** — `tight-centre` (fine near spot, coarse away),
+  `tight-edges`, `ragged`, `uniform` — rescaled by construction so a profile is
+  a shape over the gaps and never a second scale.
+- `selected_cell` is the cell the anchor falls in, so the plan states a
+  checkable expectation rather than an unrelated wish. The certificate on chain
+  still decides.
+
+### Outcome spread is a health property of a run
+
+`World.outcome_spread()` counts where every resolving market settles, and
+`world_summary` prints it beside the horizon line. A world putting more than
+**70%** of its resolving markets in one place is flagged `DEGENERATE OUTCOME
+SPREAD` with the knob to check named.
+
+The flag is over **position** — where in its own market the answer landed,
+normalised to tenths — and not over `cell/width`. Keyed by `cell/width`, "every
+market landed in its bottom cell" spreads across as many keys as the world has
+widths and reads as diverse: the historical defect would have passed. Markets
+with a single ordinary cell are counted in the cell histogram and excluded from
+the position one, because a whole coordinate domain as one region is not "the
+bottom of" anything.
 
 ## Participant personas
 
@@ -413,6 +550,27 @@ acquired the ability by upgrading a module.
 |---|---|
 | `ledger-census` (default) | observation and nothing else, against markets that already exist. Every mutation is `unattempted` with the driver that would perform it named. |
 | `lifecycle` | founding, admission, fills, resolution, the failure walk, redemption, retirement and the census over all of it — each through the SHIPPED driver that owns the route. |
+
+A `lifecycle` founding is followed immediately by
+`local-private-validator-direct-capability-activation-v1 --execute`, and that
+step is not optional. **Founding does not create the Direct capability execution
+root and nothing else does either**: the root is written by Core's
+`ActivateCapability` route CPI-ing Trading's `process_activation`, and that
+command is the only line in this tree that reaches it on a loopback validator.
+Before it existed no local Direct fill was reachable at any market width, and the
+producer's refusal said "Direct root owner or width changed" — because a
+finalized snapshot renders a MISSING account as a System-owned zero-length
+placeholder, so absence arrived at a width check wearing an owner change's
+clothes. A fill with no activation now refuses by naming the step.
+
+**One taker per market**, and the fixture decides that rather than the world. A
+Direct fill debits the buyer's participant token account 50,250,000 atoms
+(`FILL_ATOMS_V1` × `EXECUTION_PRICE_V1` / `EXPECTED_PRICE_SCALE_V1`, plus the
+50-bps fee); the participant fixture holds 100,000,000 and the compiler refuses
+any other nonzero amount, so two fully funded buyers do not fit in one market.
+The first admission takes the requirement; the rest take a small share of what
+is left, hold a position, and refuse a fill on the balance — which measures the
+fixture rather than the trade, and is worth having measured.
 
 A `lifecycle` config adds one block:
 

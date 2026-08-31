@@ -20,10 +20,15 @@ use dclutch_capability_program_contract::{
     },
 };
 use dclutch_capability_seal_contract::{
-    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealKeyV1,
-    CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1, SealedRecordRowV1,
-    SealedRoleV1,
+    CAPABILITY_SEAL_BYTES_V1, CAPABILITY_SEAL_ROW_COUNT_V1, CapabilitySealCloseRequestV1,
+    CapabilitySealKeyV1, CapabilitySealRequestV1, SealedArtifactV1, SealedDescriptorClosureV1,
+    SealedRecordRowV1, SealedRoleV1,
 };
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
+};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_transition_vm::v3::{
     ProgramV3 as TransitionProgramV3, SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3,
 };
@@ -35,7 +40,7 @@ use solana_program::{
     rent::Rent,
     sysvar::SysvarSerialize,
 };
-use solana_sdk_ids::system_program;
+use solana_sdk_ids::{system_program, sysvar};
 use solana_system_interface::instruction::{allocate, assign, transfer as system_transfer};
 
 use crate::TradingSbfError;
@@ -191,6 +196,290 @@ pub fn process_capability_seal_v1(
     SealedDescriptorClosureV1::encode(key, rows, bump, &mut data)
         .map_err(|_| TradingSbfError::Commit)?;
     Ok(())
+}
+
+/// The seal being closed, on the close outer.
+pub const CLOSE_SEAL_ACCOUNT_V1: usize = 0;
+/// The closer: signer, writable, and the sole beneficiary of the liberated rent.
+pub const CLOSE_SEAL_CLOSER_ACCOUNT_V1: usize = 1;
+/// The Registry program the seal's record addresses were derived under.
+pub const CLOSE_SEAL_REGISTRY_ACCOUNT_V1: usize = 2;
+/// A Registry-owned activation cache that still authenticates its own Trading role.
+pub const CLOSE_SEAL_ACTIVATION_CACHE_ACCOUNT_V1: usize = 3;
+/// This Program, as the Loader-owned executable the cache's Trading role names.
+pub const CLOSE_SEAL_TRADING_PROGRAM_ACCOUNT_V1: usize = 4;
+/// That executable's ProgramData, whose deployment slot carries the pin.
+pub const CLOSE_SEAL_TRADING_PROGRAMDATA_ACCOUNT_V1: usize = 5;
+/// The Rent sysvar, for the one exact liberated amount.
+pub const CLOSE_SEAL_RENT_ACCOUNT_V1: usize = 6;
+/// Exact account count of the seal close outer.
+pub const CLOSE_SEAL_ACCOUNT_COUNT_V1: usize = 7;
+
+/// Close one seal the live Trading release can no longer address, and pay its
+/// rent to whoever did the chore.
+///
+/// # The account class this exists to bound
+///
+/// `trading_semantic_release` is the fourth PDA seed of a seal, so a Trading
+/// release "does not invalidate a seal so much as stop addressing it"
+/// (decision 0005). Every Trading release therefore strands the rent of every
+/// seal written under its predecessor, across all descriptors times actions,
+/// and the class grows with the release cadence rather than with the Market
+/// count. Omission `P-006` records that; this is its close.
+///
+/// # Beneficiary
+///
+/// The closer signs and keeps the rent. This is the funded-crank pattern: the
+/// account is a chore nobody is obliged to do, so the reward is carved out of
+/// exactly the rent the chore liberates and out of nothing else. No Market's
+/// funding may receive it — a seal is not per-Market, so paying one Market's
+/// funding would make it pay for every other Market's executions, which is the
+/// same reasoning that put the seal outside `FundingStateV1` (`0005` §Rent).
+/// Burn was rejected because it preserves the stranding it was meant to end.
+///
+/// It is permissionless, and racing is harmless: the first closer wins the
+/// chore and every later attempt refuses by absence. There is no wrong signer
+/// here, only a signer who is too late.
+///
+/// # The cap, and where it is actually enforced
+///
+/// Only rent the close liberates may flow. Today that is the whole balance,
+/// and the reason is a gate rather than an arithmetic: artifact profile 1
+/// defines no lamport role beyond rent exemption, `SealedDescriptorClosureV1`
+/// refuses every other profile at `decode`, and this route refuses every
+/// request that does not name profile 1. A future seal class that carries a
+/// bounty or an escrow beyond exemption is a different profile byte with a
+/// different owner for those lamports, and it will refuse here until it gets
+/// its own close naming its own beneficiary.
+///
+/// So the cap is not implemented as "pay `min(balance, exemption)` and leave
+/// the rest", and that is deliberate on two counts. Leaving a residue is not
+/// even available — a zero-data account holding less than
+/// `Rent::minimum_balance(0)` is rent-paying, and the runtime rejects the
+/// transaction that creates one — and refusing an over-funded seal instead
+/// would hand a griefer a 1-lamport transfer that re-strands the account
+/// permanently, which is the exact outcome this route exists to prevent.
+///
+/// # What makes this sound, and it is one conjunct
+///
+/// A seal is write-once, and a close that let a *different* verdict be written
+/// at the same address afterwards would destroy that. It cannot, because
+/// re-creation is governed by the same seed the close is:
+/// `process_capability_seal_v1` derives the seal address from
+/// `root.trading_semantic_release`, which is the semantic release of the
+/// Trading role in an activation cache that authenticates against THIS
+/// deployed Program (`HotFrameV3::parse` requires
+/// `trading_program.key == program_id`; `cached_role_deployment_observation_v1`
+/// requires the release's pinned deployment slot to equal what ProgramData
+/// currently reports). So the writer can only ever reach addresses whose
+/// release seed is a live one — and this route refuses to close any seal whose
+/// release seed IS live. A closed seal is therefore an address the live
+/// executable cannot write to, not merely one it declines to.
+///
+/// The residual is named rather than papered over: `semantic_release_id` is
+/// publisher-supplied and nothing on chain checks it
+/// (`programs/dclutch-registry-sbf/src/lineage_v1.rs`), so a coalition that can
+/// activate a release set naming an old semantic release could re-open a closed
+/// address under new bytes. That coalition is the roles' upgrade authorities —
+/// the same coalition that could ship arbitrary Trading code, and therefore the
+/// same one every seal's verdict already trusts. Write-once holds against
+/// everyone the seal was ever protecting against.
+pub fn process_capability_seal_close_v1(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    CapabilitySealCloseRequestV1::decode(instruction_data)
+        .map_err(|_| TradingSbfError::CloseSealFrame)?;
+    if accounts.len() != CLOSE_SEAL_ACCOUNT_COUNT_V1 {
+        return Err(TradingSbfError::CloseSealFrame.into());
+    }
+    let seal = account(accounts, CLOSE_SEAL_ACCOUNT_V1)?;
+    let closer = account(accounts, CLOSE_SEAL_CLOSER_ACCOUNT_V1)?;
+    let registry = account(accounts, CLOSE_SEAL_REGISTRY_ACCOUNT_V1)?;
+    let cache = account(accounts, CLOSE_SEAL_ACTIVATION_CACHE_ACCOUNT_V1)?;
+    let trading_program = account(accounts, CLOSE_SEAL_TRADING_PROGRAM_ACCOUNT_V1)?;
+    let trading_programdata = account(accounts, CLOSE_SEAL_TRADING_PROGRAMDATA_ACCOUNT_V1)?;
+    let rent_account = account(accounts, CLOSE_SEAL_RENT_ACCOUNT_V1)?;
+    // The beneficiary must be a plain writable System wallet that signed, which
+    // is `record_v1::require_system_wallet`'s shape: a program-owned refund
+    // destination is an account whose bytes mean something to somebody, and
+    // crediting one is a write this route has no authority to make.
+    if !closer.is_signer
+        || !closer.is_writable
+        || closer.executable
+        || closer.owner != &system_program::ID
+        || !closer
+            .try_data_is_empty()
+            .map_err(|_| TradingSbfError::CloseSealFrame)?
+        || seal.key == closer.key
+        || registry.is_signer
+        || registry.is_writable
+        || !registry.executable
+        || trading_program.key != program_id
+        || rent_account.key != &sysvar::rent::ID
+        || rent_account.is_signer
+        || rent_account.is_writable
+        || rent_account.executable
+    {
+        return Err(TradingSbfError::CloseSealFrame.into());
+    }
+    let rent =
+        Rent::from_account_info(rent_account).map_err(|_| TradingSbfError::CloseSealFrame)?;
+    // Absence lands here, and it is what a second close of the same seal meets:
+    // the account is System-owned and empty, so it is not this Program's seal.
+    if seal.owner != program_id
+        || !seal.is_writable
+        || seal.is_signer
+        || seal.executable
+        || seal.data_len() != CAPABILITY_SEAL_BYTES_V1
+        || !rent.is_exempt(seal.lamports(), CAPABILITY_SEAL_BYTES_V1)
+    {
+        return Err(TradingSbfError::CloseSealAccount.into());
+    }
+    let key = require_own_seal_address_v1(program_id, seal)?;
+    if registry.key.to_bytes() != key.registry_program() {
+        return Err(TradingSbfError::CloseSealFrame.into());
+    }
+    let live = live_trading_semantic_release_v1(
+        program_id,
+        registry,
+        cache,
+        trading_program,
+        trading_programdata,
+    )?;
+    if live == key.trading_semantic_release() {
+        return Err(TradingSbfError::CloseSealLiveRelease.into());
+    }
+
+    let liberated = seal.lamports();
+    let closer_after = closer
+        .lamports()
+        .checked_add(liberated)
+        .ok_or(TradingSbfError::Commit)?;
+    {
+        let mut closer_lamports = closer
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)?;
+        let mut seal_lamports = seal
+            .try_borrow_mut_lamports()
+            .map_err(|_| TradingSbfError::Commit)?;
+        **closer_lamports = closer_after;
+        **seal_lamports = 0;
+    }
+    seal.resize(0).map_err(|_| TradingSbfError::Commit)?;
+    seal.assign(&system_program::ID);
+    if closer.lamports() != closer_after
+        || seal.lamports() != 0
+        || seal.owner != &system_program::ID
+        || !seal
+            .try_data_is_empty()
+            .map_err(|_| TradingSbfError::Commit)?
+    {
+        return Err(TradingSbfError::Commit.into());
+    }
+    Ok(())
+}
+
+/// Reproduce a seal account's own address from its own body, and return the key.
+///
+/// This is `authenticate_capability_seal_v3`'s address argument used the other
+/// way round. There, a consumer derives the key it wants and the seal must
+/// match; here there is no consumer and no wanted key, so the body states the
+/// key and the address is reproduced from it with `create_program_address` and
+/// the persisted bump. A body that lies about any seed reproduces some other
+/// address and refuses, so a Trading-owned account carrying plausible seal bytes
+/// at a non-canonical address can never be closed as though it were a seal — and
+/// the key this returns is exactly the one the address proves.
+fn require_own_seal_address_v1(
+    program_id: &Pubkey,
+    seal: &AccountInfo<'_>,
+) -> Result<CapabilitySealKeyV1, ProgramError> {
+    let bytes = seal
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::CloseSealAccount)?;
+    let closure =
+        SealedDescriptorClosureV1::decode(&bytes).map_err(|_| TradingSbfError::CloseSealAccount)?;
+    let key = closure
+        .key()
+        .map_err(|_| TradingSbfError::CloseSealAccount)?;
+    let bump_seed = [closure
+        .bump()
+        .map_err(|_| TradingSbfError::CloseSealAccount)?];
+    let seeds = key.seeds();
+    let base = seeds.as_slices();
+    let expected = Pubkey::create_program_address(
+        &[
+            base[0], base[1], base[2], base[3], base[4], base[5], &bump_seed,
+        ],
+        program_id,
+    )
+    .map_err(|_| TradingSbfError::CloseSealAccount)?;
+    if seal.key != &expected {
+        return Err(TradingSbfError::CloseSealAccount.into());
+    }
+    Ok(key)
+}
+
+/// Read the Trading semantic release the live deployment is currently activated
+/// under, from a Registry-owned activation cache that proves it.
+///
+/// # Why this witness cannot be stale
+///
+/// The cache is not trusted for being handed over. `require_cache_account`
+/// (inside `authenticate_activation_cache_identity_v1`) takes Registry
+/// ownership, non-executability and the one exact width; the address is then
+/// reproduced from `[ACTIVATION_PDA_DOMAIN_V1, release_set_id]` under the
+/// Registry, so only an account the Registry itself opened for exactly that
+/// release set can stand here. The release set id is read out of the cache's own
+/// body because there is no Market in this frame to name one — that is the
+/// weaker of the two identity shapes the crate documents, and it is the right
+/// one here: the caller is not selecting a generation to execute under, it is
+/// exhibiting *some* generation that is still live, and the address derivation
+/// is what makes "still live" a Registry fact rather than a claim.
+///
+/// `authenticate_activated_role_in_frame_v1` then runs the Trading role against
+/// the deployed Program and its ProgramData. That is where staleness dies: a
+/// cache for a superseded release set refuses with `ReleaseSuperseded` because
+/// the Loader moved the deployment slot on upgrade and the release's pin no
+/// longer matches (decision 0012). So the semantic release this returns is one
+/// that a hot action could actually derive a seal address from, today, in this
+/// slot — which is exactly the class of address the close must not touch.
+fn live_trading_semantic_release_v1(
+    program_id: &Pubkey,
+    registry: &AccountInfo<'_>,
+    cache: &AccountInfo<'_>,
+    trading_program: &AccountInfo<'_>,
+    trading_programdata: &AccountInfo<'_>,
+) -> Result<[u8; 32], ProgramError> {
+    let data = cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    let release_set_id = *activated
+        .execution_release_set_id()
+        .map_err(|_| TradingSbfError::Release)?
+        .as_bytes();
+    authenticate_activation_cache_identity_v1(registry, cache, &release_set_id, activated)
+        .map_err(TradingSbfError::from)?;
+    let receipt = authenticate_activated_role_in_frame_v1(
+        cache,
+        activated,
+        ExecutionRoleV1::Trading,
+        trading_program,
+        trading_programdata,
+    )
+    .map_err(TradingSbfError::from)?;
+    // The frame already required `trading_program.key == program_id` and the
+    // observation already required `program.key == release.program()`. This is
+    // the same comparison stated on the receipt, which is the form every other
+    // caller in this program states it in, and it is what ties the release this
+    // returns to the executable that is running.
+    if receipt.program().as_bytes() != &program_id.to_bytes() {
+        return Err(TradingSbfError::Release.into());
+    }
+    Ok(receipt.semantic_release_id().to_bytes())
 }
 
 /// Run the complete artifact conjunction a hot action would run, once.

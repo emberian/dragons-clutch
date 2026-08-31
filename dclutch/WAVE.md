@@ -1245,3 +1245,111 @@ sccache/workspace consolidation (waits for cold gates).
   dead markets remain standing as unretireable; no pre-cut retirement
   contingency; the reader-burden concern is solved editorially (0015 option
   C — the honest bucket), not by deletion.
+
+## Rulings — 2026-08-31, ember's full-autonomy directive
+
+- **Ember (verbatim): "You need to feel empowered to work autonomously and to
+  just DO anything yourself including operating any CLI etc. Do NOT leave
+  anything to me. Feel free to tear down and redeploy the markets, make new
+  releases, CHANGE EVERYTHING AND ANYTHING ABOUT THE PROTOCOL."** The
+  orchestrator-invented reservations (the browser-click ceremony, ember-held
+  rulings that had a sound recommendation) are void. Coordination rules
+  (single devnet steward per window, preserved substrates, lane.sh, named
+  refusals) remain — they are anti-collision engineering, not permission.
+- **E3 RULED (orchestrator, under the directive): seal rent goes to the
+  closer, capped** — the funded-crank pattern; reward carved only from rent
+  the close liberates; no Market's funding may receive it (SEALWIDE's
+  constraint); burn rejected because it preserves the stranding. CloseSeal
+  is chartered.
+
+## Rulings — 2026-08-31 night, orchestrator under the directive
+
+- **BASIS EVALUATOR AUTHORITY RULED: adopt BASIS_ABI_UNIFICATION_V1 option D
+  verbatim (§5).** The live `ProductBasisV3` evaluator is and remains the
+  sole authority for the basis wire; its ABI moves to a Lean owner with an
+  emitted byte-guarded conformance corpus; degrees 2–3 arrive by porting the
+  kernel's de Boor INTO it at the live wire's widths and rounding rule;
+  `dclutch-liability-basis-v2-kernel` retained as a non-authoritative
+  differential reference (O-005), its `product_claims.rs` (retired DCLTLNK2)
+  deleted. Grounds: the assurance inversion resolves toward the code that
+  runs; the 221 theorems become the spec of the live path; BASIS-ENUM's
+  landed fail-closed variant already conforms. The wire-free front (commits
+  1–3 + the §1.6.1 kind-tag byte-guard) is chartered NOW as lane BASIS-D;
+  the wire change (accepting kind 3 + the DCLTPGT1 slot + the schema-id
+  bump §1.6.2 demands) waits until the corpus and port are green AND no
+  founding lane is mid-flight on the old wire.
+- **RECOVERY RULED (ORPHAN_DESIGNS_TRIAGE §3.2): v1 does NOT ship
+  one-attempt markets forever.** A market whose single source attempt can
+  strand holder principal on a transient (~1 in 3 foundings hit one
+  tonight) fails the E5 standard — the lockout there was accepted only
+  because self-cure is guaranteed; a welded-shut recovery ladder has no
+  self-cure. Disposition: funded FailNext over RecoveryPolicyV2
+  (MAINNET_STATE_RELAY §13's shape) is CHARTERED as the LIVENESS successor,
+  post-cohort-8, pre-mainnet-mandatory; devnet's one-attempt state is
+  tolerable and stays honestly documented. Not built tonight — weeks-class.
+
+### Consequences recorded — 2026-08-31 night (LEDGER-TRUE)
+
+Not rulings. Facts a future lane must price in, verified against the tree
+rather than taken from a lane's report.
+
+- **A General register-bank widening re-digests General's whole settlement
+  substrate, so GEN-SEVEN-class work re-publishes it at the next cohort cut.**
+  The mechanism is real and was already written down independently at
+  `decisions/0006-family-neutral-hot-dispatch.md:211-213`: *"a root-lifecycle
+  scalar changes `GENERAL_HOT_COMMON_SCALARS_V3`, which moves the bank width,
+  the page count, and every artifact digest in the family."* Verified at HEAD:
+  the width constant is `crates/dclutch-general-adapter-contract/src/hot_candidate_v3.rs:26`
+  (`= 90`), and it is read off the wire at **byte 12** as a `u16` —
+  `crates/dclutch-transition-vm/src/v3.rs:146`, `common_scalars: read_u16(bytes, 12)?`
+  — so the byte the report names is the right byte. Because every artifact's
+  identity is the digest of bytes containing that field, widening is not an
+  edit to one artifact; it is a new identity for all of them, and identities are
+  what the publication pins.
+- **Three corrections to how that consequence was reported, each of which would
+  mis-size the work.** (1) **The seven are ACTIONS, not artifacts** —
+  `GENERAL_ACTION_PROGRAM_COUNT_V3 = 7`
+  (`crates/dclutch-general-adapter-contract/src/release_v3.rs:49`). Each action
+  carries **nine** artifacts (`GeneralSelectedBundleV1`: descriptor, account
+  profile, lifecycle policy, request profile, strategy, certificate, admission,
+  transition, effect), and the publication is pinned at **68 records** —
+  `assert_eq!(records.len(), 2 + 9 * GENERAL_SELECTED_ACTION_COUNT_V1 + 3)`
+  (`crates/dclutch-operator/src/general_selected_release_v1/tests.rs:380`). The
+  blast radius is an order of magnitude larger than "seven". (2) **Nothing is
+  DEPLOYED.** GENPUB published and finalized the records, but *"No root created:
+  the founding refuses first"* — `0x5182 ClaimsFoundingSbfErrorV5::Release` at
+  the DCLTGMF3 Open leg, family-independent (`SESSION_STATE.md:792`). So this is
+  a re-publication cost, not a migration of live state, and **it is cheapest
+  now**, before anything is activated against those digests. (3) **The widening
+  has not happened.** `GENERAL_HOT_COMMON_SCALARS_V3` is still `90`, and a
+  pickaxe over all refs returns exactly one commit ever touching it (`3aaa20fe`,
+  the original binding). This is a forecast, not a report of an event.
+- **What to do with it:** whoever widens the bank owns the re-publication of all
+  68 records in the same change, and should land it before General's founding
+  wall (FOUND-5182) clears — not after, when the substrate has live dependents.
+
+- **SPLINE APPORTIONMENT RULED (orchestrator, on BASIS-D's measurement):
+  cumulative-floor is the spline rounding rule.** The option-D directive
+  "adopt the live rounding rule" was under-determined for splines: the live
+  floor-plus-complement rule is well-defined only because the graded family
+  structurally reserves its last claim; a spline reserves nothing, and a
+  literal transliteration pays rounding residue to a claim whose de Boor
+  weight is exactly zero. Measured (11 cases, both degrees): cumulative-floor
+  keeps every claim within one atom of its exact share and preserves
+  zero-outside-support; floor-plus-complement does neither (2/11 diverge,
+  worst 2 atoms). Binding on the commit that first accepts a kind-3 body;
+  both implementations ship measured in `aac98afd` — the wire commit blesses
+  cumulative-floor and deletes the other.
+
+- **GEN-SEVEN-2 choices recorded (landed 1efac500/42c0a631/3250af18):**
+  (1) CloseBatch's artifact requires an Active root — stricter than the
+  pure fn (which admits Retiring); discipline: begin_retiring only at zero
+  open batches. (2) batch.max_orders := config.max_orders_per_candidate.
+  (3) Batch windows derive from config + trusted CurrentSlot — never
+  caller-supplied. (4) V3 admission requests ride the V2 carrier with
+  result-bump required zero; widening the carrier is VerifyCandidateRow's
+  named prerequisite. (5) Root data-effect grant is action-selected to
+  exactly the two root-writers. Re-digest inventory: all 9x7 settlement
+  records + descriptors + ProgramSet + seal re-publish at the cut that
+  ships fourteen actions (publication 68→131 then, not before); config
+  record alone survives. Nothing deployed strands.

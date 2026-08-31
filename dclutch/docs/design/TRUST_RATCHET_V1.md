@@ -49,6 +49,19 @@ failure it forecloses. Nothing is wrong today; the guard should be named before
 anything else is built on top of it, and before P-006's close-route work goes
 anywhere near record accounts.
 
+**STATUS AT 2026-08-31 (LEDGER-TRUE) — this section's "claimable" is now
+"claimed", and the sequencing it asked for was honoured.** R-1 shipped as
+decision 0017 option B in `1da601e7` and measured **−66,921 CU**, not the
+~49,500 predicted (`0017:214`; §3's amendment and §8.2 carry the reason the
+estimate was low). So the table's *"honestly claimable now, ~60,000, 4.4%"* row
+is banked and then some: the realised figure alone exceeds the whole
+two-candidate estimate, and **R-2's 10,500 is what remains outstanding of the
+60,000**. The fourth row's two preconditions have separated: the checkpoint is
+still unbuilt, but *"a P-006 close route to be responsible"* is **satisfied** —
+P-006 is `CLOSED 2026-08-31` with the beneficiary ruled (closer, capped), so R-3
+is no longer gated on it. And the guard did get named before the close-route
+work: §7.3's tripwire landed the same night, from the same lane.
+
 ## 1. What a ratchet is here, and the rule that sorts the candidates
 
 ### 1.1 One correction to how the pattern is usually described
@@ -296,11 +309,29 @@ and does not size.
 ### What it needs
 
 This is **exactly option B of decision 0017**
-(`docs/decisions/0017-cache-read-role-authentication.md:138`), which is **OPEN,
-ratification requested, ledger M-23**. That record could not sell it because its
+(`docs/decisions/0017-cache-read-role-authentication.md:138`), which is ~~**OPEN,
+ratification requested, ledger M-23**~~ **RATIFIED, BUILT AND MEASURED — see the
+amendment below**. That record could not sell it because its
 payoff was qualitative. It is no longer qualitative: it is 52,592 CU, measured,
 invariant across 32 keys and two builds, and 3.8% of a transaction that refuses
 one public trade in three thousand on the key draw alone.
+
+> **R-1 IS BANKED, not proposed — amended 2026-08-31 (LEDGER-TRUE).** This
+> candidate is spent. Decision 0017 reads `Status: **RATIFIED 2026-08-30 — A
+> ratified, C refused. B BUILT AND MEASURED**` (`0017:3`), and option B landed
+> in **`1da601e7`** (ancestor of `main`), measured at **−66,921 CU** (`0017:214`,
+> §9 *"Option B as built (2026-08-30, lane CACHEREAD)"*) against the ~49,500 the
+> arithmetic above predicts. **The estimate above is LOW by ~17,400 and is left
+> standing on purpose** — §8.2 records why it was low, and a replacement-cost
+> arithmetic that missed a whole retired decode is more useful visible than
+> corrected away. **The ledger pointer is also stale**: this cites *"ledger
+> M-23"*, but M-23 is the *reentrancy* question, which option B narrows without
+> closing — B deletes the hot arm's Registry CPIs, while the residual below
+> (`outer.rs::reauthenticate_role`, used by activation and close, and
+> `direct_begin_retiring_v1.rs:685`) is what would finish the deletion that
+> makes "no child route can execute under a Registry continuation" true by
+> construction rather than by discipline. A reader arriving here for M-23 should
+> read the residual paragraph, not this one.
 
 Decision 0017's own residual applies unchanged and should land with it: the rule
 that children must not CPI the Registry is enforced by deletion, not by a guard,
@@ -345,6 +376,36 @@ alternative — persisting the ten *addresses* rather than the five bumps — is
 worth 25,500 CU instead of 10,500, and it must be refused. The extra 15,000 CU
 costs a new account, its rent, and a second class of P-006-stranded state. Under
 §1.2's rule an address does not earn an account. **Refused; take the 10,500.**
+
+> **R-2 IS STILL OPEN — but it is no longer speculative. Verified at HEAD
+> 2026-08-31 (LEDGER-TRUE).** Two things moved under it, in opposite directions.
+>
+> **The 10,500 is still on the table, unclaimed.** All five raw/staging pairs
+> still call `find_program_address` — `crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs:460`
+> (raw) and `:465` (staging), exactly the lines this row cites, unchanged. No
+> bump reached `StateBumpsV1` or `SelectedRecordBumpsV1` for these records.
+>
+> **But this row's central argument has since been demonstrated in production,
+> on a different site, by lane ALLKEYS.** The *"a bump is not a verdict"*
+> invalidation story is no longer an argument in a design document — it ships
+> as the Hot **root** bump hint: `hot_bump_hint_v1`
+> (`crates/dclutch-capability-program-contract/src/hot_v3.rs:324`) and
+> `HotBumpHintsV1`, consumed at
+> `programs/dclutch-trading-sbf/src/dispatch.rs:370`, landed across `c5f5099c`,
+> `f27ecc07`, `62f2a727` and `f346ba81` (all ancestors of `main`). The
+> adversarial case is named after this row's own reasoning —
+> `dispatch.rs:806`, `a_wrong_root_bump_hint_reproduces_another_address_and_refuses`.
+> That is precisely *"a wrong byte reproduces a different address and refuses at
+> the equality — the derivation IS the check"*, executed rather than asserted.
+>
+> **Two consequences for whoever takes R-2.** (1) The O-016 objection is
+> pre-answered: a caller-supplied bump hint is admitted tree-wide today, because
+> it enters as a *hint* whose only effect is to be re-derived and compared —
+> caller input that becomes authority by inclusion is what O-016 forbids, and
+> this is not that. (2) There is now a **shipped template** to copy rather than a
+> pattern to design, so the remaining work is mechanical: carry the hint, derive,
+> compare, refuse. R-2's cost estimate should be re-read as an implementation
+> ticket, not a proposal.
 
 ## 5. Candidate R-3 — the product-graph closure verdict
 
@@ -634,6 +695,26 @@ attempts the reclaim-and-restage sequence, and asserts the refusal at
 `authenticate_begin` — so the seal's soundness stops resting on a condition
 nobody has been told is load-bearing.
 
+**The tripwire LANDED 2026-08-31 (CLOSESEAL).**
+`programs/dclutch-registry-sbf/src/record_v1.rs`,
+`record_v1::tests::finalization_is_the_point_of_no_return_and_the_raw_account_is_what_enforces_it`.
+It is a one-variable control rather than a restatement of `is_prefunded_vacant`:
+the same `begin_fixture`, the same `BeginRecordV1`, the same vacant cursor, and
+only the raw account moves the answer — vacant admits, finalized refuses, and
+Registry-owned-but-emptied (which is what a careless reclamation route would
+leave) also refuses. It asserts §7.1's split explicitly, that the *cursor*'s
+`require_prefunded_vacant` is SATISFIED by a finalized record and refuses
+nothing, so the reader cannot come away thinking the cursor check is what holds
+this up. Its doc comment carries the finality-window argument and names
+`borrow_sealed_record`, so the lane that reddens it is told what it has to
+re-argue rather than left to delete an assertion.
+
+It does not mint a seal, and that half of the ask is deliberately not faked: a
+Registry unit test cannot reach Trading's seal writer, and a program-test that
+staged the reclaim-and-restage sequence would need a reclamation route that does
+not exist to stage it with. The tripwire fires on the condition, which is the
+thing a future route must break.
+
 R-3 inherits this proposition unchanged and multiplies it by four records. That
 is a second reason its charter should follow P-006's close-route ruling rather
 than precede it: the two questions are one question about who may un-finalize
@@ -679,6 +760,47 @@ level, not here.
    place. A plausible beneficiary is the last closer, permissionlessly, with the
    write-once discipline preserved by refusing to re-seal a closed address into a
    different verdict; that is a design, not a line, and it is P-006's to write.
+
+**ALL THREE ANSWERED — verified at HEAD 2026-08-31 (LEDGER-TRUE).** The section
+is kept as asked, with each request's disposition appended, because two of the
+three were answered by lanes that never came back to this file.
+
+1. **GRANTED, and BUILT.** Decision 0017 is `Status: **RATIFIED 2026-08-30 — A
+   ratified, C refused. B BUILT AND MEASURED**` (`0017:3`); the ratification is
+   the decision packet's §3 (`decisions/DECISION_PACKET_2026_08_30.md:55-62`),
+   which chartered B on exactly this document's 52,592 CU measurement. **B
+   landed in `1da601e7`** (*"merge: CACHEREAD — 0017 option B, measured at
+   −66,921 CU, with the wall's first demonstrated red"*), an ancestor of `main`.
+   The realised figure is **−66,921** (`0017:214`), not the ~49,500 this
+   document's §3 arithmetic predicted — §8.2 already carries that correction and
+   the reason for it (the folded decode `authenticate_activated_child_programs_v3`
+   was retired too, worth ~14,300 CU, which §R-1's arithmetic did not credit).
+   R-1 is therefore no longer a candidate; it is banked.
+2. **ANSWERED IN THE ORDER THIS DOCUMENT ASKED FOR.** P-006 did come before R-3:
+   it is `CLOSED 2026-08-31` (`OMISSION_INDEX.md` P-006), and the beneficiary
+   ruling is the one this item called plausible — **the closer, capped**, the
+   funded-crank pattern, no Market's funding receiving it, burn rejected
+   (`WAVE.md`, *"Rulings — 2026-08-31, ember's full-autonomy directive"*). The
+   write-once discipline is preserved the way this item proposed, and by a
+   sharper mechanism than "refusing to re-seal": the close only admits a cache
+   whose semantic release **differs** from the seal's fourth seed
+   (`0x400A CloseSealLiveRelease`), and the writer derives its address from that
+   same live release — so a closed seal is an address the live executable cannot
+   reach, not one it declines to write. **R-3's charter is unblocked**, and it
+   inherits the profile gate as well as the beneficiary rule.
+3. **ADOPTED, and the test exists.** See §7.3, which CLOSESEAL extended in place.
+   Verified at HEAD: the guard is still the single condition this section named,
+   `require_prefunded_vacant(frame.raw)?;` at
+   `programs/dclutch-registry-sbf/src/record_v1.rs:342` — unchanged, and now
+   sitting next to `require_prefunded_vacant(frame.cursor)?;` at `:343`, which
+   §7.3 is careful to say refuses nothing here. The adversarial test is
+   `record_v1::tests::finalization_is_the_point_of_no_return_and_the_raw_account_is_what_enforces_it`
+   (`record_v1.rs:1720` at HEAD). The half of the ask that was **not** delivered
+   is named rather than quietly dropped: it does not mint a seal, because a
+   Registry unit test cannot reach Trading's seal writer and the reclaim-and-
+   restage sequence would need a reclamation route that does not exist to stage
+   it with. It fires on the condition instead, which is the thing a future route
+   must break.
 3. **The S-3 tripwire.** Adopt §7.3 as a standing constraint on the Registry's
    record routes. The shipped capability seal's soundness currently rests on one
    condition — `require_prefunded_vacant(frame.raw)` at `record_v1.rs:342` —

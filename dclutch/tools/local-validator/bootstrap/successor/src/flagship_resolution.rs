@@ -2907,6 +2907,24 @@ fn authenticate_checked_upgrade_plan(plan: &SuccessorPlan) -> Result<()> {
                     && observed.artifact_release_id.is_none()
                     && observed.carried_programdata_base64.is_none()
             }
+            // Baseline present (it fixed the width the equality was judged at),
+            // receipt absent (there is no Upgrade), and none of the
+            // carry-forward-only transport fields.
+            CheckedDeploymentDispositionV1::AlreadyCurrent => {
+                observed
+                    .baseline_sha256
+                    .as_deref()
+                    .is_some_and(|digest| hex32(digest).is_ok())
+                    && observed
+                        .baseline_path
+                        .as_deref()
+                        .is_some_and(|path| !path.is_empty())
+                    && observed.receipt_path.is_none()
+                    && observed.receipt_sha256.is_none()
+                    && observed.artifact_release_body_hex.is_none()
+                    && observed.artifact_release_id.is_none()
+                    && observed.carried_programdata_base64.is_none()
+            }
             CheckedDeploymentDispositionV1::CarryForward => {
                 observed.baseline_path.is_none()
                     && observed.baseline_sha256.is_none()

@@ -97,6 +97,11 @@ fn execute_inline_candidate(
         SCALAR_FEE_DENOMINATOR_V3,
         u64::from(dclutch_direct_codec::successor::DIRECT_FEE_DENOMINATOR_V1),
     )?;
+    write(
+        scalars,
+        SCALAR_MAX_FEE_BPS_V3,
+        u64::from(dclutch_direct_codec::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1),
+    )?;
     require(read(scalars, SCALAR_ROOT_PHASE_V3)? == 0)?;
     require(read(scalars, SCALAR_FILL_V3)? != 0)?;
     require(read(scalars, SCALAR_SELLER_VALID_FROM_V3)? <= read(scalars, SCALAR_SLOT_V3)?)?;
@@ -163,7 +168,7 @@ fn execute_inline_candidate(
     require(read(scalars, SCALAR_EXECUTION_PRICE_V3)? <= read(scalars, SCALAR_PRICE_SCALE_V3)?)?;
     require(read(scalars, SCALAR_SELLER_FEE_BPS_V3)? == read(scalars, SCALAR_POLICY_FEE_BPS_V3)?)?;
     require(read(scalars, SCALAR_BUYER_FEE_BPS_V3)? == read(scalars, SCALAR_POLICY_FEE_BPS_V3)?)?;
-    require(read(scalars, SCALAR_POLICY_FEE_BPS_V3)? <= read(scalars, SCALAR_FEE_DENOMINATOR_V3)?)?;
+    require(read(scalars, SCALAR_POLICY_FEE_BPS_V3)? <= read(scalars, SCALAR_MAX_FEE_BPS_V3)?)?;
     let gross = mul_div_exact(
         read(scalars, SCALAR_FILL_V3)?,
         read(scalars, SCALAR_EXECUTION_PRICE_V3)?,
@@ -218,13 +223,30 @@ fn execute_inline_candidate(
         seller_terminal,
     )?;
     write(scalars, SCALAR_FEE_SOLE_ROUTE_ENABLED_V3, fee_sole)?;
+    // `FeeSole` is retired. The route needs `seller_net == 0 && combined_fee !=
+    // 0`, which for a positive gross forces a rate of exactly 10,000 -- above
+    // the band the fee-bps relation above now enforces. The bit is still
+    // DERIVED and then required zero, so the retirement is a refusal at a named
+    // site rather than a route that quietly emits nothing.
+    require(fee_sole == 0)?;
+    // The fee leg is not routed here. It settles in a second transaction
+    // (`docs/design/FEE_SECOND_TRANSACTION_V1.md`), so this register is pinned
+    // to zero and the seller leg is the only Custody route tx1 enables. The
+    // seller leg stays NON-terminal whenever a fee is owed, which is what
+    // leaves the residual delegation the fee transaction spends.
+    let fee_continuation = 0_u64;
+    write(
+        scalars,
+        SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3,
+        fee_continuation,
+    )?;
     let custody_after_seller = checked_add(
         read(scalars, SCALAR_CUSTODY_REVISION_V3)?,
         checked_add(seller_terminal, seller_intermediate)?,
     )?;
     let custody_after_fee = checked_add(
         custody_after_seller,
-        checked_add(seller_intermediate, fee_sole)?,
+        checked_add(fee_continuation, fee_sole)?,
     )?;
     write(
         scalars,

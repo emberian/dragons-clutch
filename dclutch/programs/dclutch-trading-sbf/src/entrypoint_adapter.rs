@@ -1266,6 +1266,28 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     {
         return true;
     }
+    // `DCLTSEL1`, the validated-artifact seal outer. Added 2026-08-31 (CLOSESEAL)
+    // because the entry above left it DEAD, not merely expensive.
+    //
+    // `process_capability_seal_v1` authenticates its Market and root exactly as a
+    // hot action does, through `reauthenticate_top_level_root_roles_v3` -- and
+    // that function's first act is `require_extended_heap_admitted_v1`. The Hot
+    // arm was declared here; the seal outer, which is the same prologue, was not.
+    // So every seal write refused `TradingSbfError::HeapFrame` unconditionally,
+    // and no NEW capability seal could be written on chain by this release: a
+    // fresh `(descriptor, action, release, Registry)` tuple had no sealed
+    // execution path at all. `registry_hot_continuation`'s seal cases are the
+    // ones that carried the red.
+    //
+    // The declaration only makes a grant ADMISSIBLE. A seal transaction that
+    // sends no `RequestHeapFrame` still keeps the default ceiling and still
+    // refuses by name -- which is the right shape for a caller who forgot,
+    // rather than an unnamed abort. The seal outer's own peak is NOT measured
+    // here; declaring is the conservative direction, and weakening the guard so
+    // this route skips it would have been the other one.
+    if dclutch_capability_seal_contract::is_capability_seal_request_v1(instruction_data) {
+        return true;
+    }
     #[cfg(any(
         feature = "families",
         feature = "series-family",

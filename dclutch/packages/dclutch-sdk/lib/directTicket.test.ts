@@ -163,13 +163,16 @@ describe('the counterparty ticket', () => {
  * that could WRITE a Direct ticket; every tool could only read one, which is why
  * `devnet-direct-trade-produce-v1` demanded `--seller-ticket` and
  * `--buyer-ticket` as inputs nothing under `tools/` could produce. The Rust
- * author `direct-intent-ticket-author-v1` is the second writer, and this vector
- * is how the two are held to one wire.
+ * author in `crates/dclutch-direct-ticket` is the second writer — reached as
+ * `dclutch ticket author` in the released CLI and as
+ * `direct-intent-ticket-author-v1` in the operator binary, ONE author behind
+ * both — and this vector is how the two languages are held to one wire.
  *
  * TypeScript emits and Rust reproduces, because TypeScript is the incumbent:
  * its bytes are the ones a chain has already been asked to accept. If this test
- * changes the fixture, the Rust test in
- * `tools/local-validator/bootstrap/successor/src/direct_ticket.rs` goes red next
+ * changes the fixture, the Rust tests in
+ * `crates/dclutch-direct-ticket/tests/portable_ticket_v1.rs` and
+ * `tools/dclutch-cli/tests/ticket_v1.rs` go red next
  * — which is the correct order, and the reason the fixture is not written from
  * the Rust side.
  *
@@ -228,7 +231,7 @@ describe('the portable ticket wire the Rust author has to match', () => {
     const ticketText = encodeDirectIntentTicketV1(Object.freeze({ maker, signature, intent }));
     const produced = {
       format: 'dclutch/direct-intent-ticket-vector/v1',
-      note: 'Two-sided vector for the portable Direct intent ticket. Emitted by directTicket.test.ts through the SAME encodeDirectIntentTicketV1 the browser trade panel calls, and reproduced byte-for-byte by the Rust author in tools/local-validator/bootstrap/successor/src/direct_ticket.rs (command direct-intent-ticket-author-v1). TypeScript is the incumbent producer and therefore the authority for the JSON envelope; the 172-byte signing message underneath is owned by neither language but by formal/dclutch-semantics/EmitDirectIntentV2Rust.lean, whose emitted Rust constants lib/generated/directInlineV3.ts mirrors. The three seed fills are 32-byte Ed25519 seeds supplied as INPUTS; maker, market, collateralAccount, signatureHex, ticketText and ticketSha256 are what the encoders produced from them. ticketText carries no trailing newline because JSON.stringify(value, null, 2) emits none.',
+      note: 'Two-sided vector for the portable Direct intent ticket. Emitted by directTicket.test.ts through the SAME encodeDirectIntentTicketV1 the browser trade panel calls, and reproduced byte-for-byte by the Rust author in crates/dclutch-direct-ticket, which both `dclutch ticket author` (the released CLI) and direct-intent-ticket-author-v1 (the operator binary) call — one author, two invocations. TypeScript is the incumbent producer and therefore the authority for the JSON envelope; the 172-byte signing message underneath is owned by neither language but by formal/dclutch-semantics/EmitDirectIntentV2Rust.lean, whose emitted Rust constants lib/generated/directInlineV3.ts mirrors. The three seed fills are 32-byte Ed25519 seeds supplied as INPUTS; maker, market, collateralAccount, signatureHex, ticketText and ticketSha256 are what the encoders produced from them. ticketText carries no trailing newline because JSON.stringify(value, null, 2) emits none.',
       makerSeedFill: MAKER_SEED_FILL,
       marketSeedFill: MARKET_SEED_FILL,
       collateralSeedFill: COLLATERAL_SEED_FILL,

@@ -1304,11 +1304,30 @@ fn project_tokens_v3(
     })
 }
 
+/// The buyer's collateral account after the fill, delegation included.
+///
+/// **A delegation is revoked by exhaustion, not by a transfer happening.** This
+/// read `custody_count == 0` for "the delegation survives" and `COption::None`
+/// for every other case, which was true while the only fill shape was one that
+/// spent the whole allowance: `SellerTerminal` moves the gross and closes the
+/// delegation in the same leg. It stopped being true the moment the fee leg
+/// left the transaction (`docs/design/FEE_SECOND_TRANSACTION_V1.md`). A
+/// fee-bearing fill now runs `SellerIntermediate`, which is NON-terminal by
+/// construction -- `delegate_after == delegate_before`, `allowance_after ==
+/// combined_fee` -- precisely so the second transaction has an allowance to
+/// spend. So the projection said the account had no delegate while the chain
+/// correctly left one standing, and the fill refused at
+/// `TradingSbfError::Commit` on the buyer token's poststate digest.
+///
+/// The condition is now the one `DelegatedCustodyRequestV2::validate` itself
+/// enforces: `terminal == (allowance_after == 0)`, and `terminal` is the only
+/// thing that zeroes the delegate. A fill that dispatches no transfer at all
+/// leaves the observed delegation exactly as it found it.
 fn buyer_token_poststate_v3(
     input: &DirectInlineFinalizationInputV3<'_>,
     candidate: &DirectInlineCandidateV2,
 ) -> Result<[u8; ACCOUNT_BYTES]> {
-    let delegate_after = if candidate.custody_count == 0 {
+    let delegate_after = if candidate.custody_count == 0 || candidate.buyer_delegated_after != 0 {
         COption::Some(input.collateral.buyer_source.delegate)
     } else {
         COption::None
@@ -1661,7 +1680,7 @@ mod tests {
             let root_address = id(23);
             let request_digest = digest(&family_request);
             let config =
-                DirectExecutionConfigV1::new(100, 1_000, fee_recipient).expect("valid config");
+                DirectExecutionConfigV1::new(100, 500, fee_recipient).expect("valid config");
             let participant = |maker, side, collateral_account, bump| InlineParticipantV2 {
                 authenticated: AuthenticatedCompactIntentV2::from_adjacent_ed25519(
                     maker,
@@ -1676,7 +1695,7 @@ mod tests {
                         valid_through: 20,
                         maximum_fill: 100,
                         limit_price: if side == 0 { 40 } else { 60 },
-                        fee_basis_points: 1_000,
+                        fee_basis_points: 500,
                         collateral_account,
                     },
                 )
@@ -1724,7 +1743,7 @@ mod tests {
                     account: buyer_token_address,
                     owner: buyer,
                     delegate: custody_authority,
-                    delegated_amount: 55,
+                    delegated_amount: 52,
                     balance: 1_000,
                 },
                 seller_destination: crate::inline_candidate_v2::DirectExternalCollateralV2 {
@@ -1740,17 +1759,19 @@ mod tests {
             };
             let candidate = prepare_inline_ordinary_candidate_v2(direct, context, collateral)
                 .expect("candidate");
-            assert_eq!(candidate.custody_count, 2);
+            // One Custody transfer in tx1: the non-terminal seller leg. The
+            // fee leg is a second transaction and slot 3 is retired.
+            assert_eq!(candidate.custody_count, 1);
             let dispatch = DirectInlineEffectDispatchV2 {
-                custody_slots: [1, 2],
-                custody_count: 2,
-                child_dispatch_writable: [false, true, true, false],
+                custody_slots: [1],
+                custody_count: 1,
+                child_dispatch_writable: [false, true, false, false],
             };
             let mut request_bank = [0; DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3];
             let claims_request =
                 encode_inline_claims_request_v2(direct, context).expect("claims request");
             request_bank[..SPARSE_NATIVE_TRANSFER_BYTES_V1].copy_from_slice(&claims_request);
-            for (index, slot) in (0_u8..).zip(dispatch.custody_slots.iter().take(2)) {
+            for (index, slot) in (0_u8..).zip(dispatch.custody_slots.iter()) {
                 let effect = project_inline_custody_effect_v2(
                     direct,
                     context,

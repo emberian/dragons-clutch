@@ -57,7 +57,7 @@ describe('the join surface', () => {
     />);
     expect(html).toContain('Join this market');
     expect(html).toContain('id="join"');
-    expect(html).toContain('No wallet connected. Connecting shares an address; nothing is signed.');
+    expect(html).toContain('No wallet connected.');
     // The idle shell promises nothing quantitative and never fakes an action.
     for (const forbidden of ['probability', 'odds', 'APY', 'APR', 'instantly', 'one click']) {
       expect(html).not.toContain(forbidden);

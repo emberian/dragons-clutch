@@ -1371,10 +1371,15 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
                             ))
                         })?);
                 }
-                model::CheckedDeploymentDispositionV1::Upgrade => {
+                // An AlreadyCurrent role's live bytes ARE the candidate, so the
+                // plan projection wants exactly what it wants for an Upgrade: the
+                // freshly observed ProgramData, never the carry-forward snapshot.
+                // The only difference is upstream, in how the role was satisfied.
+                model::CheckedDeploymentDispositionV1::Upgrade
+                | model::CheckedDeploymentDispositionV1::AlreadyCurrent => {
                     if input.observed_programdata.is_none() {
                         return Err(Error::new(format!(
-                            "--deployment-set-journal requires --{flag_role}-observed-programdata for receipt-backed Upgrade"
+                            "--deployment-set-journal requires --{flag_role}-observed-programdata for a receipt-backed Upgrade or an AlreadyCurrent role"
                         )));
                     }
                 }

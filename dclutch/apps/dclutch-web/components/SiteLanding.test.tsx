@@ -65,17 +65,20 @@ describe('the front door', () => {
     expect(html).toContain('/notes/plan-to-compost-at-least-three/');
     expect(html).toContain('Plan to compost at least three');
     expect(html).toContain('How this was built');
-    expect(html).toContain('twice before the version you are reading now');
+    expect(html).toContain('Two earlier builds, thrown away on purpose');
     // Renegotiated 2026-08-31: "and they are honest about what is proved and
     // what is still only tested" is the field notes vouching for themselves.
     // Deleted; the notes are linked and can speak for themselves.
-    expect(html).toContain('what survived each time the code did not');
+    expect(html).toContain('what survived each time');
   });
 
-  it('carries the key art with a described image and an honest caption', () => {
+  it('carries the key art with a described image', () => {
     expect(html).toContain('/art/dragons-clutch-key-art-v1-1672w.webp');
+    // Renegotiated 2026-08-31: the figcaption ("every claim fully backed by
+    // collateral the market holds like treasure") restated the hero in
+    // metaphor under a picture. Deleted; the alt text still describes it.
     expect(html).toContain('claw cradling a glowing, faceted gem');
-    expect(html).toContain('holds like treasure');
+    expect(html).not.toContain('<figcaption>');
     // Lazy: the art must never delay the numbers the page exists to show.
     expect(html).toContain('loading="lazy"');
   });

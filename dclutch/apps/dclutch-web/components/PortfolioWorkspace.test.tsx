@@ -42,7 +42,7 @@ describe('Portfolio route', () => {
     // and the second half was about our derivation, not about the reader.
     expect(html).toContain('Connecting reads your address. Nothing is signed.');
     // The server render asserts nothing about installed extensions.
-    expect(html).toContain('No Wallet Standard registry exists in this runtime');
+    expect(html).toContain('No browser wallet found.');
   });
 
   it('keeps the honest empty state instead of showing placeholder holdings', () => {
@@ -88,7 +88,9 @@ describe('Redemption route', () => {
     expect(html).toContain('Your winning claims');
     expect(html).toContain('Payout is not open yet');
     expect(html).not.toContain('Redeem your winning claims');
-    expect(html).toContain('find the winning claims you hold');
+    // Renegotiated 2026-08-31: the wallet panel no longer takes a `purpose`
+    // string describing why this page wants an address. The heading says it.
+    expect(html).toContain('Connect your wallet');
     expect(html).not.toContain('Or paste any owner address');
     expect(html).not.toContain('Authenticate exact transfer route');
   });
@@ -100,8 +102,10 @@ describe('Redemption route', () => {
     // is deleted is the self-description around them -- that the plan is
     // "Rust-authored", produced outside this browser, and not invented from
     // partial state. Those are facts about our build, not about their keys.
-    expect(html).toContain('refuses Solana mainnet, testnet, and unknown chains outright');
-    expect(html).toContain('signs nothing until the market, your position, every named account and the payout plan all check out');
+    // Renegotiated 2026-08-31 again: the surviving half was still a paragraph
+    // about what this page does before it signs. The load-bearing fact for
+    // somebody holding keys is which chains it will touch at all.
+    expect(html).toContain('Devnet only — mainnet and testnet are refused.');
     expect(html).not.toContain('Rust-authored');
   });
 });

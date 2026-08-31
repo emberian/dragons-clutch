@@ -744,10 +744,21 @@ describe('a population of markets, v4', () => {
     expect(() => parseSimulatorSeriesV1(body)).toThrow(/carries 2 outcomes and the series declares 3/);
   });
 
-  it('refuses a planned market carrying a fee this protocol cannot found', () => {
-    const body = populated();
-    body.world.planned[0].fee_basis_points = 50;
-    expect(() => parseSimulatorSeriesV1(body)).toThrow(/50 bp fee/);
+  it('admits the one rate a market can be filled at, and refuses one outside the domain', () => {
+    // This test used to assert the opposite -- that ANY nonzero rate is
+    // refused -- on the reading that fee-bearing founding does not fit in one
+    // transaction. That reading came from a document about the Direct fill's
+    // fee leg and said nothing about founding, and the owned-loopback producer
+    // admits exactly 50 bps: so the guard refused every capture of a world
+    // whose markets could trade, and zero was the one rate that could not.
+    // Renegotiated in the open rather than deleted: what survives is the
+    // protocol's own domain, which is where a real impossibility lives.
+    const tradeable = populated();
+    tradeable.world.planned[0].fee_basis_points = 50;
+    expect(parseSimulatorSeriesV1(tradeable).world?.planned[0].feeBasisPoints).toBe(50);
+    const impossible = populated();
+    impossible.world.planned[0].fee_basis_points = 10_001;
+    expect(() => parseSimulatorSeriesV1(impossible)).toThrow(/outside the 0\.\.10000/);
   });
 
   it('carries what the run could not do, route by route, with its own reason', () => {
@@ -940,7 +951,10 @@ describe('a population that MUTATED, drawn', () => {
       unattempted: 0,
       blocked: 3,
       planned: 6,
-      leadingReason: 'm01 was never founded',
+      // The SHORT sentence, not the substrate's own note. The note is an
+      // engineering register entry and stays in the capture; a page says what
+      // happened.
+      leadingReason: 'The market was never founded.',
       leadingOutcome: 'blocked',
     });
     // Compaction has no driver anywhere and that is `unattempted`, never a
@@ -1015,6 +1029,63 @@ describe('reading a population out loud', () => {
     body.markets = [primary];
     return body;
   };
+
+  const withSpread = (spread: unknown, spend?: unknown) => {
+    const body = withMarkets();
+    (body.world as Record<string, unknown>).outcome_spread = spread;
+    if (spend !== undefined) {
+      ((body.world as Record<string, unknown>).substrate as Record<string, unknown>).spend = spend;
+    }
+    return body;
+  };
+
+  const HEALTHY_SPREAD = {
+    resolving_markets: 9, distinct_cells: 6,
+    counts: { '0/3': 3, '1/3': 2, '2/5': 2, '4/7': 1, '0/7': 1 },
+    positioned_markets: 9,
+    position_counts: { '0': 4, '5': 2, '6': 1, '10': 2 },
+    distinct_positions: 4, heaviest_position_tenths: 0, heaviest_share_percent: 44,
+    degenerate_threshold_percent: 70, degenerate: false, coordinate_anchor: '100000000',
+  };
+
+  it('carries where the answers landed, normalised to the market they landed in', () => {
+    const world = parseSimulatorSeriesV1(withSpread(HEALTHY_SPREAD)).world;
+    expect(world?.outcomeSpread?.distinctPositions).toBe(4);
+    expect(world?.outcomeSpread?.coordinateAnchor).toBe('100000000');
+    expect(world?.outcomeSpread?.degenerate).toBe(false);
+    expect(world?.outcomeSpread?.positionCounts['10']).toBe(2);
+  });
+
+  it('is absent rather than empty on a capture taken before it existed', () => {
+    // Every capture written before the histogram is still a complete v4, and
+    // null is a different statement from "nothing settled".
+    expect(parseSimulatorSeriesV1(withMarkets()).world?.outcomeSpread).toBeNull();
+    expect(parseSimulatorSeriesV1(withMarkets()).world?.substrate.spend).toBeNull();
+  });
+
+  it('refuses a histogram whose bars do not add up to its own total', () => {
+    expect(() => parseSimulatorSeriesV1(withSpread({
+      ...HEALTHY_SPREAD, positioned_markets: 12,
+    }))).toThrow(/positions sum to 9 under a total of 12/);
+  });
+
+  it('carries a spend record and refuses one that claims a bound it has not got', () => {
+    const bounded = parseSimulatorSeriesV1(withSpread(HEALTHY_SPREAD, {
+      max_lamports_spent: '5000', spent_lamports: '1200', credited_lamports: '0',
+      observations: 40, bounded: true,
+    }));
+    expect(bounded.world?.substrate.spend?.maxLamportsSpent).toBe('5000');
+    expect(bounded.world?.substrate.spend?.bounded).toBe(true);
+    const unbounded = parseSimulatorSeriesV1(withSpread(HEALTHY_SPREAD, {
+      max_lamports_spent: null, spent_lamports: '1200', credited_lamports: '3',
+      observations: 40, bounded: false,
+    }));
+    expect(unbounded.world?.substrate.spend?.bounded).toBe(false);
+    expect(() => parseSimulatorSeriesV1(withSpread(HEALTHY_SPREAD, {
+      max_lamports_spent: null, spent_lamports: '1', credited_lamports: '0',
+      observations: 1, bounded: true,
+    }))).toThrow(/bounded=true with max_lamports_spent=null/);
+  });
 
   it('leads its reading with the seed and ends with what the run founded', () => {
     const reading = populationReadingV1(parseSimulatorSeriesV1(withMarkets()));
@@ -1126,6 +1197,39 @@ describe('the committed simlife capture', () => {
     // that can do everything, and none exists: compaction has no driver.
     expect(world?.substrate.routesAbsent.length ?? 0).toBeGreaterThan(0);
     expect(notDoneReadingV1(series)).not.toBeNull();
+  });
+
+  /**
+   * THE EMITTER AND THIS DECODER MUST AGREE, and the unit fixtures above cannot
+   * prove that: every one of them is hand-written to match the decoder, so a
+   * capture the emitter actually writes can be refused by the very app that
+   * publishes it and nothing turns red.
+   *
+   * That is not hypothetical. Running the emitter and feeding its output back
+   * on 2026-08-31 found four disagreements at once -- the spend block written
+   * beside the substrate instead of on it, histogram counts rendered as decimal
+   * strings where this decoder wants numbers, lamport quantities rendered as
+   * numbers where it wants strings, and a fee guard here that refused any
+   * nonzero rate. The committed capture is the one artifact both halves touch,
+   * so the assertions that would have caught them live on it.
+   */
+  it('carries the blocks the emitter writes, in the shapes this decoder reads', () => {
+    const world = series.world;
+    expect(world).not.toBeNull();
+    const spread = world?.outcomeSpread ?? null;
+    if (spread !== null) {
+      // Not degenerate, and if it ever is the capture must not be published
+      // with a healthy-looking chart drawn over it.
+      expect(spread.degenerate).toBe(false);
+      expect(spread.positionedMarkets).toBeGreaterThan(0);
+      expect(spread.coordinateAnchor).toMatch(/^[0-9]+$/);
+    }
+    const spend = world?.substrate.spend ?? null;
+    if (spend !== null) {
+      expect(spend.spentLamports).toMatch(/^[0-9]+$/);
+      if (spend.bounded) expect(spend.maxLamportsSpent).toMatch(/^[0-9]+$/);
+      else expect(spend.maxLamportsSpent).toBeNull();
+    }
   });
 
   it('never publishes a violated law without a reading that leads on it', () => {

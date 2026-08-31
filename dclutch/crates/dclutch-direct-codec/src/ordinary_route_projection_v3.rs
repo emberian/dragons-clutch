@@ -291,7 +291,7 @@ mod tests {
         execution_v3::{DirectInlineOrdinaryRequestV3, DirectSignedParticipantV3},
         intent_v2::CompactIntentV2,
         ordinary_bundle_v4::tests::canonical_bundle_for_cross_module_tests,
-        successor::DirectExecutionConfigV1,
+        successor::{DIRECT_MAX_FEE_BASIS_POINTS_V1, DirectExecutionConfigV1},
     };
 
     fn id(value: u8) -> [u8; 32] {
@@ -311,9 +311,9 @@ mod tests {
                     nonce: 4,
                     valid_from: 10,
                     valid_through: 30,
-                    maximum_fill: 25,
+                    maximum_fill: 50,
                     limit_price: 40,
-                    fee_basis_points: 1_000,
+                    fee_basis_points: 500,
                     collateral_account: id(20),
                 },
             },
@@ -328,19 +328,22 @@ mod tests {
                     nonce: 9,
                     valid_from: 5,
                     valid_through: 40,
-                    maximum_fill: 30,
+                    maximum_fill: 50,
                     limit_price: 60,
-                    fee_basis_points: 1_000,
+                    fee_basis_points: 500,
                     collateral_account: id(21),
                 },
             },
-            fill: 20,
+            // Forty, not twenty: five percent of a gross of ten floors to
+            // nothing per side, and a fee-bearing fixture with no fee tests
+            // the zero-fee route twice.
+            fill: 40,
             execution_price: 50,
         }
     }
 
     fn context() -> DirectOrdinaryAuthenticatedContextV3 {
-        let config = DirectExecutionConfigV1::new(100, 1_000, id(7)).expect("config");
+        let config = DirectExecutionConfigV1::new(100, 500, id(7)).expect("config");
         DirectOrdinaryAuthenticatedContextV3 {
             parent_request_digest: id(30),
             config_content_id: digest(&config.encode()),
@@ -392,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_projection_emits_typed_child_partition() {
+    fn canonical_projection_emits_the_seller_leg_alone() {
         let bundle = canonical_bundle_for_cross_module_tests();
         let projected = project_direct_inline_ordinary_child_requests_v3(
             request(),
@@ -403,29 +406,48 @@ mod tests {
         )
         .expect("child projection");
         SparseNativeTransferV1::decode(&projected.claims).expect("Claims request");
-        // Both transfers are positive here, so the Effect selects seller
-        // intermediate then fee continuation. The other two slots are
-        // deliberately inactive projection bytes and are not child requests.
+        // A fee-bearing fill. The Effect selects the NON-terminal seller route
+        // and nothing else: the fee continuation is a second transaction and
+        // `FeeSole` is retired, so slots 0, 2 and 3 stay inactive projection
+        // bytes that are not child requests.
         assert!(DelegatedCustodyRequestV2::decode(&projected.custody[0]).is_err());
-        DelegatedCustodyRequestV2::decode(&projected.custody[1])
+        let seller = DelegatedCustodyRequestV2::decode(&projected.custody[1])
             .expect("seller-intermediate Custody request");
-        DelegatedCustodyRequestV2::decode(&projected.custody[2])
-            .expect("fee-continuation Custody request");
+        assert!(DelegatedCustodyRequestV2::decode(&projected.custody[2]).is_err());
         assert!(DelegatedCustodyRequestV2::decode(&projected.custody[3]).is_err());
         assert_eq!(
             projected.dispatch,
             DirectInlineEffectDispatchV2 {
-                custody_slots: [1, 2],
-                custody_count: 2,
-                child_dispatch_writable: [false, true, true, false],
+                custody_slots: [1],
+                custody_count: 1,
+                child_dispatch_writable: [false, true, false, false],
             }
         );
+        // The obligation, visible on the wire the fee transaction will spend:
+        // the leg is non-terminal, the delegate survives it, and what is left
+        // standing is exactly the combined fee. Fill 20 at 50 of 100 is a gross
+        // of 10; five percent of ten floors to nothing per side, so raise the
+        // fill until it does not.
+        assert!(!seller.terminal);
+        assert_eq!(seller.delegate_after, seller.delegate_before);
+        assert_eq!(
+            seller.allowance_before - seller.custody.amount,
+            seller.allowance_after
+        );
+        assert_eq!(seller.allowance_after, 2);
+        assert_eq!(seller.custody.amount, 19);
     }
 
     #[test]
-    fn zero_fee_and_full_fee_select_disjoint_terminal_routes() {
+    fn a_zero_fee_fill_closes_the_delegation_and_a_fee_bearing_one_does_not() {
         let bundle = canonical_bundle_for_cross_module_tests();
-        for (fee_basis_points, expected_slot) in [(0_u16, 0_u8), (10_000_u16, 3_u8)] {
+        // Zero bps takes the terminal seller-only route and closes the
+        // delegation; the band's own edge takes the non-terminal one and leaves
+        // the fee standing. No rate between them reaches slot 2 or slot 3.
+        for (fee_basis_points, expected_slot, terminal) in [
+            (0_u16, 0_u8, true),
+            (DIRECT_MAX_FEE_BASIS_POINTS_V1, 1_u8, false),
+        ] {
             let mut request = request();
             request.seller.intent.fee_basis_points = fee_basis_points;
             request.buyer.intent.fee_basis_points = fee_basis_points;
@@ -446,16 +468,18 @@ mod tests {
             assert_eq!(
                 projected.dispatch,
                 DirectInlineEffectDispatchV2 {
-                    custody_slots: [expected_slot, 0],
+                    custody_slots: [expected_slot],
                     custody_count: 1,
                     child_dispatch_writable: writable,
                 }
             );
             for (slot, bytes) in projected.custody.iter().enumerate() {
-                assert_eq!(
-                    DelegatedCustodyRequestV2::decode(bytes).is_ok(),
-                    slot == usize::from(expected_slot)
-                );
+                let decoded = DelegatedCustodyRequestV2::decode(bytes);
+                assert_eq!(decoded.is_ok(), slot == usize::from(expected_slot));
+                if let Ok(request) = decoded {
+                    assert_eq!(request.terminal, terminal);
+                    assert_eq!(request.allowance_after == 0, terminal);
+                }
             }
         }
     }

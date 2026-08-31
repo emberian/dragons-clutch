@@ -117,7 +117,9 @@ describe('the transaction view', () => {
     );
     expect(projected.instructions[0].decoded.magic).toBe('NOTAMAGC');
     expect(projected.instructions[0].decoded.routes).toEqual([]);
-    expect(projected.instructions[0].decoded.note).toContain('No route the census enumerates');
+    // Renegotiated 2026-08-31 with the copy pass: same behaviour (an
+    // unrecognized magic claims no route), new plain wording.
+    expect(projected.instructions[0].decoded.note).toContain('No dClutch route');
   });
 
   it('renders inner CPI frames from the chain’s own metadata, under their outer', () => {
@@ -199,7 +201,8 @@ describe('the transaction view', () => {
   it('distinguishes an unreadable transaction from an empty one', () => {
     const projected = projectTransaction(meta({ transactionBytes: new Uint8Array([1, 2, 3]) }));
     expect(projected.instructions).toEqual([]);
-    expect(projected.note).toContain('did not deserialize');
+    // Renegotiated 2026-08-31 with the copy pass: same behaviour, plain wording.
+    expect(projected.note).toContain('could not be read');
   });
 
   it('carries compute units and the invoked frames the logs report', () => {

@@ -43,7 +43,7 @@ export default function PublicDeploymentEvidence({
   deployment,
 }: Readonly<{ deployment: DeploymentV1 }>) {
   if (deployment.cluster !== 'devnet') {
-    return <p className="direct-status">You selected {deployment.label}. This selection has no checked public deployment record; its addresses came from your local or custom configuration.</p>;
+    return <p className="direct-status">You selected {deployment.label}. Addresses came from your own configuration.</p>;
   }
   return <div className="direct-actions" aria-label="Checked deployment evidence">
     <a

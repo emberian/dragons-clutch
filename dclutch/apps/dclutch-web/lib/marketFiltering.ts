@@ -39,22 +39,22 @@ export const MARKET_SORT_CHOICES_V1: ReadonlyArray<MarketSortChoiceV1> = Object.
   Object.freeze({
     order: 'enumerated' as const,
     label: 'As the chain lists them',
-    meaning: 'The order the Core program itself enumerates these accounts in, with the market this site features first. Nothing is ranked.',
+    meaning: 'Chain order',
   }),
   Object.freeze({
     order: 'name' as const,
     label: 'By name, A to Z',
-    meaning: 'Alphabetical by the name this site gives each market. A market with no name sorts last, by address.',
+    meaning: 'Alphabetical; unnamed markets last',
   }),
   Object.freeze({
     order: 'issued' as const,
     label: 'Most claims issued first',
-    meaning: 'By the total claim atoms a market has issued, largest first. That counts claims that exist; it is not a measure of interest, and a market whose claims could not be read sorts last rather than as a zero.',
+    meaning: 'Most claims issued first',
   }),
 ]);
 
 export const MARKET_SEARCH_MEANING_V1 =
-  'Searches the name, question, address, and phase shown on these cards. It reads nothing the page is not already showing you.';
+  'Name, question, address, or phase';
 
 /** Everything about a card a reader can see, lowercased for matching. */
 function haystack(card: MarketDiscoveryCardV1): string {

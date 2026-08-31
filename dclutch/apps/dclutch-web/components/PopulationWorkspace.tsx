@@ -119,28 +119,30 @@ export function HonestyStrip({ series }: Readonly<{ series: SimulatorSeriesV1 }>
   const rows = honestyRowsV1(series);
   if (rows.length === 0) return <p className="market-empty">This capture carries no route tally.</p>;
   return <>
-    <table className="holders-table population-honesty">
-      <thead>
-        <tr>
-          <th scope="col">route</th>
-          <th scope="col">planned</th>
-          <th scope="col">executed</th>
-          <th scope="col">refused</th>
-          <th scope="col">not attempted</th>
-          <th scope="col">blocked</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => <tr key={row.route}>
-          <th scope="row">{row.route}</th>
-          <td>{row.planned}</td>
-          <td className={row.executed > 0 ? 'population-executed' : undefined}>{row.executed}</td>
-          <td>{row.refused}</td>
-          <td>{row.unattempted}</td>
-          <td>{row.blocked}</td>
-        </tr>)}
-      </tbody>
-    </table>
+    <div className="viz-table-scroll">
+      <table className="holders-table population-honesty">
+        <thead>
+          <tr>
+            <th scope="col">route</th>
+            <th scope="col">planned</th>
+            <th scope="col">executed</th>
+            <th scope="col">refused</th>
+            <th scope="col">not attempted</th>
+            <th scope="col">blocked</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => <tr key={row.route}>
+            <th scope="row">{row.route}</th>
+            <td>{row.planned}</td>
+            <td className={row.executed > 0 ? 'population-executed' : undefined}>{row.executed}</td>
+            <td>{row.refused}</td>
+            <td>{row.unattempted}</td>
+            <td>{row.blocked}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
     <ul className="population-reasons">
       {rows.filter((row) => row.leadingReason !== null).map((row) => <li key={row.route}>
         <strong>{row.route}</strong>
@@ -156,39 +158,103 @@ export function ArchetypeCensus({ series }: Readonly<{ series: SimulatorSeriesV1
   const rows = archetypeCensusV1(series);
   const markets = marketRowsV1(series);
   return <>
-    <table className="holders-table">
-      <thead>
-        <tr><th scope="col">archetype</th><th scope="col">basis</th><th scope="col">drawn</th><th scope="col">observed</th></tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => <tr key={row.archetype}>
-          <th scope="row">{row.archetype}</th>
-          <td>{row.basis}</td>
-          <td>{row.planned}</td>
-          <td>{row.observed}</td>
-        </tr>)}
-      </tbody>
-    </table>
-    <table className="holders-table">
-      <thead>
-        <tr>
-          <th scope="col">market</th><th scope="col">cells</th><th scope="col">points</th>
-          <th scope="col">slots covered</th><th scope="col">checks held</th><th scope="col">checks broken</th>
-          <th scope="col">what moved</th>
-        </tr>
-      </thead>
-      <tbody>
-        {markets.map((row) => <tr key={row.marketId}>
-          <th scope="row">{row.marketId}</th>
-          <td>{row.outcomeCount}</td>
-          <td>{row.points}</td>
-          <td>{row.slotsCovered ?? '—'}</td>
-          <td>{row.checksHeld}</td>
-          <td className={row.checksBroken > 0 ? 'population-broken' : undefined}>{row.checksBroken}</td>
-          <td>{row.moved.length === 0 ? 'nothing' : row.moved.join(', ')}</td>
-        </tr>)}
-      </tbody>
-    </table>
+    <div className="viz-table-scroll">
+      <table className="holders-table">
+        <thead>
+          <tr><th scope="col">archetype</th><th scope="col">basis</th><th scope="col">drawn</th><th scope="col">observed</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => <tr key={row.archetype}>
+            <th scope="row">{row.archetype}</th>
+            <td>{row.basis}</td>
+            <td>{row.planned}</td>
+            <td>{row.observed}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+    <div className="viz-table-scroll">
+      <table className="holders-table">
+        <thead>
+          <tr>
+            <th scope="col">market</th><th scope="col">cells</th><th scope="col">points</th>
+            <th scope="col">slots covered</th><th scope="col">checks held</th><th scope="col">checks broken</th>
+            <th scope="col">what moved</th>
+          </tr>
+        </thead>
+        <tbody>
+          {markets.map((row) => <tr key={row.marketId}>
+            <th scope="row">{row.marketId}</th>
+            <td>{row.outcomeCount}</td>
+            <td>{row.points}</td>
+            <td>{row.slotsCovered ?? '—'}</td>
+            <td>{row.checksHeld}</td>
+            <td className={row.checksBroken > 0 ? 'population-broken' : undefined}>{row.checksBroken}</td>
+            <td>{row.moved.length === 0 ? 'nothing' : row.moved.join(', ')}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+  </>;
+}
+
+
+/**
+ * Where the world's answers landed.
+ *
+ * A population that settles every market into the same place has ONE
+ * measurement copied as many times as it has markets, and until the bands were
+ * drawn around the coordinate the substrate actually observes, every local
+ * world did exactly that. Positions are tenths of the way through a market's
+ * own ordinary cells, because cell 3 of four and cell 3 of eleven are not the
+ * same answer.
+ */
+export function OutcomeSpread({ series }: Readonly<{ series: SimulatorSeriesV1 }>) {
+  const spread = series.world?.outcomeSpread ?? null;
+  if (spread === null) {
+    return <p>This capture predates the settling histogram.</p>;
+  }
+  if (spread.positionedMarkets === 0) {
+    return <p>No market in this world both resolves and has more than one ordinary cell.</p>;
+  }
+  const buckets = Array.from({ length: 11 }, (_, tenths) => ({
+    tenths,
+    count: spread.positionCounts[String(tenths)] ?? 0,
+  }));
+  const tallest = Math.max(...buckets.map((bucket) => bucket.count), 1);
+  return <>
+    <dl className="population-facts">
+      <div><dt>coordinate</dt><dd>{spread.coordinateAnchor}</dd></div>
+      <div><dt>markets placed</dt><dd>{spread.positionedMarkets}</dd></div>
+      <div><dt>distinct positions</dt><dd>{spread.distinctPositions}</dd></div>
+      <div><dt>heaviest</dt><dd>{spread.heaviestSharePercent}%</dd></div>
+    </dl>
+    {spread.degenerate ? <p className="population-broken">
+      One position takes {spread.heaviestSharePercent}% of this world, over the{' '}
+      {spread.degenerateThresholdPercent}% threshold.
+    </p> : null}
+    <div className="viz-table-scroll">
+      <table className="holders-table">
+        <thead>
+          <tr>
+            <th scope="col">position</th><th scope="col">markets</th><th scope="col">share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {buckets.map((bucket) => <tr key={bucket.tenths}>
+            <th scope="row">{bucket.tenths}/10</th>
+            <td>{bucket.count}</td>
+            <td>
+              <span
+                className="population-bar"
+                style={{ width: `${Math.round((100 * bucket.count) / tallest)}%` }}
+                aria-hidden="true"
+              />
+            </td>
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
   </>;
 }
 
@@ -254,13 +320,18 @@ export default function PopulationWorkspace({ preloaded }: Readonly<{
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>Executed, refused, never attempted, blocked</h2><p>The conscience of the record. Four words, three of which are not &ldquo;it worked&rdquo;, and they are never added together: a route with one refusal and forty blocks is not a route with forty-one failures. Each row&apos;s commonest reason is printed in the substrate&apos;s own words underneath.</p></div></header>
+      <header><span>03</span><div><h2>Executed, refused, never attempted, blocked</h2><p>Every route the world planned, and what became of each attempt. The four endings are never added together: a route with one refusal and forty blocks is not a route with forty-one failures. Each route&apos;s commonest reason is printed underneath.</p></div></header>
       {body((loaded) => <HonestyStrip series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
       <header><span>04</span><div><h2>What the world drew, and what stood still</h2><p>The archetypes the seed produced — including the ones no substrate here could found — and then every observed market with the slots it covered and the conservation checks it passed. An archetype table containing only what today&apos;s compiler emits could not say what is missing.</p></div></header>
       {body((loaded) => <ArchetypeCensus series={loaded} />)}
+    </section>
+
+    <section className="trade-v3-card">
+      <header><span>05</span><div><h2>Where the answers landed</h2><p>Each resolving market&apos;s settled cell, normalised to tenths of the way through its own ordinary cells. 0/10 is the open tail below the first cut and 10/10 the one above the last.</p></div></header>
+      {body((loaded) => <OutcomeSpread series={loaded} />)}
     </section>
 
     <footer className="product-footer">

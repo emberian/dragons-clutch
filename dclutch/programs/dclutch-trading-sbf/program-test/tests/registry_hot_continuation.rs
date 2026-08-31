@@ -9,8 +9,8 @@ use std::{env, fs, path::PathBuf};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
     hot_v3::{
-        HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
-        HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+        DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
+        HOT_CONFIG_RAW_ACCOUNT_V3, HOT_CONFIG_STAGING_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
         HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3, HotExecutionAckV3,
         HotExecutionEnvelopeV3,
     },
@@ -31,6 +31,7 @@ use dclutch_registry_sbf::RegistryError;
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, TokenAccount};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::{Account, AccountSharedData};
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction, InstructionError},
@@ -47,7 +48,8 @@ use dclutch_direct_hot_program_test_support::waist::{
     RefusedExecution, Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
     canonical_lookup_addresses, direct_case, direct_case_v2, direct_case_v4,
     direct_registry_instructions, elves, fixture_substrate, legacy_registry_hot_instruction,
-    program_test, registry_hot_instruction, start_with_substrate, submit_v0, submit_v0_observed,
+    program_test, program_test_without_forced_budget, registry_hot_instruction,
+    start_with_substrate, submit_v0, submit_v0_observed,
 };
 
 // --- Named refusals ----------------------------------------------------------
@@ -1216,26 +1218,59 @@ fn direct_action() -> u32 {
     DirectExecutionActionV3::InlineOrdinary as u32
 }
 
+/// The seal outer's transaction: two ComputeBudget instructions, then the outer.
+///
+/// The heap grant is REQUIRED, not decoration.
+/// `process_capability_seal_v1` authenticates its Market and root through
+/// `reauthenticate_top_level_root_roles_v3`, whose first act is
+/// `require_extended_heap_admitted_v1`, so a seal transaction carrying no
+/// `RequestHeapFrame` refuses `TradingSbfError::HeapFrame` before it reads an
+/// artifact. These cases ran without one until 2026-08-31 and went red the
+/// moment the Hot arm's heap declaration landed (2026-08-30) -- the seal outer
+/// calls the same prologue and was not on
+/// `declares_extended_heap_profile_v1`'s list, so it refused unconditionally
+/// and no new capability seal could be written on chain at all.
+///
+/// The forced compute budget has to go with it: `set_compute_max_units` makes
+/// solana-program-test install one fixed budget and IGNORE the transaction's
+/// own ComputeBudget instructions, `RequestHeapFrame` included, so the adapter
+/// would lift its ceiling over a mapping the runtime never widened.
+fn seal_transaction(instruction: Instruction) -> Vec<Instruction> {
+    vec![
+        ComputeBudgetInstruction::set_compute_unit_limit(
+            u32::try_from(COMPUTE_LIMIT).expect("compute limit width"),
+        ),
+        ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+        instruction,
+    ]
+}
+
 async fn submit_seal(
     context: &mut ProgramTestContext,
     direct: &DirectCase,
     instruction: Instruction,
+    addresses: &[Pubkey],
 ) -> Result<u64, RefusedExecution> {
-    let addresses =
-        canonical_lookup_addresses(core::slice::from_ref(&instruction), direct.payer.pubkey());
-    submit_v0(context, &[instruction], addresses, Some(&direct.payer), &[]).await
+    submit_v0(
+        context,
+        &seal_transaction(instruction),
+        addresses.to_vec(),
+        Some(&direct.payer),
+        &[],
+    )
+    .await
 }
 
 #[tokio::test]
 async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
     let descriptor_digest = descriptor_digest(&direct);
     let canonical = seal_instruction(&direct, direct_action(), descriptor_digest);
     let addresses =
-        canonical_lookup_addresses(core::slice::from_ref(&canonical), direct.payer.pubkey());
+        canonical_lookup_addresses(&seal_transaction(canonical.clone()), direct.payer.pubkey());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
 
@@ -1246,7 +1281,7 @@ async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
         "the seal PDA is not vacant before the seal outer runs"
     );
 
-    let units = submit_seal(&mut context, &direct, canonical.clone())
+    let units = submit_seal(&mut context, &direct, canonical.clone(), &addresses)
         .await
         .expect("canonical validated-artifact seal");
     assert!(units > 0 && units <= COMPUTE_LIMIT);
@@ -1263,7 +1298,7 @@ async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
     // recorded verdict byte-for-byte intact. The control is two lines up -- the
     // byte-identical first submission executed -- so the named refusal here is
     // the seal already being there and nothing else.
-    let refused = submit_seal(&mut context, &direct, canonical)
+    let refused = submit_seal(&mut context, &direct, canonical, &addresses)
         .await
         .expect_err("an existing seal was rewritten");
     assert_refusal(&refused, TRADING_CONTENT_REFUSAL_CODE);
@@ -1274,7 +1309,7 @@ async fn the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects() {
 #[tokio::test]
 async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
     let descriptor_digest = descriptor_digest(&direct);
@@ -1282,7 +1317,14 @@ async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
         seal_instruction(&direct, direct_action() ^ 1, descriptor_digest),
         seal_instruction(&direct, direct_action(), [0x5a; 32]),
     ];
-    let addresses = canonical_lookup_addresses(&hostile, direct.payer.pubkey());
+    let addresses = canonical_lookup_addresses(
+        &hostile
+            .iter()
+            .cloned()
+            .flat_map(seal_transaction)
+            .collect::<Vec<_>>(),
+        direct.payer.pubkey(),
+    );
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
 
@@ -1291,7 +1333,7 @@ async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
     // action and the descriptor digest, and it executes. So `Content` here is
     // the coordinates being wrong, not the seal outer refusing everything.
     for instruction in hostile {
-        let refused = submit_seal(&mut context, &direct, instruction)
+        let refused = submit_seal(&mut context, &direct, instruction, &addresses)
             .await
             .expect_err("a seal filed under other coordinates reached the canonical address");
         assert_refusal(&refused, TRADING_CONTENT_REFUSAL_CODE);
@@ -1495,7 +1537,7 @@ const REENTRANT_CHILD_DEPTH: usize = 3;
 /// # And the first attempt at that control did NOT fire, which is the point
 ///
 /// The same `invoke` placed in `lib.rs::authenticate_activated_role` -- the
-/// helper FOURTEEN Claims sites share -- left this case GREEN, because the route
+/// helper THIRTEEN Claims sites share -- left this case GREEN, because the route
 /// this fixture drives is `sparse_native_transfer_v1`, which takes the
 /// bump-witness API instead and never touches that helper. So the dynamic half
 /// of the tripwire covers one route of Claims, measured, not "Claims". That is
@@ -1589,7 +1631,7 @@ async fn claims_and_custody_execute_as_children_under_a_real_continuation() {
 ///
 /// The dynamic case above proves a child really executes with the Registry on
 /// the stack, on the one route its fixture drives. It cannot speak for the other
-/// routes of the same family: Claims alone had fourteen release-set read sites.
+/// routes of the same family: Claims alone had thirteen release-set read sites.
 /// This one speaks for every route of every family and proves something weaker
 /// but categorical -- that no code path in a role adapter can name the
 /// instruction at all, so none of them can invoke it.
@@ -1668,6 +1710,214 @@ fn assert_no_family_reaches_the_registry_by_cpi() {
          Offending lines:\n{}",
         offences.join("\n"),
     );
+}
+
+/// Claims reads the activation cache in exactly three places, and thirteen of
+/// its routes share one of them.
+///
+/// # The gap this closes, quoted from the case above
+///
+/// `claims_and_custody_execute_as_children_under_a_real_continuation` records
+/// that a Registry `invoke` planted in `lib.rs::authenticate_activated_role` --
+/// "the helper THIRTEEN Claims sites share" -- left it GREEN, because the route
+/// its fixture drives is `sparse_native_transfer_v1`, which takes the
+/// bump-witness API and never touches that helper. CACHEREAD reported the same
+/// thing as an honest negative: the dynamic tripwire covers ONE Claims route.
+///
+/// `assert_no_family_reaches_the_registry_by_cpi` answers half of that. It
+/// refuses `RegistryInstructionV1` anywhere in role-adapter code, which covers
+/// every route of every family -- but only against the reacquisition that
+/// spells the instruction type. It says nothing about WHERE a family reads the
+/// cache, so a fourteenth Claims route that authenticated a role by hand would
+/// pass it, and the dynamic case would not reach that route either.
+///
+/// # What this asserts instead, and why it is what makes one route enough
+///
+/// Not "the wall is up" -- the FUNNEL. Every Claims source that names a role
+/// authentication entry point of `dclutch-registry-activation-auth-v1` is one
+/// of three, each named here with the reason, and each is pinned to the exact
+/// entry points it may name:
+///
+///   * `lib.rs` may name the plain `authenticate_activated_role_v1`, and it is
+///     the ONLY file that may. That is the shared helper, and it is what makes
+///     the thirteen release-set read sites literally one function rather than
+///     thirteen implementations that happen to agree today.
+///   * `sparse_native_transfer_v1.rs` and `founding_v5.rs` may name the
+///     bump-witness variants, because they carry a caller-mined bump the plain
+///     variant has no parameter for. The first of those is the route the
+///     dynamic case above actually drives.
+///
+/// The count was FOURTEEN when this table was written and is thirteen now, and
+/// the reason is worth a line because it is the funnel working rather than
+/// drifting: `9c25e741` moved `founding_v5` off the shared helper onto the
+/// bump-witness variants, which is exactly the row-2 migration this table
+/// permits. Nothing asserts the number -- the gates below are
+/// `helper_definitions == 1` and `helper_callers >= 5`, neither of which a
+/// legal migration can break -- so the number is prose and prose goes stale.
+/// Re-measure it rather than trusting it:
+/// `grep -rn 'authenticate_activated_role(' programs/dclutch-claims-sbf/src`
+/// minus the one definition line. Counted 2026-08-31: thirteen.
+///
+/// A fourteenth reader -- a new route that authenticates a role in its own
+/// module, or `lib.rs`'s helper quietly switching to the bump-witness API --
+/// fails here by name, which is the signal that the dynamic half's one route no
+/// longer stands for the rest.
+///
+/// The table is a two-way ratchet: a row that stops naming its entry point
+/// fails too, because a reader list with a dead row has stopped describing the
+/// program.
+///
+/// # What it deliberately does NOT claim
+///
+/// This is a source scan, so it proves a shape and never an execution. It does
+/// not show that the helper is correct, that any route runs at depth three, or
+/// that Claims has no other reentrancy. Those are the other two cases in this
+/// file, and all three are needed.
+#[test]
+fn claims_reads_the_activation_cache_only_through_its_three_named_readers() {
+    /// Every role-authentication entry point the auth crate exports.
+    const ENTRY_POINTS: [&str; 5] = [
+        "authenticate_activated_role_v1",
+        "authenticate_activated_role_and_bump_v1",
+        "authenticate_activated_role_with_bump_v1",
+        "authenticate_activated_role_in_frame_v1",
+        "authenticate_activated_role_in_cache_v1",
+    ];
+    /// The Claims sources allowed to name one, which entry points each may
+    /// name, and why that file is allowed to.
+    const READERS: [(&str, &[&str], &str); 3] = [
+        (
+            "lib.rs",
+            &["authenticate_activated_role_v1"],
+            "the shared helper the thirteen Claims release-set read sites call",
+        ),
+        (
+            "sparse_native_transfer_v1.rs",
+            &[
+                "authenticate_activated_role_and_bump_v1",
+                "authenticate_activated_role_with_bump_v1",
+            ],
+            "the bump-witness route, and the one the dynamic case above drives",
+        ),
+        (
+            "founding_v5.rs",
+            &[
+                "authenticate_activated_role_and_bump_v1",
+                "authenticate_activated_role_with_bump_v1",
+            ],
+            "the founding leg, which carries bumps mined off chain",
+        ),
+    ];
+
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("programs")
+        .join("dclutch-claims-sbf")
+        .join("src")
+        .canonicalize()
+        .expect("the Claims adapter source directory");
+    let mut offences: Vec<String> = Vec::new();
+    let mut exercised: Vec<(&str, &str)> = Vec::new();
+    let mut scanned = 0_usize;
+    let mut helper_definitions = 0_usize;
+    let mut helper_callers: Vec<String> = Vec::new();
+    for file in rust_sources(&source) {
+        scanned += 1;
+        let name = file
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("a Claims source file name")
+            .to_owned();
+        let text = std::fs::read_to_string(&file).expect("Claims adapter source");
+        let mut calls_helper = false;
+        for (index, line) in text.lines().enumerate() {
+            let code = line.trim_start();
+            // A doc comment naming the helper is the explanation of the wall,
+            // and deleting those to satisfy a checker is the wrong trade --
+            // the same exemption the seven-adapter scan makes.
+            if code.starts_with("//") {
+                continue;
+            }
+            if code.contains("fn authenticate_activated_role(") {
+                helper_definitions += 1;
+            }
+            if code.contains("authenticate_activated_role(") {
+                calls_helper = true;
+            }
+            for entry in ENTRY_POINTS {
+                if !code.contains(entry) {
+                    continue;
+                }
+                match READERS
+                    .iter()
+                    .find(|(reader, _, _)| *reader == name.as_str())
+                {
+                    Some((_, allowed, _)) if allowed.contains(&entry) => {
+                        exercised.push((
+                            READERS
+                                .iter()
+                                .find(|(reader, _, _)| *reader == name.as_str())
+                                .expect("the matched reader")
+                                .0,
+                            entry,
+                        ));
+                    }
+                    _ => offences.push(format!(
+                        "{}:{}  names {entry}\n      {}",
+                        file.display(),
+                        index.saturating_add(1),
+                        code.trim(),
+                    )),
+                }
+            }
+        }
+        if calls_helper && name != "lib.rs" {
+            helper_callers.push(name);
+        }
+    }
+
+    assert!(
+        scanned > 15,
+        "only {scanned} Claims sources were scanned, which cannot be the whole \
+         adapter -- the walker is broken and this gate is vacuous",
+    );
+    assert_eq!(
+        helper_definitions, 1,
+        "the shared helper must be defined exactly once in the Claims adapter; \
+         {helper_definitions} definitions means the thirteen sites are no \
+         longer one function and the dynamic tripwire's one route stands for \
+         nothing",
+    );
+    assert!(
+        helper_callers.len() >= 5,
+        "only {} Claims modules outside lib.rs call the shared helper ({:?}). \
+         The funnel this case exists to protect has been dismantled, or the \
+         scan stopped seeing it",
+        helper_callers.len(),
+        helper_callers,
+    );
+    assert!(
+        offences.is_empty(),
+        "a Claims source authenticates an activated role outside the three \
+         named readers. Every release-set read must go through \
+         lib.rs::authenticate_activated_role, whose one code path is what the \
+         dynamic case above actually exercises -- a reader added elsewhere is \
+         covered by neither half of decision 0017 section 7's tripwire. Add the file \
+         to READERS with its reason only if it genuinely needs an entry point \
+         the helper cannot give it. Offending lines:\n{}",
+        offences.join("\n"),
+    );
+    for (reader, allowed, reason) in READERS {
+        for entry in allowed {
+            assert!(
+                exercised.contains(&(reader, entry)),
+                "{reader} is listed as a cache reader for {entry} ({reason}), \
+                 but no longer names it. An allowance that has outlived its \
+                 reason describes a program that no longer exists: delete the \
+                 entry point from its row",
+            );
+        }
+    }
 }
 
 /// Every `.rs` file below a directory.

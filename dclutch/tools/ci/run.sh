@@ -643,7 +643,8 @@ readonly SUITE_RUNNERS="\
 custody|programs/dclutch-custody-sbf/run-program-test.sh|Custody vault routes against a real caller link
 core|programs/dclutch-core-sbf/run-open-market-program-test.sh|every core program-test target, discovered from tests/
 claims|programs/dclutch-claims-sbf/run-rational-representation-v2-program-test.sh|the rational representation V2 lowering
-dealer|programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh|the dealer accelerator link and its family tests"
+dealer|programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh|the dealer accelerator link and its family tests
+fee2tx|programs/dclutch-trading-sbf/program-test/run-fee-second-transaction.sh|the Direct fee leg in a transaction of its own, against real Custody"
 
 tier_suites() {
   say "suites -- the other SBF program-test suites"
@@ -661,7 +662,7 @@ tier_suites() {
   fi
 
   local wanted="${DCLUTCH_CI_SUITES:-}"
-  local row name script what present=0 failed=0 absent=""
+  local row name script what present=0 failed=0 absent="" unrun="" row_code=0
   local IFS_SAVE="$IFS"
   while IFS='|' read -r name script what; do
     [ -n "$name" ] || continue
@@ -675,23 +676,47 @@ tier_suites() {
     fi
     present=$((present + 1))
     note "$name -- $what"
-    if ! (cd "$repo_root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
-      "$repo_root/$script"); then
+    # A row exiting 2 means IT could not run -- the same convention this whole
+    # script uses, now honoured per row instead of only for the whole tier.
+    # Before this, every nonzero row exit became a gate failure, so a host
+    # without the claims fixture's builder archive produced "an SBF
+    # program-test suite failed ... treat this as a real finding about the
+    # protocol". The comment above SUITE_RUNNERS already claimed this tier
+    # "reports absence per row"; it did not, because the rows had no way to say
+    # it. The wrapper's own missing-prerequisite branch was unreachable for the
+    # exact case its author wrote it for.
+    row_code=0
+    (cd "$repo_root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+      "$repo_root/$script") || row_code=$?
+    case "$row_code" in
+    0) ;;
+    "$EXIT_PREREQ_MISSING")
+      note "$name: DID NOT RUN -- the row reports a missing prerequisite"
+      unrun="$unrun $name"
+      ;;
+    *)
       note "$name: FAILED"
       failed=$((failed + 1))
-    fi
+      ;;
+    esac
   done <<EOF
 $SUITE_RUNNERS
 EOF
   IFS="$IFS_SAVE"
 
   [ -n "$absent" ] && note "runners not in this tree:$absent"
+  [ -n "$unrun" ] && note "rows that did not run:$unrun"
+  # A real failure outranks an absence: if one row genuinely failed, the tier
+  # failed, and the rows that never ran are reported beside it rather than
+  # softening it.
   if [ "$present" = 0 ]; then
     record suites $EXIT_PREREQ_MISSING "no suite runner is present in this tree"
-  elif [ "$failed" = 0 ]; then
-    record suites $EXIT_PASS
-  else
+  elif [ "$failed" -gt 0 ]; then
     record suites $EXIT_GATE_FAILED "$failed of $present suites failed"
+  elif [ -n "$unrun" ]; then
+    record suites $EXIT_PREREQ_MISSING "rows did not run:$unrun"
+  else
+    record suites $EXIT_PASS
   fi
 }
 
@@ -743,6 +768,95 @@ tier_workspaces() {
 }
 
 # ---------------------------------------------------------------------------
+# release -- the release-tooling refusal suites, which ran nowhere.
+#
+# tools/release/ holds the machinery that decides whether a build may be
+# released at all: SBF build-freshness admission, the devnet activity and
+# demo-pulse wrappers, and the sponsored-market-open stager. Each of those
+# carries a test script sitting directly beside it. NOTHING RAN ANY OF THEM.
+# That is the same defect as `check-all-workspaces.py` above -- a gate that
+# exists and never runs -- except four times over.
+#
+# They are the cheapest thing in this file: about five seconds for all four,
+# needing bash, python3 and git and nothing else. Despite three of them having
+# "devnet" in the name NONE of them reaches a chain. Each builds a scratch
+# sandbox, writes stub `solana`, `solana-keygen`, `spl-token` and `dclutch`
+# executables onto PATH, and points the tool under test at
+# `https://example.invalid` so that a real fetch would fail loudly rather than
+# quietly succeed. That is why this is a push tier and not a cut tier.
+#
+# WHAT THEY ACTUALLY GATE IS REFUSALS -- the cases where the release tooling
+# has to say no. Stale or forged build evidence must not be admitted. A market
+# must not be founded at a nonzero Direct fee rate, which founds a market that
+# can never trade, nor against a founder key nobody holds, which strands
+# collateral forever. Both are irreversible. A refusal test that never runs is
+# indistinguishable from a tool that has quietly stopped refusing.
+#
+# ONE HONEST LIMIT, because it changes what a green here means: the stager
+# suite reaches for real git history, to re-run its red controls against the
+# last revision BEFORE its guards existed. That is the right design -- a
+# control pinned to HEAD stops discriminating the moment the fix lands -- but
+# on a shallow clone, or in a vendored subtree whose history does not carry
+# that path, it prints its own note and two of its thirteen cases do not run.
+# It reports that itself. This tier deliberately does not restate the count,
+# because a second copy of it here would be one more number to get wrong.
+tier_release() {
+  say "release -- the release-tooling refusal suites"
+  local dir="$repo_root/tools/release"
+  # Named one by one and never globbed. A glob turns a script that was DELETED
+  # into a tier that silently got smaller, which is a quieter version of the
+  # exact defect this tier exists to end.
+  local scripts=(
+    test-checked-release-freshness.sh
+    test-devnet-activity.sh
+    test-devnet-demo-pulse.sh
+    test-stage-devnet-sponsored-market-open.sh
+  )
+  local present=() missing=() name
+  for name in "${scripts[@]}"; do
+    if [ -f "$dir/$name" ]; then
+      present+=("$name")
+    else
+      missing+=("$name")
+    fi
+  done
+  if [ "${#present[@]}" = 0 ]; then
+    record release $EXIT_PREREQ_MISSING "tools/release test scripts are not in this tree"
+    return
+  fi
+  if ! have python3; then
+    record release $EXIT_PREREQ_MISSING "python3 not on PATH"
+    return
+  fi
+  local failed=() code=0
+  for name in "${present[@]}"; do
+    code=0
+    (cd "$repo_root" && bash "$dir/$name") || code=$?
+    [ "$code" = 0 ] || failed+=("$name")
+  done
+  if [ "${#failed[@]}" -gt 0 ]; then
+    note "a release-tooling refusal suite FAILED:"
+    for name in "${failed[@]}"; do note "  $name"; done
+    note "Each of these proves the release machinery still says no to something"
+    note "irreversible -- forged build evidence, a market founded at a fee rate"
+    note "that can never trade, a founder key nobody holds. Read the failing"
+    note "case before you change either side of it."
+    record release $EXIT_GATE_FAILED
+    return
+  fi
+  if [ "${#missing[@]}" -gt 0 ]; then
+    # Everything present passed, and that is still not a pass for this tier:
+    # some of it was not here to run. Under --require this becomes a failure,
+    # which is the correct behaviour for a release candidate.
+    note "these release suites are not in this tree and did NOT run:"
+    for name in "${missing[@]}"; do note "  $name"; done
+    record release $EXIT_PREREQ_MISSING "${#missing[@]} of ${#scripts[@]} release suites absent from this tree"
+    return
+  fi
+  record release $EXIT_PASS
+}
+
+# ---------------------------------------------------------------------------
 
 list_tiers() {
   cat <<'EOF'
@@ -752,6 +866,12 @@ census    milliseconds python3            a generated file arriving with no
                                           re-emit guard, or losing one
 seam      ~20s         ast-grep           six structural seam defect classes,
                                           new findings against a triaged baseline
+release   ~5s          python3            the four release-tooling REFUSAL
+                                          suites: build-freshness admission,
+                                          the devnet activity and demo-pulse
+                                          wrappers, the sponsored-market-open
+                                          stager. All hermetic -- stub binaries
+                                          and an invalid RPC, never a chain
 web       ~1 min       node               the web + SDK vitest suites
 emission  minutes      lake (Lean)        every generated file still byte-
                                           matches the emitter that printed it
@@ -767,17 +887,18 @@ programs  minutes      cargo-build-sbf    the programs build with no SBF stack-
                                           Direct route holds its compute margin
                                           across 32 pinned seeds
 suites    ~15 min      cargo-build-sbf    the other SBF program-test suites:
-                                          custody, core, claims, dealer. Each
-                                          row runs the runner its owning lane
-                                          maintains, never a copy of its ELF list
+                                          custody, core, claims, dealer, and the
+                                          fee2tx probe. Each row runs the runner
+                                          its owning lane maintains, never a copy
+                                          of its ELF list
 workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           from an archived revision. The general
                                           form of the journey break. Cut tier --
                                           fresh target dir per workspace, so it
                                           is not in `all`
 
-aliases:  cheap = census seam
-          all   = census seam web emission journey programs suites
+aliases:  cheap = census seam release
+          all   = census seam release web emission journey programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
 environment:
@@ -821,9 +942,9 @@ main() {
       sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
-    cheap) tiers+=(census seam) ;;
-    all) tiers+=(census seam web emission journey programs suites) ;;
-    census | seam | web | emission | journey | programs | suites | workspaces)
+    cheap) tiers+=(census seam release) ;;
+    all) tiers+=(census seam release web emission journey programs suites) ;;
+    census | seam | release | web | emission | journey | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

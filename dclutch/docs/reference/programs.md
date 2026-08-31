@@ -25,4 +25,4 @@ reachable inside an entry route's request.
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:128) |
 | `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 10 | 17 | 23 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:165) |
 | `series-shadow` | `dclutch-series-shadow-sbf` | 0xB | 1 | 0 | 5 | `program_entrypoint` (programs/dclutch-series-shadow-sbf/src/lib.rs:24) |
-| `trading` | `dclutch-trading-sbf` | 0x4 | 23 | 0 | 14 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1827) |
+| `trading` | `dclutch-trading-sbf` | 0x4 | 24 | 0 | 17 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1849) |

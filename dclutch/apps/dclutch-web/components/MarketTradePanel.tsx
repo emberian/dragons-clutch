@@ -718,7 +718,7 @@ export default function MarketTradePanel({
       <div className="direct-form-grid">
         <label><span>My size · claim atoms (blank = take the ticket in full)</span><input inputMode="numeric" value={desired} onChange={(event) => { setDesired(event.target.value.trim()); invalidatePreview(); }} /></label>
       </div>
-      <WalletDirectory directory={wallets} purpose="taker identity, intent and payer signatures" onConnected={invalidateWalletState} />
+      <WalletDirectory directory={wallets} onConnected={invalidateWalletState} />
 
       {ticketState.kind === 'refused' && <p className="market-refusal">Ticket refused: {ticketState.reason}</p>}
       {ticketState.kind === 'ready' && <div className="direct-actions">

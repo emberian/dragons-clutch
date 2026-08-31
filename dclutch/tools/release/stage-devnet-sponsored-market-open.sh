@@ -14,6 +14,17 @@ REGISTRY=""
 FEE_RECIPIENT=""
 WINDOW_START=""
 FEE_BPS=""
+# The market's SHAPE. These three were hardcoded into the compiler invocation
+# below until 2026-08-31, which meant every devnet market this script had ever
+# founded asked the same question about the same two prices -- $120 and $180 --
+# whatever SOL was actually worth on the day. Spot was $102.54 at cohort-8's
+# founding, so both boundaries sat above the money and one outcome carried
+# essentially the whole probability. A market whose answer is already known is
+# not a market. The defaults below are EXACTLY the old hardcoded values, so a
+# command line written without these flags stages the market it always did.
+CUTS="12000,18000"
+COEFFICIENTS="1,0,1,0"
+CUT_DENOMINATOR="100"
 
 usage() {
     cat <<'EOF'
@@ -21,7 +32,23 @@ Usage:
   stage-devnet-sponsored-market-open.sh --work ABSOLUTE_NEW_DIR \
     --plan ABSOLUTE_CHECKED_PLAN_JSON --registry-program-id PUBKEY \
     --direct-fee-recipient PUBKEY --direct-fee-basis-points N \
-    --window-start UNIX_SECONDS [--rpc-url URL]
+    --window-start UNIX_SECONDS [--rpc-url URL] \
+    [--cuts I128,..] [--coefficients U64,..] [--cut-denominator U64]
+
+--cuts, --coefficients and --cut-denominator set the market's SHAPE and each
+default to the value this script has always emitted, so a command line written
+without them stages the market it always did.  --cuts sets the WIDTH: outcomes =
+cuts + 2, the two open tails plus the explicit failure outcome, and
+--coefficients must then carry exactly that many payouts.  Cuts are read in the
+coordinate domain's own units -- for sol-usd that is USD CENTS over
+--cut-denominator, so 10254 with denominator 100 is $102.54.
+
+CENTRE THE CUTS ON SPOT.  Until 2026-08-31 these were hardcoded to 12000,18000
+and every market this script founded asked about $120 and $180 no matter what
+SOL cost that day; at cohort-8's founding spot was $102.54, which put both
+boundaries above the money and left one outcome holding nearly all the
+probability.  A market whose answer is already known teaches nobody anything.
+Scale the width to realized volatility over the market's own window.
 
 This stages the credential-free sponsored SOL/USD PriceUpdateV2 input and the
 real `devnet-sponsored-market` MarketRunInput, then writes an execute-only
@@ -30,14 +57,33 @@ DCLUTCH_AUTHORIZE_MARKET_OPEN=YES.  No key file is read and no transaction is
 submitted by this command.
 
 --direct-fee-basis-points has no default and must be stated.  The rate is
-sealed into the Market at founding and cannot be changed afterwards, and a
-fee-bearing Direct trade does not fit the compute ceiling: measured
-all-first-try 1,515,003 CU against 1,400,000, over by 115,003 before any key
-is drawn (docs/evidence/DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md).  A market
-founded at a nonzero rate today is a market that cannot trade, which is how
-7Mcu1ZT9 died of a different irreversible founding parameter.  Pass 0 for a
-market that must trade; pass a rate only when you mean to found one that
-cannot, or when the second-transaction fee leg has shipped.
+sealed into the Market at founding and cannot be changed afterwards.
+
+PASS 50.  Not 0.  This paragraph used to say the opposite -- "pass 0 for a
+market that must trade" -- and that sentence founded three markets that can
+never take a fill.  A ZERO-FEE MARKET CANNOT BE SET UP AT ALL:
+direct_token_setup_v1 is the sole creator of the seller's and the venue's
+Direct token accounts, so it precedes every Hot fill, and it refuses unless
+the Market's finalized Direct config reads exactly
+DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1 -- documented in the codec as "the one
+Direct fee rate admitted by this setup release", and equal to 50.  Devnet
+market19 6WZXJ7jB was founded at 0 on 2026-08-30 and is permanently unfillable
+for that reason alone.
+
+The compute ceiling is real but it is a property of the FILL, not the rate.
+crates/dclutch-direct-aot-v3-contract/src/lib.rs computes
+fee = mul_div_floor(gross, policy_fee_bps, 10_000), so at 50 bps every trade
+whose gross collateral is 1..=199 atoms has fee 0, sets seller_terminal,
+clears the fee routes, and makes ONE Custody CPI -- the branch measured at
+1,329,618..1,349,118 CU against the 1,400,000 ceiling.  The 1,515,003 figure
+in docs/evidence/DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md is the TWO-CPI branch,
+taken only when the fee does not floor, and it is still over by 115,003 (and
+by less since the CACHEREAD frame work); that branch stays blocked until the
+second-transaction fee leg ships.
+
+So: found at 50, and keep the first fills small enough that the fee floors.
+Pass any other rate only when you mean to found a market that cannot trade,
+or once the second-transaction fee leg has shipped.
 EOF
 }
 
@@ -57,6 +103,9 @@ while [ "$#" -gt 0 ]; do
         --direct-fee-recipient) FEE_RECIPIENT="${2:?--direct-fee-recipient needs a value}"; shift 2 ;;
         --direct-fee-basis-points) FEE_BPS="${2:?--direct-fee-basis-points needs a value}"; shift 2 ;;
         --window-start) WINDOW_START="${2:?--window-start needs a value}"; shift 2 ;;
+        --cuts) CUTS="${2:?--cuts needs a value}"; shift 2 ;;
+        --coefficients) COEFFICIENTS="${2:?--coefficients needs a value}"; shift 2 ;;
+        --cut-denominator) CUT_DENOMINATOR="${2:?--cut-denominator needs a value}"; shift 2 ;;
         --rpc-url) DEVNET_RPC="${2:?--rpc-url needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -81,12 +130,49 @@ done
 # the operator can still fix: refuse anything but a plain decimal, so no shell
 # expansion or empty string can reach the compiler as a silent zero.
 case "$FEE_BPS" in ''|*[!0-9]*) echo "--direct-fee-basis-points must be a plain decimal count" >&2; exit 2 ;; esac
+# This guard is no longer the only one. `DIRECT_MAX_FEE_BASIS_POINTS_V1`
+# (crates/dclutch-direct-codec/src/successor.rs) refuses the same rate at config
+# construction, and the authored transition refuses it again as a relation, so a
+# founding that avoids this script is bounded too. It stays because refusing at
+# the operator's own console is cheaper than refusing after a staged build.
 if [ "$FEE_BPS" -gt 500 ]; then
     echo "--direct-fee-basis-points exceeds MAX_FEE_BPS=500 (decision 0014 D2)" >&2
     exit 2
 fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
 case "$WINDOW_START" in ''|*[!0-9-]*) echo "--window-start must be decimal Unix seconds" >&2; exit 2 ;; esac
+
+# The shape is checked HERE, where the operator can still fix it by retyping one
+# argument, rather than 40 KB later inside the compiled document. The compiler
+# re-checks all of this over the compiled input and would catch it -- but it
+# speaks about a MarketRunInput, and someone who typed four cuts and five
+# coefficients deserves to be told that, in those words, before anything is
+# compiled. The width rule is the compiler's own: outcomes = cuts + 2, the two
+# open tails plus the explicit failure outcome.
+case "$CUT_DENOMINATOR" in ''|*[!0-9]*|0) echo "--cut-denominator must be a positive plain decimal" >&2; exit 2 ;; esac
+case "$CUTS" in *,,*|,*|*,) echo "--cuts must be a comma-separated list with no empty entries" >&2; exit 2 ;; esac
+case "$COEFFICIENTS" in *,,*|,*|*,) echo "--coefficients must be a comma-separated list with no empty entries" >&2; exit 2 ;; esac
+cut_count=0
+previous_cut=""
+for cut in ${CUTS//,/ }; do
+    case "$cut" in ''|-|*[!0-9-]*|*-*-*) echo "--cuts entry '$cut' is not a decimal integer" >&2; exit 2 ;; esac
+    case "$cut" in ?*-*) echo "--cuts entry '$cut' is not a decimal integer" >&2; exit 2 ;; esac
+    if [ -n "$previous_cut" ] && [ "$previous_cut" -ge "$cut" ]; then
+        echo "--cuts must be STRICTLY increasing: '$previous_cut' then '$cut' describes a region of zero or negative width, which is an outcome no coordinate can land in" >&2
+        exit 2
+    fi
+    previous_cut="$cut"
+    cut_count=$((cut_count + 1))
+done
+coefficient_count=0
+for coefficient in ${COEFFICIENTS//,/ }; do
+    case "$coefficient" in ''|*[!0-9]*) echo "--coefficients entry '$coefficient' is not an unsigned decimal" >&2; exit 2 ;; esac
+    coefficient_count=$((coefficient_count + 1))
+done
+if [ "$coefficient_count" -ne "$((cut_count + 2))" ]; then
+    echo "$cut_count cuts describe a $((cut_count + 2))-outcome market (two tails plus the explicit failure outcome), so it needs $((cut_count + 2)) coefficients and $coefficient_count were given" >&2
+    exit 2
+fi
 absolute_existing --plan "$PLAN"
 if [ -e "$WORK" ] || [ -L "$WORK" ]; then
     echo "--work must name a fresh directory; refusing to overwrite $WORK" >&2
@@ -122,8 +208,9 @@ cargo run --locked --manifest-path "$BOOT/Cargo.toml" -- devnet-sponsored-market
     --product product/sol-usd-sponsored-range-protection \
     --coordinate-domain coordinate-domain/usd-cents-per-sol \
     --feed sol-usd-sponsored \
-    --cuts 12000,18000 \
-    --coefficients 1,0,1,0 \
+    --cuts "$CUTS" \
+    --coefficients "$COEFFICIENTS" \
+    --cut-denominator "$CUT_DENOMINATOR" \
     > "$WORK/market.json"
 
 # This only makes the remaining authority explicit. It invokes the existing
@@ -213,15 +300,26 @@ document = {
     'credentialFree': True,
     'hermesOrPriceServiceCredentials': 'not used',
   },
+  # Read the SHAPE off the compiled input rather than restating the defaults.
+  # These three were hardcoded to 4 outcomes and cuts 12000/18000, so any
+  # market founded with different --cuts got a staging record that described a
+  # market other than the one it staged.
   'flagship': {
     'product': 'product/sol-usd-sponsored-range-protection',
-    'outcomes': 4,
-    'cuts': ['12000', '18000'],
+    'outcomes': len(market['coefficients']),
+    'cuts': [str(cut) for cut in market['cuts']],
     'directFeeBasisPointsPerSide': int(fee_bps),
     'directFeeRecipient': recipient,
     'marketInputPath': market_path,
     'feeRateIsIrreversible': True,
-    'feeBearingTradeFitsCeiling': int(fee_bps) == 0,
+    # Whether a fill can be SET UP at all, which is prior to whether it fits.
+    # direct_token_setup_v1 admits exactly one rate; see --direct-fee-basis-points.
+    'directTokenSetupAdmitsThisRate': int(fee_bps) == 50,
+    # The ceiling is a property of the FILL. At 50 bps a trade whose gross
+    # collateral is 1..=199 atoms floors its fee to zero, takes the one-CPI
+    # branch, and fits; a larger fill takes the two-CPI branch and does not.
+    'maximumGrossCollateralAtomsWhoseFeeFloorsToZero':
+        (10_000 // int(fee_bps) - 1) if int(fee_bps) else None,
   },
   'execution': {
     'driver': 'campaign --founding-only',

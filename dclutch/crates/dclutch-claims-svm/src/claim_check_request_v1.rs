@@ -70,6 +70,13 @@ pub enum ClaimCheckActionV1 {
     Redeem = 3,
     /// Close a fully redeemed escrow and sweep it to the caller.
     CloseEscrow = 4,
+    /// Compact one Fractional reserve into a record addressed by its Mint.
+    ///
+    /// A fifth tag rather than a second use of `Compact`, because the two
+    /// routes resolve different things: one sleeper's payout, and the
+    /// collateral behind an entire coordinate's outstanding shard supply. A
+    /// shared tag would make the width the only thing telling them apart.
+    FractionalCompact = 5,
 }
 
 impl ClaimCheckActionV1 {
@@ -80,6 +87,9 @@ impl ClaimCheckActionV1 {
             Self::OpenEscrow => CLAIM_CHECK_OPEN_MAGIC_V1,
             Self::Compact => CLAIM_CHECK_COMPACT_MAGIC_V1,
             Self::Redeem | Self::CloseEscrow => CLAIM_CHECK_REDEEM_MAGIC_V1,
+            Self::FractionalCompact => {
+                crate::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+            }
         }
     }
 
@@ -89,6 +99,10 @@ impl ClaimCheckActionV1 {
             2 => Ok(Self::Compact),
             3 => Ok(Self::Redeem),
             4 => Ok(Self::CloseEscrow),
+            5 => Ok(Self::FractionalCompact),
+            // 6 is reserved for the fractional redemption, which has a magic
+            // (`DCLTFCR1`) and no route. Left unallocated rather than defined,
+            // so a tag never names an act nothing performs.
             _ => Err(ClaimCheckErrorV1::UnknownTag),
         }
     }
@@ -530,7 +544,13 @@ mod tests {
 
     #[test]
     fn an_unknown_action_or_version_is_refused() {
-        for tag in [0_u8, 5, 200, 255] {
+        // 5 was in this list until the fractional compaction claimed it. It is
+        // now a defined act and moves to the join assertion below, which is a
+        // strictly stronger statement about it; 6 takes its place here, and is
+        // the tag the fractional REDEMPTION will claim when a route performs
+        // it. Renegotiated in the open rather than by widening what this
+        // accepts.
+        for tag in [0_u8, 6, 200, 255] {
             let mut bytes = redeem().to_bytes().expect("bytes");
             write(&mut bytes, ACTION_OFFSET, &[tag]).expect("tag");
             assert_eq!(
@@ -538,6 +558,31 @@ mod tests {
                 Err(ClaimCheckErrorV1::UnknownTag)
             );
         }
+        // A tag that names a real act, under a magic that does not carry it.
+        // The tags are globally distinct precisely so this pair can disagree,
+        // and the join is what notices: a fractional compaction tag on native
+        // redemption bytes is refused at the magic, not admitted as a route.
+        for (tag, magic) in [
+            (
+                ClaimCheckActionV1::FractionalCompact,
+                CLAIM_CHECK_REDEEM_MAGIC_V1,
+            ),
+            (ClaimCheckActionV1::Compact, CLAIM_CHECK_REDEEM_MAGIC_V1),
+            (ClaimCheckActionV1::OpenEscrow, CLAIM_CHECK_REDEEM_MAGIC_V1),
+        ] {
+            let mut bytes = redeem().to_bytes().expect("bytes");
+            write(&mut bytes, 0, &magic).expect("magic");
+            write(&mut bytes, ACTION_OFFSET, &[tag as u8]).expect("tag");
+            assert_eq!(
+                claim_check_action_of(&bytes),
+                Err(ClaimCheckErrorV1::InvalidHeader),
+                "{tag:?} does not arrive under this magic"
+            );
+        }
+        assert_eq!(
+            ClaimCheckActionV1::FractionalCompact.magic(),
+            crate::fractional_claim_check_v1::FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1
+        );
         let mut versioned = open().to_bytes().expect("bytes");
         write(&mut versioned, VERSION_OFFSET, &2_u16.to_le_bytes()).expect("version");
         assert_eq!(

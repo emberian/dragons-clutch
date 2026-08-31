@@ -1,10 +1,19 @@
 //! Exact fixed-role EffectProgram for inline ordinary Direct V3.
 //!
 //! The program first invokes the canonical fixed-width sparse Claims transfer,
-//! then selects the exact positive Custody route shapes for seller-net and
-//! combined-fee transfers. Four Custody route declarations are required because
-//! the delegated-allowance wire binds start/terminal flags and the post-delegate
-//! identity statically; their enable registers are mutually exclusive. Local
+//! then selects the exact positive Custody route shape for the seller-net
+//! transfer. Four Custody route declarations are required because the
+//! delegated-allowance wire binds start/terminal flags and the post-delegate
+//! identity statically; their enable registers are mutually exclusive.
+//!
+//! Two of the four are declared and never invoked. The fee continuation moved
+//! to a second transaction (`docs/design/FEE_SECOND_TRANSACTION_V1.md`) and now
+//! carries its own enable register, which the transition pins to zero; the
+//! fee-only route is retired by the `DIRECT_MAX_FEE_BASIS_POINTS_V1` band and
+//! its derived register is required zero. Their frames stay where they are:
+//! renumbering this program's 91 logical accounts is a wider change than the
+//! protocol tier, and moving them would restate every pinned identity below
+//! for no admission gained. Local
 //! Direct root and maker candidates are written only after all selected child
 //! receipts have been authenticated by the common Trading outer.
 
@@ -52,10 +61,10 @@ use crate::{
         SCALAR_BUYER_NONCE_V3, SCALAR_BUYER_OUTCOME_V3, SCALAR_BUYER_POSITION_REVISION_V3,
         SCALAR_BUYER_RENT_PRINCIPAL_V3, SCALAR_CLAIM_TRANSFER_V3, SCALAR_CLAIMS_MARKET_REVISION_V3,
         SCALAR_COMBINED_FEE_V3, SCALAR_CUSTODY_AFTER_FEE_V3, SCALAR_CUSTODY_AFTER_SELLER_V3,
-        SCALAR_CUSTODY_REVISION_V3, SCALAR_FEE_SOLE_ROUTE_ENABLED_V3, SCALAR_MAKER_MAGIC_V3,
-        SCALAR_MAKER_VERSION_V3, SCALAR_MARKET_GENERATION_V3, SCALAR_OUTCOME_COUNT_V3,
-        SCALAR_ROOT_OPEN_COUNT_AFTER_V3, SCALAR_SELLER_BUMP_V3,
-        SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3, SCALAR_SELLER_NET_V3,
+        SCALAR_CUSTODY_REVISION_V3, SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3,
+        SCALAR_FEE_SOLE_ROUTE_ENABLED_V3, SCALAR_MAKER_MAGIC_V3, SCALAR_MAKER_VERSION_V3,
+        SCALAR_MARKET_GENERATION_V3, SCALAR_OUTCOME_COUNT_V3, SCALAR_ROOT_OPEN_COUNT_AFTER_V3,
+        SCALAR_SELLER_BUMP_V3, SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3, SCALAR_SELLER_NET_V3,
         SCALAR_SELLER_NONCE_AFTER_V3, SCALAR_SELLER_OUTCOME_V3, SCALAR_SELLER_POSITION_REVISION_V3,
         SCALAR_SELLER_RENT_PRINCIPAL_V3, SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3, SCALAR_ZERO_V3,
     },
@@ -99,7 +108,7 @@ const _: () = assert!(
 
 const ROUTE_COUNT: usize = 5;
 const DEPENDENCY_COUNT: usize = 5;
-const FIXED_INSTRUCTION_COUNT: usize = 131;
+const FIXED_INSTRUCTION_COUNT: usize = 133;
 const DIRECT_INLINE_ORDINARY_EFFECT_BASE_BYTES_V4: usize = HEADER_BYTES
     + ROUTE_COUNT * ROUTE_BYTES
     + DEPENDENCY_COUNT * RECEIPT_DEPENDENCY_BYTES
@@ -184,9 +193,13 @@ fn encode_direct_inline_ordinary_effect_base_v4_atomic(
             14,
             &seller_intermediate,
         ),
+        // The fee continuation no longer shares the seller leg's enable
+        // register. It has its own, and the transition pins it to zero: the fee
+        // settles in a second transaction, so this route is declared with a
+        // live frame and never invoked here.
         route(
             FixedRole::Custody,
-            Some(scalar(SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3)?),
+            Some(scalar(SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3)?),
             DIRECT_INLINE_FEE_CONTINUATION_ACCOUNT_START_V3,
             14,
             &fee_continuation,
@@ -334,6 +347,7 @@ fn push_local_state(
         SCALAR_SELLER_BUMP_V3,
         SCALAR_SELLER_NONCE_AFTER_V3,
         SCALAR_SELLER_RENT_PRINCIPAL_V3,
+        SCALAR_ZERO_V3,
     )?;
     push_maker_state(
         output,
@@ -344,10 +358,28 @@ fn push_local_state(
         SCALAR_BUYER_BUMP_V3,
         SCALAR_BUYER_NONCE_AFTER_V3,
         SCALAR_BUYER_RENT_PRINCIPAL_V3,
+        SCALAR_COMBINED_FEE_V3,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Write one maker replay's complete state.
+///
+/// **Complete is the load-bearing word.** The account is allocated zeroed and
+/// this is the only thing that writes it, so a field absent from this list is a
+/// field that is permanently zero on chain no matter what the contract-side
+/// settlement computed. `fee_owed` was exactly that: it arrived on
+/// `MakerReplayRootV1` with its gate and its settlement arithmetic, every unit
+/// test of the record passed, and the fee-bearing fill refused at
+/// `TradingSbfError::Commit` because the poststate the finalization committed
+/// to carried an obligation the Effect had never written.
+///
+/// `fee_owed` needs no register of its own: the transition already publishes
+/// `SCALAR_COMBINED_FEE_V3`, which is the obligation, and `SCALAR_ZERO_V3` for
+/// the side that never owes. The seller is whole the instant the fill lands --
+/// their half of the fee is a reduced credit and not a later debit -- and the
+/// admission gate refuses either side's next nonce while it owes, so the
+/// seller's coordinate is exactly zero rather than approximately.
 fn push_maker_state(
     output: &mut [EffectInstructionV3],
     next: &mut usize,
@@ -357,6 +389,7 @@ fn push_maker_state(
     bump: usize,
     nonce_after: usize,
     rent_principal: usize,
+    fee_owed: usize,
 ) -> Result<(), DirectOrdinaryEffectArtifactErrorV3> {
     let account = AccountCoordinateV3::fixed(account);
     for instruction in [
@@ -414,6 +447,11 @@ fn push_maker_state(
             account,
             offset(DirectMakerReplayLayoutV1::RENT_PRINCIPAL)?,
             scalar_coordinate(rent_principal)?,
+        ),
+        EffectInstructionV3::write_u64(
+            account,
+            offset(DirectMakerReplayLayoutV1::FEE_OWED)?,
+            scalar_coordinate(fee_owed)?,
         ),
     ] {
         push(output, next, instruction)?;
@@ -838,11 +876,11 @@ mod tests {
             effect.fixed_account_count(),
             DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3 + 1
         );
-        assert_eq!(effect.common_scalar_count(), 66);
+        assert_eq!(effect.common_scalar_count(), 68);
         assert_eq!(effect.item_scalar_stride(), 2);
         assert_eq!(effect.common_identity_count(), 32);
         assert_eq!(effect.request_bytes(0).expect("request bank"), 3_424);
-        assert_eq!(effect.fixed_operation_count(), 131);
+        assert_eq!(effect.fixed_operation_count(), 133);
         assert_eq!(
             effect.route(0).expect("Claims route").role(),
             FixedRole::Claims

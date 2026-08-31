@@ -69,6 +69,7 @@ SBF_OUT_DIR="$probe" \
 DCLUTCH_CUSTODY_LEG_CALLER_ELF="$caller_elf" \
   "${cargo_command[@]}" test \
     --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
+    --features fee-second-transaction \
     --test direct_hot_fee_second_transaction \
     -- --nocapture
 

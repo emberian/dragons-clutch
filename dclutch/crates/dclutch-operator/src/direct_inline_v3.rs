@@ -53,7 +53,6 @@ use dclutch_direct_codec::{
         DirectExecutionActionV3, DirectExecutionRequestV3, DirectRegistrationRequestV3,
         encode_header_v3, native_signature_count_v3,
     },
-    intent_v2::CompactIntentV2,
     native_evidence_v3::{
         DIRECT_NATIVE_EVIDENCE_BYTES_V3, DirectNativeEvidenceContainerV3,
         direct_native_evidence_bytes_v3,
@@ -233,15 +232,16 @@ pub const DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1: usize = 2;
 pub const DIRECT_SEAL_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
 
 /// One exact detached maker signature and its canonical signed intent.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SignedDirectIntentV3 {
-    /// Native Ed25519 maker public key.
-    pub maker: Pubkey,
-    /// Detached Ed25519 signature over `intent.signed_preimage()`.
-    pub signature: [u8; 64],
-    /// Exact runtime-width Direct V2 semantic intent.
-    pub intent: CompactIntentV2,
-}
+///
+/// DECLARED IN `dclutch-direct-ticket`, not here, and re-exported so this
+/// module's path is unchanged for every caller. The struct the ticket author
+/// signs into and the struct this builder consumes must be the same struct or
+/// they will drift, and the author is the one that cannot afford to depend on
+/// this crate: it is called by the released read-only CLI, which links no
+/// program. The dependency therefore points down, and this crate takes the ticket
+/// crate with `default-features = false` -- no signer comes in with it, so the
+/// sentence at the top of this file stays true.
+pub use dclutch_direct_ticket::SignedDirectIntentV3;
 
 /// One same-finalized account plus the privileges requested by the transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1947,6 +1947,11 @@ mod tests {
             DIRECT_REGISTRATION_REQUEST_BYTES_V3, DirectRegistrationRequestV3,
             DirectSignedParticipantV3,
         },
+        // Only the tests build an intent here: the module's own code takes one
+        // already signed, inside a `SignedDirectIntentV3` that now arrives from
+        // `dclutch-direct-ticket`. Importing it at file scope would be unused in
+        // the lib build, which is exactly how it got dropped in the first place.
+        intent_v2::CompactIntentV2,
         ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
         ordinary_bundle_v4::{
             DirectInlineOrdinaryHotBundleInputV4, build_direct_inline_ordinary_hot_bundle_v4,

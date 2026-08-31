@@ -86,7 +86,6 @@ export default function SiteLanding() {
         height={941}
         loading="lazy"
       />
-      <figcaption>The clutch: every claim fully backed by collateral the market holds like treasure, paid out on the answer.</figcaption>
     </figure>
 
     <section className="trade-v3-card">
@@ -115,7 +114,7 @@ export default function SiteLanding() {
     </section>
 
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
-      <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
+      <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a market about a real mainnet event, and one abandoned on purpose for you to finish and collect the bounty.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/smoke">Read the story →</Anchor>
         <Anchor className="secondary-action" href="/bounty">How the bounty works →</Anchor>
@@ -123,7 +122,7 @@ export default function SiteLanding() {
     </section>}
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The documentation</h2><p>What a claim is, how protection works, how to run a market, how to build your own client — and how to try the whole thing yourself.</p></div></header>
+      <header><span>02</span><div><h2>The documentation</h2><p>What a claim is, how protection works, how to run a market, how to build a client.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={docsHrefV1('guides/README.html', 'docs/guides/README.md')}>Guides →</a>
         <a className="secondary-action" href={docsHrefV1('readme.html', 'README.md')}>The README →</a>
@@ -134,7 +133,7 @@ export default function SiteLanding() {
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The code</h2><p>Building on it? The tests and run logs behind every claim on this site live in the repository, beside the programs they were run against.</p></div></header>
+      <header><span>03</span><div><h2>The code</h2><p>Programs, tests, and run logs.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={repositoryHrefV1()}>Repository →</a>
       </div>
@@ -147,7 +146,7 @@ export default function SiteLanding() {
         no external font, script, or image, so it is served as-is rather than
         rebuilt into this app's chrome. */}
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>How this was built</h2><p>We built this protocol twice before the version you are reading now, and threw both away on purpose. These notes say why that was the plan from the start, and what survived each time the code did not.</p></div></header>
+      <header><span>04</span><div><h2>How this was built</h2><p>Two earlier builds, thrown away on purpose. Why that was the plan, and what survived each time.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>

@@ -144,6 +144,11 @@ class Simulator:
             keep_files=int(retention.get("keep_files", simcore.DEFAULT_CENSUS_KEEP_FILES)),
         )
         self.retention_report: Optional[dict] = None
+        # THE SPEND CEILING, the fourth kill condition and the one SIMVIZ named
+        # as missing. Local runs can go without; a devnet run that goes without
+        # is bounded only by cadence times fee, which is a number you compute
+        # rather than one you read.
+        self.budget = simcore.SpendLedger.from_config(config)
         self.disk = simcore.DiskFloor(
             floor_bytes=int(retention.get("disk_floor_bytes", simcore.DEFAULT_DISK_FLOOR_BYTES)),
         )
@@ -394,6 +399,22 @@ class Simulator:
                 },
             )
         self.prior_census = out
+        # THE SPEND CEILING, checked on the census that just landed. The census
+        # file is already on disk, so the balance that crossed the budget is
+        # recorded before this stops.
+        try:
+            observations = json.loads(out.read_text())
+        except (OSError, ValueError):
+            observations = []
+        newest = observations[-1] if isinstance(observations, list) and observations else {}
+        self.budget.observe(census_cfg["payer"], newest.get("payer_lamports"))
+        overspent = self.budget.exceeded()
+        if overspent is not None:
+            simcore.halt_loudly(
+                self.work,
+                f"spend budget crossed at cycle {cycle}: {overspent}",
+                {"spend": self.budget.describe(), "census": str(out)},
+            )
         # Bound the series before the next cycle reads it back as `--prior`.
         # Superseded files are strict prefixes of this one and the window drop
         # is lossless for every conservation law (see CensusRetention), so the
@@ -502,6 +523,9 @@ class Simulator:
                 # a bound, and this one is the fault that took the machine
                 # down on 2026-08-30.
                 "census_retention": self.retention_report,
+                # What this run has spent and what it is allowed to spend, both
+                # as numbers, for the same reason as the line above.
+                "spend": self.budget.describe(),
             },
         )
 
@@ -615,7 +639,15 @@ class Simulator:
             except simcore.Halt as halt:
                 journal.record(simcore.PHASE_HALTED, plan, reason=str(halt))
                 self.write_status(cycles_run, recon, halted=True, halt_reason=str(halt))
-                print(f"HALTED: {halt}", file=sys.stderr)
+                # Two halts, two words: a broken conservation law is a fact
+                # about the ledger and a crossed budget is a fact about this
+                # run. Both refuse a restart until a human clears HALT.json.
+                spend_halt = str(halt).startswith("spend budget crossed")
+                print(
+                    f"{'OVERSPENT' if spend_halt else 'HALTED'}: {halt}", file=sys.stderr
+                )
+                if spend_halt:
+                    return 6, simcore.EXIT_OVERSPENT, str(halt), cycles_run
                 return 3, simcore.EXIT_HALTED, str(halt), cycles_run
         self.write_status(cycles_run, recon, stopping=False)
         if self.stop.requested:

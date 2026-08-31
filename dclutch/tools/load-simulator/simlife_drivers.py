@@ -30,6 +30,7 @@ one reading a reader actually wants.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -207,6 +208,23 @@ def collateral_accounts_for_mint(url: str, mint: str) -> list:
     return sorted(entry["pubkey"] for entry in accounts)
 
 
+def sha256_hex(path: Path) -> str:
+    """A file's digest, for the drivers that PIN their own inputs.
+
+    The activation command takes `--expected-plan-sha256` and two siblings and
+    refuses unless each file hashes to what the caller said it would. That is a
+    driver asking its caller to state what it thinks it is passing, so the
+    caller has to compute it: reading bytes off disk is not the constructor
+    mirroring this module refuses. A wrong digest here cannot produce a wrong
+    transaction -- it produces a refusal naming both hashes.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def keypair_pubkey(path: Path) -> str:
     """The public half of a keypair FILE, computed without opening a wallet.
 
@@ -261,8 +279,27 @@ class FoundedMarket:
     market_input: Path
     keys: Path
     routing_table: Optional[str] = None
+    # The Direct capability EXECUTION root's activation report, once the
+    # activation command has written one. A market without it can be admitted to
+    # and censused but can never be filled: FOUNDING DOES NOT CREATE THIS ROOT
+    # and nothing else in this tree does either.
+    activation: Optional[Path] = None
+    # What the activation said if it refused, kept so a fill can be refused with
+    # the reason the ACTIVATION gave rather than with the producer's downstream
+    # sentence about a root that was never created.
+    activation_refusal: Optional[str] = None
+    # The fee rate this market was founded at, read back from its own compiled
+    # input. The owned-loopback Direct producer authors its own terms and admits
+    # exactly one rate, so this is what decides whether a fill is reachable.
+    fee_basis_points: int = 0
     # Admission reports, per participant id: the fill driver consumes one.
     admissions: dict = dataclasses.field(default_factory=dict)
+    # WHICH admitted participant was funded to the fill requirement. A Direct
+    # trade on this substrate is between the market's founding founder as seller
+    # and ONE admitted buyer, and only the buyer whose collateral leg moved the
+    # whole requirement can be that buyer -- so the fill uses this participant's
+    # report whoever the world named in the pair.
+    direct_buyer: Optional[str] = None
     # Every token account an admission's collateral leg CREATED, by holder.
     #
     # These are not decoration: collateral that moves into an account the census
@@ -302,6 +339,7 @@ def founded_market_from_evidence(
     evidence_path: Path,
     market_input: Path,
     keys: Path,
+    fee_basis_points: int = 0,
 ) -> FoundedMarket:
     evidence = json.loads(Path(evidence_path).read_text())
     accounts = evidence["execution"]["market"]["accounts"]
@@ -335,12 +373,26 @@ def founded_market_from_evidence(
         evidence=Path(evidence_path),
         market_input=Path(market_input),
         keys=Path(keys),
+        # The rate the compiler was ASKED for. It is not read back out of the
+        # compiled input, because the only place it survives there is inside
+        # `direct_capability.execution_config_hex` and decoding that field would
+        # be a copy of the DCLTDDEC1 codec -- the exact mirror this module
+        # refuses to become. The compiler refuses a rate it cannot honour, so
+        # the asked rate is the founded rate or there is no market.
+        fee_basis_points=int(fee_basis_points),
     )
 
 
 # ---------------------------------------------------------------------------
 # The routes
 # ---------------------------------------------------------------------------
+
+
+# Where a world's generations START. The local market compiler defaults to
+# generation 1 and a held probe founds one market there before any world does,
+# so a world numbering from 1 would put its first market on the substrate's own
+# bootstrap coordinate. Ten leaves room for a substrate that founds several.
+WORLD_GENERATION_BASE_V1 = 10
 
 
 FOUNDING_ROLES = (
@@ -435,7 +487,7 @@ def drive_founding(context: DriverContext, market_id: str, planned) -> tuple:
     Returns `(FoundedMarket, Invocation)` or raises `DriverRefusal` carrying the
     driver's own refusal.
     """
-    adopted = adopt_completed_founding(context, market_id)
+    adopted = adopt_completed_founding(context, market_id, planned)
     if adopted is not None:
         return adopted, None
     attempts = max(1, int(context.founding_attempts))
@@ -455,7 +507,9 @@ def drive_founding(context: DriverContext, market_id: str, planned) -> tuple:
     raise DriverRefusal(f"{last} (after {attempts} founding attempts, each with fresh keys)")
 
 
-def adopt_completed_founding(context: DriverContext, market_id: str) -> Optional["FoundedMarket"]:
+def adopt_completed_founding(
+    context: DriverContext, market_id: str, planned=None
+) -> Optional["FoundedMarket"]:
     """A founding this work directory already completed, read back.
 
     Same doctrine as `MarketCensus.adopt_existing`: a rerun over a work
@@ -480,10 +534,43 @@ def adopt_completed_founding(context: DriverContext, market_id: str) -> Optional
             continue
         if not (body.get("execution") or {}).get("completed"):
             continue
-        founded = founded_market_from_evidence(market_id, evidence, market_input, attempt / "keys")
+        founded = founded_market_from_evidence(
+            market_id, evidence, market_input, attempt / "keys",
+            fee_basis_points=founding_fee_basis_points(planned),
+        )
         founded.routing_table = frozen_routing_table_for(context.rpc_url, founded.address)
+        adopted_activation = attempt.parent / "activation.json"
+        if adopted_activation.is_file():
+            founded.activation = adopted_activation
         return founded
     return None
+
+
+# The one Direct fee rate the DEPLOYED setup release admits, and therefore the
+# only rate at which a market on this substrate can ever be filled by the
+# owned-loopback producer. It is not a preference of this module: the producer
+# pins it (`direct_trade_producer.rs`, `FEE_BASIS_POINTS_V1`) because it has no
+# ticket to read and must author its own terms, and the chain pins it too --
+# `direct_token_setup_v1` is the sole creator of the seller and venue Direct
+# token accounts and refuses unless the Market's finalized Direct config reads
+# exactly `DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1`.
+#
+# A market founded at any other rate is a market this substrate can found, open,
+# activate, admit to and census, and can never fill. That is a fact about the
+# release rather than a defect in the world, so the world is allowed to draw
+# such a market and the refusal is kept.
+DIRECT_ADMITTED_FEE_BASIS_POINTS_V1 = 50
+
+
+def founding_fee_basis_points(planned) -> int:
+    """The rate a planned market asks its founding for.
+
+    Old worlds have no such field and mean zero: the fee was a `Constant(0)` on
+    every archetype until fee-bearing founding was shown to fit.
+    """
+    if planned is None:
+        return 0
+    return int(getattr(planned, "fee_basis_points", 0) or 0)
 
 
 def _found_once(context: DriverContext, market_id: str, planned, attempt: int) -> tuple:
@@ -498,10 +585,19 @@ def _found_once(context: DriverContext, market_id: str, planned, attempt: int) -
             context.bootstrap_bin, "local-private-validator-market-v1",
             "--plan", context.plan,
             "--rpc-url", context.rpc_url,
-            # ZERO FEE, always: fee-bearing founding does not fit in one
-            # transaction on today's wire, and the world refuses a nonzero rate
-            # where it is drawn rather than here.
-            "--fee-basis-points", "0",
+            # THE RATE THE WORLD DREW, and it may be nonzero.
+            #
+            # This was `"0"` unconditionally, with a comment saying fee-bearing
+            # founding "does not fit in one transaction on today's wire" and
+            # citing FEE_SECOND_TRANSACTION_FOUNDATION_2026_08_30.md. That
+            # citation was a misreading and it cost the fill route: the document
+            # is about the Direct HOT FILL's fee leg -- two Custody CPIs that
+            # the transition co-enables and whose measured floor sat over the
+            # 1,400,000 CU ceiling -- and says nothing about founding. A
+            # fee-bearing founding fits, was measured fitting on 2026-08-30, and
+            # is REQUIRED for a fill: a zero-fee local market can never be
+            # filled by this driver whatever else is true of it.
+            "--fee-basis-points", str(founding_fee_basis_points(planned)),
             "--fee-recipient-keypair", str(keys / "fee-recipient.json"),
             "--cuts", ",".join(str(cut) for cut in planned.cuts),
             "--cut-denominator", str(planned.cut_denominator),
@@ -510,7 +606,15 @@ def _found_once(context: DriverContext, market_id: str, planned, attempt: int) -
             "--terminal-window-width-seconds", str(terminal_window_seconds(planned)),
             # The generation separates two markets that drew the same band, so
             # their derived identities cannot collide.
-            "--generation", str(1 + int(market_id.lstrip("m") or 0)),
+            #
+            # OFFSET PAST THE COMPILER'S OWN DEFAULT, which is 1
+            # (`LocalMarketShapeV1::default`). A held probe founds one market at
+            # that default before this run starts, so a world whose first market
+            # took generation 1 would be a world sharing a coordinate with the
+            # substrate's own bootstrap market -- a collision that only appears
+            # if the two also drew the same band, which is exactly the kind of
+            # conditional failure that surfaces once a month and never in a test.
+            "--generation", str(WORLD_GENERATION_BASE_V1 + int(market_id.lstrip("m") or 0)),
         ]
         log = context.log(market_id, f"compile-{attempt:02d}.log")
         run = run_driver(compile_argv, log, context.timeout, split=True)
@@ -540,9 +644,70 @@ def _found_once(context: DriverContext, market_id: str, planned, attempt: int) -
     )
     if run.returncode != 0:
         raise DriverRefusal(f"founding {market_id}: {run.first_error()}")
-    market = founded_market_from_evidence(market_id, evidence, market_input, keys)
+    market = founded_market_from_evidence(
+        market_id, evidence, market_input, keys,
+        fee_basis_points=founding_fee_basis_points(planned),
+    )
     market.routing_table = frozen_routing_table_for(context.rpc_url, market.address)
     return market, run
+
+
+def drive_direct_activation(context: DriverContext, market: FoundedMarket) -> Optional[Invocation]:
+    """Create the market's Direct capability EXECUTION root.
+
+    FOUNDING DOES NOT CREATE THIS ROOT AND NOTHING ELSE DOES EITHER. The
+    campaign's last stage is `founding`; the root is written by Core's
+    `ActivateCapability` route CPI-ing Trading's `process_activation`, and
+    `local-private-validator-direct-capability-activation-v1` is the only command
+    line in this tree that reaches it on a loopback validator. Until that command
+    existed (2026-08-30) no local Direct fill was reachable at any market width,
+    which is what the twenty-one refused fills in
+    `SIMULATOR_POPULATION_DRIVEN_2026_08_30.md` were actually recording: the
+    producer's "Direct root owner or width changed" was an ABSENT account
+    rendered by a finalized snapshot as a System-owned zero-length placeholder,
+    arriving at a width check wearing an owner change's clothes.
+
+    The order is compile -> found -> **this** -> admit -> produce -> execute, and
+    skipping this step is not a slower route to the same place.
+
+    Idempotent by the driver's own design: a live Trading-owned root reports
+    `already-active` and signs nothing. This wrapper is idempotent one level up
+    too -- the command refuses to overwrite its `--output`, so a report already
+    on disk is ADOPTED rather than re-walked.
+
+    Returns the invocation, or `None` when the report was adopted.
+    """
+    output = context.market_dir(market.market_id) / "activation.json"
+    if output.is_file():
+        market.activation = output
+        return None
+    output.parent.mkdir(parents=True, exist_ok=True)
+    argv = [
+        context.bootstrap_bin, "local-private-validator-direct-capability-activation-v1",
+        "--rpc-url", context.rpc_url,
+        # Each of the three sealed inputs is passed WITH the digest the caller
+        # believes it has. The driver refuses a mismatch by naming both hashes,
+        # so this pin cannot silently pass the wrong file.
+        "--plan", context.plan,
+        "--expected-plan-sha256", sha256_hex(Path(context.plan)),
+        "--market-input", str(market.market_input),
+        "--expected-market-input-sha256", sha256_hex(market.market_input),
+        "--campaign-report", str(market.evidence),
+        "--expected-campaign-report-sha256", sha256_hex(market.evidence),
+        # The campaign payer, which is the substrate's own funded identity and
+        # the same one the founding used; the activation's payer signs the one
+        # transaction and is not a protocol role.
+        "--payer", market.payer,
+        "--payer-keypair", context.campaign_payer_keypair,
+        "--output", str(output),
+        "--execute",
+    ]
+    run = run_driver(argv, context.log(market.market_id, "activate.log"), context.timeout)
+    if run.returncode != 0:
+        raise DriverRefusal(f"activating the Direct capability of {market.market_id}: "
+                            f"{run.first_error()}")
+    market.activation = output
+    return run
 
 
 # The market's fixture liquidity, split across however many participants ask for
@@ -553,10 +718,41 @@ def _found_once(context: DriverContext, market_id: str, planned, attempt: int) -
 FIXTURE_SHARE_DIVISOR = 16
 
 
-def fixture_share_atoms(market: FoundedMarket) -> int:
+def fixture_share_atoms(market: FoundedMarket, *, taker: bool = False) -> int:
+    """How many fixture atoms one admission moves to one participant.
+
+    ONE TAKER PER MARKET, and the fixture decides that rather than the world.
+    A Direct fill debits the buyer's participant token account
+    `DIRECT_FILL_COLLATERAL_REQUIREMENT_ATOMS_V1`; the fixture holds
+    `LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1` and is PINNED to exactly that
+    value by the compiler (`market.rs` refuses any other nonzero amount), so
+    two fully funded takers do not fit in one market and never will while the
+    fixture is one constant. The first admission of a market that wants to trade
+    takes the requirement; everyone after it takes the small share out of what
+    is left, which is enough to hold a position and NOT enough to fill.
+
+    That second group is not a defect either: an admission funded with less
+    refuses on the BALANCE rather than on the trade, and a run that never drew
+    one would never have measured which of the two walls it was standing at.
+    """
     if market.participant_fixture_source is None:
         return 0
+    if taker:
+        return DIRECT_FILL_COLLATERAL_REQUIREMENT_ATOMS_V1
     return LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1 // FIXTURE_SHARE_DIVISOR
+
+
+# What one Direct fill costs the buyer's participant token account.
+#
+# STATED, not derived from the chain, and it is the one number in this module
+# that is arithmetic over host constants rather than a read: the producer authors
+# its own terms as `FILL_ATOMS_V1` 100,000,000 at `EXECUTION_PRICE_V1` 500,000
+# over `EXPECTED_PRICE_SCALE_V1` 1,000,000 -- 50,000,000 atoms -- plus the 50 bps
+# fee, 250,000. It is a POLICY number: it decides how much collateral an
+# admission moves, never what a transaction contains. If it is wrong the fill
+# refuses on the balance and says the true number, so a stale value here cannot
+# produce a wrong result, only a measured one.
+DIRECT_FILL_COLLATERAL_REQUIREMENT_ATOMS_V1 = 50_250_000
 
 
 # The exact fixture liquidity every market this compiler emits carries, mirrored
@@ -657,6 +853,9 @@ def drive_admission(
                 "participantTokenAccount; the census would report those atoms as gone"
             )
         market.holder_tokens[participant_id] = account
+        if (collateral_atoms >= DIRECT_FILL_COLLATERAL_REQUIREMENT_ATOMS_V1
+                and market.direct_buyer is None):
+            market.direct_buyer = participant_id
     return run
 
 
@@ -674,6 +873,19 @@ def drive_fill(
     invocation and never blind-resubmits an ambiguous packet. Both are shipped
     and both own their own journal, so this composes neither.
     """
+    if market.activation is None:
+        # NOT a producer refusal, and the difference is the whole point of
+        # wiring the activation in: without the execution root the producer
+        # refuses with a sentence about a root, and a reader has to already know
+        # that absence and an owner change look alike at that check. This says
+        # which step did not happen.
+        raise DriverRefusal(
+            f"{market.market_id} has no Direct capability EXECUTION root: its activation "
+            + (f"refused -- {market.activation_refusal}" if market.activation_refusal
+               else "was never run")
+            + ". Founding does not create that root and nothing but "
+              "local-private-validator-direct-capability-activation-v1 does"
+        )
     slug = subject.replace("/", "_").replace(">", "-")
     key_dir = _trade_key_dir(context, market)
     produced = context.market_dir(market.market_id) / "fills" / slug
@@ -710,10 +922,77 @@ def drive_fill(
         "--session", str(sessions[0]),
         "--execute",
     ]
-    run = run_driver(argv, context.log(market.market_id, f"fill-{slug}-execute.log"), context.timeout)
-    if run.returncode != 0:
-        raise DriverRefusal(f"advancing the trade for {subject}: {run.first_error()}")
-    return run
+    # ONE INVOCATION ADVANCES ONE ACTION, and this used to call it once.
+    #
+    # The driver's own usage says it: "Execute advances exactly one durable ALT,
+    # seal, or Hot action and never blind-resubmits an ambiguous packet." A
+    # Direct trade is about ten of those -- replay setup, token setup, lookup
+    # create, three extends, freeze, activation, capability seal, Hot -- so a
+    # single call advanced the FIRST one and returned zero, and this module
+    # recorded a fill as `executed` over a trade that had barely started.
+    #
+    # Driven to completion the same way the resolution's table provisioning is,
+    # and completion is the driver's OWN word for it: once the trade has
+    # finalized it prints its persisted evidence document rather than a journal,
+    # and that document's schema is the terminal state. Bounded, because a
+    # driver that stopped making progress must stop this run rather than spin.
+    last = None
+    for attempt in range(DIRECT_TRADE_ACTION_CEILING_V1):
+        run = run_driver(
+            argv, context.log(market.market_id, f"fill-{slug}-execute-{attempt:02d}.log"),
+            context.timeout, split=True,
+        )
+        if run.returncode != 0:
+            raise DriverRefusal(
+                f"advancing the trade for {subject} at action {attempt}: {run.first_error()}"
+            )
+        stage = _direct_trade_stage(run.stdout)
+        if stage == DIRECT_TRADE_FINALIZED_SCHEMA_V1:
+            return run
+        if stage is not None and stage == last:
+            raise DriverRefusal(
+                f"the trade for {subject} reported {stage} twice in a row without finalizing, so "
+                "it is not advancing and this run stopped rather than resubmitting"
+            )
+        last = stage
+    raise DriverRefusal(
+        f"the trade for {subject} did not finalize within "
+        f"{DIRECT_TRADE_ACTION_CEILING_V1} durable actions; its journal is on disk and a rerun "
+        "resumes it"
+    )
+
+
+# How many durable actions one Direct trade may take before this module stops
+# asking. The route is about ten -- replay setup, token setup, lookup create,
+# the extends, freeze, activation, capability seal, Hot -- and the extension
+# count depends on the market's width, so this is the route's own shape with
+# room rather than a round number.
+DIRECT_TRADE_ACTION_CEILING_V1 = 24
+
+# What the trade driver prints once the trade has FINALIZED: its persisted
+# evidence document rather than another journal. Read as a schema string rather
+# than scraped from prose, because a driver's schema is a promise and its
+# progress lines are not.
+DIRECT_TRADE_FINALIZED_SCHEMA_V1 = "dclutch-owned-loopback-direct-trade-finalized-v1"
+
+
+def _direct_trade_stage(stdout: str) -> Optional[str]:
+    """The schema of whatever document the trade driver just printed.
+
+    `None` when it printed something this module cannot read, which is a reason
+    to keep going rather than to stop: the exit code is what says whether the
+    action landed, and a schema this does not recognise is a document it has no
+    opinion about.
+    """
+    text = (stdout or "").strip()
+    if not text:
+        return None
+    try:
+        body = json.loads(text)
+    except ValueError:
+        return None
+    schema = body.get("schema") if isinstance(body, dict) else None
+    return schema if isinstance(schema, str) else None
 
 
 # The two keys the Direct trade producer reads that a market's own founding
@@ -807,6 +1086,16 @@ def drive_resolution(context: DriverContext, market: FoundedMarket, pyth_facts: 
         raise DriverRefusal(f"producing the resolution input: {run.first_error()}")
     # Table provisioning executes exactly one journaled action per invocation and
     # says so; it is driven to completion rather than assumed to be one call.
+    #
+    # COMPLETION IS READ OFF THE JOURNAL, not scraped from the driver's prose.
+    # This used to break on `"complete" in output and "frozen" in output`, a
+    # pattern written from memory about sentences the driver may or may not
+    # print -- the same species as the frame-diagnostic grep that reported a
+    # confident zero over a build carrying forty-three. The journal is the
+    # driver's own durable record: an invocation that adds no receipt and leaves
+    # no intent behind advanced nothing, and there is nothing left to do.
+    table_journal = out / "table-journal.json"
+    receipts = -1
     for attempt in range(12):
         argv = [
             context.bootstrap_bin, "local-private-validator-flagship-resolution-v1",
@@ -826,8 +1115,10 @@ def drive_resolution(context: DriverContext, market: FoundedMarket, pyth_facts: 
         )
         if run.returncode != 0:
             raise DriverRefusal(f"provisioning the resolution tables: {run.first_error()}")
-        if "complete" in run.output.lower() and "frozen" in run.output.lower():
+        landed = _table_journal_receipts(table_journal)
+        if landed is not None and landed == receipts:
             break
+        receipts = landed if landed is not None else receipts
     for stage in ("submit", "execute", "reclaim", "complete"):
         argv = [
             context.bootstrap_bin, "local-private-validator-flagship-resolution-v1",
@@ -846,6 +1137,26 @@ def drive_resolution(context: DriverContext, market: FoundedMarket, pyth_facts: 
         if run.returncode != 0:
             raise DriverRefusal(f"resolution through {stage}: {run.first_error()}")
     return run
+
+
+def _table_journal_receipts(path: Path) -> Optional[int]:
+    """How many table actions this journal has FINALIZED, or `None`.
+
+    `None` means the journal is not readable yet, which is a reason to keep
+    going rather than to stop: the first invocation writes it.
+    """
+    try:
+        body = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    receipts = body.get("receipts")
+    if not isinstance(receipts, list):
+        return None
+    # An intent still on the journal is an action mid-flight, so this is not a
+    # resting point however many receipts are behind it.
+    if body.get("intent") is not None:
+        return None
+    return len(receipts)
 
 
 def drive_deadline_failure(context: DriverContext, market: FoundedMarket, signer_keypair: Path):

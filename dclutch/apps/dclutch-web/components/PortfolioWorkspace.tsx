@@ -199,7 +199,7 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
           {owner !== '' && state.kind !== 'loading' && <button type="button" className="secondary-action" onClick={() => void read(owner)}>Re-read</button>}
         </div>
       </form>}
-      {redemption && <p className="direct-status">This page refuses Solana mainnet, testnet, and unknown chains outright. On devnet it signs nothing until the market, your position, every named account and the payout plan all check out.</p>}
+      {redemption && <p className="direct-status">Devnet only — mainnet and testnet are refused.</p>}
       <p className="direct-status" aria-live="polite">{state.message}</p>
     </section>
 

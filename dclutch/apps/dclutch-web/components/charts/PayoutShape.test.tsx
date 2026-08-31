@@ -42,7 +42,7 @@ describe('PayoutShape', () => {
     // The clamped tails are stated as facts, not left to inference.
     expect(html).toContain('below 0/1');
     expect(html).toContain('above 100/1');
-    expect(html).toContain('Exact payout at every knot');
+    expect(html).toContain('Exact numbers');
   });
 
   it('projects i128-range knot numerators without losing the plot', () => {

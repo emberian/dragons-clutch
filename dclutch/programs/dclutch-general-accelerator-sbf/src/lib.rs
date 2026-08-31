@@ -184,10 +184,22 @@ pub fn process_instruction(
     let ack_len = ACCELERATOR_ACK_HEADER_BYTES_V2
         .checked_add(ack.payload().len())
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
-    let mut output = vec![0_u8; ack_len];
-    ack.encode_into(&mut output)
+    // A stack buffer, deliberately. The SBF bump allocator never frees, so a
+    // heap acknowledgement here would sit on top of the peak the runtime-width
+    // input bank already sets -- and the GEN-SEVEN register widening (+648
+    // bytes across the bank) pushed exactly that peak past the 32KiB heap at
+    // Close N=258. The whole acknowledgement is bounded at 1,024 bytes
+    // (header 144 + chunk payload 880), which one stack frame carries with
+    // room; the frame-diagnostic gate is what checks that claim on every
+    // build.
+    let mut output = [0_u8; ACCELERATOR_ACK_HEADER_BYTES_V2
+        + dclutch_execution_strategy_contract::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2];
+    let output = output
+        .get_mut(..ack_len)
+        .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
+    ack.encode_into(output)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
-    set_return_data(&output);
+    set_return_data(output);
     Ok(())
 }
 

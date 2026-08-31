@@ -18,6 +18,7 @@ dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract
 dclutch-rational-representation-v2-kernel = { path = "../../../../crates/dclutch-rational-representation-v2-kernel" }
 dclutch-realm-contract = { path = "../../../../crates/dclutch-realm-contract" }
 dclutch-resolution-codec = { path = "../../../../crates/dclutch-resolution-codec" }
+dclutch-claim-check-escrow-signer-test-sbf = { path = "../../test-programs/claim-check-escrow-signer", features = ["no-entrypoint"] }
 dclutch-fractional-atomic-test-caller-sbf = { path = "../../test-programs/fractional-atomic-caller", features = ["no-entrypoint"] }
 dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }

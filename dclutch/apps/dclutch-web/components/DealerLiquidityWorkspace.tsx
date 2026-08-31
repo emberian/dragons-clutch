@@ -174,7 +174,7 @@ export default function DealerLiquidityWorkspace() {
 
     <section className="trade-v3-card signing-card">
       <header><span>03</span><div><h2>Wallet handoff and packet export</h2><p>Connecting reads identity only. Signing is an explicit separate action, the wallet may not rewrite the message, and submission remains outside this workbench.</p></div></header>
-      <WalletDirectory directory={wallets} purpose="transaction payer" onConnected={adoptIdentity} />
+      <WalletDirectory directory={wallets} onConnected={adoptIdentity} />
       <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it to an external submitter.` : 'No transaction signature requested.'}</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transaction material</summary><dl><div><dt>Required signer</dt><dd>{plan.requiredSigners.join(', ')}</dd></div><div><dt>Wire bytes · base64</dt><dd>{base64(signed?.wireBytes ?? plan.wireBytes)}</dd></div><div><dt>Request bytes · base64</dt><dd>{base64(plan.request.bytes)}</dd></div></dl></details>}
     </section>

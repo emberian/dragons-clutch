@@ -51,6 +51,10 @@ EXIT_PREFLIGHT = "preflight"
 EXIT_SIGNALLED = "signalled"
 EXIT_HALTED = "halted"
 EXIT_LOW_DISK = "low-disk"
+# Its own word rather than `halted`: a broken conservation law is a fact about
+# the LEDGER and a spent budget is a fact about the RUN, and a reader deciding
+# whether to clear the halt needs to know which one they are looking at.
+EXIT_OVERSPENT = "overspent"
 EXIT_CRASHED = "crashed"
 
 # Census retention defaults.  See CensusRetention for why these two numbers
@@ -630,6 +634,88 @@ def record_exit(
         )
         return None
     return body
+
+
+@dataclasses.dataclass
+class SpendLedger:
+    """What a run has SPENT, and the ceiling it dies at.
+
+    SIMVIZ named this as the fourth kill condition and the only missing one:
+    `HALT.json` catches a broken law, `EXIT.json` catches an ending, the
+    heartbeat deadline catches a SIGKILL -- and nothing at all caught a run that
+    was merely expensive. A long unattended world with no ceiling has a bound of
+    "cadence times fee", which is a number you have to compute rather than one
+    you can read, and nothing enforces it.
+
+    SPEND IS CUMULATIVE OUTFLOW, NOT A DELTA FROM THE FIRST OBSERVATION. Every
+    fall in a payer's balance is added; every rise is recorded separately and
+    NEVER subtracted. A run that airdrops its payer mid-way must not have its
+    earlier spend forgiven, and under a first-observation delta a single refill
+    would do exactly that. Outflow only goes one way, so the ceiling does too.
+
+    The numbers come from the census's own `payer_lamports`, which is the field
+    L7 already watches, so this adds no read and invents no source.
+    """
+
+    max_lamports: Optional[int] = None
+    spent_lamports: int = 0
+    credited_lamports: int = 0
+    observations: int = 0
+    latest: dict = dataclasses.field(default_factory=dict)
+
+    def observe(self, payer: str, lamports: Optional[int]) -> None:
+        """One payer's balance at one boundary. Non-integers are ignored: a
+        census that could not read the payer is a gap, not a spend of zero."""
+        if isinstance(lamports, bool) or not isinstance(lamports, int) or lamports < 0:
+            return
+        if not payer:
+            return
+        self.observations += 1
+        previous = self.latest.get(payer)
+        self.latest[payer] = lamports
+        if previous is None:
+            return
+        if lamports < previous:
+            self.spent_lamports += previous - lamports
+        elif lamports > previous:
+            self.credited_lamports += lamports - previous
+
+    def exceeded(self) -> Optional[str]:
+        """None while there is room; otherwise the sentence to stop with."""
+        if self.max_lamports is None or self.spent_lamports <= self.max_lamports:
+            return None
+        return (
+            f"this run's fee payers have spent {self.spent_lamports} lamports against a "
+            f"budget of {self.max_lamports}, across {self.observations} censused balances "
+            f"({self.credited_lamports} lamports were credited back and are NOT subtracted, "
+            "because a refill does not undo an outflow); stopping rather than continuing to "
+            "spend unattended"
+        )
+
+    def describe(self) -> dict:
+        return {
+            "max_lamports_spent": self.max_lamports,
+            "spent_lamports": self.spent_lamports,
+            "credited_lamports": self.credited_lamports,
+            "observations": self.observations,
+            "payers": dict(sorted(self.latest.items())),
+            # Said out loud rather than left as a null somebody has to interpret:
+            # a run with no ceiling is a run nothing will stop for spending.
+            "bounded": self.max_lamports is not None,
+        }
+
+    @classmethod
+    def from_config(cls, config: dict) -> "SpendLedger":
+        budget = (config or {}).get("budget") or {}
+        raw = budget.get("max_lamports_spent")
+        if raw is None:
+            return cls()
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            raise ValueError(
+                "budget.max_lamports_spent must be one positive whole number of lamports; "
+                "omit the field for a run nothing will stop for spending"
+            )
+        return cls(max_lamports=raw)
 
 
 @dataclasses.dataclass

@@ -35,7 +35,7 @@ import { fallbackMarketTitleV1, marketEditorialV1 } from '@/lib/marketRegistry';
 import { PUBLIC_DEVNET_CUT_V1 } from '@/lib/publicCutStaging';
 import { SolanaRpcClient, type ConnectionFacts } from '@/lib/rpc';
 import { clusterNameV1 } from '@/lib/rpcDefault';
-import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
+import { deadlineMomentPhraseV1, readSlotClockV1, type SlotClockV1 } from '@/lib/slotClock';
 import { SUPPLY_SHARE_MEANING_V1 } from '@/lib/supplyShares';
 
 type State =
@@ -58,6 +58,15 @@ function deadlinePhrase(badgeDeadline: string | null, clock: SlotClockV1 | null 
   return ` · ${deadlineMomentPhraseV1(clock, badgeDeadline, nowMs)}`;
 }
 
+/**
+ * What a market can do, as one line.
+ *
+ * The chain names capability kinds by content hash, and most of them have no
+ * human name yet. A row of `unrecognized kind 2f9cf505bd6a…` chips is a wall of
+ * hex where a reader wanted a sentence, so the card counts them instead and
+ * names only the ones that have a name. The full per-entry breakdown, hex
+ * included, is on the market's own page.
+ */
 function CapabilityBadges({ capabilities, clock, nowMs }: Readonly<{ capabilities: MarketCapabilityManifestV1 }> & SlotClockPropsV1) {
   if (capabilities.status !== 'authenticated') {
     return <p className="market-capability-refusal">
@@ -65,14 +74,16 @@ function CapabilityBadges({ capabilities, clock, nowMs }: Readonly<{ capabilitie
       {capabilities.reason}
     </p>;
   }
-  return <div className="market-capability-row">
-    {capabilities.badges.map((badge) => (
-      <span key={badge.index} className={`capability-badge${badge.recognized ? ' recognized' : ''}`} title={`kind ${badge.kindId}`}>
-        {badge.label}
-        <small>{badge.activation === 'deadline' ? `deadline ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}` : 'immediate'}{badge.dependencies.length > 0 ? ` · after ${badge.dependencies.join(', ')}` : ''}</small>
-      </span>
-    ))}
-  </div>;
+  const total = capabilities.badges.length;
+  if (total === 0) return null;
+  const named = capabilities.badges.filter((badge) => badge.recognized);
+  const dated = capabilities.badges.filter((badge) => badge.activation === 'deadline' && badge.deadline !== null);
+  const soonest = dated.length === 0 ? null : dated.reduce((a, b) => (BigInt(a.deadline ?? '0') <= BigInt(b.deadline ?? '0') ? a : b));
+  return <p className="market-capability-summary">
+    {total} capability {plural(total, 'entry', 'entries')}
+    {named.length > 0 ? ` · ${named.map((badge) => badge.label).join(', ')}` : ''}
+    {soonest === null ? '' : ` · ${dated.length === 1 ? 'one' : dated.length} with a deadline${deadlinePhrase(soonest.deadline, clock, nowMs)}`}
+  </p>;
 }
 
 function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCardV1 }> & SlotClockPropsV1) {
@@ -189,7 +200,7 @@ export function HistoricalMarketAccounts({
   const count = accounts.length;
   return <ListingGroup
     title={`${count} older market${plural(count, '', 's')} this build cannot read`}
-    note="disclosed here but not listed as current"
+    note="not listed as current"
   >
     <p className="market-empty">
       Made by an older version of the protocol: 352 bytes where this build expects 360.
@@ -252,7 +263,7 @@ export function RestOfTheRecord({
 
     {founding > 0 && <ListingGroup
       title={`${founding} market${plural(founding, '', 's')} that ${plural(founding, 'was', 'were')} never finished`}
-      note="started during the build-out · kept because devnet history is public"
+      note="setup stopped part-way"
     >
       <p className="market-empty">
         Setting a market up takes a run of transactions, and {plural(founding, 'this one', 'these')} stopped part-way
@@ -263,7 +274,7 @@ export function RestOfTheRecord({
 
     {unreadable > 0 && <ListingGroup
       title={`${unreadable} account${plural(unreadable, '', 's')} we could not read`}
-      note="listed as current · each one says exactly why"
+      note="each one says why"
     >
       <div className="market-card-grid">{listing.unreadable.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
@@ -419,8 +430,6 @@ export default function MarketDiscoveryWorkspace() {
           <article><span>Open now</span><strong>{wholeListing === null ? '—' : wholeListing.open.length}</strong><small>{asideCount} further account{plural(asideCount, '', 's')} named below</small></article>
           <article><span>Core program</span><strong>{shortAddressV1(deployment.programs.core, 6)}</strong><small>{deployment.cluster === 'devnet' ? 'DEPLOY-1 permanent address' : 'the active deployment'}</small></article>
         </div>
-        <p className="direct-status">{discovery.enumeration.note}</p>
-        {clock !== null && <p className="slot-clock-note">{slotClockCaveatV1(clock)}</p>}
         {discovery.enumeration.mode === 'refused' && <p className="market-refusal">{discovery.enumeration.reason}</p>}
         {discovery.cards.length > 0 && <MarketFilterBar
           query={query}

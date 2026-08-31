@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **257** codes, with meanings taken
+The tables below carry all **260** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -50,6 +50,7 @@ from the source code's own documentation.
 | `0x109000` | 0x109 | Band 0x109 — `dclutch-general-accelerator-sbf` test caller `general-caller` |
 | `0x10A000` | 0x10A | Band 0x10A — `dclutch-svm-harness` test caller `resolution-receipt-caller` |
 | `0x10B000` | 0x10B | Band 0x10B — `dclutch-claims-sbf` test caller `fractional-atomic-caller` |
+| `0x10C000` | 0x10C | Band 0x10C — `dclutch-claims-sbf` test signer `claim-check-escrow-signer` |
 
 ## claims
 
@@ -367,6 +368,9 @@ from the source code's own documentation.
 | `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:186` |
 | `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:194` |
 | `0x4008` | `TradingSbfError::HeapFrame` | This route needs the extended heap and the transaction did not grant it.  The route declares an extended heap profile, but the runtime handed it the protocol default anyway, because the transaction carried no ComputeBudget `RequestHeapFrame` or presented no instructions sysvar. That grant is best-effort by construction, so without this refusal the route would allocate until it died -- and an out-of-memory abort names nothing: not the route, not the budget, not what the caller omitted.  The remedy is always the caller's and always the same: add `ComputeBudgetInstruction::request_heap_frame` to the transaction and keep the instructions sysvar in the account frame. | `programs/dclutch-trading-sbf/src/lib.rs:207` |
+| `0x4009` | `TradingSbfError::CloseSealAccount` | The account offered to `CloseSeal` is not a live canonical seal.  Omission `P-006`. It is absent, System-owned, the wrong width, not writable, not rent-exempt, carries a body that is not a canonical artifact-profile-1 seal, or sits at an address its own body does not reproduce. The ordinary reading is the first one: `CloseSeal` is permissionless and racing is expected, so **a second close of the same seal refuses here, by absence**, and that is the whole of the double-close story. | `programs/dclutch-trading-sbf/src/lib.rs:217` |
+| `0x400A` | `TradingSbfError::CloseSealLiveRelease` | `CloseSeal` was aimed at a seal the live Trading release still addresses.  Omission `P-006`, and the conjunct the whole route rests on. A seal's fourth PDA seed is the Trading semantic release that wrote it, so a release stops addressing a seal rather than invalidating it (decision 0005). The close is allowed only once the seal has fallen out of the live release's address space: the closer exhibits a Registry-owned activation cache that still authenticates its Trading role against this deployed Program and its ProgramData — which a superseded generation cannot do, because the Loader moved its pinned slot (decision 0012) — and the semantic release that cache names must differ from the seal's.  Refusing here is also what keeps the seal write-once: the writer derives the seal address from that same live semantic release, so an address this code protects is an address the live executable could rewrite. | `programs/dclutch-trading-sbf/src/lib.rs:233` |
+| `0x400B` | `TradingSbfError::CloseSealFrame` | The `CloseSeal` frame was not the exact permissionless closing shape.  Omission `P-006`. The beneficiary did not sign, is not a writable empty System wallet, or aliases the seal; the Registry account is not the one the seal's own key names; the Trading program account is not this executable; or the Rent sysvar is not the Rent sysvar. Distinct from [`TradingSbfError::CloseSealAccount`] because it says the *caller's* frame is wrong rather than that there is nothing here to close. | `programs/dclutch-trading-sbf/src/lib.rs:242` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |

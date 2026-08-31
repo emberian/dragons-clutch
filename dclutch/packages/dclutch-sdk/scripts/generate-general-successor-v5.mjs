@@ -59,9 +59,13 @@ const assertions = [
   ['request', 'execution_index: byte(input, 60)?'],
   ['local', 'const KIND_SELECTION: u8 = 1;'],
   ['local', 'const KIND_SETTLEMENT: u8 = 2;'],
+  ['hot', 'pub struct HotBumpHintsV1 {'],
 ];
 for (const [source, fragment] of assertions) {
   if (!sources[source].includes(fragment)) throw new Error(`canonical Rust semantics changed: ${source} lacks ${fragment}`);
+}
+if (scalar('hot', 'HOT_BUMP_HINTS_OFFSET_V1') + scalar('hot', 'HOT_BUMP_HINT_COUNT_V1') !== scalar('hot', 'HOT_EXECUTION_ENVELOPE_BYTES_V3')) {
+  throw new Error('canonical Rust semantics changed: the bump hint block is no longer the hot envelope tail');
 }
 
 let output = '// @generated from canonical Rust General V5 successor ABIs; do not edit.\n';
@@ -95,7 +99,14 @@ for (const [name, value] of [
 ]) output += `export const ${name} = ${value} as const;\n`;
 for (const name of [
   'ENVELOPE_REQUEST_BYTES_OFFSET', 'ENVELOPE_RELEASE_SET_OFFSET', 'ENVELOPE_MARKET_OFFSET',
-  'ENVELOPE_GENERATION_OFFSET', 'ENVELOPE_ROOT_PRESTATE_DIGEST_OFFSET', 'ENVELOPE_RESERVED_OFFSET',
+  'ENVELOPE_GENERATION_OFFSET', 'ENVELOPE_ROOT_PRESTATE_DIGEST_OFFSET',
+]) output += `export const GENERAL_${name}_V3 = ${scalar('hot', name)} as const;\n`;
+// The last eight envelope bytes were `ENVELOPE_RESERVED_OFFSET` until d0306a64
+// gave them to `HotBumpHintsV1`. The block is family-neutral, so the General
+// mirror emits its offset and slot count under the names the Rust now uses.
+output += `export const GENERAL_ENVELOPE_BUMP_HINTS_OFFSET_V3 = ${scalar('hot', 'HOT_BUMP_HINTS_OFFSET_V1')} as const;\n`;
+output += `export const GENERAL_ENVELOPE_BUMP_HINT_COUNT_V3 = ${scalar('hot', 'HOT_BUMP_HINT_COUNT_V1')} as const;\n`;
+for (const name of [
   'ACK_RELEASE_SET_OFFSET', 'ACK_MARKET_OFFSET', 'ACK_GENERATION_OFFSET', 'ACK_ROOT_OFFSET',
   'ACK_REQUEST_DIGEST_OFFSET', 'ACK_SELECTED_PROGRAM_OFFSET', 'ACK_ROOT_PRESTATE_DIGEST_OFFSET',
   'ACK_ROOT_POSTSTATE_DIGEST_OFFSET', 'ACK_EXECUTION_DIGEST_OFFSET',

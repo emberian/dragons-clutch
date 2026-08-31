@@ -19,6 +19,7 @@ tools/ci/run.sh all --require             # the release answer
 |---|---|---|---|
 | `census` | milliseconds | python3 | a generated file arriving with **no** re-emit guard, or losing one |
 | `seam` | ~20s | `ast-grep` | six structural seam defect classes, new findings against a triaged baseline |
+| `release` | ~5s | python3 | the four release-tooling **refusal** suites: build-freshness admission, the devnet activity and demo-pulse wrappers, the sponsored-market-open stager |
 | `web` | ~1 min | node | the web + SDK vitest suites |
 | `emission` | minutes | `lake` | every generated file still byte-matches the emitter that printed it |
 | `journey` | ~2 min | `cargo` | the journey campaign still **compiles** |
@@ -26,9 +27,31 @@ tools/ci/run.sh all --require             # the release answer
 | `suites` | ~15 min | `cargo-build-sbf` | the other SBF program-test suites: custody, core, claims, dealer |
 | `workspaces` | slow | `cargo` | **every** tracked Cargo workspace checks from an archived revision |
 
-`cheap` = census + seam. `all` = census seam web emission journey programs suites.
-`workspaces` is deliberately outside `all`: it gives every workspace a fresh
-target directory, which is the cut's price to pay and not a push's.
+`cheap` = census + seam + release. `all` = census seam release web emission
+journey programs suites. `workspaces` is deliberately outside `all`: it gives
+every workspace a fresh target directory, which is the cut's price to pay and
+not a push's.
+
+### Why `release` is a push tier despite three "devnet" names
+
+None of its four suites reaches a chain. Each builds a scratch sandbox, writes
+stub `solana`/`solana-keygen`/`spl-token`/`dclutch` executables onto `PATH`, and
+points the tool under test at `https://example.invalid` so a real fetch fails
+loudly instead of quietly succeeding. All four together are about five seconds
+and need only bash, python3 and git.
+
+What they gate is **refusals** — the cases where the release tooling has to say
+no. Stale or forged build evidence must not be admitted; a market must not be
+founded at a nonzero Direct fee rate (it could never trade) or against a founder
+key nobody holds (collateral stranded forever). Both of those are irreversible,
+and a refusal test that never runs is indistinguishable from a tool that has
+quietly stopped refusing. Before this tier they had **no callers anywhere** —
+the same defect `workspaces` was created for, four times over.
+
+One honest limit: the stager suite re-runs its red controls against the last
+revision *before* its guards existed, which needs real git history. On a shallow
+clone, or in a vendored subtree whose history does not carry that path, it says
+so itself and two of its thirteen cases do not run.
 
 ### Why `journey` is a compile check and not a campaign
 
@@ -77,7 +100,7 @@ exit but a killed one leaks 3-7 GB, and `/tmp/dclutch-*` filled a volume once.
 
 | trigger | tiers | why there |
 |---|---|---|
-| wrapper `checks.yml`, every push | census, seam, web, SBOM | seconds to a minute, no toolchain beyond python and node |
+| wrapper `checks.yml`, every push | census, seam, web, release, SBOM | seconds to a minute, no toolchain beyond python and node |
 | wrapper `rust.yml`, on `programs/**` `crates/**` Cargo files, plus daily | programs, census, seam | an SBF build is minutes; paying it on a README edit teaches everyone to ignore a slow red X |
 | a human, before landing something near the hot path | `programs --commit HEAD` | the only gate that can see compute erosion |
 | the cut | `all --require` | an unrun gate is not a passing gate |
@@ -86,6 +109,31 @@ Both workflows live in the **public wrapper** (`dragons-clutch`), because that
 is the only repository in this project with a remote and therefore the only
 place an automatic trigger exists at all. They call this script rather than
 restating the tiering, so there is one definition and two callers.
+
+As of 2026-08-31 they run on that repository's `main`. Before that they existed
+only on one side branch, had run exactly once, and both runs failed.
+
+**A fix in this tree does not turn that CI green.** The workflows check the
+vendored `dclutch/` SUBTREE, which is cut in waves and therefore lags on
+purpose, so a red X over there is a statement about what is PUBLISHED and a
+commit here does not answer it until the next cut lands. Two consequences worth
+knowing before you go looking for a bug that is already fixed:
+
+- A tier this tree has but the subtree does not shows up as **NOT RUN** with a
+  loud warning, never as a pass. That is what the `release` job says today.
+- A red whose fix is already committed here stays red until the cut. Check the
+  subtree's revision before concluding the gate is wrong.
+
+Two failures found on the first real runs are worth naming, because both were
+the same shape and neither was the defect it reported. The SBOM gate failed
+with `failures=50`, every one of them a package that could not be resolved
+because a fresh runner has an empty cargo registry — it had classified 3 of 53
+manifests and reported the other 50 as license findings. The `programs` tier
+failed on `DCLUTCH_CUSTODY_LEG_CALLER_ELF is required`, an unset variable,
+while printing its compute-margin advice. **A gate that fails for a reason
+unrelated to what it gates is worse than no gate**, because the fix that makes
+the red go away is always the wrong one. When a gate here goes red, confirm it
+is red about its own subject before you touch a threshold.
 
 ## Exit codes, and why there are three
 

@@ -34,6 +34,7 @@ use dclutch_transition_vm::v3::{
 };
 
 use crate::{
+    collection_v1::{BatchStatusV1, GeneralBatchLayoutV1},
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
         GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity,
@@ -74,6 +75,8 @@ pub use generated::*;
 pub const fn general_transition_program_bytes_lean_v3(action: Action) -> &'static [u8] {
     match action {
         unauthored_actions!() => &[],
+        Action::OpenBatch => &GENERAL_OPEN_BATCH_TRANSITION_V3,
+        Action::CloseBatch => &GENERAL_CLOSE_BATCH_TRANSITION_V3,
         Action::Consider => &GENERAL_CONSIDER_TRANSITION_V3,
         Action::Freeze => &GENERAL_FREEZE_TRANSITION_V3,
         Action::InitializeSettlement => &GENERAL_INITIALIZE_TRANSITION_V3,
@@ -96,6 +99,8 @@ pub const GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3: InstructionV3 =
 pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, usize, usize) {
     match action {
         unauthored_actions!() => (0, 0, 0),
+        Action::OpenBatch => (26, 1, 0),
+        Action::CloseBatch => (27, 1, 0),
         Action::Consider => (15, 1, 0),
         Action::Freeze => (17, 1, 0),
         Action::InitializeSettlement => (21, 2, 0),
@@ -176,10 +181,17 @@ pub fn encode_general_transition_program_v3_atomic(
 }
 
 fn append_common(action: Action, output: &mut [InstructionV3], cursor: &mut usize) -> Result<()> {
-    let kind = if matches!(action, Action::Consider | Action::Freeze) {
-        GeneralLocalStateKindV3::Selection
-    } else {
-        GeneralLocalStateKindV3::Settlement
+    // The kind each action's PRIMARY state envelope carries; the arms mirror
+    // `DClutchSemantics.GeneralTransitionV3.stateKind` exactly, and the byte
+    // gate is what keeps them mirrored.
+    let kind = match action {
+        Action::Consider | Action::Freeze => GeneralLocalStateKindV3::Selection,
+        Action::OpenBatch | Action::PlaceOrder | Action::CancelOrder | Action::CloseBatch => {
+            GeneralLocalStateKindV3::Batch
+        }
+        Action::SubmitCandidate | Action::VerifyCandidateRow => GeneralLocalStateKindV3::Candidate,
+        Action::ReleaseOrder => GeneralLocalStateKindV3::Order,
+        _ => GeneralLocalStateKindV3::Settlement,
     };
     for instruction in [
         InstructionV3::load_const(s(scalar::ACTION)?, u64::from(action as u8)),
@@ -359,6 +371,138 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
             }
             append_vault_context_binds(action, output, cursor)?;
         }
+        Action::OpenBatch => {
+            for instruction in [
+                // `GeneralRootV2::open_batch` as conjuncts: the caller's
+                // optimistic revision must be the observed one, and the three
+                // root advances are exact. The EffectProgram writes the
+                // successor root tail from the POST registers, so a skipped
+                // increment is a root that replays.
+                InstructionV3::scalar_eq(
+                    s(scalar::ROOT_EXPECTED_REVISION)?,
+                    s(scalar::ROOT_REVISION_OBSERVATION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::ROOT_REVISION_OBSERVATION)?,
+                    s(scalar::ROOT_POST_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION)?,
+                    s(scalar::ROOT_POST_BATCH_SEQUENCE)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::ROOT_OPEN_BATCHES_OBSERVATION)?,
+                    s(scalar::ROOT_POST_OPEN_BATCHES)?,
+                ),
+                // A zero window or admission bound is a batch that can admit
+                // nothing and never close by fullness.
+                InstructionV3::nonzero(s(scalar::CONFIG_COLLECTION_SLOTS)?),
+                InstructionV3::nonzero(s(scalar::CONFIG_SELECTION_SLOTS)?),
+                InstructionV3::nonzero(s(scalar::CONFIG_SETTLEMENT_SLOTS)?),
+                InstructionV3::nonzero(s(scalar::CONFIG_MAX_ORDERS)?),
+                // The windows are config-derived, never caller-chosen.
+                InstructionV3::checked_add_into(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::CONFIG_COLLECTION_SLOTS)?,
+                    s(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+                ),
+                InstructionV3::checked_add_into(
+                    s(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+                    s(scalar::CONFIG_SELECTION_SLOTS)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::checked_add_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::CONFIG_SETTLEMENT_SLOTS)?,
+                    s(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
+                ),
+                // Record constants the EffectProgram writes into the vacant
+                // account. `ONE` doubles as the record version, which is 1.
+                InstructionV3::load_const(
+                    s(scalar::BATCH_POST_STATUS)?,
+                    u64::from(BatchStatusV1::Collecting.tag()),
+                ),
+                InstructionV3::load_const(
+                    s(scalar::ONE)?,
+                    u64::from(GeneralBatchLayoutV1::version_value()),
+                ),
+                InstructionV3::load_const(s(scalar::SCRATCH_A)?, GeneralBatchLayoutV1::magic_u64()),
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_B)?,
+                    u64::from(GeneralBatchLayoutV1::phase_value()),
+                ),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
+        Action::CloseBatch => {
+            for instruction in [
+                // `GeneralRootV2::close_batch` as conjuncts: revision +1 and
+                // an exact open-batch decrement -- `sub_into` refuses at zero,
+                // which is the root refusing a close it never opened.
+                InstructionV3::scalar_eq(
+                    s(scalar::ROOT_EXPECTED_REVISION)?,
+                    s(scalar::ROOT_REVISION_OBSERVATION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::ROOT_REVISION_OBSERVATION)?,
+                    s(scalar::ROOT_POST_REVISION)?,
+                ),
+                InstructionV3::load_const(s(scalar::ONE)?, 1),
+                InstructionV3::sub_into(
+                    s(scalar::ROOT_OPEN_BATCHES_OBSERVATION)?,
+                    s(scalar::ONE)?,
+                    s(scalar::ROOT_POST_OPEN_BATCHES)?,
+                ),
+                // Only a collecting batch closes, and it closes to Closed.
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_A)?,
+                    u64::from(BatchStatusV1::Collecting.tag()),
+                ),
+                InstructionV3::scalar_eq(s(scalar::BATCH_STATUS_OBSERVATION)?, s(scalar::SCRATCH_A)?),
+                InstructionV3::load_const(
+                    s(scalar::BATCH_POST_STATUS)?,
+                    u64::from(BatchStatusV1::Closed.tag()),
+                ),
+                // `close_is_permissionless`: the window is over OR the batch
+                // is full. A disjunction over an all-conjunct vocabulary:
+                //   d1 := close - min(now, close)   (zero iff the window is over)
+                //   d2 := bound - min(count, bound) (zero iff the batch is full)
+                //   min(d1,1) * min(d2,1) = 0
+                // Anything else truncates a maker's window.
+                InstructionV3::min_into(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::sub_into(
+                    s(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::min_into(s(scalar::SCRATCH_A)?, s(scalar::ONE)?, s(scalar::SCRATCH_A)?),
+                InstructionV3::min_into(
+                    s(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
+                    s(scalar::CONFIG_MAX_ORDERS)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::sub_into(
+                    s(scalar::CONFIG_MAX_ORDERS)?,
+                    s(scalar::SCRATCH_B)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::min_into(s(scalar::SCRATCH_B)?, s(scalar::ONE)?, s(scalar::SCRATCH_B)?),
+                InstructionV3::checked_mul_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::SCRATCH_B)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::load_const(s(scalar::SCRATCH_B)?, 0),
+                InstructionV3::scalar_eq(s(scalar::SCRATCH_A)?, s(scalar::SCRATCH_B)?),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
     }
     Ok(())
 }
@@ -460,6 +604,8 @@ fn append_item(action: Action, output: &mut [InstructionV3], cursor: &mut usize)
             return Err(GeneralTransitionArtifactErrorV3::UnauthoredAction);
         }
         Action::Consider | Action::Freeze | Action::Materialize => {}
+        // The batch record has no per-outcome tail; the bound check alone.
+        Action::OpenBatch | Action::CloseBatch => {}
         Action::InitializeSettlement => push(
             output,
             cursor,
@@ -536,7 +682,7 @@ mod tests {
 
     const ACTIVE_LIFECYCLE: u64 = GeneralLifecycleV2::Active.tag() as u64;
 
-    const ACTIONS: [Action; 7] = [
+    const ACTIONS: [Action; 9] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -544,6 +690,8 @@ mod tests {
         Action::Materialize,
         Action::Distribute,
         Action::Close,
+        Action::OpenBatch,
+        Action::CloseBatch,
     ];
 
     fn artifact(action: Action) -> std::vec::Vec<u8> {
@@ -658,6 +806,24 @@ mod tests {
                 ),
                 GENERAL_CLOSE_TRANSITION_BYTES_V3,
             ),
+            (
+                Action::OpenBatch,
+                (
+                    GENERAL_OPEN_BATCH_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_OPEN_BATCH_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_OPEN_BATCH_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_OPEN_BATCH_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::CloseBatch,
+                (
+                    GENERAL_CLOSE_BATCH_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_CLOSE_BATCH_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_CLOSE_BATCH_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_CLOSE_BATCH_TRANSITION_BYTES_V3,
+            ),
         ] {
             assert_eq!(
                 general_transition_instruction_count_v3(action),
@@ -717,10 +883,8 @@ mod tests {
     #[test]
     fn an_unauthored_action_borrows_no_lean_authored_program() {
         for action in [
-            Action::OpenBatch,
             Action::PlaceOrder,
             Action::CancelOrder,
-            Action::CloseBatch,
             Action::SubmitCandidate,
             Action::VerifyCandidateRow,
             Action::ReleaseOrder,

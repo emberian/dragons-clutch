@@ -49,7 +49,14 @@ use dclutch_effect_kernel::{
         encode_program_v4_atomic,
     },
 };
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, hot_v3::HOT_RUNTIME_ROOT_COORDINATE_V3,
+};
 use dclutch_general_codec::{Action, CONTROLLER_REQUEST_BYTES};
+use dclutch_general_config_contract::{
+    GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2, GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2,
+    GENERAL_ROOT_REVISION_OFFSET_V2,
+};
 
 use crate::hot_candidate_v3::{
     GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
@@ -57,6 +64,7 @@ use crate::hot_candidate_v3::{
     scalar,
 };
 use crate::{
+    collection_v1::GeneralBatchLayoutV1,
     local_state_v3::GeneralLocalStateLayoutV3,
     runtime_selection::RuntimeSelectionLayoutV2,
     runtime_width::SettlementCursorLayoutV2,
@@ -118,6 +126,9 @@ pub const fn general_effect_route_count_v3(action: Action) -> u16 {
         // them by name first -- see `general_effect_program_bytes_v3` -- so a
         // zero here can never reach an encoder and be mistaken for a shape.
         unauthored_actions!() => 0,
+        // The root-writing pair moves no Claims Position and no Custody vault:
+        // its writes are the root tail and the batch record, both local.
+        Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => 3,
         Action::Collect | Action::Materialize | Action::Distribute => 2,
@@ -228,20 +239,24 @@ pub enum GeneralEffectArtifactErrorV3 {
     UnauthoredAction,
 }
 
-/// The seven actions whose artifact triple has not been authored.
+/// The five actions whose artifact quadruple has not been authored.
 ///
 /// Their tags are Lean-owned and their `CapabilityProgramSetV2` coordinates are
 /// reserved, because a selector is a protocol fact before it is an artifact.
-/// What does not exist yet is a TransitionVM program, an EffectProgram and an
-/// AccountProfile for each. Naming them in one place -- and refusing them by
-/// name at every fallible entry point -- is what stops a release being
-/// assembled that claims artifacts nobody wrote.
+/// What does not exist yet is a TransitionVM program, a RequestProfile, an
+/// EffectProgram and an AccountProfile for each. Naming them in one place --
+/// and refusing them by name at every fallible entry point -- is what stops a
+/// release being assembled that claims artifacts nobody wrote.
+///
+/// `OpenBatch` and `CloseBatch` left this list with GEN-SEVEN-2: the
+/// root-writing pair is authored end to end. Release admission still joins the
+/// seven settlement bundles alone -- there is no nine-action profile, by
+/// ADR-0010 SS4's own argument -- so the pair is exercised at the artifact
+/// level until all fourteen exist.
 macro_rules! unauthored_actions {
     () => {
-        Action::OpenBatch
-            | Action::PlaceOrder
+        Action::PlaceOrder
             | Action::CancelOrder
-            | Action::CloseBatch
             | Action::SubmitCandidate
             | Action::VerifyCandidateRow
             | Action::ReleaseOrder
@@ -283,6 +298,8 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
         unauthored_actions!() => (0, 0),
+        Action::OpenBatch => (24, 0),
+        Action::CloseBatch => (4, 0),
         Action::Consider => (22, 0),
         Action::Freeze => (16, 0),
         Action::InitializeSettlement => (54, 1),
@@ -295,6 +312,7 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
 pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
+        Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
             PROTOCOL_POSITION_REQUEST_BYTES_V2 + 2 * CUSTODY_REQUEST_BYTES_V1
@@ -417,7 +435,9 @@ const fn receipt_dependency_count(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
         Action::InitializeSettlement | Action::Close => 1,
-        Action::Consider
+        Action::OpenBatch
+        | Action::CloseBatch
+        | Action::Consider
         | Action::Freeze
         | Action::Collect
         | Action::Materialize
@@ -443,7 +463,7 @@ const fn receipt_dependency_count(action: Action) -> usize {
 pub const fn general_custody_callee_account_count_v3(action: Action) -> u16 {
     match action {
         unauthored_actions!() => 0,
-        Action::Consider | Action::Freeze => 0,
+        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
@@ -470,7 +490,7 @@ pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
     require_authored_action_v3(action)?;
     let suffix = match action {
         unauthored_actions!() => return Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
-        Action::Consider | Action::Freeze => 0,
+        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
             POSITION_ADMIT_ACCOUNTS + CUSTODY_INITIALIZE_ACCOUNTS + CUSTODY_OPEN_ACCOUNTS
         }
@@ -577,7 +597,7 @@ fn build_action<'a>(
 ) -> Result<usize> {
     match action {
         unauthored_actions!() => Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
-        Action::Consider | Action::Freeze => Ok(0),
+        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => Ok(0),
         Action::InitializeSettlement => build_initialize(instructions, fixed, templates, routes),
         // The two compartment bytes are NOT restated here. They come from
         // `escrow_v1`, which is also what the packet builder and the artifact
@@ -823,6 +843,9 @@ fn append_general_state_patches(
     fixed: &mut usize,
     item: &mut usize,
 ) -> Result<()> {
+    if matches!(action, Action::OpenBatch | Action::CloseBatch) {
+        return append_batch_action_patches(action, instructions, fixed);
+    }
     let terminal = action == Action::Close;
     let state = AccountCoordinateV3::fixed(if terminal {
         GENERAL_TERMINAL_STATE_ACCOUNT_V3
@@ -1035,6 +1058,168 @@ fn append_general_state_patches(
             SettlementCursorLayoutV2::inventory_stride(),
             ScalarCoordinateV3::item(scalar_u16(item_scalar::CURSOR_INVENTORY)?),
         ),
+    )
+}
+
+/// The root-writing pair's complete state writes: the exact `GeneralRootV2`
+/// tail successor behind the immutable capability header, and the batch
+/// record.
+///
+/// The root offsets are past `CAPABILITY_ROOT_HEADER_BYTES_V1`, which is
+/// precisely the boundary Trading's `require_root_write_is_state_only` guards
+/// writes by; the AccountProfile grants coordinate 0 the data-effect
+/// permission for exactly these two actions and no others.
+fn append_batch_action_patches(
+    action: Action,
+    instructions: &mut [EffectInstructionV3],
+    fixed: &mut usize,
+) -> Result<()> {
+    let root = AccountCoordinateV3::fixed(
+        u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+            .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
+    );
+    let state = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            root,
+            root_tail_offset(GENERAL_ROOT_REVISION_OFFSET_V2)?,
+            scalar_common(scalar::ROOT_POST_REVISION)?,
+        ),
+    )?;
+    if action == Action::OpenBatch {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64(
+                root,
+                root_tail_offset(GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2)?,
+                scalar_common(scalar::ROOT_POST_BATCH_SEQUENCE)?,
+            ),
+        )?;
+    }
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            root,
+            root_tail_offset(GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2)?,
+            scalar_common(scalar::ROOT_POST_OPEN_BATCHES)?,
+        ),
+    )?;
+    if action == Action::OpenBatch {
+        append_local_state_header(instructions, fixed, state, false)?;
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::MAGIC, scalar::SCRATCH_A),
+            (GeneralBatchLayoutV1::SEQUENCE, scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION),
+            (GeneralBatchLayoutV1::GENERATION, scalar::GENERATION),
+            (GeneralBatchLayoutV1::PRICE_SCALE, scalar::SELECTION_PRICE_SCALE),
+            (
+                GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT,
+                scalar::BATCH_COLLECTION_CLOSE_SLOT,
+            ),
+            (
+                GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT,
+                scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
+            ),
+            (
+                GeneralBatchLayoutV1::OPENED_ROOT_REVISION,
+                scalar::ROOT_REVISION_OBSERVATION,
+            ),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u64(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u16(
+                state,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::VERSION)?)?,
+                scalar_common(scalar::ONE)?,
+            ),
+        )?;
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::PHASE, scalar::SCRATCH_B),
+            (GeneralBatchLayoutV1::STATUS, scalar::BATCH_POST_STATUS),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u8(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::OUTCOME_COUNT, scalar::OUTCOME_COUNT),
+            (GeneralBatchLayoutV1::MAX_ORDERS, scalar::CONFIG_MAX_ORDERS),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u32(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (GeneralBatchLayoutV1::PRODUCT_ID, identity::SELECTION_PRODUCT),
+            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_identity(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    identity_common(coordinate)?,
+                ),
+            )?;
+        }
+        return Ok(());
+    }
+    // CloseBatch: the record already exists; only its status and the root
+    // revision that closed it move. Every other byte persists physically.
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u8(
+            state,
+            state_body_offset(offset_u32(GeneralBatchLayoutV1::STATUS)?)?,
+            scalar_common(scalar::BATCH_POST_STATUS)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            state,
+            state_body_offset(offset_u32(GeneralBatchLayoutV1::CLOSED_ROOT_REVISION)?)?,
+            scalar_common(scalar::ROOT_POST_REVISION)?,
+        ),
+    )
+}
+
+/// One `GeneralRootV2` tail offset behind the immutable capability header.
+fn root_tail_offset(offset: usize) -> Result<u32> {
+    offset_u32(
+        CAPABILITY_ROOT_HEADER_BYTES_V1
+            .checked_add(offset)
+            .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
     )
 }
 
@@ -2049,6 +2234,7 @@ fn action_template_compartments(action: Action) -> Result<(CompartmentV1, Compar
 const fn route_count(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
+        Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => 3,
         Action::Collect | Action::Materialize | Action::Distribute => 2,
@@ -2087,7 +2273,7 @@ mod tests {
     }
 
     #[test]
-    fn all_seven_actions_generate_exact_hot38_relative_artifacts() {
+    fn every_authored_action_generates_exact_hot38_relative_artifacts() {
         for action in [
             Action::Consider,
             Action::Freeze,
@@ -2096,6 +2282,8 @@ mod tests {
             Action::Materialize,
             Action::Distribute,
             Action::Close,
+            Action::OpenBatch,
+            Action::CloseBatch,
         ] {
             let bytes = artifact(action);
             let program = ProgramV3::decode(&bytes).expect("decoded artifact");

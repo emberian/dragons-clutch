@@ -24,6 +24,7 @@ pub mod artifacts_v4;
 pub mod begin_retiring_bundle_v1;
 pub mod direct_finalization_v3;
 pub mod execution_v3;
+pub mod fee_settlement_v1;
 pub mod inline_candidate_v2;
 pub mod intent_v2;
 #[cfg(not(target_os = "solana"))]

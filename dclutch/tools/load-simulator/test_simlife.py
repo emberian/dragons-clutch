@@ -77,7 +77,11 @@ series.append({
     "hoard_atoms": 1000,
     "tracked_collateral": 1000,
     "mint_supply": 1000,
-    "payer_lamports": 999,
+    # FALLING, so a spend ceiling has something to cross. The real census
+    # reports the payer's live balance and a fee payer's balance only goes down
+    # between airdrops; a constant here would have made the budget kill
+    # untestable through this harness.
+    "payer_lamports": 1000 - len(series) * 7,
     "outcome_count": 2,
     "position_balances": {},
     "position_totals": [0, 0],
@@ -239,9 +243,44 @@ class WorldTests(unittest.TestCase):
             total = sum(p.stake_atoms for p in market.participants)
             self.assertEqual(total, market.founding_collateral_atoms, market.market_id)
 
-    def test_every_market_is_zero_fee(self):
+    def test_the_fee_band_reaches_the_admitted_rate_and_past_it(self):
+        """A world must be mostly tradeable and must still contain a control.
+
+        This replaces `test_every_market_is_zero_fee`, which pinned the opposite
+        property for a reason that turned out to be about the fill's fee leg
+        rather than about founding. Zero is the ONE rate the owned-loopback
+        Direct producer can never fill, so a world of zero-fee markets was a
+        world whose fills could not have landed however many other walls fell.
+        """
         world = simlife.build_world(self.spec(markets=60))
-        self.assertTrue(all(m.fee_basis_points == 0 for m in world.markets))
+        rates = sorted({market.fee_basis_points for market in world.markets})
+        self.assertTrue(all(0 <= rate <= 10_000 for rate in rates), rates)
+        self.assertIn(simlife.DIRECT_ADMITTED_FEE_BASIS_POINTS_V1, rates)
+        # And a rate the release does NOT admit, so the producer's rate clause
+        # is exercised by this world rather than only described by it.
+        self.assertTrue(
+            [rate for rate in rates if rate != simlife.DIRECT_ADMITTED_FEE_BASIS_POINTS_V1],
+            rates,
+        )
+        # The majority of a world should be tradeable, or a run spends its night
+        # measuring the same refusal.
+        admitted = [
+            market for market in world.markets
+            if market.fee_basis_points == simlife.DIRECT_ADMITTED_FEE_BASIS_POINTS_V1
+        ]
+        self.assertGreater(len(admitted), len(world.markets) // 2, rates)
+
+    def test_the_engine_and_the_driver_layer_agree_on_the_admitted_rate(self):
+        """Two modules state the rate; a disagreement is a silently dead world.
+
+        The engine may not import the driver layer -- it decides what to attempt
+        and a substrate decides what happens -- so the constant is written twice
+        and pinned equal here rather than hoped equal.
+        """
+        self.assertEqual(
+            simlife.DIRECT_ADMITTED_FEE_BASIS_POINTS_V1,
+            drivers.DIRECT_ADMITTED_FEE_BASIS_POINTS_V1,
+        )
 
     def test_the_schedule_is_totally_ordered_and_numbered(self):
         world = simlife.build_world(self.spec(markets=20))
@@ -467,7 +506,7 @@ class DriveTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def config(self, *, bindings=None, markets=6, ticks=8) -> Path:
+    def config(self, *, bindings=None, markets=6, ticks=8, budget=None) -> Path:
         body = {
             "schema": drive.SCHEMA_CONFIG,
             "cluster": {"label": "local", "rpc_url": "http://127.0.0.1:8899"},
@@ -475,21 +514,29 @@ class DriveTests(unittest.TestCase):
             "work_dir": str(self.work),
             "substrate_label": "a fake bootstrap in a temporary directory",
             "world": {
-                "seed": "dclutch/simlife/test-drive",
+                "seed": "dclutch/simlife/test-drive-4",
                 "markets": markets,
                 "ticks": ticks,
                 "archetype_mix": "foundable-today",
                 "slots_per_tick": 4000,
             },
+            **({"budget": budget} if budget is not None else {}),
             "bindings": bindings if bindings is not None else {
                 "m00": {
                     "mint": "Mint1", "payer": "Payer1", "hoard": "Hoard1",
                     "aggregate": "Agg1", "claim_unit_atoms": 1, "outcome_count": 2,
                 },
-                # m02, not m01: m01 is the seven-cell wide-field this world drew,
-                # and the fake census reports two cells. Binding it there is the
-                # exact misfiling `check_bindings` refuses, and is exercised as a
-                # refusal below rather than smuggled into every other test.
+                # m02, not m01: m01 is the three-cell coin-flip this world
+                # drew, and the fake census reports two cells. Binding it there
+                # is the exact misfiling `check_bindings` refuses, and is
+                # exercised as a refusal below rather than smuggled into every
+                # other test. The seed carries a suffix for the same reason the
+                # binding names m02: when `coin-flip` widened from two cells to
+                # three -- a width-2 market has NO cuts, so its only ordinary
+                # answer is "it did not fail", which is not a coin flip -- the
+                # unsuffixed seed stopped drawing two two-cell markets and the
+                # guard correctly refused. The fixture moved rather than the
+                # guard loosening.
                 "m02": {
                     "mint": "Mint2", "payer": "Payer2", "hoard": "Hoard2",
                     "aggregate": "Agg2", "claim_unit_atoms": 1, "outcome_count": 2,
@@ -599,6 +646,46 @@ class DriveTests(unittest.TestCase):
             prefix = json.loads(older.read_text())
             self.assertEqual(prefix, newest[:len(prefix)])
 
+    def test_a_crossed_spend_budget_kills_the_run_and_refuses_a_restart(self):
+        """The fourth kill condition, end to end.
+
+        A spend ceiling has to stop a run the way a broken law does -- HALT.json
+        on disk, a restart refused until a human clears it -- and it has to say
+        a DIFFERENT word, because a broken conservation law is a fact about the
+        ledger and a crossed budget is a fact about the run.
+        """
+        config = self.config(budget={"max_lamports_spent": 10})
+        self.assertEqual(drive.main(["run", "--config", str(config), "--execute"]), 6)
+        halt = json.loads((self.work / "HALT.json").read_text())
+        self.assertIn("spend budget crossed", halt["reason"])
+        self.assertIn("lamports", halt["reason"])
+        spend = halt["details"]["spend"]
+        self.assertGreater(spend["spent_lamports"], 10)
+        self.assertEqual(spend["max_lamports_spent"], 10)
+        self.assertTrue(spend["bounded"])
+        exit_body = json.loads((self.work / "EXIT.json").read_text())
+        self.assertEqual(exit_body["outcome"], simcore.EXIT_OVERSPENT)
+        # The census that crossed it is ON DISK: the halt is the run's ending,
+        # never a hole in its history.
+        self.assertTrue(Path(halt["details"]["census"]).is_file())
+        # And a restart refuses, so an unattended lane cannot resume spending.
+        self.assertEqual(drive.main(["run", "--config", str(config), "--execute"]), 2)
+
+    def test_a_run_with_no_budget_records_its_spend_and_never_stops_for_it(self):
+        config = self.config()
+        self.assertEqual(drive.main(["run", "--config", str(config), "--execute"]), 0)
+        ledger = json.loads((self.work / "ledger.json").read_text())
+        spend = ledger["substrate"]["spend"]
+        self.assertFalse(spend["bounded"])
+        self.assertIsNone(spend["max_lamports_spent"])
+        self.assertGreater(spend["spent_lamports"], 0)
+        self.assertFalse((self.work / "HALT.json").exists())
+
+    def test_a_budget_that_is_not_a_positive_whole_number_refuses_before_anything_runs(self):
+        config = self.config(budget={"max_lamports_spent": 0})
+        self.assertEqual(drive.main(["run", "--config", str(config), "--execute"]), 2)
+        self.assertFalse((self.work / "census").exists())
+
     def test_a_violated_law_halts_the_run_and_refuses_a_restart(self):
         (self.root / "census-violation").write_text("")
         config = self.config()
@@ -634,7 +721,7 @@ class DriveTests(unittest.TestCase):
         status = json.loads((self.work / "status.json").read_text())
         self.assertEqual(status["schema"], simcore.SCHEMA_STATUS)
         self.assertIn("simlife", status)
-        self.assertEqual(status["simlife"]["seed"]["preimage"], "dclutch/simlife/test-drive")
+        self.assertEqual(status["simlife"]["seed"]["preimage"], "dclutch/simlife/test-drive-4")
         self.assertIn("expected_next_update_by", status["heartbeat"])
         self.assertEqual(status["simlife"]["markets_bound"], 2)
 
@@ -812,6 +899,266 @@ class DriverPrimitiveTests(unittest.TestCase):
             self.assertEqual(binding["claim_unit_atoms"], 1)
 
 
+RECORDING_BOOT = """#!/bin/sh
+here="$(cd "$(dirname "$0")" && pwd)"
+printf '%s\\n' "$@" > "$here/argv.txt"
+if [ -f "$here/refuse" ]; then
+  echo "REFUSED: [activation/root] the fake driver was told to say no" >&2
+  exit 1
+fi
+out=""
+want=""
+for arg in "$@"; do
+  if [ "$want" = "yes" ]; then out="$arg"; want=""; fi
+  if [ "$arg" = "--output" ]; then want="yes"; fi
+done
+[ -n "$out" ] && echo '{"schema":"fake"}' > "$out"
+echo "activation finalized slot 4242"
+exit 0
+"""
+
+
+def write_recording_boot(directory: Path) -> Path:
+    path = directory / "recording-bootstrap"
+    path.write_text(RECORDING_BOOT)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+
+def write_staged_trade_boot(directory: Path, *, stages: int, stuck: bool = False) -> Path:
+    """A bootstrap that walks a Direct trade one durable action per call.
+
+    It counts its own invocations, prints a journal document for each action and
+    the FINALIZED evidence document for the last -- which is the shape the real
+    driver has and the reason a single call is not a trade.
+    """
+    path = directory / "staged-trade-bootstrap"
+    path.write_text(f"""#!/bin/sh
+here="$(cd "$(dirname "$0")" && pwd)"
+case "$1" in
+  local-private-validator-direct-trade-produce-v1)
+    out=""
+    want=""
+    for arg in "$@"; do
+      if [ "$want" = "yes" ]; then out="$arg"; want=""; fi
+      if [ "$arg" = "--output-dir" ]; then want="yes"; fi
+    done
+    echo '{{"schema":"produced"}}' > "$out/direct-trade-session.json"
+    exit 0
+    ;;
+  local-private-validator-direct-trade-v1)
+    n=0
+    [ -f "$here/calls.txt" ] && n=$(cat "$here/calls.txt")
+    n=$((n + 1))
+    echo "$n" > "$here/calls.txt"
+    advances={stages}
+    if [ "{int(stuck)}" = "1" ]; then
+      echo '{{"schema":"dclutch-owned-loopback-direct-trade-journal-v1"}}'
+      exit 0
+    fi
+    if [ "$n" -gt "$advances" ]; then
+      echo '{{"schema":"dclutch-owned-loopback-direct-trade-finalized-v1"}}'
+    else
+      echo "{{\"schema\":\"dclutch-owned-loopback-direct-trade-journal-v1\",\"stage\":$n}}"
+    fi
+    exit 0
+    ;;
+esac
+echo "staged bootstrap does not implement $1" >&2
+exit 64
+""")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    return path
+
+
+class DirectActivationTests(unittest.TestCase):
+    """The step between a founding and a fill, and the reason fills were dead.
+
+    Founding does NOT create the Direct capability execution root and nothing
+    else does either; before `local-private-validator-direct-capability-\
+activation-v1` existed, no local Direct fill was reachable at any market width.
+    """
+
+    def founded(self, work: Path) -> "drivers.FoundedMarket":
+        accounts = {
+            name: {"address": name.upper()} for name in (
+                "founding_market", "collateral_mint", "founding_hoard_vault",
+                "claims_aggregate", "founder_position", "collateral_wallet",
+                "local_participant_fixture_source",
+            )
+        }
+        evidence = work / "evidence.json"
+        evidence.write_text(json.dumps({
+            "payer": "PAYER", "execution": {"market": {"accounts": accounts}, "completed": True},
+        }))
+        market_input = work / "market.json"
+        market_input.write_text(json.dumps({"coefficients": [1, 1, 0]}))
+        return drivers.founded_market_from_evidence(
+            "m00", evidence, market_input, work, fee_basis_points=50
+        )
+
+    def context(self, work: Path, boot: Path, *, keys: bool = False) -> "drivers.DriverContext":
+        plan = work / "plan.json"
+        plan.write_text(json.dumps({"schema": "plan"}))
+        payer = work / "payer.json"
+        payer.write_text("[]")
+        substrate_keys = None
+        if keys:
+            # The two the Direct producer reads that no market's own founding
+            # creates. Named rather than swept, exactly as the driver does.
+            directory = work / "substrate-keys"
+            directory.mkdir(exist_ok=True)
+            for name in drivers.TRADE_SHARED_KEYS:
+                (directory / f"{name}.json").write_text("[]")
+            substrate_keys = str(directory)
+        return drivers.DriverContext(
+            bootstrap_bin=str(boot), rpc_url="http://127.0.0.1:34599/", plan=str(plan),
+            work=work, timeout=30.0, campaign_payer_keypair=str(payer),
+            founding_founder="F", substituted_founder="S", substrate_keys=substrate_keys,
+        )
+
+    def test_the_shipped_command_is_called_and_every_input_is_pinned_to_its_own_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            boot = write_recording_boot(work)
+            context = self.context(work, boot)
+            founded = self.founded(work)
+            run = drivers.drive_direct_activation(context, founded)
+            self.assertIsNotNone(run)
+            argv = (work / "argv.txt").read_text().splitlines()
+            self.assertEqual(
+                argv[0], "local-private-validator-direct-capability-activation-v1"
+            )
+            self.assertIn("--execute", argv)
+            # Loopback takes NO devnet acknowledgment; the command refuses one
+            # ahead of the origin parser, so passing it would be a refusal this
+            # module composed for itself.
+            self.assertNotIn("--i-mean-devnet", argv)
+            pairs = dict(zip(argv, argv[1:]))
+            for flag, pin in (
+                ("--plan", "--expected-plan-sha256"),
+                ("--market-input", "--expected-market-input-sha256"),
+                ("--campaign-report", "--expected-campaign-report-sha256"),
+            ):
+                self.assertEqual(
+                    pairs[pin], drivers.sha256_hex(Path(pairs[flag])),
+                    f"{pin} must be the real digest of {flag}",
+                )
+            self.assertTrue(founded.activation and founded.activation.is_file())
+
+    def test_a_report_already_on_disk_is_adopted_rather_than_rewalked(self):
+        """The command refuses to overwrite its own output; so does this.
+
+        A rerun over a work directory continues it. Re-walking would refuse at
+        `output/exists` and report a refusal about a market that is already
+        activated -- the loudest possible way to say nothing happened.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            boot = write_recording_boot(work)
+            context = self.context(work, boot)
+            founded = self.founded(work)
+            self.assertIsNotNone(drivers.drive_direct_activation(context, founded))
+            (work / "argv.txt").unlink()
+            second = self.founded(work)
+            self.assertIsNone(drivers.drive_direct_activation(context, second))
+            self.assertFalse((work / "argv.txt").exists(), "nothing may have run")
+            self.assertEqual(second.activation, founded.activation)
+
+    def test_a_refused_activation_leaves_the_market_untradeable_and_says_which_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            boot = write_recording_boot(work)
+            (work / "refuse").write_text("")
+            context = self.context(work, boot)
+            founded = self.founded(work)
+            with self.assertRaises(drivers.DriverRefusal) as caught:
+                drivers.drive_direct_activation(context, founded)
+            self.assertIn("activating the Direct capability", str(caught.exception))
+            self.assertIsNone(founded.activation)
+
+    def test_a_fill_without_an_activation_names_the_step_and_not_the_root(self):
+        """The producer's own sentence is about a root; this one is about a step.
+
+        Absence and an owner change arrive at the producer's root check looking
+        alike -- a finalized snapshot renders a missing account as a
+        System-owned zero-length placeholder -- which is how twenty-one refused
+        fills were once read as a claim about a widened market's width.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            boot = write_recording_boot(work)
+            context = self.context(work, boot)
+            founded = self.founded(work)
+            founded.admissions["p0"] = work / "admission.json"
+            with self.assertRaises(drivers.DriverRefusal) as caught:
+                drivers.drive_fill(context, founded, "p0>p1", work / "admission.json")
+            message = str(caught.exception)
+            self.assertIn("EXECUTION root", message)
+            self.assertIn("local-private-validator-direct-capability-activation-v1", message)
+            self.assertNotIn("width", message)
+
+    def test_a_trade_is_driven_to_completion_rather_than_advanced_once(self):
+        """The driver advances ONE durable action per invocation and says so.
+
+        A Direct trade is about ten of them. Calling it once advanced the first
+        and returned zero, and this module recorded a fill as `executed` over a
+        trade that had barely started -- a green that describes nothing.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            boot = write_staged_trade_boot(work, stages=6)
+            context = self.context(work, boot, keys=True)
+            founded = self.founded(work)
+            founded.activation = work / "activation.json"
+            founded.activation.write_text("{}")
+            report = work / "admission.json"
+            report.write_text("{}")
+            run = drivers.drive_fill(context, founded, "p0>p1", report)
+            self.assertIsNotNone(run)
+            # One produce plus six advances: the last one is the finalized
+            # evidence document, which is the driver's own word for done.
+            self.assertEqual(int((work / "calls.txt").read_text().strip()), 7)
+
+    def test_a_trade_that_stops_advancing_stops_the_run_rather_than_spinning(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            boot = write_staged_trade_boot(work, stages=6, stuck=True)
+            context = self.context(work, boot, keys=True)
+            founded = self.founded(work)
+            founded.activation = work / "activation.json"
+            founded.activation.write_text("{}")
+            report = work / "admission.json"
+            report.write_text("{}")
+            with self.assertRaises(drivers.DriverRefusal) as caught:
+                drivers.drive_fill(context, founded, "p0>p1", report)
+            self.assertIn("twice in a row without finalizing", str(caught.exception))
+
+    def test_one_taker_per_market_because_the_fixture_is_one_constant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            founded = self.founded(work)
+            taker = drivers.fixture_share_atoms(founded, taker=True)
+            other = drivers.fixture_share_atoms(founded)
+            self.assertEqual(taker, drivers.DIRECT_FILL_COLLATERAL_REQUIREMENT_ATOMS_V1)
+            self.assertLess(other, taker)
+            # Two fully funded buyers do not fit inside one pinned fixture, and
+            # that is the reason there is exactly one taker rather than a policy.
+            self.assertGreater(
+                2 * taker, drivers.LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
+            )
+            # And one does, with room for the small shares behind it.
+            self.assertLessEqual(taker, drivers.LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1)
+
+    def test_a_market_with_no_fixture_source_funds_nobody(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            founded = self.founded(work)
+            founded.participant_fixture_source = None
+            self.assertEqual(drivers.fixture_share_atoms(founded, taker=True), 0)
+            self.assertEqual(drivers.fixture_share_atoms(founded), 0)
+
+
 class LifecycleSubstrateTests(unittest.TestCase):
     """The substrate's outcome mapping, which is the whole vocabulary.
 
@@ -919,14 +1266,172 @@ class LifecycleSubstrateTests(unittest.TestCase):
 
 
 class BandTests(unittest.TestCase):
+    ANCHOR = simlife.LOCAL_PYTH_FIXTURE_COORDINATE_V1
+
     def test_a_two_cell_market_has_no_cuts_and_a_wide_one_has_width_minus_two(self):
         for width in (2, 3, 4, 9):
-            self.assertEqual(len(simlife._band(width, 20_000, 1_000)), width - 2)
+            band = simlife._band(width, self.ANCHOR, 1_000_000, 0, simlife.BAND_PROFILE_UNIFORM)
+            self.assertEqual(len(band), width - 2)
 
     def test_a_band_is_strictly_increasing_and_positive(self):
-        cuts = simlife._band(9, 3_000, 900)
-        self.assertEqual(cuts, sorted(set(cuts)))
-        self.assertTrue(all(cut > 0 for cut in cuts))
+        for profile in simlife.BAND_PROFILES:
+            cuts = simlife._band(9, self.ANCHOR, 900_000, 0, profile)
+            self.assertEqual(cuts, sorted(set(cuts)), profile)
+            self.assertTrue(all(cut > 0 for cut in cuts), profile)
+
+    def test_a_band_is_placed_around_the_coordinate_the_substrate_will_observe(self):
+        """The bug this whole rule exists to close.
+
+        Before it, cuts came from `IntUniform(4_000, 40_000)` with a comment
+        about USD cents per SOL, while the local Pyth fixture's coordinate is
+        the raw price atoms 100,000,000 -- three to five orders of magnitude
+        away -- so every observation landed above every cut and the settling
+        cell was a CONSTANT.
+        """
+        world = simlife.build_world(simlife.WorldSpec(
+            seed=simlife.SeedBook("dclutch/simlife3/anchored"), markets=40, ticks=20,
+        ))
+        anchor = world.spec.coordinate_anchor
+        for market in world.markets:
+            if not market.cuts:
+                continue
+            # Every cut within an order of magnitude of the coordinate: a band
+            # ten times away from it is a band that cannot be landed in.
+            for cut in market.cuts:
+                self.assertGreater(cut * 10, anchor, market.market_id)
+                self.assertLess(cut, anchor * 10, market.market_id)
+            self.assertNotIn(anchor, market.cuts, "a cut ON the anchor makes the cell a tie")
+
+    def test_a_world_does_not_settle_into_one_bucket(self):
+        """OUTCOME SPREAD IS A HEALTH PROPERTY OF A RUN, not a nice-to-have.
+
+        A world of forty markets that all settle into the same cell has forty
+        copies of one measurement, whatever else is varied about it.
+        """
+        for name in ("design-space", "foundable-today"):
+            world = simlife.build_world(simlife.WorldSpec(
+                seed=simlife.SeedBook(f"dclutch/simlife3/spread/{name}"), markets=40, ticks=40,
+                archetype_mix=simlife.ARCHETYPE_MIXES[name],
+            ))
+            spread = world.outcome_spread()
+            self.assertGreater(spread["resolving_markets"], 8, name)
+            self.assertGreater(spread["distinct_cells"], 4, f"{name}: {spread['counts']}")
+            # And the reading that actually catches the defect: where in its own
+            # market each answer landed. Three is the floor rather than a target
+            # -- a world weighted towards three-cell markets can only reach the
+            # two tails, because a three-cell market has exactly two ordinary
+            # answers and no interior to land in -- so the property is that a
+            # world reaches BOTH TAILS and at least one place between them.
+            self.assertGreaterEqual(
+                spread["distinct_positions"], 3, f"{name}: {spread['position_counts']}"
+            )
+            self.assertIn(0, spread["position_counts"], f"{name}: no market settled low")
+            self.assertIn(10, spread["position_counts"], f"{name}: no market settled high")
+            self.assertTrue(
+                [place for place in spread["position_counts"] if 0 < place < 10],
+                f"{name}: nothing settled between the tails: {spread['position_counts']}",
+            )
+            self.assertFalse(spread["degenerate"], f"{name}: {spread['position_counts']}")
+            self.assertLessEqual(
+                spread["heaviest_share_percent"],
+                simlife.DEGENERATE_OUTCOME_SHARE_PERCENT_V1,
+                f"{name}: {spread['position_counts']}",
+            )
+
+    def test_a_position_normalises_a_cell_against_its_own_market(self):
+        """Cell 3 of four and cell 3 of eleven are not the same answer."""
+        self.assertEqual(simlife.settling_position_tenths(0, 3), 0)
+        self.assertEqual(simlife.settling_position_tenths(1, 3), 10)
+        self.assertEqual(simlife.settling_position_tenths(0, 12), 0)
+        self.assertEqual(simlife.settling_position_tenths(10, 12), 10)
+        self.assertEqual(simlife.settling_position_tenths(5, 12), 5)
+        # A width-2 market has one ordinary cell and therefore no position: a
+        # whole coordinate domain as one region is not "the bottom of" anything.
+        self.assertIsNone(simlife.settling_position_tenths(0, 2))
+
+    def test_the_cell_histogram_alone_would_have_missed_the_defect(self):
+        """Why the flag is over position and not over `cell/width`.
+
+        The historical failure put EVERY observation above EVERY cut. Counted as
+        `cell/width` that spreads across as many keys as the world has widths
+        and reads as diverse; counted as position it is one bucket. This is the
+        test that says the weaker reading was considered and rejected.
+        """
+        world = simlife.build_world(simlife.WorldSpec(
+            seed=simlife.SeedBook("dclutch/simlife3/histogram"), markets=40, ticks=40,
+        ))
+        far_above = world.spec.coordinate_anchor * 1_000
+        for market in world.markets:
+            if market.selected_cell is not None and market.destiny == simlife.DESTINY_RESOLVES:
+                market.selected_cell = simlife.settling_cell(far_above, market.cuts)
+        spread = world.outcome_spread()
+        self.assertGreater(spread["distinct_cells"], 3, "the weak reading looks diverse")
+        self.assertEqual(spread["distinct_positions"], 1, spread["position_counts"])
+        self.assertTrue(spread["degenerate"])
+
+    def test_the_degeneracy_flag_can_actually_fire(self):
+        """A checker that has never said no is a checker nobody has tested.
+
+        THE HISTORICAL DEFECT REPRODUCED, and reproducing it takes the two
+        halves coming apart rather than either half being wrong: the bands are
+        drawn for one coordinate and the observation arrives at another. That is
+        exactly what happened -- cuts drawn in USD cents per SOL, an observation
+        arriving as raw price atoms 100,000,000 -- and it is why no amount of
+        variety in the bands themselves saved the run.
+
+        Without this arm the test above passes on a flag hard-wired to `False`.
+        """
+        world = simlife.build_world(simlife.WorldSpec(
+            seed=simlife.SeedBook("dclutch/simlife3/degenerate"), markets=40, ticks=40,
+        ))
+        self.assertFalse(world.outcome_spread()["degenerate"], "the control must be healthy")
+        # The coordinate the OLD comment believed in: USD cents per SOL, five
+        # orders of magnitude below every cut this world drew.
+        elsewhere = world.spec.coordinate_anchor // 100_000
+        for market in world.markets:
+            if market.selected_cell is not None and market.destiny == simlife.DESTINY_RESOLVES:
+                market.selected_cell = simlife.settling_cell(elsewhere, market.cuts)
+        spread = world.outcome_spread()
+        self.assertTrue(spread["degenerate"], spread["counts"])
+        self.assertGreater(spread["heaviest_share_percent"], 70)
+        lines = "\n".join(simlife.world_summary(world))
+        self.assertIn("DEGENERATE OUTCOME SPREAD", lines)
+
+    def test_the_settling_cell_counts_the_cuts_at_or_below_the_coordinate(self):
+        cuts = [10, 20, 30]
+        self.assertEqual(simlife.settling_cell(5, cuts), 0)
+        self.assertEqual(simlife.settling_cell(10, cuts), 1)
+        self.assertEqual(simlife.settling_cell(25, cuts), 2)
+        self.assertEqual(simlife.settling_cell(999, cuts), 3)
+        # Never the failure cell: a failure is reached by a deadline, not by an
+        # observation, so the answer is always in 0..=len(cuts).
+        self.assertEqual(simlife.settling_cell(999, []), 0)
+
+    def test_a_profile_varies_the_gaps_without_moving_the_scale(self):
+        """Varied widths, and the reason they are a shape rather than a knob.
+
+        A profile has to change what the band looks like without changing how
+        big it is, or "tight-centre" would just mean "narrower" and the two
+        axes would be one axis twice.
+        """
+        widths = {}
+        for profile in simlife.BAND_PROFILES:
+            cuts = simlife._band(9, self.ANCHOR, 1_000_000, 0, profile)
+            gaps = [b - a for a, b in zip(cuts, cuts[1:])]
+            widths[profile] = cuts[-1] - cuts[0]
+            if profile == simlife.BAND_PROFILE_UNIFORM:
+                self.assertEqual(len(set(gaps)), 1, profile)
+            else:
+                self.assertGreater(len(set(gaps)), 1, f"{profile} must vary its gaps")
+        span = max(widths.values()) / min(widths.values())
+        self.assertLess(span, 2.0, f"a profile must not be a second scale: {widths}")
+
+    def test_a_tight_centre_band_is_finest_in_the_middle(self):
+        cuts = simlife._band(11, self.ANCHOR, 1_000_000, 0, simlife.BAND_PROFILE_TIGHT_CENTRE)
+        gaps = [b - a for a, b in zip(cuts, cuts[1:])]
+        middle = gaps[len(gaps) // 2]
+        self.assertLess(middle, gaps[0])
+        self.assertLess(middle, gaps[-1])
 
     def test_the_failure_cell_never_pays_and_something_always_does(self):
         import random as _random

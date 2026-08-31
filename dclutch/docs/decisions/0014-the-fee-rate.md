@@ -11,14 +11,24 @@ does not freeze a rate; see §6 for why that matters.
   2026-08-30 (evening, on the decision packet)", E1). §6's downstream line
   for D1 (a paragraph in `README.md` and `docs/guides/trader.md` naming who
   receives fees) is **unexecuted**.
-- **D2 — ADOPTED: `MAX_FEE_BPS = 500`, no lower bound**
+- **D2 — ADOPTED AND BUILT: `MAX_FEE_BPS = 500`, no lower bound**
   (`DECISION_PACKET_2026_08_30.md` §1, orchestrator ruling, ember veto window).
-  **Enforced nowhere in the protocol.** The only live check is a shell guard in
-  `tools/release/stage-devnet-sponsored-market-open.sh:84-85`; the const, the
-  refusal discriminant and the Lean bound §6 costs are unbuilt, so a founding
-  that does not go through that one script is unbounded. Cross-finding
-  (`docs/design/FEE_SECOND_TRANSACTION_V1.md:683-688`): the band retires the
-  `FeeSole` Custody route, which is reachable only at exactly 10,000 bps.
+  **Enforced in the protocol as of the FEE-CORE lane.** The const is
+  `DIRECT_MAX_FEE_BASIS_POINTS_V1`
+  (`crates/dclutch-direct-codec/src/successor.rs`), refused at config
+  construction with its own discriminant `SuccessorError::FeeBandExceeded` —
+  which every founding path reaches, because the immutable record is built from
+  that type — and refused again as a relation of the authored transition, whose
+  prelude compares the config rate against a program-owned `maxFeeBps` register
+  (`DClutchSemantics.DirectOrdinaryV3`). The shell guard in
+  `tools/release/stage-devnet-sponsored-market-open.sh` stays as an
+  operator-console refusal, not as the only one. Cross-finding
+  (`docs/design/FEE_SECOND_TRANSACTION_V1.md:683-688`), also executed: the band
+  retires the `FeeSole` Custody route, which is reachable only at exactly
+  10,000 bps. The retirement is proved rather than asserted —
+  `DClutch.Direct.banded_fee_leaves_a_positive_seller_net` — and the state that
+  would want that route refuses by name at
+  `DirectInlineCandidateErrorV2::FeeSoleRetired`.
 - **D3 — ADOPTED IN PRINCIPLE, BLOCKED ON MEASUREMENT.** The packet sequenced
   rate diversity behind FEEWALL; FEEWALL then measured a fee-bearing Direct
   trade at **1,515,003 CU all-first-try, over the 1,400,000 ceiling by 115,003
@@ -30,6 +40,17 @@ does not freeze a rate; see §6 for why that matters.
   (`docs/design/FEE_SECOND_TRANSACTION_V1.md`). The release const D3 would
   unpin is still `DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1: u16 = 50`
   (`crates/dclutch-direct-codec/src/token_setup_v1.rs:25`).
+
+  **The measurement D3 was blocked on is taken, 2026-08-31, and it clears.** The
+  fee leg ships as a second transaction: the fee-bearing fill executes 32/32
+  seeds with tens of thousands of CU of margin under the ceiling, and the
+  settlement that follows costs about 170,000 in its own transaction. The fill's
+  key-independent floor is indistinguishable from the zero-fee route's, so a
+  fee-bearing market is no longer a more expensive market to trade in. Evidence:
+  `docs/evidence/FEE_SECOND_TRANSACTION_PAIR_2026_08_31.md`. **D3's blocker is
+  discharged; D3 itself is still a decision nobody has taken**, and the release
+  const above is still pinned. What changed is that unpinning it is a choice now
+  rather than a wish.
 
 ## 1. The question
 

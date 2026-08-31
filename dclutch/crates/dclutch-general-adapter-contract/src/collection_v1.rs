@@ -23,7 +23,7 @@
 //! `docs/decisions/0009-general-batch-collection.md`.
 
 use dclutch_general_config_contract::root::{GeneralRootV2, RootError};
-use dclutch_sha256_adapter::digest;
+use dclutch_sha256_adapter::{digest, digestv};
 
 use crate::runtime_verify::AuthenticatedOrderTermsV2;
 use crate::runtime_width::{CandidateHeaderV2, ExecutionV2, VerifiedCandidateHeaderV2};
@@ -32,10 +32,35 @@ use crate::runtime_width::{CandidateHeaderV2, ExecutionV2, VerifiedCandidateHead
 pub const GENERAL_BATCH_PREFIX_BYTES_V1: usize = 160;
 /// Exact total batch record width, immutable prefix then mutable tail.
 pub const GENERAL_BATCH_BYTES_V1: usize = 224;
-/// Exact fixed bytes before one order's two runtime-width per-lot tails.
+/// Exact immutable fixed-header bytes of one order record.
 pub const GENERAL_ORDER_HEADER_BYTES_V1: usize = 160;
-/// Exact mutable escrow-state tail appended after an order's immutable prefix.
+/// Exact mutable escrow-state window between the header and the per-lot rows.
 pub const GENERAL_ORDER_STATE_BYTES_V1: usize = 32;
+/// Exact fixed offset of the mutable escrow-state window.
+///
+/// THE WIRE REPAIR THIS IS: the state block used to trail the two runtime-width
+/// per-lot tails at `160 + 16N`, an offset no fixed-offset EffectProgram write
+/// can address because `N` is a runtime width. Every mutable byte now lives at
+/// a fixed coordinate, and the runtime-width rows follow it. The identity
+/// digest masks exactly this window -- see [`general_order_identity_v1`] --
+/// the same construction [`crate::candidate_v1::general_candidate_identity_v1`]
+/// uses for a self-describing record.
+pub const GENERAL_ORDER_STATE_OFFSET_V1: usize = GENERAL_ORDER_HEADER_BYTES_V1;
+/// Exact fixed offset of the first per-outcome `(receive, deliver)` row.
+pub const GENERAL_ORDER_ROW_BASE_V1: usize =
+    GENERAL_ORDER_STATE_OFFSET_V1 + GENERAL_ORDER_STATE_BYTES_V1;
+/// Exact byte stride of one per-outcome `(receive, deliver)` row.
+///
+/// The two per-lot quantities are INTERLEAVED per outcome rather than laid out
+/// as two whole tails, because a second tail would begin at `base + 8N` -- a
+/// runtime-width offset again -- while an interleaved row gives both fields a
+/// fixed base and a fixed stride, which is exactly the shape one affine
+/// per-item EffectProgram write can produce.
+pub const GENERAL_ORDER_ROW_STRIDE_V1: usize = 16;
+/// Offset of `receive_per_lot` inside one per-outcome row.
+pub const GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1: usize = 0;
+/// Offset of `deliver_per_lot` inside one per-outcome row.
+pub const GENERAL_ORDER_ROW_DELIVER_OFFSET_V1: usize = 8;
 
 const BATCH_MAGIC: [u8; 8] = *b"DCGBAT01";
 const ORDER_MAGIC: [u8; 8] = *b"DCGORD01";
@@ -49,6 +74,132 @@ const STATUS_CLOSED: u8 = 2;
 const ORDER_PHASE_PLACED: u8 = 1;
 const ORDER_PHASE_CANCELLED: u8 = 2;
 const ORDER_PHASE_RELEASED: u8 = 3;
+
+/// Canonical byte coordinates of one batch record.
+///
+/// The hostile decoder and encoder below are the authority for accepting and
+/// producing the complete wire; these exist so the OpenBatch/CloseBatch
+/// artifact builders can write the same bytes without restating the layout,
+/// and both codec directions read them so a moved field moves everywhere.
+pub struct GeneralBatchLayoutV1;
+
+impl GeneralBatchLayoutV1 {
+    /// Record magic.
+    pub const MAGIC: usize = 0;
+    /// Record ABI version.
+    pub const VERSION: usize = 8;
+    /// Record phase byte.
+    pub const PHASE: usize = 10;
+    /// Runtime outcome width.
+    pub const OUTCOME_COUNT: usize = 12;
+    /// Exact root batch sequence consumed by the open.
+    pub const SEQUENCE: usize = 16;
+    /// Immutable Market generation.
+    pub const GENERATION: usize = 24;
+    /// Canonical Core Market key.
+    pub const MARKET: usize = 32;
+    /// Product content identity.
+    pub const PRODUCT_ID: usize = 64;
+    /// Immutable `GeneralConfigV3` identity.
+    pub const CONFIG_ID: usize = 96;
+    /// Sole candidate simplex denominator.
+    pub const PRICE_SCALE: usize = 128;
+    /// Admission window close slot.
+    pub const COLLECTION_CLOSE_SLOT: usize = 136;
+    /// Immutable admission bound.
+    pub const MAX_ORDERS: usize = 144;
+    /// Settlement window close slot.
+    pub const SETTLEMENT_CLOSE_SLOT: usize = 152;
+    /// Mutable status byte.
+    pub const STATUS: usize = 160;
+    /// Mutable admitted-order count.
+    pub const ORDER_COUNT: usize = 164;
+    /// Root revision consumed by the open.
+    pub const OPENED_ROOT_REVISION: usize = 168;
+    /// Root revision consumed by the close; zero while collecting.
+    pub const CLOSED_ROOT_REVISION: usize = 176;
+    /// Exact escrowed quote of every live admitted order.
+    pub const COMMITTED_QUOTE_RESERVE: usize = 184;
+    /// Mutable cancelled-order count.
+    pub const CANCELLED_COUNT: usize = 192;
+
+    /// Little-endian record magic as one register-width word.
+    #[must_use]
+    pub const fn magic_u64() -> u64 {
+        u64::from_le_bytes(BATCH_MAGIC)
+    }
+
+    /// Exact record ABI version.
+    #[must_use]
+    pub const fn version_value() -> u16 {
+        VERSION
+    }
+
+    /// Exact record phase byte.
+    #[must_use]
+    pub const fn phase_value() -> u8 {
+        BATCH_PHASE
+    }
+}
+
+/// Canonical byte coordinates of one order record.
+///
+/// The hostile decoder and encoder below are the authority for accepting and
+/// producing the complete wire; these exist so the order-action artifact
+/// builders can write the same bytes without restating the layout, and both
+/// codec directions read them so a moved field moves everywhere.
+pub struct GeneralOrderLayoutV1;
+
+impl GeneralOrderLayoutV1 {
+    /// Record magic.
+    pub const MAGIC: usize = 0;
+    /// Record ABI version.
+    pub const VERSION: usize = 8;
+    /// Record phase byte.
+    pub const PHASE: usize = 10;
+    /// Runtime outcome width.
+    pub const OUTCOME_COUNT: usize = 12;
+    /// Owner-scoped replay nonce.
+    pub const NONCE: usize = 16;
+    /// Maker identity; the account that must sign the placement.
+    pub const OWNER_ID: usize = 32;
+    /// Canonical Core Market key.
+    pub const MARKET: usize = 64;
+    /// Exact immutable identity of the batch this order may execute in.
+    pub const BATCH_ID: usize = 96;
+    /// Immutable Market generation.
+    pub const GENERATION: usize = 128;
+    /// Candidate-wide maximum fill.
+    pub const MAX_LOTS: usize = 136;
+    /// Candidate-wide maximum derived quote debit per filled lot.
+    pub const MAX_QUOTE_DEBIT_PER_LOT: usize = 144;
+    /// Last slot at which this order may still be settled.
+    pub const VALID_UNTIL_SLOT: usize = 152;
+    /// Mutable escrow phase byte.
+    pub const STATE_PHASE: usize = GENERAL_ORDER_STATE_OFFSET_V1;
+    /// Mutable admission slot.
+    pub const STATE_ADMITTED_SLOT: usize = GENERAL_ORDER_STATE_OFFSET_V1 + 8;
+    /// Mutable release slot; zero while placed.
+    pub const STATE_RELEASED_SLOT: usize = GENERAL_ORDER_STATE_OFFSET_V1 + 16;
+
+    /// Little-endian record magic as one register-width word.
+    #[must_use]
+    pub const fn magic_u64() -> u64 {
+        u64::from_le_bytes(ORDER_MAGIC)
+    }
+
+    /// Exact record ABI version.
+    #[must_use]
+    pub const fn version_value() -> u16 {
+        VERSION
+    }
+
+    /// Exact record phase byte.
+    #[must_use]
+    pub const fn phase_value() -> u8 {
+        ORDER_PHASE
+    }
+}
 
 /// Canonical PDA seed domain for one General batch record.
 pub const GENERAL_BATCH_PDA_DOMAIN_V1: &[u8] = b"dclutch-general-batch-v1";
@@ -254,25 +405,28 @@ impl GeneralBatchV1 {
         require_zero(bytes, 161, 3)?;
         require_zero(bytes, 196, 28)?;
         let opening = GeneralBatchOpeningV1 {
-            outcome_count: read_u32(bytes, 12)?,
-            sequence: read_u64(bytes, 16)?,
-            generation: read_u64(bytes, 24)?,
-            market: read_array(bytes, 32)?,
-            product_id: read_array(bytes, 64)?,
-            config_id: read_array(bytes, 96)?,
-            price_scale: read_u64(bytes, 128)?,
-            collection_close_slot: read_u64(bytes, 136)?,
-            max_orders: read_u32(bytes, 144)?,
-            settlement_close_slot: read_u64(bytes, 152)?,
+            outcome_count: read_u32(bytes, GeneralBatchLayoutV1::OUTCOME_COUNT)?,
+            sequence: read_u64(bytes, GeneralBatchLayoutV1::SEQUENCE)?,
+            generation: read_u64(bytes, GeneralBatchLayoutV1::GENERATION)?,
+            market: read_array(bytes, GeneralBatchLayoutV1::MARKET)?,
+            product_id: read_array(bytes, GeneralBatchLayoutV1::PRODUCT_ID)?,
+            config_id: read_array(bytes, GeneralBatchLayoutV1::CONFIG_ID)?,
+            price_scale: read_u64(bytes, GeneralBatchLayoutV1::PRICE_SCALE)?,
+            collection_close_slot: read_u64(bytes, GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+            max_orders: read_u32(bytes, GeneralBatchLayoutV1::MAX_ORDERS)?,
+            settlement_close_slot: read_u64(bytes, GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT)?,
         };
         validate_opening(opening)?;
         let state = GeneralBatchStateV1 {
-            status: BatchStatusV1::decode(read_u8(bytes, 160)?)?,
-            order_count: read_u32(bytes, 164)?,
-            opened_root_revision: read_u64(bytes, 168)?,
-            closed_root_revision: read_u64(bytes, 176)?,
-            committed_quote_reserve: read_u64(bytes, 184)?,
-            cancelled_count: read_u32(bytes, 192)?,
+            status: BatchStatusV1::decode(read_u8(bytes, GeneralBatchLayoutV1::STATUS)?)?,
+            order_count: read_u32(bytes, GeneralBatchLayoutV1::ORDER_COUNT)?,
+            opened_root_revision: read_u64(bytes, GeneralBatchLayoutV1::OPENED_ROOT_REVISION)?,
+            closed_root_revision: read_u64(bytes, GeneralBatchLayoutV1::CLOSED_ROOT_REVISION)?,
+            committed_quote_reserve: read_u64(
+                bytes,
+                GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE,
+            )?,
+            cancelled_count: read_u32(bytes, GeneralBatchLayoutV1::CANCELLED_COUNT)?,
         };
         let value = Self { opening, state };
         value.validate()?;
@@ -283,45 +437,85 @@ impl GeneralBatchV1 {
     #[must_use]
     pub fn to_bytes(self) -> [u8; GENERAL_BATCH_BYTES_V1] {
         let mut output = [0_u8; GENERAL_BATCH_BYTES_V1];
-        put(&mut output, 0, &BATCH_MAGIC);
-        put(&mut output, 8, &VERSION.to_le_bytes());
-        output[10] = BATCH_PHASE;
-        put(&mut output, 12, &self.opening.outcome_count.to_le_bytes());
-        put(&mut output, 16, &self.opening.sequence.to_le_bytes());
-        put(&mut output, 24, &self.opening.generation.to_le_bytes());
-        put(&mut output, 32, &self.opening.market);
-        put(&mut output, 64, &self.opening.product_id);
-        put(&mut output, 96, &self.opening.config_id);
-        put(&mut output, 128, &self.opening.price_scale.to_le_bytes());
+        put(&mut output, GeneralBatchLayoutV1::MAGIC, &BATCH_MAGIC);
         put(
             &mut output,
-            136,
+            GeneralBatchLayoutV1::VERSION,
+            &VERSION.to_le_bytes(),
+        );
+        output[GeneralBatchLayoutV1::PHASE] = BATCH_PHASE;
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::OUTCOME_COUNT,
+            &self.opening.outcome_count.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::SEQUENCE,
+            &self.opening.sequence.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::GENERATION,
+            &self.opening.generation.to_le_bytes(),
+        );
+        put(&mut output, GeneralBatchLayoutV1::MARKET, &self.opening.market);
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::PRODUCT_ID,
+            &self.opening.product_id,
+        );
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::CONFIG_ID,
+            &self.opening.config_id,
+        );
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::PRICE_SCALE,
+            &self.opening.price_scale.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT,
             &self.opening.collection_close_slot.to_le_bytes(),
         );
-        put(&mut output, 144, &self.opening.max_orders.to_le_bytes());
         put(
             &mut output,
-            152,
+            GeneralBatchLayoutV1::MAX_ORDERS,
+            &self.opening.max_orders.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT,
             &self.opening.settlement_close_slot.to_le_bytes(),
         );
-        output[160] = self.state.status.tag();
-        put(&mut output, 164, &self.state.order_count.to_le_bytes());
+        output[GeneralBatchLayoutV1::STATUS] = self.state.status.tag();
         put(
             &mut output,
-            168,
+            GeneralBatchLayoutV1::ORDER_COUNT,
+            &self.state.order_count.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::OPENED_ROOT_REVISION,
             &self.state.opened_root_revision.to_le_bytes(),
         );
         put(
             &mut output,
-            176,
+            GeneralBatchLayoutV1::CLOSED_ROOT_REVISION,
             &self.state.closed_root_revision.to_le_bytes(),
         );
         put(
             &mut output,
-            184,
+            GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE,
             &self.state.committed_quote_reserve.to_le_bytes(),
         );
-        put(&mut output, 192, &self.state.cancelled_count.to_le_bytes());
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::CANCELLED_COUNT,
+            &self.state.cancelled_count.to_le_bytes(),
+        );
         output
     }
 
@@ -674,12 +868,14 @@ impl GeneralOrderPhaseV1 {
     }
 }
 
-/// Mutable escrow state appended after one order's immutable prefix.
+/// Mutable escrow state in the fixed window between header and rows.
 ///
-/// The prefix -- and only the prefix -- is what `order_id` digests, exactly as
-/// a batch identity digests only its opening. That is what lets an order carry
-/// a lifecycle at all: a cancellation must not move the identity a candidate,
-/// a manifest and a settlement row all name.
+/// This window -- and only this window -- is what `order_id` masks, exactly as
+/// a candidate identity masks its own 32 identity bytes. That is what lets an
+/// order carry a lifecycle at all: a cancellation must not move the identity a
+/// candidate, a manifest and a settlement row all name, and it must reach the
+/// bytes it flips at a FIXED offset, because an EffectProgram write has no
+/// runtime-width arithmetic.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralOrderStateV1 {
     /// Current escrow phase.
@@ -713,7 +909,8 @@ pub struct GeneralOrderHeaderV1 {
     pub valid_until_slot: u64,
 }
 
-/// Borrowed order record: an immutable prefix then a mutable escrow tail.
+/// Borrowed order record: a fixed immutable header, a fixed mutable escrow
+/// window, then the immutable per-outcome rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GeneralOrderV1<'a> {
     bytes: &'a [u8],
@@ -724,54 +921,32 @@ pub struct GeneralOrderV1<'a> {
 impl<'a> GeneralOrderV1<'a> {
     /// Hostile-decode one exact `192 + 16N` order record.
     pub fn decode(bytes: &'a [u8]) -> GeneralCollectionResultV1<Self> {
-        if bytes.len() < GENERAL_ORDER_HEADER_BYTES_V1 {
+        if bytes.len() < GENERAL_ORDER_ROW_BASE_V1 {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         require_header(bytes, &ORDER_MAGIC, ORDER_PHASE)?;
+        require_zero(bytes, 24, 8)?;
         let header = GeneralOrderHeaderV1 {
-            outcome_count: read_u32(bytes, 12)?,
-            nonce: read_u64(bytes, 16)?,
-            owner_id: read_array(bytes, 32)?,
-            market: read_array(bytes, 64)?,
-            batch_id: read_array(bytes, 96)?,
-            generation: read_u64(bytes, 128)?,
-            max_lots: read_u64(bytes, 136)?,
-            max_quote_debit_per_lot: read_u64(bytes, 144)?,
-            valid_until_slot: read_u64(bytes, 152)?,
+            outcome_count: read_u32(bytes, GeneralOrderLayoutV1::OUTCOME_COUNT)?,
+            nonce: read_u64(bytes, GeneralOrderLayoutV1::NONCE)?,
+            owner_id: read_array(bytes, GeneralOrderLayoutV1::OWNER_ID)?,
+            market: read_array(bytes, GeneralOrderLayoutV1::MARKET)?,
+            batch_id: read_array(bytes, GeneralOrderLayoutV1::BATCH_ID)?,
+            generation: read_u64(bytes, GeneralOrderLayoutV1::GENERATION)?,
+            max_lots: read_u64(bytes, GeneralOrderLayoutV1::MAX_LOTS)?,
+            max_quote_debit_per_lot: read_u64(bytes, GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT)?,
+            valid_until_slot: read_u64(bytes, GeneralOrderLayoutV1::VALID_UNTIL_SLOT)?,
         };
         if bytes.len() != general_order_len_v1(header.outcome_count)? {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         validate_order_header(header)?;
-        let state_base = general_order_prefix_len_v1(header.outcome_count)?;
-        require_zero(
-            bytes,
-            state_base
-                .checked_add(1)
-                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
-            7,
-        )?;
-        require_zero(
-            bytes,
-            state_base
-                .checked_add(24)
-                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
-            8,
-        )?;
+        require_zero(bytes, GENERAL_ORDER_STATE_OFFSET_V1 + 1, 7)?;
+        require_zero(bytes, GENERAL_ORDER_STATE_OFFSET_V1 + 24, 8)?;
         let state = GeneralOrderStateV1 {
-            phase: GeneralOrderPhaseV1::decode(read_u8(bytes, state_base)?)?,
-            admitted_slot: read_u64(
-                bytes,
-                state_base
-                    .checked_add(8)
-                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
-            )?,
-            released_slot: read_u64(
-                bytes,
-                state_base
-                    .checked_add(16)
-                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
-            )?,
+            phase: GeneralOrderPhaseV1::decode(read_u8(bytes, GeneralOrderLayoutV1::STATE_PHASE)?)?,
+            admitted_slot: read_u64(bytes, GeneralOrderLayoutV1::STATE_ADMITTED_SLOT)?,
+            released_slot: read_u64(bytes, GeneralOrderLayoutV1::STATE_RELEASED_SLOT)?,
         };
         validate_order_state(state)?;
         let value = Self {
@@ -806,52 +981,68 @@ impl<'a> GeneralOrderV1<'a> {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
         output.fill(0);
-        put(output, 0, &ORDER_MAGIC);
-        put(output, 8, &VERSION.to_le_bytes());
-        output[10] = ORDER_PHASE;
-        put(output, 12, &header.outcome_count.to_le_bytes());
-        put(output, 16, &header.nonce.to_le_bytes());
-        put(output, 32, &header.owner_id);
-        put(output, 64, &header.market);
-        put(output, 96, &header.batch_id);
-        put(output, 128, &header.generation.to_le_bytes());
-        put(output, 136, &header.max_lots.to_le_bytes());
-        put(output, 144, &header.max_quote_debit_per_lot.to_le_bytes());
-        put(output, 152, &header.valid_until_slot.to_le_bytes());
-        let deliver_base = deliver_tail_base(header.outcome_count)?;
+        put(output, GeneralOrderLayoutV1::MAGIC, &ORDER_MAGIC);
+        put(output, GeneralOrderLayoutV1::VERSION, &VERSION.to_le_bytes());
+        output[GeneralOrderLayoutV1::PHASE] = ORDER_PHASE;
+        put(
+            output,
+            GeneralOrderLayoutV1::OUTCOME_COUNT,
+            &header.outcome_count.to_le_bytes(),
+        );
+        put(
+            output,
+            GeneralOrderLayoutV1::NONCE,
+            &header.nonce.to_le_bytes(),
+        );
+        put(output, GeneralOrderLayoutV1::OWNER_ID, &header.owner_id);
+        put(output, GeneralOrderLayoutV1::MARKET, &header.market);
+        put(output, GeneralOrderLayoutV1::BATCH_ID, &header.batch_id);
+        put(
+            output,
+            GeneralOrderLayoutV1::GENERATION,
+            &header.generation.to_le_bytes(),
+        );
+        put(
+            output,
+            GeneralOrderLayoutV1::MAX_LOTS,
+            &header.max_lots.to_le_bytes(),
+        );
+        put(
+            output,
+            GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT,
+            &header.max_quote_debit_per_lot.to_le_bytes(),
+        );
+        put(
+            output,
+            GeneralOrderLayoutV1::VALID_UNTIL_SLOT,
+            &header.valid_until_slot.to_le_bytes(),
+        );
         for outcome in 0..count {
-            let offset = outcome
-                .checked_mul(8)
-                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
+            let row = order_row_offset(outcome)?;
             put(
                 output,
-                GENERAL_ORDER_HEADER_BYTES_V1
-                    .checked_add(offset)
-                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+                row + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
                 &receive_per_lot[outcome].to_le_bytes(),
             );
             put(
                 output,
-                deliver_base
-                    .checked_add(offset)
-                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+                row + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
                 &deliver_per_lot[outcome].to_le_bytes(),
             );
         }
-        let state_base = general_order_prefix_len_v1(header.outcome_count)?;
-        put(output, state_base, &[state.phase.tag()]);
         put(
             output,
-            state_base
-                .checked_add(8)
-                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            GeneralOrderLayoutV1::STATE_PHASE,
+            &[state.phase.tag()],
+        );
+        put(
+            output,
+            GeneralOrderLayoutV1::STATE_ADMITTED_SLOT,
             &state.admitted_slot.to_le_bytes(),
         );
         put(
             output,
-            state_base
-                .checked_add(16)
-                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            GeneralOrderLayoutV1::STATE_RELEASED_SLOT,
             &state.released_slot.to_le_bytes(),
         );
         // Encode then hostile-decode our own candidate: the same total-function
@@ -871,20 +1062,19 @@ impl<'a> GeneralOrderV1<'a> {
         self.state
     }
 
-    /// Return the canonical `order_id`: the digest of the immutable prefix.
+    /// Return the canonical `order_id`: the masked digest of the record.
     ///
-    /// The escrow tail is excluded on purpose. A cancellation writes that tail,
-    /// and if the tail were in the digest the identity a candidate, a manifest
-    /// and every settlement row carry would move underneath them.
+    /// The mutable escrow window is excluded on purpose. A cancellation writes
+    /// that window, and if it were in the digest the identity a candidate, a
+    /// manifest and every settlement row carry would move underneath them.
     #[must_use]
     pub fn order_id(self) -> [u8; 32] {
-        let prefix = general_order_prefix_len_v1(self.header.outcome_count).unwrap_or(0);
-        digest(self.bytes.get(..prefix).unwrap_or_default())
+        general_order_identity_v1(self.bytes).unwrap_or([0; 32])
     }
 
     /// Write this order's successor escrow state into an exact-width buffer.
     ///
-    /// The immutable prefix is copied verbatim, so a lifecycle write can never
+    /// The immutable bytes are copied verbatim, so a lifecycle write can never
     /// be the vehicle for substituting an order's terms.
     pub fn encode_successor_state_into(
         self,
@@ -907,13 +1097,14 @@ impl<'a> GeneralOrderV1<'a> {
             return Err(GeneralCollectionErrorV1::Substitution);
         }
         output.copy_from_slice(self.bytes);
-        let state_base = general_order_prefix_len_v1(self.header.outcome_count)?;
-        put(output, state_base, &[state.phase.tag()]);
         put(
             output,
-            state_base
-                .checked_add(16)
-                .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
+            GeneralOrderLayoutV1::STATE_PHASE,
+            &[state.phase.tag()],
+        );
+        put(
+            output,
+            GeneralOrderLayoutV1::STATE_RELEASED_SLOT,
             &state.released_slot.to_le_bytes(),
         );
         let successor = GeneralOrderV1::decode(output)?;
@@ -925,12 +1116,12 @@ impl<'a> GeneralOrderV1<'a> {
 
     /// Return one exact claim quantity received per filled lot.
     pub fn receive_per_lot(self, index: u32) -> GeneralCollectionResultV1<u64> {
-        self.tail(GENERAL_ORDER_HEADER_BYTES_V1, index)
+        self.row_field(GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1, index)
     }
 
     /// Return one exact claim quantity delivered per filled lot.
     pub fn deliver_per_lot(self, index: u32) -> GeneralCollectionResultV1<u64> {
-        self.tail(deliver_tail_base(self.header.outcome_count)?, index)
+        self.row_field(GENERAL_ORDER_ROW_DELIVER_OFFSET_V1, index)
     }
 
     /// Exact worst-case quote obligation if this order fills completely.
@@ -972,16 +1163,12 @@ impl<'a> GeneralOrderV1<'a> {
         self.bytes
     }
 
-    fn tail(self, base: usize, index: u32) -> GeneralCollectionResultV1<u64> {
+    fn row_field(self, field_offset: usize, index: u32) -> GeneralCollectionResultV1<u64> {
         if index >= self.header.outcome_count {
             return Err(GeneralCollectionErrorV1::InvalidLength);
         }
-        let offset = base
-            .checked_add(
-                usize_from_u32(index)?
-                    .checked_mul(8)
-                    .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?,
-            )
+        let offset = order_row_offset(usize_from_u32(index)?)?
+            .checked_add(field_offset)
             .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)?;
         read_u64(self.bytes, offset)
     }
@@ -996,22 +1183,33 @@ impl<'a> GeneralOrderV1<'a> {
     }
 }
 
-/// Return the exact `160 + 16N` immutable prefix `order_id` digests.
-pub fn general_order_prefix_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
+/// Return exact `192 + 16N` bytes for one whole order record.
+pub fn general_order_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
     if outcome_count == 0 {
         return Err(GeneralCollectionErrorV1::InvalidLength);
     }
     usize_from_u32(outcome_count)?
-        .checked_mul(16)
-        .and_then(|tail| GENERAL_ORDER_HEADER_BYTES_V1.checked_add(tail))
+        .checked_mul(GENERAL_ORDER_ROW_STRIDE_V1)
+        .and_then(|rows| GENERAL_ORDER_ROW_BASE_V1.checked_add(rows))
         .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
 }
 
-/// Return exact `192 + 16N` bytes for one whole order record.
-pub fn general_order_len_v1(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
-    general_order_prefix_len_v1(outcome_count)?
-        .checked_add(GENERAL_ORDER_STATE_BYTES_V1)
-        .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
+/// Return the canonical identity of one order record.
+///
+/// The digest covers every byte EXCEPT the 32-byte mutable escrow window,
+/// which is masked by construction here -- the fixed header and the
+/// per-outcome rows are hashed as one split message. This is what lets the
+/// mutable state live at a fixed offset (where an EffectProgram write can
+/// reach it) while the identity stays pinned to exactly the bytes the maker
+/// signed.
+pub fn general_order_identity_v1(order_bytes: &[u8]) -> GeneralCollectionResultV1<[u8; 32]> {
+    let head = order_bytes
+        .get(..GENERAL_ORDER_STATE_OFFSET_V1)
+        .ok_or(GeneralCollectionErrorV1::InvalidLength)?;
+    let rows = order_bytes
+        .get(GENERAL_ORDER_ROW_BASE_V1..)
+        .ok_or(GeneralCollectionErrorV1::InvalidLength)?;
+    Ok(digestv(&[head, rows]))
 }
 
 /// Require one Candidate to name exactly this closed batch's domain.
@@ -1182,10 +1380,10 @@ fn validate_order_header(header: GeneralOrderHeaderV1) -> GeneralCollectionResul
     Ok(())
 }
 
-fn deliver_tail_base(outcome_count: u32) -> GeneralCollectionResultV1<usize> {
-    usize_from_u32(outcome_count)?
-        .checked_mul(8)
-        .and_then(|tail| GENERAL_ORDER_HEADER_BYTES_V1.checked_add(tail))
+fn order_row_offset(index: usize) -> GeneralCollectionResultV1<usize> {
+    index
+        .checked_mul(GENERAL_ORDER_ROW_STRIDE_V1)
+        .and_then(|rows| GENERAL_ORDER_ROW_BASE_V1.checked_add(rows))
         .ok_or(GeneralCollectionErrorV1::ArithmeticOverflow)
 }
 

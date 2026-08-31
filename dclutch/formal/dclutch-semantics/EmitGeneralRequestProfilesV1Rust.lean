@@ -24,3 +24,5 @@ def main : IO Unit := do
   emitBytes "GENERAL_MATERIALIZE_REQUEST_PROFILE_V1" (encodeProfile (profile .materialize))
   emitBytes "GENERAL_DISTRIBUTE_REQUEST_PROFILE_V1" (encodeProfile (profile .distribute))
   emitBytes "GENERAL_CLOSE_REQUEST_PROFILE_V1" (encodeProfile (profile .close))
+  emitBytes "GENERAL_OPEN_BATCH_REQUEST_PROFILE_V1" (encodeProfile (profile .openBatch))
+  emitBytes "GENERAL_CLOSE_BATCH_REQUEST_PROFILE_V1" (encodeProfile (profile .closeBatch))

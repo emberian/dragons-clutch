@@ -984,5 +984,75 @@ pub fn is_capability_seal_request_v1(instruction_data: &[u8]) -> bool {
         && instruction_data.get(..8) == Some(CAPABILITY_SEAL_REQUEST_MAGIC_V1.as_slice())
 }
 
+/// Canonical magic of one seal close request.
+pub const CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTCSX1";
+/// Exact seal-close-request width.
+pub const CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1: usize = 16;
+
+/// The complete instruction request for closing one stranded seal.
+///
+/// It names **nothing**, and that is the whole design. A seal is a write-once
+/// account whose body carries its own key and its own canonical PDA bump, so
+/// the account offered for closing describes itself completely: the closing
+/// program reproduces the address from the body and refuses if the two
+/// disagree. There is therefore no coordinate a caller could get wrong, and no
+/// coordinate a caller could lie about — a request that named the key would
+/// only give a hostile caller a second, weaker way to say what the account
+/// already says.
+///
+/// The beneficiary is not named here either. It is account 1 and it must sign,
+/// because a request field naming a refund destination is a field a griefer
+/// fills in with someone else's address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilitySealCloseRequestV1;
+
+impl CapabilitySealCloseRequestV1 {
+    /// Hostile-decode one exact seal close request.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        if slice(bytes, 0, 8)? != CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1 {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(bytes, 8)? != CAPABILITY_SEAL_SCHEMA_VERSION_V1 {
+            return Err(Error::UnsupportedSchema);
+        }
+        // The profile the close is willing to act on is the profile the seal
+        // body must also carry. `SealedDescriptorClosureV1::decode` enforces
+        // the second half; this is the caller stating which one it meant, so a
+        // profile-2 seal cannot be closed by a profile-1 client that has never
+        // heard of whatever lamports profile 2 carries.
+        if read_u16(bytes, 10)? != CAPABILITY_SEAL_PROFILE_V1 {
+            return Err(Error::UnsupportedArtifactProfile);
+        }
+        require_zero(bytes, 12, 4)?;
+        Ok(Self)
+    }
+
+    /// Encode one exact canonical seal close request.
+    pub fn to_bytes(self) -> [u8; CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1] {
+        let mut output = [0_u8; CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1];
+        let _ = copy(&mut output, 0, &CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1);
+        let _ = put_u16(&mut output, 8, CAPABILITY_SEAL_SCHEMA_VERSION_V1);
+        let _ = put_u16(&mut output, 10, CAPABILITY_SEAL_PROFILE_V1);
+        output
+    }
+}
+
+/// Whether instruction data selects the seal close outer.
+pub fn is_capability_seal_close_request_v1(instruction_data: &[u8]) -> bool {
+    instruction_data.len() == CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1
+        && instruction_data.get(..8) == Some(CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1.as_slice())
+}
+
+// The two seal outers must never be confused for one another by the dispatch
+// predicates above, which key on magic and width. Distinct magics are the
+// primary separation; the widths differing is the belt.
+const _: () = assert!(
+    CAPABILITY_SEAL_REQUEST_BYTES_V1 != CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1,
+    "the seal write and seal close requests must not share a width"
+);
+
 #[cfg(test)]
 mod tests;

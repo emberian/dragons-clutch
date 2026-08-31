@@ -83,6 +83,7 @@ use dclutch_direct_codec::{
         DIRECT_SUCCESSOR_KIND_ID_V3, DirectExecutionActionV3, DirectExecutionRequestV3,
     },
     inline_candidate_v2::{
+        DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2, DIRECT_INLINE_CUSTODY_ROUTE_SLOTS_V2,
         DirectExternalCollateralV2, DirectExternalDebitV2, DirectInlineCandidateContextV2,
         DirectInlineCollateralFrameV2, DirectInlineEffectDispatchV2,
     },
@@ -4406,9 +4407,9 @@ fn direct_inline_effect_dispatch_v3(
     {
         return Err(TradingSbfError::Content.into());
     }
-    let mut custody_slots = [0_u8; 2];
+    let mut custody_slots = [0_u8; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2];
     let mut custody_count = 0_usize;
-    let mut child_dispatch_writable = [false; 4];
+    let mut child_dispatch_writable = [false; DIRECT_INLINE_CUSTODY_ROUTE_SLOTS_V2];
     let mut custody_start = None;
     let mut fee_start = None;
     for slot in 0..4_usize {
@@ -10607,8 +10608,11 @@ fn market_core_state_address_v2(
 mod seal;
 
 pub use seal::{
+    CLOSE_SEAL_ACCOUNT_COUNT_V1, CLOSE_SEAL_ACCOUNT_V1, CLOSE_SEAL_ACTIVATION_CACHE_ACCOUNT_V1,
+    CLOSE_SEAL_CLOSER_ACCOUNT_V1, CLOSE_SEAL_REGISTRY_ACCOUNT_V1, CLOSE_SEAL_RENT_ACCOUNT_V1,
+    CLOSE_SEAL_TRADING_PROGRAM_ACCOUNT_V1, CLOSE_SEAL_TRADING_PROGRAMDATA_ACCOUNT_V1,
     SEAL_ACCOUNT_COUNT_V1, SEAL_PAYER_ACCOUNT_V1, SEAL_SYSTEM_PROGRAM_ACCOUNT_V1,
-    process_capability_seal_v1,
+    process_capability_seal_close_v1, process_capability_seal_v1,
 };
 use seal::{authenticate_capability_seal_v3, borrow_sealed_record, sealed_token};
 

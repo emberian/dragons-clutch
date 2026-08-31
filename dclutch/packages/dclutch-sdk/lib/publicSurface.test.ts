@@ -135,7 +135,16 @@ describe('package public surface', () => {
       import('@dclutch/sdk/lib/rpc');
     `);
     expect(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))).toEqual([]);
-  });
+    // 30s, because this is the only case here that builds a whole TypeScript
+    // program -- it loads the default library declarations and typechecks a
+    // synthetic consumer, which is seconds of real work rather than the
+    // milliseconds every other case in this file takes. Under vitest's 5s
+    // default it passed locally and on a warm runner and then failed on a cold
+    // one (1 failed, 558 passed, "Test timed out in 5000ms"), which is the
+    // worst way for a gate to fail: intermittently, on something unrelated to
+    // what it asserts. A suite that is red one push in five is a suite people
+    // start re-running instead of reading.
+  }, 30_000);
 
   it('refuses filesystem-style RPC deep imports at runtime', async () => {
     // @ts-expect-error the package export map intentionally refuses this path

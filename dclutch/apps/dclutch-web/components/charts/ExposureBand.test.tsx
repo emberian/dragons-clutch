@@ -13,7 +13,7 @@ describe('the exposure band', () => {
   const html = renderToStaticMarkup(<ExposureBand rows={ROWS} scaleAtoms="140" caption="one row per Position" />);
 
   it('keeps the exact atoms in a table twin rather than only in the plot', () => {
-    expect(html).toContain('Exact atoms behind every band');
+    expect(html).toContain('Exact numbers');
     for (const atoms of ['15', '140', '10', '40', '5', '100']) expect(html).toContain(`<td>${atoms}</td>`);
     // The decided column is computed in bigint from the two bounds.
     expect(html).toContain('<td>125</td>');

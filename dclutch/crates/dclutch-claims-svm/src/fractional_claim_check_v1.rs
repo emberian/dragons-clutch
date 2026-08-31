@@ -112,8 +112,45 @@ pub const FRACTIONAL_CLAIM_CHECK_REDEEM_MAGIC_V1: [u8; 8] = *b"DCLTFCR1";
 /// bytes fail at a named byte rather than in a field.
 pub const FRACTIONAL_CLAIM_CHECK_RECORD_KIND_V1: u8 = 3;
 
+/// Solana's maximum length for one PDA seed segment.
+///
+/// A domain longer than this is not merely unusual, it is **underivable**:
+/// `create_program_address` refuses `MaxSeedLengthExceeded` for every bump, so
+/// `find_program_address` finds none and panics. This crate is `no_std` and does
+/// not depend on the SDK, so the limit is restated here and enforced below.
+/// `dclutch-dealer-codec` restates it the same way for the same reason.
+pub const MAX_PDA_SEED_BYTES_V1: usize = 32;
+
 /// Canonical fractional claim-check PDA seed domain.
-pub const FRACTIONAL_CLAIM_CHECK_SEED_V1: &[u8] = b"dclutch:fractional-claim-check:v1";
+///
+/// `frac-` rather than `fractional-`: the spelled-out form is 33 bytes, one
+/// over the maximum, so no address could ever be derived for this record and
+/// every route naming it would have aborted. The abbreviation is on the
+/// qualifier and never on `claim-check`, which is the family word the sibling
+/// domains (`dclutch:claim-check:v1`, `:claim-check-escrow:v1`,
+/// `:claim-check-vault:v1`) all spell in full.
+pub const FRACTIONAL_CLAIM_CHECK_SEED_V1: &[u8] = b"dclutch:frac-claim-check:v1";
+
+// The assertion is the actual fix; the shorter string is only a shorter string
+// until something stops the next one from growing. `dclutch-dealer-codec` says
+// the same thing beside its own domains, and this family had no such guard,
+// which is exactly how a 33-byte seed shipped.
+const _: () = assert!(
+    FRACTIONAL_CLAIM_CHECK_SEED_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the fractional claim-check domain must be a usable PDA seed"
+);
+const _: () = assert!(
+    crate::claim_check_v1::CLAIM_CHECK_SEED_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the native claim-check domain must be a usable PDA seed"
+);
+const _: () = assert!(
+    crate::claim_check_v1::CLAIM_CHECK_ESCROW_SEED_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the claim-check escrow domain must be a usable PDA seed"
+);
+const _: () = assert!(
+    crate::claim_check_v1::CLAIM_CHECK_VAULT_SEED_V1.len() <= MAX_PDA_SEED_BYTES_V1,
+    "the claim-check vault domain must be a usable PDA seed"
+);
 
 const RECORD_VERSION_OFFSET: usize = 8;
 const RECORD_KIND_OFFSET: usize = 10;

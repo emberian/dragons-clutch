@@ -282,6 +282,29 @@ pub(crate) enum CheckedDeploymentDispositionV1 {
     Upgrade,
     /// An authenticated existing deployment and existing finalized artifact.
     CarryForward,
+    /// The role's live payload was READ BACK from a finalized cluster
+    /// observation and found byte-identical to the checked candidate, so no
+    /// Upgrade transaction exists, and none can: the Loader refuses to replace
+    /// a payload with itself and the tool refuses the replay ambiguity.
+    ///
+    /// This is deliberately a THIRD kind and never either of the other two.
+    ///
+    /// It is not an `Upgrade`: no receipt, no signature, no buffer, no fee. It
+    /// must never be counted or displayed as one.
+    ///
+    /// It is not `CarryForward` either, and the difference is the whole point.
+    /// Carry-forward is a whitelist: it asserts that two named roles were not
+    /// part of this cut and says NOTHING about their bytes. This asserts
+    /// EQUALITY -- that the bytes on chain are the bytes the checked gate
+    /// binds -- and it is refused unless that equality is read back from a
+    /// finalized observation at audit time.
+    ///
+    /// On evidence strength this is the stronger claim, which is why it is
+    /// admitted at all: an Upgrade receipt ARGUES from a transaction that the
+    /// right bytes arrived, while this READS the deployed bytes and compares
+    /// them to the candidate digest. The weaker link in a receipt-backed role
+    /// is the argument; here there is no argument.
+    AlreadyCurrent,
 }
 
 /// One permanent devnet role and the exact evidence that authorized its

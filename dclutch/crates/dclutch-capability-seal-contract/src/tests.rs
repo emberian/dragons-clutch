@@ -423,3 +423,74 @@ fn the_ownership_verdict_covers_only_its_four_artifacts_and_its_own_action() {
         Err(Error::TokenRangeMismatch)
     );
 }
+
+#[test]
+fn the_close_request_is_a_discriminator_and_carries_no_coordinate() {
+    let canonical = CapabilitySealCloseRequestV1.to_bytes();
+    assert_eq!(canonical.len(), CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1);
+    assert!(is_capability_seal_close_request_v1(&canonical));
+    assert_eq!(
+        CapabilitySealCloseRequestV1::decode(&canonical),
+        Ok(CapabilitySealCloseRequestV1)
+    );
+
+    // The two seal outers must never be reachable from one another's bytes.
+    // Both dispatch predicates key on magic and width, and both are checked
+    // here rather than trusted, because the whole separation between "write a
+    // verdict" and "delete an account and pay a stranger" rests on them.
+    let write = CapabilitySealRequestV1::new(7, id(0x22))
+        .expect("canonical seal request")
+        .to_bytes();
+    assert!(!is_capability_seal_close_request_v1(&write));
+    assert!(!is_capability_seal_request_v1(&canonical));
+    assert_eq!(
+        CapabilitySealCloseRequestV1::decode(&write),
+        Err(Error::InvalidLength)
+    );
+
+    // Hostile bytes at the exact width: wrong magic, wrong schema, wrong
+    // profile, and a non-zero reserved byte.
+    let mut wrong_magic = canonical;
+    wrong_magic[0] ^= 0xff;
+    assert!(!is_capability_seal_close_request_v1(&wrong_magic));
+    assert_eq!(
+        CapabilitySealCloseRequestV1::decode(&wrong_magic),
+        Err(Error::InvalidMagic)
+    );
+
+    let mut wrong_schema = canonical;
+    wrong_schema[8] = 2;
+    assert_eq!(
+        CapabilitySealCloseRequestV1::decode(&wrong_schema),
+        Err(Error::UnsupportedSchema)
+    );
+
+    // The profile field is the CAP. A future seal class that carries lamports
+    // beyond rent exemption is a different profile byte, and this route must
+    // refuse it rather than pay those lamports to a closer who has never heard
+    // of them.
+    let mut wrong_profile = canonical;
+    wrong_profile[10] = 2;
+    assert_eq!(
+        CapabilitySealCloseRequestV1::decode(&wrong_profile),
+        Err(Error::UnsupportedArtifactProfile)
+    );
+
+    for offset in 12..16 {
+        let mut dirty = canonical;
+        dirty[offset] = 1;
+        assert_eq!(
+            CapabilitySealCloseRequestV1::decode(&dirty),
+            Err(Error::NonCanonicalReserved),
+            "reserved byte {offset} was not enforced"
+        );
+    }
+
+    let mut short = Vec::from(canonical);
+    short.pop();
+    assert!(!is_capability_seal_close_request_v1(&short));
+    assert_eq!(
+        CapabilitySealCloseRequestV1::decode(&short),
+        Err(Error::InvalidLength)
+    );
+}

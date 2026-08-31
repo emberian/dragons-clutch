@@ -80,9 +80,13 @@ ROUTE_DRIVERS = {
         "frozen DCLTGMF3 table. DRIVEN HERE"
     ),
     simlife.ROUTE_FILL: (
-        "local-private-validator-direct-trade-produce-v1 then "
+        "local-private-validator-direct-capability-activation-v1 --execute creates the "
+        "Direct EXECUTION root that founding does not, then "
+        "local-private-validator-direct-trade-produce-v1, then "
         "local-private-validator-direct-trade-v1 --session --execute, one invocation per "
-        "durable mutation. Needs a market founded WITH the Direct capability entry"
+        "durable mutation. The activation is not optional and not implied by the "
+        "founding; the market must also carry the one Direct fee rate the deployed setup "
+        "release admits. DRIVEN HERE"
     ),
     simlife.ROUTE_RESOLVE: (
         "local-private-validator-flagship-resolution-v1, three modes "
@@ -315,6 +319,22 @@ class LedgerCensusSubstrate(simlife.Substrate):
             keep_files=int(retention_cfg.get("keep_files", simcore.DEFAULT_CENSUS_KEEP_FILES)),
         )
         self.chains: dict = {}
+        # THE SPEND CEILING, and the run dies at it the way it dies at a broken
+        # law. Built here rather than in `cmd_run` because the only place a
+        # payer's balance is read is the census, and the census lives here.
+        try:
+            self.budget = simcore.SpendLedger.from_config(config)
+        except ValueError as error:
+            raise Refusal(str(error)) from error
+
+    def describe(self) -> dict:
+        body = super().describe()
+        # WHAT THIS RUN WAS ALLOWED TO SPEND AND WHAT IT DID SPEND, carried into
+        # the ledger and from there into the published series. A run with no
+        # ceiling says so in the artifact rather than leaving the reader to
+        # notice the absence of a field.
+        body["spend"] = self.budget.describe()
+        return body
 
     def why_not(self, route: str) -> str:
         driver = ROUTE_DRIVERS.get(route, "no driver is recorded for this route")
@@ -415,6 +435,17 @@ class LedgerCensusSubstrate(simlife.Substrate):
         chain.last_report = chain.retention.apply(chain.directory)
         observations = json.loads(out.read_text())
         newest = observations[-1] if isinstance(observations, list) and observations else {}
+        # THE SPEND CEILING. The census has already been taken and is on disk,
+        # so the balance that crossed the budget is recorded before this stops:
+        # the halt is the run's ending, never a hole in its history.
+        self.budget.observe(binding.get("payer"), newest.get("payer_lamports"))
+        overspent = self.budget.exceeded()
+        if overspent is not None:
+            simcore.halt_loudly(
+                self.work,
+                f"spend budget crossed at {event.market_id} tick {event.tick}: {overspent}",
+                {"spend": self.budget.describe(), "census": str(out)},
+            )
         return simlife.EventResult(
             outcome=simlife.OUTCOME_EXECUTED,
             detail=f"observed {event.market_id} at slot {newest.get('slot')} as {stage}",
@@ -626,16 +657,46 @@ class LifecycleSubstrate(LedgerCensusSubstrate):
         # because "executed" over an adopted founding is a claim about this work
         # directory's whole history rather than about the last ten minutes.
         how = "opened" if run is not None else "adopted the completed founding of"
+        activation = self._activate(founded)
         return simlife.EventResult(
             outcome=simlife.OUTCOME_EXECUTED,
             detail=(
                 f"{how} {founded.address} with {founded.outcome_count} outcomes over cuts "
-                f"{market.cuts} and {market.founding_collateral_atoms} collateral atoms; frozen "
-                f"routing table {founded.routing_table}"
+                f"{market.cuts} and {market.founding_collateral_atoms} collateral atoms at "
+                f"{founded.fee_basis_points} bps; frozen routing table "
+                f"{founded.routing_table}; {activation}"
             ),
             observation={"market": founded.address, "outcomes": founded.outcome_count},
             signatures=[] if run is None else self._signatures(run),
         )
+
+    def _activate(self, founded) -> str:
+        """The step between founding and a fill, and the reason fills were dead.
+
+        The Direct capability EXECUTION root is created by exactly one command
+        and the founding is not it. Run here rather than lazily at the first
+        fill, because the shipped order is compile -> found -> activate -> admit
+        and an admission that ran first would be an order this tree does not
+        document.
+
+        A refusal does NOT make the founding a refusal: the market exists, is
+        Open, can be admitted to and can be censused. It makes the market
+        untradeable, which is recorded on the market and said in the founding's
+        own sentence rather than discovered three routes later.
+        """
+        try:
+            run = simlife_drivers.drive_direct_activation(self.drivers, founded)
+        except simlife_drivers.DriverRefusal as refusal:
+            founded.activation_refusal = str(refusal)
+            return f"the Direct capability activation REFUSED, so no fill can reach it: {refusal}"
+        except subprocess.TimeoutExpired:
+            founded.activation_refusal = (
+                f"the Direct capability activation exceeded {self.drivers.timeout:.0f}s"
+            )
+            return founded.activation_refusal
+        if run is None:
+            return "its Direct capability execution root was already activated in this work directory"
+        return "Direct capability execution root activated"
 
     def _binding(self, founded) -> dict:
         """A market's census binding, plus any account this CHAIN already held.
@@ -690,10 +751,16 @@ class LifecycleSubstrate(LedgerCensusSubstrate):
     def _admit(self, event, market) -> simlife.EventResult:
         founded = self._market_or_refuse(event.market_id)
         wallet = self.wallet(event.subject)
+        # THE FIRST ADMISSION OF A MARKET IS ITS TAKER and takes what a Direct
+        # fill actually costs; the rest take the small share out of what is left.
+        # One taker is the most a market can have: the participant fixture is
+        # pinned at one constant by the compiler and two fully funded buyers do
+        # not fit inside it.
+        taker = not founded.admissions
         run = simlife_drivers.drive_admission(
             self.drivers, founded, event.subject, wallet,
             int(event.detail.get("stake_atoms", 0)),
-            collateral_atoms=simlife_drivers.fixture_share_atoms(founded),
+            collateral_atoms=simlife_drivers.fixture_share_atoms(founded, taker=taker),
         )
         # REBIND, because the admission just created a token account holding
         # this market's collateral. `census_binding()` returns a fresh document
@@ -710,17 +777,29 @@ class LifecycleSubstrate(LedgerCensusSubstrate):
 
     def _fill(self, event, market) -> simlife.EventResult:
         founded = self._market_or_refuse(event.market_id)
-        maker = event.detail.get("maker")
-        report = founded.admissions.get(maker) or next(iter(founded.admissions.values()), None)
+        # THE BUYER IS THE FUNDED ONE, not whichever half of the pair the world
+        # drew. A Direct trade here is the founding founder selling to one
+        # admitted position, and only the participant whose collateral leg moved
+        # the whole fill requirement can stand on the buying side; a fill routed
+        # through anybody else refuses on the balance, which measures the
+        # fixture rather than the trade.
+        buyer = founded.direct_buyer
+        report = founded.admissions.get(buyer) if buyer else None
+        if report is None:
+            maker = event.detail.get("maker")
+            buyer = maker if maker in founded.admissions else next(iter(founded.admissions), None)
+            report = founded.admissions.get(buyer) if buyer else None
         if report is None:
             raise simlife_drivers.DriverRefusal(
                 f"no participant of {event.market_id} has been admitted, and a Direct trade is "
-                "between two admitted positions"
+                "between the founding founder and one admitted position"
             )
         run = simlife_drivers.drive_fill(self.drivers, founded, event.subject, report)
         return simlife.EventResult(
             outcome=simlife.OUTCOME_EXECUTED,
-            detail=self._finalized_line(run, f"filled {event.subject} on {founded.address}"),
+            detail=self._finalized_line(
+                run, f"filled {event.subject} on {founded.address} with {buyer} buying"
+            ),
             signatures=self._signatures(run),
         )
 
@@ -941,6 +1020,15 @@ def cmd_run(args: argparse.Namespace) -> int:
             + (f", slot {slots[-1]}" if slots else ""),
             flush=True,
         )
+        # THE LEDGER, PER TICK, and it is a crash property rather than a
+        # convenience. `ledger.json` was written once, in the run's `finally`,
+        # so a run killed hard at tick 40 of 60 kept forty ticks of census files
+        # and NO record of what it had attempted -- the censuses say what the
+        # chain held and only the ledger says what was tried and refused. A
+        # multi-hour walk has to survive being killed, so the ledger is
+        # rewritten atomically after every tick and the final write in `finally`
+        # is now the last of many rather than the only one.
+        simcore.write_json_atomic(work / "ledger.json", walked.ledger())
         if rate.period_seconds > 0.0:
             stop.sleep_interruptibly(rate.next_delay())
 
@@ -961,10 +1049,17 @@ def cmd_run(args: argparse.Namespace) -> int:
             detail = f"walked {len(conductor.entries)} planned events"
         return 0
     except simcore.Halt as halt:
-        outcome, code, detail = simcore.EXIT_HALTED, 3, str(halt)
+        # TWO HALTS, TWO WORDS. A broken conservation law is a fact about the
+        # ledger; a crossed spend budget is a fact about this run. Both write
+        # HALT.json and both refuse a restart until a human clears it -- an
+        # unattended lane must not resume spending on its own -- but a reader
+        # deciding what to do next needs to know which one stopped them.
+        spend_halt = str(halt).startswith("spend budget crossed")
+        outcome = simcore.EXIT_OVERSPENT if spend_halt else simcore.EXIT_HALTED
+        code, detail = (6 if spend_halt else 3), str(halt)
         ledger = conductor.ledger()
-        print(f"HALTED: {halt}", file=sys.stderr)
-        return 3
+        print(f"{'OVERSPENT' if spend_halt else 'HALTED'}: {halt}", file=sys.stderr)
+        return code
     except Backpressure as pressure:
         # Not a halt and not a crash: the endpoint asked this run to slow down
         # and it has nothing to slow down TO -- a world walk is finite and its

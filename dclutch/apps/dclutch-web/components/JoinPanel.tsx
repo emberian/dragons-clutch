@@ -158,10 +158,10 @@ export default function JoinPanel({
   return <section className="trade-v3-card" id="join">
     <header><span>05</span><div><h2>Join this market</h2><p>Connect a wallet to see where you stand.</p></div></header>
 
-    <WalletDirectory directory={wallets} purpose="join inspection" onConnected={() => setInspection({ kind: 'idle' })} />
+    <WalletDirectory directory={wallets} onConnected={() => setInspection({ kind: 'idle' })} />
 
     {wallets.address === null
-      ? <p className="direct-status">No wallet connected. Connecting shares an address; nothing is signed.</p>
+      ? <p className="direct-status">No wallet connected.</p>
       : <div className="direct-actions">
         <button type="button" onClick={() => { void inspect(); }} disabled={inspection.kind === 'working'}>
           {inspection.kind === 'working' ? 'Reading your accounts…' : 'Check my standing on this market'}

@@ -101,7 +101,7 @@ export default function RationalRepresentationWorkspace() {
     setWallet(address);
     if (payer === '') setPayer(address);
     if (authority === '') setAuthority(address);
-    setWalletStatus(`${address} · identity only; no signature requested`);
+    setWalletStatus(`Connected · ${address}`);
   }
 
   async function signTransaction() {
@@ -155,7 +155,7 @@ export default function RationalRepresentationWorkspace() {
 
     <section className="trade-v3-card signing-card">
       <header><span>03</span><div><h2>Wallet handoff and exact packet export</h2><p>Connecting reads identity only. Signing is a separate explicit action. Distinct payer/authority packets remain valid but are exported for multisigner coordination; nothing is submitted here.</p></div></header>
-      <WalletDirectory directory={wallets} purpose="payer / transfer authority" onConnected={adoptIdentity} />
+      <WalletDirectory directory={wallets} onConnected={adoptIdentity} />
       <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no packet built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign sole-wallet packet</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>No automatic submission or hidden retry.</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transfer material</summary><dl><div><dt>Instruction bytes · base64</dt><dd>{base64(plan.instructionBytes)}</dd></div><div><dt>Packet bytes · base64</dt><dd>{base64(signed?.wireBytes ?? plan.wireBytes)}</dd></div></dl></details>}
     </section>

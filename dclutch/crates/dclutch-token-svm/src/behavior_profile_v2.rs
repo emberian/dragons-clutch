@@ -72,6 +72,66 @@ pub struct Token2022BehaviorMintFactsV2 {
     metadata: InertMetadataV2,
 }
 
+/// Authenticated facts from one compacted Fractional shard Mint.
+///
+/// A second facts type rather than a widened first one, for the reason
+/// [`Token2022BehaviorMintFactsV2::controller`] states in its own doc: that
+/// method promises one key bound identically as Mint, close *and*
+/// permissioned-burn authority. A compacted shard Mint is exactly the shape
+/// where that promise stops holding, so it gets a type whose accessors say what
+/// is true of it rather than a field that quietly makes the other type's doc a
+/// lie.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Token2022CompactedShardMintFactsV2 {
+    mint: Mint,
+    controller: Address,
+    burn_authority: Address,
+    metadata: InertMetadataV2,
+}
+
+impl Token2022CompactedShardMintFactsV2 {
+    /// Return the exact Token-owned base Mint state.
+    pub const fn mint(self) -> Mint {
+        self.mint
+    }
+
+    /// Return the controller still bound as Mint authority and close authority.
+    ///
+    /// The Fractional capability root. It keeps both of these after the
+    /// hand-off and loses only the burn.
+    pub const fn controller(self) -> Address {
+        self.controller
+    }
+
+    /// Return the permissioned-burn authority the compaction handed over.
+    ///
+    /// Never equal to [`Self::controller`]: a Mint whose burn still answers to
+    /// the root has not been compacted, and
+    /// [`Token2022BehaviorProfileV2::read_compacted_shard_mint`] refuses it.
+    pub const fn burn_authority(self) -> Address {
+        self.burn_authority
+    }
+
+    /// Return the admitted inert-metadata shape.
+    pub const fn metadata(self) -> InertMetadataV2 {
+        self.metadata
+    }
+
+    /// Return the display-only decimals byte.
+    pub const fn display_decimals(self) -> u8 {
+        self.mint.decimals
+    }
+
+    /// Return the exact raw base-unit Mint supply.
+    ///
+    /// Reported rather than pinned, and unbounded in both directions. See
+    /// [`Token2022BehaviorProfileV2::read_compacted_shard_mint`] for why a
+    /// compacted coordinate's supply is the one number no caller can name.
+    pub const fn base_supply(self) -> u64 {
+        self.mint.supply
+    }
+}
+
 impl Token2022BehaviorMintFactsV2 {
     /// Return the exact Token-owned base Mint state.
     pub const fn mint(self) -> Mint {
@@ -176,100 +236,82 @@ impl Token2022BehaviorProfileV2 {
         mint_data: &[u8],
         expected_controller: Address,
     ) -> Result<Token2022BehaviorMintFactsV2> {
-        if program_id != TOKEN_2022_PROGRAM_ID {
-            return Err(Error::ProfileProgramMismatch);
-        }
-        if mint_key == [0; 32] || expected_controller == [0; 32] {
-            return Err(Error::AuthorityMismatch);
-        }
-        if mint_data.len() < TLV_START_OFFSET {
-            return Err(Error::InvalidLength);
-        }
-        let base = Mint::parse(
-            mint_data
-                .get(..MINT_BYTES)
-                .ok_or(Error::InvalidExtensionLayout)?,
+        // The burn role is named separately and then named as the controller,
+        // which is the whole of what "one controller, three times over" means.
+        // Stating it rather than letting the walk default to it is what makes
+        // `read_compacted_shard_mint` below a second nomination rather than a
+        // relaxation of this one.
+        let (mint, metadata) = read_profile_mint(
+            program_id,
+            mint_key,
+            mint_data,
+            expected_controller,
+            expected_controller,
         )?;
-        if mint_data
-            .get(MINT_BYTES..BASE_ACCOUNT_BYTES)
-            .ok_or(Error::InvalidExtensionLayout)?
-            .iter()
-            .any(|byte| *byte != 0)
-            || mint_data.get(ACCOUNT_TYPE_OFFSET).copied() != Some(MINT_ACCOUNT_TYPE)
-        {
-            return Err(Error::InvalidExtensionLayout);
-        }
-        if !base.is_initialized {
-            return Err(Error::MintUninitialized);
-        }
-        if base.mint_authority != COption::Some(expected_controller) {
+        Ok(Token2022BehaviorMintFactsV2 {
+            mint,
+            controller: expected_controller,
+            metadata,
+        })
+    }
+
+    /// Authenticate one Fractional shard Mint whose burn has been handed over.
+    ///
+    /// The same profile as [`Self::read_mint`] with the burn role nominated
+    /// separately, and the *only* shape that entry point cannot describe.
+    /// Fractional compaction re-points the shard Mint's permissioned-burn
+    /// authority from the capability root to the Claims escrow, while the root
+    /// is still alive to authorize it, because a shard burn needs a second
+    /// signature and the root's is not one Claims can ever produce. After that
+    /// one `SetAuthority`, the Mint authority and the close authority are still
+    /// the root and the burn authority is the escrow, so `read_mint` refuses it
+    /// — correctly, since every route that reads `read_mint` requires root
+    /// control of the burn and would be weakened by admitting anything else.
+    ///
+    /// **The two entry points are disjoint over all Mint bytes, not merely
+    /// different in intent.** This one refuses `expected_burn_authority ==
+    /// expected_controller`, so a Mint it admits has a burn authority its
+    /// mint authority does not equal, and `read_mint` requires those to be the
+    /// same key. No byte string is admitted by both, whatever either caller
+    /// nominates. A Mint that has not been handed off is therefore a *refusal*
+    /// here rather than a pass, which is what stops the compacted arm from
+    /// standing in for the live one.
+    ///
+    /// **Supply is reported and never pinned, and this is a third caller class
+    /// rather than a hole in [`Self::read_mint`]'s discipline.** That doc says
+    /// an on-chain caller with an independent expectation of the supply must
+    /// use [`Self::check_mint`]. A compacted coordinate's caller has no such
+    /// expectation and cannot acquire one: the outstanding shard supply *is*
+    /// the durable claim, and any holder's redemption lowers it between the
+    /// moment a request is built and the moment it lands. Pinning it would
+    /// refuse an honest retirement because somebody else redeemed first. There
+    /// is deliberately no `check_compacted_shard_mint`; a caller that wants one
+    /// is a caller that has not noticed this.
+    pub fn read_compacted_shard_mint(
+        program_id: Address,
+        mint_key: Address,
+        mint_data: &[u8],
+        expected_controller: Address,
+        expected_burn_authority: Address,
+    ) -> Result<Token2022CompactedShardMintFactsV2> {
+        // A burn authority equal to the controller is a Mint the hand-off never
+        // touched; a zero one is a Mint whose holders can never burn at all,
+        // and `SetAuthority` will happily produce that, so it is refused here
+        // rather than inherited from the base guard.
+        if expected_burn_authority == [0; 32] || expected_burn_authority == expected_controller {
             return Err(Error::AuthorityMismatch);
         }
-        if base.freeze_authority != COption::None {
-            return Err(Error::FreezeAuthorityPresent);
-        }
-
-        let mut cursor = TlvCursor::new(
-            mint_data
-                .get(TLV_START_OFFSET..)
-                .ok_or(Error::InvalidExtensionLayout)?,
-        );
-        let mut close_seen = false;
-        let mut burn_seen = false;
-        let mut pointer_seen = false;
-        let mut metadata_seen = false;
-        while let Some(entry) = cursor.next()? {
-            match entry.extension_type {
-                MINT_CLOSE_AUTHORITY_EXTENSION if !close_seen => {
-                    require_extension(
-                        entry,
-                        MINT_CLOSE_AUTHORITY_EXTENSION,
-                        AUTHORITY_EXTENSION_BYTES,
-                    )?;
-                    require_key(entry.value, expected_controller)?;
-                    close_seen = true;
-                }
-                PERMISSIONED_BURN_EXTENSION if !burn_seen => {
-                    require_extension(
-                        entry,
-                        PERMISSIONED_BURN_EXTENSION,
-                        AUTHORITY_EXTENSION_BYTES,
-                    )?;
-                    require_key(entry.value, expected_controller)?;
-                    burn_seen = true;
-                }
-                METADATA_POINTER_EXTENSION if !pointer_seen => {
-                    require_extension(entry, METADATA_POINTER_EXTENSION, METADATA_POINTER_BYTES)?;
-                    require_immutable_self_pointer(entry.value, mint_key)?;
-                    pointer_seen = true;
-                }
-                TOKEN_METADATA_EXTENSION if !metadata_seen => {
-                    if entry.value.len() > MAX_INERT_METADATA_VALUE_BYTES_V2 {
-                        return Err(Error::InvalidExtensionLayout);
-                    }
-                    require_extension_at_least(
-                        entry,
-                        TOKEN_METADATA_EXTENSION,
-                        TOKEN_METADATA_FIXED_BYTES,
-                    )?;
-                    validate_immutable_token_metadata(entry.value, mint_key)?;
-                    metadata_seen = true;
-                }
-                _ => return Err(Error::InvalidExtensionLayout),
-            }
-        }
-        if !close_seen || !burn_seen || pointer_seen != metadata_seen {
-            return Err(Error::InvalidExtensionLayout);
-        }
-        let metadata = if metadata_seen {
-            InertMetadataV2::ImmutableSelfHosted
-        } else {
-            InertMetadataV2::Absent
-        };
-
-        Ok(Token2022BehaviorMintFactsV2 {
-            mint: base,
+        let (mint, metadata) = read_profile_mint(
+            program_id,
+            mint_key,
+            mint_data,
+            expected_controller,
+            expected_burn_authority,
+        )?;
+        Ok(Token2022CompactedShardMintFactsV2 {
+            mint,
             controller: expected_controller,
+            burn_authority: expected_burn_authority,
             metadata,
         })
     }
@@ -321,6 +363,113 @@ impl Token2022BehaviorProfileV2 {
         }
         Ok(Token2022BehaviorAccountFactsV2 { account })
     }
+}
+
+/// The sole V2 Mint walk, with every authority role named by its caller.
+///
+/// One author for the base-state shape, the padding, the account-type byte, the
+/// freeze refusal, the extension set and the optional metadata pair — because
+/// two readers of the same account bytes that maintained those separately is
+/// exactly how a compacted arm quietly becomes a weaker arm. The two public
+/// entry points differ in what they nominate and in nothing else.
+fn read_profile_mint(
+    program_id: Address,
+    mint_key: Address,
+    mint_data: &[u8],
+    expected_controller: Address,
+    expected_burn_authority: Address,
+) -> Result<(Mint, InertMetadataV2)> {
+    if program_id != TOKEN_2022_PROGRAM_ID {
+        return Err(Error::ProfileProgramMismatch);
+    }
+    if mint_key == [0; 32] || expected_controller == [0; 32] || expected_burn_authority == [0; 32] {
+        return Err(Error::AuthorityMismatch);
+    }
+    if mint_data.len() < TLV_START_OFFSET {
+        return Err(Error::InvalidLength);
+    }
+    let base = Mint::parse(
+        mint_data
+            .get(..MINT_BYTES)
+            .ok_or(Error::InvalidExtensionLayout)?,
+    )?;
+    if mint_data
+        .get(MINT_BYTES..BASE_ACCOUNT_BYTES)
+        .ok_or(Error::InvalidExtensionLayout)?
+        .iter()
+        .any(|byte| *byte != 0)
+        || mint_data.get(ACCOUNT_TYPE_OFFSET).copied() != Some(MINT_ACCOUNT_TYPE)
+    {
+        return Err(Error::InvalidExtensionLayout);
+    }
+    if !base.is_initialized {
+        return Err(Error::MintUninitialized);
+    }
+    if base.mint_authority != COption::Some(expected_controller) {
+        return Err(Error::AuthorityMismatch);
+    }
+    if base.freeze_authority != COption::None {
+        return Err(Error::FreezeAuthorityPresent);
+    }
+
+    let mut cursor = TlvCursor::new(
+        mint_data
+            .get(TLV_START_OFFSET..)
+            .ok_or(Error::InvalidExtensionLayout)?,
+    );
+    let mut close_seen = false;
+    let mut burn_seen = false;
+    let mut pointer_seen = false;
+    let mut metadata_seen = false;
+    while let Some(entry) = cursor.next()? {
+        match entry.extension_type {
+            MINT_CLOSE_AUTHORITY_EXTENSION if !close_seen => {
+                require_extension(
+                    entry,
+                    MINT_CLOSE_AUTHORITY_EXTENSION,
+                    AUTHORITY_EXTENSION_BYTES,
+                )?;
+                require_key(entry.value, expected_controller)?;
+                close_seen = true;
+            }
+            PERMISSIONED_BURN_EXTENSION if !burn_seen => {
+                require_extension(
+                    entry,
+                    PERMISSIONED_BURN_EXTENSION,
+                    AUTHORITY_EXTENSION_BYTES,
+                )?;
+                require_key(entry.value, expected_burn_authority)?;
+                burn_seen = true;
+            }
+            METADATA_POINTER_EXTENSION if !pointer_seen => {
+                require_extension(entry, METADATA_POINTER_EXTENSION, METADATA_POINTER_BYTES)?;
+                require_immutable_self_pointer(entry.value, mint_key)?;
+                pointer_seen = true;
+            }
+            TOKEN_METADATA_EXTENSION if !metadata_seen => {
+                if entry.value.len() > MAX_INERT_METADATA_VALUE_BYTES_V2 {
+                    return Err(Error::InvalidExtensionLayout);
+                }
+                require_extension_at_least(
+                    entry,
+                    TOKEN_METADATA_EXTENSION,
+                    TOKEN_METADATA_FIXED_BYTES,
+                )?;
+                validate_immutable_token_metadata(entry.value, mint_key)?;
+                metadata_seen = true;
+            }
+            _ => return Err(Error::InvalidExtensionLayout),
+        }
+    }
+    if !close_seen || !burn_seen || pointer_seen != metadata_seen {
+        return Err(Error::InvalidExtensionLayout);
+    }
+    let metadata = if metadata_seen {
+        InertMetadataV2::ImmutableSelfHosted
+    } else {
+        InertMetadataV2::Absent
+    };
+    Ok((base, metadata))
 }
 
 fn require_immutable_self_pointer(bytes: &[u8], mint_key: Address) -> Result<()> {
@@ -401,6 +550,8 @@ mod tests {
     const MINT_KEY: Address = [7; 32];
     const CONTROLLER: Address = [8; 32];
     const HOLDER: Address = [9; 32];
+    /// The Claims escrow PDA a fractional compaction hands the burn to.
+    const ESCROW: Address = [10; 32];
 
     fn put_tlv(output: &mut std::vec::Vec<u8>, extension_type: u16, value: &[u8]) {
         output.extend_from_slice(&extension_type.to_le_bytes());
@@ -441,6 +592,20 @@ mod tests {
     }
 
     fn mint(decimals: u8, with_metadata: bool) -> std::vec::Vec<u8> {
+        mint_burning_to(decimals, with_metadata, CONTROLLER)
+    }
+
+    /// The same Mint with its permissioned-burn authority named separately.
+    ///
+    /// One fixture author for both arms, for the reason `read_profile_mint` has
+    /// one: two builders maintaining the same base state and extension order
+    /// separately is how a compacted fixture drifts into testing a shape the
+    /// hand-off would never produce.
+    fn mint_burning_to(
+        decimals: u8,
+        with_metadata: bool,
+        burn_authority: Address,
+    ) -> std::vec::Vec<u8> {
         let mut output = std::vec![0; TLV_START_OFFSET];
         put(&mut output, 0, &1_u32.to_le_bytes());
         put(&mut output, 4, &CONTROLLER);
@@ -455,8 +620,23 @@ mod tests {
             put_tlv(&mut output, METADATA_POINTER_EXTENSION, &pointer);
             put_tlv(&mut output, TOKEN_METADATA_EXTENSION, &metadata_value());
         }
-        put_tlv(&mut output, PERMISSIONED_BURN_EXTENSION, &CONTROLLER);
+        put_tlv(&mut output, PERMISSIONED_BURN_EXTENSION, &burn_authority);
         output
+    }
+
+    /// Exactly what one `SetAuthority(PermissionedBurn)` leaves behind.
+    fn compacted_mint(decimals: u8, with_metadata: bool) -> std::vec::Vec<u8> {
+        mint_burning_to(decimals, with_metadata, ESCROW)
+    }
+
+    fn read_compacted(bytes: &[u8]) -> Result<Token2022CompactedShardMintFactsV2> {
+        Token2022BehaviorProfileV2::read_compacted_shard_mint(
+            TOKEN_2022_PROGRAM_ID,
+            MINT_KEY,
+            bytes,
+            CONTROLLER,
+            ESCROW,
+        )
     }
 
     fn official_interface_mint(decimals: u8) -> std::vec::Vec<u8> {
@@ -639,6 +819,362 @@ mod tests {
             ),
             Err(Error::AuthorityMismatch)
         );
+    }
+
+    /// The compacted arm admits the hand-off's result, and reports both halves.
+    ///
+    /// The Mint authority and the close authority are still the Fractional
+    /// root; only the burn moved. A facts type that reported one "controller"
+    /// would have to pick which of those two facts to tell.
+    #[test]
+    fn the_compacted_arm_admits_what_the_hand_off_produces_and_names_both_halves() {
+        for with_metadata in [false, true] {
+            let bytes = compacted_mint(0, with_metadata);
+            let facts = read_compacted(&bytes).expect("the shape SetAuthority leaves behind");
+            assert_eq!(facts.controller(), CONTROLLER);
+            assert_eq!(facts.burn_authority(), ESCROW);
+            assert_ne!(facts.controller(), facts.burn_authority());
+            assert_eq!(facts.base_supply(), 11);
+            assert_eq!(facts.display_decimals(), 0);
+            assert_eq!(
+                facts.metadata(),
+                if with_metadata {
+                    InertMetadataV2::ImmutableSelfHosted
+                } else {
+                    InertMetadataV2::Absent
+                }
+            );
+        }
+    }
+
+    /// **No Mint bytes are admitted by both arms.** The split's whole safety.
+    ///
+    /// Stated over the fixture family and over every nomination either arm
+    /// could be handed, rather than as two separate "this one passes / that one
+    /// fails" assertions, because the property that matters is a disjunction:
+    /// if some Mint could satisfy both, the compacted arm would be a second way
+    /// to reach every route the live arm gates. It cannot, and the reason is
+    /// structural rather than incidental — the live arm requires the burn key
+    /// to equal the mint authority and the compacted arm requires it not to.
+    #[test]
+    fn no_mint_bytes_are_admitted_by_both_arms() {
+        let mut families = std::vec::Vec::new();
+        for with_metadata in [false, true] {
+            for burn in [CONTROLLER, ESCROW, HOLDER, [0; 32]] {
+                families.push(mint_burning_to(0, with_metadata, burn));
+            }
+        }
+        let mut live_admitted = 0_usize;
+        let mut compacted_admitted = 0_usize;
+        for bytes in &families {
+            for controller in [CONTROLLER, ESCROW, HOLDER] {
+                let live = Token2022BehaviorProfileV2::read_mint(
+                    TOKEN_2022_PROGRAM_ID,
+                    MINT_KEY,
+                    bytes,
+                    controller,
+                )
+                .is_ok();
+                if live {
+                    live_admitted = live_admitted.saturating_add(1);
+                }
+                for burn in [CONTROLLER, ESCROW, HOLDER, [0; 32]] {
+                    let compacted = Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                        TOKEN_2022_PROGRAM_ID,
+                        MINT_KEY,
+                        bytes,
+                        controller,
+                        burn,
+                    )
+                    .is_ok();
+                    if compacted {
+                        compacted_admitted = compacted_admitted.saturating_add(1);
+                    }
+                    assert!(
+                        !(live && compacted),
+                        "one Mint may never satisfy both arms at once"
+                    );
+                }
+            }
+        }
+        // And neither arm is vacuous: a disjointness that held because nothing
+        // was ever admitted would prove nothing at all. Counted exactly, so a
+        // future edit that widened either arm moves a number here rather than
+        // passing silently.
+        //
+        // Live: the two fixtures (metadata absent, present) whose burn TLV is
+        // the controller, each admitted under exactly one of three nominations.
+        assert_eq!(live_admitted, 2);
+        // Compacted: the two escrow-burn fixtures AND the two holder-burn
+        // fixtures, each admitted under exactly one controller/burn pair. The
+        // holder-burn ones count because this profile does not care WHO holds
+        // the burn after the hand-off, only that it is not the root -- which is
+        // the right shape, since who it should be is the compaction route's
+        // question and it derives the escrow itself rather than reading it.
+        assert_eq!(compacted_admitted, 4);
+    }
+
+    /// The live arm was not relaxed, stated against the shipped function.
+    ///
+    /// This is the claim the split has to earn: every route reading `read_mint`
+    /// today requires the Fractional root to control the burn, and a compacted
+    /// Mint must remain refused there however it is nominated. A future edit
+    /// that widened `read_mint` to accept a handed-off Mint has to argue with
+    /// this test.
+    #[test]
+    fn the_live_arm_still_requires_root_control_of_the_burn() {
+        let compacted = compacted_mint(0, false);
+        // Named as the root: the burn extension no longer carries it.
+        assert_eq!(read(&compacted), Err(Error::AuthorityMismatch));
+        // Named as the escrow: the base Mint authority no longer carries that.
+        assert_eq!(
+            Token2022BehaviorProfileV2::read_mint(
+                TOKEN_2022_PROGRAM_ID,
+                MINT_KEY,
+                &compacted,
+                ESCROW,
+            ),
+            Err(Error::AuthorityMismatch)
+        );
+        // The supply-pinning entry point inherits the refusal rather than
+        // reaching its own supply comparison first.
+        assert_eq!(
+            Token2022BehaviorProfileV2::check_mint(
+                TOKEN_2022_PROGRAM_ID,
+                MINT_KEY,
+                &compacted,
+                CONTROLLER,
+                11,
+            ),
+            Err(Error::AuthorityMismatch)
+        );
+        // And the un-handed-off Mint is still admitted by the live arm exactly
+        // as it was, which is the other half of "not relaxed": the refactor
+        // moved the walk without moving what it admits.
+        let live = mint(0, false);
+        let facts = read(&live).expect("the uncompacted shard Mint is unchanged");
+        assert_eq!(facts.controller(), CONTROLLER);
+        assert_eq!(facts.base_supply(), 11);
+        // The mirror: an uncompacted Mint is not a compacted one.
+        assert_eq!(read_compacted(&live), Err(Error::AuthorityMismatch));
+    }
+
+    /// Every authority role is nominated, and none is inferred from another.
+    ///
+    /// `closeable_mint`'s own idiom, applied one profile over: two roles that
+    /// happen to hold related keys still have to be stated, so a route that
+    /// later separates them cannot pass by accident.
+    #[test]
+    fn the_compacted_arm_nominates_every_authority_and_infers_none() {
+        let bytes = compacted_mint(0, false);
+        for wrong in [[0; 32], HOLDER, MINT_KEY] {
+            assert_eq!(
+                Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                    TOKEN_2022_PROGRAM_ID,
+                    MINT_KEY,
+                    &bytes,
+                    wrong,
+                    ESCROW,
+                ),
+                Err(Error::AuthorityMismatch),
+                "the controller is not inferred from the Mint"
+            );
+            assert_eq!(
+                Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                    TOKEN_2022_PROGRAM_ID,
+                    MINT_KEY,
+                    &bytes,
+                    CONTROLLER,
+                    wrong,
+                ),
+                Err(Error::AuthorityMismatch),
+                "the burn authority is not inferred from the Mint"
+            );
+        }
+        // The Mint key still authenticates the metadata self-pointer, and the
+        // program pin is not a hole here either.
+        assert_eq!(
+            Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                TOKEN_2022_PROGRAM_ID,
+                [0; 32],
+                &bytes,
+                CONTROLLER,
+                ESCROW,
+            ),
+            Err(Error::AuthorityMismatch)
+        );
+        assert_eq!(
+            Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                LEGACY_TOKEN_PROGRAM_ID,
+                MINT_KEY,
+                &bytes,
+                CONTROLLER,
+                ESCROW,
+            ),
+            Err(Error::ProfileProgramMismatch)
+        );
+    }
+
+    /// A hand-off to nobody is a real on-chain state, and it is refused.
+    ///
+    /// `SetAuthority` accepts `None` as the new authority, so a Mint whose
+    /// permissioned-burn extension carries the zero key is producible by the
+    /// same instruction the compaction uses. Its holders could never burn
+    /// again, and every shard outstanding against it would be stranded
+    /// permanently. That is refused at the nomination and at the bytes, so
+    /// neither a caller mistake nor a chain state can reach it.
+    #[test]
+    fn a_hand_off_to_nobody_is_refused_at_the_nomination_and_at_the_bytes() {
+        let bytes = compacted_mint(0, false);
+        assert_eq!(
+            Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                TOKEN_2022_PROGRAM_ID,
+                MINT_KEY,
+                &bytes,
+                CONTROLLER,
+                [0; 32],
+            ),
+            Err(Error::AuthorityMismatch)
+        );
+        let burned_to_nobody = mint_burning_to(0, false, [0; 32]);
+        for burn in [[0; 32], CONTROLLER, ESCROW, HOLDER] {
+            assert!(
+                Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                    TOKEN_2022_PROGRAM_ID,
+                    MINT_KEY,
+                    &burned_to_nobody,
+                    CONTROLLER,
+                    burn,
+                )
+                .is_err(),
+                "a Mint nobody can burn is admitted under no nomination"
+            );
+        }
+        assert_eq!(read(&burned_to_nobody), Err(Error::AuthorityMismatch));
+    }
+
+    /// A Mint that has not been handed off is a refusal, not a pass.
+    ///
+    /// The direction that keeps the compacted arm from standing in for the live
+    /// one. `RetireCoordinate`'s compacted arm skips the Mint close and admits
+    /// a nonzero supply; reaching it with a Mint the root still controls would
+    /// let a caller skip the close on a coordinate that was never compacted.
+    #[test]
+    fn a_mint_the_root_still_burns_is_refused_by_the_compacted_arm() {
+        let uncompacted = mint(0, false);
+        assert_eq!(
+            Token2022BehaviorProfileV2::read_compacted_shard_mint(
+                TOKEN_2022_PROGRAM_ID,
+                MINT_KEY,
+                &uncompacted,
+                CONTROLLER,
+                CONTROLLER,
+            ),
+            Err(Error::AuthorityMismatch),
+            "naming one key twice is the un-compacted shape, and is refused"
+        );
+        assert_eq!(read_compacted(&uncompacted), Err(Error::AuthorityMismatch));
+    }
+
+    /// The compacted arm refuses the extension SET exactly as the live one does.
+    ///
+    /// The shared-walk claim, executed rather than asserted by construction:
+    /// the three shapes `read_mint_refuses_on_the_extension_set_and_never_on_the_length`
+    /// pins, rebuilt with the burn handed over, refuse identically.
+    #[test]
+    fn the_compacted_arm_refuses_the_extension_set_exactly_as_the_live_one_does() {
+        let canonical = compacted_mint(0, false);
+        let base = canonical
+            .get(..TLV_START_OFFSET)
+            .expect("base account bytes")
+            .to_vec();
+        read_compacted(&canonical).expect("the canonical compacted shape is admitted");
+
+        // No burn extension at all: a Mint the hand-off could not have produced.
+        let mut close_only = base.clone();
+        put_tlv(&mut close_only, MINT_CLOSE_AUTHORITY_EXTENSION, &CONTROLLER);
+        assert_eq!(close_only.len(), 202);
+        assert_eq!(
+            read_compacted(&close_only),
+            Err(Error::InvalidExtensionLayout)
+        );
+
+        // Identical length, wrong set. A width check cannot tell these apart.
+        let mut same_length_wrong_set = base.clone();
+        put_tlv(
+            &mut same_length_wrong_set,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &CONTROLLER,
+        );
+        put_tlv(
+            &mut same_length_wrong_set,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &CONTROLLER,
+        );
+        assert_eq!(same_length_wrong_set.len(), canonical.len());
+        assert_eq!(
+            read_compacted(&same_length_wrong_set),
+            Err(Error::InvalidExtensionLayout)
+        );
+
+        // A second burn extension, which is how a hostile Mint would try to
+        // carry both authorities at once and satisfy both arms. It satisfies
+        // neither, and the two arms refuse it at DIFFERENT clauses -- which is
+        // the walk being honest rather than an inconsistency. The compacted arm
+        // matches the escrow's entry, sets `burn_seen`, and refuses the second
+        // on the layout; the live arm reaches the escrow's entry first and
+        // refuses on the authority before a duplicate is even visible. Asserted
+        // as "refused" for the live arm rather than as a code, because pinning
+        // the code here would pin an ordering nothing else depends on.
+        let mut two_burns = canonical.clone();
+        put_tlv(&mut two_burns, PERMISSIONED_BURN_EXTENSION, &CONTROLLER);
+        assert_eq!(
+            read_compacted(&two_burns),
+            Err(Error::InvalidExtensionLayout)
+        );
+        assert!(read(&two_burns).is_err());
+
+        // The close authority is still the root's, and is still checked.
+        let mut close_handed_over = std::vec![0; TLV_START_OFFSET];
+        put(&mut close_handed_over, 0, &1_u32.to_le_bytes());
+        put(&mut close_handed_over, 4, &CONTROLLER);
+        put(&mut close_handed_over, 36, &11_u64.to_le_bytes());
+        put(&mut close_handed_over, 45, &[1]);
+        put(
+            &mut close_handed_over,
+            ACCOUNT_TYPE_OFFSET,
+            &[MINT_ACCOUNT_TYPE],
+        );
+        put_tlv(
+            &mut close_handed_over,
+            MINT_CLOSE_AUTHORITY_EXTENSION,
+            &ESCROW,
+        );
+        put_tlv(&mut close_handed_over, PERMISSIONED_BURN_EXTENSION, &ESCROW);
+        assert_eq!(
+            read_compacted(&close_handed_over),
+            Err(Error::AuthorityMismatch),
+            "compaction hands over the burn and nothing else"
+        );
+    }
+
+    /// A compacted coordinate's supply is reported and pinned by nobody.
+    ///
+    /// The mirror of `read_mint_reports_the_supply_that_check_mint_pins`, and
+    /// the reason there is no `check_compacted_shard_mint` to compare against:
+    /// the outstanding shard supply is the durable claim, and any holder's
+    /// redemption lowers it between a request being built and it landing.
+    #[test]
+    fn a_compacted_mint_reports_every_supply_and_pins_none() {
+        let canonical = compacted_mint(0, false);
+        for supply in [0_u64, 1, 11, u64::MAX] {
+            let mut bytes = canonical.clone();
+            put(&mut bytes, SUPPLY_OFFSET, &supply.to_le_bytes());
+            let facts = read_compacted(&bytes).expect("every supply is admitted");
+            assert_eq!(facts.base_supply(), supply);
+            assert_eq!(facts.controller(), CONTROLLER);
+            assert_eq!(facts.burn_authority(), ESCROW);
+        }
     }
 
     #[test]

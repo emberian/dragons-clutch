@@ -1815,6 +1815,9 @@ Two costs follow, and they are what the estimate was missing:
   already performs. This costs the permissionless property nothing;
   `fractional_retirement_v3.rs` is permissionless *and* Trading-composed today.
   It costs a route in a second ELF.
+
+  > **AMENDED — "a route in a second ELF" is three arms in three crates, and
+  > the precedent this sentence leans on has only one of them.** See §17.5.
 - **A re-pointed Mint no longer satisfies `read_mint`.** That function requires
   one controller to be the mint authority *and* the close authority *and* the
   burn authority. After the hand-off the burn authority is the escrow and the
@@ -1830,3 +1833,74 @@ record's own escrowed-equals-`floor(supply / denominator) × payout_per_claim`
 invariant would each have to learn about the sink, and the sink is itself a
 perpetual account holding instruments nobody can destroy. Burning keeps one
 number meaning one thing.
+
+---
+
+### 17.5 The burn, executed; and the composition layer nobody had looked at
+
+Written by FRACCHECK-2, 2026-08-31, from building §17.4's Trading half.
+Evidence: `docs/evidence/FRACTIONAL_COMPACTION_TRADING_HALF_2026_08_31.md`.
+
+**§17.4's sound shape is no longer a design sentence.** A Mint carrying the
+whole shard profile — not the burn half — has its permissioned-burn authority
+moved from a program-derived root to a program-derived escrow while the root is
+still alive; the old authority is powerless afterwards; and the holder's own
+signature plus the escrow's `invoke_signed` burns the shards. The escrow is
+built from `ClaimCheckEscrowSeedsV1`, the shipped recipe, so what Token-2022
+accepts is a signature this tree knows how to produce rather than one a test can
+always manufacture.
+
+**The split-controller sibling exists, and the property is a disjointness.**
+
+```rust
+Token2022BehaviorProfileV2::read_compacted_shard_mint(
+    program_id, mint_key, mint_data, expected_controller, expected_burn_authority,
+) -> Result<Token2022CompactedShardMintFactsV2>
+```
+
+It refuses `burn == controller`, and `read_mint` requires those to be equal, so
+**no Mint bytes are admitted by both arms under any nomination**. The compacted
+arm therefore cannot stand in for the live one on a coordinate nobody compacted,
+and the live arm cannot be reached by a Mint whose burn the root gave away. Both
+directions are executed against the bytes Token-2022 wrote either side of a real
+`SetAuthority`, which is the half a hand-built fixture can never supply.
+
+Supply is reported and never pinned, and there is deliberately no
+`check_compacted_shard_mint`: the outstanding shard supply *is* the durable
+claim, and any holder's redemption lowers it between a request being built and
+it landing, so pinning it would refuse an honest retirement because somebody
+else redeemed first.
+
+**The correction, and it is upstream of the estimate again.** §17.4 costs the
+Trading half as *"a route in a second ELF"*, on the precedent that
+`fractional_retirement_v3.rs` is Trading-composed today. A Claims route reached
+from Trading's Hot path has to be admitted at **three** layers, and
+`RetireCoordinate` is present at one:
+
+| layer | `RetireCoordinate` |
+|---|---|
+| execution — `claims_composition_v3.rs` (`route_authority`, `fractional_root_signer`, receipt verifier) | **present** |
+| composition decode — `composition_v3.rs::decode_selected_with_external`, `hot_v3.rs::decode_claims_composition_boxed_v3` | **absent** |
+| artifact geometry — `artifacts_v4.rs::action_geometry` / `encode_effect` / `encode_account_profile` | **absent** |
+
+`FRACTIONAL_RETIREMENT_REQUEST_MAGIC_V3` occurs in `programs/dclutch-trading-sbf/src/`
+exactly twice, both inside `claims_composition_v3.rs`, and zero times in
+`composition_v3.rs`. `decode_claims_composition_boxed_v3` admits an external
+once-route only for `FRACTIONAL_EXPOSURE_REQUEST_MAGIC_V2`. So *ordered
+fractional retirement is reachable from a test caller and not from a Market*,
+and "Trading-composed" is true of the signature propagation while not yet being
+true of the route selection.
+
+That is not an argument against this design. It is a correction to what the
+remaining work is: a fractional compaction inherits the gap rather than
+borrowing a solved problem, and the two missing arms have no precedent in this
+family to copy.
+
+> **AMENDED — fourteen was short by three, and the three are composition
+> surface rather than route code.** **Seventeen commits**; eight have landed
+> (FRACCHECK's four, plus the split-controller reader, the derived-escrow
+> campaign, the compaction request, and this amendment). Nine remain against
+> the ten FRACCHECK handed over: four landed and three were added. Commit 6 —
+> the Claims compaction route, a ~48-account frame wrapping the 36-account
+> terminal frame — is a lane on its own. Everything §17.3 says about compute,
+> frames and the already-paid terminal fixture still holds.

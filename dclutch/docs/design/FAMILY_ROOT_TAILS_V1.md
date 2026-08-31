@@ -454,6 +454,51 @@ preimages, two magics, an empty `seam_fields` in both, the exact
 `ActivationBundleInputV1` for each, the emitter and guard shape per family, and
 the four assertion sites that must relax.
 
+### 11a. Re-verified STILL TRUE at HEAD, 2026-08-31 (LEDGER-TRUE)
+
+A readiness-wave report claimed the family root-tail ABIs had landed. **They
+have not, and this section needs no correction.** Recorded here because the
+claim will be made again, and because "ROOTTAILS landed" is true of the *design*
+and false of the ABI — the word attaches to this document, not to any bytes.
+
+Measured at HEAD of `main`:
+
+- **No code exists for either symbol.** `RationalCapabilityRoot`,
+  `StructuredCapabilityRoot`, and the magics `DCRNCRT1` / `DCSTCRT1` have
+  **zero hits tree-wide under `--type rust`**. They occur only in this file and
+  in `SESSION_STATE.md:579`. There is no struct, no offset constant, no size
+  constant, no decoder — nothing to wire in, so the question of whether it is
+  wired in does not arise.
+- **Both commits are doc-only.** `ec530892` (2026-08-30 22:56, *"design: the
+  two capability-root tails Rational and Structured never had"*) touches this
+  file and nothing else, +474 lines; `97d0f435` (22:57) touches
+  `SESSION_STATE.md` and nothing else. Both are ancestors of `main`. A pickaxe
+  on `DCRNCRT1` across all refs returns `ec530892` alone.
+- **The §9b negative control did not move.** §9b step 6 predicted that landing
+  the Rational emitter would take the emission census from 59 guarded / 15
+  unguarded to 59 / 16. `tools/emission-guard/COVERAGE.md:6` still reads *"74
+  generated files from 72 emitters. 59 guarded (57 emitters), 15 unguarded (15
+  emitters)."* That file is byte-gated, so it could not have stayed still
+  through a landing. Neither emitter file
+  (`EmitRationalCapabilityRootAbiRust.lean`, the `RationalCapabilityRootAbi`
+  module) exists, and `dclutch-rational-representation-v2-lifecycle-contract`
+  has no `generated.rs`.
+- **The pre-state §1 measured is intact.** `root_state_bytes` is still an
+  unauthored literal at all four sites — `64` at
+  `tools/local-validator/bootstrap/successor/src/rational_market.rs:201,230`
+  and `8` at `.../structured_market.rs:209,237` — still inside the "LAB FACTS,
+  labeled" demo functions, still constrained by nothing but
+  `CapabilityProgramV4`'s `!= 0 && <= 4096`.
+
+**What the report probably saw.** Two adjacent things did land on 2026-08-30
+and are easy to mistake for this: **General's** activation bundle and
+publication closure (WALL22 / GENPUB), which are real code at
+`crates/dclutch-general-adapter-contract/src/activation_bundle_v1.rs` — and
+only Direct and General have an `activation_bundle_v1.rs` at all. The evidence
+record for that very work says the opposite of the wave's claim in plain text:
+Rational and Structured *"still have no capability root tail; Fractional's
+remains impossible"* (`docs/evidence/GENERAL_PUBLICATION_CLOSURE_2026_08_30.md:248`).
+
 ## 12. What this does not settle
 
 Nothing here needs a ruling; the packet already ruled the process. Three things

@@ -220,21 +220,95 @@ pub enum ClaimsSbfError {
     BasisEvaluatorAbsent = 0x500C,
 }
 
+impl ClaimsSbfError {
+    /// Every refusal this adapter can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`ClaimsSbfError::ordinal`], whose match is exhaustive: a variant added
+    /// to the enum does not compile until its author writes an arm here, and
+    /// the only arm that satisfies the assertions is its own index in this
+    /// array.
+    pub const ALL: [Self; 13] = [
+        Self::Instruction,
+        Self::Accounts,
+        Self::Identity,
+        Self::Release,
+        Self::Authority,
+        Self::Economic,
+        Self::CustodyRequired,
+        Self::Receipt,
+        Self::Representation,
+        Self::Token,
+        Self::ReleaseSuperseded,
+        Self::SelectionConfig,
+        Self::BasisEvaluatorAbsent,
+    ];
+
+    /// This refusal's position in [`ClaimsSbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a
+    /// fourteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::Accounts => 1,
+            Self::Identity => 2,
+            Self::Release => 3,
+            Self::Authority => 4,
+            Self::Economic => 5,
+            Self::CustodyRequired => 6,
+            Self::Receipt => 7,
+            Self::Representation => 8,
+            Self::Token => 9,
+            Self::ReleaseSuperseded => 10,
+            Self::SelectionConfig => 11,
+            Self::BasisEvaluatorAbsent => 12,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    ClaimsSbfError::Instruction as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE,
-    "ClaimsSbfError must start at its registered refusal band base"
-);
-// Names the *last* variant, which `ReleaseSuperseded` (0x500A) stopped being
-// when `SelectionConfig` (0x500B) landed. An upper-bound assertion that names
-// a variant in the middle of the enum checks nothing about the ones after it.
-const _: () = assert!(
-    (ClaimsSbfError::BasisEvaluatorAbsent as u32)
-        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "ClaimsSbfError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one", and it had already been wrong once:
+// it still named `ReleaseSuperseded` (0x500A) after `SelectionConfig` (0x500B)
+// landed, so for as long as that stood, the newest refusal in the program was
+// checked by nothing. A hand-named ceiling says nothing about the variants
+// after it and goes stale silently every single time the enum grows -- the
+// failure is not that the number was wrong, it is that nothing could notice.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        ClaimsSbfError::ALL[0] as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE,
+        "ClaimsSbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < ClaimsSbfError::ALL.len() {
+        let variant = ClaimsSbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "ClaimsSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + index as u32,
+            "ClaimsSbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "ClaimsSbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<ClaimsSbfError> for ProgramError {
     fn from(value: ClaimsSbfError) -> Self {

@@ -1,0 +1,66 @@
+[package]
+name = "dclutch-direct-ticket"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The portable Direct intent ticket: one writer, one reader, one shape, callable from any host binary"
+
+[lib]
+path = "src/lib.rs"
+
+# WHY THIS CRATE EXISTS AT ALL.
+#
+# The Rust ticket author was born as `pub(crate)` inside the operator binary
+# `dclutch-local-successor-bootstrap`, which has no `[lib]` and fifty path
+# dependencies. That made it uncallable from anywhere else: the released
+# `dclutch` CLI could either grow a SECOND author of a signing preimage, or
+# refuse. It refused, and said so in `dclutch ticket`, and this crate is what
+# that refusal was waiting for.
+#
+# The author's real dependencies are small -- the Lean-emitted intent codec, an
+# Ed25519 signer, and serde -- so it descends here rather than the CLI climbing
+# up to the operator tree.
+
+[features]
+# Authoring is the default because this crate's own tests exercise it: a
+# byte-identity vector that cannot sign proves nothing.
+default = ["author"]
+# Everything that touches key material. A consumer that only needs to READ a
+# ticket, or only needs the `SignedDirectIntentV3` type, takes
+# `default-features = false` and links no signer at all.
+author = ["dep:solana-keypair", "dep:solana-signer"]
+
+[dependencies]
+# The signed message is owned here, emitted from
+# `formal/dclutch-semantics/EmitDirectIntentV2Rust.lean`. This crate calls
+# `CompactIntentV2::signed_preimage()` and lays out no byte of its own.
+dclutch-direct-codec = { path = "../dclutch-direct-codec" }
+
+# NOT `=` PINNED, and this is the one crate in the tree where that is correct.
+#
+# Three INDEPENDENT workspaces resolve this crate -- the protocol root, the
+# released `tools/dclutch-cli`, and the operator's successor bootstrap -- and
+# they do not agree on serde: the root is dragged to 1.0.229 by
+# `solana-program-test`, while the successor pins `=1.0.228`. An `=` requirement
+# here would make the shared author unusable in at least one workspace, which is
+# exactly the wall this crate exists to tear down. The pinning still happens,
+# where pinning actually reproduces a build: in each workspace's committed
+# `Cargo.lock`, including the one `dist` builds the release from.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+# `Pubkey`, from the same crate the on-chain programs use. `solana-address`
+# 1.1.0 is a pure re-export of 2.7.0, so this is the identical type the signer
+# crates below hand back -- checked, not assumed.
+solana-program = { version = "=3.0.0", default-features = false }
+# Detached-signature VERIFICATION is unconditional: the hostile reader verifies
+# every ticket it parses, and a reader that skips that is not this reader.
+solana-signature = { version = "=3.5.2", features = ["verify"] }
+
+# SIGNING, and only under the `author` feature.
+solana-keypair = { version = "=3.1.2", optional = true }
+solana-signer = { version = "=3.0.1", optional = true }
+
+[lints]
+workspace = true

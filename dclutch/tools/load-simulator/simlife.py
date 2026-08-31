@@ -411,6 +411,91 @@ BASIS_ABSENCE = {
 DESTINY_RESOLVES = "resolves-clean"
 DESTINY_FAILS = "commit-deadline-failure"
 DESTINY_SLEEPY = "founded-then-sleepy"
+# WHERE A BAND SITS IS RELATIVE TO THE COORDINATE THE SUBSTRATE WILL OBSERVE,
+# and getting that wrong once made every market in every world resolve into the
+# same cell.
+#
+# The old rule drew `BAND_CENTER = IntUniform(4_000, 40_000)` and
+# `BAND_SPACING = IntUniform(400, 6_000)` with a comment reading "the coordinate
+# domain is USD cents per SOL, so a cut of 12,000 over a denominator of 100
+# reads 120.00". That framing describes a devnet SOL/USD feed and it is not what
+# any local chain does. `PythAdapterConfigV1::validate_update` returns
+# `Ok(i128::from(price))` -- the RAW signed price atoms, with no rescaling to any
+# denominator -- and the committed local fixture
+# (`fixtures/pyth/local-upgraded-2026-08-22`) carries price `100000000` at
+# exponent `-8`. So the observed coordinate on this substrate is 100,000,000
+# exactly, on every chain, forever; every cut the old rule could draw was three
+# to five orders of magnitude below it; and the observation therefore landed
+# above the top cut in one hundred percent of markets.
+#
+# That is not a skew a bigger sample fixes. It is a units mismatch that made the
+# outcome a CONSTANT, and the world's own `selected_cell` -- drawn uniformly and
+# independently of the band -- hid it, because the plan's expectation and the
+# chain's answer were never compared.
+LOCAL_PYTH_FIXTURE_COORDINATE_V1 = 100_000_000
+
+# When one cell taking this share of a world's resolving markets stops being a
+# draw and starts being a defect. Seventy is a threshold rather than a law: a
+# world of four markets can legitimately put three in one cell, and a world of
+# forty cannot. It is stated so a run can FLAG itself rather than leave the
+# reading to whoever notices the histogram.
+DEGENERATE_OUTCOME_SHARE_PERCENT_V1 = 70
+
+# The window a band's width is stated against. A market's band should be wide
+# enough that the coordinate could plausibly be anywhere in it by the deadline,
+# so the width scales with the SQUARE ROOT of the window -- the random walk's
+# own scaling, and the only one that does not make a long market's band either
+# absurdly narrow or absurdly wide.
+BAND_WINDOW_REFERENCE_SLOTS_V1 = 10_000
+
+# How far the coordinate is assumed to be able to travel over the reference
+# window, in basis points of the anchor. Drawn per market: two markets on one
+# feed with different views of how volatile it is are two different products,
+# and this is the axis that says so.
+BAND_VOLATILITY_BPS = IntUniform(40, 900)
+
+# The band's PLACEMENT, in tenths of its own spacing, measured from the anchor.
+# Drawn wide enough that the anchor lands in every cell of the market including
+# both open tails: with `count` cuts there are `count + 1` ordinary cells, and an
+# offset spread over +/- (count + 1)/2 spacings reaches all of them.
+BAND_PLACEMENT_TENTHS_PER_CELL_V1 = 5
+
+# Cuts are stated over this denominator. It is 1 rather than 100 because the
+# coordinate is raw price atoms and a denominator is a display convention: a
+# denominator of 100 over an atom coordinate would have printed every cut a
+# hundred times too small.
+CUT_DENOMINATOR = 1
+
+# How the gaps between cuts vary across a band. Evenly spaced was the old rule
+# and it made two markets of one width one product twice at two scales; a
+# profile is what makes a nine-cell market about "roughly where" different from
+# a nine-cell market about "exactly where near spot".
+BAND_PROFILE_UNIFORM = "uniform"
+BAND_PROFILE_TIGHT_CENTRE = "tight-centre"
+BAND_PROFILE_TIGHT_EDGES = "tight-edges"
+BAND_PROFILE_RAGGED = "ragged"
+BAND_PROFILES = (
+    BAND_PROFILE_UNIFORM,
+    BAND_PROFILE_TIGHT_CENTRE,
+    BAND_PROFILE_TIGHT_EDGES,
+    BAND_PROFILE_RAGGED,
+)
+BAND_PROFILE = Categorical((
+    (BAND_PROFILE_TIGHT_CENTRE, 4),
+    (BAND_PROFILE_UNIFORM, 3),
+    (BAND_PROFILE_RAGGED, 2),
+    (BAND_PROFILE_TIGHT_EDGES, 1),
+))
+
+# The one profile that is a pattern rather than a rule: a fixed irregular
+# sequence, so a `ragged` band is reproducibly uneven rather than randomly so.
+_RAGGED_PATTERN_V1 = (7, 13, 9, 17, 11, 6, 15, 12, 8)
+
+# How steeply a shaped profile's gaps grow, in tenths of the spacing, per
+# half-step away from the middle of the band.
+_PROFILE_SLOPE_TENTHS_V1 = 4
+
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -418,12 +503,22 @@ class MarketArchetype:
     """One KIND of market, as a bundle of distributions rather than as a market.
 
     An archetype is drawn from, never instantiated directly: two markets of the
-    same archetype differ in every number, and that is the point.  The fee rate
-    is a `Constant(0)` on every archetype in this module and the comment beside
-    it says why -- fee-bearing founding does not fit in one transaction today
-    (`docs/evidence/FEE_SECOND_TRANSACTION_FOUNDATION_2026_08_30.md`), and a
-    world that draws a nonzero rate would be a world whose markets cannot be
-    founded at all.
+    same archetype differ in every number, and that is the point.
+
+    THE FEE RATE IS A BAND. It was a `Constant(0)` everywhere, on the reading
+    that fee-bearing founding did not fit in one transaction; that reading came
+    from a document about the FILL's fee leg and not about founding, and it made
+    every market this world drew untradeable -- because the owned-loopback Direct
+    producer has no ticket to read, authors its own terms, and admits exactly
+    `DIRECT_ADMITTED_FEE_BASIS_POINTS_V1`. Zero was the one rate that could never
+    trade.
+
+    So each archetype now draws a rate, weighted towards the admitted one and
+    carrying its own controls. A market drawn off that rate is founded, opened,
+    activated, admitted to and censused like any other, and its fill refuses
+    naming the rate it read, the rate the release admits, and the program that
+    does the refusing. That refusal is a measurement worth having and it is
+    deliberately reachable.
     """
 
     name: str
@@ -440,8 +535,22 @@ class MarketArchetype:
     # has a fill route at all.
     fill_bursts: Distribution
     fills_per_burst: Distribution
-    # Zero-fee only. See the class docstring.
-    fee_basis_points: Distribution = dataclasses.field(default_factory=lambda: Constant(0))
+    # See the class docstring. The default is the admitted rate rather than
+    # zero, so an archetype added later without a fee band is tradeable by
+    # default rather than silently untradeable.
+    fee_basis_points: Distribution = dataclasses.field(
+        default_factory=lambda: Constant(DIRECT_ADMITTED_FEE_BASIS_POINTS_V1)
+    )
+    # HOW FAR THE ARCHETYPE THINKS ITS COORDINATE CAN TRAVEL over the reference
+    # window, in basis points of the anchor, and HOW ITS GAPS VARY across the
+    # band. These two are what make two markets of one width two products: a
+    # three-cell market at 40 bp on a tight-centre profile asks "is it moving at
+    # all", and a three-cell market at 900 bp on a tight-edges profile asks a
+    # different question with the same number of answers.
+    band_volatility_bps: Distribution = dataclasses.field(
+        default_factory=lambda: BAND_VOLATILITY_BPS
+    )
+    band_profile: Distribution = dataclasses.field(default_factory=lambda: BAND_PROFILE)
 
     def describe(self) -> dict:
         return {
@@ -459,17 +568,45 @@ class MarketArchetype:
                 "fill_bursts": self.fill_bursts.describe(),
                 "fills_per_burst": self.fills_per_burst.describe(),
                 "fee_basis_points": self.fee_basis_points.describe(),
+                "band_volatility_bps": self.band_volatility_bps.describe(),
+                "band_profile": self.band_profile.describe(),
             },
         }
+
+
+# The one Direct fee rate the deployed setup release admits, mirrored from
+# `simlife_drivers.DIRECT_ADMITTED_FEE_BASIS_POINTS_V1` so this module can draw a
+# band around it without importing the driver layer. The engine must not depend
+# on the drivers -- it decides what to ATTEMPT and a substrate decides what
+# happens -- so the number is stated twice on purpose and pinned equal by test.
+DIRECT_ADMITTED_FEE_BASIS_POINTS_V1 = 50
+
+
+# Rates a market may be founded at, and only one of them can be filled today.
+# The weights say what a world is mostly made of; the tail is the control that
+# makes the producer's rate clause reachable rather than theoretical.
+TRADEABLE_FEE_BAND = Categorical((("50", 6), ("0", 1), ("25", 1)))
+WIDE_FEE_BAND = Categorical((("50", 4), ("0", 1), ("100", 1)))
+NARROW_FEE_BAND = Categorical((("50", 3), ("100", 1)))
+GRADED_FEE_BAND = Categorical((("50", 3), ("25", 1)))
+UNTRADED_FEE_BAND = Categorical((("0", 1), ("50", 1)))
 
 
 ARCHETYPES: tuple = (
     MarketArchetype(
         name="coin-flip",
-        blurb="Two outcomes, an indicator basis, and a deadline in the middle "
-              "distance. The plainest market this protocol can hold, and the "
-              "one every other archetype is a departure from.",
-        outcomes=Constant(2),
+        blurb="Two sides of one line, plus the explicit failure cell: above the "
+              "cut or below it. The plainest market this protocol can hold that "
+              "still has two answers, and the one every other archetype is a "
+              "departure from.",
+        # THREE, not two, and the difference is the whole archetype. A width-2
+        # market has NO cuts -- the whole coordinate domain as one region plus
+        # failure -- so its only ordinary answer is "it did not fail", which is
+        # not a coin flip and cannot land in two places. One cut gives two
+        # regions, which is what the name has always claimed. Width 2 stays
+        # reachable through `quiet-corner`, which is about a market nobody
+        # trades rather than about a market with two sides.
+        outcomes=Constant(3),
         basis=Constant(BASIS_CATEGORICAL),
         deadline_slots=LogIntUniform(2_000, 20_000),
         destiny=Categorical(((DESTINY_RESOLVES, 8), (DESTINY_FAILS, 1), (DESTINY_SLEEPY, 1))),
@@ -479,6 +616,7 @@ ARCHETYPES: tuple = (
         stake_concentration_percent=Constant(100),
         fill_bursts=IntUniform(1, 3),
         fills_per_burst=IntUniform(1, 3),
+        fee_basis_points=TRADEABLE_FEE_BAND,
     ),
     MarketArchetype(
         name="short-fuse",
@@ -499,6 +637,7 @@ ARCHETYPES: tuple = (
         stake_concentration_percent=Constant(60),
         fill_bursts=IntUniform(1, 2),
         fills_per_burst=IntUniform(1, 2),
+        fee_basis_points=NARROW_FEE_BAND,
     ),
     MarketArchetype(
         name="ladder",
@@ -515,6 +654,7 @@ ARCHETYPES: tuple = (
         stake_concentration_percent=Constant(45),
         fill_bursts=IntUniform(2, 5),
         fills_per_burst=IntUniform(1, 4),
+        fee_basis_points=GRADED_FEE_BAND,
     ),
     MarketArchetype(
         name="tent-band",
@@ -531,6 +671,7 @@ ARCHETYPES: tuple = (
         stake_concentration_percent=Constant(70),
         fill_bursts=IntUniform(1, 4),
         fills_per_burst=IntUniform(1, 3),
+        fee_basis_points=GRADED_FEE_BAND,
     ),
     MarketArchetype(
         name="wide-field",
@@ -547,6 +688,7 @@ ARCHETYPES: tuple = (
         stake_concentration_percent=Constant(35),
         fill_bursts=IntUniform(2, 6),
         fills_per_burst=IntUniform(1, 5),
+        fee_basis_points=WIDE_FEE_BAND,
     ),
     MarketArchetype(
         name="quiet-corner",
@@ -564,6 +706,56 @@ ARCHETYPES: tuple = (
         stake_concentration_percent=Constant(100),
         fill_bursts=Constant(0),
         fills_per_burst=Constant(0),
+        fee_basis_points=UNTRADED_FEE_BAND,
+        # A market nobody trades is still a market about something, and the
+        # thing it is about is a wide slow question: a low volatility over a
+        # very long window still gives a broad band.
+        band_volatility_bps=IntUniform(60, 300),
+        band_profile=Constant(BAND_PROFILE_UNIFORM),
+    ),
+    MarketArchetype(
+        name="hairline",
+        blurb="Three answers around a band so tight the question is whether "
+              "the coordinate moved at all. The archetype whose cuts sit "
+              "closest together, and the one where a small move changes the "
+              "answer.",
+        outcomes=Constant(3),
+        basis=Constant(BASIS_CATEGORICAL),
+        deadline_slots=LogIntUniform(600, 6_000),
+        destiny=Categorical(((DESTINY_RESOLVES, 8), (DESTINY_FAILS, 1), (DESTINY_SLEEPY, 1))),
+        claim_unit_atoms=Constant(1),
+        founding_collateral_atoms=LogIntUniform(80_000_000, 900_000_000),
+        participants=IntUniform(2, 4),
+        stake_concentration_percent=Constant(80),
+        fill_bursts=IntUniform(1, 3),
+        fills_per_burst=IntUniform(1, 2),
+        fee_basis_points=TRADEABLE_FEE_BAND,
+        # Deliberately the narrowest band any archetype draws. At this width the
+        # placement draw moves the answer between all three cells easily, which
+        # is the point: a hairline market is one whose outcome is genuinely in
+        # doubt rather than one whose band is so wide the middle always wins.
+        band_volatility_bps=IntUniform(15, 120),
+        band_profile=Constant(BAND_PROFILE_UNIFORM),
+    ),
+    MarketArchetype(
+        name="long-tail",
+        blurb="Five to seven answers whose regions widen away from the middle: "
+              "fine resolution where the coordinate probably lands and coarse "
+              "buckets for the moves nobody expects. The archetype about HOW "
+              "FAR rather than about WHERE.",
+        outcomes=IntUniform(5, 7),
+        basis=Constant(BASIS_CATEGORICAL),
+        deadline_slots=LogIntUniform(3_000, 40_000),
+        destiny=Categorical(((DESTINY_RESOLVES, 6), (DESTINY_SLEEPY, 3), (DESTINY_FAILS, 1))),
+        claim_unit_atoms=Constant(1),
+        founding_collateral_atoms=LogIntUniform(300_000_000, 3_000_000_000),
+        participants=IntUniform(3, 6),
+        stake_concentration_percent=Constant(50),
+        fill_bursts=IntUniform(2, 4),
+        fills_per_burst=IntUniform(1, 3),
+        fee_basis_points=TRADEABLE_FEE_BAND,
+        band_volatility_bps=IntUniform(200, 900),
+        band_profile=Constant(BAND_PROFILE_TIGHT_CENTRE),
     ),
 )
 
@@ -579,6 +771,8 @@ DEFAULT_ARCHETYPE_MIX = Categorical((
     ("tent-band", 2),
     ("wide-field", 2),
     ("quiet-corner", 2),
+    ("hairline", 3),
+    ("long-tail", 3),
 ))
 
 # The same world, restricted to the markets a real substrate can actually
@@ -586,11 +780,19 @@ DEFAULT_ARCHETYPE_MIX = Categorical((
 # foundable (see BASIS_ABSENCE); nothing else about them is wrong, and the day a
 # founding driver emits a graded basis this preset should be deleted rather than
 # edited.
+#
+# Six archetypes rather than four, and the two added are categorical by
+# construction: `hairline` and `long-tail` differ from the rest in their BAND
+# rather than in their basis -- how far the coordinate is assumed to travel and
+# how the gaps vary across the width -- which is the one axis of variety a
+# substrate that can express exactly one basis kind still has.
 FOUNDABLE_ARCHETYPE_MIX = Categorical((
     ("coin-flip", 4),
     ("short-fuse", 2),
     ("wide-field", 3),
     ("quiet-corner", 2),
+    ("hairline", 3),
+    ("long-tail", 3),
 ))
 
 ARCHETYPE_MIXES = {
@@ -887,12 +1089,20 @@ class WorldSpec:
     # rate. The default is the rate SIMVIZ measured on the devnet run
     # (6.03 slots/s) times a 20s cadence, rounded.
     slots_per_tick: int = 120
+    # THE COORDINATE THIS WORLD'S SUBSTRATE WILL OBSERVE, and every band is
+    # placed relative to it. It is a fact about the CHAIN rather than about the
+    # world: a local validator resolves against a captured Pyth fixture whose
+    # price is one constant, so a world drawn for one substrate and run against
+    # another would have its bands in the wrong place. The default is the
+    # committed local fixture's own coordinate; a devnet world states its own.
+    coordinate_anchor: int = LOCAL_PYTH_FIXTURE_COORDINATE_V1
 
     def describe(self) -> dict:
         return {
             "markets": self.markets,
             "ticks": self.ticks,
             "slots_per_tick": self.slots_per_tick,
+            "coordinate_anchor": self.coordinate_anchor,
             "founding_stagger": self.founding_stagger.describe(),
             "archetype_mix": self.archetype_mix.describe(),
             "persona_mix": self.persona_mix.describe(),
@@ -922,7 +1132,71 @@ class World:
             "personas": [p.describe() for p in PERSONAS],
             "markets": markets,
             "events": events,
+            "outcome_spread": self.outcome_spread(),
             "plan_digest": simcore.digest_of({"markets": markets, "events": events}),
+        }
+
+    def outcome_spread(self) -> dict:
+        """WHICH CELL each market that can resolve settles into, counted.
+
+        A world whose markets all settle into one cell is a world that measures
+        nothing about outcomes, however many markets it has and however varied
+        everything else about them is -- and that is exactly the state this
+        engine was in before the band was drawn relative to the observed
+        coordinate. So it is a health property of a RUN rather than a fact
+        somebody has to go looking for: counted here, carried in `world.json`,
+        printed by `plan`, and failed by a test.
+
+        Cells are counted as `i/n` -- cell index over the market's own width --
+        because cell 3 of four and cell 3 of eleven are not the same answer and
+        summing them would be the caption-disagrees-with-its-chart species one
+        level down.
+        """
+        counts: dict = {}
+        positions: dict = {}
+        for market in self.markets:
+            if market.destiny != DESTINY_RESOLVES or market.selected_cell is None:
+                continue
+            counts[f"{market.selected_cell}/{market.outcome_count}"] = 1 + counts.get(
+                f"{market.selected_cell}/{market.outcome_count}", 0
+            )
+            place = settling_position_tenths(market.selected_cell, market.outcome_count)
+            if place is not None:
+                positions[place] = positions.get(place, 0) + 1
+        total = sum(counts.values())
+        ordered = sorted(counts.items(), key=lambda row: (-row[1], row[0]))
+        # THE DEGENERACY FLAG IS OVER POSITION, NOT OVER `cell/width`, and the
+        # difference is what lets it catch the defect it exists for. Keyed by
+        # `cell/width`, "every market landed in its bottom cell" spreads across
+        # as many keys as the world has widths and looks diverse; the historical
+        # failure -- every observation above every cut -- would have passed.
+        # Position normalises the cell to where in its own market it sits, so
+        # "always the bottom" and "always the top" are each ONE bucket.
+        placed = sum(positions.values())
+        by_position = sorted(positions.items(), key=lambda row: (-row[1], row[0]))
+        heaviest = by_position[0] if by_position else None
+        # A share stated as an exact percentage over integers, never a float:
+        # a threshold a reader can check by hand is worth more than one they
+        # have to trust.
+        share_percent = (100 * heaviest[1]) // placed if heaviest and placed else 0
+        return {
+            "resolving_markets": total,
+            "distinct_cells": len(counts),
+            "counts": dict(ordered),
+            "coordinate_anchor": self.spec.coordinate_anchor,
+            # Markets with a single ordinary cell are counted above and NOT
+            # here: a market whose whole coordinate domain is one region has no
+            # position to take, and counting it as "the bottom" would make a
+            # world of narrow markets look degenerate for being narrow.
+            "positioned_markets": placed,
+            "position_counts": dict(by_position),
+            "distinct_positions": len(positions),
+            "heaviest_position_tenths": None if heaviest is None else heaviest[0],
+            "heaviest_share_percent": share_percent,
+            "degenerate_threshold_percent": DEGENERATE_OUTCOME_SHARE_PERCENT_V1,
+            "degenerate": bool(
+                placed > 0 and share_percent > DEGENERATE_OUTCOME_SHARE_PERCENT_V1
+            ),
         }
 
 
@@ -944,32 +1218,100 @@ def build_world(spec: WorldSpec) -> World:
     return World(spec=spec, markets=markets, events=events)
 
 
-# The coordinate domain is USD cents per SOL, so a cut of 12,000 over a
-# denominator of 100 reads "120.00". These two bound where a band sits and how
-# wide its regions are; they are the difference between two markets of one
-# width being two products and being one product twice.
-BAND_CENTER = IntUniform(4_000, 40_000)
-BAND_SPACING = IntUniform(400, 6_000)
-CUT_DENOMINATOR = 100
+def _gap_tenths(profile: str, gaps: int) -> list:
+    """`gaps` gap multipliers, in tenths of the band's spacing.
+
+    A PROFILE IS A SHAPE OVER THE GAPS AND NOT A SECOND SCALE, and that is
+    enforced by construction rather than by hand-tuned tables: whatever shape a
+    profile asks for is rescaled so the multipliers average ten. Without the
+    rescale "tight-centre" would also mean "narrower", the two axes would be one
+    axis twice, and a reader comparing two markets could not tell which of the
+    two they were looking at.
+    """
+    if gaps <= 0:
+        return []
+    if profile == BAND_PROFILE_UNIFORM:
+        return [10] * gaps
+    if profile == BAND_PROFILE_RAGGED:
+        raw = [_RAGGED_PATTERN_V1[index % len(_RAGGED_PATTERN_V1)] for index in range(gaps)]
+    else:
+        # Distance from the band's middle in HALF-STEPS, so an even gap count is
+        # symmetric with no rounding. The shape is a property of the band rather
+        # than of which end it was built from.
+        distance = [abs(2 * index - (gaps - 1)) for index in range(gaps)]
+        farthest = max(distance)
+        if profile == BAND_PROFILE_TIGHT_CENTRE:
+            raw = [10 + _PROFILE_SLOPE_TENTHS_V1 * step for step in distance]
+        elif profile == BAND_PROFILE_TIGHT_EDGES:
+            raw = [10 + _PROFILE_SLOPE_TENTHS_V1 * (farthest - step) for step in distance]
+        else:
+            raise Refusal(f"unknown band profile {profile!r}")
+    total = sum(raw)
+    return [max(1, value * 10 * gaps // total) for value in raw]
 
 
-def _band(outcome_count: int, center: int, spacing: int) -> list:
-    """`outcome_count - 2` strictly increasing cuts, centred and evenly spaced.
+def _band(outcome_count: int, anchor: int, spacing: int, offset: int, profile: str) -> list:
+    """`outcome_count - 2` strictly increasing cuts, placed around an anchor.
 
-    Evenly spaced is a CHOICE and a modest one: the interesting variation
-    between two markets of one width is where the band sits and how wide it is,
-    and an uneven band would add a second axis of difference that no consumer of
-    this plan reads. It is recorded as a distribution beside the value so a
-    reader can see that the spacing was uniform rather than assume it.
+    `anchor` is the coordinate the substrate will actually observe; `offset` is
+    how far the band's middle sits from it, in the band's own units; `profile`
+    decides how the gaps vary across the band. The cuts come back strictly
+    increasing and positive, which the founding compiler requires and refuses.
     """
     count = max(0, outcome_count - 2)
     if count == 0:
         return []
-    first = center - spacing * (count - 1) // 2
-    # Keep the whole band positive: a negative USD-cents-per-SOL cut is a
-    # coordinate no price can land under, which would make one region dead.
-    first = max(spacing, first)
-    return [first + spacing * step for step in range(count)]
+    spacing = max(1, int(spacing))
+    gaps = [max(1, spacing * tenths // 10) for tenths in _gap_tenths(profile, max(0, count - 1))]
+    width = sum(gaps)
+    first = anchor + offset - width // 2
+    # Keep the whole band positive AND clear of the anchor's own value: a cut
+    # exactly at the anchor would make the settling cell depend on whether the
+    # chain's comparison is strict, which is a question this module must not
+    # have an opinion about.
+    lowest = max(1, spacing)
+    if first < lowest:
+        first = lowest
+    cuts = [first]
+    for gap in gaps:
+        cuts.append(cuts[-1] + gap)
+    if anchor in cuts:
+        # The WHOLE band moves, not the offending cut. Nudging one cut would
+        # change two gaps and make a `uniform` profile stop being uniform for a
+        # reason that has nothing to do with the profile.
+        cuts = [cut + 1 for cut in cuts]
+    return cuts
+
+
+def settling_cell(coordinate: int, cuts: Sequence[int]) -> int:
+    """Which ordinary cell an observed coordinate falls in.
+
+    `outcome_count == len(cuts) + 2`: one open tail below the first cut, one
+    region per gap, one open tail above the last, and the explicit failure cell
+    last. So an observation at or above `k` cuts is cell `k`, and the answer is
+    in `0 ..= len(cuts)` -- never the failure cell, which is reached by a
+    deadline rather than by an observation.
+    """
+    return sum(1 for cut in cuts if coordinate >= cut)
+
+
+def settling_position_tenths(cell: int, outcome_count: int) -> Optional[int]:
+    """WHERE IN ITS OWN MARKET a settled cell sits, in tenths, or `None`.
+
+    Cell 3 of four and cell 3 of eleven are not the same answer, so a histogram
+    over raw cell indices compares numbers that do not mean the same thing. This
+    normalises: 0 is the bottom open tail, 10 is the top one, and everything
+    between is interior.
+
+    `None` for a market with a single ordinary cell -- a width-2 market has no
+    cuts, so its whole coordinate domain is one region and there is no position
+    for an observation to take. Filing that as "the bottom" would make a world
+    of deliberately narrow markets read as degenerate for being narrow.
+    """
+    ordinary = max(0, int(outcome_count) - 1)
+    if ordinary < 2:
+        return None
+    return (10 * int(cell)) // (ordinary - 1)
 
 
 def _payoff(rng: random.Random, outcome_count: int) -> list:
@@ -999,15 +1341,24 @@ def _draw_market(spec: WorldSpec, index: int) -> PlannedMarket:
 
     outcome_count = record("outcome_count", archetype.outcomes, f"market/{market_id}/outcomes")
     basis = record("basis", archetype.basis, f"market/{market_id}/basis")
-    fee = record("fee_basis_points", archetype.fee_basis_points, f"market/{market_id}/fee")
-    if fee != 0:
-        # Not a style rule: fee-bearing founding does not fit in one transaction
-        # on today's wire, so a world that drew a rate would be a world whose
-        # markets cannot be founded. Refuse where the number is drawn rather
-        # than let a conductor discover it a validator later.
+    fee = int(record("fee_basis_points", archetype.fee_basis_points, f"market/{market_id}/fee"))
+    # A RATE IS A BAND NOW, and the refusal that used to stand here is deleted.
+    #
+    # It read "only zero-fee markets found in one transaction today" and cited
+    # FEE_SECOND_TRANSACTION_FOUNDATION_2026_08_30.md. That document is about the
+    # Direct HOT FILL's fee leg -- two Custody CPIs the transition co-enables,
+    # whose measured floor sat over the 1,400,000 CU ceiling -- and says nothing
+    # about founding at all. Fee-bearing foundings were measured landing on a
+    # loopback validator on 2026-08-30, at four cells and at six.
+    #
+    # What survives is only the compiler's own domain. Which rates can be FILLED
+    # is a different question and is not decided here: the owned-loopback Direct
+    # producer admits exactly one rate, so a market drawn at any other is one
+    # this world founds, opens, activates and censuses and never trades -- and
+    # the fill says which rate it read and which the release admits.
+    if not 0 <= fee <= 10_000:
         raise Refusal(
-            f"{market_id} drew a {fee} bp fee; only zero-fee markets found in one "
-            "transaction today (docs/evidence/FEE_SECOND_TRANSACTION_FOUNDATION_2026_08_30.md)"
+            f"{market_id} drew a {fee} bp fee, which is outside the 0..10000 a rate can be"
         )
     unit = int(record("claim_unit_atoms", archetype.claim_unit_atoms, f"market/{market_id}/unit"))
     collateral = record(
@@ -1040,9 +1391,31 @@ def _draw_market(spec: WorldSpec, index: int) -> PlannedMarket:
     # boundary, the two open tails, and the explicit failure outcome. So a
     # width-2 market has NO cuts -- the whole coordinate domain as one region
     # plus failure -- and that is a value here rather than a degenerate case.
-    band_center = record("band_center", BAND_CENTER, f"market/{market_id}/band-center")
-    band_spacing = record("band_spacing", BAND_SPACING, f"market/{market_id}/band-spacing")
-    cuts = _band(int(outcome_count), int(band_center), int(band_spacing))
+    anchor = int(spec.coordinate_anchor)
+    volatility_bps = int(record(
+        "band_volatility_bps", archetype.band_volatility_bps, f"market/{market_id}/volatility"
+    ))
+    profile = record("band_profile", archetype.band_profile, f"market/{market_id}/band-profile")
+    # WIDTH SCALES WITH THE SQUARE ROOT OF THE WINDOW, which is the random
+    # walk's own scaling: a market with twenty times the horizon gets a band
+    # about four and a half times as wide, not twenty times. Integer throughout
+    # -- `isqrt`, floor division -- because a plan a reader can reproduce by hand
+    # is worth more than a fractional basis point.
+    cell_count = max(1, int(outcome_count) - 1)
+    span_bps = volatility_bps * math.isqrt(max(1, int(deadline_slots))) \
+        // max(1, math.isqrt(BAND_WINDOW_REFERENCE_SLOTS_V1))
+    band_spacing = max(1, anchor * max(1, span_bps) // (10_000 * cell_count))
+    # PLACEMENT, in tenths of the band's own spacing, drawn wide enough to put
+    # the anchor in any cell of this market including both open tails. This is
+    # the draw that makes outcomes distribute: the boundaries are relative to
+    # the coordinate that will actually be observed, and where they sit around
+    # it is the random variable.
+    reach = BAND_PLACEMENT_TENTHS_PER_CELL_V1 * cell_count
+    placement_tenths = int(record(
+        "band_placement_tenths", IntUniform(-reach, reach), f"market/{market_id}/band-placement"
+    ))
+    band_offset = band_spacing * placement_tenths // 10
+    cuts = _band(int(outcome_count), anchor, band_spacing, band_offset, profile)
     # The payoff. `coefficients[i]` is what outcome `i` pays, and the LAST
     # outcome is the market's explicit failure cell, which pays nothing: a
     # market that paid on its own failure is not a market anybody would buy
@@ -1053,9 +1426,12 @@ def _draw_market(spec: WorldSpec, index: int) -> PlannedMarket:
         "name": "band",
         "drawn": {"cuts": cuts, "cut_denominator": CUT_DENOMINATOR, "coefficients": coefficients},
         "from": (
-            f"{len(cuts)} cuts spaced {band_spacing} around {band_center} over denominator "
-            f"{CUT_DENOMINATOR}; payoff drawn over the non-failure cells with the failure cell "
-            "pinned to zero"
+            f"{len(cuts)} cuts on a {profile} profile at spacing {band_spacing}, placed "
+            f"{band_offset} from the anchor coordinate {anchor}; the spacing is "
+            f"{volatility_bps} bp of the anchor scaled by the square root of a "
+            f"{deadline_slots}-slot window against a {BAND_WINDOW_REFERENCE_SLOTS_V1}-slot "
+            f"reference, over {cell_count} ordinary cells; payoff drawn over the non-failure "
+            "cells with the failure cell pinned to zero"
         ),
     })
 
@@ -1085,7 +1461,20 @@ def _draw_market(spec: WorldSpec, index: int) -> PlannedMarket:
     if destiny == DESTINY_RESOLVES:
         settle_rng = spec.seed.stream(f"market/{market_id}/settlement")
         terminal_tick = deadline_tick + settle_rng.randint(0, 2)
-        selected_cell = settle_rng.randrange(int(outcome_count))
+        # THE CELL IS DERIVED FROM THE BAND, NOT DRAWN BESIDE IT.
+        #
+        # It used to be `settle_rng.randrange(outcome_count)` -- a uniform draw
+        # with no relation to where the cuts sat -- so the plan's expectation and
+        # the chain's answer were two unrelated numbers and nothing in the run
+        # ever compared them. That is what let a band three orders of magnitude
+        # away from the observed coordinate look healthy: the plan said "cell 4"
+        # for reasons of its own while the chain said "top cell" every time.
+        #
+        # Now it is the cell the anchor falls in, which is what the certificate
+        # will say if this substrate resolves this market. The chain still
+        # decides; this is the engine stating a checkable expectation instead of
+        # an unrelated wish.
+        selected_cell = settling_cell(anchor, cuts)
     elif destiny == DESTINY_FAILS:
         # The failure branch selects the market's own disclosed failure cell,
         # which by protocol convention is the last one. The engine records which
@@ -1817,6 +2206,26 @@ def world_summary(world: World) -> list:
             "  NOTHING RESOLVES IN THIS WORLD. Every market's deadline is past the "
             "horizon, so the run will observe foundings and holdings and no answers. "
             "Raise slots_per_tick or ticks, or draw an archetype mix with shorter fuses."
+        )
+    # THE OUTCOME SPREAD, and it is the second line to read before running
+    # anything. A world of forty markets that all settle into the same cell has
+    # forty copies of one measurement.
+    spread = world.outcome_spread()
+    lines.append(
+        f"outcome spread: {spread['resolving_markets']} resolving markets over "
+        f"{spread['distinct_cells']} distinct cells at coordinate "
+        f"{world.spec.coordinate_anchor}; {spread['positioned_markets']} of them over "
+        f"{spread['distinct_positions']} positions, heaviest "
+        f"{spread['heaviest_position_tenths']}/10 at {spread['heaviest_share_percent']}%"
+    )
+    lines.append("  cells: " + ", ".join(f"{k} x{v}" for k, v in spread["counts"].items()))
+    if spread["degenerate"]:
+        lines.append(
+            f"  DEGENERATE OUTCOME SPREAD. One cell takes "
+            f"{spread['heaviest_share_percent']}% of the markets that can resolve, over the "
+            f"{spread['degenerate_threshold_percent']}% threshold. The bands are drawn in the "
+            "wrong place for the coordinate this substrate observes -- check "
+            "WorldSpec.coordinate_anchor against what the chain's source adapter returns."
         )
     return lines
 

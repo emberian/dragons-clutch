@@ -21,6 +21,18 @@ def schemaVersion : Nat := 1
 def artifactProfile : Nat := 1
 def canonicalEndian : Nat := 0
 def entryBytes : Nat := 40
+
+/-- Maximum bytes in one finalized Capability Program Set V1 record.
+
+**This is a replica** of the same `1312` written independently in four Lean
+files; see `RequestProfileAbi.finalizedRecordMaxBytes` for the roster and
+`CapabilityProgramAbi.finalizedRecordMaxBytes` for the one full derivation.
+
+V1 is superseded: `CapabilityProgramSetV2.maxBytes` is 2336, chosen freely and
+without reference to this class, which is the in-tree proof that nothing
+physical selects 1312. Do not lift this copy — it would change a shipped V1
+decoder's acceptance envelope under an unchanged `schemaReleaseId`. A width
+change belongs in a new schema version, which is exactly what V2 did. -/
 def maxBytes : Nat := 1312
 def schemaReleasePreimage : List UInt8 := [
   0x64, 0x63, 0x6c, 0x75, 0x74, 0x63, 0x68, 0x2f, 0x73, 0x63, 0x68, 0x65,

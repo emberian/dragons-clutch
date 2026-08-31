@@ -21,6 +21,10 @@ dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capabili
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+# The Direct intent ticket author, which used to be `pub(crate)` in THIS crate
+# and is now shared with the released `dclutch` CLI. `direct_ticket.rs` is the
+# adapter that keeps this binary's subcommand and error type over it.
+dclutch-direct-ticket = { path = "../../../../crates/dclutch-direct-ticket" }
 dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
 dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractional-claim-operator" }

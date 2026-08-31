@@ -101,6 +101,16 @@ pub enum Error {
     /// A spline selection's knot vector does not derive its declared width:
     /// `knot_count - degree - 1 != basis_width`.
     SplineWidthDerivationMismatch,
+    /// A spline coordinate located no non-degenerate knot span, or the located
+    /// span left the basis domain.
+    ///
+    /// Distinct from [`Error::UnorderedKnots`] on purpose. The two shipping
+    /// kinds refuse any knot that fails to strictly increase; the spline family
+    /// *admits* repeated interior knots — that is how a spline lowers
+    /// continuity — and refuses only when no usable span survives the
+    /// collapse. Reporting that as unordered knots would name a rule this
+    /// family does not have.
+    SplineDegenerateSpan,
     /// A spline selection carried no price-gate certificate digest.
     ///
     /// Degree 2 and 3 are both strictly above the gate's exempt degree, so a

@@ -215,6 +215,13 @@ mod tests {
     use super::*;
     use crate::claim_check_compaction_v1::ClaimCheckCompactionSbfErrorV1;
     use crate::claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1;
+    use dclutch_claims_svm::claim_check_v1::{
+        CLAIM_CHECK_ESCROW_SEED_V1, CLAIM_CHECK_SEED_V1, CLAIM_CHECK_VAULT_SEED_V1,
+    };
+    use dclutch_claims_svm::fractional_claim_check_v1::{
+        FRACTIONAL_CLAIM_CHECK_SEED_V1, FractionalClaimCheckSeedsV1, MAX_PDA_SEED_BYTES_V1,
+    };
+    use solana_program::pubkey::{Pubkey, PubkeyError};
 
     const COMPACTION_TABLE: [FractionalClaimCheckCompactionSbfErrorV1; 13] = [
         FractionalClaimCheckCompactionSbfErrorV1::Accounts,
@@ -431,6 +438,80 @@ mod tests {
                 matches!(claim_check_route_for(kind), ClaimCheckRouteV1::Fractional),
                 "{kind:?} must be admitted by the routing and by nothing else"
             );
+        }
+    }
+
+    /// The record's address derives, which it could not until 2026-08-31.
+    ///
+    /// `FRACTIONAL_CLAIM_CHECK_SEED_V1` shipped at 33 bytes — one over Solana's
+    /// per-seed maximum — so `create_program_address` refused
+    /// `MaxSeedLengthExceeded` for all 255 bumps, `find_program_address` found
+    /// none, and every route naming this record would have **panicked** rather
+    /// than refused. Nothing caught it because nothing had ever derived it:
+    /// `dclutch-claims-svm` is `no_std` with no SDK dependency, so its own tests
+    /// cannot call this. This crate can, and does.
+    ///
+    /// **The test discriminates**, which is the part that matters: the same call
+    /// on the exact 33-byte string it used to hold returns `None`. A derivation
+    /// test that could not tell the old value from the new one would pass either
+    /// way and prove nothing about the fix.
+    #[test]
+    fn the_record_address_derives_and_the_old_domain_still_could_not() {
+        let seeds = FractionalClaimCheckSeedsV1::new([3; 32], [4; 32]).expect("coordinates");
+        let program = Pubkey::new_from_array([5; 32]);
+
+        let (address, bump) = Pubkey::try_find_program_address(&seeds.as_slices(), &program)
+            .expect("the fractional claim-check address must derive");
+        assert_ne!(address, Pubkey::default());
+        // And the bump round-trips: the address the record persists a bump for
+        // is the one `create_program_address` reproduces from that bump.
+        let with_bump: [&[u8]; 4] = [
+            FRACTIONAL_CLAIM_CHECK_SEED_V1,
+            &seeds.aggregate(),
+            &seeds.shard_mint(),
+            core::slice::from_ref(&bump),
+        ];
+        assert_eq!(
+            Pubkey::create_program_address(&with_bump, &program).expect("canonical bump"),
+            address
+        );
+
+        // The exact string this domain held until it was shortened. Restated as
+        // a literal rather than reconstructed, so this stays a statement about
+        // the value that actually shipped.
+        const SHIPPED_UNDERIVABLE: &[u8] = b"dclutch:fractional-claim-check:v1";
+        assert_eq!(SHIPPED_UNDERIVABLE.len(), 33);
+        assert_eq!(
+            Pubkey::try_find_program_address(
+                &[SHIPPED_UNDERIVABLE, &seeds.aggregate(), &seeds.shard_mint()],
+                &program,
+            ),
+            None,
+            "the 33-byte domain has no derivable address for any bump"
+        );
+        assert_eq!(
+            Pubkey::create_program_address(
+                &[
+                    SHIPPED_UNDERIVABLE,
+                    &seeds.aggregate(),
+                    &seeds.shard_mint(),
+                    &[255]
+                ],
+                &program,
+            ),
+            Err(PubkeyError::MaxSeedLengthExceeded),
+            "and the reason is the seed length, not an unlucky bump"
+        );
+
+        // Every domain this family derives with is inside the maximum, so the
+        // fix is the family's and not one constant's.
+        for domain in [
+            FRACTIONAL_CLAIM_CHECK_SEED_V1,
+            CLAIM_CHECK_SEED_V1,
+            CLAIM_CHECK_ESCROW_SEED_V1,
+            CLAIM_CHECK_VAULT_SEED_V1,
+        ] {
+            assert!(domain.len() <= MAX_PDA_SEED_BYTES_V1);
         }
     }
 }

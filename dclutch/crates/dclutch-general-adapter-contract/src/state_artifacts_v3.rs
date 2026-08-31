@@ -26,6 +26,7 @@ use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
 use dclutch_general_codec::Action;
 
 use crate::{
+    collection_v1::{GENERAL_BATCH_BYTES_V1, GeneralBatchLayoutV1},
     hot_candidate_v3::{identity, scalar},
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
@@ -174,6 +175,10 @@ fn general_state_lifecycle_bytes(action: Action, current_rent_v5: bool) -> Resul
 pub const fn general_readonly_evidence_count_v3(action: Action) -> u16 {
     match action {
         unauthored_actions!() => 0,
+        // The batch pair's evaluator inputs are the Hot prefix itself: the
+        // root tail and the config record, both projected by the
+        // AccountProfile rather than read as evidence accounts.
+        Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider => 2,
         Action::Freeze => 0,
         Action::InitializeSettlement => 3,
@@ -223,7 +228,9 @@ pub const fn general_readonly_evidence_start_v3(action: Action) -> u16 {
         // used; the arm exists so the next action forces a decision rather than
         // inheriting the settlement prefix from a catch-all.
         unauthored_actions!() => 8,
-        Action::Consider
+        Action::OpenBatch
+        | Action::CloseBatch
+        | Action::Consider
         | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
@@ -285,22 +292,21 @@ fn encode_primary(
     output: &mut [u8],
 ) -> Result<()> {
     let state_recipe = GeneralStateRecipeV3::primary_for_action(action);
-    let selection = matches!(state_recipe, GeneralStateRecipeV3::Selection);
-    let data_base = if selection {
-        u32::try_from(
-            GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-                .checked_add(RUNTIME_SELECTION_CURSOR_BYTES_V2)
-                .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
-        )
-        .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?
-    } else {
-        u32::try_from(
-            GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-                .checked_add(SETTLEMENT_CURSOR_HEADER_BYTES_V2)
-                .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
-        )
-        .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?
+    // `data_base` is the account's fixed byte width; the stride is the
+    // per-outcome tail past it. A fixed-width state carries a zero stride.
+    let semantic_bytes = match state_recipe {
+        GeneralStateRecipeV3::Selection => RUNTIME_SELECTION_CURSOR_BYTES_V2,
+        GeneralStateRecipeV3::Settlement | GeneralStateRecipeV3::Terminal => {
+            SETTLEMENT_CURSOR_HEADER_BYTES_V2
+        }
+        GeneralStateRecipeV3::Batch => GENERAL_BATCH_BYTES_V1,
     };
+    let data_base = u32::try_from(
+        GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+            .checked_add(semantic_bytes)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )
+    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
     // The count and the bump ordinal are READ OFF the recipe's own seed table
     // rather than written down beside it, so a seed added to that table cannot
     // leave this policy declaring a truncated seed program.
@@ -310,7 +316,10 @@ fn encode_primary(
         seed_count: state_recipe.seed_count(),
         bump_offset: state_recipe.bump_offset(),
         data_base,
-        data_stride: if selection {
+        data_stride: if matches!(
+            state_recipe,
+            GeneralStateRecipeV3::Selection | GeneralStateRecipeV3::Batch
+        ) {
             0
         } else {
             SettlementCursorLayoutV2::inventory_stride()
@@ -526,11 +535,13 @@ fn general_current_rent_quotes_v5(
 const fn lifecycle_current_rent_quote_count(action: Action) -> usize {
     match action {
         Action::InitializeSettlement => 4,
-        // Written out rather than defaulted, for the same reason the seven new
+        // Written out rather than defaulted, for the same reason the new
         // actions are written out at every other dispatcher: the next action
         // added must force a decision here instead of inheriting one.
         unauthored_actions!() => 0,
-        Action::Consider
+        Action::OpenBatch
+        | Action::CloseBatch
+        | Action::Consider
         | Action::Freeze
         | Action::Collect
         | Action::Materialize
@@ -584,6 +595,27 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
         values: [empty; 5],
         len: lifecycle_binding_count(action),
     };
+    if matches!(action, Action::OpenBatch | Action::CloseBatch) {
+        // The batch record's three immutable identities, bound to the
+        // canonical registers the AccountProfile projects from the root, the
+        // Product record, and the root's config selection. A live batch whose
+        // bytes disagree with any of the three is a substituted window.
+        for (slot, (offset, canonical)) in [
+            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (GeneralBatchLayoutV1::PRODUCT_ID, identity::SELECTION_PRODUCT),
+            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            output.values[slot] = binding(
+                0,
+                u32::try_from(offset).map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+                canonical,
+            )?;
+        }
+        return Ok(output);
+    }
     if matches!(action, Action::Consider | Action::Freeze) {
         for (slot, (body_offset, canonical)) in [
             (
@@ -656,6 +688,7 @@ const fn require_authored(action: Action) -> Result<()> {
 const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
     match action {
         unauthored_actions!() => (0, 0, 0),
+        Action::OpenBatch | Action::CloseBatch => (1, 5, 1),
         Action::Consider | Action::Freeze => (1, 4, 1),
         Action::InitializeSettlement
         | Action::Collect
@@ -668,6 +701,7 @@ const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
 const fn lifecycle_binding_count(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
+        Action::OpenBatch | Action::CloseBatch => 3,
         Action::Consider | Action::Freeze => 5,
         Action::InitializeSettlement
         | Action::Collect
@@ -693,7 +727,7 @@ mod tests {
 
     use super::*;
 
-    const ACTIONS: [Action; 7] = [
+    const ACTIONS: [Action; 9] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -701,6 +735,8 @@ mod tests {
         Action::Materialize,
         Action::Distribute,
         Action::Close,
+        Action::OpenBatch,
+        Action::CloseBatch,
     ];
 
     #[test]

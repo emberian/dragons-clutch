@@ -193,7 +193,7 @@ export default function ReleaseWorkspace() {
       <button type="submit">Reacquire finalized authority &amp; build activation</button><p className="direct-status" aria-live="polite">{activationStatus}</p>{activation && <ActivationResult plan={activation} />}
     </form>
     <section className="direct-card"><div className="direct-card-heading"><span>03</span><div><h2>Sign the walk with a browser wallet</h2><p>Connecting reads identity only. Signing opens for exactly one reason: the activation plan built in step 02 went green against this chain, and the connected wallet is the fee payer that plan declares. Each role is a separate explicit wallet request, and submission stays outside this page.</p></div></div>
-      <WalletDirectory directory={wallets} purpose="Registry activation fee payer" onConnected={adoptIdentity} />
+      <WalletDirectory directory={wallets} onConnected={adoptIdentity} />
       <div className="signing-grid">
         <article><span>Wallet identity</span><strong>{wallets.address ?? 'not connected'}</strong><p>{walletStatus}</p></article>
         <article><span>Signing gate</span><strong data-testid="ungate-state">{gate.open ? 'open' : 'closed'}</strong><p data-testid="ungate-reason">{gate.reason}</p></article>

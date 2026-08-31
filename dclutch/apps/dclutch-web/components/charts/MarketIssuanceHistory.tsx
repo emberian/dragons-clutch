@@ -58,7 +58,7 @@ export default function MarketIssuanceHistory({ address, outcomes, preloaded }: 
       lines={lines}
       xLabels={series.points.map((point) => `cycle ${point.cycle}`)}
       unit="atoms"
-      caption={`Issued claims on each outcome across ${covered}, from a run's own records. Claim counts in raw atoms — not a forecast, and not a rate.`}
+      caption={`Claims issued on each outcome across ${covered}, in raw atoms.`}
       flatNote={everyLineFlatV1(lines)
         ? 'unchanged at every recorded cycle: no trade has landed in this run yet'
         : undefined}

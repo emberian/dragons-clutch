@@ -276,11 +276,17 @@ the invoke log of the canonical Direct Hot continuation: **Core is never invoked
 at all** on that route, and Dealer and Rent have no continuation fixture anywhere
 in the tree. So the dynamic half is two families of five. Worse, and more useful:
 the first attempt at its negative control put the `invoke` in Claims'
-`lib.rs::authenticate_activated_role` — the helper fourteen Claims sites share —
+`lib.rs::authenticate_activated_role` — the helper thirteen Claims sites share —
 and the test stayed GREEN, because this fixture drives
 `sparse_native_transfer_v1`, which takes the bump-witness API instead. The
 dynamic half covers ONE ROUTE of Claims. The structural half is what covers the
-other thirteen and the three families with no fixture.
+other twelve and the three families with no fixture.
+
+(This record said *fourteen* and *thirteen* when written on 2026-08-30. The
+helper had thirteen call sites by then: `9c25e741`, the day before, moved
+`founding_v5` onto the bump-witness API. Re-counted 2026-08-31 — the correction
+is arithmetic, and it does not move the finding, which is that the dynamic half
+covers one route.)
 
 **Still owed, and sized rather than claimed:** a real continuation fixture for
 Core, Dealer and Rent. Each needs its own release waist, market and continuation
@@ -289,6 +295,40 @@ drives the Direct Hot bundle and that bundle does not reach them. Estimate 4–8
 hours per family, and the honest first question is whether a continuation into
 those families is a shape the protocol actually runs, because if it is not then
 the structural half is the whole of what the tripwire can be.
+
+### Core: owed above, and closed 2026-08-31 (lane TRIPWIRE)
+
+**"There is no existing fixture to extend" was true of the Direct Hot bundle and
+false of the tree, and the difference cost nothing to find.** Core has had a real
+Registry continuation since `2dc53776` — the **founding** continuation, Registry
+`invoke_signed` into Core `OpenMarket`, which the same 2026-08-30 packet ruling
+that demoted the Hot continuation to harness-only carved out explicitly as
+load-bearing production (§4, CORESTATE-3). `programs/dclutch-core-sbf/tests/open_market_program_test.rs`
+has been driving it with real ELFs the whole time. What it never did was ASSERT
+the stack, so the wall was being exercised by a test that would have gone red
+about a Custody replay revision.
+
+`core_and_custody_execute_as_children_under_the_founding_continuation` reads the
+runtime's invoke log and requires Registry [1], Core [2], Custody [3], with the
+market reaching `Phase::Open`. **Demonstrated red:** the deleted CPI restored in
+`release.rs::authenticate_continuation_roles` produced
+`InstructionError(0, ReentrancyNotAllowed)`, Core dying at depth two on 12,449 CU.
+
+One thing this corrects for whoever takes Dealer and Rent: the reentrancy rule is
+**deeper than the Registry**, not "depth three". `registry_hot_continuation`'s
+`REENTRANT_CHILD_DEPTH = 3` is right for a topology where Trading sits at two;
+under the founding continuation Core sits at two and is exposed exactly as its
+children are. Stating it as a fact about the stack makes both topologies one rule.
+
+So the dynamic half is now **three families of five** — Claims and Custody on the
+harness-only Hot route, Core and Custody on the production founding route. Dealer
+and Rent remain owed at the estimate above. The Claims shared helper is also still
+uncovered dynamically and is NOT closed by this: the founding leg drives
+`founding_v5`, which takes the bump-witness API, so no founding fixture reaches
+the thirteen-site helper either. That needs a continuation into one of
+`process_core_effect`/`process_generic_plan`, `affine_batch_v2`, `signed_delta_v3`,
+`protocol_position_v2`, `rational_*`, `market_closure_v1` or
+`terminal_settlement_v3` — a separate 4–8 hour shape, named rather than absorbed.
 
 ### The frame the conversion broke, and what it cost to find
 

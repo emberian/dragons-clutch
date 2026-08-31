@@ -137,6 +137,23 @@ describe('General V5 operator-plan browser boundary', () => {
     const truncated = localState('settlement', 258).slice(0, -8); expect(() => decodeGeneralLocalStateV3(truncated)).toThrow(/runtime width/);
   });
 
+  it('reads the envelope bump-hint tail instead of demanding the retired reserved zeros', async () => {
+    // `d0306a64` gave the last eight envelope bytes to `HotBumpHintsV1`, and
+    // this decoder kept refusing them as required-zero reserved space -- the
+    // same shape of defect HINTS-TS removed from the Direct evidence encoder,
+    // where a legally mined wire failed its own authenticator.
+    expect(Abi.GENERAL_ENVELOPE_BUMP_HINTS_OFFSET_V3 + Abi.GENERAL_ENVELOPE_BUMP_HINT_COUNT_V3).toBe(Abi.GENERAL_HOT_ENVELOPE_BYTES_V3);
+    const value = await fixture('freeze');
+    const absent = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(value.text));
+    expect(absent.envelope.bumpHints).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+    const transaction = VersionedTransaction.deserialize(base64ToBytes(value.raw.transactionBase64 as string));
+    const mined = [254, 253, 252, 0, 251, 0, 250, 0];
+    mined.forEach((bump, slot) => { transaction.message.compiledInstructions[0].data[Abi.GENERAL_ENVELOPE_BUMP_HINTS_OFFSET_V3 + slot] = bump; });
+    const hinted = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(JSON.stringify({ ...value.raw, transactionBase64: base64(transaction.serialize()) })));
+    expect(hinted.envelope.bumpHints).toEqual(mined);
+    expect(hinted.plan.familyRequestDigest).toBe(absent.plan.familyRequestDigest);
+  });
+
   it('joins a commit-last Hot receipt to the exact request and selected descriptor', async () => {
     const value = await fixture('close'); const inspection = await inspectGeneralSuccessorPlanV5(decodeGeneralSuccessorPlanDocumentV5(value.text));
     const receipt = new Uint8Array(Abi.GENERAL_HOT_ACK_BYTES_V3); receipt.set(Abi.GENERAL_HOT_ACK_MAGIC_V3); putU16(receipt, 8, 3); putU16(receipt, 10, 1);

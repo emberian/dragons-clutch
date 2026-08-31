@@ -284,6 +284,86 @@ function eventTimeline(ledger) {
     .map((row) => ({ ...row, routes: row.routes.sort() }));
 }
 
+/**
+ * The world's own settling histogram, carried through unchanged when the plan
+ * has one and rebuilt from nothing when it does not.
+ *
+ * Optional for the same reason the timeline is: a capture taken before this
+ * existed is still a complete v4 document, and an absent block is an absent
+ * block rather than a claim that nothing settled.
+ */
+/**
+ * A run's spend record, with its lamport quantities rendered the way every
+ * other atom-scale quantity in this document is: as exact decimal strings.
+ *
+ * A lamport ceiling can pass 2^53 and a double would round it, so the three
+ * quantities go through `exact` while the observation COUNT stays a number.
+ * Passing the Python object through unchanged published numbers where this
+ * app's decoder wanted strings, and the decoder refused the whole document.
+ *
+ * `payers` is deliberately dropped: it is a map of live pubkeys to balances,
+ * which is per-run operational detail rather than anything a page draws, and
+ * the fewer addresses a published artifact carries the better.
+ */
+function spendRecord(body) {
+  if (body === undefined || body === null) return null;
+  const bounded = body.bounded === true;
+  return {
+    max_lamports_spent: body.max_lamports_spent === null || body.max_lamports_spent === undefined
+      ? null
+      : exact(body.max_lamports_spent, 'spend max_lamports_spent'),
+    spent_lamports: exact(body.spent_lamports ?? 0, 'spend spent_lamports'),
+    credited_lamports: exact(body.credited_lamports ?? 0, 'spend credited_lamports'),
+    observations: Number(body.observations ?? 0),
+    bounded,
+  };
+}
+
+
+function outcomeSpread(world) {
+  const body = world.outcome_spread;
+  if (body === undefined || body === null) return null;
+  // COUNTS ARE NUMBERS AND THE COORDINATE IS A STRING, and the split is not
+  // cosmetic. `exact` renders a decimal STRING because atom-scale quantities do
+  // not survive a double; a count of markets is small, and the decoder reads it
+  // with a whole-number check that a string fails. Emitting both through
+  // `exact` published a document this app's own decoder refuses -- caught by
+  // running the emitter and feeding it back, which is the only thing that could
+  // have caught it, because the unit fixture was hand-written to match the
+  // decoder rather than the emitter.
+  const whole = (value, field) => {
+    const parsed = typeof value === 'string' ? Number(value) : value;
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      throw new Error(`${field} is not an exact non-negative count: ${JSON.stringify(value)}`);
+    }
+    return parsed;
+  };
+  const counts = (raw, field) => Object.fromEntries(
+    Object.entries(raw ?? {}).map(([key, value]) => [String(key), whole(value, `${field} ${key}`)]),
+  );
+  return {
+    resolving_markets: whole(body.resolving_markets, 'outcome_spread resolving_markets'),
+    distinct_cells: whole(body.distinct_cells, 'outcome_spread distinct_cells'),
+    counts: counts(body.counts, 'outcome_spread counts'),
+    positioned_markets: whole(body.positioned_markets, 'outcome_spread positioned_markets'),
+    position_counts: counts(body.position_counts, 'outcome_spread position_counts'),
+    distinct_positions: whole(body.distinct_positions, 'outcome_spread distinct_positions'),
+    heaviest_position_tenths: body.heaviest_position_tenths === null
+      || body.heaviest_position_tenths === undefined
+      ? null
+      : whole(body.heaviest_position_tenths, 'outcome_spread heaviest_position_tenths'),
+    heaviest_share_percent: whole(body.heaviest_share_percent, 'outcome_spread heaviest_share_percent'),
+    degenerate_threshold_percent: whole(
+      body.degenerate_threshold_percent, 'outcome_spread degenerate_threshold_percent',
+    ),
+    degenerate: body.degenerate === true,
+    // Atom-scale: a Pyth coordinate is raw price atoms and a devnet feed's can
+    // pass 2^53, so this one stays a string.
+    coordinate_anchor: exact(body.coordinate_anchor ?? 0, 'outcome_spread coordinate_anchor'),
+  };
+}
+
+
 function main() {
   const { work, points: keep, check, out } = args(process.argv.slice(2));
 
@@ -353,6 +433,11 @@ function main() {
         routes_absent: substrate.routes_absent ?? [],
         basis_kinds: substrate.basis_kinds ?? [],
         basis_kinds_absent: substrate.basis_kinds_absent ?? [],
+        // What this run was ALLOWED to spend and what it did spend. A run with
+        // no ceiling says so here rather than leaving a missing field to
+        // interpret. It rides on the SUBSTRATE rather than beside it because
+        // the payer whose lamports these are is the substrate's.
+        spend: spendRecord(substrate.spend),
       },
       markets_planned: (world.markets ?? []).length,
       markets_observed: markets.length,
@@ -378,6 +463,13 @@ function main() {
       })),
       not_done: unattemptedSummary(ledger),
       timeline: eventTimeline(ledger),
+      // WHERE THE WORLD'S ANSWERS LANDED, and whether they landed anywhere at
+      // all. A population that resolves every market into the same cell has one
+      // measurement copied N times, and until 2026-08-31 every local world did
+      // exactly that -- bands drawn in USD cents against an observation arriving
+      // as raw price atoms. Carried so the page can say so rather than draw a
+      // healthy-looking chart over it.
+      outcome_spread: outcomeSpread(world),
     },
     markets,
   };

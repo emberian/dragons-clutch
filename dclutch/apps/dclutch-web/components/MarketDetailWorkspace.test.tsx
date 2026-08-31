@@ -92,7 +92,7 @@ describe('a market the shipped registry names', () => {
   const html = renderToStaticMarkup(<MarketDetailWorkspace address={FLAGSHIP} />);
 
   it('leads with the registered name and question', () => {
-    expect(html).toContain('SOL/USD range — the first public market');
+    expect(html).toContain('SOL/USD range — first public market');
     expect(html).toContain('Where does the SOL/USD price finish this market&#x27;s window');
     // The address does not disappear behind the name.
     expect(html).toContain(FLAGSHIP);
@@ -100,13 +100,13 @@ describe('a market the shipped registry names', () => {
 
   it('tells the permanent disposition as history, not breakage', () => {
     expect(html).toContain('never switched on');
-    expect(html).toContain('readable forever');
+    expect(html).toContain('stay on devnet');
     expect(html).not.toContain('broken');
   });
 
   it('says in words how the question settles', () => {
-    expect(html).toContain('settles from Pyth');
-    expect(html).toContain('silence is an outcome here, not a stall');
+    expect(html).toContain('Settles from Pyth');
+    expect(html).toContain('resolves to the source-failure outcome');
   });
 
   /**

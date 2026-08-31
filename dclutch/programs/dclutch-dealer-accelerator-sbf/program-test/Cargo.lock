@@ -1593,6 +1593,16 @@ name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-claim-check-escrow-signer-test-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-refusal-registry",
+ "solana-program",
+ "spl-token-2022-interface",
+]
+
+[[package]]
 name = "dclutch-claims-affine-batch-program-test"
 version = "0.1.0"
 dependencies = [
@@ -1770,6 +1780,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-direct-ticket"
+version = "0.1.0"
+dependencies = [
+ "dclutch-direct-codec",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-program",
+ "solana-signature",
+]
+
+[[package]]
 name = "dclutch-economic-slice-kernel"
 version = "0.1.0"
 
@@ -1795,6 +1817,7 @@ name = "dclutch-fractional-atomic-program-test"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
+ "dclutch-claim-check-escrow-signer-test-sbf",
  "dclutch-claims-affine-batch-program-test",
  "dclutch-claims-sbf",
  "dclutch-claims-svm",
@@ -1932,6 +1955,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-bearer-v2-operator",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",
@@ -1940,6 +1964,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
  "dclutch-direct-codec",
+ "dclutch-direct-ticket",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",

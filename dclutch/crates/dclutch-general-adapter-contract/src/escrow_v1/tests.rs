@@ -40,8 +40,8 @@ const MAX_QUOTE_DEBIT_PER_LOT: u64 = 5;
 /// `MAX_LOTS * MAX_QUOTE_DEBIT_PER_LOT`, the exact worst case one order escrows.
 const QUOTE_RESERVE: u64 = MAX_LOTS * MAX_QUOTE_DEBIT_PER_LOT;
 
-/// The seven actions whose artifact triple is authored today.
-const AUTHORED: [Action; 7] = [
+/// The actions whose artifacts are authored today.
+const AUTHORED: [Action; 9] = [
     Action::Consider,
     Action::Freeze,
     Action::InitializeSettlement,
@@ -49,6 +49,8 @@ const AUTHORED: [Action; 7] = [
     Action::Materialize,
     Action::Distribute,
     Action::Close,
+    Action::OpenBatch,
+    Action::CloseBatch,
 ];
 
 fn id(low: u8) -> [u8; 32] {

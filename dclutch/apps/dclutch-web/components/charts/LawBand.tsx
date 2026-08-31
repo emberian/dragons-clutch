@@ -4,6 +4,8 @@ import { useState } from 'react';
 
 import type { ConservationLawRowV1, ConservationLawStatusV1 } from '@/lib/simulatorSeries';
 
+import { FIGURE_LABEL_PX, useFigureScale } from './useFigureScale';
+
 /**
  * Every named conservation law, cycle by cycle.
  *
@@ -41,9 +43,16 @@ export type LawBandPropsV1 = Readonly<{
 }>;
 
 const WIDTH = 1000;
-const ROW_HEIGHT = 13;
 const ROW_GAP = 3;
-const LABEL_WIDTH = 26;
+/* A row carries its law's id inside its own height, in the gutter reserved to
+   the left of the cells. Both are room for text, and text is sized in real
+   pixels now (see useFigureScale), so how much room it takes depends on what
+   the slot made one unit worth. These are the floors, kept so a full-width band
+   lays out exactly as it did before. */
+const MIN_ROW_HEIGHT = 13;
+const MIN_LABEL_WIDTH = 26;
+/** The gutter was 26 units for 8-unit ids; the ids are no longer 8 units. */
+const LABEL_ROOM_PER_UNIT = 26 / 8;
 
 /** The reserved status trio. Never used for a series hue, here or anywhere. */
 const FILL: Readonly<Record<ConservationLawStatusV1, string>> = Object.freeze({
@@ -118,17 +127,24 @@ function columnSummary(rows: ReadonlyArray<ConservationLawRowV1>, index: number)
 
 export default function LawBand({ rows, cycles, caption, emptyReason, glosses }: LawBandPropsV1) {
   const [active, setActive] = useState<number | null>(null);
+  const { figureRef, units } = useFigureScale(WIDTH);
 
   const columns = cycles.length;
   const drawable = rows.length > 0 && columns > 0 && rows.every((row) => row.statuses.length === columns);
   if (!drawable) {
     return <figure className="viz-figure">
-      <p className="viz-caption">{emptyReason ?? 'This capture recorded no named conservation laws, so there is no band to draw.'}</p>
+      <p className="viz-caption">{emptyReason ?? 'No checks recorded.'}</p>
     </figure>;
   }
 
-  const height = rows.length * ROW_HEIGHT + (rows.length - 1) * ROW_GAP;
-  const plotWidth = WIDTH - LABEL_WIDTH;
+  const labelSize = units(FIGURE_LABEL_PX);
+  // The id sits inside its row and inside the gutter, so both grow with it —
+  // and a wide band, where the text is worth less than a unit each, keeps the
+  // geometry it always had.
+  const rowHeight = Math.max(MIN_ROW_HEIGHT, labelSize + units(2));
+  const labelWidth = Math.max(MIN_LABEL_WIDTH, labelSize * LABEL_ROOM_PER_UNIT);
+  const height = rows.length * rowHeight + (rows.length - 1) * ROW_GAP;
+  const plotWidth = WIDTH - labelWidth;
   // A 2px surface gap between cells, per the mark spec — but only while the
   // cells are wide enough that the gap reads as separation. Below that the
   // gaps become a stripe TEXTURE covering the whole band, and a reader sees a
@@ -142,26 +158,29 @@ export default function LawBand({ rows, cycles, caption, emptyReason, glosses }:
 
   return <figure className="viz-figure">
     <div className="viz-scroll"><svg
+      ref={figureRef}
       viewBox={`0 0 ${WIDTH} ${height}`}
       role="group"
       aria-label={caption}
       style={{ width: '100%' }}
     >
       {rows.map((row, index) => {
-        const top = index * (ROW_HEIGHT + ROW_GAP);
+        const top = index * (rowHeight + ROW_GAP);
         // Gapped cells stay one mark each so they remain countable; gapless
         // ones collapse into runs, which draws the identical picture.
         const marks = gap > 0
           ? row.statuses.map((status, column) => ({ start: column, length: 1, status }))
           : runsOf(row.statuses);
         return <g key={row.id}>
-          <text x={0} y={top + ROW_HEIGHT - 3} fontSize={8} fill="var(--viz-muted)">{row.id}</text>
+          {/* Centred on the row rather than offset from its bottom edge, so the
+              id stays centred at whatever size the slot asks for. */}
+          <text x={0} y={top + rowHeight / 2 + labelSize * 0.35} fontSize={labelSize} fill="var(--viz-muted)">{row.id}</text>
           {marks.map((mark) => <rect
             key={cycles[mark.start]}
-            x={LABEL_WIDTH + mark.start * cellWidth}
+            x={labelWidth + mark.start * cellWidth}
             y={top}
             width={Math.max(mark.length * cellWidth - gap, 0.5)}
-            height={ROW_HEIGHT}
+            height={rowHeight}
             rx={gap > 0 ? 2 : 0}
             fill={FILL[mark.status]}
           />)}
@@ -171,7 +190,7 @@ export default function LawBand({ rows, cycles, caption, emptyReason, glosses }:
       {/* The column a reader is on, drawn once over the whole band instead of
           as an opacity change on every mark underneath it. */}
       {active !== null && <rect
-        x={LABEL_WIDTH + active * cellWidth}
+        x={labelWidth + active * cellWidth}
         y={0}
         width={Math.max(cellWidth, 1)}
         height={height}
@@ -185,7 +204,7 @@ export default function LawBand({ rows, cycles, caption, emptyReason, glosses }:
       {cycles.map((cycle, index) => <rect
         key={cycle}
         className="viz-hit"
-        x={LABEL_WIDTH + index * cellWidth}
+        x={labelWidth + index * cellWidth}
         y={0}
         width={cellWidth}
         height={height}
@@ -212,7 +231,7 @@ export default function LawBand({ rows, cycles, caption, emptyReason, glosses }:
     </ul>
 
     <details className="viz-table">
-      <summary>What each law is, and its verdict at the newest cycle</summary>
+      <summary>Each check, and its latest result</summary>
       <div className="viz-table-scroll">
         <table>
           <thead><tr><th>Law</th><th>Held</th><th>Did not apply</th><th>Broke</th><th>What it checked, at the newest cycle</th></tr></thead>

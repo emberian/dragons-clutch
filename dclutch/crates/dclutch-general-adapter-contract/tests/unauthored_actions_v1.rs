@@ -58,20 +58,18 @@ use dclutch_general_adapter_contract::{
 };
 use dclutch_general_codec::Action;
 
-/// The seven protocol selectors with authenticated pure transitions and no
-/// artifact triple, in tag order.
-const UNAUTHORED: [Action; 7] = [
-    Action::OpenBatch,
+/// The five protocol selectors with authenticated pure transitions and no
+/// artifact quadruple, in tag order.
+const UNAUTHORED: [Action; 5] = [
     Action::PlaceOrder,
     Action::CancelOrder,
-    Action::CloseBatch,
     Action::SubmitCandidate,
     Action::VerifyCandidateRow,
     Action::ReleaseOrder,
 ];
 
-/// The seven whose triple is authored, in tag order.
-const AUTHORED: [Action; 7] = [
+/// The nine whose artifacts are authored, in tag order.
+const AUTHORED: [Action; 9] = [
     Action::Consider,
     Action::Freeze,
     Action::InitializeSettlement,
@@ -79,6 +77,8 @@ const AUTHORED: [Action; 7] = [
     Action::Materialize,
     Action::Distribute,
     Action::Close,
+    Action::OpenBatch,
+    Action::CloseBatch,
 ];
 
 #[test]

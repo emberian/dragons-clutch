@@ -1333,12 +1333,19 @@ fn custody_registers(
     let seller_terminal = !fee_nonzero;
     let intermediate = fee_nonzero && seller_net != 0;
     let fee_sole = seller_net == 0 && fee_nonzero;
+    // The fee continuation has its own enable register now, and the transition
+    // pins it to zero: the fee leg settles in a second transaction
+    // (`docs/design/FEE_SECOND_TRANSACTION_V1.md`). `fee_sole` is derived and
+    // then REQUIRED zero by the transition, because no rate inside the
+    // `DIRECT_MAX_FEE_BASIS_POINTS_V1` band can enable it -- this fixture keeps
+    // deriving it so a scenario that tried would be visible here too.
+    let fee_continuation = false;
     let after_seller = CUSTODY_REVISION
         .checked_add(u64::from(seller_terminal))
         .and_then(|value| value.checked_add(u64::from(intermediate)))
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
     let after_fee = after_seller
-        .checked_add(u64::from(intermediate))
+        .checked_add(u64::from(fee_continuation))
         .and_then(|value| value.checked_add(u64::from(fee_sole)))
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
     Ok(CustodyRegistersV3 {
@@ -1611,6 +1618,32 @@ pub struct DirectCustodyLegV1 {
 /// [`build_direct_hot_chain_fixture_v5`] uses, so a leg's request bytes and
 /// caller authority are the ones that fixture installs and the artifact builder
 /// reproduces.
+/// The immutable Direct config record's raw account and its staging cursor.
+///
+/// Both are content-addressed under the Registry from the same config bytes the
+/// fixture installs, so this reproduces the pair rather than describing it. The
+/// fee-settlement route reads them to learn the Market's `fee_recipient`, and
+/// the vacant staging cursor is how this tree spells "immutable".
+///
+/// Returned as a pair rather than folded into
+/// [`direct_hot_custody_legs_v1`]'s frames because they are not Custody
+/// coordinates: Custody never reads the Direct config, and the route that does
+/// carries them past the fourteen.
+pub fn direct_hot_config_record_v1(
+    input: DirectHotChainInputV5,
+) -> Result<(Pubkey, Pubkey), DirectHotChainFixtureErrorV5> {
+    validate_input(input)?;
+    let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+        .encode();
+    let record = finalized(
+        input.registry_program,
+        DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1,
+        config.to_vec(),
+    );
+    Ok((record.raw, record.staging))
+}
+
 pub fn direct_hot_custody_legs_v1(
     input: DirectHotChainInputV5,
 ) -> Result<[DirectCustodyLegV1; 4], DirectHotChainFixtureErrorV5> {
@@ -2659,8 +2692,8 @@ mod tests {
         assert_eq!(seller_fee.checked_add(buyer_fee), Some(10));
     }
 
-    /// The two scenarios differ in exactly one thing: how many Custody routes
-    /// the transition enables.
+    /// The two scenarios differ in exactly one thing: WHICH Custody route the
+    /// transition enables, and whether it is terminal.
     ///
     /// Asserted here, off-chain and in a hundred microseconds, because the
     /// forty-second on-chain sweep that measures the fee leg is worth nothing
@@ -2670,7 +2703,7 @@ mod tests {
     /// scenario constants and NOT checking the chain -- the chain's answer is
     /// the invocation count in `direct_hot_fee_bearing_margin_gate.rs`.
     #[test]
-    fn only_the_fee_bearing_scenario_enables_the_second_custody_route() {
+    fn only_the_fee_bearing_scenario_leaves_the_seller_route_non_terminal() {
         let zero = custody_registers(DirectTradeScenarioV1::ZERO_FEE).expect("zero-fee registers");
         assert_eq!(
             zero.combined_fee, 0,
@@ -2693,10 +2726,17 @@ mod tests {
         );
         assert_eq!(fee.seller_net, 199);
         assert_eq!(fee.buyer_debit, 201);
-        // Two routes: `SellerIntermediate` steps `after_seller` once and
-        // `FeeContinuation` steps `after_fee` again on top of it.
+        // ONE route here too, and that is the change. `SellerIntermediate`
+        // steps `after_seller` once; the fee continuation no longer steps
+        // `after_fee` on top of it, because the fee leg settles in a second
+        // transaction (`docs/design/FEE_SECOND_TRANSACTION_V1.md`). What
+        // distinguishes the two scenarios is not the route COUNT any more but
+        // which slot runs and whether the delegation survives it: the zero-fee
+        // scenario takes terminal slot 0 and closes it, the fee-bearing one
+        // takes non-terminal slot 1 and leaves `combined_fee` standing for the
+        // second transaction to spend.
         assert_eq!(fee.after_seller, CUSTODY_REVISION + 1);
-        assert_eq!(fee.after_fee, CUSTODY_REVISION + 2);
+        assert_eq!(fee.after_fee, CUSTODY_REVISION + 1);
 
         // The buyer's staged allowance is the DEBIT, and under the fee-bearing
         // scenario that is not the gross.

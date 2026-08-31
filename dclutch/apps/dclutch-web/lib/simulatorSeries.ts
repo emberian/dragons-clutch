@@ -344,6 +344,46 @@ export type SimulatorNotDoneV1 = Readonly<{
   count: number;
 }>;
 
+/**
+ * What a run was allowed to spend and what it did spend.
+ *
+ * `null` for a capture taken before the ceiling existed. `bounded: false` is a
+ * different statement from that and a louder one: the run HAD no ceiling, so
+ * nothing would have stopped it for spending.
+ */
+export type SimulatorSpendV1 = Readonly<{
+  maxLamportsSpent: string | null;
+  spentLamports: string;
+  creditedLamports: string;
+  observations: number;
+  bounded: boolean;
+}>;
+
+/**
+ * Where a world's answers landed, and whether they landed anywhere at all.
+ *
+ * A population that settles every market into the same place has ONE
+ * measurement copied as many times as it has markets. `positionCounts` is keyed
+ * by tenths of the way through a market's own ordinary cells, because cell 3 of
+ * four and cell 3 of eleven are not the same answer; `counts` keeps the raw
+ * `cell/width` reading beside it for a reader who wants the unnormalised view.
+ */
+export type SimulatorOutcomeSpreadV1 = Readonly<{
+  resolvingMarkets: number;
+  distinctCells: number;
+  counts: Readonly<Record<string, number>>;
+  positionedMarkets: number;
+  positionCounts: Readonly<Record<string, number>>;
+  distinctPositions: number;
+  heaviestPositionTenths: number | null;
+  heaviestSharePercent: number;
+  degenerateThresholdPercent: number;
+  /** True when one place takes more of the world than the threshold allows. */
+  degenerate: boolean;
+  /** The coordinate this world's substrate observes at resolution. */
+  coordinateAnchor: string;
+}>;
+
 /** Where a population was driven, and what that place could and could not do. */
 export type SimulatorSubstrateV1 = Readonly<{
   name: string | null;
@@ -355,6 +395,8 @@ export type SimulatorSubstrateV1 = Readonly<{
   routesAbsent: ReadonlyArray<string>;
   basisKinds: ReadonlyArray<string>;
   basisKindsAbsent: ReadonlyArray<string>;
+  /** Null for a capture taken before the spend ceiling existed. */
+  spend: SimulatorSpendV1 | null;
 }>;
 
 /** One route's four counts, exactly as the conductor recorded them. */
@@ -414,6 +456,12 @@ export type SimulatorWorldV1 = Readonly<{
    * document is still a complete v4 and every other block still decodes.
    */
   timeline: ReadonlyArray<SimulatorTimelineTickV1>;
+  /**
+   * Where this world's answers landed. NULL for a capture taken before the
+   * histogram existed, which is a true thing to say about that document rather
+   * than a claim that nothing settled.
+   */
+  outcomeSpread: SimulatorOutcomeSpreadV1 | null;
 }>;
 
 export type SimulatorSeriesV1 = Readonly<{
@@ -697,13 +745,20 @@ function plannedMarket(value: unknown, index: number): SimulatorPlannedMarketV1 
     destiny: text(body.destiny, `${where} destiny`),
     outcomeCount: count(body.outcome_count, `${where} outcome_count`),
     deadlineSlots: count(body.deadline_slots, `${where} deadline_slots`),
-    // A world may only draw zero-fee markets, because fee-bearing founding does
-    // not fit in one transaction on today's wire. A capture claiming otherwise
-    // is describing a market this protocol cannot found, so it is refused here
-    // rather than drawn.
+    // A RATE IS A BAND, and the guard that used to stand here refused any
+    // nonzero one on the reading that "fee-bearing founding does not fit in one
+    // transaction on today's wire". That reading came from a document about the
+    // Direct FILL's fee leg and said nothing about founding; fee-bearing
+    // foundings were measured landing on a loopback validator on 2026-08-30,
+    // and the owned-loopback Direct producer admits exactly 50 bps -- so zero
+    // was the one rate that could never be filled and this guard refused every
+    // capture of a world that could trade.
+    //
+    // What survives is the protocol's own domain, which is where a real
+    // impossibility lives.
     feeBasisPoints: (() => {
       const fee = count(body.fee_basis_points, `${where} fee_basis_points`);
-      if (fee !== 0) throw new Error(`${where} carries a ${fee} bp fee and only zero-fee markets found today`);
+      if (fee > 10_000) throw new Error(`${where} carries a ${fee} bp fee, outside the 0..10000 a rate can be`);
       return fee;
     })(),
     foundingCollateralAtoms: atoms(body.founding_collateral_atoms, `${where} founding_collateral_atoms`),
@@ -806,13 +861,79 @@ function parseWorld(value: unknown, observedIds: ReadonlySet<string>): Simulator
       routesAbsent: strings(substrate.routes_absent, 'world substrate routes_absent'),
       basisKinds: strings(substrate.basis_kinds, 'world substrate basis_kinds'),
       basisKindsAbsent: strings(substrate.basis_kinds_absent, 'world substrate basis_kinds_absent'),
+      spend: decodeSpend(substrate.spend),
     }),
+    outcomeSpread: decodeOutcomeSpread(body.outcome_spread),
     marketsPlanned: count(body.markets_planned, 'world markets_planned'),
     marketsObserved: count(body.markets_observed, 'world markets_observed'),
     marketsFoundedByThisRun: strings(body.markets_founded_by_this_run, 'world markets_founded_by_this_run'),
     marketsPreFounded: strings(body.markets_pre_founded, 'world markets_pre_founded'),
     planned,
     notDone,
+  });
+}
+
+
+/** A run's spend record, or null for a capture taken before one existed. */
+function decodeSpend(value: unknown): SimulatorSpendV1 | null {
+  if (value === undefined || value === null) return null;
+  const body = object(value, 'world substrate spend');
+  const bounded = body.bounded === true;
+  const max = optionalAtoms(body.max_lamports_spent, 'spend max_lamports_spent');
+  // A bound is a number or it is not a bound. A record claiming to be bounded
+  // with no ceiling in it is the caption-disagrees-with-its-chart species.
+  if (bounded !== (max !== null)) {
+    throw new Error(
+      `world substrate spend says bounded=${bounded} with max_lamports_spent=${String(max)}`,
+    );
+  }
+  return Object.freeze({
+    maxLamportsSpent: max,
+    spentLamports: atoms(body.spent_lamports, 'spend spent_lamports'),
+    creditedLamports: atoms(body.credited_lamports, 'spend credited_lamports'),
+    observations: count(body.observations, 'spend observations'),
+    bounded,
+  });
+}
+
+/** Where a world's answers landed, or null when the capture predates it. */
+function decodeOutcomeSpread(value: unknown): SimulatorOutcomeSpreadV1 | null {
+  if (value === undefined || value === null) return null;
+  const body = object(value, 'world outcome_spread');
+  const histogram = (raw: unknown, field: string): Record<string, number> => {
+    const table = object(raw, field);
+    const out: Record<string, number> = {};
+    for (const [key, entry] of Object.entries(table)) out[key] = count(entry, `${field} ${key}`);
+    return out;
+  };
+  const positionCounts = histogram(body.position_counts, 'outcome_spread position_counts');
+  const positioned = count(body.positioned_markets, 'outcome_spread positioned_markets');
+  const summed = Object.values(positionCounts).reduce((total, entry) => total + entry, 0);
+  // The histogram must be the same markets the header counts. A page drawing
+  // bars under a total they do not add up to is the one defect this decoder
+  // exists to refuse.
+  if (summed !== positioned) {
+    throw new Error(
+      `world outcome_spread positions sum to ${summed} under a total of ${positioned}`,
+    );
+  }
+  const heaviest = body.heaviest_position_tenths;
+  return Object.freeze({
+    resolvingMarkets: count(body.resolving_markets, 'outcome_spread resolving_markets'),
+    distinctCells: count(body.distinct_cells, 'outcome_spread distinct_cells'),
+    counts: Object.freeze(histogram(body.counts, 'outcome_spread counts')),
+    positionedMarkets: positioned,
+    positionCounts: Object.freeze(positionCounts),
+    distinctPositions: count(body.distinct_positions, 'outcome_spread distinct_positions'),
+    heaviestPositionTenths: heaviest === null || heaviest === undefined
+      ? null
+      : count(heaviest, 'outcome_spread heaviest_position_tenths'),
+    heaviestSharePercent: count(body.heaviest_share_percent, 'outcome_spread heaviest_share_percent'),
+    degenerateThresholdPercent: count(
+      body.degenerate_threshold_percent, 'outcome_spread degenerate_threshold_percent',
+    ),
+    degenerate: body.degenerate === true,
+    coordinateAnchor: atoms(body.coordinate_anchor, 'outcome_spread coordinate_anchor'),
   });
 }
 
@@ -1596,10 +1717,59 @@ export type HonestyRowV1 = Readonly<{
   unattempted: number;
   blocked: number;
   planned: number;
-  /** The substrate's own sentence for the commonest thing that was not done. */
+  /**
+   * A SHORT DESCRIPTIVE sentence for the commonest thing that was not done.
+   *
+   * NOT the substrate's own note. Those are engineering register entries and
+   * they carry file paths, test names, hour estimates and raw nested Rust
+   * errors; the full text stays in the capture, where it belongs, and a page
+   * shows what happened. See `publicReasonV1`.
+   */
   leadingReason: string | null;
   leadingOutcome: SimulatorNotDoneV1['outcome'] | null;
 }>;
+
+/**
+ * One short sentence for a step that did not happen.
+ *
+ * The substrate's own reason is an INTERNAL NOTE. It is written for whoever has
+ * to fix the thing and it reads like it: `programs/dclutch-claims-sbf/tests/…`,
+ * `a_market_retires_a_sleeping_holders_position_…`, `6-10 hours plus 1-2 for the
+ * gauntlet binding`, `Error: Error("authority keypair public key 66LV… differs
+ * from authenticated input EahM…")`. None of that is public copy, and rendering
+ * it verbatim was this page publishing our ticket queue.
+ *
+ * The note is NOT deleted. It stays on `world.not_done[].reason` in the capture,
+ * which is the record; this is the render layer, and it says what happened.
+ *
+ * EVERY BRANCH MUST BE TRUE OF EVERY ROW IT MATCHES. The fallbacks are keyed on
+ * the outcome word alone, because those three words are defined and a sentence
+ * built from one of them cannot be wrong about a reason it did not read.
+ */
+export function publicReasonV1(entry: Readonly<{
+  outcome: SimulatorNotDoneV1['outcome'];
+  reason: string;
+}>): string {
+  const note = entry.reason.toLowerCase();
+  if (entry.outcome === 'unattempted') {
+    // `unattempted` means the substrate has no such route, by definition of the
+    // word, so this sentence is true of every row that carries it.
+    return 'No tool exists yet for this step.';
+  }
+  if (entry.outcome === 'blocked') {
+    if (note.includes('basis')) return 'This market’s payout shape is one the local compiler cannot emit.';
+    if (note.includes('never founded')) return 'The market was never founded.';
+    if (note.includes('terminal answer')) return 'The market never reached a terminal answer.';
+    if (note.includes('already retired')) return 'The market was already retired.';
+    return 'A step this one depends on did not happen.';
+  }
+  if (note.includes('fee') && note.includes('basis points')) return 'Refused: the market’s fee rate is not the one this release can trade at.';
+  if (note.includes('execution root')) return 'Refused: the market’s trading capability was never activated.';
+  if (note.includes('finalized')) return 'Refused: the chain had not finalized a prerequisite yet.';
+  if (note.includes('authority') || note.includes('keypair')) return 'Refused: a key did not match the one the step authenticates.';
+  if (note.includes('balance') || note.includes('insufficient')) return 'Refused: the account did not hold enough to cover it.';
+  return 'The chain refused this step.';
+}
 
 /**
  * THE HONESTY STRIP: every route the world planned, and what became of it.
@@ -1634,7 +1804,7 @@ export function honestyRowsV1(series: SimulatorSeriesV1): ReadonlyArray<HonestyR
     target[entry.outcome] += entry.count;
     if (entry.count > target.leadingCount) {
       target.leadingCount = entry.count;
-      target.leadingReason = entry.reason;
+      target.leadingReason = publicReasonV1(entry);
       target.leadingOutcome = entry.outcome;
     }
   }

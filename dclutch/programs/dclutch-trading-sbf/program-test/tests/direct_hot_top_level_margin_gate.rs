@@ -257,7 +257,78 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// 629. No gate constant can make that figure untrue while the searches remain,
 /// which is why the site count above is the real deliverable and the constant is
 /// only the regression detector.
-const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_254_251;
+/// # Why it rose 8,874 CU on 2026-08-31, and who moved each part of it
+///
+/// This is the act the paragraph above calls spending margin, so it is spent
+/// with an itemisation rather than a shrug. The same gate, by the same method,
+/// on three trees:
+///
+/// ```text
+///   this constant, as recorded                                    1,254,251
+///   the fee lane's base `a0b1f4cb`, before any of its own work     1,259,047   +4,796
+///   the fee lane merged with main at `59ecec5f`                    1,263,125   +4,078
+///   ------------------------------------------------------------------------ +8,874
+/// ```
+///
+/// **+4,796 is the fee-core protocol tier**: `DirectMakerReplayLayoutV1` widened
+/// 152 -> 160 for `fee_owed`, and the fee-band `require` in the transition.
+/// Neither had ever been run against an on-chain gate, and that branch was
+/// already red here before the second-transaction lane touched it.
+///
+/// **+4,078 is the second-transaction lane plus main's own drift**: one
+/// `write_u64` per maker replay in the Effect -- without which `fee_owed` is
+/// permanently zero on chain -- the eight extra record bytes hashed on both
+/// sides of the poststate comparison, and the poststate projection's delegation
+/// branch.
+///
+/// Nothing got cheaper in exchange and this comment's bargain is not met. What
+/// is offered instead is that a fee-bearing Direct market now EXISTS: it was
+/// unreachable at any price before, over the ceiling by more than the whole fee
+/// leg cost. 8,874 CU buys it, against 105,373 CU of remaining worst-seed
+/// margin on this same sweep. That is a judgement and it is recorded as one.
+/// Evidence: `docs/evidence/FEE_SECOND_TRANSACTION_PAIR_2026_08_31.md`.
+///
+/// # Why it rose a further 1,551 CU on 2026-08-31, and why 1,500 of that is slack
+///
+/// The constant above was set to a MEASURED FLOOR WITH ZERO HEADROOM at 02:06,
+/// and the tree it was measured on was merged with main at 02:16. Ten minutes.
+/// The cohort-8 cut measured the merged tree and read 1,263,176 -- fifty-one
+/// compute units over a pin that had no room for one. Same gate, same method:
+///
+/// ```text
+///   the fee lane's own commit `28530782`, re-measured here   1,263,125     0
+///   the cohort-8 cut candidate `dfb41be6`                    1,263,176   +51
+/// ```
+///
+/// The first line REPRODUCES the recorded constant exactly, which is what makes
+/// the second line a measurement of drift rather than of a different instrument.
+///
+/// **The +51 is main's own drift, merged into the lane after the pin was set.**
+/// Eliminated by inspection: the final merge `f8cf60cc` -> `a7d50d3a` added no
+/// Rust at all under `programs`/`crates` (two shell scripts); `8b47f287` touched
+/// only `tools/gauntlet`; and NO `Cargo.lock` changed in either merge range, so
+/// it is not dependency drift. What remains is the set merged at `ab428f63`,
+/// of which only these touch non-test code this route can reach --
+/// `d38aadae` (`dclutch-claims-svm`, and the Claims caller authority is one of
+/// the seven sites), `aac98afd` (`dclutch-product-payoff-v2-codec`),
+/// `f3f47640` (`dclutch-token-svm`). Per-commit attribution is queued; the
+/// honest statement today is 51 CU, measured, from that set.
+///
+/// **The 1,500 is deliberate slack and it is the actual lesson here.** A pin set
+/// to its own floor reddens on the next commit that costs a single unit, which
+/// is what happened, and a gate that cries at 51 CU while the route sits 108,322
+/// CU under the ceiling trains its readers to raise it without looking. 1,500 is
+/// one whole bump-search attempt -- the quantum this route's cost actually moves
+/// in -- about thirty times the drift just measured, and far below the class of
+/// change this gate exists to catch: `df404c56` cost 7,520 CU while believing it
+/// had changed no program at all. Routine drift will not re-redden this; a real
+/// regression still will. It also restores the headroom FIXBUMPS chose, which
+/// this file's own history records as "exactly 1,500 CU".
+///
+/// For the record, the route got CHEAPER, not dearer: cohort-7 shipped a
+/// 1,319,583 floor and this is 1,263,176, 56,407 CU below it, with the
+/// affordable bump-search count up from 54 to 85 over the same seven sites.
+const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_264_676;
 
 /// The protocol maximum a transaction may consume.
 const PROTOCOL_CEILING: u64 = 1_400_000;

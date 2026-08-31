@@ -122,8 +122,8 @@ function deadlinePhrase(deadline: string | null, clock: SlotClockV1 | null | und
 function CapabilityEntry({ badge, clock, nowMs }: Readonly<{ badge: MarketCapabilityBadgeV1 }> & SlotClockPropsV1) {
   return <details className="capability-drawer">
     <summary>
-      <span className={`capability-badge${badge.recognized ? ' recognized' : ''}`}>{badge.label}</span>
-      <small>entry {badge.index} · {badge.activation === 'deadline' ? `activation deadline slot ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}` : 'immediate activation'}</small>
+      <span className={`capability-badge${badge.recognized ? ' recognized' : ''}`}>{badge.recognized ? badge.label : `Capability entry ${badge.index}`}</span>
+      <small>{badge.activation === 'deadline' ? `switches on by slot ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}` : 'switches on immediately'}</small>
     </summary>
     <dl className="detail-facts">
       <ContentId label="What kind it is" value={badge.kindId} />
@@ -416,7 +416,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               supplies={decoded.liability.supplyAtoms}
               outcomes={editorial?.outcomes ?? null}
               caption={SUPPLY_SHARE_MEANING_V1}
-              emptyReason="No claims have been issued on this market yet, so there is no split to draw."
+              emptyReason="No claims issued yet."
             />
             {/* Drawn only for a market some run actually recorded; every other
                 market renders nothing here rather than an empty frame. */}

@@ -21,7 +21,10 @@ use dclutch_account_profile_contract::v2::{
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1,
-    hot_v3::{HOT_RUNTIME_PORTFOLIO_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3},
+    hot_v3::{
+        HOT_RUNTIME_CONFIG_COORDINATE_V3, HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+        HOT_RUNTIME_PRODUCT_COORDINATE_V3, HOT_RUNTIME_ROOT_COORDINATE_V3,
+    },
 };
 use dclutch_claims_svm::frame_spec_v1::{
     ClaimsFrameDataV1, ClaimsFrameRoleV1, ClaimsFrameSpecV1, FramePrivilegesV1,
@@ -31,15 +34,21 @@ use dclutch_custody_contract::{
 };
 use dclutch_general_codec::{Action, SELECTION_POLICY_BYTES};
 use dclutch_general_config_contract::{
-    GENERAL_ROOT_LIFECYCLE_OFFSET_V2, v3::GENERAL_CONFIG_BYTES_V3,
+    GENERAL_ROOT_CONFIG_ID_OFFSET_V2, GENERAL_ROOT_LIFECYCLE_OFFSET_V2,
+    GENERAL_ROOT_MARKET_OFFSET_V2, GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2,
+    GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2, GENERAL_ROOT_REVISION_OFFSET_V2,
+    v3::{GENERAL_CONFIG_BYTES_V3, GeneralConfigV3Layout},
 };
 use dclutch_product_runtime_v2::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
 };
-use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
+use dclutch_product_runtime_v2_admission::{
+    PRODUCT_RECORD_BYTES_V2, PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2,
+};
 
 use crate::{
     artifacts_v3::GENERAL_PRODUCT_TAIL_COUNT_SCALAR_V3,
+    collection_v1::{GENERAL_BATCH_BYTES_V1, GeneralBatchLayoutV1},
     effect_artifacts_v3::{
         GeneralChildFrameV3, general_custody_callee_account_count_v3,
         general_custody_callee_coordinate_v3, general_effect_account_count_v3,
@@ -206,6 +215,8 @@ pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
         // projected no operations would leave `ROOT_LIFECYCLE_OBSERVATION` at
         // zero, which is not `Active`, so every action would refuse.
         unauthored_actions!() => 0,
+        Action::OpenBatch => 19,
+        Action::CloseBatch => 16,
         Action::Close => 9,
         Action::Consider
         | Action::Freeze
@@ -261,6 +272,131 @@ pub fn general_account_profile_operation_v3(
                     .checked_add(GENERAL_ROOT_LIFECYCLE_OFFSET_V2)
                     .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
             )?,
+        }),
+        // The batch pair's projections: the root tail, the config windows, and
+        // the three identities the batch record binds. `zero` receives the
+        // persisted batch width on CloseBatch -- the real width conjunct --
+        // and the Product width again on OpenBatch, whose record does not yet
+        // exist and whose width the effect pins to the same source.
+        // A coordinate carrying a data-effect grant with no lifecycle creation
+        // must anchor its owner explicitly, exactly as Close anchors the
+        // settlement state it debits. The composite root is Trading's PDA.
+        5 if matches!(action, Action::OpenBatch | Action::CloseBatch) => {
+            Ok(AccountOperationInputV2::RequireOwner {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                expected: common_identity(identity::TRADING_PROGRAM)?,
+            })
+        }
+        6 if matches!(action, Action::OpenBatch | Action::CloseBatch) => {
+            if action == Action::OpenBatch {
+                Ok(AccountOperationInputV2::ProjectDataU32 {
+                    account: AccountCoordinateV2::fixed(narrow(
+                        HOT_RUNTIME_PORTFOLIO_COORDINATE_V3,
+                    )?),
+                    destination: common_scalar(scalar::ZERO)?,
+                    data_offset: width(PORTFOLIO_COEFFICIENT_COUNT_OFFSET)?,
+                })
+            } else {
+                Ok(AccountOperationInputV2::ProjectDataU32 {
+                    account: primary,
+                    destination: common_scalar(scalar::ZERO)?,
+                    data_offset: batch_body_offset(GeneralBatchLayoutV1::OUTCOME_COUNT)?,
+                })
+            }
+        }
+        7 if matches!(action, Action::OpenBatch | Action::CloseBatch) => {
+            Ok(AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_scalar(scalar::ROOT_REVISION_OBSERVATION)?,
+                data_offset: root_tail_offset(GENERAL_ROOT_REVISION_OFFSET_V2)?,
+            })
+        }
+        8 if matches!(action, Action::OpenBatch | Action::CloseBatch) => {
+            Ok(AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_scalar(scalar::ROOT_OPEN_BATCHES_OBSERVATION)?,
+                data_offset: root_tail_offset(GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2)?,
+            })
+        }
+        9 if matches!(action, Action::OpenBatch | Action::CloseBatch) => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_identity(identity::GENERAL_CONFIG_ID)?,
+                data_offset: root_tail_offset(GENERAL_ROOT_CONFIG_ID_OFFSET_V2)?,
+            })
+        }
+        10 if matches!(action, Action::OpenBatch | Action::CloseBatch) => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_identity(identity::MARKET)?,
+                data_offset: root_tail_offset(GENERAL_ROOT_MARKET_OFFSET_V2)?,
+            })
+        }
+        11 if matches!(action, Action::OpenBatch | Action::CloseBatch) => {
+            Ok(AccountOperationInputV2::ProjectDataIdentity {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_PRODUCT_COORDINATE_V3)?),
+                destination: common_identity(identity::SELECTION_PRODUCT)?,
+                data_offset: width(PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2)?,
+            })
+        }
+        12 if action == Action::OpenBatch => {
+            Ok(AccountOperationInputV2::ProjectDataU64 {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_scalar(scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION)?,
+                data_offset: root_tail_offset(GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2)?,
+            })
+        }
+        13 if action == Action::OpenBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::CONFIG_COLLECTION_SLOTS)?,
+            data_offset: width(GeneralConfigV3Layout::COLLECTION_SLOTS)?,
+        }),
+        14 if action == Action::OpenBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::CONFIG_SELECTION_SLOTS)?,
+            data_offset: width(GeneralConfigV3Layout::SELECTION_SLOTS)?,
+        }),
+        15 if action == Action::OpenBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::CONFIG_SETTLEMENT_SLOTS)?,
+            data_offset: width(GeneralConfigV3Layout::SETTLEMENT_SLOTS)?,
+        }),
+        16 if action == Action::OpenBatch => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
+            data_offset: width(GeneralConfigV3Layout::MAX_ORDERS_PER_CANDIDATE)?,
+        }),
+        17 if action == Action::OpenBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::SELECTION_PRICE_SCALE)?,
+            data_offset: width(GeneralConfigV3Layout::PRICE_SCALE)?,
+        }),
+        18 if action == Action::OpenBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
+            destination: common_scalar(scalar::GENERATION)?,
+            data_offset: width(GeneralConfigV3Layout::GENERATION)?,
+        }),
+        // CloseBatch's four batch-record projections: the status and counter
+        // its disjunction reads, and the window and bound it compares.
+        12 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU8 {
+            account: primary,
+            destination: common_scalar(scalar::BATCH_STATUS_OBSERVATION)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::STATUS)?,
+        }),
+        13 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: primary,
+            destination: common_scalar(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::ORDER_COUNT)?,
+        }),
+        14 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU64 {
+            account: primary,
+            destination: common_scalar(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT)?,
+        }),
+        15 if action == Action::CloseBatch => Ok(AccountOperationInputV2::ProjectDataU32 {
+            account: primary,
+            destination: common_scalar(scalar::CONFIG_MAX_ORDERS)?,
+            data_offset: batch_body_offset(GeneralBatchLayoutV1::MAX_ORDERS)?,
         }),
         // Every other action creates its primary state, so its lifecycle plan is
         // what proves the account's owner. Close destroys that account instead:
@@ -351,7 +487,16 @@ pub fn encode_general_account_profile_v3_atomic(
             .ok_or(GeneralAccountRuleErrorV3::Geometry)? = operation;
     }
     encode_account_profile_with_dynamic_fixed_span_v2_generated_atomic(
-        TrustedEnvironmentV2::None,
+        // The window-gated actions read the trusted current slot; a caller may
+        // not state what time it is. The settlement seven declare none, and
+        // adding one there would move seven digests for nothing.
+        if matches!(action, Action::OpenBatch | Action::CloseBatch) {
+            TrustedEnvironmentV2::CurrentSlot {
+                destination: narrow_u32(scalar::CURRENT_SLOT)?,
+            }
+        } else {
+            TrustedEnvironmentV2::None
+        },
         TrustedIdentityEnvironmentV2::CurrentExecutingProgram {
             destination: narrow_u32(identity::TRADING_PROGRAM)?,
         },
@@ -379,7 +524,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 9;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 19;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -390,7 +535,7 @@ const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 
 
 const _: () = assert!(
     GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3
-        == general_account_profile_operation_count_v3(Action::Close) as usize
+        == general_account_profile_operation_count_v3(Action::OpenBatch) as usize
 );
 
 fn narrow_u32(value: u32) -> Result<u16> {
@@ -403,6 +548,22 @@ fn narrow(value: usize) -> Result<u16> {
 
 fn width(value: usize) -> Result<u32> {
     u32::try_from(value).map_err(|_| GeneralAccountRuleErrorV3::Geometry)
+}
+
+/// One `GeneralRootV2` tail offset behind the immutable capability header.
+fn root_tail_offset(offset: usize) -> Result<u32> {
+    width(
+        CAPABILITY_ROOT_HEADER_BYTES_V1
+            .checked_add(offset)
+            .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
+    )
+}
+
+/// One batch-record offset behind the General local-state envelope header.
+fn batch_body_offset(offset: usize) -> Result<u32> {
+    GeneralLocalStateLayoutV3::body()
+        .checked_add(width(offset)?)
+        .ok_or(GeneralAccountRuleErrorV3::Geometry)
 }
 
 fn common_scalar(coordinate: u32) -> Result<ScalarCoordinateV2> {
@@ -533,7 +694,15 @@ fn common_rule(
             )
             .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
             0,
-            no_effects(),
+            // The one argument the long comment above promised: the two
+            // root-advancing actions get the data-effect grant, and no other
+            // action does. Trading's own offset guard keeps every such write
+            // behind the immutable capability header.
+            if matches!(action, Action::OpenBatch | Action::CloseBatch) {
+                AccountEffectPermissionsV2::new(false, false, true)
+            } else {
+                no_effects()
+            },
         )),
         1 => Ok(exact_rule(
             false,
@@ -570,6 +739,8 @@ fn common_rule(
 fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPrestateInputV2> {
     let semantic_header = if matches!(action, Action::Consider | Action::Freeze) {
         RUNTIME_SELECTION_CURSOR_BYTES_V2
+    } else if matches!(action, Action::OpenBatch | Action::CloseBatch) {
+        GENERAL_BATCH_BYTES_V1
     } else {
         SETTLEMENT_CURSOR_HEADER_BYTES_V2
     };
@@ -592,7 +763,10 @@ fn local_state_rule(action: Action, coordinate: u16) -> Result<AccountRuleWithPr
                     .ok_or(GeneralAccountRuleErrorV3::Geometry)?,
             )
             .map_err(|_| GeneralAccountRuleErrorV3::Geometry)?,
-            data_item_stride: if matches!(action, Action::Consider | Action::Freeze) {
+            data_item_stride: if matches!(
+                action,
+                Action::Consider | Action::Freeze | Action::OpenBatch | Action::CloseBatch
+            ) {
                 0
             } else {
                 8
@@ -1167,7 +1341,7 @@ mod tests {
         rent_credit: 48,
     };
 
-    const ACTIONS: [Action; 7] = [
+    const ACTIONS: [Action; 9] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -1175,6 +1349,8 @@ mod tests {
         Action::Materialize,
         Action::Distribute,
         Action::Close,
+        Action::OpenBatch,
+        Action::CloseBatch,
     ];
 
     #[test]

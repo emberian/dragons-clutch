@@ -54,6 +54,8 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -480,6 +482,38 @@ pub(crate) struct DirectTradeTermsV1 {
     pub(crate) fee_basis_points: u16,
 }
 
+/// Which of the two prestates the chain admits a Direct token destination to be
+/// in, as observed on chain before this trade is produced.
+///
+/// THE CHAIN ADMITS TWO PRESTATES AND THIS PRODUCER USED TO ADMIT ONE, which is
+/// why no market in this tree could ever trade twice. The two are owned by two
+/// different instructions and neither is optional:
+///
+/// - [`Vacant`](Self::Vacant) is what `direct_token_setup_v1` requires in order
+///   to CREATE the account. `authenticate_setup` refuses on
+///   `seller_account.owner != &system_program::ID || seller_account.data_len()
+///   != 0` (`programs/dclutch-trading-sbf/src/direct_token_setup_v1.rs`), so a
+///   destination that already exists cannot be set up again, ever.
+/// - [`Initialized`](Self::Initialized) is what the TRADE requires in order to
+///   EXECUTE against the account. `project_tokens_v3` in
+///   `dclutch-direct-codec` refuses on owner, length, state, native profile,
+///   Mint and token-owner (`crates/dclutch-direct-codec/src/direct_finalization_v3.rs`),
+///   so a vacant destination cannot be paid.
+///
+/// A market's FIRST trade sees `Vacant` and runs token setup. Every later trade
+/// sees `Initialized` and must skip it. Admitting only the first is a producer
+/// that refuses every market it has already traded on -- the same defect WALL4
+/// dissolved in the TypeScript panel on 2026-08-31, which the Rust producer
+/// never got the pass for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DirectTokenDestinationPrestateV1 {
+    /// System-owned and data-empty. Token setup will create it.
+    Vacant,
+    /// The initialized Token-2022 account for this Realm Mint and this owner.
+    /// Token setup has already run; the trade executes against it.
+    Initialized,
+}
+
 #[derive(Clone)]
 struct PreparedPublicFactsV1 {
     plan_sha256: String,
@@ -661,6 +695,169 @@ fn refusing_ticket_half_clauses_v1(
         ));
     }
     refusing
+}
+
+/// Every clause on which the finalized buyer collateral account cannot fund
+/// this exact trade, each naming what the chain holds and what it requires.
+///
+/// THE ALLOWANCE IS AN EQUALITY, NOT A FLOOR, and this function exists because
+/// the producer used to model it as a floor over the wrong number entirely. It
+/// tested `participant.collateral_quantity_atoms < required_buyer_collateral`
+/// -- one `<` against the admission REPORT -- while `validate_collateral` in
+/// `dclutch-direct-codec`, which is what the Trading program actually runs,
+/// tests two different things about the finalized TOKEN ACCOUNT:
+///
+/// - `balance < buyer_collateral_debit` refuses. A floor, as expected.
+/// - `delegated_amount != buyer_collateral_debit` refuses. An EQUALITY. The
+///   delegation is a single-use authorization for exactly this trade, spent to
+///   zero by the Custody effect; an allowance larger than the debit is not
+///   generous, it is a different trade's authorization.
+///
+/// So an admission funded with MORE than the trade needs was accepted here and
+/// refused on chain, and the chain said `Candidate`, and the exterior said
+/// `Finalization`, and nothing anywhere named the number. That is the whole
+/// distance between a produced session and a landed fill.
+fn refusing_buyer_collateral_clauses_v1(
+    account_data: &[u8],
+    admitted_quantity_atoms: u64,
+    custody_authority: Pubkey,
+    required_buyer_collateral: u64,
+) -> Result<Vec<String>> {
+    let token = TokenAccount::parse(account_data)
+        .map_err(|error| Error::new(format!("buyer collateral token account: {error:?}")))?;
+    let mut refusing = Vec::new();
+    if token.amount < required_buyer_collateral {
+        refusing.push(format!(
+            "its balance {} is below the {required_buyer_collateral} atoms this trade debits",
+            token.amount
+        ));
+    }
+    match token.delegate {
+        COption::Some(delegate) if delegate == custody_authority.to_bytes() => {}
+        COption::Some(delegate) => refusing.push(format!(
+            "its delegate {} is not the Custody authority {custody_authority}",
+            Pubkey::new_from_array(delegate)
+        )),
+        COption::None => {
+            refusing.push("it carries no delegate, so Custody has no allowance to spend".to_owned())
+        }
+    }
+    if token.delegated_amount != required_buyer_collateral {
+        refusing.push(format!(
+            "its delegated allowance {} is not exactly the {required_buyer_collateral} atoms this trade debits -- the allowance authorizes one trade and is spent to zero, so more is as refused as less",
+            token.delegated_amount
+        ));
+    }
+    // The admission REPORT's quantity is deliberately not a clause. The chain
+    // reads this token account and nothing else at trade time, and adding a
+    // rule the chain does not have is the same drift as missing one -- it just
+    // fails in the safe direction, which is how a producer ends up refusing
+    // trades the validator would accept. It is carried only to be NAMED beside
+    // the allowance when they disagree, because that disagreement is the single
+    // most useful sentence for an operator holding an oversized admission.
+    if !refusing.is_empty() && admitted_quantity_atoms != token.delegated_amount {
+        refusing.push(format!(
+            "for context, the admission record says {admitted_quantity_atoms} atoms while the account delegates {}",
+            token.delegated_amount
+        ));
+    }
+    Ok(refusing)
+}
+
+/// Classify a Direct token destination against the two prestates the chain
+/// admits, or name every clause on which it is neither.
+///
+/// Returns `Some(prestate)` with no clauses, or `None` with at least one. The
+/// clauses are ALL of them, not the first, on PAIRFIX's
+/// `refusing_ticket_half_clauses_v1` grounds: an operator who fixes one clause
+/// and re-runs has learned almost nothing.
+///
+/// WHAT THIS DELIBERATELY DOES NOT REQUIRE, and each omission is a wall that
+/// mirroring the wrong instruction would have built:
+///
+/// - **not `amount == 0`.** `direct_token_setup_v1`'s POSTSTATE is
+///   `TokenAccount::initialized_base_bytes`, whose balance is zero, and mirroring
+///   that here would admit a destination only until the first time it was paid --
+///   a market that could trade exactly twice instead of exactly once. The trade
+///   reads `seller.amount` as an observation and binds it to its own snapshot;
+///   it never requires a particular value.
+/// - **not `lamports == exact_rent`.** That clause belongs to token setup's rent
+///   normalization, which is settling who paid for the account. The trade does
+///   not read the destination's lamports at all.
+/// - **not the delegate or close authority.** `project_tokens_v3` reads those
+///   for the BUYER source, where the allowance is the authorization; for the
+///   seller and fee destinations it reads neither, and a producer that invents
+///   a rule the chain does not have fails in the safe direction, which is how a
+///   producer ends up refusing trades the validator would accept.
+///
+/// What it DOES require is exactly `project_tokens_v3`'s own conjunction over a
+/// destination: the token program owns it, it is `ACCOUNT_BYTES` long, it parses,
+/// it is `Initialized`, it carries no native reserve, and its Mint and owner are
+/// this trade's.
+fn classify_direct_token_destination_v1(
+    account: Option<&crate::rpc::RpcAccount>,
+    mint: Pubkey,
+    owner: Pubkey,
+    token_program: Pubkey,
+) -> (Option<DirectTokenDestinationPrestateV1>, Vec<String>) {
+    // A MISSING account and an existing System-owned data-empty one are the same
+    // prestate: the runtime renders the first as the second to any instruction
+    // that declares it, which is exactly how token setup creates the PDA.
+    let Some(account) = account else {
+        return (Some(DirectTokenDestinationPrestateV1::Vacant), Vec::new());
+    };
+    if account.owner == system_program::ID && !account.executable && account.data.is_empty() {
+        return (Some(DirectTokenDestinationPrestateV1::Vacant), Vec::new());
+    }
+    let mut refusing = Vec::new();
+    if account.owner != token_program {
+        refusing.push(format!(
+            "it is owned by {} rather than the Realm token program {token_program}, and it is not the System-owned data-empty prestate token setup would create either",
+            account.owner
+        ));
+    }
+    if account.executable {
+        refusing.push("it is executable".to_owned());
+    }
+    if account.data.len() != ACCOUNT_BYTES {
+        refusing.push(format!(
+            "it holds {} bytes rather than the {ACCOUNT_BYTES} of a Token-2022 account",
+            account.data.len()
+        ));
+    }
+    match TokenAccount::parse(&account.data) {
+        Err(error) => refusing.push(format!("its bytes are not a token account: {error:?}")),
+        Ok(token) => {
+            if token.state != AccountState::Initialized {
+                refusing.push(format!(
+                    "its state is {:?} rather than Initialized",
+                    token.state
+                ));
+            }
+            if !token.native_reserve.is_none() {
+                refusing.push(
+                    "it carries a native reserve, so it is a wrapped-SOL account".to_owned(),
+                );
+            }
+            if token.mint != mint.to_bytes() {
+                refusing.push(format!(
+                    "its Mint {} is not this Market's collateral Mint {mint}",
+                    Pubkey::new_from_array(token.mint)
+                ));
+            }
+            if token.owner != owner.to_bytes() {
+                refusing.push(format!(
+                    "its token owner {} is not {owner}",
+                    Pubkey::new_from_array(token.owner)
+                ));
+            }
+        }
+    }
+    if refusing.is_empty() {
+        (Some(DirectTokenDestinationPrestateV1::Initialized), refusing)
+    } else {
+        (None, refusing)
+    }
 }
 
 /// Both halves' refusing clauses, seller first.
@@ -1979,6 +2176,10 @@ fn prepare_public_facts_v1(
             aggregate,
             seller_position,
             participant.position,
+            // The buyer's collateral account joins the snapshot because the
+            // allowance the chain requires is a fact of THIS account at THIS
+            // commitment, not of the admission report that once described it.
+            participant.collateral_account,
             mint,
             lifecycle_rent_credit,
             sysvar::rent::ID,
@@ -2122,10 +2323,18 @@ fn prepare_public_facts_v1(
     let required_buyer_collateral = gross
         .checked_add(fee)
         .ok_or_else(|| refusal("Direct buyer reserve overflowed"))?;
-    if participant.collateral_quantity_atoms < required_buyer_collateral {
+    let buyer_collateral_account = snapshot.account(participant.collateral_account)?;
+    let refusing = refusing_buyer_collateral_clauses_v1(
+        &buyer_collateral_account.data,
+        participant.collateral_quantity_atoms,
+        participant.custody_authority,
+        required_buyer_collateral,
+    )?;
+    if !refusing.is_empty() {
         return Err(refusal(format!(
-            "Direct participant has {} collateral atoms; this exact trade requires {required_buyer_collateral}",
-            participant.collateral_quantity_atoms
+            "the finalized buyer collateral account {} cannot fund this exact trade: {}",
+            participant.collateral_account,
+            refusing.join("; ")
         )));
     }
     let rent_account = snapshot.account(sysvar::rent::ID)?;
@@ -2141,6 +2350,8 @@ fn prepare_public_facts_v1(
         Pubkey::find_program_address(&seller_seeds.as_slices(), &trading);
     let (buyer_maker, buyer_bump) =
         Pubkey::find_program_address(&buyer_seeds.as_slices(), &trading);
+    // Read from the RentCredit the chain itself reads, not from who is paying.
+    let maker_rent_beneficiary = maker_root_rent_beneficiary_v1(rpc, lifecycle_rent_credit)?;
     let seller_facts = maker_facts_v1(
         rpc,
         seller_maker,
@@ -2149,7 +2360,7 @@ fn prepare_public_facts_v1(
         market,
         generation,
         seller,
-        payer,
+        maker_rent_beneficiary,
         &rent,
     )?;
     let buyer_facts = maker_facts_v1(
@@ -2160,7 +2371,7 @@ fn prepare_public_facts_v1(
         market,
         generation,
         participant.owner,
-        payer,
+        maker_rent_beneficiary,
         &rent,
     )?;
     let custody_replay = Pubkey::find_program_address(
@@ -2252,17 +2463,64 @@ fn prepare_public_facts_v1(
         ],
         &[("payer", "buyer")],
     )?;
-    for (address, label) in [
-        (seller_token, "seller Token-2022 destination"),
-        (fee_token, "fee Token-2022 destination"),
+    // The two destinations are classified independently and then required to
+    // AGREE, because a market with one vacant and one initialized destination is
+    // a half-run token setup: setup refuses (one is not vacant) and the trade
+    // refuses (one is not initialized), so there is no instruction that can move
+    // it forward, and saying so here is the only place an operator learns it.
+    let mut destination_prestates = Vec::new();
+    for (address, label, token_owner) in [
+        (seller_token, "seller Token-2022 destination", seller),
+        (fee_token, "fee Token-2022 destination", fee_recipient),
     ] {
-        if rpc.account(address)?.is_some_and(|account| {
-            account.owner != system_program::ID || account.executable || !account.data.is_empty()
-        }) {
+        let observed = rpc.account(address)?;
+        let (prestate, refusing) = classify_direct_token_destination_v1(
+            observed.as_ref(),
+            mint,
+            token_owner,
+            token_program,
+        );
+        match prestate {
+            Some(prestate) => destination_prestates.push((label, prestate)),
+            None => {
+                return Err(refusal(format!(
+                    "{label} {address} is neither of the two prestates the chain admits -- not the System-owned data-empty account `direct_token_setup_v1` creates, and not the initialized Token-2022 account the trade pays: {}",
+                    refusing.join("; ")
+                )));
+            }
+        }
+    }
+    let token_setup_prestate = match destination_prestates.as_slice() {
+        [(_, seller_prestate), (_, fee_prestate)] if seller_prestate == fee_prestate => {
+            *seller_prestate
+        }
+        [(seller_label, seller_prestate), (fee_label, fee_prestate)] => {
             return Err(refusal(format!(
-                "{label} was not a System-owned data-empty PDA prestate"
+                "Direct token setup is half run on this Market: the {seller_label} {seller_token} is {seller_prestate:?} while the {fee_label} {fee_token} is {fee_prestate:?}. Token setup creates both in one instruction and refuses unless BOTH are vacant; the trade pays both and refuses unless BOTH are initialized. No instruction can move this Market forward"
             )));
         }
+        _ => return Err(refusal("Direct token destinations were not classified")),
+    };
+    // WHAT REMAINS OF WALL 7, NAMED RATHER THAN DISCOVERED ON CHAIN.
+    //
+    // The producer now admits both prestates the chain admits, which is the
+    // half of this that was wrong: it used to call an initialized destination
+    // malformed. But admitting it is only useful if the SETUP STAGE MACHINE
+    // then skips a token setup whose accounts already exist, and it does not
+    // yet -- `execute_direct_setup_action_v1` selects TokenSetup purely on
+    // journal phase, and a fresh session has no journal, so it would send the
+    // instruction and `direct_token_setup_v1` would refuse it for not finding
+    // the vacancy it needs to create anything.
+    //
+    // So this refuses HERE, before signing two intents and writing a session
+    // that could never advance, and it says which stage owns the gap. That is
+    // strictly better than producing the session and reading `Content` off the
+    // chain twenty minutes later, and it is honest that the market still cannot
+    // trade twice.
+    if token_setup_prestate == DirectTokenDestinationPrestateV1::Initialized {
+        return Err(refusal(format!(
+            "Direct token setup has already run on Market {market} generation {generation}: the seller destination {seller_token} and fee destination {fee_token} are both the initialized Token-2022 accounts this trade would pay. The producer admits that prestate; the setup stage machine cannot yet SKIP a finished token setup, so this session would stall at the token-setup stage. That skip is the remaining half of wall 7"
+        )));
     }
 
     let descriptor = record_coordinates_v1(
@@ -2537,11 +2795,39 @@ fn prepare_public_facts_v1(
         route_without_children,
         replay_setup,
         token_setup,
+
         participant,
     })
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The refund wallet the chain will write into a maker root it creates.
+///
+/// THE LIFECYCLE LANE MOVED THIS AND THE PRODUCER DID NOT FOLLOW. `maker_facts_v1`
+/// used to answer `payer` here, under a comment that said so and named itself as
+/// "the single producer coordinate to change" if maker-root rent ever moved to
+/// RentCredit. It moved. `hot_v3.rs` builds `MakerReplayFirstUseV1` with
+/// `rent_owner: plan.beneficiary`, and that beneficiary is
+/// `credit.refund_wallet()` of the founding lifecycle RentCredit -- not the
+/// wallet that happened to pay for one trade.
+///
+/// The distinction is the point rather than a detail. A maker replay root is a
+/// shared structure of the MARKET; if its rent followed whoever paid, a stranger
+/// paying their own fees would walk away owning the rent of something the market
+/// depends on. The same route deliberately admits that stranger as the payer.
+///
+/// Measured 2026-08-31 on a landed fill: the producer projected the payer, the
+/// chain wrote the refund wallet, and the driver refused its own fill's
+/// poststate on those 32 bytes with every economic cell already agreeing.
+fn maker_root_rent_beneficiary_v1(rpc: &mut Rpc, lifecycle_rent_credit: Pubkey) -> Result<Pubkey> {
+    let account = rpc
+        .account(lifecycle_rent_credit)?
+        .ok_or_else(|| refusal("Direct founding lifecycle RentCredit is absent"))?;
+    let credit = LifecycleRentCreditV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("Direct lifecycle RentCredit: {error:?}")))?;
+    Ok(Pubkey::new_from_array(credit.refund_wallet().to_bytes()))
+}
+
 fn maker_facts_v1(
     rpc: &mut Rpc,
     address: Pubkey,
@@ -2550,7 +2836,7 @@ fn maker_facts_v1(
     market: Pubkey,
     generation: u64,
     maker: Pubkey,
-    payer: Pubkey,
+    rent_beneficiary: Pubkey,
     rent: &Rent,
 ) -> Result<MakerFactsV1> {
     let Some(account) = rpc.account(address)? else {
@@ -2562,10 +2848,7 @@ fn maker_facts_v1(
             rent_principal_observation: 0,
             rent_principal: rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1),
             rent_beneficiary_observation: Pubkey::default(),
-            // Current Direct operator first-use semantics assign maker-root rent
-            // to the authenticated payer. If the lifecycle lane moves this to
-            // RentCredit, this is the single producer coordinate to change.
-            rent_beneficiary: payer,
+            rent_beneficiary,
         });
     };
     if account.owner == system_program::ID && account.data.is_empty() {
@@ -2577,7 +2860,7 @@ fn maker_facts_v1(
             rent_principal_observation: 0,
             rent_principal: rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1),
             rent_beneficiary_observation: Pubkey::default(),
-            rent_beneficiary: payer,
+            rent_beneficiary,
         });
     }
     if account.owner != trading || account.executable {
@@ -3743,8 +4026,14 @@ mod tests {
         signature::{Keypair, Signer as _},
     };
 
+    use dclutch_token_svm::{TokenAccount, state::TokenAccountLayoutV1};
+    use solana_sdk_ids::system_program;
+
+    use crate::rpc::RpcAccount;
+
     use super::{
-        CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_DIRECT_PRODUCER_COMMAND_V1,
+        ACCOUNT_BYTES, CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_DIRECT_PRODUCER_COMMAND_V1,
+        DirectTokenDestinationPrestateV1, classify_direct_token_destination_v1,
         DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1, DevnetDirectParticipantSourceV1,
         DevnetDirectSessionProducerJournalV1, DevnetDirectSessionProducerPhaseV1,
         DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTradeTermsV1,
@@ -4656,5 +4945,159 @@ mod tests {
         for forbidden in ["--seller-keypair", "--buyer-keypair", "--secret-key"] {
             assert!(!usage.contains(forbidden), "usage exposed {forbidden}");
         }
+    }
+
+    /// Both prestates the chain admits are admitted, and every clause of the
+    /// third thing is proven red by mutating exactly one field away from a
+    /// destination that would otherwise pass.
+    ///
+    /// This is the red-proof for wall 7. The producer used to admit vacancy
+    /// alone, so a market that had run token setup once could never trade
+    /// again; the failure it produced named a "System-owned data-empty PDA
+    /// prestate", which describes the prestate of the instruction that CREATES
+    /// the account and says nothing about the one that PAYS it.
+    #[test]
+    fn both_admitted_token_destination_prestates_and_every_refusing_clause() {
+        let mint = key_v1("2xGo6Cxtfb41HJCrrqWBf73TSaJrbjUmFqr2urDi91q8");
+        let owner = Pubkey::new_unique();
+        let token_program = Pubkey::new_unique();
+        let initialized = TokenAccount::initialized_base_bytes(mint.to_bytes(), owner.to_bytes())
+            .expect("initialized base");
+
+        // A MISSING account is the vacant prestate: the runtime renders it that
+        // way to the instruction that creates the PDA.
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(None, mint, owner, token_program);
+        assert_eq!(prestate, Some(DirectTokenDestinationPrestateV1::Vacant));
+        assert!(clauses.is_empty(), "{clauses:?}");
+
+        let vacant = RpcAccount {
+            lamports: 0,
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: Vec::new(),
+        };
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&vacant), mint, owner, token_program);
+        assert_eq!(prestate, Some(DirectTokenDestinationPrestateV1::Vacant));
+        assert!(clauses.is_empty(), "{clauses:?}");
+
+        let good = RpcAccount {
+            lamports: 2_039_280,
+            owner: token_program,
+            executable: false,
+            rent_epoch: 0,
+            data: initialized.to_vec(),
+        };
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&good), mint, owner, token_program);
+        assert_eq!(
+            prestate,
+            Some(DirectTokenDestinationPrestateV1::Initialized),
+            "{clauses:?}"
+        );
+        assert!(clauses.is_empty(), "{clauses:?}");
+
+        // THE BALANCE IS NOT A CLAUSE, and this is the assertion that keeps it
+        // from becoming one. `direct_token_setup_v1`'s poststate is the ZERO
+        // balance of `initialized_base_bytes`, and mirroring that here would
+        // admit a destination only until the first time it was paid -- a market
+        // that could trade exactly twice instead of exactly once. The trade
+        // reads this balance as an observation, never as a requirement.
+        let mut paid = good.clone();
+        paid.data = TokenAccount::project_amount_poststate(&initialized, 50_000_000)
+            .expect("paid seller destination")
+            .to_vec();
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&paid), mint, owner, token_program);
+        assert_eq!(
+            prestate,
+            Some(DirectTokenDestinationPrestateV1::Initialized),
+            "a seller destination that has been paid once is still payable: {clauses:?}"
+        );
+
+        // Nor are the lamports: that clause belongs to token setup's rent
+        // normalization, and the trade does not read this account's lamports.
+        let mut underfunded = good.clone();
+        underfunded.lamports = 1;
+        let (prestate, _) =
+            classify_direct_token_destination_v1(Some(&underfunded), mint, owner, token_program);
+        assert_eq!(prestate, Some(DirectTokenDestinationPrestateV1::Initialized));
+
+        // Each mutation below moves exactly one field and must refuse by name.
+        let cases: [(&str, Box<dyn Fn(&mut RpcAccount)>, &str); 5] = [
+            (
+                "a stranger owns it",
+                Box::new(|account: &mut RpcAccount| account.owner = Pubkey::new_unique()),
+                "Realm token program",
+            ),
+            (
+                "it is executable",
+                Box::new(|account: &mut RpcAccount| account.executable = true),
+                "executable",
+            ),
+            (
+                "it is the wrong length",
+                Box::new(|account: &mut RpcAccount| account.data.truncate(ACCOUNT_BYTES - 1)),
+                "bytes rather than the",
+            ),
+            (
+                "it is frozen rather than initialized",
+                Box::new(|account: &mut RpcAccount| {
+                    account.data[TokenAccountLayoutV1::STATE] = 2;
+                }),
+                "rather than Initialized",
+            ),
+            (
+                "it carries a native reserve",
+                Box::new(|account: &mut RpcAccount| {
+                    account.data[TokenAccountLayoutV1::NATIVE_RESERVE] = 1;
+                }),
+                "native reserve",
+            ),
+        ];
+        for (label, mutate, expected) in cases {
+            let mut hostile = good.clone();
+            mutate(&mut hostile);
+            let (prestate, clauses) =
+                classify_direct_token_destination_v1(Some(&hostile), mint, owner, token_program);
+            assert_eq!(prestate, None, "{label} was admitted");
+            assert!(
+                clauses.iter().any(|clause| clause.contains(expected)),
+                "{label} refused without naming {expected}: {clauses:?}"
+            );
+        }
+
+        // The Mint and the token owner are the two identities that make this
+        // THIS trade's destination rather than some other market's.
+        let other = key_v1("6wLYToyGCRNa39Hjph9L4zgCPE4mjr2wKiHLQSyBDKaK");
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&good), other, owner, token_program);
+        assert_eq!(prestate, None);
+        assert!(
+            clauses.iter().any(|clause| clause.contains("collateral Mint")),
+            "{clauses:?}"
+        );
+        let (prestate, clauses) = classify_direct_token_destination_v1(
+            Some(&good),
+            mint,
+            Pubkey::new_unique(),
+            token_program,
+        );
+        assert_eq!(prestate, None);
+        assert!(
+            clauses.iter().any(|clause| clause.contains("token owner")),
+            "{clauses:?}"
+        );
+
+        // ALL failing clauses, not the first: an operator who fixes one and
+        // re-runs has learned almost nothing.
+        let mut doubly = good.clone();
+        doubly.executable = true;
+        doubly.data[TokenAccountLayoutV1::STATE] = 2;
+        let (_, clauses) =
+            classify_direct_token_destination_v1(Some(&doubly), mint, owner, token_program);
+        assert!(clauses.len() >= 2, "only one clause reported: {clauses:?}");
     }
 }

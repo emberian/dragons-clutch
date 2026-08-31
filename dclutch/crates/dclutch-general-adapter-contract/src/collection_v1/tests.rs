@@ -1156,3 +1156,101 @@ fn a_cancellation_lowers_the_ceiling_a_candidate_must_fit_inside() {
         Err(GeneralCollectionErrorV1::EscrowShortfall)
     );
 }
+
+// ---------------------------------------------------------------------------
+// The order wire: fixed-offset mutable state, interleaved rows, masked digest
+// ---------------------------------------------------------------------------
+
+/// Pin the wire the order-action EffectPrograms write by.
+///
+/// The mutable escrow window sits at the FIXED offsets `GeneralOrderLayoutV1`
+/// names, and every per-outcome row lies at `192 + 16 * i` with the receive
+/// and deliver quantities at fixed intra-row offsets. If any of these move,
+/// the fixed-offset artifact writes silently write the wrong field, so this
+/// test states the coordinates as bytes rather than trusting the codec to
+/// agree with itself.
+#[test]
+fn the_order_wire_is_fixed_state_then_interleaved_rows() {
+    let receive = [11_u64, 0, 13];
+    let deliver = [0_u64, 22, 23];
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &receive, &deliver);
+    assert_eq!(bytes.len(), 192 + 16 * WIDTH as usize);
+    assert_eq!(
+        bytes[GeneralOrderLayoutV1::STATE_PHASE],
+        GeneralOrderPhaseV1::Placed.tag()
+    );
+    assert_eq!(GeneralOrderLayoutV1::STATE_PHASE, 160);
+    assert_eq!(GeneralOrderLayoutV1::STATE_ADMITTED_SLOT, 168);
+    assert_eq!(GeneralOrderLayoutV1::STATE_RELEASED_SLOT, 176);
+    assert_eq!(bytes[168..176], 10_u64.to_le_bytes());
+    assert_eq!(bytes[176..184], 0_u64.to_le_bytes());
+    assert!(bytes[161..168].iter().all(|byte| *byte == 0));
+    assert!(bytes[184..192].iter().all(|byte| *byte == 0));
+    assert!(bytes[24..32].iter().all(|byte| *byte == 0));
+    for outcome in 0..WIDTH as usize {
+        let row = 192 + 16 * outcome;
+        assert_eq!(bytes[row..row + 8], receive[outcome].to_le_bytes());
+        assert_eq!(bytes[row + 8..row + 16], deliver[outcome].to_le_bytes());
+    }
+}
+
+/// The identity masks exactly the 32-byte mutable window and nothing more.
+///
+/// The successor half proves the mask covers the window: a lifecycle write
+/// leaves the identity fixed. The two flip halves prove it covers NOTHING
+/// more: the last header byte before the window and the first row byte after
+/// it both move the digest, so a mask one byte too wide on either side is a
+/// red test rather than a silently forgeable coordinate.
+#[test]
+fn the_order_identity_masks_exactly_the_mutable_window() {
+    let bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
+    let order = GeneralOrderV1::decode(&bytes).expect("order");
+    let identity = general_order_identity_v1(&bytes).expect("identity");
+    assert_eq!(order.order_id(), identity);
+
+    let mut released = bytes.clone();
+    order
+        .encode_successor_state_into(
+            GeneralOrderStateV1 {
+                phase: GeneralOrderPhaseV1::Released,
+                admitted_slot: 10,
+                released_slot: SETTLEMENT_CLOSE,
+            },
+            &mut released,
+        )
+        .expect("successor");
+    assert_ne!(released, bytes);
+    assert_eq!(
+        general_order_identity_v1(&released).expect("identity"),
+        identity
+    );
+
+    let mut header_flip = bytes.clone();
+    header_flip[GENERAL_ORDER_STATE_OFFSET_V1 - 1] ^= 1;
+    assert_ne!(
+        general_order_identity_v1(&header_flip).expect("identity"),
+        identity
+    );
+
+    let mut row_flip = bytes;
+    row_flip[GENERAL_ORDER_ROW_BASE_V1] ^= 1;
+    assert_ne!(
+        general_order_identity_v1(&row_flip).expect("identity"),
+        identity
+    );
+}
+
+/// The reserved range behind the nonce is canonical now.
+///
+/// Before the wire repair bytes 24..32 were never checked, so two encodings of
+/// one signed order could carry two identities. A content-addressed record may
+/// not have a free byte.
+#[test]
+fn a_nonzero_reserved_range_refuses_to_decode() {
+    let mut bytes = order_bytes(id(9), 4, 5, 6, 7, &[1, 0, 0], &[0, 2, 0]);
+    bytes[24] = 1;
+    assert_eq!(
+        GeneralOrderV1::decode(&bytes),
+        Err(GeneralCollectionErrorV1::InvalidHeader)
+    );
+}

@@ -78,7 +78,17 @@ if [[ -z "$builder_crate" ]]; then
 fi
 if [[ ! -f "$builder_crate" ]]; then
   echo "missing cargo-build-sbf crate archive needed for provenance authentication" >&2
-  exit 1
+  echo "  looked for cargo-build-sbf-$(manifest_value cargo_build_sbf_version).crate in ${CARGO_HOME:-$HOME/.cargo}/registry/cache" >&2
+  echo "  set CARGO_BUILD_SBF_CRATE to an explicit path, or populate the cache" >&2
+  # Exit 2, not 1: the archive being ABSENT is a fact about this host, not a
+  # defect in the fixture or in Claims. A GitHub runner installs Agave from the
+  # anza release tarball, which is not a cargo download, so nothing there ever
+  # puts this archive in the registry cache and this row cannot run. Under the
+  # 1 it used to return, tools/ci/run.sh counted that as a failed suite and the
+  # wrapper announced "a real finding about the protocol" -- about a file that
+  # was simply not on the machine. A DIGEST MISMATCH below still exits 1, and
+  # should: that is the fixture catching something real.
+  exit 2
 fi
 actual_builder_crate_sha="$(shasum -a 256 "$builder_crate" | awk '{print $1}')"
 if [[ "$actual_builder_crate_sha" != "$(manifest_value cargo_build_sbf_crate_sha256)" ]]; then

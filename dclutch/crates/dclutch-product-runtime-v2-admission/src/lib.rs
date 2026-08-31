@@ -65,6 +65,11 @@ pub const ADMISSION_RECORD_COUNT_V2: u8 = 3;
 pub const ADMISSION_RECEIPT_PDA_DOMAIN_V2: &[u8] = b"dclutch/product-v2/admission";
 
 const PRODUCT_ID_OFFSET: usize = 16;
+/// Public byte offset of the Product content identity inside one record.
+///
+/// Account-profile generators project the identity from this coordinate; the
+/// hostile decoder above remains the authority for accepting the whole record.
+pub const PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2: usize = PRODUCT_ID_OFFSET;
 const PRODUCT_DOMAIN_DIGEST_OFFSET: usize = 48;
 const PRODUCT_PORTFOLIO_DIGEST_OFFSET: usize = 80;
 const RECEIPT_COUNT_OFFSET: usize = 10;

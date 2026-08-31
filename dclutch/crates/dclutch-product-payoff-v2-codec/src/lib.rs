@@ -20,6 +20,8 @@ pub mod registry_v3;
 pub mod runtime_v3;
 /// Admission for the allocated-but-unevaluated degree-2-to-3 spline kind.
 pub mod spline_admission_v3;
+/// Integer Cox-de-Boor for the degree-2-to-3 kind, at the live wire's widths.
+pub mod spline_eval_v3;
 
 /// Canonical V2 wire magic.
 pub const MAGIC_V2: [u8; 8] = *b"DCLTPAY2";

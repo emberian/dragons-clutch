@@ -132,18 +132,18 @@ export default function ActivityWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <Nav current="/activity" status="node history · not a protocol index" />
+    <Nav current="/activity" status="node history" />
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Activity · the node&apos;s history, honestly labeled</p>
+        <p className="eyebrow">Activity</p>
         <h1>What this wallet did.<br /><em>As the node remembers it.</em></h1>
-        <p>dClutch runs no indexer, so this surface reads the one history that exists without one: the RPC node&apos;s own per-address signature index, for the wallet you name and the Claims Position addresses derived from the Markets you name. Every row is a finalized transaction the node returned, decoded in this browser. A node configured without history honestly answers &quot;nothing&quot; for every address, and that answer is shown as the node&apos;s, never as yours.</p>
+        <p>Finalized transactions for a wallet, and for its claims in any market you name. A node kept without history answers &quot;nothing&quot; for every address.</p>
       </div>
       <aside>
-        <span>Provenance</span>
+        <span>Source</span>
         <strong>Node signature index</strong>
-        <p>Not consensus state and not a protocol fact: two nodes can remember different histories. Amounts and programs below are decoded from the returned finalized bytes; nothing is aggregated or estimated.</p>
+        <p>Two nodes can remember different histories.</p>
       </aside>
     </section>
 
@@ -156,7 +156,7 @@ export default function ActivityWorkspace() {
         <label><span>Core program · label only</span><input value={coreProgram} onChange={(event) => setCoreProgram(event.target.value.trim())} /></label>
         <label><span>Trading program · label only</span><input value={tradingProgram} onChange={(event) => setTradingProgram(event.target.value.trim())} /></label>
       </div>
-      <WalletDirectory directory={directory} purpose="read one owner identity" onConnected={(address) => setOwnerOverride(address)} />
+      <WalletDirectory directory={directory} onConnected={(address) => setOwnerOverride(address)} />
       <label><span>Market addresses · one per line, up to {ACTIVITY_MAX_MARKETS}</span><textarea rows={4} value={addressList} onChange={(event) => setAddressListOverride(event.target.value)} /></label>
       <div className="direct-actions">
         <button disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading node history…' : 'Read activity'}</button>
@@ -167,10 +167,10 @@ export default function ActivityWorkspace() {
 
     <section className="trade-v3-card">
       <header><span>02</span><div><h2>Finalized transactions, newest first</h2><p>Each row names why it appears (which watched address it touched), the programs it invoked, and the owner&apos;s exact lamport movement. Claim-atom movements live on the portfolio surface, where the Position is decoded in full.</p></div></header>
-      {activity === null && <p className="market-empty">No history has been read. Until an owner is named and the node answers, this surface stays empty rather than inventing an activity feed.</p>}
+      {activity === null && <p className="market-empty">Nothing read yet.</p>}
       {activity !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
-          <article><span>Owner</span><strong>{shortAddressV1(activity.owner, 6)}</strong><small>identity only; nothing is signed here</small></article>
+          <article><span>Owner</span><strong>{shortAddressV1(activity.owner, 6)}</strong><small>address only</small></article>
           <article><span>Watched addresses</span><strong>{activity.watched.length}</strong><small>wallet + derived Positions</small></article>
           <article><span>Transactions</span><strong>{activity.entries.length}{activity.truncated ? '+' : ''}</strong><small>{activity.truncated ? 'truncated at the explicit browser bound' : 'complete node answer'}</small></article>
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>

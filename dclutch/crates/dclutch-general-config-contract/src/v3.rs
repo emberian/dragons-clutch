@@ -36,6 +36,15 @@ impl GeneralConfigV3Layout {
     pub const GENERATION: usize = generated_v3::CONFIG_GENERATION_OFFSET_V3;
     /// Exact simplex denominator.
     pub const PRICE_SCALE: usize = generated_v3::CONFIG_PRICE_SCALE_OFFSET_V3;
+    /// Batch collection-window length in slots.
+    pub const COLLECTION_SLOTS: usize = generated_v3::CONFIG_COLLECTION_SLOTS_OFFSET_V3;
+    /// Selection-window length in slots.
+    pub const SELECTION_SLOTS: usize = generated_v3::CONFIG_SELECTION_SLOTS_OFFSET_V3;
+    /// Settlement-window length in slots.
+    pub const SETTLEMENT_SLOTS: usize = generated_v3::CONFIG_SETTLEMENT_SLOTS_OFFSET_V3;
+    /// Admission bound shared by one batch window and one candidate.
+    pub const MAX_ORDERS_PER_CANDIDATE: usize =
+        generated_v3::CONFIG_MAX_ORDERS_PER_CANDIDATE_OFFSET_V3;
     /// Interpreted selection-policy content identity.
     pub const SELECTION_POLICY_ID: usize = generated_v3::CONFIG_SELECTION_POLICY_ID_OFFSET_V3;
     /// Immutable owner of the replaceable surplus token account.

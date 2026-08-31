@@ -24,14 +24,29 @@ use crate::successor::{
     InlineOrdinaryInputV2, InlineOrdinarySettlementV2, settle_inline_ordinary_v2,
 };
 
-/// Seller-net and combined-fee are the only positive collateral routes.
-pub const DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2: usize = 2;
+/// The seller-net leg is the only Custody route this transaction dispatches.
+///
+/// The fee leg settles in a second transaction
+/// (`docs/design/FEE_SECOND_TRANSACTION_V1.md`): the fee-bearing route did not
+/// fit the compute ceiling with both legs in one transaction, by a margin
+/// larger than the fee leg itself
+/// (`docs/evidence/DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md`). So tx1 moves
+/// `seller_net`, leaves the residual allowance in place by running the seller
+/// leg NON-terminally, and records the obligation on the buyer's maker replay.
+pub const DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2: usize = 1;
 /// Exact fixed width of the ordinary sparse Claims request.
 pub const DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2: usize = SPARSE_NATIVE_TRANSFER_BYTES_V1;
 /// Exact authenticated Effect request-bank width for ordinary Direct.
 pub const DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3: usize =
     SPARSE_NATIVE_TRANSFER_BYTES_V1 + 4 * DELEGATED_CUSTODY_REQUEST_BYTES_V2;
-/// Exact count of mutually exclusive/exhaustive Custody route slots.
+/// Exact count of declared Custody route slots.
+///
+/// Four are declared and two are reachable. Slot 2, fee continuation, is the
+/// leg that moved to the second transaction; slot 3, `FeeSole`, is retired by
+/// the `DIRECT_MAX_FEE_BASIS_POINTS_V1` band and refuses at
+/// [`DirectInlineCandidateErrorV2::FeeSoleRetired`]. Both keep their declared
+/// slot and their physical Effect frame in this lane: renumbering the Effect's
+/// 91-account topology is a separate, wider change than the protocol tier.
 pub const DIRECT_INLINE_CUSTODY_ROUTE_SLOTS_V2: usize = 4;
 
 /// Stable refusal from the pure ordinary Direct candidate.
@@ -55,6 +70,14 @@ pub enum DirectInlineCandidateErrorV2 {
     Postcondition,
     /// Exact Direct state-candidate encoding refused.
     State,
+    /// A settlement asked for the retired fee-only Custody route.
+    ///
+    /// `CUSTODY_ROUTES_V3` slot 3 needs `seller_net == 0 && combined_fee != 0`,
+    /// which for a positive gross forces a rate of exactly 10,000 basis points
+    /// -- five times the `DIRECT_MAX_FEE_BASIS_POINTS_V1` band decision 0014 D2
+    /// adopted. Unreachable is not the same as unrepresentable, so the state
+    /// gets a refusal rather than a route that silently plans nothing.
+    FeeSoleRetired,
 }
 
 /// Result alias for the pure ordinary Direct candidate.
@@ -395,79 +418,89 @@ fn compile_custody(
     collateral: &DirectInlineCollateralFrameV2,
     settlement: &InlineOrdinarySettlementV2,
 ) -> Result<CustodyCompilationV2> {
-    let mut count = 0_usize;
-    let mut source_after = collateral.buyer_source.balance;
-    let mut delegated_after = collateral.buyer_source.delegated_amount;
-    let mut seller_after = collateral.seller_destination.balance;
-    let mut fee_after =
-        if collateral.seller_destination.account == collateral.fee_destination.account {
-            seller_after
-        } else {
-            collateral.fee_destination.balance
-        };
-    let positive_count = usize::from(settlement.effects.seller_net_collateral_credit > 0)
-        .checked_add(usize::from(settlement.effects.total_fee_transfer > 0))
-        .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
-    while count < positive_count {
-        let (amount, destination) = custody_route(settlement, collateral, count)?;
-        let destination_before = if destination.account == collateral.seller_destination.account {
-            seller_after
-        } else {
-            fee_after
-        };
-        let effect = compile_custody_effect(
-            direct,
-            context,
-            &collateral.buyer_source,
-            destination,
-            count,
-            amount,
-            source_after,
-            delegated_after,
-            destination_before,
-            positive_count,
-            settlement.effects.buyer_collateral_debit,
-        )?;
-        source_after = effect.source_after;
-        delegated_after = effect.delegated_after;
-        count = count
-            .checked_add(1)
-            .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
-        if destination.account == collateral.seller_destination.account {
-            seller_after = effect.destination_after;
-        }
-        if destination.account == collateral.fee_destination.account {
-            fee_after = effect.destination_after;
-        }
+    // The fee destination does not move in this transaction. It still tracks
+    // the seller's when a market routes both to one account -- an alias
+    // `validate_collateral` permits only when every observed field agrees.
+    let aliased = collateral.seller_destination.account == collateral.fee_destination.account;
+    let count = custody_transfer_count(settlement)?;
+    if count == 0 {
+        return Ok(CustodyCompilationV2 {
+            count: 0,
+            source_after: collateral.buyer_source.balance,
+            delegated_after: collateral.buyer_source.delegated_amount,
+            seller_after: collateral.seller_destination.balance,
+            fee_after: if aliased {
+                collateral.seller_destination.balance
+            } else {
+                collateral.fee_destination.balance
+            },
+        });
     }
-    if source_after
+    let effect = compile_custody_effect(
+        direct,
+        context,
+        &collateral.buyer_source,
+        &collateral.seller_destination,
+        settlement.effects.seller_net_collateral_credit,
+        collateral.buyer_source.balance,
+        collateral.buyer_source.delegated_amount,
+        collateral.seller_destination.balance,
+        settlement.effects.total_fee_transfer,
+        settlement.effects.buyer_collateral_debit,
+    )?;
+    // The tx1 closing postconditions. The buyer is debited the seller's net and
+    // nothing more, the allowance keeps exactly the unsettled `combined_fee`,
+    // and the fee destination does not move in this transaction at all.
+    if effect.source_after
         != collateral
             .buyer_source
             .balance
-            .checked_sub(settlement.effects.buyer_collateral_debit)
+            .checked_sub(settlement.effects.seller_net_collateral_credit)
             .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?
-        || delegated_after
+        || effect.delegated_after
             != collateral
                 .buyer_source
                 .delegated_amount
-                .checked_sub(settlement.effects.buyer_collateral_debit)
+                .checked_sub(settlement.effects.seller_net_collateral_credit)
                 .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?
+        || effect.delegated_after != settlement.effects.total_fee_transfer
     {
         return Err(DirectInlineCandidateErrorV2::Postcondition);
     }
     Ok(CustodyCompilationV2 {
-        count: u8::try_from(count).map_err(|_| DirectInlineCandidateErrorV2::Arithmetic)?,
-        source_after,
-        delegated_after,
-        seller_after,
-        fee_after,
+        count: 1,
+        source_after: effect.source_after,
+        delegated_after: effect.delegated_after,
+        seller_after: effect.destination_after,
+        fee_after: if aliased {
+            effect.destination_after
+        } else {
+            collateral.fee_destination.balance
+        },
     })
 }
 
-/// Project one positive Custody effect in canonical seller-net then fee order.
+/// How many Custody transfers this transaction dispatches, and the retirement.
 ///
-/// `transfer_index` addresses only positive routes; zero-valued routes have no
-/// index and can never become a child dispatch.
+/// The seller leg runs whenever the seller nets anything; the fee leg never
+/// runs here. A settlement that nets the seller nothing while still owing a fee
+/// is the retired `FeeSole` shape and is refused by name.
+fn custody_transfer_count(settlement: &InlineOrdinarySettlementV2) -> Result<u8> {
+    match (
+        settlement.effects.seller_net_collateral_credit != 0,
+        settlement.effects.total_fee_transfer != 0,
+    ) {
+        (false, true) => Err(DirectInlineCandidateErrorV2::FeeSoleRetired),
+        (false, false) => Ok(0),
+        (true, _) => Ok(1),
+    }
+}
+
+/// Project the one Custody effect this transaction dispatches.
+///
+/// `transfer_index` addresses only dispatched routes, of which there is now at
+/// most one: the seller-net leg. The fee leg is a second transaction and the
+/// fee-only route is retired, so any other index is a width refusal.
 #[inline(never)]
 pub fn project_inline_custody_effect_v2(
     direct: InlineOrdinaryInputV2,
@@ -483,58 +516,21 @@ pub fn project_inline_custody_effect_v2(
         return Err(DirectInlineCandidateErrorV2::Binding);
     }
     validate_collateral(direct, context, collateral, settlement)?;
-    let positive_count = usize::from(settlement.effects.seller_net_collateral_credit > 0)
-        .checked_add(usize::from(settlement.effects.total_fee_transfer > 0))
-        .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
-    let target = usize::from(transfer_index);
-    if target >= positive_count || positive_count > DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2 {
+    if usize::from(transfer_index) >= usize::from(custody_transfer_count(&settlement)?) {
         return Err(DirectInlineCandidateErrorV2::Width);
     }
-    let mut source_after = collateral.buyer_source.balance;
-    let mut delegated_after = collateral.buyer_source.delegated_amount;
-    let mut seller_after = collateral.seller_destination.balance;
-    let mut fee_after =
-        if collateral.seller_destination.account == collateral.fee_destination.account {
-            seller_after
-        } else {
-            collateral.fee_destination.balance
-        };
-    let mut index = 0_usize;
-    loop {
-        let (amount, destination) = custody_route(&settlement, &collateral, index)?;
-        let destination_before = if destination.account == collateral.seller_destination.account {
-            seller_after
-        } else {
-            fee_after
-        };
-        let effect = compile_custody_effect(
-            &direct,
-            &context,
-            &collateral.buyer_source,
-            destination,
-            index,
-            amount,
-            source_after,
-            delegated_after,
-            destination_before,
-            positive_count,
-            settlement.effects.buyer_collateral_debit,
-        )?;
-        if index == target {
-            return Ok(effect);
-        }
-        source_after = effect.source_after;
-        delegated_after = effect.delegated_after;
-        if destination.account == collateral.seller_destination.account {
-            seller_after = effect.destination_after;
-        }
-        if destination.account == collateral.fee_destination.account {
-            fee_after = effect.destination_after;
-        }
-        index = index
-            .checked_add(1)
-            .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
-    }
+    compile_custody_effect(
+        &direct,
+        &context,
+        &collateral.buyer_source,
+        &collateral.seller_destination,
+        settlement.effects.seller_net_collateral_credit,
+        collateral.buyer_source.balance,
+        collateral.buyer_source.delegated_amount,
+        collateral.seller_destination.balance,
+        settlement.effects.total_fee_transfer,
+        settlement.effects.buyer_collateral_debit,
+    )
 }
 
 /// Differentially verify the authenticated Effect request/dispatch partition.
@@ -618,45 +614,27 @@ fn verify_inline_effect_partition_prepared_v2(
     let mut source_after = collateral.buyer_source.balance;
     let mut delegated_after = collateral.buyer_source.delegated_amount;
     let mut seller_after = collateral.seller_destination.balance;
-    let mut fee_after =
-        if collateral.seller_destination.account == collateral.fee_destination.account {
-            seller_after
-        } else {
-            collateral.fee_destination.balance
-        };
-    let mut transfer_index = 0_usize;
-    while transfer_index < count {
+    let aliased = collateral.seller_destination.account == collateral.fee_destination.account;
+    if count == 1 {
         let slot = usize::from(
             *dispatch
                 .custody_slots
-                .get(transfer_index)
+                .first()
                 .ok_or(DirectInlineCandidateErrorV2::Width)?,
         );
-        let seen_slot = seen
+        *seen
             .get_mut(slot)
-            .ok_or(DirectInlineCandidateErrorV2::Width)?;
-        if *seen_slot {
-            return Err(DirectInlineCandidateErrorV2::Postcondition);
-        }
-        *seen_slot = true;
-        let (amount, destination) =
-            custody_route(&candidate.settlement, &collateral, transfer_index)?;
-        let destination_before = if destination.account == collateral.seller_destination.account {
-            seller_after
-        } else {
-            fee_after
-        };
+            .ok_or(DirectInlineCandidateErrorV2::Width)? = true;
         let effect = compile_custody_effect(
             &direct,
             &context,
             &collateral.buyer_source,
-            destination,
-            transfer_index,
-            amount,
+            &collateral.seller_destination,
+            candidate.settlement.effects.seller_net_collateral_credit,
             source_after,
             delegated_after,
-            destination_before,
-            count,
+            seller_after,
+            candidate.settlement.effects.total_fee_transfer,
             candidate.settlement.effects.buyer_collateral_debit,
         )?;
         let expected_request = effect
@@ -677,16 +655,13 @@ fn verify_inline_effect_partition_prepared_v2(
         }
         source_after = effect.source_after;
         delegated_after = effect.delegated_after;
-        if destination.account == collateral.seller_destination.account {
-            seller_after = effect.destination_after;
-        }
-        if destination.account == collateral.fee_destination.account {
-            fee_after = effect.destination_after;
-        }
-        transfer_index = transfer_index
-            .checked_add(1)
-            .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
+        seller_after = effect.destination_after;
     }
+    let fee_after = if aliased {
+        seller_after
+    } else {
+        collateral.fee_destination.balance
+    };
     if dispatch.child_dispatch_writable != seen
         || source_after != candidate.buyer_source_after
         || delegated_after != candidate.buyer_delegated_after
@@ -701,52 +676,16 @@ fn verify_inline_effect_partition_prepared_v2(
 fn expected_custody_slots(
     settlement: InlineOrdinarySettlementV2,
 ) -> Result<[u8; DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2]> {
-    let net = settlement.effects.seller_net_collateral_credit != 0;
-    let fee = settlement.effects.total_fee_transfer != 0;
-    let slots = match (net, fee) {
-        (false, false) => [0, 0],
-        (true, false) => [0, 0],
-        (true, true) => [1, 2],
-        (false, true) => [3, 0],
-    };
-    let expected_count = u8::from(net)
-        .checked_add(u8::from(fee))
-        .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
-    if expected_count
-        > u8::try_from(DIRECT_INLINE_CUSTODY_EFFECT_CAPACITY_V2)
-            .map_err(|_| DirectInlineCandidateErrorV2::Arithmetic)?
-    {
-        return Err(DirectInlineCandidateErrorV2::Arithmetic);
+    // Slot 0 is the terminal seller-only route, slot 1 the non-terminal one
+    // that leaves the fee's allowance standing. Slot 2 (fee continuation) is
+    // the second transaction's, and slot 3 (`FeeSole`) is retired -- both are
+    // unreachable from here, and the count refuses the shapes that would want
+    // them.
+    if custody_transfer_count(&settlement)? == 0 {
+        return Ok([0]);
     }
-    Ok(slots)
-}
-
-fn custody_route<'a>(
-    settlement: &InlineOrdinarySettlementV2,
-    collateral: &'a DirectInlineCollateralFrameV2,
-    positive_index: usize,
-) -> Result<(u64, &'a DirectExternalCollateralV2)> {
-    let mut seen = 0_usize;
-    for (amount, destination) in [
-        (
-            settlement.effects.seller_net_collateral_credit,
-            &collateral.seller_destination,
-        ),
-        (
-            settlement.effects.total_fee_transfer,
-            &collateral.fee_destination,
-        ),
-    ] {
-        if amount != 0 {
-            if seen == positive_index {
-                return Ok((amount, destination));
-            }
-            seen = seen
-                .checked_add(1)
-                .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
-        }
-    }
-    Err(DirectInlineCandidateErrorV2::Width)
+    let terminal = settlement.effects.total_fee_transfer == 0;
+    Ok(if terminal { [0] } else { [1] })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -756,12 +695,11 @@ fn compile_custody_effect(
     context: &DirectInlineCandidateContextV2,
     source: &DirectExternalDebitV2,
     destination: &DirectExternalCollateralV2,
-    transfer_index: usize,
     amount: u64,
     source_before: u64,
     delegated_before: u64,
     destination_before: u64,
-    positive_count: usize,
+    fee_still_owed: u64,
     total_debit: u64,
 ) -> Result<DirectInlineCustodyEffectV2> {
     let source_after = source_before
@@ -773,14 +711,18 @@ fn compile_custody_effect(
     let destination_after = destination_before
         .checked_add(amount)
         .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?;
-    let custody = custody_request(direct, context, source, destination, transfer_index, amount)?;
-    let terminal = transfer_index
-        .checked_add(1)
-        .ok_or(DirectInlineCandidateErrorV2::Arithmetic)?
-        == positive_count;
+    let custody = custody_request(direct, context, source, destination, 0, amount)?;
+    // The one change of substance in tx1, and the reason the seller leg keeps
+    // its shipped `SellerIntermediate` shape: terminality now follows the FEE,
+    // not the transfer count. A fee-bearing fill leaves the delegation standing
+    // at exactly `combined_fee` for the second transaction to spend; a zero-fee
+    // fill closes it, exactly as it always did. `DelegatedCustodyRequestV2`'s
+    // own `terminal == (allowance_after == 0)` relation is what keeps the two
+    // statements from drifting apart.
+    let terminal = fee_still_owed == 0;
     let request = DelegatedCustodyRequestV2 {
         custody,
-        starts_atomic_debit: transfer_index == 0,
+        starts_atomic_debit: true,
         terminal,
         delegate_before: context.custody_authority,
         delegate_after: if terminal {

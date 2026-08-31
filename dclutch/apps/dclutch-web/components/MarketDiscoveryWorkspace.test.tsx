@@ -100,7 +100,11 @@ describe('Market discovery route', () => {
 
     // It asks for nothing a reader would have to leave the page to obtain,
     // and it says so about itself.
-    expect(bar).toContain('It reads nothing the page is not already showing you');
+    // Renegotiated 2026-08-31: the bar carried two explanatory sentences under
+    // the controls -- what a search reads, and what the chosen order means.
+    // A search box and an order dropdown do not need either.
+    expect(bar).not.toContain('It reads nothing');
+    expect(bar).not.toContain('Nothing is ranked');
     for (const infrastructure of ['endpoint', 'Endpoint', 'RPC', 'keypair', 'private key', 'http', 'program address', 'Paste']) {
       expect(bar).not.toContain(infrastructure);
     }
@@ -113,8 +117,12 @@ describe('Market discovery route', () => {
     const searched = renderToStaticMarkup(
       <MarketFilterBar query="nothing matches this" onQuery={() => {}} order="enumerated" onOrder={() => {}} shown={0} total={7} />,
     );
-    expect(searched).toContain('0 of 7 markets match');
-    expect(searched).toContain('Searching hides cards; it never changes what exists.');
+    expect(searched).toContain('0 of 7 match');
+    // "Searching hides cards; it never changes what exists" is deleted; the
+    // count says it. The invariant it described is pinned in this file by the
+    // filtering tests themselves, which assert what a query may and may not
+    // remove from the listing.
+    expect(searched).not.toContain('never changes what exists');
   });
 
   /**
@@ -174,7 +182,7 @@ describe('Market discovery route', () => {
     />);
     expect(empty).toContain('No market on devnet yet');
     expect(empty).toContain('Made by an older version of the protocol');
-    expect(empty).toContain('disclosed here but not listed as current');
+    expect(empty).toContain('not listed as current');
     expect(empty).toContain(legacyAddress);
     expect(empty).toContain(`/explorer?view=account&amp;q=${legacyAddress}`);
     expect(empty).not.toContain('No markets on devnet');
@@ -245,7 +253,7 @@ describe('the rest of the record', () => {
     // The summary is what a reader who never clicks walks away with, so the
     // count and the framing both have to live in it.
     expect(html).toContain('<summary><span>2 markets that were never finished</span>');
-    expect(html).toContain('kept because devnet history is public');
+    expect(html).toContain('setup stopped part-way');
     expect(html).toContain('stopped part-way through');
     expect(html).toContain('There is nothing to trade against them');
   });
@@ -264,7 +272,7 @@ describe('the rest of the record', () => {
 
   it('gives the older-generation accounts a labelled row of their own', () => {
     expect(html).toContain('1 older market this build cannot read');
-    expect(html).toContain('disclosed here but not listed as current');
+    expect(html).toContain('not listed as current');
     expect(html).toContain('Made by an older version of the protocol');
     // Renegotiated 2026-08-31: "It will not guess at the difference, so it
     // declines to read them rather than show you a field it made up" is a
@@ -409,7 +417,7 @@ describe('markets that can never trade', () => {
     expect(rendered).toContain('1 account we could not read');
     expect(rendered).toContain('Core Market state is 360 bytes; the exact current width is 368.');
     expect(rendered).toContain('1 older market this build cannot read');
-    expect(rendered).toContain('disclosed here but not listed as current');
+    expect(rendered).toContain('not listed as current');
     // Neither of them is dressed in the never-trades state, and the page does
     // not claim anywhere that they cannot trade.
     expect(rendered).not.toContain('never trades');
@@ -453,7 +461,7 @@ describe('market names on cards', () => {
   it('labels an unregistered founding as build-out debris, and never invents a name', () => {
     const listing = curateMarketListingV1([card('found111111111111111111111111111111111111111', 'Founding')]);
     const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
-    expect(html).toContain('Build-out founding · foun…1111');
+    expect(html).toContain('Unfinished · foun…1111');
     expect(html).toContain('found111111111111111111111111111111111111111');
     expect(html).not.toContain('market-question');
   });
@@ -463,7 +471,7 @@ describe('market names on cards', () => {
     // label — the group placement (which is phase, i.e. chain fact) does not.
     const listing = curateMarketListingV1([card(FLAGSHIP, 'Founding')]);
     const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
-    expect(html).toContain('SOL/USD range — the first public market');
+    expect(html).toContain('SOL/USD range — first public market');
     expect(html).toContain('Where does the SOL/USD price finish this market&#x27;s window');
     expect(html).toContain(FLAGSHIP);
   });

@@ -39,29 +39,51 @@
 //! does and in nothing else. The delta they report is the fee leg and only the
 //! fee leg.
 //!
+//! # The shape this file measures CHANGED, and the header says so
+//!
+//! When this file was written, a fee-bearing fill dispatched TWO Custody CPIs
+//! and the pair did not fit: the measured key-independent floor was a LOWER
+//! BOUND of 1,435,274 CU against a 1,400,000 ceiling, and the decomposition test
+//! that produced it existed only because a route over the meter reports the
+//! meter and cannot report itself.
+//!
+//! `docs/design/FEE_SECOND_TRANSACTION_V1.md` moved the fee leg into a
+//! transaction of its own. The transition pins
+//! `SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3` to zero, so a fee-bearing fill now
+//! dispatches ONE Custody CPI -- `SellerIntermediate`, non-terminal, leaving the
+//! residual delegation standing -- and it fits. That retired the decomposition
+//! test, which had written its own retirement condition into an assertion:
+//! *"the fee-bearing arm EXECUTED at seed N. That is the good news this file was
+//! written to be able to report, and the decomposition below is then
+//! unnecessary -- use the sweep's own figure."* It is deleted rather than left
+//! passing on a premise that is false.
+//!
+//! What this file still owns is the CONTROLLED PAIR. The two arms differ in a
+//! host-side fixture input and in nothing else, so their difference is the
+//! seller leg's non-terminal-versus-terminal cost and nothing about keys.
+//! `direct_hot_fee_pair.rs` owns the other half -- the second transaction, its
+//! ledger and its refusals -- and neither file measures the other's.
+//!
 //! # What is asserted and what is printed
 //!
 //! Asserted, because each is a property of the code:
 //!
-//! * the zero-fee arm invokes Custody ONCE and the fee-bearing arm TWICE, on
-//!   every seed, read out of the program log rather than inferred from the
-//!   fixture's own arithmetic;
+//! * BOTH arms invoke Custody exactly ONCE, on every seed, read out of the
+//!   program log rather than inferred from the fixture's own arithmetic. The
+//!   arms are no longer told apart by a route COUNT, so the assertions say which
+//!   count each must have rather than that the two differ;
 //! * every seed's residual sits on the 1,500 CU bump-search grid, so the site
 //!   census below is known to be stale rather than quietly wrong the day
 //!   something key-dependent that is not a search appears;
-//! * the fee-bearing route's KEY-INDEPENDENT cost has not regressed past
-//!   [`FEE_BEARING_LOWER_BOUND_CU_V1`], which the second test measures because
-//!   the first cannot: a route over the meter reports the meter;
-//! * a refusal is a BUDGET refusal. A fee-bearing route over the ceiling refuses
-//!   with `ComputationalBudgetExceeded` and that is a margin fact; a refusal
-//!   with any other code is a broken fixture or a broken route and this file
-//!   must not report it as a margin result.
+//! * NEITHER arm refuses. A fee-bearing refusal used to be a margin fact this
+//!   file reported; it is a defect now, and reporting it as a margin result
+//!   would be a lie about a route that fits;
+//! * the fee-bearing arm's KEY-INDEPENDENT floor has not regressed past
+//!   [`FEE_BEARING_FLOOR_CU_V1`].
 //!
-//! Printed and NOT asserted: whether the route fits. Fitting is a question about
-//! a stranger's keys, which is a geometric distribution and not a constant --
-//! the margin gate's own argument, reproduced here because the fee-bearing shape
-//! searches at MORE sites and so has a fatter tail than the shape that argument
-//! was written for.
+//! Printed and NOT asserted: the worst observed margin. Fitting is a question
+//! about a stranger's keys, which is a geometric distribution and not a
+//! constant -- the margin gate's own argument.
 
 use solana_program::{instruction::InstructionError, pubkey::Pubkey};
 use solana_program_test::BanksClientError;
@@ -131,14 +153,23 @@ impl ArmV1 {
     ///
     /// Slot 0 is `SellerTerminal`, 1 is `SellerIntermediate`, 2 is
     /// `FeeContinuation`, 3 is `FeeSole`. A zero fee enables slot 0 alone; a
-    /// nonzero fee with a nonzero seller net enables 1 and 2. This is the
-    /// fixture's model of the transition's own `select_zero` arithmetic and it
-    /// is CHECKED against the chain: the Custody invocation count in the
-    /// program log must equal this slice's length on every seed.
+    /// nonzero fee enables slot 1 alone. This is the fixture's model of the
+    /// transition's own `select_zero` arithmetic and it is CHECKED against the
+    /// chain: the Custody invocation count in the program log must equal this
+    /// slice's length on every seed.
+    ///
+    /// **This read `&[1, 2]` until the fee leg left the transaction.** The
+    /// transition now pins `SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3` to zero,
+    /// so a fee-bearing fill emits ONE Custody CPI and leaves the residual
+    /// delegation standing for the second transaction. What separates the two
+    /// arms is therefore no longer a route COUNT: it is which slot runs and
+    /// whether the delegation survives it. Zero fee takes terminal slot 0 and
+    /// closes the delegation; a banded fee takes non-terminal slot 1 and leaves
+    /// `combined_fee` behind. `direct_hot_fee_pair.rs` spends that residue.
     const fn live_route_slots(self) -> &'static [usize] {
         match self {
             Self::ZeroFee => &[0],
-            Self::FeeBearing => &[1, 2],
+            Self::FeeBearing => &[1],
         }
     }
 }
@@ -711,7 +742,7 @@ fn assert_on_grid(sweep: &SweepV1) {
 }
 
 #[tokio::test]
-async fn the_fee_bearing_direct_route_executes_two_custody_routes_and_this_is_what_it_costs() {
+async fn the_fee_bearing_direct_route_fits_now_that_the_fee_leg_left_it() {
     let zero = sweep(ArmV1::ZeroFee).await;
     let fee = sweep(ArmV1::FeeBearing).await;
 
@@ -739,14 +770,22 @@ async fn the_fee_bearing_direct_route_executes_two_custody_routes_and_this_is_wh
     }
     for observation in &fee.observations {
         assert_eq!(
-            observation.depths.custody_invocations, 2,
-            "fee-bearing seed {}: expected TWO Custody invocations -- SellerIntermediate then \
-             FeeContinuation -- and the log shows {}. If it is 1 the scenario's fee floored \
-             after all and this arm is measuring the zero-fee route under another name, which \
-             is exactly the defect this file exists to retire.",
+            observation.depths.custody_invocations, 1,
+            "fee-bearing seed {}: expected ONE Custody invocation -- SellerIntermediate, \
+             non-terminal, leaving the residual delegation for the second transaction -- and \
+             the log shows {}. Two means the fee continuation register came unpinned and the \
+             fee leg is back inside the fill, which is the shape that does not fit.",
             observation.seed, observation.depths.custody_invocations,
         );
     }
+    // The two arms run the same NUMBER of Custody routes now, so a count can no
+    // longer tell them apart. What still must differ is the leg's SHAPE, and
+    // that shows up in the floors below rather than in the log.
+    assert_eq!(
+        ArmV1::ZeroFee.live_route_slots().len(),
+        ArmV1::FeeBearing.live_route_slots().len(),
+        "the arms' modelled route counts must match what the chain showed above",
+    );
 
     assert_on_grid(&zero);
     assert_on_grid(&fee);
@@ -754,479 +793,89 @@ async fn the_fee_bearing_direct_route_executes_two_custody_routes_and_this_is_wh
     let zero_floor = report(&zero);
     let fee_floor = report(&fee);
 
-    // A fee-bearing refusal is a MARGIN fact and this file reports it. A refusal
-    // with any other cause is a defect and must not be dressed as one.
-    for refusal in &fee.refusals {
-        assert!(
-            refusal.budget,
-            "fee-bearing seed {} refused as {:?} rather than on the compute ceiling: {}. That is \
-             a broken route or a broken fixture -- the fee leg's accounts, its allowance \
-             arithmetic or its replay revision step -- and reporting it as a margin result would \
-             be a lie about what was measured. Log tail: {:?}",
-            refusal.seed, refusal.code, refusal.error, refusal.tail,
-        );
-    }
+    // A fee-bearing refusal used to be a MARGIN fact this file reported. It is a
+    // defect now: the route this arm measures fits, and the only way it can
+    // refuse is that something about the fee-bearing shape is broken.
+    assert!(
+        fee.refusals.is_empty(),
+        "the fee-bearing arm refused on {} of {GATE_SEEDS} seeds: {:?}. Since the fee leg moved \
+         into a second transaction this arm dispatches ONE Custody route, exactly as the \
+         zero-fee arm does, and it is nowhere near the ceiling -- so a refusal here is a broken \
+         route or a broken fixture and never a margin fact. A BUDGET refusal in particular \
+         means the fee-bearing shape got a hundred thousand CU more expensive, which nothing in \
+         this file's model can explain.",
+        fee.refusals.len(),
+        fee.refusals,
+    );
 
-    if let (Some(zero_floor), Some(fee_floor)) = (zero_floor, fee_floor) {
-        let delta = fee_floor.saturating_sub(zero_floor);
-        println!(
-            "FEELEG\tthe second Custody route's KEY-INDEPENDENT cost is {delta} CU \
-             ({zero_floor} -> {fee_floor}). Both floors are C0 plus one bump attempt for the \
-             unmodelled Claims caller authority, so the difference is the code's constant part \
-             and nothing about these keys. It is measured on ONE ELF SET and one substrate; a \
-             source change to any of the five roles redraws every depth in both arms but not \
-             this difference.",
-        );
-    }
-
+    let (Some(zero_floor), Some(fee_floor)) = (zero_floor, fee_floor) else {
+        panic!("both arms executed on every seed, so both floors exist");
+    };
     println!(
-        "SUMMARY\tzero-fee worst {} of {PROTOCOL_CEILING} over {} executed seeds; fee-bearing \
-         {} executed and {} refused at the meter, so it has no worst -- the number it does not \
-         have is measured in \
-         `the_fee_bearing_route_exceeds_the_ceiling_by_at_least_this_much`.",
+        "FEELEG\tthe fee-bearing fill's KEY-INDEPENDENT floor is {fee_floor} against the \
+         zero-fee arm's {zero_floor} on the same ELFs, keys and substrate. Both arms dispatch \
+         ONE Custody route; what differs is the seller leg's non-terminal shape -- six patched \
+         scalars in a request of identical width, a delegation left standing instead of \
+         revoked, and the `fee_owed` the Effect writes into the buyer's replay. Both floors are \
+         C0 plus one bump attempt for the unmodelled Claims caller authority, so this \
+         difference is the code's constant part and nothing about these keys.",
+    );
+    println!(
+        "SUMMARY\tzero-fee worst {} and fee-bearing worst {} of {PROTOCOL_CEILING}, over {} and \
+         {} executed seeds. Section 4.3 of the design predicted this: tx1 returns to the \
+         zero-fee cost profile, because it keeps the shipped `SellerIntermediate` route, which \
+         differs from `SellerTerminal` in six patched scalars of an identical-width request.",
         zero.worst(),
+        fee.worst(),
         zero.observations.len(),
         fee.observations.len(),
-        fee.refusals.len(),
-    );
-}
-
-// ---------------------------------------------------------------------------
-// WHAT THE FEE-BEARING ROUTE COSTS, when it cannot be run to completion.
-//
-// The sweep above says the route exceeds the meter. It cannot say by how much,
-// and the difference matters enormously: a route 5,000 CU over is one lane's
-// work on the fee leg, and a route 150,000 over is a lifecycle decision. So the
-// number has to come from somewhere.
-//
-// TWO WAYS THAT DO NOT WORK, both tried and both recorded so the next lane does
-// not spend the afternoon again:
-//
-// * Ask for a bigger budget. 1,400,000 is the runtime's maximum; a
-//   `SetComputeUnitLimit` above it is clamped, so there is nothing to request.
-// * Lift the meter under the harness with `ProgramTest::set_compute_max_units`.
-//   That replaces the whole `ComputeBudget`, which resets the heap to the
-//   protocol default of 32 KiB. Submitting WITH the heap-frame instruction then
-//   lets `admit_heap_frame_v1` read the 64 KiB grant out of the instructions
-//   sysvar and lift the allocator ceiling past what the runtime mapped:
-//   measured, every seed dies at `Access violation writing 8 bytes at address
-//   0x30000fa58`, which is heap offset 64,088. Submitting WITHOUT it refuses as
-//   `TradingSbfError::HeapFrame` (0x4008) at 47,835 CU, because this route
-//   declares an extended heap profile and refuses rather than allocating until
-//   it dies. There is no third door: the route needs 64 KiB and the lifted
-//   meter cannot grant it.
-//
-// So the cost is assembled from the program log, which reports the compute
-// meter at every invocation boundary and does so whether or not the transaction
-// completes. `Program <id> consumed X of Y` gives both the invocation's cost
-// and the meter remaining when it started, so the transaction's consumption at
-// any child boundary is exactly `budget - Y`.
-//
-// The decomposition, per seed:
-//
-//   A       everything before the first Custody CPI          = budget - Y(c1)
-//   C       the Custody CPIs and the Trading work between    (measured)
-//   P       everything after the last Custody CPI returns    (measured on the
-//                                                             ZERO-FEE arm)
-//
-// The zero-fee arm runs to completion, so `A`, `C` and `P` are all measured
-// there and `A + C + P` reproduces its total exactly -- which this test ASSERTS,
-// because a decomposition that does not add up is not a measurement.
-//
-// The fee-bearing arm runs as far as its second Custody CPI's return and dies
-// after it, so `A` and `C` are measured there too and only `P` is not. The
-// figure reported is `A_fee + C_fee + P_zero`, and it is a LOWER BOUND: the fee
-// arm's commit phase writes one more child's poststate than the zero-fee arm's,
-// so its real `P` is at least `P_zero`. Stated as a bound rather than as an
-// estimate, because the conclusion it supports -- the route does not fit -- is
-// one a bound is enough for and an estimate would only weaken.
-// ---------------------------------------------------------------------------
-
-/// The fee-bearing route's key-independent cost, as a measured LOWER BOUND.
-///
-/// Measured at **1,435,274 CU** by the decomposition below, on five role ELFs
-/// built from this tree. It is the same residual statistic the sweep's floor is
-/// -- `total - 1,500 * modelled attempts` -- so it is a property of the code and
-/// not of a key draw, and it is comparable across trees the way a worst-seed
-/// sample is not.
-///
-/// # It fell 66,229 CU, and none of that is the fee leg
-///
-/// It read 1,501,503 before decision 0017's option B took the two Registry
-/// reauthentication CPIs and the third cache decode off the TOP-LEVEL arm, which
-/// both arms of this file enter through. The zero-fee arm of the same run fell
-/// 1,319,672 -> 1,252,751, so the implied fee leg went 182,386 -> 182,523: the
-/// same leg to within 137 CU, on ELFs whose every bump draw was redrawn. The
-/// saving is entirely upstream of the fee work and the fee work is unchanged.
-///
-/// What it buys is real and does not close the question. This route is still
-/// over the protocol ceiling -- by 35,274 CU rather than 101,503 -- so 0017's
-/// option B moved the fee-bearing shape from two thirds of a route away from
-/// fitting to about a quarter. It does not fit. The variance census's
-/// 1.49-1.52M two-Custody shape is still the largest thing on it and still
-/// nobody's.
-///
-/// It earned that claim rather than asserting it. Measured on two different ELF
-/// sets -- before and after a rebase onto four commits of main -- this floor
-/// read 1,501,294 and 1,501,503, moving **209 CU**, which is the same 209 the
-/// zero-fee arm moved by over the same rebase. The fee leg the two differences
-/// imply is 182,386 CU on both, identical to the compute unit.
-///
-/// One bump attempt of slack above the measurement, the smallest unit this
-/// route can spend, for the same reason `TOP_LEVEL_KEY_INDEPENDENT_CU_V1` takes
-/// it: a change costing less than a single PDA search should not go red here.
-///
-/// Raising it is not "spending margin" the way raising the zero-fee gate's
-/// constant is, because this route HAS no margin -- it is 120,000 CU over the
-/// ceiling. Raising it is recording that the thing already too expensive to run
-/// got more expensive. Do that with a sentence saying why.
-const FEE_BEARING_LOWER_BOUND_CU_V1: u64 = 1_436_774;
-
-/// Seeds decomposed. Eight is enough for a floor and the parse is the cost.
-const DECOMPOSITION_SEEDS: u64 = 8;
-
-/// One program invocation the log reported, with the meter at its boundaries.
-#[derive(Clone, Debug)]
-struct InvocationV1 {
-    program: String,
-    depth: u32,
-    /// The compute meter remaining when this invocation started.
-    remaining_at_entry: u64,
-    /// What this invocation and everything below it consumed.
-    consumed: u64,
-}
-
-/// Parse the runtime's stable log into invocation records.
-///
-/// The runtime prints `Program <id> invoke [depth]` on entry and `Program <id>
-/// consumed X of Y compute units` immediately before the matching `success` or
-/// `failed`, so a stack of open invocations pairs them without ambiguity even
-/// though Custody's own Token CPI nests inside.
-fn invocations(logs: &[String]) -> Vec<InvocationV1> {
-    let mut open: Vec<(String, u32)> = Vec::new();
-    let mut out: Vec<InvocationV1> = Vec::new();
-    for line in logs {
-        let Some(rest) = line.strip_prefix("Program ") else {
-            continue;
-        };
-        let mut words = rest.split_whitespace();
-        let Some(program) = words.next() else {
-            continue;
-        };
-        match words.next() {
-            Some("invoke") => {
-                let depth = words
-                    .next()
-                    .and_then(|token| token.trim_matches(['[', ']']).parse::<u32>().ok())
-                    .unwrap_or(0);
-                open.push((program.to_owned(), depth));
-            }
-            Some("consumed") => {
-                // `consumed X of Y compute units`
-                let consumed = words.next().and_then(|token| token.parse::<u64>().ok());
-                let remaining = words.nth(1).and_then(|token| token.parse::<u64>().ok());
-                if let (Some(consumed), Some(remaining), Some((id, depth))) =
-                    (consumed, remaining, open.last().cloned())
-                    && id == program
-                {
-                    out.push(InvocationV1 {
-                        program: id,
-                        depth,
-                        remaining_at_entry: remaining,
-                        consumed,
-                    });
-                }
-            }
-            Some("success" | "failed:")
-                if open.last().map(|(id, _)| id.as_str()) == Some(program) =>
-            {
-                open.pop();
-            }
-            _ => {}
-        }
-    }
-    out
-}
-
-/// One seed's decomposition into before-Custody, Custody, and after-Custody.
-#[derive(Clone, Copy, Debug)]
-struct PartsV1 {
-    /// Trading's whole allotment, the meter it started with.
-    budget: u64,
-    /// Consumption up to the first Custody CPI's entry.
-    before: u64,
-    /// The Custody CPIs plus the Trading work between and around them, up to
-    /// the last Custody CPI's return.
-    custody_span: u64,
-    /// Consumption after the last Custody CPI returned. `None` when the
-    /// transaction did not survive to report it.
-    after: Option<u64>,
-    /// Whether the LAST Custody CPI returned rather than dying at the meter.
-    ///
-    /// When it died the span above is truncated at the meter, so a bound built
-    /// on it is looser than one built on a seed whose Custody leg completed --
-    /// still a bound, and worth marking so nobody reads the two as equally
-    /// tight.
-    last_custody_completed: bool,
-}
-
-impl PartsV1 {
-    /// Consumption reached by the last Custody CPI's return.
-    const fn reached(self) -> u64 {
-        self.before + self.custody_span
-    }
-}
-
-/// Decompose one transaction's log around its Custody CPIs.
-fn parts(logs: &[String], custody: &str, trading: &str) -> Option<PartsV1> {
-    let records = invocations(logs);
-    let top = records
-        .iter()
-        .find(|record| record.depth == 1 && record.program == trading)?;
-    let budget = top.remaining_at_entry;
-    let custody_calls = records
-        .iter()
-        .filter(|record| record.depth == 2 && record.program == custody)
-        .collect::<Vec<_>>();
-    let first = custody_calls.first()?;
-    let last = custody_calls.last()?;
-    let before = budget.saturating_sub(first.remaining_at_entry);
-    let end_of_last = last.remaining_at_entry.saturating_sub(last.consumed);
-    let custody_span = first.remaining_at_entry.saturating_sub(end_of_last);
-    // Trading's own reported consumption is the whole invocation, so the tail
-    // is only meaningful when the invocation actually completed. A budget death
-    // reports the meter, not the work, so `after` is None there.
-    let after = if top.consumed < budget.saturating_sub(1_000) {
-        Some(top.consumed.saturating_sub(before + custody_span))
-    } else {
-        None
-    };
-    // A CPI is handed the remaining meter, so a Custody leg that RETURNED left
-    // meter behind and one that died at the meter left about eight units.
-    let last_custody_completed = end_of_last > 1_000;
-    Some(PartsV1 {
-        budget,
-        before,
-        custody_span,
-        after,
-        last_custody_completed,
-    })
-}
-
-/// Run one seed of one arm and return its log and its outcome.
-async fn one_seed(arm: ArmV1, seed: u64) -> (Vec<String>, Option<u64>, DepthsV1) {
-    let artifacts = elves();
-    let (mut test, direct, instructions, releases) = with_fixture_seed(seed, || {
-        let mut test = program_test_without_forced_budget(&artifacts);
-        let releases = add_release_waist(&mut test, &artifacts);
-        let direct = direct_case_v5(
-            &mut test,
-            releases,
-            &artifacts,
-            false,
-            false,
-            fixture_substrate(),
-            DirectOrdinaryGeometryV3::CANONICAL,
-            arm.scenario(),
-        );
-        let instructions = direct_top_level_instructions(&direct);
-        (test, direct, instructions, releases)
-    });
-    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
-    add_lookup_table(&mut test, &addresses);
-    let mut context = start_with_substrate(test, fixture_substrate()).await;
-    match submit_v0_observed(
-        &mut context,
-        &instructions,
-        addresses,
-        Some(&direct.payer),
-        &[],
-    )
-    .await
-    {
-        Ok(execution) => {
-            let custody = custody_invocations(&execution.logs);
-            let depth = depths(&direct, releases, arm, custody);
-            (
-                execution.logs,
-                Some(execution.compute_units_consumed),
-                depth,
-            )
-        }
-        Err(refusal) => {
-            let custody = custody_invocations(&refusal.logs);
-            let depth = depths(&direct, releases, arm, custody.max(1));
-            (refusal.logs, None, depth)
-        }
-    }
-}
-
-#[tokio::test]
-async fn the_fee_bearing_route_exceeds_the_ceiling_by_at_least_this_much() {
-    let custody = CUSTODY_PROGRAM_ID.to_string();
-    let trading = TRADING_PROGRAM_ID.to_string();
-
-    let mut zero_after: Vec<u64> = Vec::new();
-    let mut zero_totals: Vec<u64> = Vec::new();
-    let mut zero_floors: Vec<u64> = Vec::new();
-    let mut zero_outside: Vec<u64> = Vec::new();
-    let mut fee_bounds: Vec<(u64, u64, u64)> = Vec::new();
-
-    for seed in 0..DECOMPOSITION_SEEDS {
-        let (logs, total, depth) = one_seed(ArmV1::ZeroFee, seed).await;
-        let parts =
-            parts(&logs, &custody, &trading).expect("the zero-fee log names its Custody CPI");
-        let total = total.expect("the zero-fee arm executes");
-        let after = parts
-            .after
-            .expect("the zero-fee arm completed, so its tail is measured");
-        // The decomposition must reconstruct the transaction, or it is a story
-        // about a log rather than a measurement of a route. Trading's own
-        // consumption plus the two ComputeBudget instructions and the Ed25519
-        // precompile is the whole transaction, and that remainder must be a
-        // small CONSTANT -- if it drifts with the seed, something outside
-        // Trading is key-dependent and this decomposition is not closed.
-        let trading_total = parts.before + parts.custody_span + after;
-        let outside = total.saturating_sub(trading_total);
-        assert!(
-            trading_total <= total && outside < 10_000,
-            "seed {seed}: Trading's decomposed consumption {trading_total} against a \
-             transaction total of {total} leaves {outside} CU outside Trading, which is too \
-             much to be the precompile and the two ComputeBudget instructions. The log parse \
-             is wrong or something else in the transaction is doing work.",
-        );
-        println!(
-            "PARTS\tzero-fee\t{seed}\tbudget {}\tbefore {}\tcustody {}\tafter {after}\t\
-             trading total {trading_total}\ttx total {total}\toutside Trading {outside}\t\
-             modelled attempts {}",
-            parts.budget,
-            parts.before,
-            parts.custody_span,
-            depth.modelled_attempts(),
-        );
-        zero_after.push(after);
-        zero_totals.push(total);
-        zero_outside.push(outside);
-        zero_floors
-            .push(total.saturating_sub(ATTEMPT_COST_CU.saturating_mul(depth.modelled_attempts())));
-    }
-    let outside = zero_outside.iter().copied().max().unwrap_or_default();
-
-    // The tail is the same work on every draw: no bump search happens after the
-    // last child returns, so this is a constant and not a distribution.
-    let after_low = zero_after.iter().copied().min().unwrap_or_default();
-    let after_high = zero_after.iter().copied().max().unwrap_or_default();
-    println!(
-        "TAILWORK\tafter the last Custody CPI the zero-fee route spends {after_low} to \
-         {after_high} CU across {DECOMPOSITION_SEEDS} draws"
     );
 
-    for seed in 0..DECOMPOSITION_SEEDS {
-        let (logs, total, depth) = one_seed(ArmV1::FeeBearing, seed).await;
-        assert!(
-            total.is_none(),
-            "the fee-bearing arm EXECUTED at seed {seed} ({total:?} CU). That is the good news \
-             this file was written to be able to report, and the decomposition below is then \
-             unnecessary -- use the sweep's own figure.",
-        );
-        let Some(parts) = parts(&logs, &custody, &trading) else {
-            println!("PARTS\tfee-bearing\t{seed}\tthe log names no Custody CPI");
-            continue;
-        };
-        // A TRANSACTION total, because the ceiling is a transaction ceiling:
-        // Trading's decomposed consumption plus the measured constant the two
-        // ComputeBudget instructions and the Ed25519 precompile cost outside it.
-        let bound = parts
-            .reached()
-            .saturating_add(after_low)
-            .saturating_add(outside);
-        println!(
-            "PARTS\tfee-bearing\t{seed}\tbudget {}\tbefore {}\tcustody {}\treached {}\t\
-             second Custody leg {}\tLOWER BOUND {bound}\tover the ceiling by at least {}\t\
-             modelled attempts {}",
-            parts.budget,
-            parts.before,
-            parts.custody_span,
-            parts.reached(),
-            if parts.last_custody_completed {
-                "returned"
-            } else {
-                "died at the meter, so this row's bound is the loosest kind"
-            },
-            bound.saturating_sub(PROTOCOL_CEILING),
-            depth.modelled_attempts(),
-        );
-        // ONLY seeds whose second Custody leg RETURNED enter the floor.
-        //
-        // A seed whose Custody leg died at the meter has a `reached` that is the
-        // METER and not a measurement -- capped at the budget, while its
-        // modelled attempts are subtracted in full. That produces an
-        // artificially LOW residual and it silently captures the minimum, which
-        // is exactly what happened when this file was first written: the floor
-        // it reported came from a truncated seed and moved 4,500 CU on a rebase
-        // that cost the route 209. Computed over completed seeds only, the same
-        // rebase moves this floor by 209 as well -- the same 209 the zero-fee
-        // arm moves by -- and the fee leg below reproduces to the compute unit
-        // across both ELF sets. The truncated rows are still printed; they are
-        // just not evidence about a constant.
-        if parts.last_custody_completed {
-            fee_bounds.push((seed, bound, depth.modelled_attempts()));
-        }
-    }
-
+    // The ratchet. Same residual statistic the zero-fee gate takes, for the same
+    // reason: it does not move when keys move, so a red here is a CODE change.
     assert!(
-        !fee_bounds.is_empty(),
-        "no fee-bearing seed's second Custody CPI RETURNED, so every row is truncated at the \
-         meter and there is no honest floor to take. The route got expensive enough that it \
-         now dies inside the fee leg on every draw; decompose it with more seeds, or read the \
-         per-seed `reached` figures above as the only thing that is still measured.",
-    );
-
-    // The key-independent form of the bound, so it is comparable across trees
-    // the way the sweep's floor statistic is.
-    let floor = fee_bounds
-        .iter()
-        .map(|(_, bound, attempts)| bound.saturating_sub(ATTEMPT_COST_CU.saturating_mul(*attempts)))
-        .min()
-        .unwrap_or_default();
-    let worst = fee_bounds
-        .iter()
-        .map(|(_, bound, _)| *bound)
-        .max()
-        .unwrap_or_default();
-    let best = fee_bounds
-        .iter()
-        .map(|(_, bound, _)| *bound)
-        .min()
-        .unwrap_or_default();
-    let zero_worst = zero_totals.iter().copied().max().unwrap_or_default();
-    let zero_floor = zero_floors.iter().copied().min().unwrap_or_default();
-    println!(
-        "BOUND\tthe fee-bearing Direct route costs AT LEAST {best} to {worst} CU across \
-         {DECOMPOSITION_SEEDS} draws, against a ceiling of {PROTOCOL_CEILING} -- over by at \
-         least {} to {}. The zero-fee route on the same ELFs, keys and substrate reached \
-         {zero_worst} at its worst of the same draws. Key-independent lower bound (the same \
-         residual statistic the sweep reports): {floor}.",
-        best.saturating_sub(PROTOCOL_CEILING),
-        worst.saturating_sub(PROTOCOL_CEILING),
-    );
-    println!(
-        "FEELEG\tthe second Custody route's KEY-INDEPENDENT cost is AT LEAST {} CU \
-         ({zero_floor} -> {floor} over the same {DECOMPOSITION_SEEDS} draws, same ELFs, same \
-         substrate, same keys). Both statistics are `total - 1,500 * modelled attempts`, so \
-         the difference is the code's constant part and nothing about these keys. It is a \
-         BOUND and not a measurement of the whole leg, because the fee arm's commit phase \
-         never ran: the tail added to it is the ZERO-FEE tail, which writes one child's \
-         poststate where the fee route writes two.",
-        floor.saturating_sub(zero_floor),
-    );
-    assert!(
-        floor <= FEE_BEARING_LOWER_BOUND_CU_V1,
-        "the fee-bearing Direct route's key-independent cost is now AT LEAST {floor} CU, past \
-         the {FEE_BEARING_LOWER_BOUND_CU_V1} recorded here. This statistic does not move when \
-         keys move, so this red is a CODE change and the fee leg just got more expensive -- on \
-         a route that is already {} CU over the ceiling and cannot afford it. The zero-fee arm \
-         of the same run read {zero_floor}.",
-        floor.saturating_sub(PROTOCOL_CEILING),
+        fee_floor <= FEE_BEARING_FLOOR_CU_V1,
+        "the fee-bearing Direct fill's key-independent floor is now {fee_floor} CU, past the \
+         {FEE_BEARING_FLOOR_CU_V1} recorded here. This statistic does not move when keys move, \
+         so this red is a code change and the fee-bearing fill just got more expensive. The \
+         zero-fee arm of the same run read {zero_floor}; if BOTH moved by the same amount the \
+         change is upstream of the fee work and belongs in `direct_hot_top_level_margin_gate`'s \
+         constant too.",
     );
 }
+
+/// The fee-bearing fill's key-independent floor, plus one bump attempt.
+///
+/// `min over seeds of (CU(seed) - 1500 * modelled attempts)` -- the same
+/// residual the sweep reports and the same one
+/// `direct_hot_top_level_margin_gate.rs` takes, for the reason that file gives
+/// at length: a source change to any role redraws `release_set_id` and every
+/// bump search under it, so two worst-seed figures across that boundary are not
+/// comparable and this is.
+///
+/// It replaces `FEE_BEARING_LOWER_BOUND_CU_V1`, which was a LOWER BOUND
+/// assembled from a program log because the route could not be run to
+/// completion. That constant read 1,436,774 and bounded a route over the
+/// protocol ceiling by at least 35,274 CU. This one measures a route that lands.
+///
+/// The slack is one bump attempt, the smallest unit this route can spend, for
+/// the same reason `TOP_LEVEL_KEY_INDEPENDENT_CU_V1` takes it: a change costing
+/// less than a single PDA search should not go red here.
+const FEE_BEARING_FLOOR_CU_V1: u64 = FEE_BEARING_MEASURED_FLOOR_CU_V1 + ATTEMPT_COST_CU;
+
+/// The measured value the constant above takes its slack from.
+///
+/// 2026-08-31, thirty-two seeds, `Immutable` substrate, five role ELFs built
+/// from this tree: **32/32 executed**, best 1,271,994, worst 1,295,997, mean
+/// 1,280,672, band 24,003, worst margin against the ceiling **104,003 CU**.
+///
+/// The zero-fee arm of the same run floored at 1,263,125, so the fee-bearing
+/// fill's key-independent cost is **131 CU BELOW** the zero-fee one -- less than
+/// a tenth of one bump attempt, which is to say the two shapes are the same
+/// route. That is the design's section 4.3 prediction stated as a measurement.
+/// The same 131 was measured on the pre-merge tree, on a different ELF set with
+/// every bump depth redrawn, which is what a key-independent statistic is for.
+///
+/// Before the split this statistic was a LOWER BOUND of 1,435,274 on a route
+/// that could not be run to completion, 35,274 over the ceiling.
+const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_262_994;

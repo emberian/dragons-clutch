@@ -191,7 +191,7 @@ const NO_REGISTRY: WalletDiscoveryV1 = Object.freeze({
   registryPresent: false,
   wallets: Object.freeze([]),
   refusals: Object.freeze([]),
-  reason: 'No Wallet Standard registry exists in this runtime. Browser wallet discovery is unavailable here.',
+  reason: 'No browser wallet found.',
 });
 
 /**
@@ -207,7 +207,7 @@ export function projectAnnouncedWalletsV1(announced: ReadonlyArray<unknown> | nu
       registryPresent: true,
       wallets: Object.freeze([]),
       refusals: Object.freeze([]),
-      reason: 'The Wallet Standard registry did not return an array of registrations.',
+      reason: 'Could not read the browser wallet list.',
     });
   }
   const bounded = announced.slice(0, MAX_LISTED_WALLETS);
@@ -216,9 +216,9 @@ export function projectAnnouncedWalletsV1(announced: ReadonlyArray<unknown> | nu
   const refusals = Object.freeze(projections.filter((entry): entry is RefusedWalletV1 => !isDiscovered(entry)));
   const overflow = announced.length - bounded.length;
   const reason = wallets.length > 0
-    ? `${wallets.length} conforming Solana wallet${wallets.length === 1 ? '' : 's'} announced${refusals.length > 0 ? `; ${refusals.length} registration${refusals.length === 1 ? '' : 's'} refused` : ''}${overflow > 0 ? `; ${overflow} beyond the ${MAX_LISTED_WALLETS}-wallet listing bound were not read` : ''}.`
+    ? (overflow > 0 ? `${overflow} more wallet${overflow === 1 ? '' : 's'} not listed.` : '')
     : announced.length === 0
-      ? 'A Wallet Standard registry is present but no browser wallet has registered. Install a conforming Solana wallet extension.'
+      ? 'No wallet extension found. Install a Solana wallet to connect.'
       : `No announced registration conforms to the Solana Wallet Standard; ${refusals.length} were refused.`;
   return Object.freeze({ registryPresent: true, wallets, refusals, reason });
 }
@@ -233,7 +233,7 @@ export function discoverWalletsV1(registry: WalletStandardRegistryV1 | null): Wa
       registryPresent: true,
       wallets: Object.freeze([]),
       refusals: Object.freeze([]),
-      reason: `The Wallet Standard registry refused enumeration: ${error instanceof Error ? error.message : 'no usable reason'}`,
+      reason: `Could not read the browser wallet list: ${error instanceof Error ? error.message : 'no usable reason'}`,
     });
   }
 }
@@ -349,7 +349,7 @@ export function walletConnectionTransitionV1(intent: WalletConnectionIntentV1, e
     return Object.freeze({ kind: 'connected', walletId: intent.walletId, address: event.address, label: event.label, switched: true });
   }
   if (intent.kind !== 'connecting' || intent.walletId !== event.walletId) {
-    return Object.freeze({ kind: 'refused', walletId: event.walletId, reason: 'a wallet answered an identity request this surface did not make' });
+    return Object.freeze({ kind: 'refused', walletId: event.walletId, reason: 'a wallet answered a request this page did not make' });
   }
   if (event.kind === 'connect-refused') return Object.freeze({ kind: 'refused', walletId: event.walletId, reason: event.reason });
   return Object.freeze({ kind: 'connected', walletId: event.walletId, address: event.address, label: event.label, switched: false });
@@ -380,10 +380,10 @@ export function projectWalletConnectionV1(discovery: WalletDiscoveryV1, intent: 
   const registered = discovery.wallets.some((wallet) => wallet.id === intent.walletId);
   if (intent.kind === 'connecting') {
     if (!registered) return Object.freeze({ kind: 'refused', discovery, walletId: intent.walletId, message: 'Refused: the selected wallet is not in the current registry listing.' });
-    return Object.freeze({ kind: 'connecting', discovery, walletId: intent.walletId, message: `Requesting identity from ${walletName(discovery, intent.walletId)}; no signature is requested.` });
+    return Object.freeze({ kind: 'connecting', discovery, walletId: intent.walletId, message: `Connecting to ${walletName(discovery, intent.walletId)}…` });
   }
   if (!registered) {
-    return Object.freeze({ kind: 'refused', discovery, walletId: intent.walletId, message: `Refused: ${walletName(discovery, intent.walletId)} unregistered itself; the connected identity was dropped.` });
+    return Object.freeze({ kind: 'refused', discovery, walletId: intent.walletId, message: `Refused: ${walletName(discovery, intent.walletId)} disconnected.` });
   }
   return Object.freeze({
     kind: 'connected',
@@ -393,7 +393,7 @@ export function projectWalletConnectionV1(discovery: WalletDiscoveryV1, intent: 
     label: intent.label,
     message: intent.switched
       ? `${intent.address} · identity only; the wallet switched accounts`
-      : `${intent.address} · identity only; no signature requested`,
+      : `Connected · ${intent.address}`,
   });
 }
 

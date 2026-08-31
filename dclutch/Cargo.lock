@@ -1867,6 +1867,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-direct-ticket"
+version = "0.1.0"
+dependencies = [
+ "dclutch-direct-codec",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-keypair",
+ "solana-program",
+ "solana-signature",
+ "solana-signer",
+]
+
+[[package]]
 name = "dclutch-economic-kernel"
 version = "0.1.0"
 
@@ -2093,6 +2107,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
  "dclutch-direct-codec",
+ "dclutch-direct-ticket",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -2163,6 +2178,7 @@ version = "0.1.0"
 name = "dclutch-product-payoff-v2-codec"
 version = "0.1.0"
 dependencies = [
+ "dclutch-liability-basis-v2-kernel",
  "dclutch-product-runtime-v2",
  "dclutch-sha256-adapter",
 ]

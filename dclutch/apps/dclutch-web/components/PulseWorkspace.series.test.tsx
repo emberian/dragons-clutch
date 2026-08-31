@@ -118,13 +118,19 @@ describe('the pulse surface, with a recorded run', () => {
    * A market's own outcome names are allowed to contain a money threshold —
    * "Below $120" is what this market ASKS, and refusing the dollar sign there
    * would be refusing the question rather than refusing an invented metric.
-   * So the editorial names are subtracted first, exactly the way the shipped
-   * disclaimers are, and what remains is this page's own prose. That prose may
-   * not carry a figure the chain does not store.
+   * So the editorial names are subtracted first, and what remains is this
+   * page's own prose. That prose may not carry a figure the chain does not
+   * store.
+   *
+   * Renegotiated 2026-08-31: the sparkline caption used to end "not a forecast
+   * and not a rate", and this array subtracted that exact sentence before
+   * scanning — a disclaimer written to be exempt from the scan that forbids
+   * it. The caption is deleted, so the subtraction is too, and the scan now
+   * runs over the whole caption. Stricter, not looser.
    */
   it('never dresses a recorded run in market-data vocabulary of its own', () => {
     const editorial = series.market === null ? null : marketEditorialV1(series.market);
-    const subtract = ['not a forecast and not a rate', ...(editorial?.outcomes ?? [])];
+    const subtract = [...(editorial?.outcomes ?? [])];
     let remainder = html;
     for (const phrase of subtract) {
       expect(remainder).toContain(phrase);
@@ -169,13 +175,15 @@ describe('who is in the market', () => {
   });
 
   it('never lets holding collateral read as holding a claim on the answer', () => {
-    expect(html).toContain('A holder of collateral is not a holder of claims');
     expect(html).toContain('only a position holds claims on the answer');
   });
 
   it('marks the operator’s labels and this site’s gloss as what they each are', () => {
-    expect(html).toContain('own labels, not anything the chain stores');
-    expect(html).toContain('the market’s own vault');
+    // Renegotiated 2026-08-31: the note used to open by attributing the
+    // account names to the run operator and the vault gloss to this site.
+    // Deleted; what survives is the one distinction a reader can act on.
+    expect(html).not.toContain('not anything the chain stores');
+    expect(html).toContain('Collateral holders hold the token the market settles in');
   });
 });
 

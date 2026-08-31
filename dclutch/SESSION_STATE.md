@@ -1,4 +1,50 @@
-# SESSION STATE — 2026-08-30 ~16:50 EDT
+# SESSION STATE — read top-down; newest first. Compact #3 header, refreshed 2026-08-31 ~03:3x EDT
+
+## CURRENT STATE (post-compact reader: start here, everything below is the log)
+
+**FULL AUTONOMY IS IN FORCE (ember, 2026-08-31, recorded in WAVE.md):** do
+anything, operate any CLI, tear down/redeploy markets, change the protocol.
+**TRADE-4 fires the first public trade itself** (the browser-click hold is
+RESCINDED), then keeps devnet alive: more fills + 2-3 diverse-shape markets.
+Ember steers tonight: markets must be GENUINELY UNCERTAIN at founding
+(buckets centered on spot, width ~ vol × window; vary question types) and
+the site design is the next strike — "text too small / imbalanced /
+rethink the graphic design" (DESIGN lane queued behind GRICE; standard in
+memory dclutch-web-aliveness-patterns).
+Cohort-7 live (5 roles, set `d202e1f4…`); market19 Open/activated/admitted;
+site at clutch.dregg.pro (PUBLISH-3 shipped `2c33f821`); CLI release
+v0.1.0-devnet.2. Standing goal: work until 10am, protocol excellent and
+complete; GOAL.md is the done-log.
+
+**THE NIGHT WAVE — resume any lane with SendMessage to its id:**
+
+| lane | id | mission |
+|---|---|---|
+| FINALIZATION | `ac4ae0b8c46cb7943` | split the ten collapsed refusals; land the FIRST LOCAL FILL (substrate: validator 43080, preserved) |
+| FEE-TX2 | `a86fef5170d01f9bd` | build tx2 (fee settlement) on FEE-CORE's seam + FEEPROOF's foundation |
+| FRACCHECK-2 | `ab8fdba6b8bc62789` | the Trading half: SetAuthority hand-off route + split-controller read_mint |
+| SIMLIFE-3 | `acf661074f8de21b8` | wire activation into the drivers; run the long world; morning /population; outcome-spread is a health metric |
+| HYGIENE | `a9471dfe4a411c7cd` | 8 ledgered debts: general-v5 scraper, generator gate, twins gate, ceiling pin, dead const, 4 lockfiles, Claims tripwire, careful reap |
+| TRADE-4 | `adfc58bb7c5f10d24` | devnet: manifest → RUN `hot` (the first public trade) → more markets per the uncertainty steer |
+| CLOSESEAL | `aad34d691d8e715f4` | E3 ruled collector-keeps-capped: CloseSeal route, write-once preserved |
+| GRICE | `ab29cc70c73c5e7da` | strike-five minimalism (registry stories, wallet panel, chips); DESIGN lane spawns on its landing |
+| DONE tonight | EXPLORER `ae7edb4b1f9ce81db` | dialect pass landed `13d9359c`; 10 web reds are other lanes' in-flight strings — PUBLISH-4 adjudicates |
+
+**Ember-pending:** Helius key rotation only (recommended, transcript
+exposure). E3 is RULED (collector-keeps, capped — WAVE.md `4f792663`).
+**Hard rules that bind every lane:** devnet writes are TRADE-4's alone;
+market19/job-dir untouchable by everyone else; validators
+43080/26900/27100/29300/34500 preserved; lane.sh commits with named paths —
+NEVER a broad add (f346ba81 swept a sibling's file tonight);
+frame-diagnostic grep pattern from run.sh never memory; refusals name their
+clauses; a checker with a wrong pattern answers no; honesty is silent on
+the page; resume 429-killed lanes warm, never relaunch.
+
+---
+
+# The log (oldest header below; sections were appended newest-above-oldest at the log's top)
+
+## (superseded original header) SESSION STATE — 2026-08-30 ~16:50 EDT
 
 Read this first. Written immediately before a `/compact`, so it assumes the
 reader has no memory of the session. The wave board at
@@ -439,6 +485,10 @@ durable in the job dir (`PREPASS_FINDINGS.md`).
 
 ## FEE-CORE — the fee's protocol tier is real (`a0b1f4cb` merge)
 
+**[CORRECTED 2026-08-31, LEDGER-TRUE: everything in this section is
+BRANCH-ONLY — `a0b1f4cb` never reached main; it lives on lane/fee-core →
+lane/fee-tx2, which FEE-TX2 lands as one composed stack. At HEAD today a
+9,999 bps fee is still admitted; the band exists only on the branch.]**
 Band enforced PROTOCOL-side (`DIRECT_MAX_FEE_BASIS_POINTS_V1 = 500` at
 config construction + as a transition relation — 0014 D2's "enforced
 nowhere" corrected). Replay 152→160 via Lean emission, both-width reads,

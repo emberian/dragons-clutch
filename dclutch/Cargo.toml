@@ -13,6 +13,7 @@ members = [
     "crates/dclutch-dealer-codec",
     "crates/dclutch-dealer-scenario-kernel",
     "crates/dclutch-direct-codec",
+    "crates/dclutch-direct-ticket",
     "crates/dclutch-economic-kernel",
     "crates/dclutch-economic-slice-kernel",
     "crates/dclutch-effect-kernel",

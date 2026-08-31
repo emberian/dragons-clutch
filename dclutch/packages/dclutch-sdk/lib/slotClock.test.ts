@@ -93,12 +93,17 @@ describe('slot clock measurement', () => {
       earlierSlot: '490350000', earlierUnixSeconds: '1788084000',
       observedAtMs: NOW,
     });
-    expect(slotClockCaveatV1(measured)).toContain('estimates');
+    // Renegotiated 2026-08-31: the caveat used to run two clauses past its own
+    // point ("slot time wobbles, and the chain's own clock is slots"; "devnet
+    // often runs far from nominal"). What a reader needs is that the time is
+    // an estimate and at what rate -- and, when we could not measure the
+    // cluster, that we could not. Both still pinned, both now one clause.
+    expect(slotClockCaveatV1(measured)).toContain('estimated');
     expect(slotClockCaveatV1(measured)).toContain('160 ms per slot');
-    expect(slotClockCaveatV1(measured)).toContain('slot time wobbles');
+    expect(slotClockCaveatV1(measured).length).toBeLessThan(60);
 
     const assumed = assumedSlotClockV1('1', NOW);
-    expect(slotClockCaveatV1(assumed)).toContain('assuming the nominal 400 ms');
+    expect(slotClockCaveatV1(assumed)).toContain('nominal 400 ms');
     expect(slotClockCaveatV1(assumed)).toContain('could not be measured');
   });
 });

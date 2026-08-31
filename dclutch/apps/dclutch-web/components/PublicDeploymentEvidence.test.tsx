@@ -61,7 +61,7 @@ describe('public deployment evidence', () => {
     const local = renderToStaticMarkup(
       <PublicDeploymentEvidence deployment={LOCAL_DEPLOYMENT_V1} />,
     );
-    expect(local).toContain('has no checked public deployment record');
+    expect(local).toContain('Addresses came from your own configuration');
     expect(local).not.toContain('download=');
   });
 });

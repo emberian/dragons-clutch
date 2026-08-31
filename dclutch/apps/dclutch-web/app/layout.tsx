@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import './charts.css';
+import SiteFooter from '@/components/SiteFooter';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -58,6 +59,7 @@ export default function RootLayout({
       >
         <a className="skip-link" href="#main-content">Skip to main content</a>
         {children}
+        <SiteFooter />
       </body>
     </html>
   );

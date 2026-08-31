@@ -23,6 +23,10 @@ dclutch-core-contract = { path = "../dclutch-core-contract" }
 dclutch-custody-contract = { path = "../dclutch-custody-contract" }
 dclutch-dealer-codec = { path = "../dclutch-dealer-codec" }
 dclutch-direct-codec = { path = "../dclutch-direct-codec" }
+# `SignedDirectIntentV3` only. `default-features = false` drops the `author`
+# feature and with it every signer: this crate goes on linking nothing that can
+# sign, which is a claim its module documentation makes out loud.
+dclutch-direct-ticket = { path = "../dclutch-direct-ticket", default-features = false }
 dclutch-economic-slice-kernel = { path = "../dclutch-economic-slice-kernel" }
 dclutch-effect-kernel = { path = "../dclutch-effect-kernel" }
 dclutch-execution-strategy-contract = { path = "../dclutch-execution-strategy-contract" }

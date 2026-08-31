@@ -819,6 +819,48 @@ Three properties that make it defensible, and one that does not:
 
 ## 8. What this document does NOT establish
 
+**Amendment, 2026-08-31, from execution.** Lanes A, B, C and D landed and four
+of the items below are now measured rather than open. Evidence, with the ledger
+read back off the bank and the refusal table executed row by row:
+`docs/evidence/FEE_SECOND_TRANSACTION_PAIR_2026_08_31.md`; instruments
+`programs/dclutch-trading-sbf/program-test/tests/direct_hot_fee_pair.rs` and
+`direct_hot_fee_bearing_margin_gate.rs`.
+
+* **tx2 exists and costs about 170,000 CU** in a 19-account frame — inside
+  §4.3's estimated 165,000–210,000 and 18–21, with over a million CU of
+  headroom, so §4.3's "ALL KEYS by margin rather than by mechanism" holds.
+* **tx1 returned to the zero-fee cost profile, exactly.** Thirty-two seeds per
+  arm on one ELF set: the fee-bearing fill executes 32/32 and its
+  key-independent floor sits within one fifth of a bump attempt of the zero-fee
+  arm's. The pre-split figure for the same statistic was a lower bound of
+  1,435,274 on a route that could not complete.
+* **`fee_owed` costs nothing measurable in tx1.** It is one `write_u64` in the
+  Effect, and it is inside that same margin.
+* **Q1 is executed on the Trading side.** §1's source argument was confirmed
+  against Custody by FEEPROOF; the route now confirms it against Trading, and
+  the answer has no mechanism in it — the caller authority is a PDA of the
+  caller program seeded by the digest of the request Trading has just built, so
+  there is nothing for tx1 to have registered.
+
+Three corrections the lane owes this document:
+
+1. **§1.4's refusal table is incomplete.** It names two new refusals; there are
+   three. Custody checks `source.key == request.source` and the source's mint
+   and **never** `semantic.source_owner`, so without a pin the route would let
+   one maker settle their own `fee_owed` out of another maker's standing
+   delegation — clearing themselves for free, consuming the allowance the second
+   maker needs, and stranding them behind §2.4's lockout permanently. The route
+   adds `TradingSbfError::FeeSource` and the fee comes out of an account the
+   debtor owns.
+2. **The Market's phase must not be checked in tx2.** §7.1 rules the obligation
+   undeadlined, so requiring `Phase::Open` would strand a fee — and its debtor —
+   the moment a market resolved. The route deliberately does not check it.
+3. **`total_debit` is not derivable in tx2 and §1.4's table implies it is.** The
+   fill's `buyer_debit` is spent and the maker replay records the residue, so
+   the settlement declares an atomic debit of exactly the obligation. Nothing
+   turns on it: Custody compares `allowance_before` against the live delegation.
+
+
 - **That the fee request validates in a later transaction on chain.** §1 is a
   reading of the seed derivation, `authenticate_common_frame`,
   `CustodyReplayV1::advance` and `DelegatedCustodyRequestV2::validate` at HEAD.

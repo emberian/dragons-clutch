@@ -64,112 +64,112 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
   // ------------------------------------------------------------------- claims
   {
     routeId: 'claims/affine_batch_v2::process',
-    summary: 'Apply a batch of affine claim-balance deltas under one authenticated plan.',
+    summary: 'Applies a batch of claim-balance changes under one signed plan.',
   },
   {
     routeId: 'claims/custody_replay_v1::process',
-    summary: 'Create or advance the Custody replay record a Claims action settles through.',
+    summary: 'Creates or advances the record that stops a collateral move being replayed.',
   },
   {
     routeId: 'claims/founding_v5::process',
-    summary: 'Found the Claims aggregate for a Market, atomically with its Custody composition.',
+    summary: 'Sets up a market’s claim supply and the vault that backs it, in one step.',
   },
   {
     routeId: 'claims/market_closure_v1::process',
-    summary: 'Close a retired Market’s Claims state and release what it held.',
+    summary: 'Closes a retired market’s claim state and releases what it held.',
   },
   {
     routeId: 'claims/process_core_effect',
-    summary: 'Apply a Core-authored effect to Claims state as a CPI child.',
+    summary: 'Applies a change the Core program asked for to claim balances.',
   },
   {
     routeId: 'claims/protocol_position_v2::process',
-    summary: 'Open, advance or close one owner’s Claims Position.',
+    summary: 'Opens, updates or closes one owner’s claim balances.',
   },
   {
     routeId: 'claims/rational_lifecycle_v2::process',
-    summary: 'Drive the rational representation lifecycle: retire a receipt, redeem a coordinate.',
+    summary: 'Retires a wrapped-claim receipt, or redeems what it stands for.',
   },
   {
     routeId: 'claims/rational_representation_v2::process',
-    summary: 'Issue, unwrap, denominate or reconstitute a rational representation of a claim.',
+    summary: 'Wraps claims into a token that can be moved on its own, or unwraps them back.',
     bodyMagic: magicText(RATIONAL_REQUEST_MAGIC_V2),
   },
   {
     routeId: 'claims/signed_delta_v3::process',
-    summary: 'Apply a signed position-delta plan produced by a Dealer or General settlement.',
+    summary: 'Applies the balance changes a pool or an auction settlement worked out.',
   },
   {
     routeId: 'claims/sparse_native_transfer_v1::process',
-    summary: 'Move native lamports between Claims-owned compartments without touching balances.',
+    summary: 'Moves lamports between the protocol’s own accounts without touching any claim balance.',
   },
   {
     routeId: 'claims/terminal_settlement_v3::process',
-    summary: 'Settle a terminal Market: redeem winning claims against the Hoard.',
+    summary: 'Pays out a settled market: winning claims are redeemed against the vault.',
   },
 
   // --------------------------------------------------------------------- core
   {
     routeId: 'core/found::project',
-    summary: 'Project a founding without committing it, so the caller can see the Market it would create.',
+    summary: 'Works out what a founding would create, without creating it.',
   },
   {
     routeId: 'core/generic_founding_v1::process',
-    summary: 'The Core half of the atomic generic founding: Found-and-permit, or Open.',
+    summary: 'The Core program’s half of founding a market: create it, or open it for trading.',
     bodyMagic: magicText(GENERIC_FOUNDING_REQUEST_MAGIC_V1),
   },
   {
     routeId: 'core/series_consume::process',
-    summary: 'Consume a Series permit against a projected Custody lock receipt.',
+    summary: 'Spends a series permit against collateral already locked for it.',
   },
   {
     routeId: 'core/series_open::process',
-    summary: 'Open the next Market in a Series against its Claims founding receipt.',
+    summary: 'Opens the next market in a series.',
   },
   {
     routeId: 'core/series_permit_expiry::process',
-    summary: 'Expire an unconsumed Series permit and return what it reserved.',
+    summary: 'Expires an unused series permit and returns what it reserved.',
   },
 
   // ------------------------------------------------------------------ custody
   {
     routeId: 'custody/delegated::process',
-    summary: 'Move collateral under a delegated Custody authority, against an exact replay revision.',
+    summary: 'Moves collateral on behalf of an owner who authorized it.',
   },
   {
     routeId: 'custody/projected::process',
-    summary: 'Lock, realize or abort a projected Custody transfer — the founding-time escrow.',
+    summary: 'Locks collateral for a founding, then either completes or releases it.',
   },
 
   // ----------------------------------------------------------------- registry
   {
     routeId: 'registry/continuation_v1::process',
-    summary: 'Continue a multi-transaction Registry publication.',
+    summary: 'Continues publishing a record too large for one transaction.',
   },
   {
     routeId: 'registry/hot_continuation_v2::process',
-    summary: 'The Registry’s side of a Hot execution: authenticate the release the transition runs under.',
+    summary: 'Checks that a trade is running the exact program build it claims to.',
     bodyMagic: magicText(HOT_EXECUTION_MAGIC_V3),
   },
   {
     routeId: 'registry/record_v1::dispatch',
-    summary: 'Stage, finalize or close a content-addressed record account.',
+    summary: 'Stages, finalizes or closes a stored record.',
   },
 
   // --------------------------------------------------------------------- rent
   {
     routeId: 'rent/process_create_v2#Create',
-    summary: 'Create a Market’s lifecycle RentCredit, prepaying its rent to a named refund wallet.',
+    summary: 'Prepays a market’s rent, refundable to one named wallet.',
     bodyMagic: magicText(LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2),
   },
   {
     routeId: 'rent/process_sweep_v2#Sweep',
-    summary: 'Sweep accrued lamports out of a RentCredit to its beneficiary.',
+    summary: 'Sweeps accrued lamports out to the wallet they are owed to.',
     bodyMagic: magicText(LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2),
   },
   {
     routeId: 'rent/process_close_v2#Close',
-    summary: 'Close a spent RentCredit and refund its principal.',
+    summary: 'Closes spent prepaid rent and refunds what is left.',
     bodyMagic: magicText(LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2),
   },
 
@@ -278,11 +278,11 @@ export function decodeInstructionData(data: Uint8Array, depth = 0): DecodedInstr
     if (nested !== null) inner = decodeInstructionData(nested, depth + 1);
   }
   if (magic === null) {
-    note = 'The leading eight bytes are not printable ASCII, so they are not a dClutch instruction magic.';
+    note = 'The first eight bytes are not readable text, so they are not a dClutch instruction magic.';
   } else if (routes.length === 0 && spec === null) {
-    note = 'No route the census enumerates is selected by this magic, and no rendered record carries it.';
+    note = 'No dClutch route and no rendered record uses this magic.';
   } else if (routes.length === 0) {
-    note = 'No census route is selected by this magic; the bytes are decoded against the record of the same name.';
+    note = 'No route uses this magic; the bytes are read against the record that carries it.';
   }
 
   return Object.freeze({ magic, routes: Object.freeze(routes), body, inner, bytes: data.length, note });

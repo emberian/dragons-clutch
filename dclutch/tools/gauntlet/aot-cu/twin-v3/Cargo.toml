@@ -1,0 +1,39 @@
+[package]
+name = "dclutch-direct-relation-twin-v3"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "Measurement-only twin ELF for the current InlineOrdinary TransitionVMV3 relation"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+path = "src/lib.rs"
+
+[features]
+default = []
+aot = []
+interpreted = []
+null = []
+decode-only = []
+no-entrypoint = []
+
+[dependencies]
+dclutch-direct-aot-v3-contract = { path = "../../../../crates/dclutch-direct-aot-v3-contract" }
+dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+dclutch-transition-vm = { path = "../../../../crates/dclutch-transition-vm" }
+solana-program = { version = "=3.0.0", default-features = false }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

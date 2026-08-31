@@ -71,6 +71,33 @@ DYNAMIC_PORT_RANGE=""
 readonly TICKS_PER_SLOT="${DCLUTCH_TICKS_PER_SLOT:-16}"
 readonly MINT_PUBKEY="11111111111111111111111111111111"
 
+# WHY THIS LAUNCHER PINS LEDGER RETENTION, and it is the difference between a
+# resumable campaign and a permanently stranded one.
+#
+# `solana-test-validator` keeps 10,000 shreds of root slots by default and
+# purges what falls off in multi-thousand-slot chunks. This launcher never named
+# the flag, so every campaign it ever started ran on that default.
+#
+# The drivers in bootstrap/successor re-verify EVERY earlier stage from
+# transaction history on every invocation -- that is what makes a stage journal
+# an evidence chain rather than a checklist. So a purge that lands mid-sequence
+# does not slow a campaign down, it ENDS it: the driver refuses with `finalized
+# Direct signature omitted transaction history` and there is no resume, because
+# the evidence the next stage must cite no longer exists anywhere. The account
+# state survives the purge; only the proof that it was reached does.
+#
+# It cost lane FINALIZATION its Direct sequence on 2026-08-31 at slot ~46,000,
+# seven stages in. The number below is a retention FLOOR for a whole campaign,
+# not a tuning knob: it is a cap on shreds retained, not an allocation, so a
+# short campaign pays nothing for it. Override only to go HIGHER.
+#
+# It is the same 100,000,000 that `VALIDATOR_LEDGER_SHRED_CAP_V1` in
+# tools/release/private-validator-lifecycle/run.py sets for the other way this
+# repository starts a validator, and the two should stay equal: a campaign that
+# survives on one launch path and strands on the other is worse than one that
+# strands on both, because only one of them teaches you anything.
+readonly LEDGER_SHREDS="${DCLUTCH_LIMIT_LEDGER_SIZE:-100000000}"
+
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
 FIXTURE_DIR="$REPO_ROOT/fixtures/pyth/local-upgraded-2026-08-22"
@@ -602,6 +629,7 @@ start() {
     --account-dir "$account_dir" \
     --mint "$MINT_PUBKEY" \
     --ticks-per-slot "$TICKS_PER_SLOT" \
+    --limit-ledger-size "$LEDGER_SHREDS" \
     --bind-address 127.0.0.1 \
     --rpc-port "$RPC_PORT" \
     --faucet-port "$FAUCET_PORT" \

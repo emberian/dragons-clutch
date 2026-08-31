@@ -45,6 +45,7 @@ pub use behavior_profile_v2::{
     InertMetadataV2, MAX_DISPLAY_DECIMALS_V2, MAX_INERT_METADATA_VALUE_BYTES_V2,
     TOKEN_2022_BEHAVIOR_PROFILE_ID_V2, TOKEN_2022_BEHAVIOR_PROFILE_PREIMAGE_V2,
     Token2022BehaviorAccountFactsV2, Token2022BehaviorMintFactsV2, Token2022BehaviorProfileV2,
+    Token2022CompactedShardMintFactsV2,
 };
 pub use closeable_mint::{
     TOKEN_2022_CLOSEABLE_MINT_BYTES_V2, Token2022CloseableMintFactsV2,

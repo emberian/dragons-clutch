@@ -7,7 +7,7 @@ use dclutch_capability_program_contract::v3::SCHEMA_RELEASE_ID as CAPABILITY_PRO
 use dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID as EFFECT_PROGRAM_SCHEMA_ID;
 use dclutch_execution_strategy_contract::v2::EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2;
 use dclutch_fractional_claim_contract::{
-    FractionalActionV1, FractionalRootInputV1, FractionalRootV1,
+    FRACTIONAL_ROOT_PDA_SEED_V1, FractionalActionV1, FractionalRootInputV1, FractionalRootV1,
 };
 use dclutch_fractional_claim_kernel::{
     FRACTIONAL_TERMS_SCHEMA_ID_V1, FractionalTermsInputV1, OutcomeReserveV1,
@@ -268,7 +268,7 @@ impl FractionalChainFixtureV1 {
 
         let (root_key, bump) = Pubkey::find_program_address(
             &[
-                b"dclutch/fractional-root-v1",
+                FRACTIONAL_ROOT_PDA_SEED_V1,
                 &terms_digest,
                 market_key.as_ref(),
             ],
