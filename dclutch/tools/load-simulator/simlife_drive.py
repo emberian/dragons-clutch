@@ -698,6 +698,35 @@ class LifecycleSubstrate(LedgerCensusSubstrate):
             return "its Direct capability execution root was already activated in this work directory"
         return "Direct capability execution root activated"
 
+    @staticmethod
+    def _dedupe_tokens(binding: dict) -> dict:
+        """One address, one label. The census sums PER ACCOUNT.
+
+        A token account named twice is counted twice, and L1 then reports more
+        atoms tracked than the Mint has ever issued -- which is exactly what a
+        re-walk over a chain this run had already touched produced: the holder's
+        participant token account came back from the prior scan as `prior_01`
+        AND from the admission as `holder_m04-p0`, one address under two names,
+        and the census refused with `tracked 228894899 != Mint supply
+        178644899`.
+
+        The census was right and the caption was wrong, which is the whole
+        reason that law exists. Labels are kept in sorted order so the survivor
+        is deterministic, and the descriptive ones win over the scan's
+        `prior_NN` because a reader should see `holder_m04-p0`.
+        """
+        tokens = binding.get("tokens") or {}
+        seen: dict = {}
+        for label in sorted(tokens, key=lambda name: (name.startswith("prior_"), name)):
+            address = tokens[label]
+            if address in seen:
+                continue
+            seen[address] = label
+        binding["tokens"] = {
+            label: address for address, label in sorted(seen.items(), key=lambda row: row[1])
+        }
+        return binding
+
     def _binding(self, founded) -> dict:
         """A market's census binding, plus any account this CHAIN already held.
 
@@ -712,7 +741,7 @@ class LifecycleSubstrate(LedgerCensusSubstrate):
             binding["tokens"][label] = address
         for index, address in enumerate(self._prior_tokens(founded)):
             binding["tokens"][f"prior_{index:02d}"] = address
-        return binding
+        return self._dedupe_tokens(binding)
 
     def _prior_tokens(self, founded) -> list:
         """Collateral accounts this CHAIN already held for a market, named once.
@@ -794,7 +823,14 @@ class LifecycleSubstrate(LedgerCensusSubstrate):
                 f"no participant of {event.market_id} has been admitted, and a Direct trade is "
                 "between the founding founder and one admitted position"
             )
-        run = simlife_drivers.drive_fill(self.drivers, founded, event.subject, report)
+        run = simlife_drivers.drive_fill(
+            self.drivers, founded, event.subject, report,
+            # The admitted wallet the participant report names as position
+            # owner, which is the identity the producer derives its buyer
+            # from -- NOT the market's founding `participant` role, which
+            # shares the name and owns the fixture liquidity instead.
+            buyer_keypair=self.wallet(buyer) if buyer else None,
+        )
         return simlife.EventResult(
             outcome=simlife.OUTCOME_EXECUTED,
             detail=self._finalized_line(

@@ -29,6 +29,9 @@ pub const fn general_request_profile_bytes_v1(action: Action) -> &'static [u8] {
         unauthored_actions!() => &[],
         Action::OpenBatch => &GENERAL_OPEN_BATCH_REQUEST_PROFILE_V1,
         Action::CloseBatch => &GENERAL_CLOSE_BATCH_REQUEST_PROFILE_V1,
+        Action::PlaceOrder => &GENERAL_PLACE_ORDER_REQUEST_PROFILE_V1,
+        Action::CancelOrder => &GENERAL_CANCEL_ORDER_REQUEST_PROFILE_V1,
+        Action::ReleaseOrder => &GENERAL_RELEASE_ORDER_REQUEST_PROFILE_V1,
         Action::Consider => &GENERAL_CONSIDER_REQUEST_PROFILE_V1,
         Action::Freeze => &GENERAL_FREEZE_REQUEST_PROFILE_V1,
         Action::InitializeSettlement => &GENERAL_INITIALIZE_REQUEST_PROFILE_V1,
@@ -70,23 +73,48 @@ mod tests {
         Action::Close,
         Action::OpenBatch,
         Action::CloseBatch,
+        Action::PlaceOrder,
+        Action::CancelOrder,
+        Action::ReleaseOrder,
     ];
 
     const fn speaks_v3(action: Action) -> bool {
-        matches!(action, Action::OpenBatch | Action::CloseBatch)
+        matches!(
+            action,
+            Action::OpenBatch
+                | Action::CloseBatch
+                | Action::PlaceOrder
+                | Action::CancelOrder
+                | Action::ReleaseOrder
+        )
     }
 
     fn request(action: Action) -> [u8; CONTROLLER_REQUEST_BYTES_V2] {
         if speaks_v3(action) {
             return ControllerRequestV3 {
                 action: ControllerActionV3::from(action),
-                expected_revision: 7,
+                // ReleaseOrder carries no optimistic revision at all: an order
+                // state has no revision counter, and its grammar requires the
+                // coordinate zero.
+                expected_revision: if matches!(
+                    action,
+                    Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder
+                ) {
+                    0
+                } else {
+                    7
+                },
                 subject_id: Some([0x31; 32]),
                 page_index: 0,
                 execution_index: 0,
                 manifest_order_index: 0,
                 primary_state_bump: 42,
-                secondary_state_bump: 0,
+                secondary_state_bump: if matches!(action, Action::PlaceOrder | Action::CancelOrder)
+                {
+                    43
+                } else {
+                    0
+                },
                 result_state_bump: 0,
             }
             .to_bytes()
@@ -155,7 +183,18 @@ mod tests {
                 },
             )
             .expect("selected profile accepts");
-            if speaks_v3(action) {
+            if matches!(
+                action,
+                Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder
+            ) {
+                // The order grammars name their subject in the ORDER register
+                // the state PDA is keyed by, and project NO revision: the
+                // replay-guard register passes through untouched.
+                assert_eq!(output_scalars.first(), Some(&99));
+                assert_eq!(output_scalars.get(94), Some(&99));
+                assert_eq!(output_identities.get(3), Some(&[0x31; 32]));
+                assert_eq!(output_identities.get(29), Some(&[0x99; 32]));
+            } else if speaks_v3(action) {
                 // The V3 grammar lands the optimistic root revision in the
                 // replay-guard register and the subject in the batch identity
                 // register; the settlement coordinates pass through untouched.
@@ -175,7 +214,14 @@ mod tests {
             assert_eq!(output_scalars.get(69), Some(&42));
             assert_eq!(
                 output_scalars.get(70),
-                Some(&if action == Action::Close { 43 } else { 99 })
+                Some(&if matches!(
+                    action,
+                    Action::Close | Action::PlaceOrder | Action::CancelOrder
+                ) {
+                    43
+                } else {
+                    99
+                })
             );
         }
     }

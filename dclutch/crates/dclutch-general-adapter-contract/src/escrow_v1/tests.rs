@@ -41,7 +41,7 @@ const MAX_QUOTE_DEBIT_PER_LOT: u64 = 5;
 const QUOTE_RESERVE: u64 = MAX_LOTS * MAX_QUOTE_DEBIT_PER_LOT;
 
 /// The actions whose artifacts are authored today.
-const AUTHORED: [Action; 9] = [
+const AUTHORED: [Action; 12] = [
     Action::Consider,
     Action::Freeze,
     Action::InitializeSettlement,
@@ -50,7 +50,10 @@ const AUTHORED: [Action; 9] = [
     Action::Distribute,
     Action::Close,
     Action::OpenBatch,
+    Action::PlaceOrder,
+    Action::CancelOrder,
     Action::CloseBatch,
+    Action::ReleaseOrder,
 ];
 
 fn id(low: u8) -> [u8; 32] {

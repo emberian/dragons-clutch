@@ -83,6 +83,11 @@ def held_probe(root: Path, *, identities: dict | None = None, keys=KEY_FILES) ->
         "keyDirectory": str(key_dir),
     }))
     probe.joinpath("SUMMARY.json").write_text(json.dumps({"source_revision": "a" * 40}))
+    release = root / "release"
+    release.mkdir(exist_ok=True)
+    release.joinpath("CHECKED_UPGRADE_GATE.json").write_text(
+        json.dumps({"source_revision": "b" * 40})
+    )
     return probe
 
 
@@ -188,6 +193,25 @@ class SimlifeConfigTests(unittest.TestCase):
             with self.assertRaises(adapter.Refusal) as caught:
                 self.build(root, probe, "--pyth-facts", str(root / "nothing.json"))
             self.assertIn("pyth facts document absent", str(caught.exception))
+
+    def test_the_release_gate_names_the_substrate_a_held_probe_cannot(self):
+        """A held probe has no SUMMARY.json -- it is stopped, not finished.
+
+        Reading the revision from there produced a capture labelled with no
+        substrate at all, which is the one thing a published artifact must not
+        be. The checked release's gate names the bytes the validator loaded.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            probe = held_probe(root)
+            (probe / "SUMMARY.json").unlink()
+            with self.assertRaises(adapter.Refusal) as caught:
+                self.build(root, probe)
+            self.assertIn("no source revision", str(caught.exception))
+            config = json.loads(
+                self.build(root, probe, "--release-root", str(root / "release")).read_text()
+            )
+            self.assertEqual(config["source_revision"], "b" * 40)
 
     def test_an_unbounded_run_carries_no_budget_block_at_all(self):
         with tempfile.TemporaryDirectory() as directory:

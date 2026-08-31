@@ -10,6 +10,7 @@ mod aggregate_retirement_journal;
 mod campaign;
 mod cluster;
 mod direct_capability_activation;
+mod direct_fee_settlement;
 mod direct_hot_route_manifest;
 mod direct_market;
 mod direct_ticket;
@@ -18,6 +19,7 @@ mod direct_trade_producer;
 mod direct_trade_setup;
 mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
+mod evidence_refresh;
 mod family_hot_campaign;
 mod fractional_market;
 mod general_capability_activation;
@@ -157,6 +159,12 @@ fn run() -> Result<()> {
         Some(command) if command == aggregate_retirement_exterior::COMMAND_V1 => {
             aggregate_retirement_exterior::run(arguments.collect())
         }
+        Some(command) if command == evidence_refresh::REFRESH_EVIDENCE_COMMAND_V1 => {
+            evidence_refresh::run_devnet(arguments.collect())
+        }
+        Some(command) if command == evidence_refresh::LOCAL_REFRESH_EVIDENCE_COMMAND_V1 => {
+            evidence_refresh::run_owned_loopback(arguments.collect())
+        }
         Some("devnet-direct-trade-v1") => direct_trade::run_devnet(arguments.collect()),
         Some(command) if command == family_hot_campaign::GENERAL_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::General)
@@ -166,6 +174,12 @@ fn run() -> Result<()> {
         }
         Some(command) if command == family_hot_campaign::SERIES_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::Series)
+        }
+        Some(command) if command == direct_fee_settlement::COMMAND_V1 => {
+            direct_fee_settlement::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
+            direct_fee_settlement::run_devnet_v1(arguments.collect())
         }
         Some("local-private-validator-direct-trade-v1") => {
             direct_trade::run_owned_loopback(arguments.collect())
@@ -1615,6 +1629,7 @@ fn usage() {
     println!("{}", private_activity::usage());
     println!("{}", private_lifecycle::usage());
     println!("{}", private_lifecycle::direct_payout_schedule_usage());
+    println!("{}", direct_fee_settlement::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", sponsored_push::usage());

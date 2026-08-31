@@ -727,6 +727,60 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
                 Some((FixedRole::Custody, 2)),
             )
         }
+        // The admission and the escrow construction, in the money order:
+        // replay create, vault open (receipt-dependent on the create),
+        // Position admit, claims escrow-in, quote deposit. The transfer
+        // compartments come from the same escrow_v1 table the builder reads
+        // (EscrowCollateral: External -> Settlement).
+        Action::PlaceOrder => {
+            require_route_count(effect, 5)?;
+            require_custody_route(
+                effect,
+                0,
+                OperationV1::InitializeReplay,
+                CompartmentV1::None,
+                CompartmentV1::None,
+                None,
+            )?;
+            require_custody_route(
+                effect,
+                1,
+                OperationV1::OpenVault,
+                CompartmentV1::None,
+                CompartmentV1::Settlement,
+                Some((FixedRole::Custody, 0)),
+            )?;
+            require_position_route(effect, 2, ProtocolPositionActionV2::Admit)?;
+            require_affine_route(effect, 3, 2)?;
+            require_named_custody_transfer_route(effect, 4, action)
+        }
+        // The residual refund and the escrow teardown, in the money order:
+        // the claims residual empties the Position, the quote residual empties
+        // the vault, then Position, vault, and replay close. The transfer
+        // compartments come from the same `escrow_v1` table the builder reads
+        // (`ReleaseCollateral`: Settlement -> External).
+        Action::CancelOrder | Action::ReleaseOrder => {
+            require_route_count(effect, 5)?;
+            require_affine_route(effect, 0, 2)?;
+            require_named_custody_transfer_route(effect, 1, action)?;
+            require_position_route(effect, 2, ProtocolPositionActionV2::Close)?;
+            require_custody_route(
+                effect,
+                3,
+                OperationV1::CloseVault,
+                CompartmentV1::Settlement,
+                CompartmentV1::None,
+                None,
+            )?;
+            require_custody_route(
+                effect,
+                4,
+                OperationV1::CloseReplay,
+                CompartmentV1::None,
+                CompartmentV1::None,
+                Some((FixedRole::Custody, 3)),
+            )
+        }
     }
 }
 

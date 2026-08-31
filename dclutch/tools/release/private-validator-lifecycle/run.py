@@ -1449,10 +1449,21 @@ def validator_argv(
         # Measured by the FINALIZATION lane on 2026-08-31 and recorded there as
         # the first thing whoever restages should change.
         #
-        # This is a CAP on shreds retained, not a preallocation: a loopback
-        # session that lands a few thousand transactions writes a few tens of
-        # megabytes whatever the cap is, so a cap this high costs nothing on a
-        # run of this size and removes the purge entirely.
+        # THE COST IS REAL AND IT IS NOT SMALL. This comment used to reason that
+        # a loopback session writes "a few tens of megabytes whatever the cap
+        # is". It was wrong by two orders of magnitude: measured at about
+        # 470 KB PER SLOT on a session that landed well under a hundred
+        # transactions -- 5.9 GB by slot 12,779 on the first-fill run, 9.9 GB by
+        # slot 21,000 on the population run. The bytes are the validator's own
+        # block and shred bookkeeping rather than campaign traffic, which is
+        # precisely why the default purges them and precisely why the default
+        # ends campaigns.
+        #
+        # The cap stays, because a stranded sequence is unrecoverable and disk
+        # is not. But BUDGET FOR IT: several concurrent lanes each holding a
+        # ledger is tens of gigabytes, and this machine has already lost a night
+        # to a full volume. Reap a session's ledger when its evidence is
+        # captured. See docs/evidence/FIRST_LOCAL_DIRECT_FILL_2026_08_31.md.
         "--limit-ledger-size",
         str(VALIDATOR_LEDGER_SHRED_CAP_V1),
         "--bind-address",

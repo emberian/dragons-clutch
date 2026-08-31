@@ -28,6 +28,24 @@ keeps devnet alive), CLOSESEAL (E3: collector-keeps-capped), GRICE
    credential sweep first. Then cohort-8 if warranted; morning report
    by 10am.
 
+## For ember: planned but not launched (the list you asked for)
+
+1. **General runtime-dispatch** — invocation V3 + accelerator bank paths;
+   THE critical path: 12/14 actions are authored but none can execute
+   until this. Then the candidate pair. (weeks-class)
+2. **Effect-kernel AOT** — the real 164k-CU lever (transition-AOT
+   measured near-worthless: 10,393 CU).
+3. **Structured issuance session-split** — K=3 is packet-unissuable; the
+   record-bound lift was measured useless; splitting issuance is the lift.
+4. **Spline wire commit** — evaluator ported + corpus green + rounding
+   ruled; remaining: schema-id bump + DCLTPGT1 slot.
+5. **Funded FailNext recovery** (ruled: one-attempt is NOT forever;
+   pre-mainnet mandatory). 6. **CEILINGS** (9 programs). 7. **GRICE-2**
+   (operator consoles). 8. **CREATE-WIZARD**. 9. KAPPA-CAP, SEMANTIC-
+   OWNER, AGENT-ARTIFACTS, P-007 seal emission, FRACCHECK-3 (9 commits),
+   AlreadyCurrent dedup (5 sites), tail-model reconciliation (60x).
+Pending only-you: Helius key rotation; the vm_compressor=2 boot-arg call.
+
 ## Night worklist (from BACKLOG's ledger digest, 03:5x)
 
 Spawned: GEN-SEVEN (General order placement, worktree, L), TRIPWIRE (0017
@@ -67,6 +85,142 @@ mainnet, CFTC, assurance park, dead-market deletion, monolith benchmark.
 
 ## Done-log (07:4x additions)
 
+- ★★ THE FIRST PUBLIC TRADE IS ON CHAIN (TRADE-7): sig 4YQLY9ts…, slot
+  490,907,340, err None, 1,309,797 CU — local replay predicted it within
+  115 CU. Fee settled by A STRANGER (participant-2, tx2 64c5Ev8T…,
+  fee_owed 9,950→0) — the permissionless property live on a public
+  chain. Conservation cell-by-cell: 10,000,000 before = after.
+  Conviction: ONE BYTE — custody bump hint mined for the zero-fee slot
+  shape; correct for every fill ever assembled, wrong for the first
+  real fee (every operator fixture was economically zero-fee). Fixed +
+  two-sided red-proof (ffa73ced); devnet fee-settlement arm reviewed +
+  approved (genesis-authenticated, --i-mean-devnet). Stranded cohort-6
+  seal UNCLOSABLE (ZeroBump body; deployed refusal CORRECT) — cohort-9
+  queue. → PUBLISH-5 spawned: the trade reaches the site.
+- LIFECYCLE-EXEC done (2d28333b): the four-receipt gate NEVER MOVED —
+  the wall was at checkpoint load; solved by ADOPTION (each carried
+  receipt re-verified from chain: 12 live tamper-refusals + a passing
+  control; its own wrong first Ruling 4 caught by the real receipt);
+  execute union 40→48 rows, reprovision ran green key-free. Life still
+  18 acts: WALL 9 (producer+provisioner assert a fresh life) restated
+  per-stage in §7.11, correctly left undone → LIFECYCLE-TABLE spawned
+  (the §7.11 relaxation + execute → redeem → retire).
+- ★ TRADE-6 done: ChildFrame CONVICTED at direct_inline_route_v3.rs:2212
+  (the wall-10 fix reached only the producer; both hand-written models
+  were wrong TOGETHER and agreed — "half a duplicate is worse than
+  none"); fixed host-side, red-proven, no cohort-9. Nine of ten ladder
+  stages; THE FIRST CAPABILITY SEAL EVER ON THIS DEVNET (2KhDV1DT…,
+  720,187 CU — DCLTSEL1 proven on chain); market21/22 fixtures live
+  (3127faf1). New distinct wall: 0x4001 Release at 771,347 CU in
+  SIMULATION with every reachable candidate eliminated — an honest
+  contradiction → TRADE-7 spawned with the instrumented-ELF replay
+  method. Found: exactly ONE stranded seal (6hDpsgAo…, 7.6M lamports)
+  and CloseSeal has NO host caller anywhere — TRADE-7 builds it.
+- ★ LIFECYCLE-CLOCK done (df89640c, flagship 27/27, workspace 538/538):
+  §7.6 band derived-then-built (per-FIELD exemption — only the 40 data
+  bytes released, four fields keep byte-pins; monotonicity for the
+  epoch fields; endpoints only from still-pinned rows), red-proofed both
+  directions ON A MOVING CLOCK. RESOLUTION SUBMIT LANDED (4j9ipdXYKq…,
+  slot 79,334, 155,790 CU; lifecycle = Submitted). Walls 6+7 fell too —
+  wall 7 was a FABRICATED-VACANCY bug (observed_or_vacant read
+  never-fetched as vacant; now refuses unobserved keys). Life table 18
+  acts CONSERVED +0/+0. Wall 8 sized to the byte (execute 1,351 vs
+  1,232 — nine extractable addresses missing from a frozen table)
+  → LIFECYCLE-EXEC spawned (§7.9; the stage-gate relaxation designed
+  first, guard preserved).
+- LIFECYCLE-ALT done (4 commits): the deadlock broken RIGHT (reclaim
+  floor pinned with two derived bounds, guard's refusals red-proofed
+  live); §6's wall 1 WITHDRAWN (driver impatience — receipt landed on
+  invocation one); wall 4 fixed (PacketTooLarge at 1233 vs 1232 — one
+  byte, payload-less error); flagship ALT route END-TO-END for the first
+  time (11 receipts, abandoned table closed, nothing stranded); 17-act
+  table CONSERVED +0/+0. Life stops at WALL 5: the durable prestate
+  byte-pins SysvarClock — provable only where time freezes; §7.5 designs
+  the semantic band → LIFECYCLE-CLOCK spawned to implement + complete
+  resolve→redeem→retire + THE COMPLETE LIFE TABLE.
+- ★ COHORT-8 IS LIVE ON DEVNET (TRADE-5): all five roles at slots
+  490,814,947–490,849,793 (resolution AlreadyCurrent — the new evidence
+  kind, red-proved, its negative probe caught its own bug), deployment
+  set 97d49888…, THE SEAL FIX DEPLOYED. Two vol-derived markets founded
+  from measured $102.54 spot (market21 5w24EmP7… 6-cell, market22
+  8Xky2yx3… 4-cell), activated, admitted, delegation == debit exact.
+  Floor gate 1,263,176 with honest slack; TRADE-5 declined to quote a
+  tail probability (its model vs cohort-7's published number disagree
+  60x — reconcile queued). Spend 1.0694 SOL. THE TRADE PARKED at an
+  unexplained ChildFrame on BOTH markets (width + encoding refuted;
+  identical assembly passed locally) → TRADE-6 spawned: differential
+  forensics local-vs-devnet, then fire it + seal closes + fixtures.
+- REDPAIR done (693682de, suite 26/0, ELF byte-identical): late_custody
+  = HARDENING (410320ac's pre-CPI crosscheck provably subsumes every
+  destination class) — re-aimed onto an uninitialized Mint, a genuinely-
+  late Custody refusal; nonselected_claims = code-corrected to Commit
+  (39b75718 moved the class) with a sibling control proving no blanket
+  shift. Map facts: Custody 0x6006 propagates VERBATIM; slot-pinned
+  fixture env panics one fee-pair case (cache, not refusal).
+- ★ EVIDENCE-BRIDGE landed (5ab322da/1dc1c362, 532/532, 14 red-proofs +
+  7 on-chain both-ways): resolution goes CANNOT-BE-PLANNED → PLANNED.
+  Design docs/design/EVIDENCE_REFRESH_V1.md — a collector-authored
+  refresh generation over the advanceable set, eleven immutable pins
+  byte-identical, extended-not-relaxed. Convicted en route: 13 pins not
+  12 (claims_admission — admission mutates too), and direct_capability_
+  root names TWO addresses (one provably empty forever — the all-or-none
+  could never pass by construction). Behind it: 3 sized ALT-provisioning
+  defects incl. a real deadlock (clock-tracking resume identity vs
+  512-slot ALT expiry) → LIFECYCLE-ALT spawned to fix + complete the
+  life (resolve→redeem→retire, full closing table). Substrate died on
+  its own at 04:54, restored intact from ledger, conservation +0.
+- SIMLIFE-3 done (20 commits, web 1228/0): the intricate world REAL —
+  8 markets founded+activated on loopback, 288 censuses, conservation
+  100%, settling histogram NON-DEGENERATE (heaviest 37%; root cause was
+  units: price atoms vs cent cuts — the "same bucket" disease convicted);
+  spend ceilings built; /population shows the run for ember's morning.
+  Confirmed independently: WALL 7 (no second trade) + the evidence wall
+  ("resolution produced against a market since ADMITTED to" — routed to
+  EVIDENCE-BRIDGE: the refresh covers the mutation CLASS). 17GB reaped.
+- PORT done (50a77e64/cb8a2447, suite 21/4 → 23/2): 8 tests ported
+  (exhausting cases → GREEN ~1.30M), 13 stayed (continuation is their
+  subject), nothing weakened, ceiling unmoved. Growth attributed: the
+  SHARED hot path grew ~40k; top-level absorbed it via 0017-B's headroom.
+  2 route-independent reds adjudicated-not-papered → REDPAIR spawned
+  (early-refusal hardening-or-regression; Commit-vs-Transition code).
+  Option-B retirement debt inventoried (3 files + tooling couplings +
+  one dead leaf).
+- ★ GEN-SEVEN-3 done (4 commits): GENERAL AT 12/14 ACTIONS — order wire
+  repaired while free (fixed offsets + masked split digest), PlaceOrder/
+  CancelOrder/ReleaseOrder authored with real escrow economics (15
+  execution theorems, mutation witnesses each; 29 frame diagnostics → 0
+  en route). Choices 6-10 in WAVE (1978849a). Critical path to execution:
+  the runtime-dispatch unit (invocation V3 + accelerator bank paths) —
+  weeks-class, THE top post-night charter; candidate pair behind it;
+  CloseCandidate tag-14 ruling at the fourteen-cut.
+- GATES triage closed (55f3bf9a live-tree, bcc4a2920 public main): both
+  probe runners' macOS-only mktemp paths portable; postjoin cases routed
+  to their own suites row (a demoted route must not gate the production
+  tier — the right call); both inverted annotations rewritten ("if
+  direct_hot_top_level is green the margin is intact"). Coordination
+  routed to PORT.
+- ★ FIRST FEE SETTLEMENT ON A LIVE FILL (RETIRE-1, slot 19651, 178,649
+  CU): fee_owed 500,000→0, delegation spent to exactly zero, nonce gate
+  lifted, verified three ways; built the missing DCLTDFS1 caller route.
+  Closing table: net drift +0 across founding→fill→fee; mint-wide +0.
+  begin_retiring test landed (35a40233). WALLED at resolve: activation
+  creates the execution root OUTSIDE campaign evidence, nothing bridges
+  (sanctioned path proven nonexistent; declined to forge/relax) →
+  EVIDENCE-BRIDGE spawned (design-first refresh generation; then drive
+  resolution→redeem→retire on the preserved substrate). Substrate ledger
+  grows ~10GB/hr (~2 days runway).
+- ★ PUBLISH-4 LIVE (38579989d → pages 33369083491 green, 35/0 three-layer
+  verify): strike-five copy + full typographic rebuild + AGPL footer on
+  clutch.dregg.pro; `checks` workflow FULLY GREEN for the first time.
+  Its correction surfaced: the DEMOTED continuation route now exhausts
+  1,399,850 CU at 4 outcomes (production margin gate PASSED same run —
+  scoped to the harness-only tier) → PORT spawned (the packet-chartered
+  ~20-test port; compute rescue stays unchartered). CI triage fixes
+  routed to GATES (macOS mktemp path, POSTJOIN wiring, inverted
+  annotations).
+- direct_begin_retiring_v1's FIRST execution: 98,804 CU, 4 tests green,
+  refusals 0x4002/0x4003 with signer discriminated BY COMPUTE (7,280 vs
+  48,100); RETIRE-1 folding + driving the lifecycle.
 - DESIGN-2 done (7 commits): the type system enforced across all 9 pages
   (mono=values, sentences sans ≥13px); THE SVG FIND — viewBox scaled
   chart labels to 3.2px on small panels, now measured-11px everywhere

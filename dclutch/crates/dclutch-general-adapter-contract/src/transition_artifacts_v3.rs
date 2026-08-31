@@ -26,6 +26,8 @@
 //! safe to take one action at a time.
 
 use crate::effect_artifacts_v3::unauthored_actions;
+use dclutch_claims_svm::affine_batch_v2::DeltaDirectionV2;
+use dclutch_custody_contract::OperationV1;
 use dclutch_general_codec::Action;
 use dclutch_general_config_contract::GeneralLifecycleV2;
 use dclutch_transition_vm::v3::{
@@ -34,7 +36,9 @@ use dclutch_transition_vm::v3::{
 };
 
 use crate::{
-    collection_v1::{BatchStatusV1, GeneralBatchLayoutV1},
+    collection_v1::{
+        BatchStatusV1, GeneralBatchLayoutV1, GeneralOrderLayoutV1, GeneralOrderPhaseV1,
+    },
     hot_candidate_v3::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
         GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3, GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity,
@@ -77,6 +81,9 @@ pub const fn general_transition_program_bytes_lean_v3(action: Action) -> &'stati
         unauthored_actions!() => &[],
         Action::OpenBatch => &GENERAL_OPEN_BATCH_TRANSITION_V3,
         Action::CloseBatch => &GENERAL_CLOSE_BATCH_TRANSITION_V3,
+        Action::PlaceOrder => &GENERAL_PLACE_ORDER_TRANSITION_V3,
+        Action::CancelOrder => &GENERAL_CANCEL_ORDER_TRANSITION_V3,
+        Action::ReleaseOrder => &GENERAL_RELEASE_ORDER_TRANSITION_V3,
         Action::Consider => &GENERAL_CONSIDER_TRANSITION_V3,
         Action::Freeze => &GENERAL_FREEZE_TRANSITION_V3,
         Action::InitializeSettlement => &GENERAL_INITIALIZE_TRANSITION_V3,
@@ -101,6 +108,9 @@ pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, 
         unauthored_actions!() => (0, 0, 0),
         Action::OpenBatch => (26, 1, 0),
         Action::CloseBatch => (27, 1, 0),
+        Action::PlaceOrder => (45, 4, 0),
+        Action::CancelOrder => (49, 4, 0),
+        Action::ReleaseOrder => (42, 4, 0),
         Action::Consider => (15, 1, 0),
         Action::Freeze => (17, 1, 0),
         Action::InitializeSettlement => (21, 2, 0),
@@ -186,11 +196,14 @@ fn append_common(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
     // gate is what keeps them mirrored.
     let kind = match action {
         Action::Consider | Action::Freeze => GeneralLocalStateKindV3::Selection,
-        Action::OpenBatch | Action::PlaceOrder | Action::CancelOrder | Action::CloseBatch => {
+        // The register feeds the envelope an action CREATES (or, for a
+        // non-creating action, nothing at all): PlaceOrder creates the ORDER
+        // envelope even though its primary derived state is the batch window.
+        Action::OpenBatch | Action::CancelOrder | Action::CloseBatch => {
             GeneralLocalStateKindV3::Batch
         }
         Action::SubmitCandidate | Action::VerifyCandidateRow => GeneralLocalStateKindV3::Candidate,
-        Action::ReleaseOrder => GeneralLocalStateKindV3::Order,
+        Action::PlaceOrder | Action::ReleaseOrder => GeneralLocalStateKindV3::Order,
         _ => GeneralLocalStateKindV3::Settlement,
     };
     for instruction in [
@@ -459,7 +472,10 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                     s(scalar::SCRATCH_A)?,
                     u64::from(BatchStatusV1::Collecting.tag()),
                 ),
-                InstructionV3::scalar_eq(s(scalar::BATCH_STATUS_OBSERVATION)?, s(scalar::SCRATCH_A)?),
+                InstructionV3::scalar_eq(
+                    s(scalar::BATCH_STATUS_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
                 InstructionV3::load_const(
                     s(scalar::BATCH_POST_STATUS)?,
                     u64::from(BatchStatusV1::Closed.tag()),
@@ -480,7 +496,11 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                     s(scalar::SCRATCH_A)?,
                     s(scalar::SCRATCH_A)?,
                 ),
-                InstructionV3::min_into(s(scalar::SCRATCH_A)?, s(scalar::ONE)?, s(scalar::SCRATCH_A)?),
+                InstructionV3::min_into(
+                    s(scalar::SCRATCH_A)?,
+                    s(scalar::ONE)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
                 InstructionV3::min_into(
                     s(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
                     s(scalar::CONFIG_MAX_ORDERS)?,
@@ -491,7 +511,11 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                     s(scalar::SCRATCH_B)?,
                     s(scalar::SCRATCH_B)?,
                 ),
-                InstructionV3::min_into(s(scalar::SCRATCH_B)?, s(scalar::ONE)?, s(scalar::SCRATCH_B)?),
+                InstructionV3::min_into(
+                    s(scalar::SCRATCH_B)?,
+                    s(scalar::ONE)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
                 InstructionV3::checked_mul_into(
                     s(scalar::SCRATCH_A)?,
                     s(scalar::SCRATCH_B)?,
@@ -499,6 +523,403 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 ),
                 InstructionV3::load_const(s(scalar::SCRATCH_B)?, 0),
                 InstructionV3::scalar_eq(s(scalar::SCRATCH_A)?, s(scalar::SCRATCH_B)?),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
+        Action::PlaceOrder => {
+            for instruction in [
+                // The second derived state -- the order record this admission
+                // CREATES -- anchored exactly as a created secondary always is.
+                InstructionV3::scalar_eq(
+                    s(scalar::TERMINAL_RECORD_BUMP)?,
+                    s(scalar::TERMINAL_CANONICAL_BUMP)?,
+                ),
+                InstructionV3::identity_eq(
+                    i(identity::TERMINAL_OWNER)?,
+                    i(identity::TRADING_PROGRAM)?,
+                ),
+                InstructionV3::nonzero(s(scalar::TERMINAL_RENT_PRINCIPAL)?),
+                // The signed terms' width must be the Product width the
+                // prelude already equated with the batch's.
+                InstructionV3::scalar_eq(s(scalar::SCRATCH_A)?, s(scalar::OUTCOME_COUNT)?),
+                // Admission: a COLLECTING batch, inside its window, under its
+                // bound.
+                InstructionV3::load_const(s(scalar::ONE)?, 1),
+                InstructionV3::scalar_eq(s(scalar::BATCH_STATUS_OBSERVATION)?, s(scalar::ONE)?),
+                InstructionV3::scalar_lt(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+                ),
+                InstructionV3::scalar_lt(
+                    s(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
+                    s(scalar::CONFIG_MAX_ORDERS)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
+                    s(scalar::BATCH_POST_ORDER_COUNT)?,
+                ),
+                // THE EXPIRY PIN (recorded choice 6): the signed
+                // valid_until_slot IS the batch's settlement close, exactly.
+                InstructionV3::scalar_eq(
+                    s(scalar::ORDER_VALID_UNTIL_SLOT)?,
+                    s(scalar::BATCH_SETTLEMENT_CLOSE_SLOT)?,
+                ),
+                // The escrow the admission MOVES: the exact worst case, into
+                // the order's own vault, and the batch commits exactly that.
+                InstructionV3::nonzero(s(scalar::ORDER_MAX_LOTS)?),
+                InstructionV3::checked_mul_into(
+                    s(scalar::ORDER_MAX_LOTS)?,
+                    s(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                ),
+                InstructionV3::copy_scalar(
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                    s(scalar::CUSTODY_AMOUNT)?,
+                ),
+                InstructionV3::checked_add_into(
+                    s(scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?,
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                    s(scalar::BATCH_POST_QUOTE_RESERVE)?,
+                ),
+                // Record constants the EffectProgram writes into the vacant
+                // account. SCRATCH_A carried the signed terms' width until the
+                // equality above consumed it; from here it carries the record
+                // magic.
+                InstructionV3::load_const(
+                    s(scalar::ORDER_POST_PHASE)?,
+                    u64::from(GeneralOrderPhaseV1::Placed.tag()),
+                ),
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_B)?,
+                    u64::from(GeneralOrderLayoutV1::phase_value()),
+                ),
+                InstructionV3::load_const(s(scalar::SCRATCH_A)?, GeneralOrderLayoutV1::magic_u64()),
+                // The quote-deposit route's guard is a PROVEN consequence of
+                // the signed terms: active exactly when the reserve is
+                // nonzero.
+                InstructionV3::min_into(
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                    s(scalar::ONE)?,
+                    s(scalar::CUSTODY_ACTIVE)?,
+                ),
+                // The claims escrow-in: maker source (index zero) to the
+                // freshly admitted escrow Position (index one), nothing
+                // minted. A Position admit does not advance the Claims market,
+                // so the escrow transfer expects the same observation the
+                // admit did; a freshly admitted Position's revision is ZERO.
+                InstructionV3::increment_into(
+                    s(scalar::CLAIMS_MARKET_REVISION)?,
+                    s(scalar::CLAIMS_POST_MARKET_REVISION)?,
+                ),
+                InstructionV3::load_const(s(scalar::POSITION_ONE_REVISION)?, 0),
+                InstructionV3::load_const(s(scalar::CLAIMS_SOURCE_PRESENT)?, 1),
+                InstructionV3::load_const(s(scalar::CLAIMS_DESTINATION_PRESENT)?, 1),
+                InstructionV3::load_const(s(scalar::CLAIMS_SOURCE_POSITION_INDEX)?, 0),
+                InstructionV3::load_const(s(scalar::CLAIMS_DESTINATION_POSITION_INDEX)?, 1),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_AGGREGATE_DIRECTION)?,
+                    DeltaDirectionV2::Neutral as u64,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_SOURCE_DIRECTION)?,
+                    DeltaDirectionV2::Debit as u64,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_DESTINATION_DIRECTION)?,
+                    DeltaDirectionV2::Credit as u64,
+                ),
+                // The 0010 SS2a addressing discipline, deposit direction:
+                // atoms leave the MAKER's external account and claims leave
+                // the MAKER's Position, and both arrive at addresses keyed by
+                // the order's own identity.
+                InstructionV3::identity_eq(
+                    i(identity::DESTINATION_VAULT_CONTEXT)?,
+                    i(identity::ORDER)?,
+                ),
+                InstructionV3::identity_eq(i(identity::CUSTODY_SOURCE_OWNER)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::POSITION_ZERO_OWNER)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::POSITION_ONE_OWNER)?, i(identity::ORDER)?),
+                InstructionV3::identity_eq(
+                    i(identity::SETTLEMENT_POSITION_OWNER)?,
+                    i(identity::ORDER)?,
+                ),
+                InstructionV3::identity_eq(i(identity::RENT_CREDIT)?, i(identity::OWNER)?),
+                InstructionV3::load_const(
+                    s(scalar::CUSTODY_OPERATION)?,
+                    OperationV1::Transfer as u64,
+                ),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
+        Action::CancelOrder => {
+            for instruction in [
+                // The second derived state: the order the maker is cancelling,
+                // anchored the way settlement Close anchors its terminal
+                // record.
+                InstructionV3::scalar_eq(
+                    s(scalar::TERMINAL_RECORD_BUMP)?,
+                    s(scalar::TERMINAL_CANONICAL_BUMP)?,
+                ),
+                InstructionV3::identity_eq(
+                    i(identity::TERMINAL_OWNER)?,
+                    i(identity::TRADING_PROGRAM)?,
+                ),
+                InstructionV3::nonzero(s(scalar::TERMINAL_RENT_PRINCIPAL)?),
+                // The order record's width must be the Product width the
+                // prelude already equated with the batch's.
+                InstructionV3::scalar_eq(s(scalar::SCRATCH_A)?, s(scalar::OUTCOME_COUNT)?),
+                // Only while the batch COLLECTS, and only a PLACED order.
+                // `Collecting.tag()` and `Placed.tag()` are both one by
+                // construction, so one constant serves both conjuncts.
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_B)?,
+                    u64::from(BatchStatusV1::Collecting.tag()),
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::BATCH_STATUS_OBSERVATION)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::ORDER_PHASE_OBSERVATION)?,
+                    s(scalar::SCRATCH_B)?,
+                ),
+                InstructionV3::scalar_lt(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::BATCH_COLLECTION_CLOSE_SLOT)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::ORDER_POST_PHASE)?,
+                    u64::from(GeneralOrderPhaseV1::Cancelled.tag()),
+                ),
+                InstructionV3::copy_scalar(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::ORDER_POST_RELEASED_SLOT)?,
+                ),
+                InstructionV3::scalar_le(
+                    s(scalar::ORDER_ADMITTED_SLOT_OBSERVATION)?,
+                    s(scalar::CURRENT_SLOT)?,
+                ),
+                // The refund is the WHOLE reserve, exactly; the batch counter
+                // surrenders exactly what admission committed.
+                InstructionV3::checked_mul_into(
+                    s(scalar::ORDER_MAX_LOTS)?,
+                    s(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                ),
+                InstructionV3::copy_scalar(
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                    s(scalar::CUSTODY_AMOUNT)?,
+                ),
+                InstructionV3::sub_into(
+                    s(scalar::BATCH_QUOTE_RESERVE_OBSERVATION)?,
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                    s(scalar::BATCH_POST_QUOTE_RESERVE)?,
+                ),
+                // One more cancellation, never more than admissions.
+                InstructionV3::scalar_lt(
+                    s(scalar::BATCH_CANCELLED_COUNT_OBSERVATION)?,
+                    s(scalar::BATCH_ORDER_COUNT_OBSERVATION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::BATCH_CANCELLED_COUNT_OBSERVATION)?,
+                    s(scalar::BATCH_POST_CANCELLED_COUNT)?,
+                ),
+                // The teardown chain and the claims refund, exactly as
+                // ReleaseOrder's.
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_EXPECTED_REVISION)?,
+                    s(scalar::CUSTODY_RESULTING_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_RESULTING_REVISION)?,
+                    s(scalar::CUSTODY_CLOSE_VAULT_EXPECTED_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_CLOSE_VAULT_EXPECTED_REVISION)?,
+                    s(scalar::CUSTODY_CLOSE_VAULT_RESULTING_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_CLOSE_VAULT_RESULTING_REVISION)?,
+                    s(scalar::CUSTODY_CLOSE_REPLAY_RESULTING_REVISION)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CUSTODY_OPERATION)?,
+                    OperationV1::Transfer as u64,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CLAIMS_MARKET_REVISION)?,
+                    s(scalar::CLAIMS_POST_MARKET_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::POSITION_ZERO_REVISION)?,
+                    s(scalar::SETTLEMENT_POSITION_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::SETTLEMENT_POSITION_REVISION)?,
+                    s(scalar::SETTLEMENT_POST_POSITION_REVISION)?,
+                ),
+                InstructionV3::load_const(s(scalar::CLAIMS_SOURCE_PRESENT)?, 1),
+                InstructionV3::load_const(s(scalar::CLAIMS_DESTINATION_PRESENT)?, 1),
+                InstructionV3::load_const(s(scalar::CLAIMS_SOURCE_POSITION_INDEX)?, 0),
+                InstructionV3::load_const(s(scalar::CLAIMS_DESTINATION_POSITION_INDEX)?, 1),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_AGGREGATE_DIRECTION)?,
+                    DeltaDirectionV2::Neutral as u64,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_SOURCE_DIRECTION)?,
+                    DeltaDirectionV2::Debit as u64,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_DESTINATION_DIRECTION)?,
+                    DeltaDirectionV2::Credit as u64,
+                ),
+                // The 0010 SS2a addressing discipline, identical to
+                // ReleaseOrder's.
+                InstructionV3::identity_eq(i(identity::SOURCE_VAULT_CONTEXT)?, i(identity::ORDER)?),
+                InstructionV3::identity_eq(
+                    i(identity::CUSTODY_DESTINATION_OWNER)?,
+                    i(identity::OWNER)?,
+                ),
+                InstructionV3::identity_eq(i(identity::POSITION_ZERO_OWNER)?, i(identity::ORDER)?),
+                InstructionV3::identity_eq(i(identity::POSITION_ONE_OWNER)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(
+                    i(identity::SETTLEMENT_POSITION_OWNER)?,
+                    i(identity::ORDER)?,
+                ),
+                InstructionV3::identity_eq(i(identity::RENT_CREDIT)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::RENT_REFUND)?, i(identity::OWNER)?),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
+        Action::ReleaseOrder => {
+            for instruction in [
+                // Only a placed order releases, and it releases to Released. A
+                // vacant state account projects phase zero, which is not
+                // Placed, so a release aimed at an unoccupied address refuses.
+                InstructionV3::load_const(
+                    s(scalar::SCRATCH_A)?,
+                    u64::from(GeneralOrderPhaseV1::Placed.tag()),
+                ),
+                InstructionV3::scalar_eq(
+                    s(scalar::ORDER_PHASE_OBSERVATION)?,
+                    s(scalar::SCRATCH_A)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::ORDER_POST_PHASE)?,
+                    u64::from(GeneralOrderPhaseV1::Released.tag()),
+                ),
+                // The window gate, from the order alone: PlaceOrder pins the
+                // signed valid_until_slot to the batch's settlement close
+                // EXACTLY, so strictly-after-valid is strictly-after-the-window
+                // and no batch account enters the frame.
+                InstructionV3::scalar_lt(
+                    s(scalar::ORDER_VALID_UNTIL_SLOT)?,
+                    s(scalar::CURRENT_SLOT)?,
+                ),
+                InstructionV3::copy_scalar(
+                    s(scalar::CURRENT_SLOT)?,
+                    s(scalar::ORDER_POST_RELEASED_SLOT)?,
+                ),
+                InstructionV3::scalar_le(
+                    s(scalar::ORDER_ADMITTED_SLOT_OBSERVATION)?,
+                    s(scalar::CURRENT_SLOT)?,
+                ),
+                // The residual is the OBSERVED vault balance -- never computed
+                // -- and it can never exceed the exact worst case admission
+                // escrowed.
+                InstructionV3::checked_mul_into(
+                    s(scalar::ORDER_MAX_LOTS)?,
+                    s(scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT)?,
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                ),
+                InstructionV3::scalar_le(
+                    s(scalar::ESCROW_BALANCE_OBSERVATION)?,
+                    s(scalar::ORDER_QUOTE_RESERVE)?,
+                ),
+                InstructionV3::copy_scalar(
+                    s(scalar::ESCROW_BALANCE_OBSERVATION)?,
+                    s(scalar::CUSTODY_AMOUNT)?,
+                ),
+                // The four-route close suite advances one revision per Custody
+                // operation, the same chain settlement Close carries.
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_EXPECTED_REVISION)?,
+                    s(scalar::CUSTODY_RESULTING_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_RESULTING_REVISION)?,
+                    s(scalar::CUSTODY_CLOSE_VAULT_EXPECTED_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_CLOSE_VAULT_EXPECTED_REVISION)?,
+                    s(scalar::CUSTODY_CLOSE_VAULT_RESULTING_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::CUSTODY_CLOSE_VAULT_RESULTING_REVISION)?,
+                    s(scalar::CUSTODY_CLOSE_REPLAY_RESULTING_REVISION)?,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CUSTODY_OPERATION)?,
+                    OperationV1::Transfer as u64,
+                ),
+                // The claims residual advances the Claims market once; the
+                // escrow Position close that follows expects that successor,
+                // and the Position's close-time revision is its post-affine
+                // successor.
+                InstructionV3::increment_into(
+                    s(scalar::CLAIMS_MARKET_REVISION)?,
+                    s(scalar::CLAIMS_POST_MARKET_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::POSITION_ZERO_REVISION)?,
+                    s(scalar::SETTLEMENT_POSITION_REVISION)?,
+                ),
+                InstructionV3::increment_into(
+                    s(scalar::SETTLEMENT_POSITION_REVISION)?,
+                    s(scalar::SETTLEMENT_POST_POSITION_REVISION)?,
+                ),
+                // Constant residual row plumbing: the escrow Position is the
+                // sole source (index zero), the maker's the sole destination
+                // (index one), and a transfer mints nothing. The row count is
+                // deliberately unpinned: an omitted row leaves the Position
+                // nonzero and the Position close refuses -- fail-closed.
+                InstructionV3::load_const(s(scalar::CLAIMS_SOURCE_PRESENT)?, 1),
+                InstructionV3::load_const(s(scalar::CLAIMS_DESTINATION_PRESENT)?, 1),
+                InstructionV3::load_const(s(scalar::CLAIMS_SOURCE_POSITION_INDEX)?, 0),
+                InstructionV3::load_const(s(scalar::CLAIMS_DESTINATION_POSITION_INDEX)?, 1),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_AGGREGATE_DIRECTION)?,
+                    DeltaDirectionV2::Neutral as u64,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_SOURCE_DIRECTION)?,
+                    DeltaDirectionV2::Debit as u64,
+                ),
+                InstructionV3::load_const(
+                    s(scalar::CLAIMS_DESTINATION_DIRECTION)?,
+                    DeltaDirectionV2::Credit as u64,
+                ),
+                // The 0010 SS2a addressing discipline for every leg: the vault
+                // drawn on is the ORDER's own, the refunded owner is the
+                // record's maker, the closed Position is the order's, and
+                // every rent credit is the maker's.
+                InstructionV3::identity_eq(i(identity::SOURCE_VAULT_CONTEXT)?, i(identity::ORDER)?),
+                InstructionV3::identity_eq(
+                    i(identity::CUSTODY_DESTINATION_OWNER)?,
+                    i(identity::OWNER)?,
+                ),
+                InstructionV3::identity_eq(i(identity::POSITION_ZERO_OWNER)?, i(identity::ORDER)?),
+                InstructionV3::identity_eq(i(identity::POSITION_ONE_OWNER)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(
+                    i(identity::SETTLEMENT_POSITION_OWNER)?,
+                    i(identity::ORDER)?,
+                ),
+                InstructionV3::identity_eq(i(identity::RENT_CREDIT)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::RENT_REFUND)?, i(identity::OWNER)?),
             ] {
                 push(output, cursor, instruction)?;
             }
@@ -611,7 +1032,29 @@ fn append_item(action: Action, output: &mut [InstructionV3], cursor: &mut usize)
             cursor,
             InstructionV3::load_const(is(item_scalar::CURSOR_INVENTORY)?, 0),
         )?,
-        Action::Collect | Action::Distribute => {
+        // `ReleaseOrder` moves its residual claims through the same
+        // two-Position transfer shape as the settlement rows: nothing minted,
+        // source and destination magnitudes exactly the row quantity.
+        // `placeOrder` derives its escrow row from the signed terms: the
+        // claim reserve at each outcome is deliver-per-lot times the order's
+        // maximum fill, moved whole from the maker to the escrow.
+        Action::PlaceOrder => {
+            for instruction in [
+                InstructionV3::load_const(is(item_scalar::CLAIMS_AGGREGATE_MAGNITUDE)?, 0),
+                InstructionV3::checked_mul_into(
+                    is(item_scalar::QUANTITY)?,
+                    s(scalar::ORDER_MAX_LOTS)?,
+                    is(item_scalar::CLAIMS_SOURCE_MAGNITUDE)?,
+                ),
+                InstructionV3::copy_scalar(
+                    is(item_scalar::CLAIMS_SOURCE_MAGNITUDE)?,
+                    is(item_scalar::CLAIMS_DESTINATION_MAGNITUDE)?,
+                ),
+            ] {
+                push(output, cursor, instruction)?;
+            }
+        }
+        Action::Collect | Action::Distribute | Action::CancelOrder | Action::ReleaseOrder => {
             for instruction in [
                 InstructionV3::load_const(is(item_scalar::CLAIMS_AGGREGATE_MAGNITUDE)?, 0),
                 InstructionV3::scalar_eq(
@@ -682,7 +1125,7 @@ mod tests {
 
     const ACTIVE_LIFECYCLE: u64 = GeneralLifecycleV2::Active.tag() as u64;
 
-    const ACTIONS: [Action; 9] = [
+    const ACTIONS: [Action; 12] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -691,7 +1134,10 @@ mod tests {
         Action::Distribute,
         Action::Close,
         Action::OpenBatch,
+        Action::PlaceOrder,
+        Action::CancelOrder,
         Action::CloseBatch,
+        Action::ReleaseOrder,
     ];
 
     fn artifact(action: Action) -> std::vec::Vec<u8> {
@@ -824,6 +1270,33 @@ mod tests {
                 ),
                 GENERAL_CLOSE_BATCH_TRANSITION_BYTES_V3,
             ),
+            (
+                Action::PlaceOrder,
+                (
+                    GENERAL_PLACE_ORDER_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_PLACE_ORDER_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_PLACE_ORDER_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_PLACE_ORDER_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::CancelOrder,
+                (
+                    GENERAL_CANCEL_ORDER_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_CANCEL_ORDER_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_CANCEL_ORDER_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_CANCEL_ORDER_TRANSITION_BYTES_V3,
+            ),
+            (
+                Action::ReleaseOrder,
+                (
+                    GENERAL_RELEASE_ORDER_PRELUDE_INSTRUCTIONS_V3,
+                    GENERAL_RELEASE_ORDER_ITEM_INSTRUCTIONS_V3,
+                    GENERAL_RELEASE_ORDER_EPILOGUE_INSTRUCTIONS_V3,
+                ),
+                GENERAL_RELEASE_ORDER_TRANSITION_BYTES_V3,
+            ),
         ] {
             assert_eq!(
                 general_transition_instruction_count_v3(action),
@@ -882,13 +1355,7 @@ mod tests {
     /// by the decoder rather than treated as a permissive one.
     #[test]
     fn an_unauthored_action_borrows_no_lean_authored_program() {
-        for action in [
-            Action::PlaceOrder,
-            Action::CancelOrder,
-            Action::SubmitCandidate,
-            Action::VerifyCandidateRow,
-            Action::ReleaseOrder,
-        ] {
+        for action in [Action::SubmitCandidate, Action::VerifyCandidateRow] {
             let bytes = general_transition_program_bytes_lean_v3(action);
             assert!(bytes.is_empty(), "{action:?} borrowed a program");
             assert!(ProgramV3::decode(bytes).is_err());

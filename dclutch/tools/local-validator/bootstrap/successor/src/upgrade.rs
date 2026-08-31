@@ -10492,6 +10492,10 @@ mod tests {
                                 .expect("dump path"),
                             sha256: None,
                         },
+                        // This fixture builds only CarryForward and Upgrade
+                        // roles, and the field is present exactly when the
+                        // disposition is AlreadyCurrent.
+                        already_current: None,
                     }
                 })
                 .collect();
@@ -10911,6 +10915,7 @@ mod tests {
                         baseline: None,
                         receipt: receipt_ref,
                         dump: dump_ref,
+                        already_current: None,
                     });
                     continue;
                 }
@@ -11130,6 +11135,7 @@ mod tests {
                     }),
                     receipt: receipt_ref,
                     dump: dump_ref,
+                    already_current: None,
                 });
             }
 

@@ -459,11 +459,38 @@ tier_programs() {
   # both live in this tree, so running a working-tree harness against archived
   # ELFs would compare one revision's threshold to another revision's route --
   # and produce a number belonging to neither.
+  # THE THREE SKIPPED CASES, and why skipping them is the correct answer rather
+  # than the convenient one.
+  #
+  # They are `registry_hot_continuation` rows that each stage an isolated child
+  # ADVERSARY -- a corrupted Claims, Custody or Token program -- and prove
+  # Trading refuses the exact post-child mismatch and rolls the whole
+  # transaction back. They read `POSTJOIN_SBF_OUT_DIR` for those hostile ELFs.
+  # This tier builds the real release set and has no hostile directory to give
+  # them, and `POSTJOIN_SBF_OUT_DIR` appeared NOWHERE in this file, so all three
+  # failed here on an unset variable while proving nothing -- the same shape as
+  # the fee-leg probe above.
+  #
+  # Setting the variable is not the fix either. They exercise the Hot
+  # CONTINUATION, which decision 0030 demoted to harness-only after HEAPRED
+  # measured it +35,127 CU above the top-level route the public actually uses.
+  # A demoted route must not gate the production tier: this tier's red means the
+  # PUBLIC Direct route lost margin, and that sentence has to stay true.
+  #
+  # Their real home is `run-postjoin-hostiles.sh`, which builds both the real
+  # set and the three adversaries and sets all three variables itself. It is now
+  # a row of the `suites` tier, so these cases run -- they just run where their
+  # prerequisites exist. If a fourth hostile case is added and not listed here,
+  # it fails loudly in this tier rather than passing silently, which is the
+  # right way for this list to go stale.
   local result=0
   (cd "$build_root" && SBF_OUT_DIR="$elf_dir" cargo test \
     --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
     ${DCLUTCH_CI_PROGRAM_TESTS:+$DCLUTCH_CI_PROGRAM_TESTS} \
-    -- --nocapture) || result=1
+    -- --nocapture \
+    --skip nonselected_claims_supply_corruption_after_real_child_commit_rolls_back \
+    --skip omitted_token_close_authority_corruption_after_real_custody_commit_rolls_back \
+    --skip omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls_back) || result=1
 
   [ -n "$owned" ] && rm -rf -- "$elf_dir"
   [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
@@ -644,7 +671,8 @@ custody|programs/dclutch-custody-sbf/run-program-test.sh|Custody vault routes ag
 core|programs/dclutch-core-sbf/run-open-market-program-test.sh|every core program-test target, discovered from tests/
 claims|programs/dclutch-claims-sbf/run-rational-representation-v2-program-test.sh|the rational representation V2 lowering
 dealer|programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh|the dealer accelerator link and its family tests
-fee2tx|programs/dclutch-trading-sbf/program-test/run-fee-second-transaction.sh|the Direct fee leg in a transaction of its own, against real Custody"
+fee2tx|programs/dclutch-trading-sbf/program-test/run-fee-second-transaction.sh|the Direct fee leg in a transaction of its own, against real Custody
+postjoin|programs/dclutch-trading-sbf/program-test/run-postjoin-hostiles.sh|Trading refuses three isolated child adversaries and rolls the whole transaction back"
 
 tier_suites() {
   say "suites -- the other SBF program-test suites"
@@ -887,10 +915,12 @@ programs  minutes      cargo-build-sbf    the programs build with no SBF stack-
                                           Direct route holds its compute margin
                                           across 32 pinned seeds
 suites    ~15 min      cargo-build-sbf    the other SBF program-test suites:
-                                          custody, core, claims, dealer, and the
-                                          fee2tx probe. Each row runs the runner
-                                          its owning lane maintains, never a copy
-                                          of its ELF list
+                                          custody, core, claims, dealer, plus the
+                                          fee2tx and postjoin probes, which own
+                                          the cases the programs tier cannot
+                                          stage. Each row runs the runner its
+                                          owning lane maintains, never a copy of
+                                          its ELF list
 workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           from an archived revision. The general
                                           form of the journey break. Cut tier --

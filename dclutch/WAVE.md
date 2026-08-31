@@ -1353,3 +1353,18 @@ rather than taken from a lane's report.
   records + descriptors + ProgramSet + seal re-publish at the cut that
   ships fourteen actions (publication 68→131 then, not before); config
   record alone survives. Nothing deployed strands.
+
+- **GEN-SEVEN-3 choices recorded (landed 001dc90c/03e70826/62181cd5/
+  08a73840; General at 12/14 actions):** (6) PlaceOrder pins valid_until
+  == batch settlement_close_slot exactly (the one coordinate that could
+  strand escrow past every window; makes ReleaseOrder batch-free). (7) No
+  optimistic revision in order grammars — replay is address occupancy.
+  (8) Claims-refund row count unpinned — an omitted row fails closed at
+  the zero-vector Position close. (9) Subject honesty unproven in Hot by
+  design: a wrong subject yields an unfillable order, escrow maker-
+  recoverable. (10) Per-outcome terms rows ride the runtime bank channel
+  (profile grammar refuses item ops in dynamic-span profiles); the future
+  invocation path owns terms-to-bank fidelity. OPEN for the fourteen-cut:
+  ControllerActionV3::CloseCandidate (tag 14) ships with them or not —
+  ruling needed at that cut. Critical path to EXECUTION: the runtime-
+  dispatch unit (invocation_v1 V3 topology + accelerator bank paths).

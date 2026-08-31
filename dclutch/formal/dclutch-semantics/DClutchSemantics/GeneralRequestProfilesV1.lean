@@ -57,6 +57,57 @@ def batchCoordinates : List Operation := [
   ⟨.requireU8, false, false, 63, 0, 0⟩
 ]
 
+/-- ReleaseOrder. The subject (offset 24) is the ORDER's content identity and
+lands in identity 3 (`ORDER`) -- the register the order-state PDA recipe is
+keyed by -- and the primary bump witness in scalar 69. The optimistic-revision
+coordinate is REQUIRED ZERO: an order state carries no revision counter, its
+phase byte is the sole admission guard, and a free byte here would be an
+unauthenticated extension point. Everything else of the exact V3 grammar is
+required zero too: release is single-state and permissionless. -/
+def releaseOrderCoordinates : List Operation := [
+  ⟨.requireU8, false, false, 11, 0, 0⟩,
+  ⟨.requireU64, false, false, 16, 0, 0⟩,
+  ⟨.projectIdentity, false, false, 24, 3, 0⟩,
+  ⟨.requireU32, false, false, 56, 0, 0⟩,
+  ⟨.requireU8, false, false, 60, 0, 0⟩,
+  ⟨.projectU8, false, false, 61, 69, 0⟩,
+  ⟨.requireU8, false, false, 62, 0, 0⟩,
+  ⟨.requireU8, false, false, 63, 0, 0⟩
+]
+
+/-- CancelOrder. The subject (offset 24) is the ORDER's content identity in
+identity 3, the primary bump witness (the batch state) in scalar 69, and the
+secondary bump witness (the order state) in scalar 70 -- the same register
+Close projects its terminal bump into. No optimistic revision: the batch and
+order guards are their own status and phase bytes. -/
+def cancelOrderCoordinates : List Operation := [
+  ⟨.requireU8, false, false, 11, 0, 0⟩,
+  ⟨.requireU64, false, false, 16, 0, 0⟩,
+  ⟨.projectIdentity, false, false, 24, 3, 0⟩,
+  ⟨.requireU32, false, false, 56, 0, 0⟩,
+  ⟨.requireU8, false, false, 60, 0, 0⟩,
+  ⟨.projectU8, false, false, 61, 69, 0⟩,
+  ⟨.projectU8, false, false, 62, 70, 0⟩,
+  ⟨.requireU8, false, false, 63, 0, 0⟩
+]
+
+/-- PlaceOrder. The subject (offset 24) is the ORDER's content identity --
+the masked digest of exactly the bytes the maker signed -- in identity 3, the
+primary bump witness (the batch window) in scalar 69, and the secondary bump
+witness (the order record this admission creates) in scalar 70. No optimistic
+revision: the batch's status byte and the vacant order address are the
+guards. -/
+def placeOrderCoordinates : List Operation := [
+  ⟨.requireU8, false, false, 11, 0, 0⟩,
+  ⟨.requireU64, false, false, 16, 0, 0⟩,
+  ⟨.projectIdentity, false, false, 24, 3, 0⟩,
+  ⟨.requireU32, false, false, 56, 0, 0⟩,
+  ⟨.requireU8, false, false, 60, 0, 0⟩,
+  ⟨.projectU8, false, false, 61, 69, 0⟩,
+  ⟨.projectU8, false, false, 62, 70, 0⟩,
+  ⟨.requireU8, false, false, 63, 0, 0⟩
+]
+
 def manifestOrderCoordinate : List Operation := [
   ⟨.projectU8, false, false, 11, 87, 0⟩
 ]
@@ -114,6 +165,12 @@ def profile (action : Action) : Profile := {
   fixedOperations :=
     if action = .openBatch || action = .closeBatch then
       requirePrefixV3 action ++ batchCoordinates
+    else if action = .placeOrder then
+      requirePrefixV3 action ++ placeOrderCoordinates
+    else if action = .cancelOrder then
+      requirePrefixV3 action ++ cancelOrderCoordinates
+    else if action = .releaseOrder then
+      requirePrefixV3 action ++ releaseOrderCoordinates
     else
       requirePrefix action ++
         (if action = .collect || action = .distribute then manifestOrderCoordinate
@@ -126,7 +183,7 @@ def profile (action : Action) : Profile := {
 
 def actions : List Action := [
   .consider, .freeze, .initializeSettlement, .collect, .materialize, .distribute, .close,
-  .openBatch, .closeBatch
+  .openBatch, .placeOrder, .cancelOrder, .closeBatch, .releaseOrder
 ]
 
 def profiles : List Profile := actions.map profile
@@ -177,11 +234,15 @@ theorem settlement_rows_alone_project_manifest_order :
           operation.requestOffset = 11 ∧ operation.immediate = 0)) := by
   native_decide
 
-theorem close_alone_projects_terminal_record_bump :
-    (profile .close).fixedOperations.any
+/-- Exactly the two-state actions project the secondary bump witness: Close
+for its terminal record, PlaceOrder for the order it creates, CancelOrder for
+the order it flips. Every other grammar requires the byte zero. -/
+theorem only_the_two_state_actions_project_the_secondary_bump :
+    ([Action.close, .placeOrder, .cancelOrder].all fun action =>
+      (profile action).fixedOperations.any
         (fun operation => operation.kind = .projectU8 ∧
-          operation.requestOffset = 62 ∧ operation.register = 70) ∧
-      (actions.erase .close).all fun action =>
+          operation.requestOffset = 62 ∧ operation.register = 70)) ∧
+      (((actions.erase .close).erase .placeOrder).erase .cancelOrder).all fun action =>
         (profile action).fixedOperations.any
           (fun operation => operation.kind = .requireU8 ∧
             operation.requestOffset = 62 ∧ operation.immediate = 0) := by
@@ -203,5 +264,38 @@ theorem the_batch_pair_speaks_the_v3_request :
         operation.kind = .projectIdentity && operation.requestOffset = 24 &&
           operation.register = 29)) = true ∧
     requestMagicWordV3 ≠ requestMagicWord := by native_decide
+
+/-- ReleaseOrder speaks the V3 request, names its order in the PDA-keyed
+register, and admits no optimistic-revision coordinate at all: the byte range
+is required zero rather than projected anywhere. -/
+theorem release_order_names_its_order_and_carries_no_revision :
+    ((profile .releaseOrder).fixedOperations.any (fun operation =>
+        operation.kind = .requireU64 && operation.requestOffset = 0 &&
+          operation.immediate = requestMagicWordV3) &&
+      (profile .releaseOrder).fixedOperations.any (fun operation =>
+        operation.kind = .projectIdentity && operation.requestOffset = 24 &&
+          operation.register = 3) &&
+      (profile .releaseOrder).fixedOperations.any (fun operation =>
+        operation.kind = .requireU64 && operation.requestOffset = 16 &&
+          operation.immediate = 0) &&
+      (profile .releaseOrder).fixedOperations.all (fun operation =>
+        operation.requestOffset ≠ 16 || operation.kind ≠ .projectU64)) = true := by
+  native_decide
+
+/-- CancelOrder speaks the V3 request, names its order in the PDA-keyed
+register, projects BOTH bump witnesses, and carries no revision coordinate. -/
+theorem cancel_order_names_its_order_and_projects_both_bumps :
+    ((profile .cancelOrder).fixedOperations.any (fun operation =>
+        operation.kind = .requireU64 && operation.requestOffset = 0 &&
+          operation.immediate = requestMagicWordV3) &&
+      (profile .cancelOrder).fixedOperations.any (fun operation =>
+        operation.kind = .projectIdentity && operation.requestOffset = 24 &&
+          operation.register = 3) &&
+      (profile .cancelOrder).fixedOperations.any (fun operation =>
+        operation.kind = .projectU8 && operation.requestOffset = 62 &&
+          operation.register = 70) &&
+      (profile .cancelOrder).fixedOperations.all (fun operation =>
+        operation.requestOffset ≠ 16 || operation.kind ≠ .projectU64)) = true := by
+  native_decide
 
 end DClutch.General.RequestProfilesV1

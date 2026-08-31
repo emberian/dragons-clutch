@@ -293,6 +293,61 @@ fn meta_pair(pair: &RecordPair) -> Result<[AccountMeta; 2]> {
     ])
 }
 
+/// The Direct **execution** capability root, and the selection that names it.
+///
+/// Not to be confused with the founding checkpoint's `direct_capability_root`,
+/// which is the FOUNDING-PERMIT namespace address and at which no account can
+/// ever exist (see the comment in [`run`] and
+/// `docs/design/EVIDENCE_REFRESH_V1.md` §3). This is the address activation
+/// creates and the address the terminal sequence means.
+pub(crate) struct DirectExecutionRootV1 {
+    pub(crate) root: Pubkey,
+    pub(crate) selection: dclutch_release_set_contract::CapabilityExecutionSelectionV1,
+}
+
+/// Derive the Direct execution capability root from its authors alone.
+///
+/// Pure: every argument is either a program identity from the pinned plan or a
+/// fact read from finalized chain state by the caller. Nothing here is a
+/// caller-supplied projection, so a second entry that reaches this function
+/// with chain-read arguments derives the same address the activation driver
+/// derived, by the same authors, or fails (O-016).
+pub(crate) fn direct_execution_root_v1(
+    trading: Pubkey,
+    release_set: Identity,
+    market: Pubkey,
+    generation: u64,
+    entry_index: u16,
+    manifest_body: &[u8],
+) -> Result<DirectExecutionRootV1> {
+    let manifest = CapabilityManifestV1::decode(manifest_body)
+        .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
+    let entry = manifest
+        .entry(entry_index)
+        .map_err(|error| Error::new(format!("manifest entry {entry_index}: {error:?}")))?;
+    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
+        entry_index,
+        ContentId::new(<[u8; 32]>::from(Sha256::digest(manifest_body)))
+            .map_err(|_| Error::new("manifest identity".to_string()))?,
+        entry.kind_id(),
+        entry.release_id(),
+        entry.config_id(),
+    )
+    .map_err(|error| Error::new(format!("execution selection: {error:?}")))?;
+    let root_header = CapabilityRootHeaderV1::new(
+        ContentId::new(release_set.to_bytes()).map_err(|_| Error::new("release set".to_string()))?,
+        market.to_bytes(),
+        generation,
+        selection,
+        SelectedRecordBumpsV1::default(),
+    )
+    .map_err(|error| Error::new(format!("root header: {error:?}")))?;
+    Ok(DirectExecutionRootV1 {
+        root: Pubkey::find_program_address(&root_header.seeds().as_slices(), &trading).0,
+        selection,
+    })
+}
+
 pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
     run(arguments, ExpectedClusterV1::Devnet)
 }
@@ -504,27 +559,22 @@ fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
     }
 
     // The root coordinate: derived from the header seeds and cross-checked
-    // against the founding's own checkpoint scalar.
-    let selection = dclutch_release_set_contract::CapabilityExecutionSelectionV1::new(
-        entry_index,
-        ContentId::new(<[u8; 32]>::from(Sha256::digest(&manifest_body)))
-            .map_err(|_| Error::new("manifest identity".to_string()))?,
-        entry.kind_id(),
-        entry.release_id(),
-        entry.config_id(),
-    )
-    .map_err(|error| Error::new(format!("execution selection: {error:?}")))?;
-    let root_header = CapabilityRootHeaderV1::new(
-        ContentId::new(release_set.to_bytes())
-            .map_err(|_| Error::new("release set".to_string()))?,
-        market.to_bytes(),
-        generation,
-        selection,
-        SelectedRecordBumpsV1::default(),
-    )
-    .map_err(|error| Error::new(format!("root header: {error:?}")))?;
+    // against the founding's own checkpoint scalar. The derivation is SHARED
+    // with the post-activation evidence refresh
+    // (`docs/design/EVIDENCE_REFRESH_V1.md` §3, §4) rather than restated there:
+    // a refresh that reached this address by a second implementation could
+    // emit a root row describing an account this driver never created.
     let trading = pubkey(&plan.trading.program_id)?;
-    let (root, _) = Pubkey::find_program_address(&root_header.seeds().as_slices(), &trading);
+    let derived = direct_execution_root_v1(
+        trading,
+        release_set,
+        market,
+        generation,
+        entry_index,
+        &manifest_body,
+    )?;
+    let selection = derived.selection;
+    let root = derived.root;
     if let Some(existing) = rpc.account(root)? {
         if existing.owner == trading && !existing.data.is_empty() {
             let tail = existing

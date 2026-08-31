@@ -104,6 +104,40 @@ def campaign_public_identities(probe: Path) -> dict:
     return identities
 
 
+def substrate_source_revision(args, probe: Path):
+    """The revision the programs ON THIS CHAIN were built from.
+
+    A HELD probe has no `SUMMARY.json` -- it is SIGSTOPed at the participant
+    boundary and writes that file only when it finishes -- so reading the
+    revision from there produced a capture labelled with no substrate at all,
+    which is the one thing a published artifact must never be. The checked
+    release's own gate names it, and that is the authority: those are the bytes
+    the validator loaded.
+    """
+    root = getattr(args, "release_root", None)
+    if root:
+        gate = Path(root) / "CHECKED_UPGRADE_GATE.json"
+        if not gate.is_file():
+            raise Refusal(f"checked release gate absent: {gate}")
+        revision = load(gate, "checked release gate").get("source_revision")
+        if not isinstance(revision, str) or len(revision) != 40:
+            raise Refusal("the checked release gate names no forty-character source revision")
+        return revision
+    summary = probe / "SUMMARY.json"
+    if summary.is_file():
+        try:
+            found = json.loads(summary.read_text()).get("source_revision")
+        except ValueError:
+            found = None
+        if isinstance(found, str) and len(found) == 40:
+            return found
+    raise Refusal(
+        "no source revision for this substrate: pass --release-root so the capture can say "
+        "which programs it was driven against. A held probe has no SUMMARY.json, and a capture "
+        "that names no substrate is the one thing a published artifact must not be"
+    )
+
+
 def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
                          key_directory: str) -> int:
     """One `dclutch-simlife-config-v1` for the lifecycle substrate.
@@ -129,13 +163,7 @@ def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
         if not (keys / required).is_file():
             raise Refusal(f"the probe's key directory has no {required}, which a Direct trade reads")
     identities = campaign_public_identities(probe)
-    summary = probe / "SUMMARY.json"
-    revision = None
-    if summary.is_file():
-        try:
-            revision = json.loads(summary.read_text()).get("source_revision")
-        except ValueError:
-            revision = None
+    revision = substrate_source_revision(args, probe)
     config = {
         "schema": SIMLIFE_SCHEMA_V1,
         "cluster": {"label": "local", "rpc_url": rpc_url},
@@ -167,8 +195,7 @@ def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
         },
         "bindings": {},
     }
-    if revision:
-        config["source_revision"] = revision
+    config["source_revision"] = revision
     if args.solana_keygen:
         if not Path(args.solana_keygen).is_file():
             raise Refusal(f"solana-keygen absent: {args.solana_keygen}")
@@ -227,6 +254,9 @@ def main(argv=None) -> int:
                         help="solana-keygen, which the lifecycle substrate uses to make "
                              "one disposable key per founding role and participant wallet")
     parser.add_argument("--substrate-label")
+    parser.add_argument("--release-root",
+                        help="the checked release the substrate's programs were built from; its "
+                             "gate names the source revision this run was driven against")
     parser.add_argument("--pyth-facts",
                         help="a dclutch-flagship-pyth-update-facts-v1 document; without one "
                              "every resolution refuses, because the producer will not invent "

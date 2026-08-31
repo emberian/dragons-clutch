@@ -1134,6 +1134,41 @@ activation-v1` existed, no local Direct fill was reachable at any market width.
                 drivers.drive_fill(context, founded, "p0>p1", report)
             self.assertIn("twice in a row without finalizing", str(caught.exception))
 
+    def test_two_stages_sharing_a_schema_are_progress_and_not_a_stall(self):
+        """Schema alone is too coarse, and it cost a hand-run its trade.
+
+        `replay-setup` and `token-setup` both print
+        `dclutch-direct-trade-setup-journal-v1`, so a stall check keyed on the
+        schema saw one word after two consecutive FINALIZED actions and called a
+        working trade stuck.
+        """
+        setup = "dclutch-direct-trade-setup-journal-v1"
+        replay = drivers._direct_trade_progress(
+            json.dumps({"schema": setup, "stage": "replay-setup", "phase": "finalized"})
+        )
+        token = drivers._direct_trade_progress(
+            json.dumps({"schema": setup, "stage": "token-setup", "phase": "finalized"})
+        )
+        self.assertNotEqual(replay, token)
+        self.assertEqual(replay[0], token[0], "the schema really is the same")
+        # And the same is true one level down: three consecutive lookup-extend
+        # actions share a schema AND a stage, and each finalizes its own
+        # transaction. Only the whole document separates them.
+        journal = "dclutch-owned-loopback-direct-trade-journal-v1"
+        first = drivers._direct_trade_progress(json.dumps(
+            {"schema": journal, "stage": "lookup-extend", "phase": "finalized", "slot": 11},
+        ))
+        second = drivers._direct_trade_progress(json.dumps(
+            {"schema": journal, "stage": "lookup-extend", "phase": "finalized", "slot": 12},
+        ))
+        self.assertNotEqual(first, second)
+        self.assertEqual(first[:2], second[:2], "schema and stage really are the same")
+        # A driver that truly does not advance prints the SAME report.
+        self.assertEqual(first, drivers._direct_trade_progress(json.dumps(
+            {"schema": journal, "stage": "lookup-extend", "phase": "finalized", "slot": 11},
+        )))
+        self.assertIsNone(drivers._direct_trade_progress("not json"))
+
     def test_one_taker_per_market_because_the_fixture_is_one_constant(self):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
@@ -1235,6 +1270,30 @@ class LifecycleSubstrateTests(unittest.TestCase):
             result = substrate.execute(event, market)
             self.assertEqual(result.outcome, simlife.OUTCOME_UNATTEMPTED)
             self.assertIn("local-private-validator-market-v1", result.detail)
+
+    def test_one_address_gets_one_label_or_the_census_counts_it_twice(self):
+        """The census sums PER ACCOUNT, so a duplicate is atoms from nowhere.
+
+        Measured: a re-walk over a chain this run had already touched brought
+        the holder's participant token account back from the prior scan as
+        `prior_01` while the admission also named it `holder_m04-p0`, and L1
+        refused with `tracked 228894899 != Mint supply 178644899` -- fifty
+        million atoms more than the Mint had ever issued. The census was right
+        and the caption was wrong, which is the law's whole purpose.
+        """
+        binding = drive.LifecycleSubstrate._dedupe_tokens({
+            "tokens": {
+                "holder_m04-p0": "SAME", "prior_01": "SAME",
+                "founder_wallet": "OTHER", "prior_00": "THIRD",
+            },
+        })
+        self.assertEqual(len(binding["tokens"]), 3)
+        self.assertEqual(sorted(binding["tokens"].values()), ["OTHER", "SAME", "THIRD"])
+        # The descriptive label survives, because a reader should see the name
+        # that says what the account is.
+        self.assertIn("holder_m04-p0", binding["tokens"])
+        self.assertNotIn("prior_01", binding["tokens"])
+        self.assertIn("prior_00", binding["tokens"], "an unduplicated prior is still named")
 
     def test_a_lifecycle_config_without_its_founding_identities_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:

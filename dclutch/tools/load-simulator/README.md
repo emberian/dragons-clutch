@@ -237,6 +237,14 @@ multi-thousand-slot chunks, and a purge landing between two stages strands the
 journal permanently — the later stage can no longer authenticate the earlier
 one, and no retry recovers it.
 
+**Budget about 470 KB per slot for it.** Measured: 5.9 GB by slot 12,779 on the
+first-fill run and 9.9 GB by slot 21,000 on the population run, on sessions
+landing well under a hundred transactions each — the bytes are the validator's
+own block and shred bookkeeping, not campaign traffic. A multi-hour world is
+tens of gigabytes, several concurrent lanes are more than that, and this machine
+has already lost a night to a full volume. Reap a session's ledger once its
+evidence is captured.
+
 ## Devnet flip
 
 Same loop, config swapped: `cluster.label = "devnet"`, an https RPC URL,

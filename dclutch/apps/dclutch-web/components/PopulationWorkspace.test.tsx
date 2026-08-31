@@ -181,7 +181,14 @@ describe('where the answers landed', () => {
   });
 
   it('says a capture predating the histogram predates it, rather than drawing zero', () => {
-    const html = renderToStaticMarkup(<OutcomeSpread series={capture} />);
+    // Built explicitly rather than taken from the committed capture: that
+    // capture now CARRIES a histogram, and a test that reached for it would
+    // have quietly stopped exercising this branch the moment it did.
+    const older = capture.world === null ? capture : {
+      ...capture,
+      world: { ...capture.world, outcomeSpread: null },
+    };
+    const html = renderToStaticMarkup(<OutcomeSpread series={older} />);
     expect(html).toContain('predates');
     expect(html).not.toContain('0/10');
   });

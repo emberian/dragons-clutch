@@ -104,6 +104,7 @@ use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_release_tool::{CHECKED_MULTIPROGRAM_BYTES_V1, CheckedExecutionReleaseSetV1};
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_token_svm::{AccountState, COption, Mint, TokenAccount};
 use solana_address_lookup_table_interface::{
     instruction::{create_lookup_table, extend_lookup_table, freeze_lookup_table},
@@ -954,9 +955,15 @@ pub struct DirectInlineChildAuthoritiesV3 {
     pub claims_request_digest: [u8; 32],
     /// Claims child caller-authority PDA.
     pub claims_authority: Pubkey,
-    /// Custody child request digests in Effect route order.
+    /// Custody child request digests in FIXED SLOT order.
+    ///
+    /// The slots are the four request shapes a Direct inline execution can
+    /// take -- seller terminal, seller intermediate, fee continuation, fee
+    /// sole -- and NOT the order the Effect executes them in. Which one
+    /// actually runs is `DirectInlineEffectDispatchV2::custody_slots`, and
+    /// exactly one of the four does.
     pub custody_request_digests: [[u8; 32]; 4],
-    /// Custody child caller-authority PDAs in Effect route order.
+    /// Custody child caller-authority PDAs in FIXED SLOT order, as above.
     pub custody_authorities: [Pubkey; 4],
     /// Canonical bump of `claims_authority`, mined here so Trading need not.
     ///
@@ -967,8 +974,36 @@ pub struct DirectInlineChildAuthoritiesV3 {
     /// seeds itself and refuses unless the address reproduces the account at
     /// coordinate 0. See `HotBumpHintsV1`.
     pub claims_authority_bump: u8,
-    /// Canonical bumps of `custody_authorities`, in the same order.
+    /// Canonical bumps of `custody_authorities`, in the same FIXED SLOT order.
+    ///
+    /// Indexing this array with a literal is a bug. The slot that runs depends
+    /// on the settlement: `expected_custody_slots` picks slot 0 only when
+    /// `total_fee_transfer == 0`, and slot 1 whenever a fee is transferred.
+    /// Use `child_caller_bumps`, which is already ordered the way the on-chain
+    /// walk assigns its hint slots.
     pub custody_authority_bumps: [u8; 4],
+    /// The two `HotBumpHintsV1::child_caller` slots, ready to hand to the hot
+    /// envelope with no indexing at the call site.
+    ///
+    /// The on-chain walk numbers its hint slots route-major over child
+    /// INVOCATIONS (`hot_v3::child_caller_hint_v1` reads `child_caller[ordinal]`),
+    /// so for InlineOrdinary slot 0 is the Claims route and slot 1 is the ONE
+    /// enabled Custody route. That route is named by
+    /// `DirectInlineEffectDispatchV2::custody_slots` and is slot 1 of the fixed
+    /// four for every fee-bearing fill, so a caller that reached into
+    /// `custody_authority_bumps[0]` mined the ZERO-FEE route's bump and the
+    /// program refused `Release` reproducing it. This field exists so that
+    /// mistake has nowhere left to live.
+    ///
+    /// A hint is a memo and never an authority: a wrong one reproduces a
+    /// different address and refuses, and a zero searches.
+    pub child_caller_bumps: [u8; 2],
+    /// Which of the four fixed Custody slots this execution actually runs.
+    ///
+    /// Reported because it is the fact `child_caller_bumps[1]` turns on, and a
+    /// bump byte is too coarse to test against: two Custody routes routinely
+    /// share one. `None` means no Custody child runs.
+    pub enabled_custody_slot: Option<u8>,
 }
 
 /// Release-authenticated program and ProgramData coordinates used by Direct.
@@ -1935,13 +1970,37 @@ struct DirectMakerRouteFactsV3 {
     next_nonce: u64,
 }
 
+/// Authenticate one maker replay root, or project the one the chain will create.
+///
+/// `rent_beneficiary` is the wallet the Trading program will record as the
+/// root's rent owner when it creates it, and it must be the founding lifecycle
+/// RentCredit's `refund_wallet()` — never the payer. `hot_v3.rs` builds
+/// `MakerReplayFirstUseV1` with `rent_owner: plan.beneficiary`, and that
+/// beneficiary comes from the RentCredit, because a maker replay root is a
+/// shared structure of the MARKET: if its rent followed whoever paid, a stranger
+/// paying their own fees would walk away owning the rent of something the market
+/// depends on, and this route deliberately admits that stranger as the payer.
+///
+/// This projection previously answered `payer`, and that was the same stale
+/// model `9d4935d2` corrected in the producer's `maker_facts_v1` — a
+/// hand-written duplicate the producer's fix did not reach.
+///
+/// It stayed hidden for the least comfortable reason: BOTH sides were wrong
+/// together. A market's first fill is exactly where this branch runs, because
+/// the Hot action is what creates the maker roots (`direct_replay_setup_v1`
+/// creates the Custody replay, not these). While the producer also answered
+/// `payer`, the two agreed, the equality below passed, and the error survived
+/// as far as the poststate check that FILL-2 measured. Correcting only the
+/// producer broke the agreement and turned a landed-but-wrong fill into a
+/// `ChildFrame` refusal on these 32 bytes, with every other field of the
+/// authenticated context already equal. Half a duplicate is worse than none.
 fn authenticate_direct_maker_route_v3(
     account: &ObservedAccount,
     trading: Pubkey,
     market: [u8; 32],
     generation: u64,
     maker: Pubkey,
-    payer: Pubkey,
+    rent_beneficiary: Pubkey,
     rent: &solana_program::rent::Rent,
 ) -> Result<DirectMakerRouteFactsV3, DirectInlineRouteErrorV3> {
     let coordinates = DirectCoordinatesV1::new(market, generation)
@@ -1960,7 +2019,7 @@ fn authenticate_direct_maker_route_v3(
             rent_principal_observation: 0,
             rent_principal: rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1),
             rent_beneficiary_observation: [0; 32],
-            rent_beneficiary: payer.to_bytes(),
+            rent_beneficiary: rent_beneficiary.to_bytes(),
             next_nonce: 0,
         });
     }
@@ -2028,13 +2087,23 @@ fn authenticate_direct_ordinary_context_v3(
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
 
+    // The rent owner a created maker root will carry comes from the founding
+    // lifecycle RentCredit the chain itself reads, not from who is paying for
+    // this one trade. `authenticate_named_route_v3` has already proven this
+    // account is owned by the route's rent program.
+    let maker_rent_beneficiary = Pubkey::new_from_array(
+        LifecycleRentCreditV2::decode(&route.lifecycle_rent_credit.data)
+            .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+            .refund_wallet()
+            .to_bytes(),
+    );
     let seller = authenticate_direct_maker_route_v3(
         &route.seller_maker,
         fixed.trading_program.key,
         fixed.market.key.to_bytes(),
         core.identity.generation,
         authentication.seller.maker,
-        route.payer.key,
+        maker_rent_beneficiary,
         &rent,
     )?;
     let buyer = authenticate_direct_maker_route_v3(
@@ -2043,7 +2112,7 @@ fn authenticate_direct_ordinary_context_v3(
         fixed.market.key.to_bytes(),
         core.identity.generation,
         authentication.buyer.maker,
-        route.payer.key,
+        maker_rent_beneficiary,
         &rent,
     )?;
 
@@ -2255,6 +2324,41 @@ fn has_duplicate(keys: &[Pubkey]) -> bool {
         .any(|(index, key)| keys.iter().take(index).any(|earlier| earlier == key))
 }
 
+/// Order the two `child_caller` hint slots the way the on-chain walk reads them.
+///
+/// `hot_v3::child_caller_hint_v1` indexes `HotBumpHintsV1::child_caller` by the
+/// child INVOCATION ordinal, route-major, so for InlineOrdinary slot 0 is the
+/// Claims route and slot 1 is the one enabled Custody route. `custody_slots`
+/// names that route; the four-slot arrays are in FIXED shape order and indexing
+/// them with a literal is the bug this function exists to make unrepresentable.
+///
+/// Returns the hint block and which Custody slot it followed.
+fn child_caller_hint_slots_v1(
+    claims_authority_bump: u8,
+    custody_authority_bumps: [u8; 4],
+    dispatch: dclutch_direct_codec::inline_candidate_v2::DirectInlineEffectDispatchV2,
+) -> Result<([u8; 2], Option<u8>), DirectInlineRouteErrorV3> {
+    let enabled = dispatch
+        .custody_slots
+        .get(..usize::from(dispatch.custody_count))
+        .and_then(<[u8]>::first)
+        .copied();
+    match enabled {
+        Some(slot) => Ok((
+            [
+                claims_authority_bump,
+                *custody_authority_bumps
+                    .get(usize::from(slot))
+                    .ok_or(DirectInlineRouteErrorV3::ChildFrame)?,
+            ],
+            Some(slot),
+        )),
+        // No Custody child runs, so the second slot is ABSENT and the walk
+        // searches for whatever it does reach: correct, and merely slower.
+        None => Ok(([claims_authority_bump, 0], None)),
+    }
+}
+
 fn derive_child_authorities(
     context: DirectOrdinaryAuthenticatedContextV3,
     family_request: [u8; crate::direct_inline_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3],
@@ -2311,6 +2415,11 @@ fn derive_child_authorities(
     {
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
+    let (child_caller_bumps, enabled_custody_slot) = child_caller_hint_slots_v1(
+        claims_authority_bump,
+        custody_authority_bumps,
+        projected.dispatch,
+    )?;
     Ok(DirectInlineChildAuthoritiesV3 {
         family_request,
         claims_request_digest,
@@ -2319,6 +2428,8 @@ fn derive_child_authorities(
         custody_authorities,
         claims_authority_bump,
         custody_authority_bumps,
+        child_caller_bumps,
+        enabled_custody_slot,
     })
 }
 
@@ -3977,9 +4088,9 @@ mod tests {
         admit_direct_inline_devnet_account_lock_count_v3,
         assemble_authenticated_direct_inline_ordinary_route_v3,
         build_direct_inline_capability_seal_v3, build_direct_inline_lookup_table_provision_v3,
-        compile_direct_inline_capability_seal_routed_v0_v3, compile_direct_inline_routed_v0_v3,
-        derive_direct_inline_child_authorities_v3, insert_once, merge_placement,
-        prepare_direct_inline_hot_finalization_v3,
+        child_caller_hint_slots_v1, compile_direct_inline_capability_seal_routed_v0_v3,
+        compile_direct_inline_routed_v0_v3, derive_direct_inline_child_authorities_v3, insert_once,
+        merge_placement, prepare_direct_inline_hot_finalization_v3,
         project_direct_inline_sealed_execution_physical_v3,
         project_direct_inline_sealed_execution_report_v3, verify_direct_inline_capability_seal_v3,
     };
@@ -4146,6 +4257,39 @@ mod tests {
             executable: geometry.privileges().executable(),
             data: vec![0; data_len],
         }
+    }
+
+    /// The founding RentCredit's refund wallet, deliberately NOT the payer.
+    ///
+    /// A maker replay root's rent belongs to the market, so the chain records
+    /// this wallet as its rent owner however the trade is paid for. Holding it
+    /// distinct from the payer is what lets these fixtures tell the two models
+    /// apart; while they were the same key, a projection answering `payer` was
+    /// indistinguishable from a correct one.
+    fn maker_rent_beneficiary() -> Pubkey {
+        key(0x5a)
+    }
+
+    /// A real founding lifecycle RentCredit, not a zero-filled placeholder.
+    fn lifecycle_rent_credit_account(
+        profile: AccountProfileV2<'_>,
+        key_value: Pubkey,
+        rent_program: Pubkey,
+    ) -> ObservedAccount {
+        let mut account = profiled_account(profile, 7, key_value, rent_program);
+        let credit = dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2::new(
+            dclutch_rent_contract::RefundAuthority::new(maker_rent_beneficiary().to_bytes())
+                .expect("refund wallet"),
+            dclutch_rent_contract::lifecycle_v2::LifecycleAccountIdV2::new([0x5b; 32])
+                .expect("market"),
+            dclutch_rent_contract::lifecycle_v2::LifecycleAccountIdV2::new([0x5c; 32])
+                .expect("release set"),
+            7,
+            255,
+        )
+        .expect("lifecycle RentCredit");
+        account.data = credit.to_bytes().to_vec();
+        account
     }
 
     fn record(raw: ObservedAccount, staging_key: Pubkey) -> FinalizedRecordRouteV3 {
@@ -4956,9 +5100,9 @@ mod tests {
             buyer_maker_root: route.buyer_maker.key.to_bytes(),
             system_program: system_program::ID.to_bytes(),
             custody_authority: custody_authority.to_bytes(),
-            seller_rent_beneficiary: route.payer.key.to_bytes(),
+            seller_rent_beneficiary: maker_rent_beneficiary().to_bytes(),
             seller_rent_beneficiary_observation: [0; 32],
-            buyer_rent_beneficiary: route.payer.key.to_bytes(),
+            buyer_rent_beneficiary: maker_rent_beneficiary().to_bytes(),
             buyer_rent_beneficiary_observation: [0; 32],
             fee_token_account: route.custody.fee_token.key.to_bytes(),
             seller_token_account: route.custody.seller_token.key.to_bytes(),
@@ -5328,7 +5472,7 @@ mod tests {
             fixed,
             seller_maker: profiled_account(profile, 5, key(42), trading),
             payer: profiled_account(profile, 6, payer, system_program::ID),
-            lifecycle_rent_credit: profiled_account(profile, 7, key(67), rent_program),
+            lifecycle_rent_credit: lifecycle_rent_credit_account(profile, key(67), rent_program),
             buyer_maker: profiled_account(profile, 8, key(43), trading),
             rent_program: profiled_account(profile, 10, rent_program, bpf_loader_upgradeable::ID),
             system_program: profiled_account(profile, 11, system_program::ID, key(200)),
@@ -6520,6 +6664,127 @@ mod tests {
         assert_eq!(
             admit_direct_inline_devnet_account_lock_count_v3(0),
             Err(DirectInlineRoutedTransactionErrorV3::AccountLocks)
+        );
+    }
+
+    /// The Custody hint slot follows the ENABLED Custody route, never slot 0.
+    ///
+    /// `expected_custody_slots` picks the terminal slot 0 only when
+    /// `total_fee_transfer == 0`, and the non-terminal slot 1 -- the one that
+    /// leaves the fee's allowance standing for the settlement transaction --
+    /// whenever a fee is transferred. The devnet trade driver handed
+    /// `custody_authority_bumps[0]` to the hot envelope, which is right for
+    /// every zero-fee fill this protocol had ever assembled and wrong for the
+    /// first fee-bearing one: Trading reproduced the terminal route's bump for
+    /// the intermediate route's seeds, `create_program_address` refused the
+    /// off-curve check, and the fill returned `Release` 771,347 CU in.
+    ///
+    /// Measured on cohort-8's market22 against the deployed ELF: the enabled
+    /// slot's canonical bump was 252 and slot 0's was 255.
+    #[test]
+    fn the_custody_hint_slot_follows_a_fee_bearing_settlement() {
+        let (_, _, route, authentication, _, _, _) = named_fixture();
+        let child = derive_direct_inline_child_authorities_v3(
+            authentication.seller,
+            authentication.buyer,
+            authentication.fill,
+            authentication.execution_price,
+            authentication.context,
+            &route.fixed.account_profile.raw.data,
+            &route.fixed.transition.raw.data,
+            &route.fixed.effect.raw.data,
+        )
+        .expect("child authorities");
+
+        // Hint slot 0 is the Claims route and is not at issue.
+        assert_eq!(child.child_caller_bumps[0], child.claims_authority_bump);
+
+        // The hint follows whatever slot the projection enabled -- never a
+        // literal index.
+        let slot = child.enabled_custody_slot.expect("an enabled Custody slot");
+        assert_eq!(
+            child.child_caller_bumps[1],
+            child.custody_authority_bumps[usize::from(slot)],
+        );
+
+        // And a standing note on this fixture, so nobody reads the assertion
+        // above as covering the bug. Its intents fill 20 at price 50 against a
+        // price scale of 100, so gross is 10 and 50 bps of that FLOORS TO
+        // ZERO. It is nominally fee-bearing and economically not, so it takes
+        // the terminal slot 0 -- which is exactly the byte the old call site
+        // hardcoded. Every fixture in this crate is in the same position, and
+        // that is why indexing `[0]` survived here for as long as it did. The
+        // discriminating coverage is the unit test below.
+        assert_eq!(slot, 0, "this fixture's 50 bps floors to a zero fee");
+    }
+
+    /// The Custody hint slot follows the ENABLED Custody route, never slot 0.
+    ///
+    /// `expected_custody_slots` picks the terminal slot 0 only when
+    /// `total_fee_transfer == 0`, and the non-terminal slot 1 -- the one that
+    /// leaves the fee's allowance standing for the settlement transaction --
+    /// whenever a fee is actually transferred. That selection is proven
+    /// two-sidedly in the codec by
+    /// `a_zero_fee_fill_closes_the_delegation_and_a_fee_bearing_one_does_not`.
+    ///
+    /// What no test covered was whether the hint handed to the hot envelope
+    /// FOLLOWS that selection. It did not: the devnet trade driver passed
+    /// `custody_authority_bumps[0]`, which is right for every zero-fee fill
+    /// this protocol had ever assembled and wrong for the first fee-bearing
+    /// one. Trading reproduced the terminal route's bump against the
+    /// intermediate route's seeds, `create_program_address` refused the
+    /// off-curve check, and the fill returned `Release` 771,347 CU in.
+    ///
+    /// Measured on cohort-8's market22 against the deployed ELF: the enabled
+    /// slot's canonical bump was 252 and slot 0's was 255.
+    #[test]
+    fn the_child_caller_hint_follows_the_enabled_custody_slot() {
+        // Four distinct bumps, so picking the wrong slot cannot coincidentally
+        // reproduce the right byte and no assertion below can go vacuous.
+        let bumps = [251_u8, 252, 253, 254];
+        let claims = 250_u8;
+        let dispatch = |slot: u8, count: u8| {
+            dclutch_direct_codec::inline_candidate_v2::DirectInlineEffectDispatchV2 {
+                custody_slots: [slot],
+                custody_count: count,
+                child_dispatch_writable: [false; 4],
+            }
+        };
+
+        // A zero-fee fill takes the terminal route at slot 0.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(0, 1)),
+            Ok(([claims, 251], Some(0))),
+        );
+        // A fee-bearing fill takes the intermediate route at slot 1, and the
+        // hint must move with it. This is the case the old call site got wrong.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(1, 1)),
+            Ok(([claims, 252], Some(1))),
+        );
+        // The remaining shapes are not reachable from an inline fill today, but
+        // the mapping must not silently hand back a neighbour's byte if one
+        // ever becomes reachable.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(2, 1)),
+            Ok(([claims, 253], Some(2))),
+        );
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(3, 1)),
+            Ok(([claims, 254], Some(3))),
+        );
+
+        // No Custody child: the slot is ABSENT and the walk searches.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(0, 0)),
+            Ok(([claims, 0], None)),
+        );
+
+        // A slot outside the fixed four is refused rather than wrapped or
+        // silently dropped.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(4, 1)),
+            Err(DirectInlineRouteErrorV3::ChildFrame),
         );
     }
 

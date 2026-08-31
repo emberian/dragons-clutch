@@ -1,8 +1,90 @@
-//! Real-ELF release-waist evidence for Registry-authenticated Trading Hot.
+//! Real-ELF release-waist evidence for Direct Hot, on both of its routes.
 //!
-//! The final campaign executes the canonical Direct fixed-topology bundle at
-//! the protocol 1.4M compute ceiling.  This test owns only transaction assembly
-//! and observations; Registry and Trading remain the executable authorities.
+//! The campaign executes the canonical Direct fixed-topology bundle at the
+//! protocol 1.4M compute ceiling. This test owns only transaction assembly and
+//! observations; Registry and Trading remain the executable authorities.
+//!
+//! # Two routes live in this file, and which one a case takes is a RULING
+//!
+//! `DECISION_PACKET_2026_08_30` §4 ruled the TOP-LEVEL route production for
+//! Direct Hot and demoted the Registry Hot continuation to harness-only, on
+//! HEAPRED's evidence (`docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md`):
+//! the outer composition authenticates the same two roles over the same
+//! activation cache, hands Trading the same children, executes the same trade
+//! to the compute unit -- and charges a measured six-figure CU delta for it. No
+//! caller outside this harness builds it: not the SDK, whose types cannot even
+//! express the frame, not the web panel, not the CLI, not the devnet drivers.
+//!
+//! So the rule that decides where a case belongs is **what it proves**, never
+//! what it happens to submit:
+//!
+//! * a case whose claim is about TRADING, its children, the market geometry,
+//!   the validated-artifact seal or the rollback of a refusal takes
+//!   `direct_top_level_instructions` -- the route that ships. What it proves
+//!   has to be proven on the route the public actually sends.
+//! * a case whose claim IS the outer composition -- the transparent wrapper's
+//!   byte preservation, the admission PDA, the release-batch authentication,
+//!   the V1/V2 seam split, the reentrancy wall that only exists because the
+//!   Registry sits at CPI depth one -- takes `direct_registry_instructions` and
+//!   stays there. Retiring the route retires those cases with it; that is the
+//!   point, and it is why they are the ones left.
+//!
+//! # What the port bought, measured
+//!
+//! The continuation is at the wall and past it. On this tree it traded a
+//! two-outcome market at 1,385,133 CU of 1,399,850 and a three-outcome market
+//! at 1,396,465 -- margins of 14,717 and 3,385 -- and **exhausted the meter
+//! outright at four outcomes**, which is the journey's own shipped geometry.
+//! `the_family_trades_every_geometry_it_is_given` and
+//! `a_four_outcome_market_trades_on_the_canonical_artifacts` were red for
+//! exactly that and are green on the top-level route, which runs the same trade
+//! with room to spare. The measured wall for geometry was thirty outcomes; on
+//! the demoted route it had fallen to three.
+//!
+//! The ruling did not charter the compute fix, so this file does not attempt
+//! one. It moves the evidence onto the route that ships and leaves the
+//! continuation's own cases on the continuation, where a compute figure is the
+//! harness's problem and no longer the product's.
+//!
+//! # Where the continuation's cost grew -- diagnosed, deliberately not fixed
+//!
+//! Recorded because the next person to look at this route will ask, and because
+//! the obvious answer is the wrong one. Measured on one tree, one seed, one
+//! pair of ELFs, at the canonical three-outcome geometry, both routes:
+//!
+//! | stage | continuation | top-level |
+//! |---|---:|---:|
+//! | Registry outer prologue | 94,550 | -- |
+//! | Trading hot path | 1,282,544 | 1,277,869 |
+//! | Claims child | 146,514 | 146,514 |
+//! | Custody child | 128,016 | 128,024 |
+//! | transaction total | 1,380,977 | 1,278,177 |
+//!
+//! Against `docs/evidence/DIRECT_GEOMETRY_2026_08_27.md`'s sweep of the same
+//! route at `1b0fe8be`, the continuation has gained about forty thousand CU at
+//! every geometry: 1,352,967 -> 1,395,295 at two outcomes, 1,341,795 ->
+//! 1,381,127 at three, and 1,363,637 -> exhausted at four.
+//!
+//! **It is not the outer composition.** The prologue is 94,550 here against the
+//! 95,778 modal draw HEAPRED measured on 2026-08-30, and every value on that
+//! grid is `95,778 + 1500k` -- so today's is one bump attempt shallower, not a
+//! cheaper outer. The children are identical to the COMPUTE UNIT across routes
+//! (Claims 146,514 both), so they cannot explain a route-specific gap either.
+//! What is left is the stage both routes share: **Trading's own hot path grew,
+//! and only the top-level route was given anything to pay for it with.**
+//! Decision 0017's option B took 66,921 CU off the top-level arm and explicitly
+//! did not touch the continuation, which never paid those CPIs -- so one route
+//! absorbed the growth into fresh headroom while the other met it with the
+//! two-to-eighteen thousand CU of margin it already had.
+//!
+//! The continuation did not get worse at being a continuation. The trade got
+//! more expensive for everybody and the continuation had nowhere to put it.
+//!
+//! Stated as a rate rather than a draw, because under ledger M-61 a one-byte
+//! ELF change redraws every seed and a single-geometry comparison across
+//! commits carries up to ~12,000 CU of bump noise. The ~40,000 holds across
+//! three geometries, and the widest market this route can trade fell from
+//! thirty outcomes to three, which is not something a draw does.
 
 use std::{env, fs, path::PathBuf};
 
@@ -24,10 +106,12 @@ use dclutch_capability_seal_contract::{
     CapabilitySealRequestV1,
 };
 use dclutch_custody_contract::CustodyReplayV1;
+use dclutch_custody_sbf::CustodySbfError;
 use dclutch_direct_codec::execution_v3::DirectExecutionActionV3;
 use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_direct_codec::successor::{DirectMakerReplayLayoutV1, DirectRootStateLayoutV1};
 use dclutch_registry_sbf::RegistryError;
+use dclutch_token_svm::state::{MintLayoutV1, TokenAccountLayoutV1};
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, TokenAccount};
 use dclutch_trading_sbf::TradingSbfError;
 use solana_account::{Account, AccountSharedData};
@@ -47,9 +131,9 @@ use dclutch_direct_hot_program_test_support::waist::{
     CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, DirectCase, Elves, REGISTRY_PROGRAM_ID,
     RefusedExecution, Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
     canonical_lookup_addresses, direct_case, direct_case_v2, direct_case_v4,
-    direct_registry_instructions, elves, fixture_substrate, legacy_registry_hot_instruction,
-    program_test, program_test_without_forced_budget, registry_hot_instruction,
-    start_with_substrate, submit_v0, submit_v0_observed,
+    direct_registry_instructions, direct_top_level_instructions, elves, fixture_substrate,
+    legacy_registry_hot_instruction, program_test, program_test_without_forced_budget,
+    registry_hot_instruction, start_with_substrate, submit_v0, submit_v0_observed,
 };
 
 // --- Named refusals ----------------------------------------------------------
@@ -82,6 +166,16 @@ const TRADING_NATIVE_SIGNATURE_REFUSAL_CODE: u32 = TradingSbfError::NativeSignat
 /// `TradingSbfError::Commit`: an invoked child or local poststate differed
 /// from the exact precomputed candidate after all authorized child effects.
 const TRADING_COMMIT_REFUSAL_CODE: u32 = TradingSbfError::Commit as u32;
+/// `CustodySbfError::TokenState`: a Mint, vault, or token account taking part
+/// in a Custody transfer refused its parsed state or authority policy.
+///
+/// A CHILD's code, named here because a refusal Custody raises inside the
+/// child walk reaches the transaction verbatim -- Trading does not rewrite it,
+/// on either route and at whatever CPI depth that route puts it -- so a case
+/// that means "the Custody child refused" has to say so in Custody's
+/// vocabulary. `dclutch-custody-sbf` ships an rlib beside its cdylib for
+/// exactly this (see this crate's `Cargo.toml`).
+const CUSTODY_TOKEN_STATE_REFUSAL_CODE: u32 = CustodySbfError::TokenState as u32;
 
 fn postjoin_hostile_elf(name: &str) -> Vec<u8> {
     let directory =
@@ -221,6 +315,24 @@ async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
         .await
         .expect("account read")
         .expect("live account")
+}
+
+/// The collateral Mint, read from the token account that names it.
+///
+/// The chain fixture publishes the three collateral token accounts but not the
+/// Mint behind them, and a test must not restate an address the chain already
+/// states: bytes `TokenAccountLayoutV1::MINT..+32` of any of the three ARE the
+/// Mint this trade settles in, so reading it back is the only derivation that
+/// cannot drift from the fixture.
+async fn collateral_mint(context: &mut ProgramTestContext, token_account: Pubkey) -> Pubkey {
+    let value = account(context, token_account).await;
+    let identity: [u8; 32] = value
+        .data
+        .get(TokenAccountLayoutV1::MINT..TokenAccountLayoutV1::MINT + 32)
+        .expect("collateral token account Mint coordinate")
+        .try_into()
+        .expect("32-byte Mint identity");
+    Pubkey::new_from_array(identity)
 }
 
 async fn corrupt_account_byte(
@@ -475,10 +587,9 @@ async fn real_registry_refuses_aliased_ephemeral_admission_atomically() {
     let (releases, direct) = boundary_case(&mut test, &artifacts);
     let (mut instruction, admission) =
         registry_hot_instruction(releases, registry_boundary_hot(&direct));
-    let child_start = 6;
     *instruction
         .accounts
-        .get_mut(child_start)
+        .get_mut(REGISTRY_HOT_CHILD_START)
         .expect("first Hot account") = AccountMeta::new_readonly(admission, false);
     let refusal = assert_registry_refusal(
         test,
@@ -572,14 +683,26 @@ enum SealedExecutionAliasHostile {
 
 /// The Registry transparent-continuation prefix precedes the exact child Hot
 /// frame in the outer instruction assembled by `registry_hot_instruction`.
+///
+/// Only the cases that remain on the continuation need it. A top-level
+/// submission carries the Hot instruction itself, so a fixed-frame coordinate
+/// sits at its own index and there is no prefix to skip.
 const REGISTRY_HOT_CHILD_START: usize = 6;
 
+/// Apply one sealed-execution alias hostile to the Hot instruction itself.
+///
+/// PORTED to the top-level route (`DECISION_PACKET_2026_08_30` §4). What this
+/// proves is a TRADING property -- that the six duplicate metas are an exact,
+/// sealed execution shape rather than a general relaxation of Hot fixed-account
+/// distinctness -- so it belongs on the route the public sends. The hostiles
+/// index the Hot fixed frame directly now; under the continuation they reached
+/// the same metas through the outer's six-account prefix, which is the only
+/// thing that changed.
 fn apply_sealed_execution_alias_hostile(
     hostile: SealedExecutionAliasHostile,
-    outer: &mut Instruction,
+    hot: &mut Instruction,
     direct: &DirectCase,
 ) {
-    let child_meta = |index: usize| REGISTRY_HOT_CHILD_START + index;
     match hostile {
         SealedExecutionAliasHostile::Partial => {
             let distinct_staging = direct
@@ -588,9 +711,8 @@ fn apply_sealed_execution_alias_hostile(
                 .get(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3)
                 .expect("distinct descriptor staging")
                 .clone();
-            *outer
-                .accounts
-                .get_mut(child_meta(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3))
+            *hot.accounts
+                .get_mut(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3)
                 .expect("descriptor staging meta") = distinct_staging;
         }
         SealedExecutionAliasHostile::WrongRaw => {
@@ -601,9 +723,8 @@ fn apply_sealed_execution_alias_hostile(
                 .get(HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3)
                 .expect("account-profile raw")
                 .clone();
-            *outer
-                .accounts
-                .get_mut(child_meta(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3))
+            *hot.accounts
+                .get_mut(HOT_DESCRIPTOR_STAGING_ACCOUNT_V3)
                 .expect("descriptor staging meta") = wrong;
         }
         SealedExecutionAliasHostile::SeventhAlias => {
@@ -614,15 +735,13 @@ fn apply_sealed_execution_alias_hostile(
                 .get(HOT_CONFIG_RAW_ACCOUNT_V3)
                 .expect("config raw")
                 .clone();
-            *outer
-                .accounts
-                .get_mut(child_meta(HOT_CONFIG_STAGING_ACCOUNT_V3))
+            *hot.accounts
+                .get_mut(HOT_CONFIG_STAGING_ACCOUNT_V3)
                 .expect("config staging meta") = config_raw;
         }
         SealedExecutionAliasHostile::WritableRaw => {
-            outer
-                .accounts
-                .get_mut(child_meta(HOT_DESCRIPTOR_RAW_ACCOUNT_V3))
+            hot.accounts
+                .get_mut(HOT_DESCRIPTOR_RAW_ACCOUNT_V3)
                 .expect("descriptor raw meta")
                 .is_writable = true;
         }
@@ -631,11 +750,18 @@ fn apply_sealed_execution_alias_hostile(
 
 /// The six duplicate metas are an exact, sealed execution shape rather than a
 /// general relaxation of Hot fixed-account distinctness. Exercise the real
-/// Registry and Trading ELFs for every boundary: an incomplete set, a staging
-/// coordinate pointed at the wrong raw record, a seventh duplicate outside the
-/// closed set, and a privilege escalation caused by message-key coalescing.
-/// Each refusal reaches Trading, carries the semantic Content code, and rolls
-/// back every tracked byte and lamport.
+/// Trading ELF for every boundary: an incomplete set, a staging coordinate
+/// pointed at the wrong raw record, a seventh duplicate outside the closed set,
+/// and a privilege escalation caused by message-key coalescing. Each refusal
+/// reaches Trading, carries the semantic Content code, and rolls back every
+/// tracked byte and lamport.
+///
+/// PORTED to the top-level route. The alias set is a property of
+/// `HotFrameV3::parse` and the seal projection, both of which run identically
+/// on either route -- and the top-level arm is the STRICTER of the two to
+/// assert it on, because `authenticate_hot_invocation_v3` grants the
+/// continuation `permits_fixed_market_union` and the top-level arm nothing.
+/// Proving the closed alias set here proves it where the public sends it.
 #[tokio::test]
 async fn real_hot_refuses_noncanonical_sealed_execution_aliases_atomically() {
     for hostile in [
@@ -645,11 +771,11 @@ async fn real_hot_refuses_noncanonical_sealed_execution_aliases_atomically() {
         SealedExecutionAliasHostile::WritableRaw,
     ] {
         let artifacts = elves();
-        let mut test = program_test(&artifacts);
+        let mut test = program_test_without_forced_budget(&artifacts);
         let releases = add_release_waist(&mut test, &artifacts);
         let direct = direct_case(&mut test, releases, &artifacts, false);
-        let mut instructions = direct_registry_instructions(releases, &direct);
-        apply_sealed_execution_alias_hostile(hostile, &mut instructions[2], &direct);
+        let mut instructions = direct_top_level_instructions(&direct);
+        apply_sealed_execution_alias_hostile(hostile, &mut instructions[3], &direct);
         let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
         add_lookup_table(&mut test, &addresses);
         let mut context = start_with_substrate(test, fixture_substrate()).await;
@@ -717,6 +843,43 @@ async fn assert_postjoin_hostile_rolls_back(
     );
 }
 
+/// The Claims adversary commits the genuine transfer, returns the genuine ACK,
+/// and flips one bit of a NONSELECTED aggregate supply on its way out.
+///
+/// # This case names `Commit`, and it did not always
+///
+/// It named `Transition` until `39b75718` ("trading: avoid duplicate direct
+/// claims poststate hash"), and the code moved because the OWNER of the check
+/// moved -- not because the refusal weakened.
+///
+/// Before `39b75718`, `execute_claims_route_v3` hashed the three actual child
+/// bodies immediately and compared them to the digest the receipt declared;
+/// `verify_sparse_native_receipt` raised `TradingSbfError::Transition` on a
+/// mismatch. `39b75718` observed that Direct ordinary already re-proves that
+/// same conjunction after the complete child walk, and made the sparse
+/// post-resource join `SparsePostResourceVerificationV3::DirectFinalization`
+/// on this route -- so the body hash is no longer taken inside the Claims
+/// composition at all. The corruption is now caught where the projection is
+/// joined to the physical bytes, `verify_direct_inline_account_poststate_v3`,
+/// which raises `TradingSbfError::Commit`.
+///
+/// **`Commit` is the semantically correct code here, and `Transition` was
+/// always the weaker fit.** The refusal registry gives `Transition` as "the
+/// checked data-defined transition refused" and `Commit` as "a projected
+/// physical mutation or account write could not commit". This adversary runs
+/// the REAL Claims transfer and returns its REAL ACK, so the data-defined
+/// transition did not refuse anything -- every declared fact checks out. What
+/// fails is that the bytes on the chain afterwards are not the bytes Trading
+/// projected. That is a commit-class fact by the registry's own words, and it
+/// is exactly what this file's `TRADING_COMMIT_REFUSAL_CODE` doc comment
+/// already describes: an invoked child poststate differing from the exact
+/// precomputed candidate after all authorized child effects.
+///
+/// The sibling below is the control that keeps this from being a blanket
+/// shift: `omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls_back`
+/// still names `Transition` and still gets it, because a corrupted replay
+/// lineage IS a declared-fact mismatch that Custody receipt verification
+/// catches before any digest comparison.
 #[tokio::test]
 async fn nonselected_claims_supply_corruption_after_real_child_commit_rolls_back() {
     let mut artifacts = elves();
@@ -729,7 +892,7 @@ async fn nonselected_claims_supply_corruption_after_real_child_commit_rolls_back
         releases,
         direct,
         CLAIMS_PROGRAM_ID,
-        TRADING_TRANSITION_REFUSAL_CODE,
+        TRADING_COMMIT_REFUSAL_CODE,
     )
     .await;
 }
@@ -791,10 +954,25 @@ async fn omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls
 /// is one coordinate of the tail either way, and the other coordinates carry
 /// a Claims quantity of zero that the transition's epilogue requires to sum
 /// away.
+///
+/// # PORTED, and this case is why the port was urgent
+///
+/// This ran on the Registry Hot continuation until `DECISION_PACKET_2026_08_30`
+/// §4, and by 2026-08-31 it was RED: the continuation exhausted all 1,399,850
+/// CU at four outcomes. Not a shape refusal -- `ProgramFailedToComplete`, the
+/// meter. Measured on this tree, the continuation traded two outcomes at
+/// 1,385,133 CU and three at 1,396,465 and had nothing left for a fourth, so
+/// the journey's own shipped geometry did not fit on the route the journey was
+/// being measured on.
+///
+/// The claim was never about the Registry outer. It is that ONE artifact set
+/// serves every geometry, which is a Product Runtime V2 and Trading property,
+/// so it belongs on the route that ships -- and it fits there with room. The
+/// continuation's compute is a harness problem the ruling declined to charter.
 #[tokio::test]
 async fn a_four_outcome_market_trades_on_the_canonical_artifacts() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case_v4(
         &mut test,
@@ -805,7 +983,7 @@ async fn a_four_outcome_market_trades_on_the_canonical_artifacts() {
         fixture_substrate(),
         DirectOrdinaryGeometryV3::from_outcome_count(4).expect("four-outcome geometry"),
     );
-    let instructions = direct_registry_instructions(releases, &direct);
+    let instructions = direct_top_level_instructions(&direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
@@ -818,7 +996,7 @@ async fn a_four_outcome_market_trades_on_the_canonical_artifacts() {
         &[],
     )
     .await
-    .expect("Registry-authenticated Direct Hot execution at four outcomes");
+    .expect("top-level Direct Hot execution at four outcomes");
     assert!(units > 0 && units <= COMPUTE_LIMIT);
     println!("four-outcome Direct Hot: consumed {units} compute units");
 
@@ -852,8 +1030,14 @@ async fn a_four_outcome_market_trades_on_the_canonical_artifacts() {
 }
 
 /// Trade one market at one geometry, or report why it did not.
+///
+/// PORTED to the top-level route with the two cases it serves. A geometry sweep
+/// measures how wide a market the HOT PATH can trade, so running it through the
+/// demoted outer measured the outer instead: it charged a six-figure constant
+/// for authentication Trading performs anyway, and that constant came directly
+/// out of the width the sweep could report.
 async fn trade_at_geometry(artifacts: &Elves, outcomes: u32) -> Result<u64, RefusedExecution> {
-    let mut test = program_test(artifacts);
+    let mut test = program_test_without_forced_budget(artifacts);
     let releases = add_release_waist(&mut test, artifacts);
     let direct = direct_case_v4(
         &mut test,
@@ -864,7 +1048,7 @@ async fn trade_at_geometry(artifacts: &Elves, outcomes: u32) -> Result<u64, Refu
         fixture_substrate(),
         DirectOrdinaryGeometryV3::from_outcome_count(outcomes).expect("geometry"),
     );
-    let instructions = direct_registry_instructions(releases, &direct);
+    let instructions = direct_top_level_instructions(&direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
@@ -947,6 +1131,21 @@ async fn the_family_trades_every_geometry_it_is_given() {
 /// for its own reasons; it is not a Direct-family width limit, and it will move
 /// with every hot-path compute change in either direction.
 ///
+/// # PORTED, and the old bound was never this route's
+///
+/// The thirty-outcome figure above was measured through the Registry Hot
+/// continuation, which is exactly the contamination HEAPRED's §3.5 names: the
+/// test is called `the_shipped_hot_path` and it was measuring the route that is
+/// NOT shipped, carrying an outer composition no public caller can build. Every
+/// width it ever reported was therefore a lower bound on the real one, short by
+/// whatever the outer charged.
+///
+/// It now sweeps `direct_top_level_instructions`. **The number above is stale
+/// by construction and will move UP** -- it is left as written because a
+/// measurement is a dated fact and overwriting it with a guess would be worse
+/// than leaving it labelled. Re-run this case to replace it, and record the new
+/// bound with the ELF digest it belongs to, per ledger M-61.
+///
 /// Ignored by default: it is a minute of real-ELF execution, and the number it
 /// produces is a measurement, not a gate. Re-measure with
 ///
@@ -989,16 +1188,85 @@ async fn the_widest_geometry_the_shipped_hot_path_can_trade() {
     );
 }
 
+/// A late Custody refusal rolls back everything the earlier children wrote.
+///
+/// PORTED to the top-level route. Atomicity across the child walk is a Trading
+/// property -- it is Trading that invokes Claims, then Custody, and Trading's
+/// crosscheck that refuses -- so the route it is proven on should be the one
+/// that ships. The `registry_hot` in the name is a fossil of where it used to
+/// run and is kept only so the evidence documents that cite it still resolve.
+///
+/// # RE-AIMED: the staged corruption moved from the destination to the Mint
+///
+/// This case used to stage an UNINITIALIZED DESTINATION -- `direct_case`'s
+/// `corrupt_destination`, which clears the destination's
+/// `TokenAccountLayoutV1::STATE` byte -- and rely on Custody's
+/// `check_transfer_account` to refuse it one CPI level below Trading, after
+/// Claims had already committed. `410320ac` ("direct: authenticate exact hot
+/// finalization") took that failure mode away, CORRECTLY, and the case went
+/// red on its own depth assertions rather than on its rollback claim.
+///
+/// `410320ac` added `project_tokens_v3`
+/// (`crates/dclutch-direct-codec/src/direct_finalization_v3.rs`), the typed
+/// candidate precompute Trading runs at `prepare_direct_inline_hot_crosscheck_v3`
+/// BEFORE the first child CPI. Its conjunct `seller.state !=
+/// AccountState::Initialized` catches exactly this fixture's byte, so Trading
+/// now refuses `Transition` at ~809,000 CU having invoked nothing. That is
+/// strictly better than the old behavior -- it refuses without paying for two
+/// child CPIs and without any child write to unwind -- so the hardening stands
+/// and the TEST is what had to move.
+///
+/// **The old failure mode is not merely harder to reach, it is GONE.** For a
+/// destination in `CompartmentV1::External`, Custody's entire refusal surface
+/// is `ExactTransferProfileV1::check_transfer_account` plus two owner
+/// comparisons: token-program mismatch, unparseable bytes, `check_active`
+/// (uninitialized OR frozen), a native reserve, a Mint mismatch, and a
+/// `semantic.destination_owner` mismatch. `project_tokens_v3` checks every one
+/// of those pre-CPI and is strictly stronger besides -- it pins the exact
+/// address, the exact owner and the exact balance. Custody's profile
+/// deliberately admits a destination's own delegate and close authority
+/// ("those facts do not affect the amount credited by this transfer",
+/// `crates/dclutch-token-svm/src/profile.rs`), so corrupting THOSE refuses
+/// nowhere at all -- the candidate is projected from the observed prestate, so
+/// the poststate still matches and the trade succeeds. There is no byte of the
+/// destination account that reaches a late Custody refusal any more.
+///
+/// So the case is re-aimed onto a corruption the precompute genuinely does not
+/// see: the MINT. Trading's hot path never parses the Mint account -- it only
+/// compares each token account's `mint` FIELD to the context address, and the
+/// sole `check_mint` in Trading belongs to `direct_token_setup_v1`, a different
+/// instruction. Custody parses it on every transfer. Clearing
+/// `MintLayoutV1::IS_INITIALIZED` therefore sails through the whole precompute,
+/// through the Claims child, and refuses inside Custody as
+/// `Error::MintUninitialized` -> `CustodySbfError::TokenState`. Same depth,
+/// same rollback claim -- reached by a failure mode that is still late.
+///
+/// The case now also NAMES its code, which it never did before: it asserted
+/// only `is_err()` plus the two depth assertions, and AGENTS.md is explicit
+/// that this is not a refusal assertion. Measured on this tree, Custody's
+/// `0x6006` reaches the transaction verbatim -- Trading does not rewrite a
+/// child refusal that propagates out of the child walk -- so the code named
+/// here is Custody's, derived from `CustodySbfError`.
+///
+/// The early refusal the old fixture now produces did not lose its coverage:
+/// `an_uninitialized_custody_destination_refuses_before_any_child_runs` below
+/// keeps `corrupt_destination` alive and pins `410320ac`'s hardening by name.
 #[tokio::test]
 async fn late_custody_refusal_rolls_back_registry_hot_claims_and_lifecycle() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
-    let direct = direct_case(&mut test, releases, &artifacts, true);
-    let instructions = direct_registry_instructions(releases, &direct);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    let instructions = direct_top_level_instructions(&direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
+    // Through the BANK, not through `direct.chain.accounts`: those were already
+    // installed into the ProgramTest by `direct_case`, so mutating them here
+    // would never reach the chain and would leave the assertion below satisfied
+    // by whatever the untouched bundle refuses on (ledger `M-38`).
+    let mint = collateral_mint(&mut context, direct.chain.collateral_accounts[1]).await;
+    corrupt_account_byte(&mut context, mint, MintLayoutV1::IS_INITIALIZED).await;
     let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
     let refusal = submit_v0(
         &mut context,
@@ -1008,7 +1276,13 @@ async fn late_custody_refusal_rolls_back_registry_hot_claims_and_lifecycle() {
         &[],
     )
     .await
-    .expect_err("uninitialized Custody destination unexpectedly accepted");
+    .expect_err("uninitialized collateral Mint unexpectedly accepted");
+    // The control that keeps this code from being a universal donor is
+    // `direct_hot_top_level::direct_inline_ordinary_executes_when_submitted_top_level_to_trading`,
+    // which submits THIS bundle on THIS route with nothing corrupted and
+    // executes. So the refusal below belongs to the staged Mint and to nothing
+    // the canonical submission would have produced on its own.
+    assert_refusal(&refusal, CUSTODY_TOKEN_STATE_REFUSAL_CODE);
     // A rollback assertion over an execution that never started is vacuous: it
     // holds for any refusal, including one raised before the first child CPI.
     // The claim under test is specifically that Trading reached its Custody
@@ -1028,6 +1302,62 @@ async fn late_custody_refusal_rolls_back_registry_hot_claims_and_lifecycle() {
     assert_eq!(
         after, before,
         "late Custody refusal failed to roll back Claims/lifecycle bytes or lamports"
+    );
+}
+
+/// An uninitialized Custody destination is refused before ANY child is invoked.
+///
+/// The other half of the re-aim above, and the case that keeps `direct_case`'s
+/// `corrupt_destination` fixture in use. `410320ac` moved this corruption from
+/// a Custody refusal inside the child walk to a Trading refusal before it, and that
+/// move is a property worth pinning in its own right: the exact-finalization
+/// precompute is what makes a malformed destination cost two child CPIs less
+/// than it used to, and a later change that quietly deferred the check back to
+/// Custody would be a regression this file should catch.
+///
+/// The negative depth assertions are the whole point, because the code alone
+/// does not locate the refusal: `TradingSbfError::Transition` is raised from
+/// dozens of sites across Trading's hot path, on both sides of the child walk,
+/// and `prepare_direct_inline_finalization_into_v3`'s eleven typed error
+/// variants are all collapsed onto it by one `map_err` in
+/// `prepare_direct_inline_account_finalization_v3`. Only the ABSENCE of both
+/// child invocations says the precompute is what refused, which is exactly the
+/// fact `410320ac` established and the fact a regression would take away.
+#[tokio::test]
+async fn an_uninitialized_custody_destination_refuses_before_any_child_runs() {
+    let artifacts = elves();
+    let mut test = program_test_without_forced_budget(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, true);
+    let instructions = direct_top_level_instructions(&direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    let before = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    let refusal = submit_v0(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect_err("uninitialized Custody destination unexpectedly accepted");
+    assert_refusal(&refusal, TRADING_TRANSITION_REFUSAL_CODE);
+    assert!(
+        !refusal.invoked(CLAIMS_PROGRAM_ID),
+        "the destination precompute was expected to refuse before the Claims child ran: {:#?}",
+        refusal.logs
+    );
+    assert!(
+        !refusal.invoked(CUSTODY_PROGRAM_ID),
+        "the destination precompute was expected to refuse before the Custody child ran: {:#?}",
+        refusal.logs
+    );
+    let after = account_snapshots(&mut context, &direct.chain.rollback_snapshot_keys).await;
+    assert_eq!(
+        after, before,
+        "a refusal raised before the first child CPI still moved a tracked byte or lamport"
     );
 }
 
@@ -1075,11 +1405,16 @@ async fn corrupt_profile14_root_reserved_byte_refuses_without_mutation() {
 /// Restore every rollback-tracked account except the maker replays.
 ///
 /// A maker replay is only *live* after an execution has written it, and that
-/// same execution advances the root -- which the Registry's Hot coordinate
-/// check pins by prestate digest, so a second submission of the same bundle is
-/// refused at the boundary before Trading reads any replay at all. Rewinding
-/// everything but the replays is what puts a live replay in front of a bundle
-/// the Registry will still forward.
+/// same execution advances the root -- which the Hot envelope pins by prestate
+/// digest, so a second submission of the same bundle is refused before any
+/// replay is read at all. Rewinding everything but the replays is what puts a
+/// live replay in front of a bundle that will still be forwarded.
+///
+/// Which PROGRAM raises that refusal is the one thing the route changes, and it
+/// is why this helper is still needed after the port rather than in spite of
+/// it. Under the continuation the Registry's `authenticate_hot_coordinates`
+/// caught the stale digest at the boundary; top-level, Trading checks the same
+/// envelope field itself. Same pin, same rewind, one less program.
 async fn rewind_except_maker_replays(
     context: &mut ProgramTestContext,
     direct: &DirectCase,
@@ -1111,15 +1446,21 @@ async fn rewind_except_maker_replays(
 /// bundle is the whole evidence: it is what a bare `is_err()` here could never
 /// have shown, and for as long as this test asserted only `is_err()` after a
 /// plain second submission it was showing nothing at all -- that submission is
-/// refused by the Registry at the root prestate digest, corrupt maker byte or
-/// not, and Trading never runs.
+/// refused at the root prestate digest, corrupt maker byte or not, before any
+/// replay is read.
+///
+/// PORTED to the top-level route: the maker replay's decode and its revision
+/// are Trading's, on either route, so this proves them where the public sends
+/// them. It also executes a full successful trade first, to make the replay
+/// live, which is the reason it belongs off a route that no longer reliably
+/// completes one.
 #[tokio::test]
 async fn corrupt_live_profile14_maker_reserved_byte_refuses_without_mutation() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case(&mut test, releases, &artifacts, false);
-    let instructions = direct_registry_instructions(releases, &direct);
+    let instructions = direct_top_level_instructions(&direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
@@ -1357,15 +1698,20 @@ async fn a_seal_for_another_action_or_descriptor_never_lands_at_this_address() {
 /// seal can only ever arrive here by being planted.
 ///
 /// The control for both is
-/// `real_registry_executes_profile14_direct_hot_under_protocol_limit`: the same
-/// bundle with the fixture's own seal installed, and it executes.
+/// `direct_inline_ordinary_executes_when_submitted_top_level_to_trading` in
+/// `direct_hot_top_level.rs`: the same bundle on the same route with the
+/// fixture's own seal installed, and it executes.
+///
+/// PORTED to the top-level route. The validated-artifact seal is authenticated
+/// by Trading, from the seal PDA, on both routes alike -- the Registry outer
+/// never reads it -- so the route this is proven on should be the shipped one.
 #[tokio::test]
 async fn hot_refuses_a_missing_seal_and_a_seal_written_for_another_release() {
     let artifacts = elves();
-    let mut test = program_test(&artifacts);
+    let mut test = program_test_without_forced_budget(&artifacts);
     let releases = add_release_waist(&mut test, &artifacts);
     let direct = direct_case_v2(&mut test, releases, &artifacts, false, true);
-    let instructions = direct_registry_instructions(releases, &direct);
+    let instructions = direct_top_level_instructions(&direct);
     let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
     add_lookup_table(&mut test, &addresses);
     let mut context = start_with_substrate(test, fixture_substrate()).await;
@@ -1410,6 +1756,12 @@ async fn hot_refuses_a_missing_seal_and_a_seal_written_for_another_release() {
     assert_refusal(&refused, TRADING_CONTENT_REFUSAL_CODE);
 }
 
+/// Every field of a written seal is authenticated, and altering any one of them
+/// is refused by Trading inside the seal authentication itself.
+///
+/// PORTED to the top-level route, with the rest of the seal evidence. The eight
+/// offsets swept below are all seal-body fields Trading hashes and compares; no
+/// Registry outer participates in that at all.
 #[tokio::test]
 async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
     for offset in [
@@ -1425,11 +1777,11 @@ async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
             + CAPABILITY_SEAL_ROW_DIGEST_OFFSET_V1,
     ] {
         let artifacts = elves();
-        let mut test = program_test(&artifacts);
+        let mut test = program_test_without_forced_budget(&artifacts);
         let releases = add_release_waist(&mut test, &artifacts);
         let direct = direct_case(&mut test, releases, &artifacts, false);
         let seal = direct.chain.capability_seal;
-        let instructions = direct_registry_instructions(releases, &direct);
+        let instructions = direct_top_level_instructions(&direct);
         let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
         add_lookup_table(&mut test, &addresses);
         let mut context = start_with_substrate(test, fixture_substrate()).await;
@@ -1464,8 +1816,9 @@ async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
         // object, so an altered magic, an altered verdict word and an altered row
         // digest are all "this is not the seal for this closure". Requiring the
         // code and the depth is what would catch an offset that starts being
-        // caught somewhere else -- by the Registry's own frame checks, say, which
-        // would mean this test had stopped exercising the seal at all.
+        // caught somewhere else -- by the Hot frame parse, before the seal is
+        // read at all, say -- which would mean this test had stopped exercising
+        // the seal.
         assert_refusal(&refusal, TRADING_CONTENT_REFUSAL_CODE);
         assert!(
             refusal.invoked(TRADING_PROGRAM_ID),

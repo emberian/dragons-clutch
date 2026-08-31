@@ -285,7 +285,24 @@ fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
         let evidence = checked_role_v1(checked, role)?;
         let program = crate::plan::pubkey(&pin.program_id)?;
         let programdata = crate::plan::pubkey(&pin.programdata_id)?;
-        if evidence.disposition != disposition
+        // The table above says what KIND of row each role is: the two
+        // carry-forward rows are exactly that and nothing else, while a role the
+        // cut owns may be satisfied either by an Upgrade receipt or -- when this
+        // cut did not change its bytes -- by proven equality with the checked
+        // candidate. Both are legitimate here and neither is legitimate for
+        // registry or rent, so the carry-forward arm stays an exact match.
+        let disposition_matches = match disposition {
+            CheckedDeploymentDispositionV1::CarryForward => {
+                evidence.disposition == CheckedDeploymentDispositionV1::CarryForward
+            }
+            CheckedDeploymentDispositionV1::Upgrade
+            | CheckedDeploymentDispositionV1::AlreadyCurrent => matches!(
+                evidence.disposition,
+                CheckedDeploymentDispositionV1::Upgrade
+                    | CheckedDeploymentDispositionV1::AlreadyCurrent
+            ),
+        };
+        if !disposition_matches
             || evidence.program_id != pin.program_id
             || evidence.programdata_id != pin.programdata_id
             || evidence.checked_candidate_elf_path != pin.checked_candidate_elf_path

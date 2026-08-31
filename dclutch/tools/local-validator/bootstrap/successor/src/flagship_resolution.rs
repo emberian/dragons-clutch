@@ -27,9 +27,9 @@ use dclutch_operator::{
     provider_transport_v3::{
         ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
         ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3, ProviderSubmitIntentV3,
-        ProviderSubmitSnapshotV3, ProviderTransportReportV3, build_provider_execute_v3,
-        build_provider_reclaim_v3, build_provider_submit_v3, compile_provider_execute_v0,
-        compile_provider_reclaim_v0, compile_provider_submit_v0,
+        ProviderSubmitSnapshotV3, ProviderTransportReportV3, ProviderTransportTransactionErrorV3,
+        build_provider_execute_v3, build_provider_reclaim_v3, build_provider_submit_v3,
+        compile_provider_execute_v0, compile_provider_reclaim_v0, compile_provider_submit_v0,
     },
     resolution_core_v3::{
         ResolutionAdmitTerminalReportV3, ResolutionAdmitTerminalSnapshotV3,
@@ -57,6 +57,10 @@ use dclutch_resolution_core_v3_operator::provider_finalized_projection_v3::{
     ProviderSubmitFinalizedInputV3, ProviderSubmitWritableAccountsV3,
     project_finalized_provider_execute_v3, project_finalized_provider_reclaim_v3,
     project_finalized_provider_submit_v3,
+};
+use dclutch_source_contract::{
+    PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1, SOURCE_SPEC_SCHEMA_ID_V1,
+    STATISTIC_SPEC_SCHEMA_ID_V1, WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use dclutch_source_contract::{
     PythAdapterConfigV1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -94,7 +98,8 @@ use crate::{
     cluster::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
     },
-    model::{CheckedDeploymentDispositionV1, SuccessorPlan},
+    evidence_refresh,
+    model::{AccountEvidence, CheckedDeploymentDispositionV1, SuccessorPlan},
     plan::{hex, hex32, pubkey},
     rpc::{Rpc, RpcAccount, WritePolicyV1, account_evidence, bounded_instructions},
     runtime::decode_hex,
@@ -120,6 +125,9 @@ const PLAN_FORMAT: &str = "dclutch-local-successor-infrastructure-plan-v2";
 const FLAGSHIP_RECLAIM_DELAY_SECONDS_V1: i64 = 3_600;
 /// Chain-derived Pyth accumulator PriceFeedMessage V1 wire width.
 const PYTH_PRICE_FEED_MESSAGE_BYTES_V1: usize = 85;
+/// Exact bincode wire width of the `Clock` sysvar: five little-endian 8-byte
+/// fields, no padding.
+const CLOCK_SYSVAR_BYTES_V1: usize = 40;
 const GEOMETRY_BLOCKHASH: [u8; 32] = [0x6d; 32];
 
 const fn input_format(expected: ExpectedClusterV1) -> &'static str {
@@ -191,11 +199,26 @@ struct AccountSelectorsV1 {
     source_material: String,
     source_material_staging: String,
     source_spec: String,
+    /// The six Execute-only staging cursors. `default` is carried so a producer
+    /// checkpoint minted before §7.9 named them still deserializes; an empty
+    /// value never reaches a message, because `nonzero_pubkey` refuses it.
+    #[serde(default)]
+    source_spec_staging: String,
     source_provider_release: String,
+    #[serde(default)]
+    source_provider_release_staging: String,
     adapter_config: String,
+    #[serde(default)]
+    adapter_config_staging: String,
     window: String,
+    #[serde(default)]
+    window_staging: String,
     statistic: String,
+    #[serde(default)]
+    statistic_staging: String,
     pyth_release: String,
+    #[serde(default)]
+    pyth_release_staging: String,
     product: String,
     product_staging: String,
     result_domain: String,
@@ -365,6 +388,11 @@ struct ProducerCheckpointV1 {
     format: String,
     plan_sha256: String,
     campaign_evidence_sha256: String,
+    /// The refresh digest this producer authenticated against, when one was
+    /// supplied. A resume that changes which refresh is in play changes which
+    /// rows authenticated, so it is bound here like every other input digest.
+    #[serde(default)]
+    refreshed_evidence_sha256: Option<String>,
     pyth_facts_sha256: String,
     observation_slot: u64,
     observation_unix_timestamp: i64,
@@ -569,11 +597,20 @@ impl SelectedInputV1 {
         account!("source_material", source_material);
         account!("source_material_staging", source_material_staging);
         account!("source_spec", source_spec);
+        account!("source_spec_staging", source_spec_staging);
         account!("source_provider_release", source_provider_release);
+        account!(
+            "source_provider_release_staging",
+            source_provider_release_staging
+        );
         account!("adapter_config", adapter_config);
+        account!("adapter_config_staging", adapter_config_staging);
         account!("window", window);
+        account!("window_staging", window_staging);
         account!("statistic", statistic);
+        account!("statistic_staging", statistic_staging);
         account!("pyth_release", pyth_release);
+        account!("pyth_release_staging", pyth_release_staging);
         account!("product", product);
         account!("product_staging", product_staging);
         account!("result_domain", result_domain);
@@ -875,23 +912,50 @@ impl FinalizedSnapshotV1 {
         })
     }
 
-    fn observed_or_vacant(&self, key: Pubkey) -> ObservedAccount {
-        let account = self.optional(key).cloned().unwrap_or(RpcAccount {
-            lamports: 0,
-            owner: system_program::ID,
-            executable: false,
-            rent_epoch: 0,
-            data: Vec::new(),
-        });
-        ObservedAccount {
+    /// Read a key that is allowed to be vacant on chain.
+    ///
+    /// A key the snapshot never fetched is *not* the same fact as a key the
+    /// chain reports vacant, and reading the first as the second fabricates a
+    /// zero balance the projections then compare against. The map distinguishes
+    /// them — a fetched-but-vacant key is present with `None` — so this refuses
+    /// rather than inventing an observation it never made.
+    fn observed_or_vacant(&self, key: Pubkey) -> Result<ObservedAccount> {
+        let account = self
+            .accounts
+            .get(&key)
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "finalized snapshot never observed {key}; a vacant reading would be a fabrication"
+                ))
+            })?
+            .clone()
+            .unwrap_or(RpcAccount {
+                lamports: 0,
+                owner: system_program::ID,
+                executable: false,
+                rent_epoch: 0,
+                data: Vec::new(),
+            });
+        Ok(ObservedAccount {
             observation: self.observation,
             key,
             owner: account.owner,
             lamports: account.lamports,
             executable: account.executable,
             data: account.data,
-        }
+        })
     }
+}
+
+/// The Pyth Receiver's fee treasury, which every provider submit credits.
+///
+/// It is a derived address rather than a named input account, which is why the
+/// input's `accounts` map does not carry it.
+fn receiver_treasury_address(selected: &SelectedInputV1) -> Result<Pubkey> {
+    Ok(
+        Pubkey::find_program_address(&[b"treasury", &[0]], &selected.account("receiver_program")?)
+            .0,
+    )
 }
 
 fn observe(
@@ -905,6 +969,14 @@ fn observe(
     keys.insert(lifecycle_address(selected)?);
     keys.extend(selected.lookup_tables.values().copied());
     keys.insert(sysvar::rent::ID);
+    // The finalized projections read every writable the stage mutates, and four
+    // of those are identities the input names outside its `accounts` map — the
+    // three signing roles and the Receiver's derived fee treasury. Without them
+    // the snapshot cannot answer for the accounts the projection is about.
+    keys.insert(selected.submitter);
+    keys.insert(selected.resolver);
+    keys.insert(selected.refund_recipient);
+    keys.insert(receiver_treasury_address(selected)?);
     if keys.len() > 100 {
         return Err(Error::new(
             "flagship finalized snapshot exceeds the 100-account RPC bound",
@@ -1233,11 +1305,17 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             selected!("capability_manifest_staging", FinalizedRecordStaging);
             selected!("funding_ledger", FundingLedger);
             selected!("source_spec", FinalizedRecord);
+            selected!("source_spec_staging", FinalizedRecordStaging);
             selected!("source_provider_release", FinalizedRecord);
+            selected!("source_provider_release_staging", FinalizedRecordStaging);
             selected!("adapter_config", FinalizedRecord);
+            selected!("adapter_config_staging", FinalizedRecordStaging);
             selected!("window", FinalizedRecord);
+            selected!("window_staging", FinalizedRecordStaging);
             selected!("statistic", FinalizedRecord);
+            selected!("statistic_staging", FinalizedRecordStaging);
             selected!("pyth_release", FinalizedRecord);
+            selected!("pyth_release_staging", FinalizedRecordStaging);
             selected!("product", FinalizedRecord);
             selected!("product_staging", FinalizedRecordStaging);
             selected!("result_domain", FinalizedRecord);
@@ -1245,6 +1323,16 @@ fn stable_lookup_union(selected: &SelectedInputV1, stage: StageV1) -> Result<Vec
             selected!("portfolio", FinalizedRecord);
             selected!("portfolio_staging", FinalizedRecordStaging);
             selected!("update_account", ProviderObservation);
+            // Named by the input but historically pushed only into the Reclaim
+            // union, and derived rather than named. Both are ordinary readonly
+            // keys the Execute instruction carries; seating them here is what
+            // takes the bare action under the packet limit (§7.9, §7.11).
+            selected!("certificate", SourceState);
+            push(
+                "lifecycle",
+                StableAddressClassV1::ProviderObservation,
+                lifecycle_address(selected)?,
+            )?;
             provider_programs!();
         }
         StageV1::Reclaim => {
@@ -2176,6 +2264,15 @@ enum ReceiptStageV1 {
 }
 
 impl ReceiptStageV1 {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Submit => "submit",
+            Self::ProviderExecute => "execute",
+            Self::CoreAccept => "accept",
+            Self::Reclaim => "reclaim",
+        }
+    }
+
     fn from_stage(stage: StageV1) -> Result<Self> {
         match stage {
             StageV1::Submit => Ok(Self::Submit),
@@ -2183,6 +2280,16 @@ impl ReceiptStageV1 {
             StageV1::Accept => Ok(Self::CoreAccept),
             StageV1::Reclaim => Ok(Self::Reclaim),
             StageV1::Complete => Err(Error::new("complete has no mutation receipt")),
+        }
+    }
+
+    /// The routing stage whose lookup table this receipt's packet resolved
+    /// against. Accept rides Execute's table (`StageV1::routing_stage`).
+    const fn routing_stage(self) -> StageV1 {
+        match self {
+            Self::Submit => StageV1::Submit,
+            Self::ProviderExecute | Self::CoreAccept => StageV1::Execute,
+            Self::Reclaim => StageV1::Reclaim,
         }
     }
 }
@@ -2225,6 +2332,10 @@ struct ProducerCommandArgumentsV1 {
     acknowledgment: Option<String>,
     plan: Option<PathBuf>,
     campaign_evidence: Option<PathBuf>,
+    /// The optional post-activation evidence refresh
+    /// (`docs/design/EVIDENCE_REFRESH_V1.md`). Absent, this producer behaves
+    /// byte-for-byte as it did before the refresh existed.
+    refreshed_evidence: Option<PathBuf>,
     pyth_facts: Option<PathBuf>,
     producer_checkpoint: Option<PathBuf>,
     output: Option<PathBuf>,
@@ -2259,6 +2370,11 @@ impl ProducerCommandArgumentsV1 {
                     PathBuf::from(value),
                     "--campaign-evidence",
                 )?,
+                "--refreshed-evidence" => set_once(
+                    &mut parsed.refreshed_evidence,
+                    PathBuf::from(value),
+                    "--refreshed-evidence",
+                )?,
                 "--pyth-facts" => {
                     set_once(&mut parsed.pyth_facts, PathBuf::from(value), "--pyth-facts")?
                 }
@@ -2288,6 +2404,7 @@ struct TableProvisionArgumentsV1 {
     acknowledgment: Option<String>,
     producer_checkpoint: Option<PathBuf>,
     table_journal: Option<PathBuf>,
+    standing_checkpoint: Option<PathBuf>,
     authority_keypair: Option<PathBuf>,
     execute: bool,
 }
@@ -2332,6 +2449,11 @@ impl TableProvisionArgumentsV1 {
                             PathBuf::from(value),
                             "--table-journal",
                         )?,
+                        "--standing-checkpoint" => set_once(
+                            &mut parsed.standing_checkpoint,
+                            PathBuf::from(value),
+                            "--standing-checkpoint",
+                        )?,
                         "--authority-keypair" => set_once(
                             &mut parsed.authority_keypair,
                             PathBuf::from(value),
@@ -2366,6 +2488,55 @@ fn campaign_account(evidence: &CampaignMarketEvidenceV1, label: &str) -> Result<
         .get(label)
         .ok_or_else(|| Error::new(format!("completed campaign omitted {label}")))?;
     nonzero_pubkey(&row.address, label)
+}
+
+/// The producer's rows in the crate's one canonical evidence-row shape.
+///
+/// Both spellings carry the identical seven fields; this exists so the refresh
+/// admission can be written once, against one type, rather than once per
+/// parser.
+fn campaign_rows_as_model_v1(
+    evidence: &CampaignMarketEvidenceV1,
+) -> BTreeMap<String, AccountEvidence> {
+    evidence
+        .accounts
+        .iter()
+        .map(|(label, row)| {
+            (
+                label.clone(),
+                AccountEvidence {
+                    address: row.address.clone(),
+                    owner: row.owner.clone(),
+                    lamports: row.lamports,
+                    executable: row.executable,
+                    data_len: row.data_len,
+                    data_sha256: row.data_sha256.clone(),
+                    account_sha256: row.account_sha256.clone(),
+                },
+            )
+        })
+        .collect()
+}
+
+fn model_rows_as_campaign_v1(
+    rows: BTreeMap<String, AccountEvidence>,
+) -> BTreeMap<String, CampaignAccountEvidenceV1> {
+    rows.into_iter()
+        .map(|(label, row)| {
+            (
+                label,
+                CampaignAccountEvidenceV1 {
+                    address: row.address,
+                    owner: row.owner,
+                    lamports: row.lamports,
+                    executable: row.executable,
+                    data_len: row.data_len,
+                    data_sha256: row.data_sha256,
+                    account_sha256: row.account_sha256,
+                },
+            )
+        })
+        .collect()
 }
 
 fn authenticate_campaign_account(
@@ -2529,6 +2700,7 @@ fn load_producer_checkpoint(
     path: &Path,
     plan_sha256: &str,
     campaign_sha256: &str,
+    refreshed_sha256: Option<&str>,
     facts_sha256: &str,
     expected_cluster: ExpectedClusterV1,
 ) -> Result<Option<ProducerCheckpointV1>> {
@@ -2546,6 +2718,7 @@ fn load_producer_checkpoint(
     if checkpoint.format != producer_checkpoint_format(expected_cluster)
         || checkpoint.plan_sha256 != plan_sha256
         || checkpoint.campaign_evidence_sha256 != campaign_sha256
+        || checkpoint.refreshed_evidence_sha256.as_deref() != refreshed_sha256
         || checkpoint.pyth_facts_sha256 != facts_sha256
     {
         return Err(Error::new(
@@ -2762,6 +2935,60 @@ fn lookup_creation_slots(
     ]))
 }
 
+/// The reclaim floor is a checkpoint COMMITMENT, not a per-produce observation.
+///
+/// It is encoded into the provider submission the checkpoint plans, so a resume
+/// that re-derived it from the wall clock would plan a different transaction
+/// than the one the checkpoint already committed to. And because the derivation
+/// is `max(observation, window_end) + delay`, once the observation passes the
+/// window end it tracks the clock: `prior.planned_input != input` on every
+/// subsequent produce, and the resume guard refuses forever. It is therefore
+/// pinned from the prior checkpoint exactly as `lookup_creation_slots` pins the
+/// table creation slots.
+///
+/// Pinning moves the value from derived to carried, so it acquires its own
+/// bounds. A carried floor must lie inside the closed interval of values this
+/// producer could legitimately have derived at any observation between founding
+/// and now:
+///
+/// * at least `window_end + delay` — the floor a fresh derivation always clears,
+///   and below which `dclutch-provider-transport-v3-operator` refuses the intent
+///   outright (`intent.reclaim_after_unix_seconds < window.end_unix_seconds()`);
+/// * at most this observation's own derivation — so a hand-edited checkpoint
+///   cannot push the floor into the future and strand the reclaim.
+///
+/// Nothing is excluded from the resume comparison: `planned_input` is still
+/// compared in full, this field included. What changed is only which document
+/// the field is read from, and a carried value that fails either bound refuses.
+fn pinned_reclaim_after_unix_seconds(
+    prior: Option<&ProducerCheckpointV1>,
+    observation_unix_timestamp: i64,
+    window_end_unix_seconds: i64,
+) -> Result<i64> {
+    let derived = observation_unix_timestamp
+        .max(window_end_unix_seconds)
+        .checked_add(FLAGSHIP_RECLAIM_DELAY_SECONDS_V1)
+        .ok_or_else(|| Error::new("provider reclaim time overflow"))?;
+    let Some(prior) = prior else {
+        return Ok(derived);
+    };
+    let pinned = prior.planned_input.reclaim_after_unix_seconds;
+    let floor = window_end_unix_seconds
+        .checked_add(FLAGSHIP_RECLAIM_DELAY_SECONDS_V1)
+        .ok_or_else(|| Error::new("provider reclaim time overflow"))?;
+    if pinned < floor {
+        return Err(Error::new(format!(
+            "producer checkpoint reclaim floor {pinned} is below the terminal window bound {floor}"
+        )));
+    }
+    if pinned > derived {
+        return Err(Error::new(format!(
+            "producer checkpoint reclaim floor {pinned} is ahead of the derivation {derived} this observation admits"
+        )));
+    }
+    Ok(pinned)
+}
+
 fn table_keys(authority: Pubkey, slots: &BTreeMap<StageV1, u64>) -> Result<LookupTablesV1> {
     let derive = |stage: StageV1| -> Result<String> {
         let slot = *slots
@@ -2950,8 +3177,22 @@ fn authenticate_checked_upgrade_plan(plan: &SuccessorPlan) -> Result<()> {
                         })
             }
         };
+        // The table says which KIND of row this is. Carry-forward is exact; a
+        // role the cut owns may be satisfied by an Upgrade receipt or by proven
+        // equality with the checked candidate, and both are admitted here.
+        let disposition_matches = match expected_disposition {
+            CheckedDeploymentDispositionV1::CarryForward => {
+                observed.disposition == CheckedDeploymentDispositionV1::CarryForward
+            }
+            CheckedDeploymentDispositionV1::Upgrade
+            | CheckedDeploymentDispositionV1::AlreadyCurrent => matches!(
+                observed.disposition,
+                CheckedDeploymentDispositionV1::Upgrade
+                    | CheckedDeploymentDispositionV1::AlreadyCurrent
+            ),
+        };
         if observed.role != expected_role
-            || observed.disposition != expected_disposition
+            || !disposition_matches
             || !tagged_fields_are_closed
             || observed.dump_path.is_empty()
             || observed.checked_candidate_elf_path.is_empty()
@@ -3049,6 +3290,7 @@ fn producer_selected_input(
     post_update_body: &[u8],
     coherent: &FinalizedSnapshotV1,
     slots: &BTreeMap<StageV1, u64>,
+    prior: Option<&ProducerCheckpointV1>,
     expected_cluster: ExpectedClusterV1,
 ) -> Result<PlanInputV1> {
     if plan.schema != PLAN_FORMAT {
@@ -3142,12 +3384,11 @@ fn producer_selected_input(
         window,
         adapter,
     )?;
-    let reclaim_after_unix_seconds = coherent
-        .observation
-        .unix_timestamp
-        .max(window.end_unix_seconds())
-        .checked_add(FLAGSHIP_RECLAIM_DELAY_SECONDS_V1)
-        .ok_or_else(|| Error::new("provider reclaim time overflow"))?;
+    let reclaim_after_unix_seconds = pinned_reclaim_after_unix_seconds(
+        prior,
+        coherent.observation.unix_timestamp,
+        window.end_unix_seconds(),
+    )?;
     // A fresh Primary state hostile-decodes only with terminal sequence zero;
     // the first terminal decision is therefore the canonical next sequence.
     let terminal_sequence = 1_u64;
@@ -3164,7 +3405,7 @@ fn producer_selected_input(
     let lookup_tables = table_keys(resolver, slots)?;
     let (registry_artifact, registry_artifact_staging) =
         plan_record(plan, "registry_artifact_release")?;
-    let (pyth_release, _) = plan_record(plan, "pyth_release")?;
+    let (pyth_release, pyth_release_staging) = plan_record(plan, "pyth_release")?;
     let source_material_staging = campaign_record_staging(
         campaign,
         "source_material_record",
@@ -3196,6 +3437,40 @@ fn producer_selected_input(
         PORTFOLIO_SCHEMA_ID_V2,
         registry_program,
     )?;
+    // The six Execute-only staging cursors. Each is the canonical staging PDA of
+    // a campaign record whose raw coordinate `campaign_record_staging` re-derives
+    // from the same (schema, digest) pair, so a wrong schema refuses here rather
+    // than silently seating a junk address in the Execute lookup table.
+    let source_spec_staging = campaign_record_staging(
+        campaign,
+        "source_spec_record",
+        SOURCE_SPEC_SCHEMA_ID_V1,
+        registry_program,
+    )?;
+    let source_provider_release_staging = campaign_record_staging(
+        campaign,
+        "provider_release_record",
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+        registry_program,
+    )?;
+    let adapter_config_staging = campaign_record_staging(
+        campaign,
+        "pyth_adapter_config_record",
+        PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+        registry_program,
+    )?;
+    let window_staging = campaign_record_staging(
+        campaign,
+        "window_spec_record",
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        registry_program,
+    )?;
+    let statistic_staging = campaign_record_staging(
+        campaign,
+        "statistic_spec_record",
+        STATISTIC_SPEC_SCHEMA_ID_V1,
+        registry_program,
+    )?;
     let funding_ledger = campaign_account(campaign, "resolution_funding_ledger")?;
     Ok(PlanInputV1 {
         format: input_format(expected_cluster).to_owned(),
@@ -3213,12 +3488,18 @@ fn producer_selected_input(
             source_material: campaign_account(campaign, "source_material_record")?.to_string(),
             source_material_staging: source_material_staging.to_string(),
             source_spec: campaign_account(campaign, "source_spec_record")?.to_string(),
+            source_spec_staging: source_spec_staging.to_string(),
             source_provider_release: campaign_account(campaign, "provider_release_record")?
                 .to_string(),
+            source_provider_release_staging: source_provider_release_staging.to_string(),
             adapter_config: adapter_key.to_string(),
+            adapter_config_staging: adapter_config_staging.to_string(),
             window: window_key.to_string(),
+            window_staging: window_staging.to_string(),
             statistic: campaign_account(campaign, "statistic_spec_record")?.to_string(),
+            statistic_staging: statistic_staging.to_string(),
             pyth_release: pyth_release.to_owned(),
+            pyth_release_staging: pyth_release_staging.to_owned(),
             product: campaign_account(campaign, "product_record")?.to_string(),
             product_staging: product_staging.to_string(),
             result_domain: campaign_account(campaign, "result_domain_record")?.to_string(),
@@ -3263,24 +3544,33 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
     let arguments = ProducerCommandArgumentsV1::parse(arguments)?;
     let plan_path = absolute(arguments.plan, "--plan")?;
     let campaign_path = absolute(arguments.campaign_evidence, "--campaign-evidence")?;
+    let refreshed_path = arguments
+        .refreshed_evidence
+        .map(|path| absolute(Some(path), "--refreshed-evidence"))
+        .transpose()?;
     let facts_path = absolute(arguments.pyth_facts, "--pyth-facts")?;
     let checkpoint_path = absolute(arguments.producer_checkpoint, "--producer-checkpoint")?;
     let output_path = absolute(arguments.output, "--output")?;
     let plan_bytes = fs::read(&plan_path)?;
     let campaign_bytes = fs::read(&campaign_path)?;
+    let refreshed_bytes = refreshed_path.as_ref().map(fs::read).transpose()?;
     let facts_bytes = fs::read(&facts_path)?;
     let plan_sha256 = hex(&Sha256::digest(&plan_bytes));
     let campaign_sha256 = hex(&Sha256::digest(&campaign_bytes));
+    let refreshed_sha256 = refreshed_bytes
+        .as_deref()
+        .map(|bytes| hex(&Sha256::digest(bytes)));
     let facts_sha256 = hex(&Sha256::digest(&facts_bytes));
     let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
     let campaign_envelope: CampaignEvidenceV1 = serde_json::from_slice(&campaign_bytes)?;
-    let campaign = completed_campaign(&campaign_envelope, &plan_sha256, expected_cluster)?;
+    let founding_campaign = completed_campaign(&campaign_envelope, &plan_sha256, expected_cluster)?;
     let (facts, encoded_vaa, update_account, post_update_body) =
         parse_producer_facts(&facts_bytes)?;
     let prior = load_producer_checkpoint(
         &checkpoint_path,
         &plan_sha256,
         &campaign_sha256,
+        refreshed_sha256.as_deref(),
         &facts_sha256,
         expected_cluster,
     )?;
@@ -3293,6 +3583,35 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
     )?;
     expected_cluster.authenticate(&origin)?;
     let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    // The refresh, if one was supplied, is admitted here and merged into the
+    // effective evidence. Nothing below is weakened by it: every label the
+    // producer pins is still pinned byte-exact against the live finalized
+    // account by `authenticate_campaign_account`. What the refresh changes is
+    // only WHICH document was allowed to carry the row, and it may carry one
+    // only after reproducing the founding's immutable records exactly.
+    // `docs/design/EVIDENCE_REFRESH_V1.md`.
+    let refreshed_campaign = match refreshed_bytes.as_deref() {
+        None => None,
+        Some(bytes) => {
+            let refresh = evidence_refresh::parse_refresh_v1(bytes)?;
+            let effective = evidence_refresh::effective_accounts_v1(
+                &refresh,
+                &campaign_bytes,
+                &campaign_rows_as_model_v1(founding_campaign),
+                &plan_sha256,
+                expected_cluster,
+                rpc.finalized_slot()?,
+            )?;
+            Some(CampaignMarketEvidenceV1 {
+                completed: founding_campaign.completed.clone(),
+                accounts: model_rows_as_campaign_v1(effective),
+                founding_custody_context: founding_campaign.founding_custody_context.clone(),
+                direct_selected_manifest_entry_index: founding_campaign
+                    .direct_selected_manifest_entry_index,
+            })
+        }
+    };
+    let campaign = refreshed_campaign.as_ref().unwrap_or(founding_campaign);
     let market = campaign_account(campaign, "founding_market")?;
     let window = campaign_account(campaign, "window_spec_record")?;
     let adapter = campaign_account(campaign, "pyth_adapter_config_record")?;
@@ -3339,6 +3658,7 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
         &post_update_body,
         &coherent,
         &slots,
+        prior.as_ref(),
         expected_cluster,
     )?;
     let selected = SelectedInputV1::parse(&input, expected_cluster)?;
@@ -3471,6 +3791,7 @@ fn run_producer(arguments: Vec<String>, expected_cluster: ExpectedClusterV1) -> 
         format: producer_checkpoint_format(expected_cluster).to_owned(),
         plan_sha256,
         campaign_evidence_sha256: campaign_sha256,
+        refreshed_evidence_sha256: refreshed_sha256,
         pyth_facts_sha256: facts_sha256,
         observation_slot: snapshot.observation.slot,
         observation_unix_timestamp: snapshot.observation.unix_timestamp,
@@ -3908,10 +4229,17 @@ fn finish_table_submission(
         .as_ref()
         .ok_or_else(|| Error::new("table finalization omitted durable intent"))?;
     let snapshot = observe(rpc, selected, StageV1::Submit, slot)?;
-    if classify(chain_facts(selected, &snapshot)?)? != StageV1::Submit {
-        return Err(Error::new(
-            "Market resolution advanced while provisioning its routing tables",
-        ));
+    // §7.12 Ruling 6: the plan-time gate reads the chain before the packet is
+    // sent, and the life can advance between send and finalize. A table action
+    // must not *land* after the life has passed the stage its table serves —
+    // Ruling 1's clause, re-evaluated at the finalized slot.
+    let position = classify(chain_facts(selected, &snapshot)?)?;
+    if position > submission.stage {
+        return Err(Error::new(format!(
+            "the {} routing table action finalized after the life advanced to {}",
+            submission.stage.label(),
+            position.label()
+        )));
     }
     let plan = checkpoint
         .tables
@@ -4207,6 +4535,138 @@ fn reconcile_table_attempt(
     }
 }
 
+/// The freshness proof that accompanies a table provision: rebuild the action of
+/// the stage the life is at *now*, from the same finalized snapshot the routing
+/// decision reads (`docs/design/EVIDENCE_REFRESH_V1.md` §7.12 Ruling 5).
+///
+/// Its subject is the chain's position, not the table being written. Provisioning
+/// is a sequence — a fresh life writes all three tables while still at Submit —
+/// and a later stage's action is unbuildable from a snapshot that predates the
+/// accounts that stage's predecessor creates. At the mid-life case this exists
+/// for, the position and the table's stage coincide.
+///
+/// `Complete` is unreachable here: Ruling 1 refuses every routing stage first.
+fn authenticate_stage_freshness(
+    selected: &SelectedInputV1,
+    snapshot: &FinalizedSnapshotV1,
+    position: StageV1,
+) -> Result<()> {
+    match position {
+        StageV1::Submit => provider_submit_report(selected, snapshot).map(drop),
+        StageV1::Execute => provider_execute_report(selected, snapshot).map(drop),
+        StageV1::Accept => core_terminal_accept_report(selected, snapshot).map(drop),
+        StageV1::Reclaim => provider_reclaim_report(selected, snapshot).map(drop),
+        StageV1::Complete => Ok(()),
+    }
+}
+
+/// A life already under way must name itself before a routing table is written
+/// for it, and the name is §7.10's receipt chain, byte-identical: each standing
+/// receipt is re-derived from the cluster's own finalized packet and bound to
+/// *this* input's market (§7.12 Rulings 3 and 4).
+///
+/// The binding cannot be the input digest — a re-plan changes `inputSha256` by
+/// construction, which is the whole reason §7.10 exists.
+fn authenticate_standing_life(
+    rpc: &mut Rpc,
+    selected: &SelectedInputV1,
+    path: Option<&PathBuf>,
+    position: StageV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<Option<CheckpointV1>> {
+    let Some(path) = path else {
+        if position == StageV1::Submit {
+            return Ok(None);
+        }
+        return Err(Error::new(format!(
+            "a life already at {} may be provisioned only against its standing checkpoint; pass --standing-checkpoint",
+            position.label()
+        )));
+    };
+    let path = absolute(Some(path.clone()), "--standing-checkpoint")?;
+    let bytes = fs::read(&path).map_err(|error| {
+        Error::new(format!(
+            "read standing checkpoint {}: {error}",
+            path.display()
+        ))
+    })?;
+    let standing: CheckpointV1 = serde_json::from_slice(&bytes)?;
+    if standing.format != checkpoint_format(expected_cluster) {
+        return Err(Error::new(
+            "standing checkpoint format differs from this cluster",
+        ));
+    }
+    // The chain, not the operator, decides how many receipts the standing
+    // checkpoint owes: exactly the stage prefix below where the chain is.
+    require_adoption_coverage(&standing.receipts, position)?;
+    for receipt in &standing.receipts {
+        authenticate_adopted_receipt(rpc, selected, receipt)?;
+    }
+    authenticate_receipt_prefix(&standing, expected_cluster)?;
+    Ok(Some(standing))
+}
+
+/// A routing table may be written only for a stage the life has not passed and
+/// whose packet is neither landed nor planned (§7.12 Rulings 1 and 2).
+///
+/// A v0 message names most of its accounts by index into a lookup table, so a
+/// table that could change after a packet referencing it exists could change
+/// what that packet means. `classify` answers for landed packets; the standing
+/// checkpoint answers for signed-but-unsent ones, which chain cannot see.
+fn require_table_stage_open(
+    position: StageV1,
+    stage: StageV1,
+    standing: Option<&CheckpointV1>,
+) -> Result<()> {
+    let landed = standing.map_or_else(Vec::new, |checkpoint| {
+        checkpoint
+            .receipts
+            .iter()
+            .map(|receipt| receipt.stage)
+            .collect()
+    });
+    let planned = standing
+        .and_then(|checkpoint| checkpoint.stage_plan.as_ref())
+        .map(|plan| plan.stage);
+    table_stage_open(position, stage, &landed, planned)
+}
+
+/// The clause itself, over exactly the stage facts it reads: where the chain
+/// is, which stages the standing checkpoint has landed, and which stage it has
+/// a signed-but-unsent packet for.
+fn table_stage_open(
+    position: StageV1,
+    stage: StageV1,
+    landed: &[ReceiptStageV1],
+    planned: Option<StageV1>,
+) -> Result<()> {
+    if position > stage {
+        return Err(Error::new(format!(
+            "the {} routing table may not be provisioned: the life is already at {}",
+            stage.label(),
+            position.label()
+        )));
+    }
+    if let Some(receipt) = landed
+        .iter()
+        .find(|receipt| receipt.routing_stage() == stage)
+    {
+        return Err(Error::new(format!(
+            "the {} routing table may not be provisioned: the standing checkpoint holds a landed {} receipt",
+            stage.label(),
+            receipt.label()
+        )));
+    }
+    if let Some(plan) = planned.filter(|plan| plan.routing_stage() == stage) {
+        return Err(Error::new(format!(
+            "the {} routing table may not be provisioned: the standing checkpoint already plans an {} packet",
+            stage.label(),
+            plan.label()
+        )));
+    }
+    Ok(())
+}
+
 fn run_table_provisioner(
     arguments: Vec<String>,
     expected_cluster: ExpectedClusterV1,
@@ -4330,19 +4790,27 @@ fn run_table_provisioner(
     }
     if journal.intent.is_none() {
         let snapshot = observe(&mut rpc, &selected, StageV1::Submit, 0)?;
-        if classify(chain_facts(&selected, &snapshot)?)? != StageV1::Submit {
-            return Err(Error::new(
-                "routing tables may be provisioned only before the flagship provider submission",
-            ));
-        }
+        // §7.12 replaces the per-life gate with a per-stage one. The life's
+        // position on chain, the standing checkpoint that names the life, and
+        // the freshness proof for that position are all read before any stage
+        // is chosen; the stage-open clause then guards the write itself.
+        let position = classify(chain_facts(&selected, &snapshot)?)?;
+        let standing = authenticate_standing_life(
+            &mut rpc,
+            &selected,
+            arguments.standing_checkpoint.as_ref(),
+            position,
+            expected_cluster,
+        )?;
         authenticate_current_deployments(&selected, &snapshot)?;
         authenticate_selected_pyth_release(&selected, &snapshot, true, expected_cluster)?;
-        provider_submit_report(&selected, &snapshot)?;
+        authenticate_stage_freshness(&selected, &snapshot, position)?;
         let Some((stage, action, instruction)) = next_table_provision(&checkpoint, &snapshot)?
         else {
             println!("{}", serde_json::to_string_pretty(&journal)?);
             return Ok(());
         };
+        require_table_stage_open(position, stage, standing.as_ref())?;
         if action == TableProvisionActionV1::Create {
             authenticate_table_creation_slot(
                 &mut rpc,
@@ -4584,13 +5052,13 @@ fn core_terminal_accept_report(
         source_material: snapshot
             .observed(selected.account("source_material")?, "SourceMaterial")?,
         source_material_staging: snapshot
-            .observed_or_vacant(selected.account("source_material_staging")?),
+            .observed_or_vacant(selected.account("source_material_staging")?)?,
         capability_manifest: snapshot.observed(
             selected.account("capability_manifest")?,
             "CapabilityManifest",
         )?,
         capability_manifest_staging: snapshot
-            .observed_or_vacant(selected.account("capability_manifest_staging")?),
+            .observed_or_vacant(selected.account("capability_manifest_staging")?)?,
         source_state: snapshot.observed(selected.account("source_state")?, "Source state")?,
         funding_ledger: snapshot.observed(
             selected.account("funding_ledger")?,
@@ -4599,12 +5067,12 @@ fn core_terminal_accept_report(
         certificate: snapshot.observed(selected.account("certificate")?, "terminal certificate")?,
         rent_sysvar: snapshot.observed(sysvar::rent::ID, "Rent sysvar")?,
         product_raw: snapshot.observed(selected.account("product")?, "Product")?,
-        product_staging: snapshot.observed_or_vacant(selected.account("product_staging")?),
+        product_staging: snapshot.observed_or_vacant(selected.account("product_staging")?)?,
         result_domain_raw: snapshot.observed(selected.account("result_domain")?, "ResultDomain")?,
         result_domain_staging: snapshot
-            .observed_or_vacant(selected.account("result_domain_staging")?),
+            .observed_or_vacant(selected.account("result_domain_staging")?)?,
         portfolio_raw: snapshot.observed(selected.account("portfolio")?, "Portfolio")?,
-        portfolio_staging: snapshot.observed_or_vacant(selected.account("portfolio_staging")?),
+        portfolio_staging: snapshot.observed_or_vacant(selected.account("portfolio_staging")?)?,
     })
     .map_err(|error| Error::new(format!("Core terminal accept builder: {error:?}")))?;
     if report.instruction.program_id != selected.account("core_program")?
@@ -4766,6 +5234,46 @@ fn versioned_message_balances(
     Ok((slot, balances, states))
 }
 
+/// Give a provider-transport geometry probe the margin its error cannot carry.
+///
+/// `ProviderTransportTransactionErrorV3::Routing(PacketTooLarge)` says the bare
+/// action does not fit and cannot say by how much, which is the difference
+/// between a wall that can be acted on and one that can only be reported.
+/// EVIDENCE_REFRESH_V1 §7.4 fixed exactly this for the packet `prepare_stage`
+/// ships and named the same blind spot in these probes; this is that remedy
+/// applied where the probe lives.
+fn sized_provider_geometry_refusal(
+    stage: StageV1,
+    payer: Pubkey,
+    report: &ProviderTransportReportV3,
+    table: &ObservedAccount,
+    error: &ProviderTransportTransactionErrorV3,
+) -> Error {
+    if matches!(
+        error,
+        ProviderTransportTransactionErrorV3::Routing(
+            dclutch_versioned_message_operator::Error::PacketTooLarge
+        )
+    ) {
+        if let Ok(wire_bytes) = dclutch_versioned_message_operator::measure_v0_wire_bytes(
+            payer,
+            std::slice::from_ref(&report.instruction),
+            Hash::new_from_array(GEOMETRY_BLOCKHASH),
+            report.observation,
+            std::slice::from_ref(table),
+        ) {
+            return Error::new(format!(
+                "provider {} v0 geometry: the bare action alone is {wire_bytes} wire bytes, \
+                 {} over the {} packet limit, before the ComputeBudget prefix the sent packet adds",
+                stage.label(),
+                wire_bytes.saturating_sub(dclutch_versioned_message_operator::PACKET_DATA_BYTES),
+                dclutch_versioned_message_operator::PACKET_DATA_BYTES,
+            ));
+        }
+    }
+    Error::new(format!("provider {} v0 geometry: {error:?}", stage.label()))
+}
+
 struct CanonicalStageSemanticsV1 {
     action: Instruction,
     required_signers: Vec<Pubkey>,
@@ -4810,7 +5318,9 @@ fn canonical_stage_semantics(
                 Hash::new_from_array(GEOMETRY_BLOCKHASH),
                 std::slice::from_ref(table),
             )
-            .map_err(|error| Error::new(format!("provider submit v0 geometry: {error:?}")))?;
+            .map_err(|error| {
+                sized_provider_geometry_refusal(stage, selected.submitter, &report, table, &error)
+            })?;
             (
                 report.instruction,
                 compiled.required_signers,
@@ -4843,7 +5353,9 @@ fn canonical_stage_semantics(
                 Hash::new_from_array(GEOMETRY_BLOCKHASH),
                 std::slice::from_ref(table),
             )
-            .map_err(|error| Error::new(format!("provider execute v0 geometry: {error:?}")))?;
+            .map_err(|error| {
+                sized_provider_geometry_refusal(stage, selected.resolver, &report, table, &error)
+            })?;
             (
                 report.instruction,
                 compiled.required_signers,
@@ -4881,7 +5393,9 @@ fn canonical_stage_semantics(
                 Hash::new_from_array(GEOMETRY_BLOCKHASH),
                 std::slice::from_ref(table),
             )
-            .map_err(|error| Error::new(format!("provider reclaim v0 geometry: {error:?}")))?;
+            .map_err(|error| {
+                sized_provider_geometry_refusal(stage, selected.resolver, &report, table, &error)
+            })?;
             (
                 report.instruction,
                 compiled.required_signers,
@@ -4979,16 +5493,41 @@ fn prepare_stage(
     instructions.push(action.clone());
     let bounded = bounded_instructions(&instructions, None)?;
     let (blockhash, last_valid_block_height) = latest_table_blockhash(rpc)?;
+    let payer = *required_signers
+        .first()
+        .ok_or_else(|| Error::new("stage has no fee payer"))?;
     let routed = dclutch_versioned_message_operator::compile_v0_message(
-        *required_signers
-            .first()
-            .ok_or_else(|| Error::new("stage has no fee payer"))?,
+        payer,
         &bounded,
         blockhash,
         snapshot.observation,
         std::slice::from_ref(&table),
     )
     .map_err(|error| {
+        // A packet refusal that cannot name its own margin cannot be acted on:
+        // it does not say whether the route is a few bytes over or structurally
+        // impossible. The operator's error carries no payload, so measure the
+        // identical message and report the overage.
+        if error == dclutch_versioned_message_operator::Error::PacketTooLarge {
+            if let Ok(wire_bytes) = dclutch_versioned_message_operator::measure_v0_wire_bytes(
+                payer,
+                &bounded,
+                blockhash,
+                snapshot.observation,
+                std::slice::from_ref(&table),
+            ) {
+                return Error::new(format!(
+                    "{} atomic stage geometry: {wire_bytes} wire bytes is {} over the {} packet limit, \
+                     carrying {} bundled top-up transfer(s)",
+                    stage.label(),
+                    wire_bytes.saturating_sub(
+                        dclutch_versioned_message_operator::PACKET_DATA_BYTES
+                    ),
+                    dclutch_versioned_message_operator::PACKET_DATA_BYTES,
+                    transfers.len(),
+                ));
+            }
+        }
         Error::new(format!(
             "{} atomic stage geometry: {error:?}",
             stage.label()
@@ -5075,6 +5614,7 @@ struct CommandArgumentsV1 {
     resolver_keypair: Option<PathBuf>,
     update_keypair: Option<PathBuf>,
     through: Option<StageV1>,
+    adopt_receipts: Option<PathBuf>,
     execute: bool,
 }
 
@@ -5124,6 +5664,11 @@ impl CommandArgumentsV1 {
                         return Err(Error::new("--through may be supplied only once"));
                     }
                 }
+                "--adopt-receipts" => set_once(
+                    &mut parsed.adopt_receipts,
+                    PathBuf::from(value),
+                    "--adopt-receipts",
+                )?,
                 _ => return Err(Error::new(format!("unknown flagship argument: {argument}"))),
             }
         }
@@ -5163,10 +5708,12 @@ pub(crate) fn usage() -> &'static str {
      dclutch-local-successor-bootstrap flagship-resolution-v1 --provision-tables \
      --rpc-url URL --i-mean-devnet DEVNET_GENESIS \
      --producer-checkpoint ABSOLUTE_JSON --table-journal ABSOLUTE_JSON \
+     [--standing-checkpoint ABSOLUTE_JSON] \
      [--execute --authority-keypair ABSOLUTE_JSON]\n\n  \
      dclutch-local-successor-bootstrap flagship-resolution-v1 --rpc-url URL \
      --i-mean-devnet DEVNET_GENESIS --input ABSOLUTE_JSON \
      --checkpoint ABSOLUTE_JSON [--through submit|execute|reclaim|complete] \
+     [--adopt-receipts ABSOLUTE_JSON] \
      [--execute --submitter-keypair ABSOLUTE_JSON --resolver-keypair ABSOLUTE_JSON \
      --update-keypair ABSOLUTE_JSON]\n\nThe producer is key-free, read-only, and devnet-only. It \
      emits durable create/ordered-extend/freeze plans for the three exact typed tables, and \
@@ -5187,7 +5734,8 @@ pub(crate) fn owned_loopback_usage() -> &'static str {
      dclutch-local-successor-bootstrap \
      local-private-validator-flagship-resolution-v1 --provision-tables \
      --rpc-url http://127.0.0.1:PORT --producer-checkpoint ABSOLUTE_JSON \
-     --table-journal ABSOLUTE_JSON [--execute --authority-keypair ABSOLUTE_JSON]\n\n  \
+     --table-journal ABSOLUTE_JSON [--standing-checkpoint ABSOLUTE_JSON] \
+     [--execute --authority-keypair ABSOLUTE_JSON]\n\n  \
      dclutch-local-successor-bootstrap \
      local-private-validator-flagship-resolution-v1 \
      --rpc-url http://127.0.0.1:PORT --input ABSOLUTE_JSON \
@@ -5338,6 +5886,231 @@ fn provider_transaction_status(
     }))
 }
 
+/// The Clock sysvar's five decoded fields.
+///
+/// Every one of them advances, so a durable plan cannot pin any of them by
+/// bytes and still be sendable on a cluster whose slots move. Each earns a
+/// bound instead (EVIDENCE_REFRESH_V1 §7.6).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ClockReadingV1 {
+    slot: u64,
+    epoch_start_timestamp: i64,
+    epoch: u64,
+    leader_schedule_epoch: u64,
+    unix_timestamp: i64,
+}
+
+impl ClockReadingV1 {
+    fn decode(stage: StageV1, data: &[u8]) -> Result<Self> {
+        let field = |start: usize| -> Result<[u8; 8]> {
+            data.get(start..start.saturating_add(8))
+                .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
+                .ok_or_else(|| Self::width_refusal(stage))
+        };
+        if data.len() != CLOCK_SYSVAR_BYTES_V1 {
+            return Err(Self::width_refusal(stage));
+        }
+        Ok(Self {
+            slot: u64::from_le_bytes(field(0)?),
+            epoch_start_timestamp: i64::from_le_bytes(field(8)?),
+            epoch: u64::from_le_bytes(field(16)?),
+            leader_schedule_epoch: u64::from_le_bytes(field(24)?),
+            unix_timestamp: i64::from_le_bytes(field(32)?),
+        })
+    }
+
+    fn width_refusal(stage: StageV1) -> Error {
+        Error::new(format!(
+            "provider {} clock sysvar is not the exact {CLOCK_SYSVAR_BYTES_V1}-byte Clock layout",
+            stage.label()
+        ))
+    }
+}
+
+/// The interval of clock readings under which this exact plan is still the plan
+/// the producer's `validate_observation_fields` admitted.
+///
+/// `upper` is open where the stage reads no clock at all; the transaction's own
+/// freshness is bounded there by `last_valid_block_height`, not by this band
+/// (EVIDENCE_REFRESH_V1 §7.6, Ruling 4).
+#[derive(Clone, Copy, Debug)]
+struct ClockBandV1 {
+    lower: i64,
+    upper: Option<i64>,
+}
+
+/// Read one band endpoint's account out of the plan's own prestate.
+///
+/// Band endpoints come only from rows that still carry a byte-exact pin, which
+/// is what makes the band un-widenable: the comparison this change keeps has
+/// already refused any alteration of these rows on the original string before
+/// the band is derived (EVIDENCE_REFRESH_V1 §7.6, Ruling 3).
+fn pinned_band_row(plan: &StagePlanV1, key: Pubkey, label: &str) -> Result<Vec<u8>> {
+    let state = plan.pre_accounts.get(&key.to_string()).ok_or_else(|| {
+        Error::new(format!(
+            "provider {} clock band lost its pinned {label} row",
+            plan.stage.label()
+        ))
+    })?;
+    BASE64
+        .decode(&state.data_base64)
+        .map_err(|error| Error::new(format!("provider prestate base64: {error}")))
+}
+
+fn admissible_clock_band(selected: &SelectedInputV1, plan: &StagePlanV1) -> Result<ClockBandV1> {
+    let planned = plan.observation_unix_timestamp;
+    match plan.stage {
+        // `validate_observation_fields` admits when the publication sits inside
+        // `[now - max_age, now + max_future_skew]`. Solved for the clock rather
+        // than the publication, that is the closed interval below, and it is
+        // exactly the band this plan was admitted under.
+        StageV1::Submit | StageV1::Execute => {
+            let window = WindowSpecV1::decode(&pinned_band_row(
+                plan,
+                selected.account("window")?,
+                "WindowSpec",
+            )?)
+            .map_err(|error| Error::new(format!("WindowSpec: {error:?}")))?;
+            let publication = parse_price_feed_message(&selected.post_update_body)?.publish_time;
+            let lower = publication
+                .checked_sub(i64::from(window.max_future_skew_seconds()))
+                .ok_or_else(|| Error::new("provider clock band lower bound overflow"))?;
+            let upper = publication
+                .checked_add(i64::from(window.max_age_seconds()))
+                .ok_or_else(|| Error::new("provider clock band upper bound overflow"))?;
+            Ok(ClockBandV1 {
+                lower: lower.max(planned),
+                upper: Some(upper),
+            })
+        }
+        // Core terminal accept reads no clock, so monotonicity is the whole of
+        // its band; inventing an upper bound would be improvisation.
+        StageV1::Accept => Ok(ClockBandV1 {
+            lower: planned,
+            upper: None,
+        }),
+        StageV1::Reclaim => {
+            let lifecycle = ProviderUpdateLifecycleV3::decode(&pinned_band_row(
+                plan,
+                lifecycle_address(selected)?,
+                "provider lifecycle",
+            )?)
+            .map_err(|error| Error::new(format!("provider lifecycle: {error:?}")))?;
+            Ok(ClockBandV1 {
+                lower: lifecycle.reclaim_after_unix_seconds.max(planned),
+                upper: None,
+            })
+        }
+        StageV1::Complete => Err(Error::new("complete has no stage plan")),
+    }
+}
+
+/// Authenticate the one resolved row the runtime advances unconditionally.
+///
+/// Owner, lamports, executable and data width keep the original byte-pin and
+/// the original refusal; only the Clock's five decoded fields are released, and
+/// each is replaced by a bound rather than dropped.
+/// Compare the resolved prestate the plan recorded against a fresh reading.
+///
+/// Every row but the Clock is byte-exact on the original refusal. The band is
+/// taken lazily so a stage whose message never resolves the Clock never derives
+/// one.
+fn authenticate_prestate_rows(
+    plan: &StagePlanV1,
+    observed: BTreeMap<String, DurableAccountStateV1>,
+    band: impl FnOnce() -> Result<ClockBandV1>,
+) -> Result<()> {
+    let clock_key = sysvar::clock::ID.to_string();
+    let mut observed_rows = observed;
+    let mut planned_rows = plan.pre_accounts.clone();
+    let observed_clock = observed_rows.remove(&clock_key);
+    let planned_clock = planned_rows.remove(&clock_key);
+    if observed_rows != planned_rows {
+        return Err(Error::new(
+            "provider full resolved account prestate changed",
+        ));
+    }
+    match (planned_clock, observed_clock) {
+        (Some(planned_clock), Some(observed_clock)) => {
+            authenticate_prestate_clock(plan, &planned_clock, &observed_clock, band()?)
+        }
+        // A stage whose message never resolves the Clock has nothing to release.
+        (None, None) => Ok(()),
+        _ => Err(Error::new(
+            "provider full resolved account prestate changed",
+        )),
+    }
+}
+
+fn authenticate_prestate_clock(
+    plan: &StagePlanV1,
+    planned: &DurableAccountStateV1,
+    observed: &DurableAccountStateV1,
+    band: ClockBandV1,
+) -> Result<()> {
+    let decode = |state: &DurableAccountStateV1| -> Result<Vec<u8>> {
+        BASE64
+            .decode(&state.data_base64)
+            .map_err(|error| Error::new(format!("provider prestate base64: {error}")))
+    };
+    let planned_data = decode(planned)?;
+    let observed_data = decode(observed)?;
+    if planned.owner != observed.owner
+        || planned.lamports != observed.lamports
+        || planned.executable != observed.executable
+        || planned_data.len() != observed_data.len()
+    {
+        return Err(Error::new(
+            "provider full resolved account prestate changed",
+        ));
+    }
+    let before = ClockReadingV1::decode(plan.stage, &planned_data)?;
+    let after = ClockReadingV1::decode(plan.stage, &observed_data)?;
+    let monotone = |field: &str, planned_value: i128, observed_value: i128| -> Result<()> {
+        if observed_value < planned_value {
+            return Err(Error::new(format!(
+                "provider {} clock rewound: {field} {observed_value} is behind the planned {planned_value}",
+                plan.stage.label()
+            )));
+        }
+        Ok(())
+    };
+    monotone(
+        "slot",
+        i128::from(before.slot.max(plan.observation_slot)),
+        i128::from(after.slot),
+    )?;
+    monotone("epoch", i128::from(before.epoch), i128::from(after.epoch))?;
+    monotone(
+        "leaderScheduleEpoch",
+        i128::from(before.leader_schedule_epoch),
+        i128::from(after.leader_schedule_epoch),
+    )?;
+    monotone(
+        "epochStartTimestamp",
+        i128::from(before.epoch_start_timestamp),
+        i128::from(after.epoch_start_timestamp),
+    )?;
+    monotone(
+        "unixTimestamp",
+        i128::from(before.unix_timestamp),
+        i128::from(after.unix_timestamp),
+    )?;
+    if after.unix_timestamp < band.lower
+        || band.upper.is_some_and(|upper| after.unix_timestamp > upper)
+    {
+        return Err(Error::new(format!(
+            "provider {} clock {} is outside the admissible band [{}, {}] this plan was admitted under",
+            plan.stage.label(),
+            after.unix_timestamp,
+            band.lower,
+            band.upper
+                .map_or_else(|| "unbounded".to_string(), |upper| upper.to_string()),
+        )));
+    }
+    Ok(())
+}
+
 fn authenticate_provider_prestate(
     rpc: &mut Rpc,
     selected: &SelectedInputV1,
@@ -5386,18 +6159,16 @@ fn authenticate_provider_prestate(
             "provider full resolved prebalance vector changed",
         ));
     }
-    if states != plan.pre_accounts {
-        return Err(Error::new(
-            "provider full resolved account prestate changed",
-        ));
-    }
-    if table_fee_for_message(rpc, &plan.message_base64, expected_cluster)?
-        != plan.exact_fee_lamports
-    {
-        return Err(Error::new(
-            "provider exact fee differs from the canonical durable message",
-        ));
-    }
+    // Thirty-eight of the thirty-nine rows keep byte-equality on the original
+    // refusal. The Clock is the one account no actor controls and the runtime
+    // advances every slot, so pinning its contents buys no anti-forgery value
+    // and guarantees a liveness failure anywhere slots move; it is released
+    // here and bounded instead (EVIDENCE_REFRESH_V1 §7.6).
+    authenticate_prestate_rows(plan, states, || admissible_clock_band(selected, plan))?;
+    // Expiry is checked before the fee probe deliberately. `getFeeForMessage`
+    // answers null for a blockhash the cluster has forgotten, so an expired
+    // durable plan otherwise refuses with `getFeeForMessage omitted exact table
+    // fee` — a refusal that names the probe rather than the cause.
     let height = rpc
         .call("getBlockHeight", &json!([{"commitment":"finalized"}]))?
         .as_u64()
@@ -5405,6 +6176,13 @@ fn authenticate_provider_prestate(
     if height > plan.last_valid_block_height {
         return Err(Error::new(
             "durable provider blockhash expired before key access",
+        ));
+    }
+    if table_fee_for_message(rpc, &plan.message_base64, expected_cluster)?
+        != plan.exact_fee_lamports
+    {
+        return Err(Error::new(
+            "provider exact fee differs from the canonical durable message",
         ));
     }
     Ok(())
@@ -5478,10 +6256,10 @@ fn authenticate_provider_finalized_projection(
             let before1 = durable_pre_account(plan, key(1)?)?;
             let before2 = durable_pre_account(plan, key(2)?)?;
             let before34 = durable_pre_account(plan, key(34)?)?;
-            let after0 = post.observed_or_vacant(key(0)?);
-            let after1 = post.observed_or_vacant(key(1)?);
-            let after2 = post.observed_or_vacant(key(2)?);
-            let after34 = post.observed_or_vacant(key(34)?);
+            let after0 = post.observed_or_vacant(key(0)?)?;
+            let after1 = post.observed_or_vacant(key(1)?)?;
+            let after2 = post.observed_or_vacant(key(2)?)?;
+            let after34 = post.observed_or_vacant(key(34)?)?;
             let lifecycle_top_up_lamports = plan
                 .transfers
                 .iter()
@@ -5521,10 +6299,10 @@ fn authenticate_provider_finalized_projection(
             let before3 = durable_pre_account(plan, key(3)?)?;
             let before4 = durable_pre_account(plan, key(4)?)?;
             let before37 = durable_pre_account(plan, key(37)?)?;
-            let after2 = post.observed_or_vacant(key(2)?);
-            let after3 = post.observed_or_vacant(key(3)?);
-            let after4 = post.observed_or_vacant(key(4)?);
-            let after37 = post.observed_or_vacant(key(37)?);
+            let after2 = post.observed_or_vacant(key(2)?)?;
+            let after3 = post.observed_or_vacant(key(3)?)?;
+            let after4 = post.observed_or_vacant(key(4)?)?;
+            let after37 = post.observed_or_vacant(key(37)?)?;
             let source_material = durable_pre_account(plan, selected.account("source_material")?)?;
             let result_domain = durable_pre_account(plan, selected.account("result_domain")?)?;
             let update = durable_pre_account(plan, selected.account("update_account")?)?;
@@ -5571,7 +6349,7 @@ fn authenticate_provider_finalized_projection(
                 ));
             }
             let before_market = durable_pre_account(plan, key(1)?)?;
-            let after_market = post.observed_or_vacant(key(1)?);
+            let after_market = post.observed_or_vacant(key(1)?)?;
             if before_market.owner != after_market.owner
                 || before_market.executable != after_market.executable
                 || before_market.data == after_market.data
@@ -5587,7 +6365,7 @@ fn authenticate_provider_finalized_projection(
             ] {
                 require_same_account_state(
                     &durable_pre_account(plan, key(index)?)?,
-                    &post.observed_or_vacant(key(index)?),
+                    &post.observed_or_vacant(key(index)?)?,
                     purpose,
                 )?;
             }
@@ -5608,10 +6386,10 @@ fn authenticate_provider_finalized_projection(
             let before2 = durable_pre_account(plan, key(2)?)?;
             let before3 = durable_pre_account(plan, key(3)?)?;
             let before4 = durable_pre_account(plan, key(4)?)?;
-            let after1 = post.observed_or_vacant(key(1)?);
-            let after2 = post.observed_or_vacant(key(2)?);
-            let after3 = post.observed_or_vacant(key(3)?);
-            let after4 = post.observed_or_vacant(key(4)?);
+            let after1 = post.observed_or_vacant(key(1)?)?;
+            let after2 = post.observed_or_vacant(key(2)?)?;
+            let after3 = post.observed_or_vacant(key(3)?)?;
+            let after4 = post.observed_or_vacant(key(4)?)?;
             let certificate = durable_pre_account(plan, key(5)?)?;
             project_finalized_provider_reclaim_v3(ProviderReclaimFinalizedInputV3 {
                 instruction: &instruction,
@@ -5815,6 +6593,12 @@ fn run_with_expected_cluster(
     {
         return run_table_provisioner(arguments, expected_cluster);
     }
+    if arguments
+        .iter()
+        .any(|argument| argument == "--reprovision-execute-table")
+    {
+        return run_execute_table_reprovision(arguments, expected_cluster);
+    }
     let arguments = CommandArgumentsV1::parse(arguments)?;
     let input_path = absolute(arguments.input.clone(), "--input")?;
     let checkpoint_path = absolute(arguments.checkpoint.clone(), "--checkpoint")?;
@@ -5842,6 +6626,22 @@ fn run_with_expected_cluster(
     };
     let mut rpc = Rpc::connect_cluster(&origin, policy)?;
     let mut checkpoint = load_checkpoint(&checkpoint_path, &input_sha256, expected_cluster)?;
+    if arguments.adopt_receipts.is_some() {
+        let prior = absolute(arguments.adopt_receipts.clone(), "--adopt-receipts")?;
+        // The chain, not the operator, decides how many receipts this resume
+        // owes (§7.10 Ruling 5). Classify first, then demand exactly that prefix.
+        let initial = observe(&mut rpc, &selected, StageV1::Submit, 0)?;
+        let stage = classify(chain_facts(&selected, &initial)?)?;
+        adopt_prior_receipts(
+            &mut rpc,
+            &selected,
+            &mut checkpoint,
+            &prior,
+            stage,
+            expected_cluster,
+        )?;
+        write_checkpoint(&checkpoint_path, &checkpoint)?;
+    }
     let through = arguments.through.unwrap_or(StageV1::Complete);
     loop {
         if let Some(plan) = checkpoint.stage_plan.as_mut() {
@@ -6093,6 +6893,478 @@ fn authenticate_receipt_prefix(
         expected_cluster
             .authenticate_finalized_fee(receipt.fee_lamports, "Resolution finalized mutation")?;
     }
+    Ok(())
+}
+
+/// Carry the finalized receipts of every stage before `stage` into a fresh
+/// checkpoint, each one re-derived from chain rather than trusted from the file
+/// (`docs/design/EVIDENCE_REFRESH_V1.md` §7.10). This exists so a new
+/// `input.json` — a new `inputSha256`, and so a checkpoint
+/// `authenticate_checkpoint_identity` will not load — can still reach the
+/// unchanged exactly-four gate honestly.
+fn adopt_prior_receipts(
+    rpc: &mut Rpc,
+    selected: &SelectedInputV1,
+    checkpoint: &mut CheckpointV1,
+    prior_path: &Path,
+    stage: StageV1,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    if !checkpoint.receipts.is_empty()
+        || checkpoint.stage_plan.is_some()
+        || checkpoint.verified_terminal
+    {
+        return Err(Error::new(
+            "receipt adoption refused into a checkpoint that already has history",
+        ));
+    }
+    let bytes = fs::read(prior_path).map_err(|error| {
+        Error::new(format!(
+            "read adopted checkpoint {}: {error}",
+            prior_path.display()
+        ))
+    })?;
+    let prior: CheckpointV1 = serde_json::from_slice(&bytes)?;
+    require_adoption_coverage(&prior.receipts, stage)?;
+    for receipt in &prior.receipts {
+        authenticate_adopted_receipt(rpc, selected, receipt)?;
+    }
+    checkpoint.receipts = prior.receipts;
+    // Every structural clause the driver-minted vector answers, unchanged.
+    authenticate_receipt_prefix(checkpoint, expected_cluster)
+}
+
+/// The chain decides how many receipts a resume owes: exactly the stage prefix
+/// below `stage`, in order. This is the clause that keeps a resume from
+/// skipping a stage — no operator input can change the count (§7.10 Ruling 5).
+fn require_adoption_coverage(receipts: &[StageReceiptV1], stage: StageV1) -> Result<()> {
+    let owed = [
+        StageV1::Submit,
+        StageV1::Execute,
+        StageV1::Accept,
+        StageV1::Reclaim,
+    ]
+    .into_iter()
+    .filter(|candidate| *candidate < stage)
+    .map(ReceiptStageV1::from_stage)
+    .collect::<Result<Vec<_>>>()?;
+    if receipts.len() != owed.len()
+        || receipts
+            .iter()
+            .zip(&owed)
+            .any(|(receipt, expected)| receipt.stage != *expected)
+    {
+        return Err(Error::new(format!(
+            "adopted receipts do not cover exactly the stages before {}",
+            stage.label()
+        )));
+    }
+    Ok(())
+}
+
+/// Re-derive one adopted receipt from the finalized transaction it names. The
+/// anchor is the packet digest: the receipt names a byte string, and the cluster
+/// hands back the bytes it executed.
+fn authenticate_adopted_receipt(
+    rpc: &mut Rpc,
+    selected: &SelectedInputV1,
+    receipt: &StageReceiptV1,
+) -> Result<()> {
+    let label = receipt.stage.label();
+    let value = rpc.call(
+        "getTransaction",
+        &json!([receipt.signature, {"commitment":"finalized","encoding":"base64","maxSupportedTransactionVersion":0}]),
+    )?;
+    if value.is_null() {
+        return Err(Error::new(format!(
+            "adopted {label} receipt has no finalized transaction on this cluster"
+        )));
+    }
+    let tuple = value
+        .get("transaction")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::new(format!("adopted {label} receipt omitted base64 tuple")))?;
+    let encoded = tuple.first().and_then(Value::as_str).unwrap_or_default();
+    let packet = BASE64
+        .decode(encoded)
+        .map_err(|error| Error::new(format!("adopted {label} packet base64: {error}")))?;
+    let transaction: VersionedTransaction = bincode::deserialize(&packet)
+        .map_err(|error| Error::new(format!("adopted {label} packet: {error}")))?;
+    if tuple.len() != 2
+        || tuple.get(1).and_then(Value::as_str) != Some("base64")
+        || hex(&Sha256::digest(&packet)) != receipt.signed_transaction_sha256
+        || transaction
+            .signatures
+            .first()
+            .map(ToString::to_string)
+            .as_deref()
+            != Some(receipt.signature.as_str())
+    {
+        return Err(Error::new(format!(
+            "adopted {label} receipt does not authenticate against the finalized packet"
+        )));
+    }
+    transaction
+        .verify_and_hash_message()
+        .map_err(|error| Error::new(format!("adopted {label} packet signature: {error}")))?;
+    let meta = value
+        .get("meta")
+        .ok_or_else(|| Error::new(format!("adopted {label} receipt omitted meta")))?;
+    if !meta.get("err").is_some_and(Value::is_null) {
+        return Err(Error::new(format!(
+            "adopted {label} receipt finalized with a runtime error"
+        )));
+    }
+    let numbers = |parent: &Value, key: &str| -> Result<Vec<u64>> {
+        parent
+            .get(key)
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new(format!("adopted {label} receipt omitted {key}")))?
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_u64()
+                    .ok_or_else(|| Error::new(format!("adopted {label} receipt invalid {key}")))
+            })
+            .collect()
+    };
+    let strings = |parent: &Value, key: &str| -> Result<Vec<String>> {
+        parent
+            .get(key)
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::new(format!("adopted {label} receipt omitted {key}")))?
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| Error::new(format!("adopted {label} receipt invalid {key}")))
+            })
+            .collect()
+    };
+    let loaded = meta
+        .get("loadedAddresses")
+        .ok_or_else(|| Error::new(format!("adopted {label} receipt omitted loadedAddresses")))?;
+    let mut resolved = transaction
+        .message
+        .static_account_keys()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let statics = resolved.len();
+    resolved.extend(strings(loaded, "writable")?);
+    resolved.extend(strings(loaded, "readonly")?);
+    if resolved != receipt.resolved_account_keys {
+        return Err(Error::new(format!(
+            "adopted {label} receipt resolved a different account vector"
+        )));
+    }
+    // The packet may be real, finalized, and correctly digested and still belong
+    // to another market. Bind it to *this* input: the certificate and lifecycle
+    // it touched, and the Resolution program it invoked (§7.10 Ruling 4).
+    let mut bound = vec![
+        lifecycle_address(selected)?,
+        selected.account("market")?,
+        selected.account("source_state")?,
+        selected.account("update_account")?,
+    ];
+    // Submit CREATES the certificate's preconditions but never names it; every
+    // later stage does. Demand it exactly where it belongs.
+    if receipt.stage != ReceiptStageV1::Submit {
+        bound.push(selected.account("certificate")?);
+    }
+    let resolution = selected.account("resolution_program")?.to_string();
+    if bound
+        .into_iter()
+        .any(|key| !resolved.contains(&key.to_string()))
+        || !resolved[..statics].contains(&resolution)
+    {
+        return Err(Error::new(format!(
+            "adopted {label} receipt belongs to a different market"
+        )));
+    }
+    let return_data_base64 = match meta.get("returnData") {
+        Some(data) if !data.is_null() => data
+            .get("data")
+            .and_then(Value::as_array)
+            .and_then(|tuple| tuple.first())
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new(format!("adopted {label} receipt omitted returnData bytes")))?
+            .to_owned(),
+        _ => String::new(),
+    };
+    let return_bytes = BASE64
+        .decode(&return_data_base64)
+        .map_err(|error| Error::new(format!("adopted {label} returnData base64: {error}")))?;
+    for (field, chain, named) in [
+        (
+            "slot",
+            value.get("slot").and_then(Value::as_u64),
+            Some(receipt.slot),
+        ),
+        (
+            "fee",
+            meta.get("fee").and_then(Value::as_u64),
+            Some(receipt.fee_lamports),
+        ),
+        (
+            "computeUnitsConsumed",
+            finalized_compute_units(meta, "adopted receipt").ok(),
+            Some(receipt.compute_units_consumed),
+        ),
+    ] {
+        if chain.is_none() || chain != named {
+            return Err(Error::new(format!(
+                "adopted {label} receipt {field} differs from the finalized transaction"
+            )));
+        }
+    }
+    if numbers(meta, "preBalances")? != receipt.pre_balances
+        || numbers(meta, "postBalances")? != receipt.post_balances
+        || return_data_base64 != receipt.return_data_base64
+        || hex(&Sha256::digest(&return_bytes)) != receipt.return_data_sha256
+    {
+        return Err(Error::new(format!(
+            "adopted {label} receipt balances or return data differ from the finalized transaction"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct ReprovisionArgumentsV1 {
+    rpc_url: Option<String>,
+    acknowledgment: Option<String>,
+    producer_checkpoint: Option<PathBuf>,
+    campaign_evidence: Option<PathBuf>,
+    plan: Option<PathBuf>,
+    output: Option<PathBuf>,
+    input_output: Option<PathBuf>,
+}
+
+impl ReprovisionArgumentsV1 {
+    fn parse(arguments: Vec<String>) -> Result<Self> {
+        let mut parsed = Self::default();
+        let mut iterator = arguments.into_iter();
+        let mut mode = false;
+        while let Some(argument) = iterator.next() {
+            if argument == "--reprovision-execute-table" {
+                if mode {
+                    return Err(Error::new(
+                        "--reprovision-execute-table may be supplied only once",
+                    ));
+                }
+                mode = true;
+                continue;
+            }
+            let value = iterator
+                .next()
+                .ok_or_else(|| Error::new(format!("{argument} requires a value")))?;
+            match argument.as_str() {
+                "--rpc-url" => set_once(&mut parsed.rpc_url, value, "--rpc-url")?,
+                flag if flag == DEVNET_ACKNOWLEDGMENT_FLAG => set_once(
+                    &mut parsed.acknowledgment,
+                    value,
+                    DEVNET_ACKNOWLEDGMENT_FLAG,
+                )?,
+                "--producer-checkpoint" => set_once(
+                    &mut parsed.producer_checkpoint,
+                    PathBuf::from(value),
+                    "--producer-checkpoint",
+                )?,
+                "--campaign-evidence" => set_once(
+                    &mut parsed.campaign_evidence,
+                    PathBuf::from(value),
+                    "--campaign-evidence",
+                )?,
+                "--plan" => set_once(&mut parsed.plan, PathBuf::from(value), "--plan")?,
+                "--output" => set_once(&mut parsed.output, PathBuf::from(value), "--output")?,
+                "--input-output" => set_once(
+                    &mut parsed.input_output,
+                    PathBuf::from(value),
+                    "--input-output",
+                )?,
+                _ => {
+                    return Err(Error::new(format!(
+                        "unknown reprovision argument: {argument}"
+                    )));
+                }
+            }
+        }
+        Ok(parsed)
+    }
+}
+
+/// Re-plan the Execute lookup table for a life already under way.
+///
+/// The producer cannot run here — it asserts a fresh life, and the Receiver
+/// update this market already created is not vacant. But nothing about the
+/// planned input is stale except the Execute union, which grew by the eight
+/// rows §7.9 measured as missing. So this reads an already-authenticated
+/// producer checkpoint, names the six Execute-only staging cursors the input
+/// never carried, and re-plans **only** the Execute table at a fresh creation
+/// slot. Submit and Reclaim keep their frozen tables, because neither union
+/// changed.
+///
+/// It writes nothing to chain, and it re-runs `authenticate_producer_checkpoint`
+/// on its own output before writing: a re-plan that does not agree with the
+/// union derived from its own planned input refuses here.
+fn run_execute_table_reprovision(
+    arguments: Vec<String>,
+    expected_cluster: ExpectedClusterV1,
+) -> Result<()> {
+    let arguments = ReprovisionArgumentsV1::parse(arguments)?;
+    let producer_path = absolute(arguments.producer_checkpoint, "--producer-checkpoint")?;
+    let campaign_path = absolute(arguments.campaign_evidence, "--campaign-evidence")?;
+    let plan_path = absolute(arguments.plan, "--plan")?;
+    let output_path = absolute(arguments.output, "--output")?;
+    let input_path = absolute(arguments.input_output, "--input-output")?;
+    let producer_bytes = fs::read(&producer_path).map_err(|error| {
+        Error::new(format!(
+            "read producer checkpoint {}: {error}",
+            producer_path.display()
+        ))
+    })?;
+    let prior: ProducerCheckpointV1 = serde_json::from_slice(&producer_bytes)?;
+    // The prior checkpoint cannot authenticate itself under the widened
+    // selector set — it was minted before the six cursors were named, so its
+    // planned input carries empty strings where they belong. The output is
+    // authenticated in full instead, and the two are tied together by the
+    // exact-diff assertion below, which is strictly stronger: it admits a change
+    // to the six cursors and the Execute table address, and nothing else.
+    let campaign_bytes = fs::read(&campaign_path).map_err(|error| {
+        Error::new(format!(
+            "read campaign evidence {}: {error}",
+            campaign_path.display()
+        ))
+    })?;
+    if hex(&Sha256::digest(&campaign_bytes)) != prior.campaign_evidence_sha256 {
+        return Err(Error::new(
+            "campaign evidence digest differs from the producer checkpoint it re-plans",
+        ));
+    }
+    let campaign_envelope: CampaignEvidenceV1 = serde_json::from_slice(&campaign_bytes)?;
+    let plan_bytes = fs::read(&plan_path)
+        .map_err(|error| Error::new(format!("read plan {}: {error}", plan_path.display())))?;
+    if hex(&Sha256::digest(&plan_bytes)) != prior.plan_sha256 {
+        return Err(Error::new(
+            "plan digest differs from the producer checkpoint it re-plans",
+        ));
+    }
+    let plan: SuccessorPlan = serde_json::from_slice(&plan_bytes)?;
+    let campaign = completed_campaign(&campaign_envelope, &prior.plan_sha256, expected_cluster)?;
+    let origin = ClusterOriginV1::parse(
+        arguments
+            .rpc_url
+            .as_deref()
+            .ok_or_else(|| Error::new("--rpc-url is required"))?,
+        arguments.acknowledgment.as_deref(),
+    )?;
+    expected_cluster.authenticate(&origin)?;
+    let mut rpc = Rpc::connect_cluster(&origin, WritePolicyV1::ReadsOnly)?;
+    let registry_program = pubkey(&prior.planned_input.accounts.registry_program)?;
+    let mut input = prior.planned_input.clone();
+    // The six Execute-only staging cursors, each re-derived from the campaign
+    // record whose raw coordinate pins its (schema, digest) pair.
+    // Each cursor is tied to the raw record the input ALREADY names. That makes
+    // the derivation self-checking: `campaign_record_staging` pins the (schema,
+    // digest) pair by re-deriving the raw coordinate, and this pins that
+    // coordinate to the authenticated selector. A campaign document that no
+    // longer describes this input's records refuses rather than seating a stale
+    // cursor in the frozen table.
+    let cursor = |label: &str, selector: &str, raw: &str, schema: [u8; 32]| -> Result<String> {
+        let staging = campaign_record_staging(campaign, label, schema, registry_program)?;
+        if campaign_account(campaign, label)?.to_string() != raw {
+            return Err(Error::new(format!(
+                "campaign {label} is not the record this input names as {selector}"
+            )));
+        }
+        Ok(staging.to_string())
+    };
+    input.accounts.source_spec_staging = cursor(
+        "source_spec_record",
+        "sourceSpec",
+        &prior.planned_input.accounts.source_spec,
+        SOURCE_SPEC_SCHEMA_ID_V1,
+    )?;
+    input.accounts.source_provider_release_staging = cursor(
+        "provider_release_record",
+        "sourceProviderRelease",
+        &prior.planned_input.accounts.source_provider_release,
+        PROVIDER_RELEASE_SCHEMA_ID_V1,
+    )?;
+    input.accounts.adapter_config_staging = cursor(
+        "pyth_adapter_config_record",
+        "adapterConfig",
+        &prior.planned_input.accounts.adapter_config,
+        PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
+    )?;
+    input.accounts.window_staging = cursor(
+        "window_spec_record",
+        "window",
+        &prior.planned_input.accounts.window,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+    )?;
+    input.accounts.statistic_staging = cursor(
+        "statistic_spec_record",
+        "statistic",
+        &prior.planned_input.accounts.statistic,
+        STATISTIC_SPEC_SCHEMA_ID_V1,
+    )?;
+    // Pyth's staging cursor was always derivable — the producer computed it from
+    // the plan and discarded it.
+    input.accounts.pyth_release_staging = plan_record(&plan, "pyth_release")?.1.to_owned();
+    let authority = pubkey(&prior.authority)?;
+    let value = rpc.call("getSlot", &json!([{"commitment":"finalized"}]))?;
+    let creation_slot = value
+        .as_u64()
+        .ok_or_else(|| Error::new("getSlot omitted a finalized slot"))?;
+    let table_key = create_lookup_table(authority, authority, creation_slot).1;
+    input.lookup_tables.execute = table_key.to_string();
+    // Exactly seven fields may move. Rebase the new input back onto the prior
+    // one and demand byte equality: any other drift — a substituted Market, a
+    // moved refund recipient, a different post body — refuses here.
+    let mut rebased = input.clone();
+    rebased.accounts.source_spec_staging = prior.planned_input.accounts.source_spec_staging.clone();
+    rebased.accounts.source_provider_release_staging = prior
+        .planned_input
+        .accounts
+        .source_provider_release_staging
+        .clone();
+    rebased.accounts.adapter_config_staging =
+        prior.planned_input.accounts.adapter_config_staging.clone();
+    rebased.accounts.window_staging = prior.planned_input.accounts.window_staging.clone();
+    rebased.accounts.statistic_staging = prior.planned_input.accounts.statistic_staging.clone();
+    rebased.accounts.pyth_release_staging =
+        prior.planned_input.accounts.pyth_release_staging.clone();
+    rebased.lookup_tables.execute = prior.planned_input.lookup_tables.execute.clone();
+    if rebased != prior.planned_input {
+        return Err(Error::new(
+            "Execute table re-plan changed more than the six staging cursors and the Execute table",
+        ));
+    }
+    let selected = SelectedInputV1::parse(&input, expected_cluster)?;
+    let table = build_lookup_table_plan(&selected, StageV1::Execute, creation_slot, authority)?;
+    authenticate_lookup_table_plan(&selected, &table)?;
+    let route = route_lookup_table(&table, None, creation_slot, &Rent::default())?;
+    let mut tables = prior.tables.clone();
+    let mut routes = prior.routes.clone();
+    tables.insert(StageV1::Execute, table);
+    routes.insert(StageV1::Execute, route);
+    let checkpoint = ProducerCheckpointV1 {
+        tables,
+        routes,
+        planned_input: input.clone(),
+        flagship_input: Some(input.clone()),
+        ..prior
+    };
+    // The output is admitted by the same authentication the producer's own
+    // output is: the Execute plan must agree with the union its planned input
+    // derives, and every table address must agree with `lookupTables`.
+    authenticate_producer_checkpoint(&checkpoint, expected_cluster)?;
+    write_json(&output_path, &checkpoint)?;
+    write_json(&input_path, &input)?;
+    println!("{}", serde_json::to_string_pretty(&checkpoint.routes)?);
     Ok(())
 }
 
@@ -6542,11 +7814,17 @@ mod tests {
             source_material: key(),
             source_material_staging: key(),
             source_spec: key(),
+            source_spec_staging: key(),
             source_provider_release: key(),
+            source_provider_release_staging: key(),
             adapter_config: key(),
+            adapter_config_staging: key(),
             window: key(),
+            window_staging: key(),
             statistic: key(),
+            statistic_staging: key(),
             pyth_release: key(),
+            pyth_release_staging: key(),
             product: key(),
             product_staging: key(),
             result_domain: key(),
@@ -7256,6 +8534,32 @@ mod tests {
         missing_accept.verified_terminal = false;
         assert!(authenticate_receipt_prefix(&missing_accept, ExpectedClusterV1::Devnet).is_err());
         assert!(require_terminal_receipts(&missing_accept, ExpectedClusterV1::Devnet).is_err());
+
+        // §7.10 Ruling 5: the chain's stage fixes the count, and only the exact
+        // prefix below it is admissible. Nothing here can be widened by input.
+        for (stage, owed) in [
+            (StageV1::Submit, 0),
+            (StageV1::Execute, 1),
+            (StageV1::Accept, 2),
+            (StageV1::Reclaim, 3),
+            (StageV1::Complete, 4),
+        ] {
+            assert!(require_adoption_coverage(&receipts[..owed], stage).is_ok());
+            for wrong in 0..=4 {
+                if wrong != owed {
+                    assert!(
+                        require_adoption_coverage(&receipts[..wrong], stage).is_err(),
+                        "{} admitted {wrong} receipts, owes {owed}",
+                        stage.label()
+                    );
+                }
+            }
+        }
+        // A later stage's receipt may never stand in for an earlier one.
+        let skipped = vec![receipts[1].clone()];
+        assert!(require_adoption_coverage(&skipped, StageV1::Execute).is_err());
+        let reordered_prefix = vec![receipts[1].clone(), receipts[0].clone()];
+        assert!(require_adoption_coverage(&reordered_prefix, StageV1::Accept).is_err());
     }
 
     #[test]
@@ -7642,5 +8946,377 @@ mod tests {
             "11111111111111111111111111111111"
         );
         assert_eq!(base58_encode(&[0, 1]).expect("base58"), "12");
+    }
+
+    fn checkpoint_with_reclaim_floor(reclaim_after_unix_seconds: i64) -> ProducerCheckpointV1 {
+        let mut planned_input = sample_input();
+        planned_input.reclaim_after_unix_seconds = reclaim_after_unix_seconds;
+        ProducerCheckpointV1 {
+            format: PRODUCER_CHECKPOINT_FORMAT.into(),
+            plan_sha256: hex(&[1; 32]),
+            campaign_evidence_sha256: hex(&[2; 32]),
+            refreshed_evidence_sha256: None,
+            pyth_facts_sha256: hex(&[3; 32]),
+            observation_slot: 100,
+            observation_unix_timestamp: 10_000,
+            market: Pubkey::new_from_array([60; 32]).to_string(),
+            generation: 1,
+            payer: Pubkey::new_from_array([80; 32]).to_string(),
+            authority: Pubkey::new_from_array([80; 32]).to_string(),
+            tables: BTreeMap::new(),
+            routes: BTreeMap::new(),
+            planned_input,
+            flagship_input: None,
+        }
+    }
+
+    /// The first produce derives the floor from its own observation.
+    #[test]
+    fn absent_prior_derives_the_reclaim_floor_from_this_observation() {
+        // Observation past the window end: the observation is the max.
+        assert_eq!(
+            pinned_reclaim_after_unix_seconds(None, 10_000, 5_000).expect("derived"),
+            10_000 + FLAGSHIP_RECLAIM_DELAY_SECONDS_V1
+        );
+        // Observation inside the window: the window end is the max.
+        assert_eq!(
+            pinned_reclaim_after_unix_seconds(None, 4_000, 5_000).expect("derived"),
+            5_000 + FLAGSHIP_RECLAIM_DELAY_SECONDS_V1
+        );
+    }
+
+    /// The deadlock: with the floor re-derived, a later observation would move
+    /// it and the resume comparison would refuse forever. Pinned, it does not
+    /// move, no matter how far the clock has run past the window.
+    #[test]
+    fn resume_pins_the_reclaim_floor_against_an_advancing_clock() {
+        let committed = 10_000 + FLAGSHIP_RECLAIM_DELAY_SECONDS_V1;
+        let prior = checkpoint_with_reclaim_floor(committed);
+        for observation in [10_000, 20_000, 400_000, 10_000_000] {
+            assert_eq!(
+                pinned_reclaim_after_unix_seconds(Some(&prior), observation, 5_000)
+                    .expect("pinned floor"),
+                committed,
+                "the carried floor moved at observation {observation}"
+            );
+        }
+    }
+
+    /// Carried, not believed. A floor below the terminal window bound is what
+    /// `dclutch-provider-transport-v3-operator` refuses outright, so the
+    /// producer refuses to carry one.
+    #[test]
+    fn carried_reclaim_floor_below_the_window_bound_refuses() {
+        let prior = checkpoint_with_reclaim_floor(5_000 + FLAGSHIP_RECLAIM_DELAY_SECONDS_V1 - 1);
+        let error = pinned_reclaim_after_unix_seconds(Some(&prior), 10_000, 5_000)
+            .expect_err("floor below the window bound must refuse");
+        assert!(
+            format!("{error:?}").contains("is below the terminal window bound"),
+            "unexpected refusal: {error:?}"
+        );
+    }
+
+    /// The other direction: a hand-edited floor cannot be pushed past what this
+    /// observation would itself derive, so a resume cannot strand the reclaim.
+    #[test]
+    fn carried_reclaim_floor_ahead_of_this_observation_refuses() {
+        let prior = checkpoint_with_reclaim_floor(10_000 + FLAGSHIP_RECLAIM_DELAY_SECONDS_V1 + 1);
+        let error = pinned_reclaim_after_unix_seconds(Some(&prior), 10_000, 5_000)
+            .expect_err("floor ahead of the derivation must refuse");
+        assert!(
+            format!("{error:?}").contains("is ahead of the derivation"),
+            "unexpected refusal: {error:?}"
+        );
+        // The same floor is admitted once the clock legitimately reaches it.
+        assert!(pinned_reclaim_after_unix_seconds(Some(&prior), 10_001, 5_000).is_ok());
+    }
+
+    fn clock_row(
+        slot: u64,
+        epoch_start: i64,
+        epoch: u64,
+        leader: u64,
+        unix: i64,
+    ) -> DurableAccountStateV1 {
+        let mut data = Vec::with_capacity(CLOCK_SYSVAR_BYTES_V1);
+        data.extend_from_slice(&slot.to_le_bytes());
+        data.extend_from_slice(&epoch_start.to_le_bytes());
+        data.extend_from_slice(&epoch.to_le_bytes());
+        data.extend_from_slice(&leader.to_le_bytes());
+        data.extend_from_slice(&unix.to_le_bytes());
+        DurableAccountStateV1 {
+            owner: sysvar::ID.to_string(),
+            lamports: 1_169_280,
+            executable: false,
+            data_base64: BASE64.encode(&data),
+            data_sha256: hex(&Sha256::digest(&data)),
+        }
+    }
+
+    /// EVIDENCE_REFRESH_V1 §7.5/§7.6: the Clock is released from byte-equality
+    /// and bounded instead, and the release must not leak to any other row.
+    #[test]
+    fn prestate_releases_only_the_clock_and_bounds_every_field_it_releases() {
+        let (mut plan, _) = sample_durable_stage_plan();
+        let clock_key = sysvar::clock::ID.to_string();
+        let planned_clock = clock_row(111, 200, 3, 5, 222);
+        plan.pre_accounts
+            .insert(clock_key.clone(), planned_clock.clone());
+        let band = ClockBandV1 {
+            lower: 222,
+            upper: Some(500),
+        };
+        let rows = |clock: &DurableAccountStateV1| {
+            let mut observed = plan.pre_accounts.clone();
+            observed.insert(clock_key.clone(), clock.clone());
+            observed
+        };
+        let refusal = |observed: BTreeMap<String, DurableAccountStateV1>| {
+            authenticate_prestate_rows(&plan, observed, || Ok(band))
+                .expect_err("must refuse")
+                .to_string()
+        };
+
+        // Green: the clock advanced, inside the band, and the plan still holds.
+        // This is the direction the byte-pin made impossible on a live cluster.
+        assert!(
+            authenticate_prestate_rows(&plan, rows(&clock_row(9_001, 200, 3, 5, 499)), || Ok(band))
+                .is_ok()
+        );
+        assert!(
+            authenticate_prestate_rows(&plan, rows(&planned_clock), || Ok(band)).is_ok(),
+            "an unmoved clock is still inside its own band"
+        );
+
+        // Past the band, on a refusal of its own that names the band.
+        let outside = refusal(rows(&clock_row(9_001, 200, 3, 5, 501)));
+        assert!(
+            outside.contains("is outside the admissible band [222, 500]"),
+            "unexpected refusal: {outside}"
+        );
+
+        // Every released field keeps a bound: nothing is simply dropped.
+        for (field, hostile) in [
+            ("unixTimestamp", clock_row(9_001, 200, 3, 5, 221)),
+            ("slot", clock_row(110, 200, 3, 5, 300)),
+            ("epoch", clock_row(9_001, 200, 2, 5, 300)),
+            ("epochStartTimestamp", clock_row(9_001, 199, 3, 5, 300)),
+            ("leaderScheduleEpoch", clock_row(9_001, 200, 3, 4, 300)),
+        ] {
+            let error = refusal(rows(&hostile));
+            assert!(
+                error.contains(&format!("clock rewound: {field}")),
+                "unexpected refusal for {field}: {error}"
+            );
+        }
+
+        // The release is per-field: the Clock row's own non-advancing
+        // attributes keep the byte-pin and the ORIGINAL refusal.
+        let mut reparented = planned_clock.clone();
+        reparented.owner = system_program::ID.to_string();
+        assert_eq!(
+            refusal(rows(&reparented)),
+            "provider full resolved account prestate changed"
+        );
+        let mut refunded = planned_clock.clone();
+        refunded.lamports = planned_clock.lamports + 1;
+        assert_eq!(
+            refusal(rows(&refunded)),
+            "provider full resolved account prestate changed"
+        );
+        let mut truncated = planned_clock.clone();
+        let short = vec![0_u8; CLOCK_SYSVAR_BYTES_V1 - 1];
+        truncated.data_base64 = BASE64.encode(&short);
+        truncated.data_sha256 = hex(&Sha256::digest(&short));
+        assert_eq!(
+            refusal(rows(&truncated)),
+            "provider full resolved account prestate changed",
+            "a re-widthed Clock row is caught by the surviving data-length pin"
+        );
+
+        // The band must not leak generality: a single byte moved on any OTHER
+        // row still refuses on the original string, even while the clock is
+        // legitimately advancing inside its band.
+        let victim = plan
+            .resolved_account_keys
+            .first()
+            .cloned()
+            .expect("fixture resolved key");
+        let mut tampered = rows(&clock_row(9_001, 200, 3, 5, 499));
+        let row = tampered.get_mut(&victim).expect("fixture row");
+        row.lamports += 1;
+        assert_eq!(
+            refusal(tampered),
+            "provider full resolved account prestate changed"
+        );
+
+        // A Clock the plan pinned but the reading never produced is structural.
+        let mut absent = rows(&planned_clock);
+        absent.remove(&clock_key);
+        assert_eq!(
+            refusal(absent),
+            "provider full resolved account prestate changed"
+        );
+    }
+
+    /// EVIDENCE_REFRESH_V1 §7.6, Ruling 3/4: each stage derives its own band,
+    /// and only from rows that still carry a byte-exact pin.
+    #[test]
+    fn admissible_clock_band_is_stage_specific_and_reads_only_pinned_rows() {
+        let selected = sample_selected();
+        let (mut plan, _) = sample_durable_stage_plan();
+
+        // Core terminal accept reads no clock: monotonicity is the whole band.
+        plan.stage = StageV1::Accept;
+        let accept = admissible_clock_band(&selected, &plan).expect("accept band");
+        assert_eq!(accept.lower, plan.observation_unix_timestamp);
+        assert_eq!(accept.upper, None);
+
+        // Complete never carries a plan, so it can never derive a band.
+        plan.stage = StageV1::Complete;
+        assert!(admissible_clock_band(&selected, &plan).is_err());
+
+        // A band endpoint whose account the plan did not resolve is a
+        // structural break, refused by name rather than silently widened.
+        plan.stage = StageV1::Reclaim;
+        let error = admissible_clock_band(&selected, &plan)
+            .expect_err("reclaim band without a pinned lifecycle row")
+            .to_string();
+        assert!(
+            error.contains("clock band lost its pinned provider lifecycle row"),
+            "unexpected refusal: {error}"
+        );
+        plan.stage = StageV1::Submit;
+        let error = admissible_clock_band(&selected, &plan)
+            .expect_err("submit band without a pinned WindowSpec row")
+            .to_string();
+        assert!(
+            error.contains("clock band lost its pinned WindowSpec row"),
+            "unexpected refusal: {error}"
+        );
+    }
+
+    /// `docs/design/EVIDENCE_REFRESH_V1.md` §7.12 Ruling 1: the routing-table
+    /// gate is per-stage reachability, not per-life freshness. Driving chain can
+    /// only exhibit the positions the substrate happens to be in; the clause is
+    /// a pure function of two stages, so prove it over the whole lattice.
+    #[test]
+    fn routing_table_stage_gate_is_per_stage_reachability() {
+        let routed = [StageV1::Submit, StageV1::Execute, StageV1::Reclaim];
+        let positions = [
+            StageV1::Submit,
+            StageV1::Execute,
+            StageV1::Accept,
+            StageV1::Reclaim,
+            StageV1::Complete,
+        ];
+        for position in positions {
+            for stage in routed {
+                let admitted = table_stage_open(position, stage, &[], None).is_ok();
+                assert_eq!(
+                    admitted,
+                    position <= stage,
+                    "position {} against the {} table",
+                    position.label(),
+                    stage.label()
+                );
+            }
+        }
+
+        // The fresh-life path does not move: a life at Submit still writes all
+        // three tables, which is the whole flagship founding sequence.
+        for stage in routed {
+            table_stage_open(StageV1::Submit, stage, &[], None).expect("fresh life");
+        }
+
+        // Submit's meaning stays frozen the instant the life leaves Submit, and
+        // the refusal names the stage and the position rather than the feature.
+        let error = table_stage_open(StageV1::Execute, StageV1::Submit, &[], None)
+            .expect_err("submit table mid-life")
+            .to_string();
+        assert!(
+            error.contains(
+                "the submit routing table may not be provisioned: the life is already at execute"
+            ),
+            "unexpected refusal: {error}"
+        );
+
+        // A finished life writes no table at all.
+        for stage in routed {
+            let error = table_stage_open(StageV1::Complete, stage, &[], None)
+                .expect_err("complete life")
+                .to_string();
+            assert!(
+                error.contains("the life is already at complete"),
+                "unexpected refusal: {error}"
+            );
+        }
+    }
+
+    /// §7.12 Ruling 2: chain answers for landed packets, the standing checkpoint
+    /// answers for signed-but-unsent ones. A stage plan is invisible to
+    /// `classify`, so Ruling 1 alone does not buy the property.
+    #[test]
+    fn routing_table_stage_gate_reads_planned_packets_from_the_standing_checkpoint() {
+        // A landed Execute receipt freezes the Execute table even where Ruling 1
+        // would still admit it. Accept rides Execute's table, so its receipt
+        // freezes the same one.
+        for landed in [ReceiptStageV1::ProviderExecute, ReceiptStageV1::CoreAccept] {
+            let error = table_stage_open(StageV1::Execute, StageV1::Execute, &[landed], None)
+                .expect_err("landed receipt")
+                .to_string();
+            assert!(
+                error.contains(
+                    "the execute routing table may not be provisioned: the standing checkpoint holds a landed"
+                ),
+                "unexpected refusal: {error}"
+            );
+        }
+
+        // A Submit receipt says nothing about Execute's table.
+        table_stage_open(
+            StageV1::Execute,
+            StageV1::Execute,
+            &[ReceiptStageV1::Submit],
+            None,
+        )
+        .expect("a landed submit does not freeze the execute table");
+
+        // A signed-but-unsent Execute packet does, and chain cannot see it:
+        // `classify` reads accounts, and an unsent packet has touched none.
+        let error = table_stage_open(
+            StageV1::Execute,
+            StageV1::Execute,
+            &[ReceiptStageV1::Submit],
+            Some(StageV1::Execute),
+        )
+        .expect_err("planned packet")
+        .to_string();
+        assert!(
+            error.contains(
+                "the execute routing table may not be provisioned: the standing checkpoint already plans an execute packet"
+            ),
+            "unexpected refusal: {error}"
+        );
+
+        // An Accept packet is planned against Execute's table too.
+        assert!(
+            table_stage_open(
+                StageV1::Execute,
+                StageV1::Execute,
+                &[ReceiptStageV1::Submit],
+                Some(StageV1::Accept)
+            )
+            .is_err()
+        );
+
+        // …and neither says anything about Reclaim's.
+        table_stage_open(
+            StageV1::Execute,
+            StageV1::Reclaim,
+            &[ReceiptStageV1::Submit],
+            Some(StageV1::Execute),
+        )
+        .expect("a planned execute packet does not freeze the reclaim table");
     }
 }

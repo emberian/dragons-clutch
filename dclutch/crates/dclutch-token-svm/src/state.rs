@@ -24,6 +24,31 @@ const ACCOUNT_NATIVE_OFFSET: usize = 109;
 const ACCOUNT_DELEGATED_AMOUNT_OFFSET: usize = 121;
 const ACCOUNT_CLOSE_AUTHORITY_OFFSET: usize = 129;
 
+/// Canonical base-token Mint byte coordinates.
+///
+/// The Mint half of [`TokenAccountLayoutV1`], and public for the same reason:
+/// an adversarial fixture that stages a Mint-side refusal must name the field
+/// it corrupts, not a number it typed. `IS_INITIALIZED` is the coordinate
+/// [`ExactTransferProfileV1::check_mint`] reads, so a fixture that clears it
+/// stages exactly `Error::MintUninitialized` and nothing else.
+///
+/// [`ExactTransferProfileV1::check_mint`]: crate::ExactTransferProfileV1::check_mint
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MintLayoutV1;
+
+impl MintLayoutV1 {
+    /// Four-byte mint-authority option tag followed by its 32-byte body.
+    pub const AUTHORITY: usize = MINT_AUTHORITY_OFFSET;
+    /// Total minted supply.
+    pub const SUPPLY: usize = MINT_SUPPLY_OFFSET;
+    /// Base-unit exponent.
+    pub const DECIMALS: usize = MINT_DECIMALS_OFFSET;
+    /// Mint lifecycle byte: exactly one initialized Mint, zero otherwise.
+    pub const IS_INITIALIZED: usize = MINT_INITIALIZED_OFFSET;
+    /// Four-byte freeze-authority option tag followed by its 32-byte body.
+    pub const FREEZE_AUTHORITY: usize = MINT_FREEZE_AUTHORITY_OFFSET;
+}
+
 /// Canonical base-token Account byte coordinates.
 ///
 /// This layout is the single public owner used by adapters and adversarial

@@ -50,6 +50,32 @@
       ],
       "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
       "story": "Founded alongside the first public market and left unfinished. Trading was never switched on before the deadline passed."
+    },
+    "5w24EmP7Q2Kkw9y9tjMPdixLPMdJHA1xsY7Wip3k5SDm": {
+      "title": "SOL/USD buckets — five ways the week can end",
+      "question": "Where does the SOL/USD price finish this market's window — below $90, $90–$98, $98–$107, $107–$116, or above $116?",
+      "outcomes": [
+        "Below $90",
+        "$90 – $98",
+        "$98 – $107",
+        "$107 – $116",
+        "Above $116",
+        "The source failed to report"
+      ],
+      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
+      "story": "The first market here whose boundaries were measured, not assumed: half and one-and-a-half standard deviations around the founding price, from thirty days of realised volatility. It charges a 50 basis point fee."
+    },
+    "8Xky2yx3wBmDRXeNfKSuJigqiWDtwSvGvB75BSW6tPxK": {
+      "title": "SOL/USD — which side of the week",
+      "question": "Where does the SOL/USD price finish this market's window — below $98, between $98 and $107, or above $107?",
+      "outcomes": [
+        "Below $98",
+        "$98 – $107",
+        "Above $107",
+        "The source failed to report"
+      ],
+      "resolution": "Settles from Pyth's SOL/USD feed over the market's window. If the feed cannot answer, it resolves to the source-failure outcome.",
+      "story": "The same measured boundaries as its sibling, asked with one bucket instead of five, so the middle outcome is near a coin toss. It charges a 50 basis point fee and carries the first capability seal written on chain."
     }
   }
 }

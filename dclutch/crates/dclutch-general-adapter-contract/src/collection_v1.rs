@@ -459,7 +459,11 @@ impl GeneralBatchV1 {
             GeneralBatchLayoutV1::GENERATION,
             &self.opening.generation.to_le_bytes(),
         );
-        put(&mut output, GeneralBatchLayoutV1::MARKET, &self.opening.market);
+        put(
+            &mut output,
+            GeneralBatchLayoutV1::MARKET,
+            &self.opening.market,
+        );
         put(
             &mut output,
             GeneralBatchLayoutV1::PRODUCT_ID,
@@ -934,7 +938,10 @@ impl<'a> GeneralOrderV1<'a> {
             batch_id: read_array(bytes, GeneralOrderLayoutV1::BATCH_ID)?,
             generation: read_u64(bytes, GeneralOrderLayoutV1::GENERATION)?,
             max_lots: read_u64(bytes, GeneralOrderLayoutV1::MAX_LOTS)?,
-            max_quote_debit_per_lot: read_u64(bytes, GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT)?,
+            max_quote_debit_per_lot: read_u64(
+                bytes,
+                GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT,
+            )?,
             valid_until_slot: read_u64(bytes, GeneralOrderLayoutV1::VALID_UNTIL_SLOT)?,
         };
         if bytes.len() != general_order_len_v1(header.outcome_count)? {
@@ -982,7 +989,11 @@ impl<'a> GeneralOrderV1<'a> {
         }
         output.fill(0);
         put(output, GeneralOrderLayoutV1::MAGIC, &ORDER_MAGIC);
-        put(output, GeneralOrderLayoutV1::VERSION, &VERSION.to_le_bytes());
+        put(
+            output,
+            GeneralOrderLayoutV1::VERSION,
+            &VERSION.to_le_bytes(),
+        );
         output[GeneralOrderLayoutV1::PHASE] = ORDER_PHASE;
         put(
             output,

@@ -1859,10 +1859,13 @@ fn collect_direct_trade_planning_from_snapshot_v1(
         // by the route projection that produced `route`, from the same child
         // requests Trading will rebuild; a wrong one reproduces a different
         // address and the trade refuses rather than executing wrongly.
-        [
-            route.child_authorities.claims_authority_bump,
-            route.child_authorities.custody_authority_bumps[0],
-        ],
+        //
+        // The Custody bump is taken from the projection's ENABLED slot, never
+        // by indexing the fixed four-slot array here. This line used to read
+        // `custody_authority_bumps[0]`, which is the terminal ZERO-FEE route;
+        // a fee-bearing fill runs slot 1, and reproducing the wrong slot's
+        // bump refused `Release` at `child_authority_v4.rs:73`.
+        route.child_authorities.child_caller_bumps,
     )
     .map_err(|error| Error::new(format!("Direct Hot report: {error:?}")))?;
     if hot_report.trading_artifact_release != route.chain.trading_artifact_release

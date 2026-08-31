@@ -17,7 +17,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
-work="${DCLUTCH_FEE2TX_WORK:-$(mktemp -d /private/tmp/dclutch-fee2tx.XXXXXX)}"
+# TMPDIR, not a literal /private/tmp: that path is macOS-specific and does not
+# exist on the ubuntu-24.04 runner this now runs on, so `mktemp -d` failed
+# before the first ELF was built and the row died having proven nothing. Pin an
+# exact directory with DCLUTCH_FEE2TX_WORK when you want the evidence kept
+# somewhere specific.
+work="${DCLUTCH_FEE2TX_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/dclutch-fee2tx.XXXXXX")}"
 probe="$work/probe"
 caller="$work/caller"
 mkdir -p "$probe" "$caller"

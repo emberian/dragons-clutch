@@ -859,11 +859,33 @@ def drive_admission(
     return run
 
 
+def _produce_direct_trade(context: DriverContext, market: FoundedMarket, subject: str,
+                          participant_report: Path, key_dir: Path, produced: Path,
+                          slug: str) -> None:
+    """Freeze two signed Direct intents into a public manifest and a session."""
+    argv = [
+        context.bootstrap_bin, "local-private-validator-direct-trade-produce-v1",
+        "--rpc-url", context.rpc_url,
+        "--plan", context.plan,
+        "--market-input", str(market.market_input),
+        "--campaign-report", str(market.evidence),
+        "--participant-report", str(participant_report),
+        "--key-dir", str(key_dir),
+        "--output-dir", str(produced),
+    ]
+    run = run_driver(
+        argv, context.log(market.market_id, f"fill-{slug}-produce.log"), context.timeout
+    )
+    if run.returncode != 0:
+        raise DriverRefusal(f"producing the trade for {subject}: {run.first_error()}")
+
+
 def drive_fill(
     context: DriverContext,
     market: FoundedMarket,
     subject: str,
     participant_report: Path,
+    buyer_keypair: Optional[Path] = None,
 ) -> Invocation:
     """One Direct trade: produce the session, then advance it.
 
@@ -887,35 +909,38 @@ def drive_fill(
               "local-private-validator-direct-capability-activation-v1 does"
         )
     slug = subject.replace("/", "_").replace(">", "-")
-    key_dir = _trade_key_dir(context, market)
+    key_dir = _trade_key_dir(context, market, buyer_keypair)
     produced = context.market_dir(market.market_id) / "fills" / slug
-    if produced.exists() and any(produced.iterdir()):
-        raise DriverRefusal(
-            f"{subject} already has a produced trade directory; the producer refuses a "
-            "non-empty output directory rather than overwrite a signed session"
-        )
-    # EXISTING and EMPTY, both: the producer refuses a path that does not exist
-    # ("Direct output directory ...: No such file or directory") and refuses one
-    # that already holds a session.
-    produced.mkdir(parents=True, exist_ok=True)
-    argv = [
-        context.bootstrap_bin, "local-private-validator-direct-trade-produce-v1",
-        "--rpc-url", context.rpc_url,
-        "--plan", context.plan,
-        "--market-input", str(market.market_input),
-        "--campaign-report", str(market.evidence),
-        "--participant-report", str(participant_report),
-        "--key-dir", str(key_dir),
-        "--output-dir", str(produced),
-    ]
-    run = run_driver(argv, context.log(market.market_id, f"fill-{slug}-produce.log"), context.timeout)
-    if run.returncode != 0:
-        raise DriverRefusal(f"producing the trade for {subject}: {run.first_error()}")
-    sessions = sorted(produced.glob("*session*.json"))
+    # A TRADE ALREADY PRODUCED IS ADOPTED, NOT REFUSED, and this used to refuse.
+    #
+    # Same doctrine as the founding's, and here it is load-bearing rather than
+    # tidy: a Direct trade is about ten durable actions, each with its own
+    # journal, and the whole point of that design is that an interrupted trade
+    # can be picked up where it stopped. Refusing a non-empty directory threw
+    # that away -- a trade that had finalized its replay and token setup could
+    # never be advanced again, and the run had to abandon signed work the chain
+    # had already accepted.
+    #
+    # The producer's own refusal is still respected: it is never re-run over a
+    # directory that holds a session.
+    sessions = sorted(produced.glob("*session*.json")) if produced.is_dir() else []
     if not sessions:
-        raise DriverRefusal(
-            f"the trade producer wrote no session for {subject}; nothing to advance"
-        )
+        if produced.exists() and any(produced.iterdir()):
+            raise DriverRefusal(
+                f"{subject} has a trade directory with no session in it; the producer refuses a "
+                "non-empty output directory rather than overwrite one, and there is nothing here "
+                "to resume"
+            )
+        # EXISTING and EMPTY, both: the producer refuses a path that does not
+        # exist ("Direct output directory ...: No such file or directory") and
+        # refuses one that already holds a session.
+        produced.mkdir(parents=True, exist_ok=True)
+        _produce_direct_trade(context, market, subject, participant_report, key_dir, produced, slug)
+        sessions = sorted(produced.glob("*session*.json"))
+        if not sessions:
+            raise DriverRefusal(
+                f"the trade producer wrote no session for {subject}; nothing to advance"
+            )
     argv = [
         context.bootstrap_bin, "local-private-validator-direct-trade-v1",
         "--rpc-url", context.rpc_url,
@@ -946,15 +971,16 @@ def drive_fill(
             raise DriverRefusal(
                 f"advancing the trade for {subject} at action {attempt}: {run.first_error()}"
             )
-        stage = _direct_trade_stage(run.stdout)
-        if stage == DIRECT_TRADE_FINALIZED_SCHEMA_V1:
+        progress = _direct_trade_progress(run.stdout)
+        if progress is not None and progress[0] == DIRECT_TRADE_FINALIZED_SCHEMA_V1:
             return run
-        if stage is not None and stage == last:
+        if progress is not None and progress == last:
             raise DriverRefusal(
-                f"the trade for {subject} reported {stage} twice in a row without finalizing, so "
-                "it is not advancing and this run stopped rather than resubmitting"
+                f"the trade for {subject} printed a byte-identical {progress[0]} "
+                f"{progress[1]} report twice in a row without finalizing, so it is not advancing "
+                "and this run stopped rather than resubmitting"
             )
-        last = stage
+        last = progress
     raise DriverRefusal(
         f"the trade for {subject} did not finalize within "
         f"{DIRECT_TRADE_ACTION_CEILING_V1} durable actions; its journal is on disk and a rerun "
@@ -976,13 +1002,20 @@ DIRECT_TRADE_ACTION_CEILING_V1 = 24
 DIRECT_TRADE_FINALIZED_SCHEMA_V1 = "dclutch-owned-loopback-direct-trade-finalized-v1"
 
 
-def _direct_trade_stage(stdout: str) -> Optional[str]:
-    """The schema of whatever document the trade driver just printed.
+def _direct_trade_progress(stdout: str) -> Optional[tuple]:
+    """WHERE the trade is, as a tuple the stall check can compare.
 
-    `None` when it printed something this module cannot read, which is a reason
-    to keep going rather than to stop: the exit code is what says whether the
-    action landed, and a schema this does not recognise is a document it has no
-    opinion about.
+    SCHEMA ALONE IS TOO COARSE and that cost a hand-run its trade. The setup
+    actions -- `replay-setup` then `token-setup` -- both print
+    `dclutch-direct-trade-setup-journal-v1`, so a check keyed on the schema saw
+    the same word after two consecutive FINALIZED actions and called a working
+    trade stalled. The stage is what moves; the schema only says which family of
+    document is describing it.
+
+    `None` when the driver printed something this module cannot read, which is a
+    reason to keep going rather than to stop: the exit code is what says whether
+    the action landed, and a document this has no opinion about is not evidence
+    of a stall.
     """
     text = (stdout or "").strip()
     if not text:
@@ -991,8 +1024,25 @@ def _direct_trade_stage(stdout: str) -> Optional[str]:
         body = json.loads(text)
     except ValueError:
         return None
-    schema = body.get("schema") if isinstance(body, dict) else None
-    return schema if isinstance(schema, str) else None
+    if not isinstance(body, dict):
+        return None
+    schema = body.get("schema")
+    if not isinstance(schema, str):
+        return None
+    # THE WHOLE DOCUMENT, digested, and nothing narrower.
+    #
+    # Two narrower keys were tried and both called a working trade stalled. The
+    # SCHEMA repeats across `replay-setup` and `token-setup`; the schema plus the
+    # STAGE repeats across the three consecutive `lookup-extend` actions, each of
+    # which finalized its own transaction. Every one of those is progress.
+    #
+    # A driver that is genuinely not advancing prints the SAME REPORT -- same
+    # signature, same slot, same receipt -- so the exact document is the only
+    # key that separates "did the same thing again" from "did the next thing of
+    # the same kind". The stage is kept beside it for the refusal's sentence,
+    # which a reader has to be able to act on.
+    stage = str(body.get("stage") or body.get("nextAction") or "")
+    return (schema, stage, hashlib.sha256(text.encode()).hexdigest())
 
 
 # The two keys the Direct trade producer reads that a market's own founding
@@ -1018,14 +1068,39 @@ def _substrate_key(context: DriverContext, name: str) -> Path:
     return path
 
 
-def _trade_key_dir(context: DriverContext, market: FoundedMarket) -> Path:
-    """The market's own keys plus the two the producer needs from the substrate.
+# The three files the Direct producer opens out of `--key-dir`, and which
+# identity each one has to be. Read off the producer rather than guessed
+# (`direct_trade_producer.rs`, the three `key_dir.join(...)` calls), because
+# guessing two of them right and one wrong is what a whole run of refusals looks
+# like from outside.
+TRADE_KEY_FILES = {
+    "payer": "core-upgrade-authority.json",
+    "seller": "founding-founder.json",
+    "buyer": "participant.json",
+}
 
-    The producer refuses by NAMING the file it wanted next -- "Direct payer
-    keypair …/core-upgrade-authority.json: No such file or directory", then
-    "Direct seller keypair …/founding-founder.json" -- which is how this set was
-    established: by running it, not by reading a README that does not mention
-    either.
+
+def _trade_key_dir(
+    context: DriverContext, market: FoundedMarket, buyer_keypair: Optional[Path] = None
+) -> Path:
+    """The three keypairs the producer opens, each the identity it authenticates.
+
+    The producer reads exactly `core-upgrade-authority.json`,
+    `founding-founder.json` and `participant.json` from this directory and
+    refuses unless each expands to the public identity its EVIDENCE derives:
+    "a private key file did not expand to its evidence-derived public identity".
+
+    THE BUYER IS THE ADMITTED WALLET, NOT THE FOUNDING `participant` ROLE, and
+    that collision cost this lane a whole run. Both are called `participant`.
+    The founding role owns the market's fixture liquidity and is created by the
+    campaign; the buyer is the wallet the ADMISSION named as position owner, and
+    it is the one the participant report's public half is derived from. Copying
+    the market's key set wholesale put the founding role at `participant.json`,
+    and every fill on a market whose fee rate was otherwise admissible refused
+    on the identity rather than on anything about the trade.
+
+    So the buyer is written LAST and unconditionally, over whatever the market's
+    own key set left there.
     """
     merged = market.keys.parent / "trade-keys"
     merged.mkdir(parents=True, exist_ok=True)
@@ -1050,6 +1125,13 @@ def _trade_key_dir(context: DriverContext, market: FoundedMarket) -> Path:
         if not target.exists():
             shutil.copyfile(source, target)
             os.chmod(target, 0o600)
+    if buyer_keypair is not None:
+        # LAST AND UNCONDITIONAL. See the docstring: the market's own key set
+        # carries a founding role of the same name, and letting it win is the
+        # identity refusal.
+        target = merged / TRADE_KEY_FILES["buyer"]
+        shutil.copyfile(buyer_keypair, target)
+        os.chmod(target, 0o600)
     return merged
 
 
