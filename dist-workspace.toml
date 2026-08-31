@@ -1,0 +1,42 @@
+# Release configuration for the `dclutch` CLI, read by `dist`
+# (https://opensource.axo.dev/cargo-dist/).
+#
+# WHY THIS FILE IS AT THE ROOT OF THE REPOSITORY AND THE CARGO WORKSPACE IS NOT.
+#
+# The protocol's working tree is vendored here as the `dclutch/` subtree, and
+# the released crate is `dclutch/tools/dclutch-cli`, which is its own Cargo
+# workspace like every other host tool under `tools/`. There is no Cargo
+# workspace at this repository's root and there should not be one.
+#
+# `dist` reconciles those two facts with a `dist-workspace.toml` that NAMES a
+# member workspace living anywhere in the tree. That has to be here rather than
+# in the subtree for one hard reason: `dist` writes its release workflow next to
+# this file, and GitHub only reads `.github/workflows/` at a repository root. A
+# `dist-workspace.toml` inside `dclutch/` would generate a workflow GitHub never
+# runs.
+#
+# The consequence, stated so nobody rediscovers it: this file points INTO the
+# subtree, so a content-sync cut that moves or removes `tools/dclutch-cli`
+# breaks releases until the path below is updated. The subtree is content-synced
+# in waves; this file is a host file and survives those cuts untouched.
+
+[workspace]
+members = ["cargo:dclutch/tools/dclutch-cli"]
+
+[dist]
+# Pinned. A release is reproducible only if the thing that builds it is.
+cargo-dist-version = "0.31.0"
+ci = ["github"]
+installers = ["shell"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
+# `dclutch` reads accounts. It has no business phoning home to check its own
+# version, and a self-updater is a second network path to audit for no gain.
+install-updater = false
+# Publish nothing automatically beyond the GitHub Release itself. The crate is
+# `publish = false` and could not go to crates.io anyway: every protocol
+# dependency it has is a path dependency into the subtree.
+publish-jobs = []
