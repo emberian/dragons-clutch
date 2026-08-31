@@ -182,7 +182,17 @@ jobs:
               echo "programs tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
               ;;
             *)
-              echo "::error::the programs tier FAILED. Either an SBF program did not build, or the public Direct route no longer holds its compute margin. If it is the margin: find what got more expensive before touching the gate's constant -- raising it IS spending margin, and there is very little left. Check the shared contract crates first, because the last change to cost this route real margin believed it had changed no program at all."
+              # This annotation used to offer exactly two explanations, "either
+              # an SBF program did not build, or the margin broke", and it was
+              # wrong in both halves on the first real runs: all eight programs
+              # built and `direct_hot_top_level` PASSED, while what actually
+              # failed was an unrelated case in the same suite -- once a probe
+              # reading an unset ELF variable, once three continuation rows with
+              # no hostile directory to read. Someone trusting the two-way
+              # framing goes looking for compute erosion that is not there, and
+              # the nearest thing to a fix is the gate's constant. That is the
+              # one edit this project can least afford made for a wrong reason.
+              echo "::error::the programs tier FAILED, and this tier is BROADER than its name: it builds the SBF programs, runs the direct_hot_top_level margin gate, and runs the rest of the trading program-test suite. READ WHICH before concluding anything. If the margin gate itself is green, the margin is intact and the failure is another case -- check whether it ran at all, because a case that died on a missing fixture or unset variable proved nothing. ONLY if direct_hot_top_level is the failing row is this a compute finding, and then: find what got more expensive before touching its constant. Raising it IS spending margin and there is very little left; check the shared contract crates first, because the last change to cost this route real margin believed it had changed no program at all."
               echo "programs tier: FAILED" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
@@ -312,11 +322,19 @@ jobs:
           case "$code" in
             0) echo "suites: passed" | tee -a "$GITHUB_STEP_SUMMARY" ;;
             2)
-              echo "::warning::no suite ran -- a prerequisite is missing. The claims row in particular needs a populated cargo registry to build its audited Token-2022 fixture, and absence there is a host fact, not a claims defect."
+              echo "::warning::a row DID NOT RUN -- it reported a missing prerequisite, so nothing was proven for it either way. The claims row in particular needs cargo-build-sbf's own crate archive in the registry cache to authenticate its audited Token-2022 fixture, and a runner that installs Agave from the release tarball never puts one there. That is a host fact, not a claims defect."
               echo "suites: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
               ;;
             *)
-              echo "::error::an SBF program-test suite failed. The log names which row. These suites have twice been silently red for days because a change touched several programs and zero campaigns -- so treat this as a real finding about the protocol, not as suite maintenance."
+              # This annotation used to assert "treat this as a real finding
+              # about the protocol, not as suite maintenance", and on the first
+              # runs it said that about three rows in which ZERO TESTS RAN: one
+              # could not find its manifest, one had no builder archive, one had
+              # a stale lock. Asserting a protocol finding is not this job's to
+              # make -- the tier cannot see the difference between a row that
+              # refuted something and a row that fell over, so the honest
+              # annotation names the question instead of answering it.
+              echo "::error::a suite row exited nonzero. FIRST establish which, and whether it ran any tests at all: a row that failed before its first assertion is an environment or wiring defect, not a protocol finding, and three of them looked exactly like this on 2026-08-31. If it DID build and run and then a case failed, treat that as real -- these suites have twice been silently red for days because a change touched several programs and zero campaigns."
               echo "suites: FAILED" >> "$GITHUB_STEP_SUMMARY"
               exit 1
               ;;
