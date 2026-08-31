@@ -321,7 +321,7 @@ export default function CampaignWorkspace({ preloaded }: Readonly<{
         <p className="eyebrow">A campaign · one market&apos;s whole life on a private chain</p>
         <h1>Founded, resolved, retired.<br /><em>On a chain we started for it.</em></h1>
         <p>Everything on this page came off a private validator running on 127.0.0.1 — its own genesis, its own seven programs, nobody else on it. A campaign founds one market there from nothing, publishes the source graph it will resolve against, funds and activates its resolution, carries it to a terminal answer through the real transport, and retires it. Then it re-reads the chain at every boundary and proves the collateral is all still where the ledger says it must be.</p>
-        <p>None of this is devnet and none of it is mainnet. It is a rehearsal, and every chart below says so under it.</p>
+        <p>None of this is devnet or mainnet. It is a rehearsal.</p>
       </div>
       <aside>
         <span>Where this stands</span>
@@ -330,7 +330,7 @@ export default function CampaignWorkspace({ preloaded }: Readonly<{
           ? <p>{NO_CAMPAIGN_SENTENCE_V1}</p>
           : <p>{reading}</p>}
         {series === null ? null : <p className="market-editorial-note">
-          The transcript, the market address and the revision are the run&apos;s own; the label is the run&apos;s name for itself and says which machine and which lane produced it. Re-derive this file from that transcript with <code>scripts/campaign-series.mjs --check</code>.
+          Re-derive this file from the run&apos;s transcript with <code>scripts/campaign-series.mjs --check</code>.
         </p>}
       </aside>
     </section>
@@ -342,33 +342,32 @@ export default function CampaignWorkspace({ preloaded }: Readonly<{
     </div>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>Where the claims sit</h2><p>Each outcome&apos;s share of the claims issued against it. In a market where people trade, this line moves every time somebody takes a side. In this one nobody has, so the line says only what it actually knows.</p></div></header>
+      <header><span>01</span><div><h2>Where the claims sit</h2><p>Each outcome&apos;s share of the claims issued against it. Nobody has traded in this one.</p></div></header>
       {body((loaded) => <OddsPath series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>What the vault held</h2><p>What was in the market&apos;s vault, against every unit of collateral the ledger could account for anywhere. The gap between the two is the whole question: collateral that has left the vault still belongs to somebody, and collateral that has left the ledger belongs to nobody.</p></div></header>
+      <header><span>02</span><div><h2>What the vault held</h2><p>What was in the market&apos;s vault, against every unit of collateral the ledger could account for anywhere.</p></div></header>
       {body((loaded) => <VaultPath series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The work each stage took</h2><p>Transactions, and what they cost to run. A market with nobody trading has no traded volume, and this page will not draw one. It draws the work instead, which is real, measured, and what actually happened.</p></div></header>
+      <header><span>03</span><div><h2>The work each stage took</h2><p>Transactions, and what they cost to run.</p></div></header>
       {body((loaded) => <WorkPerStage series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>The answer, and what a claim turned out to be worth</h2><p>Getting an answer is the only move a market with no trading makes, and it is total: one outcome pays the full claim unit and every other one pays nothing.</p></div></header>
+      <header><span>04</span><div><h2>The answer, and what a claim turned out to be worth</h2><p>One outcome pays the full claim unit; every other one pays nothing.</p></div></header>
       {body((loaded) => <Settlement series={loaded} />)}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>05</span><div><h2>The checks, after every stage</h2><p>After each stage the run re-checks the same things: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay. Any one of them failing stops the campaign. This is the record of none of them failing.</p></div></header>
+      <header><span>05</span><div><h2>The checks, after every stage</h2><p>After each stage the run re-checks that the collateral is all still somewhere we can name, that the positions add up to the claims issued, and that the vault covers the worst outcome it could be asked to pay. Any one failing stops the campaign.</p></div></header>
       {body((loaded) => <CampaignLaws series={loaded} />)}
     </section>
 
     <footer className="product-footer">
       <span>One campaign&apos;s own transcript · a private validator on 127.0.0.1</span>
-      <span>Not devnet · not mainnet · no fills, and no chart here pretends otherwise</span>
     </footer>
   </main>;
 }

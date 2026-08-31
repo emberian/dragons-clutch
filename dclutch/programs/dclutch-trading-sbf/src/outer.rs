@@ -1072,6 +1072,23 @@ fn require_close_selection(
 /// receipt rather than assertions about a returned one -- and the second is
 /// required in any case by `cached_role_deployment_observation_v1` before it
 /// observes a deployment at all.
+///
+/// # `inline(never)` here is prophylactic, and the prophylaxis was earned
+///
+/// This one has TWO call sites -- `process_activation` and `process_close` --
+/// so LLVM keeps it out of line today, and both callers measure unchanged at
+/// 3,840 and 3,968 of the 4,096-byte SBPF v0 frame. Its sibling in
+/// `direct_begin_retiring_v1` had two call sites too, until this same conversion
+/// left it with one; LLVM then inlined it and put its caller at exactly 4,096
+/// with 43 frame-overwrite diagnostics.
+///
+/// `process_close` has 128 bytes of headroom. A future edit that drops one of
+/// these two call sites -- or an inliner that simply decides differently --
+/// would reproduce that defect on a route with a third of the slack the last one
+/// had. The attribute costs a call and makes the separation structural instead
+/// of a property of a heuristic nobody is watching. Measured with
+/// `tools/sbf-frame-sizes.py`: both callers are byte-identical with it.
+#[inline(never)]
 fn reauthenticate_roles<'info>(
     suffix: &AuthenticatedSuffixV2<'_, 'info>,
     release_set: [u8; 32],

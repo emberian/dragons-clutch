@@ -193,7 +193,13 @@ fn run() -> Result<()> {
         Some(command)
             if command == direct_capability_activation::DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1 =>
         {
-            direct_capability_activation::run(arguments.collect())
+            direct_capability_activation::run_devnet(arguments.collect())
+        }
+        Some(command)
+            if command
+                == direct_capability_activation::LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1 =>
+        {
+            direct_capability_activation::run_owned_loopback(arguments.collect())
         }
         Some(command)
             if command
@@ -1618,6 +1624,7 @@ fn usage() {
     println!("{}", direct_hot_route_manifest::checked_execution_release_usage());
     println!("{}", direct_hot_route_manifest::hot_route_manifest_usage());
     println!("{}", direct_capability_activation::usage());
+    println!("{}", direct_capability_activation::owned_loopback_usage());
     println!("{}", general_capability_activation::usage());
     println!("{}", campaign_usage_v1());
     println!(

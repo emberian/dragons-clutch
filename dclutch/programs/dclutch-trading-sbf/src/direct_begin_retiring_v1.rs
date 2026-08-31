@@ -429,6 +429,34 @@ pub fn process_direct_begin_retiring_v1(
     Ok(())
 }
 
+/// Hold the Market to the request, out of line, in a frame of its own.
+///
+/// # Why the attribute, and why it is the thing that fixed the wall
+///
+/// This decodes a `CoreState` and RE-ENCODES it to compare byte for byte, so it
+/// carries the widest stack object on the route: 2,304 bytes of the 4,096 an
+/// SBPF v0 frame gets. Its caller carries a borrowed root, a context and a
+/// request of its own, and the two do not fit together.
+///
+/// LLVM kept them apart on its own until the activation-cache conversion, then
+/// stopped. The sequence is worth writing down because the second half is the
+/// counter-intuitive one:
+///
+/// ```text
+///   f6596ffb   caller 3,712   authenticate_market 2,304 out of line, reauthenticate_role 576
+///   converted  caller 4,096   the two-role read inlined into the caller     -- 43 diagnostics
+///   +inline(never) on the read
+///              caller 4,352   the read left, and authenticate_market CAME IN -- 48 diagnostics
+///   +inline(never) here
+///              caller 3,392   both out of line
+/// ```
+///
+/// Splitting one frame made the caller look cheaper to the inliner, so it
+/// swallowed a 2,304-byte callee it had previously declined and the number got
+/// WORSE. Nothing about either function changed; the heuristic simply re-scored
+/// a body it was now measuring differently. A frame that has to stay split must
+/// say so, because the inliner is not a party to the constraint.
+#[inline(never)]
 fn authenticate_market(
     accounts: &Accounts<'_, '_>,
     request: DirectBeginRetiringRequestV1,
@@ -661,6 +689,27 @@ fn authenticate_artifact_transition(
 /// who names another Market's generation reaches a cache that is real and then
 /// fails to join it to the Market it is retiring. The call order below is the
 /// order this route already had, and this change does not move it.
+///
+/// # `inline(never)` is the frame, and it is load-bearing
+///
+/// SBPF v0 gives every call frame exactly 4,096 bytes and does not grow one: a
+/// function whose locals plus outgoing arguments exceed it gets a diagnostic and
+/// a call that writes over its own locals. This function holds a `Ref` over the
+/// cache, a decoded view into it and two receipts, and it measures 576 bytes.
+///
+/// While the CPI form existed there were TWO call sites here, so LLVM kept it
+/// out of line for its own reasons and the frames never met. Folding the two
+/// roles into one read left ONE call site, LLVM inlined it, and those bytes
+/// landed on a caller that had exactly 384 spare:
+/// `process_direct_begin_retiring_v1` went 3,712 -> 4,096 of 4,096 and the link
+/// emitted 43 frame-overwrite diagnostics. Measured both ways with
+/// `tools/sbf-frame-sizes.py`.
+///
+/// So the split is not a hint here, it is the frame. The inliner's heuristic was
+/// the only thing holding these apart, and it stopped applying the moment the
+/// call count changed -- which is exactly the kind of thing that must not be
+/// left to a heuristic on a route whose caller has three digits of headroom.
+#[inline(never)]
 fn reauthenticate_roles<'info>(
     accounts: &Accounts<'_, 'info>,
     release_set: [u8; 32],

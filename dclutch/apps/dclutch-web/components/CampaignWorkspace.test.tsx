@@ -84,7 +84,10 @@ describe('the campaign surface', () => {
   });
 
   it('never says devnet or mainnet about its own figures', () => {
-    expect(html).toContain('Not devnet');
+    // Renegotiated 2026-08-31: the footer used to repeat "Not devnet · not
+    // mainnet · no fills, and no chart here pretends otherwise". The hero says
+    // it once, as a fact; the footer echo is deleted.
+    expect(html).toContain('None of this is devnet or mainnet');
     expect(html).not.toMatch(/traded on devnet|on the public devnet[^,.]*price/);
   });
 
@@ -102,7 +105,10 @@ describe('the campaign surface', () => {
 
   it('calls the work what it is, and never calls it traded volume', () => {
     expect(html).toContain('The work each stage took');
-    expect(html).toContain('A market with nobody trading has no traded volume');
+    // Renegotiated 2026-08-31: the blurb used to explain that a market with
+    // nobody trading has no traded volume and this page will not draw one.
+    // What survives is the invariant, checked directly.
+    expect(html).not.toContain('traded volume');
   });
 
   it('names the boundary each law column is, because a number is not a stage', () => {

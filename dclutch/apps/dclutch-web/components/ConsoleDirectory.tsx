@@ -107,16 +107,12 @@ export default function ConsoleDirectory() {
         <p>If you came here to look around or to trade, start at{' '}
         <Anchor href="/markets">Markets</Anchor> instead. These are working
         tools, not product pages.</p>
-        <p>Each one says plainly what it can and cannot do. Being listed here
-        does not mean a page can send a transaction — several deliberately
-        cannot. When the chain disagrees with what a page was asked to do, the
-        page says so by name rather than failing quietly.</p>
-        <p>Where a console asks you to paste a file, it tells you which tool
-        produces that file, right on the input. The full list is in the
-        README&apos;s table <a href={docsHrefV1('readme.html', 'README.md')}>“The
-        artifacts, and where they come from”</a>. If a console ever asks for
-        something and you cannot tell where it comes from, that is a bug in the
-        console.</p>
+        <p>Being listed here does not mean a page can send a transaction —
+        several deliberately cannot.</p>
+        <p>Where a console asks you to paste a file, it names the tool that
+        produces it, right on the input. The full list is in the README&apos;s
+        table <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts,
+        and where they come from”</a>.</p>
       </div>
     </section>
 

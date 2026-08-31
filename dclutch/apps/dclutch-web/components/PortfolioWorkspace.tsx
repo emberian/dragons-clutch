@@ -69,7 +69,7 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
     {position.status === 'absent' && <p className="market-empty">{position.note}</p>}
     {position.status === 'refused' && <p className="market-refusal">{position.reason}</p>}
     {position.status === 'held' && <>
-      <h4 className="detail-subhead">What this wallet holds, per outcome · raw amounts</h4>
+      <h4 className="detail-subhead">What this wallet holds, per outcome</h4>
       {/* FE-CHART mount: the same balances as bars, with the phase's own line
           through them; the list below stays as the exact-value twin. */}
       <PositionBars
@@ -79,7 +79,7 @@ function PositionEntry({ entry, redeem }: Readonly<{ entry: PortfolioEntryV1; re
           : position.claim.kind === 'redeemable'
             ? { kind: 'redeemable', winningClaim: position.claim.winningClaim, redeemableAtoms: position.claim.redeemableAtoms }
             : { kind: 'unavailable' }}
-        caption="Height is how many claims this wallet holds on each outcome, read from the chain."
+        caption="Claims held per outcome."
       />
       <ol className="outcome-vector">
         {position.balances.map((amount, index) => (
@@ -131,13 +131,13 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
   const [state, setState] = useState<State>({
     kind: 'idle',
     message: redemption
-      ? 'Connect your wallet. This page then finds the claims it holds in every market this build can read, and offers a payout only where the chain says you hold a winning claim.'
-      : 'Connect a wallet, or paste any address, and this page reads what it holds in every market on this deployment. Reading a derived address requires no authority at all — none of it is private.',
+      ? 'Connect your wallet to find the claims it holds.'
+      : 'Connect a wallet, or paste any address.',
   });
   const portfolio = state.kind === 'ready' ? state.portfolio : null;
 
   const read = useCallback(async (ownerAddress: string) => {
-    setState({ kind: 'loading', message: 'Listing this deployment’s markets, working out where this owner’s claims would sit in each one, then reading every one of those addresses at the same finalized point in the chain…' });
+    setState({ kind: 'loading', message: 'Reading this owner’s claims in every market…' });
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
       const facts = await client.probe();
@@ -170,27 +170,27 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
   }
 
   return <main className="product-shell trade-v3-shell">
-    <Nav current={redemption ? '/redeem' : '/portfolio'} status={`${deployment.label} · ${redemption ? 'wallet redemption' : 'finalized reads'}`} />
+    <Nav current={redemption ? '/redeem' : '/portfolio'} status={`${deployment.label} · ${redemption ? 'wallet redemption' : 'read live'}`} />
 
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">{redemption ? 'Redeem · your connected wallet, exactly what it holds' : 'Portfolio · what one wallet holds'}</p>
         <h1>{redemption ? <>Your winning claims.<br /><em>Payout is not open yet.</em></> : <>Everything one wallet<br /><em>holds here.</em></>}</h1>
         <p>{redemption
-          ? <>Connect your wallet and this page finds every claim it holds, reading the markets straight from the deployment&apos;s own programs and working out where your claims live from your address alone. Paying winning claims out is not available yet: when a market resolves and you hold the winning side, this is where you will do it. Nothing here — no market, no balance, no eligibility — comes from browser storage.</>
-          : <>Paste an address, or connect a wallet, and this page tells you what claims it holds in every market on this deployment. Your claims in a market sit at an address worked out from that market and your own address, so nothing is looked up: dClutch runs no indexer and this browser will not pretend to be one. Where an address holds nothing, the page says so, because that is what the chain says.</>}</p>
+          ? <>Connect your wallet to find every claim it holds. Paying winning claims out is not available yet: when a market resolves and you hold the winning side, this is where you will do it.</>
+          : <>Paste an address, or connect a wallet, to see what claims it holds in every market on this deployment.</>}</p>
       </div>
       <aside>
         <span>All this page needs</span>
         <strong>{redemption ? 'Your wallet' : 'One address'}</strong>
         <p>{redemption
-          ? 'Connecting only reads your public address. Signing is a separate step later, and it appears only once the chain and a Rust-authored payout plan agree on the exact Market, Position, owner, winning claim, recipient, programs, and lookup table.'
-          : 'Connecting a wallet reads a public address and nothing else — no signature, no approval. Pasting any address reads the same finalized state for that owner, because reading a derived address requires no authority at all.'}</p>
+          ? 'Connecting reads your address. Signing is a separate step, later.'
+          : 'Connecting reads your address. Nothing is signed.'}</p>
       </aside>
     </section>
 
     <section className="trade-v3-card route-card">
-      <header><span>01</span><div><h2>{redemption ? 'Connect your wallet' : 'Whose wallet?'}</h2><p>Everything else — which chain, which programs, which markets — comes from the active {deployment.label} deployment. All this page needs from you is an address.</p></div></header>
+      <header><span>01</span><div><h2>{redemption ? 'Connect your wallet' : 'Whose wallet?'}</h2></div></header>
       <WalletDirectory directory={directory} purpose={redemption ? 'find the winning claims you hold' : 'read one owner identity'} onConnected={connected} />
       {!redemption && <form className="portfolio-owner-row" onSubmit={readPasted}>
         <label><span>Or paste any owner address</span><input value={pasted} onChange={(event) => setPasted(event.target.value.trim())} spellCheck={false} placeholder="an owner’s public address" /></label>
@@ -199,26 +199,26 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
           {owner !== '' && state.kind !== 'loading' && <button type="button" className="secondary-action" onClick={() => void read(owner)}>Re-read</button>}
         </div>
       </form>}
-      {redemption && <p className="direct-status">This wallet path permanently refuses Solana mainnet, testnet, and unknown non-local chains before it asks for a signature. On devnet it still signs nothing until the current Market, your derived Position, every named program and account, and the exact payout plan all pass finalized preflight. The payout plan is still produced outside this browser; this page does not invent one from partial state.</p>}
+      {redemption && <p className="direct-status">This page refuses Solana mainnet, testnet, and unknown chains outright. On devnet it signs nothing until the market, your position, every named account and the payout plan all check out.</p>}
       <p className="direct-status" aria-live="polite">{state.message}</p>
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Across everything you hold</h2><p>The most and the least all of it can pay, added up. Two markets about different things rule nothing out about each other, so together they can pay exactly the sum — the true number, not a cautious one. Where two markets are about the same thing, the arithmetic says so and shows the difference.</p></div></header>
+      <header><span>02</span><div><h2>Across everything you hold</h2><p>The most and the least all of it can pay, added up.</p></div></header>
       {portfolio === null
-        ? <p className="market-empty">Nothing has been read yet, so there is nothing to add up. This stays empty rather than showing a total nobody holds.</p>
+        ? <p className="market-empty">Nothing read yet.</p>
         : <BundleExposurePanel exposure={bundleExposureV1(portfolio)} />}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>{redemption ? 'What you can cash in' : 'Market by market'}</h2><p>One entry per market on this deployment. Each one says the address it worked out, whether anything is there, and what you can do with what it found — given how far that market has got.</p></div></header>
-      {portfolio === null && <p className="market-empty">Nothing has been read yet. Until an address arrives and the chain answers, this stays empty rather than showing made-up holdings.</p>}
+      <header><span>03</span><div><h2>{redemption ? 'What you can cash in' : 'Market by market'}</h2><p>One entry per market on this deployment.</p></div></header>
+      {portfolio === null && <p className="market-empty">Nothing read yet.</p>}
       {portfolio !== null && state.kind === 'ready' && <>
         <div className="trade-v3-evidence">
-          <article><span>Wallet</span><strong>{shortAddressV1(portfolio.owner, 6)}</strong><small>{redemption ? 'connected; signing is still a separate step' : 'an address only; nothing is signed here'}</small></article>
-          <article><span>Finalized floor</span><strong>{portfolio.floorSlot}</strong><small>every entry read at this one moment</small></article>
+          <article><span>Wallet</span><strong>{shortAddressV1(portfolio.owner, 6)}</strong><small>{redemption ? 'connected' : 'address only'}</small></article>
+          <article><span>Finalized floor</span><strong>{portfolio.floorSlot}</strong><small>slot</small></article>
           <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
-          <article><span>Addresses checked</span><strong>{portfolio.entries.length}</strong><small>one per market on this deployment</small></article>
+          <article><span>Markets checked</span><strong>{portfolio.entries.length}</strong><small>on this deployment</small></article>
         </div>
         {portfolio.entries.length === 0
           ? <p className="market-empty">{portfolio.reason}</p>
@@ -226,9 +226,5 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
       </>}
     </section>
 
-    <footer className="product-footer">
-      <span>{redemption ? 'Your connected wallet · checked against the chain first · safe to retry' : 'Worked out, not looked up · read from the chain · refusals said out loud'}</span>
-      <span>{redemption ? 'No mainnet · no invented plan · no ambiguous replay' : 'No index · nothing guessed · raw amounts'}</span>
-    </footer>
   </main>;
 }

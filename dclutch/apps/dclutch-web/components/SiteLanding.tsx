@@ -90,7 +90,7 @@ export default function SiteLanding() {
     </figure>
 
     <section className="trade-v3-card">
-      <header><span>··</span><div><h2>What is out there right now</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it. A zero means we read a zero. Where a total would mix two different tokens, you get both, each in its own units.</p></div></header>
+      <header><span>··</span><div><h2>What is out there right now</h2></div></header>
       {/* FE-CHART mount: LandingPulse reads the counts from the active
           deployment and feeds the presentational NumberStrip. */}
       <LandingPulse />
@@ -101,10 +101,7 @@ export default function SiteLanding() {
           aside did: it went on saying no market was open after one was. It
           reads the same published cut, so opening a market is still one
           fixture edit and the front door still stops claiming otherwise. */}
-      <header><span>01</span><div><h2>Try it</h2><p>The app opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed;{' '}
-        {PUBLIC_DEVNET_CUT_V1.market === null
-          ? <>anything that still needs an open market will tell you plainly that there is not one yet, instead of failing quietly.</>
-          : <>every page tells you plainly what it could and could not read off the chain, instead of failing quietly.</>}</p></div></header>
+      <header><span>01</span><div><h2>Try it</h2><p>Seven programs, deployed on devnet.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
         <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>
@@ -113,7 +110,7 @@ export default function SiteLanding() {
         <Anchor className="secondary-action" href="/explorer">Look up any account →</Anchor>
         <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>
-      <p className="direct-status">Want to check the deployment yourself? Read the record below, or download every program address and the slot it was deployed at in one click.</p>
+      <p className="direct-status">Every program address and the slot it was deployed at:</p>
       <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />
     </section>
 
@@ -150,7 +147,7 @@ export default function SiteLanding() {
         no external font, script, or image, so it is served as-is rather than
         rebuilt into this app's chrome. */}
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>How this was built</h2><p>We built this protocol twice before the version you are reading now, and threw both away on purpose. These notes say why that was the plan from the start, and what survived each time the code did not. They are written for someone who has never opened the repository, and they are honest about what is proved and what is still only tested.</p></div></header>
+      <header><span>04</span><div><h2>How this was built</h2><p>We built this protocol twice before the version you are reading now, and threw both away on purpose. These notes say why that was the plan from the start, and what survived each time the code did not.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>

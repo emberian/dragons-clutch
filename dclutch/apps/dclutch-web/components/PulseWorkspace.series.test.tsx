@@ -39,7 +39,7 @@ describe('the pulse surface, with a recorded run', () => {
 
   it('tells the reader the line is a record, not a feed', () => {
     expect(html).toContain('The run continues past the last point; this page does not.');
-    expect(html).toContain('last write before the site was published');
+    expect(html).toContain('the last write before publication');
   });
 
   it('reports the ledger checks across every drawn cycle, and whether they held', () => {

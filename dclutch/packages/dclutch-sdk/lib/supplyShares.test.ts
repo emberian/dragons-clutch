@@ -54,8 +54,13 @@ describe('issued supply shares', () => {
   });
 
   it('carries the meaning sentence every share surface must render', () => {
-    expect(SUPPLY_SHARE_MEANING_V1).toContain('not a traded price');
-    expect(SUPPLY_SHARE_MEANING_V1).toContain('not a forecast');
-    expect(SUPPLY_SHARE_MEANING_V1).toContain('even split');
+    // Renegotiated 2026-08-31: this constant used to carry three disclaimers
+    // ("not a traded price", "not a forecast", what an even split means). They
+    // were interpretation guards on a labelled chart and are deleted, not
+    // reworded — the label is the whole contract now. What is still pinned is
+    // that it stays a LABEL: short, and naming issuance rather than a price.
+    expect(SUPPLY_SHARE_MEANING_V1.length).toBeLessThan(60);
+    expect(SUPPLY_SHARE_MEANING_V1).toContain('issued');
+    expect(SUPPLY_SHARE_MEANING_V1).not.toMatch(/price|forecast|odds|probability/i);
   });
 });

@@ -64,6 +64,7 @@ a { color: inherit; }
 /* Chain-derived Direct V3 trading workbench */
 .trade-v3-shell { width: min(1280px, calc(100% - 40px)); margin: 0 auto; padding-bottom: 80px; }
 .trade-v3-hero { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(280px,.55fr); gap: clamp(30px,6vw,88px); align-items: end; padding: clamp(58px,8vw,112px) 0 42px; }
+.trade-v3-hero.hero-solo { grid-template-columns: minmax(0,1fr); }
 .trade-v3-hero h1 { max-width: 910px; font-size: clamp(48px,7vw,92px); }
 .trade-v3-hero > div > p:last-child { max-width: 760px; margin: 25px 0 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
 .trade-v3-hero aside { padding: 22px; border: 1px solid rgba(239,215,132,.18); border-radius: 15px; background: rgba(239,215,132,.035); }

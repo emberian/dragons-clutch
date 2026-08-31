@@ -74,6 +74,5 @@ export function formatBasisPointsV1(basisPoints: number): string {
   return `${whole}.${String(cents).padStart(2, '0')}%`;
 }
 
-/** The sentence a share surface must carry, stating what the split is not. */
-export const SUPPLY_SHARE_MEANING_V1 =
-  'How the claims people bought are split across the outcomes — where the claims sit, not a traded price and not a forecast. A new market starts with the same number of claims on every outcome, so an even split means nobody has leaned either way yet.';
+/** The label a share surface carries. */
+export const SUPPLY_SHARE_MEANING_V1 = 'Claims issued per outcome';

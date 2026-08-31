@@ -270,14 +270,14 @@ function AccountView({ state }: Readonly<{ state: Async<ExplorerAccountResult> }
 
       {decoded === null ? null : (
         <section className="xp-panel">
-          <p className="eyebrow">Typed fields · names from the generated ABI modules</p>
+          <p className="eyebrow">Fields</p>
           <RecordFields decoded={decoded} />
         </section>
       )}
 
       {account.derivations.length === 0 ? null : (
         <section className="xp-panel">
-          <p className="eyebrow">PDA derivation · checked by reproduction, never asserted</p>
+          <p className="eyebrow">Address derivation</p>
           <Derivations derivations={account.derivations} />
         </section>
       )}
@@ -889,9 +889,7 @@ export default function ChainExplorer() {
         <p className="eyebrow">Seven devnet programs, live · no wallet, no setup</p>
         <h1>Every record the protocol writes, decoded by its own schema.</h1>
         <p className="lede">
-          The app knows its own deployment: the seven role programs below are the baked {deployment.label} manifest, read
-          live. Layouts come from <code>lib/generated/</code> — the byte-gated modules the protocol emits from its Lean
-          schemas, its Rust contracts and its route census. What the emission does not say, this page does not say either.
+          Paste an address, a signature, or a program ID. The seven {deployment.label} programs are below.
         </p>
         <PublicDeploymentEvidence deployment={deployment} />
       </section>

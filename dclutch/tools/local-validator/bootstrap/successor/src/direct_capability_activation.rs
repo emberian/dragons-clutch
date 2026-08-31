@@ -1,4 +1,4 @@
-//! First-execution driver for Direct capability activation on devnet.
+//! First-execution driver for Direct capability activation.
 //!
 //! One Core-signed, permissionless transaction creates the Direct capability
 //! root: Core's capability route validates the manifest-selected entry and its
@@ -15,6 +15,28 @@
 //! builds it. Idempotence: a live Trading-owned root at the derived coordinate
 //! reports `already-active` and exits cleanly, so a rerun after any
 //! interruption converges instead of double-submitting.
+//!
+//! # Two acknowledged endpoints, ONE author
+//!
+//! The route is the same on an acknowledged devnet endpoint and on an owned
+//! loopback validator, so it is written once and entered twice
+//! (`run_devnet`/`run_owned_loopback`), exactly as `sponsored_push` and the
+//! General sibling already do. The cluster reaches the body as an
+//! [`ExpectedClusterV1`] and decides exactly three things: whether
+//! `--i-mean-devnet` is required or refused, which cluster the campaign
+//! evidence must have been produced against, and the report schema. Every
+//! other fact is derived from the chain and from the sealed artifacts, so
+//! neither endpoint can drift from the other by editing one of them.
+//!
+//! **Why the loopback entry exists.** Until it did, the Direct execution root
+//! could not be created on a local validator AT ALL — nothing else in this
+//! repository creates one (Core `ActivateCapability` CPIs Trading's
+//! `process_activation`, and only this frame reaches it), and the devnet entry
+//! refuses a loopback origin before it reads anything. Every local Direct
+//! trade therefore refused at the trade producer's root check for as long as
+//! local Direct trades have existed, at every market width. That is the wall
+//! `docs/evidence/SIMULATOR_POPULATION_DRIVEN_2026_08_30.md` recorded as
+//! twenty-one refused fills and read as a width problem; it was an absence.
 
 use std::path::PathBuf;
 
@@ -56,6 +78,28 @@ use crate::{
 pub(crate) const DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1: &str =
     "devnet-direct-capability-activation-v1";
 
+/// The same route on an owned loopback validator. The General family already
+/// carries this pair; Direct did not, and the missing half is what made every
+/// local Direct fill unreachable.
+pub(crate) const LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1: &str =
+    "local-private-validator-direct-capability-activation-v1";
+
+/// The report schema each endpoint emits.
+///
+/// The devnet string is unchanged, so a devnet report written before this pair
+/// existed and one written after are the same document. The loopback endpoint
+/// gets its own name rather than borrowing devnet's: a reader who greps an
+/// evidence directory for what a report describes must never find a
+/// `devnet-` schema over a run that never left the machine.
+const fn report_schema_v1(expected: ExpectedClusterV1) -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => "dclutch-devnet-direct-capability-activation-report-v1",
+        ExpectedClusterV1::OwnedLoopback => {
+            "dclutch-local-private-validator-direct-capability-activation-report-v1"
+        }
+    }
+}
+
 fn refusal(code: &str, reason: impl AsRef<str>) -> Error {
     Error::new(format!("REFUSED: [{code}] {}", reason.as_ref()))
 }
@@ -81,8 +125,31 @@ pub(crate) fn usage() -> &'static str {
      --output ABSOLUTE_NEW_JSON [--execute]"
 }
 
+pub(crate) fn owned_loopback_usage() -> &'static str {
+    "dclutch-local-successor-bootstrap \
+     local-private-validator-direct-capability-activation-v1 \
+     --rpc-url http://127.0.0.1:PORT/ \
+     --plan ABSOLUTE_JSON --expected-plan-sha256 HEX64 \
+     --market-input ABSOLUTE_JSON --expected-market-input-sha256 HEX64 \
+     --campaign-report ABSOLUTE_JSON --expected-campaign-report-sha256 HEX64 \
+     --payer PUBKEY --payer-keypair ABSOLUTE_RUNTIME_KEYPAIR_JSON \
+     --output ABSOLUTE_NEW_JSON [--execute]"
+}
+
+const fn usage_for(expected: ExpectedClusterV1) -> fn() -> &'static str {
+    match expected {
+        ExpectedClusterV1::Devnet => usage,
+        ExpectedClusterV1::OwnedLoopback => owned_loopback_usage,
+    }
+}
+
 struct ArgumentsV1 {
     rpc_url: String,
+    /// Exactly what the caller passed for `--i-mean-devnet`, forwarded to
+    /// `ClusterOriginV1::parse` rather than re-decided here. The origin parser
+    /// owns the "acknowledgment for a loopback socket" refusal, and it is the
+    /// one that can tell the operator which of the two was the typo.
+    acknowledgment: Option<String>,
     plan: PathBuf,
     expected_plan_sha256: String,
     market_input: PathBuf,
@@ -95,7 +162,7 @@ struct ArgumentsV1 {
     execute: bool,
 }
 
-fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
+fn parse_arguments(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<ArgumentsV1> {
     let mut rpc_url = None;
     let mut acknowledgment = None;
     let mut plan = None;
@@ -114,9 +181,12 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             execute = true;
             continue;
         }
-        let value = iterator
-            .next()
-            .ok_or_else(|| refusal("input/missing-value", format!("{flag}; usage: {}", usage())))?;
+        let value = iterator.next().ok_or_else(|| {
+            refusal(
+                "input/missing-value",
+                format!("{flag}; usage: {}", usage_for(expected)()),
+            )
+        })?;
         let slot = match flag.as_str() {
             "--rpc-url" => &mut rpc_url,
             "--i-mean-devnet" => &mut acknowledgment,
@@ -137,17 +207,47 @@ fn parse_arguments(arguments: Vec<String>) -> Result<ArgumentsV1> {
             return Err(refusal("input/repeated-flag", flag));
         }
     }
-    if acknowledgment.as_deref() != Some(DEVNET_GENESIS_HASH) {
-        return Err(refusal(
-            "input/devnet-acknowledgment",
-            format!("--i-mean-devnet must be exactly {DEVNET_GENESIS_HASH}"),
-        ));
+    match expected {
+        // Unchanged for the public endpoint: the acknowledgment is required
+        // and must be the exact devnet genesis hash.
+        ExpectedClusterV1::Devnet => {
+            if acknowledgment.as_deref() != Some(DEVNET_GENESIS_HASH) {
+                return Err(refusal(
+                    "input/devnet-acknowledgment",
+                    format!("--i-mean-devnet must be exactly {DEVNET_GENESIS_HASH}"),
+                ));
+            }
+        }
+        // Refused HERE, ahead of the origin parser, because at this point the
+        // operator's intent is unambiguous: they typed the private-validator
+        // command AND a public-cluster acknowledgment. `ClusterOriginV1` would
+        // also refuse, but only by saying one of the two is a typo — which is
+        // the right sentence when the command name does not already settle it,
+        // and the wrong one when it does.
+        ExpectedClusterV1::OwnedLoopback => {
+            if acknowledgment.is_some() {
+                return Err(refusal(
+                    "input/loopback-acknowledgment",
+                    format!(
+                        "{LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1} runs against an owned \
+                         loopback validator, which needs no acknowledgment; \
+                         {DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1} is the devnet endpoint"
+                    ),
+                ));
+            }
+        }
     }
     let required = |value: Option<String>, name: &str| {
-        value.ok_or_else(|| refusal("input/missing-flag", format!("{name}; usage: {}", usage())))
+        value.ok_or_else(|| {
+            refusal(
+                "input/missing-flag",
+                format!("{name}; usage: {}", usage_for(expected)()),
+            )
+        })
     };
     Ok(ArgumentsV1 {
         rpc_url: required(rpc_url, "--rpc-url")?,
+        acknowledgment,
         plan: PathBuf::from(required(plan, "--plan")?),
         expected_plan_sha256: required(expected_plan, "--expected-plan-sha256")?,
         market_input: PathBuf::from(required(market_input, "--market-input")?),
@@ -193,8 +293,16 @@ fn meta_pair(pair: &RecordPair) -> Result<[AccountMeta; 2]> {
     ])
 }
 
-pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
-    let arguments = parse_arguments(arguments)?;
+pub(crate) fn run_devnet(arguments: Vec<String>) -> Result<()> {
+    run(arguments, ExpectedClusterV1::Devnet)
+}
+
+pub(crate) fn run_owned_loopback(arguments: Vec<String>) -> Result<()> {
+    run(arguments, ExpectedClusterV1::OwnedLoopback)
+}
+
+fn run(arguments: Vec<String>, expected: ExpectedClusterV1) -> Result<()> {
+    let arguments = parse_arguments(arguments, expected)?;
     let plan_bytes = pinned(&arguments.plan, &arguments.expected_plan_sha256, "plan")?;
     let market_bytes = pinned(
         &arguments.market_input,
@@ -216,13 +324,16 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         .map_err(|error| Error::new(format!("successor plan: {error}")))?;
     let market_input: MarketRunInput = serde_json::from_slice(&market_bytes)
         .map_err(|error| Error::new(format!("market input: {error}")))?;
+    // The campaign that founded the Market must have been run against THIS
+    // cluster. A devnet founding activated from a loopback socket, or the
+    // reverse, would derive every coordinate from evidence about another chain.
     let evidence = campaign::parse_campaign_terminal_evidence_with_expected_cluster_v1(
         &campaign_bytes,
-        ExpectedClusterV1::Devnet,
+        expected,
     )?;
 
-    let origin = ClusterOriginV1::parse(&arguments.rpc_url, Some(DEVNET_GENESIS_HASH))?;
-    ExpectedClusterV1::Devnet.authenticate(&origin)?;
+    let origin = ClusterOriginV1::parse(&arguments.rpc_url, arguments.acknowledgment.as_deref())?;
+    expected.authenticate(&origin)?;
     let mut rpc = Rpc::connect_cluster(
         &origin,
         if arguments.execute {
@@ -241,7 +352,12 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
         .get("founding_market")
         .map(|row| pubkey(&row.address))
         .transpose()?
-        .ok_or_else(|| refusal("activation/campaign-market", "campaign omitted founding_market"))?;
+        .ok_or_else(|| {
+            refusal(
+                "activation/campaign-market",
+                "campaign omitted founding_market",
+            )
+        })?;
     let funding_ledger = evidence
         .accounts
         .get("direct_trading_funding_ledger")
@@ -272,7 +388,12 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     let entry_index = evidence.direct_selected_manifest_entry_index;
 
     let realm = record_pair(&plan, &market_input, &evidence, "realm_record")?;
-    let manifest_pair = record_pair(&plan, &market_input, &evidence, "capability_manifest_record")?;
+    let manifest_pair = record_pair(
+        &plan,
+        &market_input,
+        &evidence,
+        "capability_manifest_record",
+    )?;
     let program_set = record_pair(&plan, &market_input, &evidence, "direct_program_set_record")?;
     let config = record_pair(
         &plan,
@@ -394,7 +515,8 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     )
     .map_err(|error| Error::new(format!("execution selection: {error:?}")))?;
     let root_header = CapabilityRootHeaderV1::new(
-        ContentId::new(release_set.to_bytes()).map_err(|_| Error::new("release set".to_string()))?,
+        ContentId::new(release_set.to_bytes())
+            .map_err(|_| Error::new("release set".to_string()))?,
         market.to_bytes(),
         generation,
         selection,
@@ -412,7 +534,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
             let state = DirectRootStateV1::decode(tail)
                 .map_err(|error| Error::new(format!("live root tail: {error:?}")))?;
             let report = json!({
-                "schema": "dclutch-devnet-direct-capability-activation-report-v1",
+                "schema": report_schema_v1(expected),
                 "verdict": "already-active",
                 "market": market.to_string(),
                 "root": root.to_string(),
@@ -584,7 +706,7 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     };
 
     let facts = json!({
-        "schema": "dclutch-devnet-direct-capability-activation-report-v1",
+        "schema": report_schema_v1(expected),
         "market": market.to_string(),
         "generation": generation,
         "entryIndex": entry_index,
@@ -610,7 +732,10 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     }
 
     // ------------------------------------------------------------- execute
-    let payer = crate::direct_trade_producer::read_keypair_v1(&arguments.payer_keypair, "activation payer")?;
+    let payer = crate::direct_trade_producer::read_keypair_v1(
+        &arguments.payer_keypair,
+        "activation payer",
+    )?;
     if payer.pubkey() != arguments.payer {
         return Err(refusal(
             "input/payer-identity",
@@ -694,4 +819,241 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     )?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ArgumentsV1, DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1,
+        LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1, owned_loopback_usage, parse_arguments,
+        report_schema_v1, run_owned_loopback, sha256_hex, usage,
+    };
+    use crate::cluster::{ClusterOriginV1, DEVNET_GENESIS_HASH, ExpectedClusterV1};
+
+    fn argv(pairs: &[(&str, &str)]) -> Vec<String> {
+        pairs
+            .iter()
+            .flat_map(|(flag, value)| [(*flag).to_owned(), (*value).to_owned()])
+            .collect()
+    }
+
+    fn complete(extra: &[(&str, &str)]) -> Vec<String> {
+        let mut base = vec![
+            ("--rpc-url", "http://127.0.0.1:34500/"),
+            ("--plan", "/tmp/plan.json"),
+            ("--expected-plan-sha256", "11"),
+            ("--market-input", "/tmp/market.json"),
+            ("--expected-market-input-sha256", "22"),
+            ("--campaign-report", "/tmp/campaign.json"),
+            ("--expected-campaign-report-sha256", "33"),
+            ("--payer", "11111111111111111111111111111112"),
+            ("--payer-keypair", "/tmp/payer.json"),
+            ("--output", "/tmp/out.json"),
+        ];
+        base.extend_from_slice(extra);
+        argv(&base)
+    }
+
+    fn parsed(arguments: Vec<String>, expected: ExpectedClusterV1) -> ArgumentsV1 {
+        parse_arguments(arguments, expected).expect("arguments")
+    }
+
+    /// `ArgumentsV1` deliberately carries no `Debug`: it names a payer keypair
+    /// path, and an arguments struct that prints itself is one panic away from
+    /// putting that path in a log. So a refusal is read out by hand.
+    fn refused(arguments: Vec<String>, expected: ExpectedClusterV1, why: &str) -> String {
+        match parse_arguments(arguments, expected) {
+            Ok(_) => panic!("{why}"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    /// The devnet endpoint is EXACTLY what it was. Its acknowledgment is still
+    /// required and still checked against the one genesis hash, so the live
+    /// devnet flagship's activation route is unchanged by the loopback twin.
+    #[test]
+    fn the_devnet_endpoint_still_requires_the_exact_genesis_acknowledgment() {
+        // The acknowledgment is decided before the origin is ever parsed, so
+        // the URL in hand does not enter this refusal.
+        let missing = refused(
+            complete(&[]),
+            ExpectedClusterV1::Devnet,
+            "a devnet run without the acknowledgment must refuse",
+        );
+        assert!(
+            missing.contains("[input/devnet-acknowledgment]"),
+            "{missing}"
+        );
+        assert!(missing.contains(DEVNET_GENESIS_HASH), "{missing}");
+
+        let wrong = refused(
+            complete(&[("--i-mean-devnet", "not-the-genesis-hash")]),
+            ExpectedClusterV1::Devnet,
+            "a wrong acknowledgment must refuse",
+        );
+        assert!(wrong.contains("[input/devnet-acknowledgment]"), "{wrong}");
+
+        let accepted = parsed(
+            complete(&[("--i-mean-devnet", DEVNET_GENESIS_HASH)]),
+            ExpectedClusterV1::Devnet,
+        );
+        assert_eq!(
+            accepted.acknowledgment.as_deref(),
+            Some(DEVNET_GENESIS_HASH)
+        );
+    }
+
+    /// The loopback endpoint refuses the acknowledgment by NAME, ahead of the
+    /// origin parser. The command already settles which cluster was meant, so
+    /// "one of these two is a typo" would be the wrong sentence here.
+    #[test]
+    fn the_loopback_endpoint_refuses_a_devnet_acknowledgment_by_name() {
+        let text = refused(
+            complete(&[("--i-mean-devnet", DEVNET_GENESIS_HASH)]),
+            ExpectedClusterV1::OwnedLoopback,
+            "a loopback run carrying a devnet acknowledgment must refuse",
+        );
+        assert!(text.contains("[input/loopback-acknowledgment]"), "{text}");
+        assert!(
+            text.contains(LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1),
+            "{text}"
+        );
+        assert!(
+            text.contains(DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1),
+            "the refusal must name the endpoint the operator probably wanted: {text}"
+        );
+
+        let accepted = parsed(complete(&[]), ExpectedClusterV1::OwnedLoopback);
+        assert!(accepted.acknowledgment.is_none());
+        assert_eq!(accepted.rpc_url, "http://127.0.0.1:34500/");
+    }
+
+    /// A loopback endpoint pointed at a public cluster is refused by the shared
+    /// cluster authenticator, not by anything this module restates. Reaching
+    /// that refusal proves the origin is authenticated before any write policy
+    /// is chosen.
+    #[test]
+    fn each_endpoint_refuses_the_other_endpoints_origin() {
+        // The gate `run` actually calls, exercised directly.
+        //
+        // Driving it through `run_owned_loopback` cannot reach it: the three
+        // pinned inputs are read and JSON-parsed FIRST, so any argv this test
+        // could invent refuses on a document shape long before the origin is
+        // authenticated. An earlier draft pointed those inputs at `/tmp` and
+        // admitted the read failure as a pass, which made the test a coin flip
+        // on what else lives in `/tmp` — it passed 501 times and failed once
+        // on this machine, for exactly that reason. A test that cannot reach
+        // its subject should say so by moving, not by widening what it accepts.
+        let devnet =
+            ClusterOriginV1::parse("https://api.devnet.solana.com", Some(DEVNET_GENESIS_HASH))
+                .expect("acknowledged devnet origin");
+        let loopback =
+            ClusterOriginV1::parse("http://127.0.0.1:34500/", None).expect("loopback origin");
+
+        ExpectedClusterV1::OwnedLoopback
+            .authenticate(&loopback)
+            .expect("the private endpoint admits its own origin");
+        ExpectedClusterV1::Devnet
+            .authenticate(&devnet)
+            .expect("the public endpoint admits its own origin");
+
+        let public_on_private = ExpectedClusterV1::OwnedLoopback
+            .authenticate(&devnet)
+            .expect_err("the private endpoint must refuse a public origin")
+            .to_string();
+        assert!(
+            public_on_private.contains("owned loopback"),
+            "{public_on_private}"
+        );
+
+        let private_on_public = ExpectedClusterV1::Devnet
+            .authenticate(&loopback)
+            .expect_err("the public endpoint must refuse a loopback origin")
+            .to_string();
+        assert!(
+            private_on_public.contains("refuses loopback"),
+            "{private_on_public}"
+        );
+    }
+
+    /// A refusal writes nothing, and it refuses before opening an RPC socket.
+    #[test]
+    fn a_refused_activation_creates_no_output_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "dclutch-activation-refusal-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&directory).expect("owned test directory");
+        let plan = directory.join("plan.json");
+        std::fs::write(&plan, "{}").expect("test plan");
+        let output = directory.join("never-written.json");
+        let text = run_owned_loopback(argv(&[
+            ("--rpc-url", "http://127.0.0.1:34500/"),
+            ("--plan", plan.display().to_string().as_str()),
+            ("--expected-plan-sha256", sha256_hex(b"{}").as_str()),
+            ("--market-input", plan.display().to_string().as_str()),
+            ("--expected-market-input-sha256", sha256_hex(b"{}").as_str()),
+            ("--campaign-report", plan.display().to_string().as_str()),
+            (
+                "--expected-campaign-report-sha256",
+                sha256_hex(b"{}").as_str(),
+            ),
+            ("--payer", "11111111111111111111111111111112"),
+            (
+                "--payer-keypair",
+                directory.join("payer.json").display().to_string().as_str(),
+            ),
+            ("--output", output.display().to_string().as_str()),
+        ]))
+        .expect_err("an empty plan document must refuse")
+        .to_string();
+        assert!(text.contains("successor plan"), "{text}");
+        assert!(
+            !output.exists(),
+            "a refused activation must write nothing at {}",
+            output.display()
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// Two endpoints, two report schemas, and the devnet one is the string it
+    /// has always been.
+    #[test]
+    fn each_endpoint_names_its_own_cluster_in_its_report_schema() {
+        assert_eq!(
+            report_schema_v1(ExpectedClusterV1::Devnet),
+            "dclutch-devnet-direct-capability-activation-report-v1"
+        );
+        assert_eq!(
+            report_schema_v1(ExpectedClusterV1::OwnedLoopback),
+            "dclutch-local-private-validator-direct-capability-activation-report-v1"
+        );
+        assert_ne!(
+            report_schema_v1(ExpectedClusterV1::Devnet),
+            report_schema_v1(ExpectedClusterV1::OwnedLoopback),
+        );
+        assert!(
+            !report_schema_v1(ExpectedClusterV1::OwnedLoopback).contains("devnet"),
+            "a loopback run must never emit a devnet-labelled schema"
+        );
+    }
+
+    /// The two usage strings name their own commands and their own origins, so
+    /// a reader of `--help` cannot pick the endpoint that will refuse them.
+    #[test]
+    fn the_two_usage_lines_name_their_own_endpoint_and_origin() {
+        assert!(usage().contains(DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1));
+        assert!(usage().contains("--i-mean-devnet"));
+        assert!(
+            owned_loopback_usage().contains(LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1),
+            "{}",
+            owned_loopback_usage()
+        );
+        assert!(
+            !owned_loopback_usage().contains("--i-mean-devnet"),
+            "the loopback usage must not advertise a flag it refuses"
+        );
+        assert!(owned_loopback_usage().contains("http://127.0.0.1:PORT/"));
+    }
 }

@@ -199,7 +199,7 @@ Commits `f04654a0` (the conversion) and `09c1c8fc` (the tripwire), on top of
 
 ### The measurement
 
-**Floor 1,319,672 → 1,252,751 CU, −66,921**, at the key-independent statistic
+**Floor 1,319,672 → 1,252,764 CU, −66,908**, at the key-independent statistic
 `min over seeds of (CU(seed) − 1,500 · T_known(seed))` over 32 seeds — the one
 `TRUST_RATCHET_V1.md` §8.2 asked for, and the one that survives the fact that
 converting the route changes the five ELF digests and therefore redraws every
@@ -289,6 +289,46 @@ drives the Direct Hot bundle and that bundle does not reach them. Estimate 4–8
 hours per family, and the honest first question is whether a continuation into
 those families is a shape the protocol actually runs, because if it is not then
 the structural half is the whole of what the tripwire can be.
+
+### The frame the conversion broke, and what it cost to find
+
+`process_direct_begin_retiring_v1` shipped to main at **4,096 of the 4,096 bytes
+SBPF v0 gives a call frame**, with 43 frame-overwrite diagnostics, and it was
+this conversion. Fixed in `lane/cacheread-frame-split-20260831`; measured with
+`tools/sbf-frame-sizes.py` at every step:
+
+```text
+  f6596ffb   caller 3,712   authenticate_market 2,304 out of line, reauthenticate_role 576
+  converted  caller 4,096   ONE call site now, so LLVM inlined the two-role read   43 diags
+  +inline(never) on the read
+             caller 4,352   the read left, and authenticate_market CAME IN         48 diags
+  +inline(never) on authenticate_market
+             caller 3,712   both out of line, byte-identical to f6596ffb            0 diags
+```
+
+Two things in that are worth more than the fix.
+
+**The conversion's own shape caused it.** Folding two role reads into one did not
+make the helper bigger; it made it *single-call-site*, and the inliner took it.
+The 576 bytes it carries landed on a caller with exactly 384 spare. Nothing about
+either function's code was the defect — the call COUNT was, and that is not a
+property anyone reviews.
+
+**The first fix made it worse, which is the general lesson.** Splitting one frame
+made the caller look cheaper to score, so the inliner swallowed a 2,304-byte
+callee it had previously declined. A frame that must stay split has to say so;
+the inliner is not a party to the constraint, and relieving pressure in one place
+invites it somewhere else. `outer::reauthenticate_roles` therefore carries the
+attribute prophylactically: it has two call sites today and is out of line for
+LLVM's own reasons, and `outer::process_close` — 3,968, next-deepest, pre-existing
+— has 128 bytes to absorb the day that changes.
+
+**And the lane's own gate said zero.** `cacheread-floor.sh` grepped three
+plausible-sounding patterns invented from memory; the backend emits none of them.
+It reported a confident zero on a build carrying 43 diagnostics. The pattern is
+now copied from `tools/gauntlet/run.sh`, which is where it should have come from,
+and the script says why in the place someone would next be tempted to paraphrase
+it. A checker with a wrong pattern does not fail to answer — it answers no.
 
 ### A drift seam this created, named rather than left
 

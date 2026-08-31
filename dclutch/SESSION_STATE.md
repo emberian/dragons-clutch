@@ -316,6 +316,110 @@ slots need the projection port: **10,643 measured non-test Rust lines across
 4 crates** (queued; miner exported for callers with a projection; those
 draws are per-request, so no key is ever permanently stuck).
 
+## FILLWIDTH LANDED (`7fc47e73`) — the readiness wave is 6/6
+
+Composed with PAIRFIX properly: adopted collect-all-clauses (an occupied
+root wrong three ways names all three); ABSENCE stays exclusive, with the
+reasoning in code ("reporting owner/executable/width beside an absence
+would be reporting three facts about nothing"). 516/516 on main itself; 20
+producer tests (PAIRFIX's 18 + 2) in one run; CACHEREAD/FEE-CORE overlap
+checked by --name-only, not assumed. FINALIZATION's substrate staged and
+re-verified live (validator 43080, two Open markets with produced sessions,
+both refusing at the exact spot that lane opens); artifacts preserved by
+request until FINALIZATION closes.
+
+## FILLWIDTH — premise refuted, the missing driver built
+
+**No width pinning exists** — the "width changed" clause compares two
+compile-time constants; the closure follows width correctly. The real wall:
+NO loopback Direct-activation driver ever existed (General had one, Direct
+didn't) — every local Direct fill had always refused at every width, and
+the snapshot layer rendered the missing root as a System-owned placeholder
+instead of refusing. Fixed: `direct_capability_activation.rs`
+cluster-parameterized; `local-private-validator-direct-capability-
+activation-v1` exists; the producer's root check names ABSENCE first.
+Proven: activation+admission+produce on default AND six-cell markets (the
+default needing it equally = the control). Landing via rebase over
+PAIRFIX's producer refactor (same file — semantic compose instructed).
+Findings: market19 UNAFFECTED (fee pin is loopback-arm only); SIMLIFE's
+fee-0 was avoidable; run.py stage-08 fix = the founding records its frozen
+table (queued); checked release cuts in 312s on this laptop (a drafted
+refusal withdrawn). **NEXT WAVE'S OPENER queued: the FINALIZATION lane** —
+`prepare_direct_inline_hot_finalization_v3` collapses ten refusal sites
+into one nameless variant (the PAIRFIX disease) and gates the
+never-executed eighth stage; validator 43080 with two activated markets is
+its staged substrate.
+
+## CACHEREAD-2 — 43→0, and the checker-that-answers-no lesson
+
+It was its own: folding two role reads into one made `reauthenticate_roles`
+SINGLE-CALL-SITE, so LLVM inlined 576 bytes into a caller with 384 spare.
+The first fix made it WORSE (48) — splitting one frame made the caller
+cheaper to score and the inliner swallowed `authenticate_market`. Both
+`inline(never)` → frames byte-identical to baseline; zero of 858 frames
+grew; floor 1,252,764 (the fix cost 13 CU); all seven role links recompiled
+to 0. **Root cause of the false "zero diagnostics" claim: its gate's grep
+pattern was written FROM MEMORY and matched nothing the backend emits — "a
+checker with a wrong pattern doesn't fail to answer, it answers no."**
+Pattern now copied from run.sh with a comment at the paraphrase site. A
+flipped continuation test correctly NOT claimed (lottery redraw, not a
+fix). Merged `d1891162`.
+
+## PAIRFIX ruled; TRADE-4 runs the session; WALL4 fixes the panel
+
+PAIRFIX (`dd9a96a5`): **the producer was wrong** — its twelve-way distinctness
+sweep had no site-specific reason against the buyer (neither on-chain
+instruction carries the buyer at any index; the real hazards are lamport/
+privilege merges, still guarded). payer==buyer now plans; every refusal
+names ALL its clauses (the 26-clause boolean became a named-expectation
+type). The silent clause convicted: the seller ticket named the PARTICIPANT
+collateral shape where the producer requires the DIRECT TOKEN PDA
+(`2xGo6Cxt…`) the trade itself creates. **Wall 4 (same species, panel-side):
+`prepareDirectWalletTransactionV1` requires seller participant-readiness
+the chain doesn't** — the trade creates the seller's account; founder only
+needs its Position → WALL4 (`a70665bfa3299b86c`), SDK-only ~900 lines,
+chain-preconditions-win rule. **TRADE-3's transcript ORPHANED (rotation) —
+TRADE-4 (`adfc58bb7c5f10d24`)** spawned from the job dir: re-author seller
+ticket with the PDA collateral, rebuild ≥dd9a96a5, produce with payer=p3
+through session/lookup-freeze/manifest, STOP before `hot`, update the kit.
+GRICE reopened for the strike-four DELETION pass (honesty silent on the
+page); README + SECURITY.md landed on origin/main (`fe7350443`,
+`6d3706d0a`).
+
+## THE SITE IS FULLY LIVE — PUBLISH-2 (`55b42907` live-main → host `657eb4504`)
+
+Headless-browser verified: market19 under "Markets you can trade" ("Open now
+1", finalized floor 490747385); the 360-byte stranding rendered honestly
+("not listed as current"); GRICE copy + /population + /portfolio + honest
+buckets all serving. Fixture's founding signature READ OFF CHAIN — HELD_STATE's
+`4JWstD1A…` is the activation, the founding is `4AWsB181…` (mislabel
+avoided). The false-claim link-check pins were DECORATION (footer satisfied
+them with the body deleted) — now body-only, proved red. Genref: exactly 7
+files, decisions through the packet, refusals 212→257. Credential sweep to
+the zero-64-byte-arrays level: CLEAN. market18's "this one can [trade]"
+title corrected (the widening falsified it). Queued: `abi:general-v5`
+scraper (`hot.ENVELOPE_RESERVED_OFFSET`, blocks the convergence batch —
+correctly not quick-fixed in a cut); 4 stale program-test Cargo.locks;
+CORRECTION: docs/reference/decisions.md does NOT ship publicly (only
+refusals + abi/ do). **NEXT CUT HAZARD: host LOCAL main diverged from
+origin/main — build cuts on origin/main** (routed to README).
+
+## THE PRE-PASS — two walls dissolved, the real one adjudicating
+
+TRADE-3: Wall 1 was never there (`token-setup` creates the seller's Direct
+collateral PERMISSIONLESSLY — the founder only needs its Position; both of
+ORCH's proposed fixes would have failed, reasons recorded). Kit ticket
+verified from first principles (derivation reproduces p3's real account as
+control) — no re-authoring. Delivered: buyer ticket `15b0f867…`, p3 funded
+to 263,541,120 lamports, driver rebuilt with the ticket author, six digests
+re-verified. **Wall 3 is the real one and structural: producer
+`require_distinct_v1` refuses payer==buyer; the panel requires
+payer==connected wallet — both cannot hold** → PAIRFIX
+(`a5fd790e0773c10d8`) adjudicating with the code's own reasons + convicting
+the silent `public.seller/buyer` clause + making the producer name every
+refusing clause. TRADE-3 re-runs the session on PAIRFIX's DONE. Everything
+durable in the job dir (`PREPASS_FINDINGS.md`).
+
 ## FEE-CORE — the fee's protocol tier is real (`a0b1f4cb` merge)
 
 Band enforced PROTOCOL-side (`DIRECT_MAX_FEE_BASIS_POINTS_V1 = 500` at

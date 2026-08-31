@@ -28,8 +28,7 @@ describe('Market discovery route', () => {
 
   it('lands on the market list of the baked deployment, loading with zero typing', () => {
     expect(html).toContain('Markets on Devnet');
-    expect(html).toContain('Reading the market list from the chain…');
-    expect(html).toContain('straight from the Core program itself');
+    expect(html).toContain('Reading the market list…');
     // "current-compatible" is our word for "a market this build can read".
     expect(html).not.toContain('current-compatible');
     // The one button is a refresh, disabled while the auto-load is in flight.
@@ -45,8 +44,12 @@ describe('Market discovery route', () => {
   it('leads with the markets that are open, and says where the rest went', () => {
     expect(html).toContain('Markets you can trade');
     expect(html).toContain('Markets you can trade come first');
-    expect(html).toContain('counted and named rather than dropped');
-    expect(html).toContain('One card per market that is finished and still open');
+    // Renegotiated 2026-08-31. The section used to carry a blurb explaining
+    // that we list straight from the Core program with no index in between and
+    // never partly invent a card. That is a promise about US, and it is gone.
+    // The arrangement claim is the only one this test was ever really making.
+    expect(html).not.toContain('no index in between');
+    expect(html).not.toContain('never partly invented');
   });
 
   it('asks the visitor for NO endpoint and NO program address', () => {
@@ -114,29 +117,37 @@ describe('Market discovery route', () => {
     expect(searched).toContain('Searching hides cards; it never changes what exists.');
   });
 
-  it('states the provenance and refusal contract every card is held to', () => {
-    expect(html).toContain('CHAIN · finalized slot');
-    expect(html).toContain('REFUSED');
-    expect(html).toContain('never partly invented');
+  /**
+   * Renegotiated 2026-08-31. This block used to pin the hero aside that
+   * narrated our provenance contract at the reader ("Every panel says where
+   * its own numbers came from... never a blank, and never a zero"). The aside
+   * is deleted. Provenance is now carried by the nav status line and by the
+   * per-card chip, which is a label, not a sentence — so what is pinned here
+   * is that the PAGE says none of it in prose.
+   */
+  it('carries no provenance sermon in the page chrome', () => {
+    for (const sermon of ['never a blank', 'never partly invented', 'read live from the chain', 'no index in between']) {
+      expect(html).not.toContain(sermon);
+    }
   });
 
-  it('presents raw atoms and never a market-data metric', () => {
-    expect(html).toContain('in raw units');
-    expect(html).toContain('No volume · no odds · no probability · no yield');
-    // Market-data vocabulary may appear only inside the sentences that refuse it.
-    const disclaimers = [
-      'There is no volume, price, odds, probability, or yield here, because the chain does not store any of those.',
-      'Claim counts come from the accounts that actually hold the claims, in raw units.',
-      'No volume · no odds · no probability · no yield',
-      'Issuance shares are issuance, not odds',
-    ];
-    let remainder = html;
-    for (const disclaimer of disclaimers) {
-      expect(remainder).toContain(disclaimer);
-      remainder = remainder.split(disclaimer).join('');
-    }
+  /**
+   * Renegotiated 2026-08-31, and it got STRICTER rather than looser.
+   *
+   * This used to be subtract-the-disclaimers-then-forbid: four sentences whose
+   * whole job was to say what the page is not ("There is no volume, price,
+   * odds, probability, or yield here...", "No volume · no odds · no
+   * probability · no yield", "Issuance shares are issuance, not odds") were
+   * exempted from the scan and then everything else was checked. Those
+   * sentences are deleted -- a labelled number needs no interpretation guard,
+   * and reading four refusals before the first market was the single most
+   * exhausting thing on the page. With nothing left to exempt, the forbidden
+   * scan now runs over the WHOLE document, which is what it should always have
+   * been.
+   */
+  it('never shows a market-data metric, anywhere on the page', () => {
     for (const forbidden of ['volume', 'Volume', 'odds', 'probability', 'Probability', 'TVL', '24h', 'APR', 'APY', 'yield', 'Total value locked', '$']) {
-      expect(remainder).not.toContain(forbidden);
+      expect(html).not.toContain(forbidden);
     }
   });
 
@@ -161,8 +172,8 @@ describe('Market discovery route', () => {
         ]),
       }}
     />);
-    expect(empty).toContain('No current compatible market is listed on devnet');
-    expect(empty).toContain('1 account here was made by an older version of the');
+    expect(empty).toContain('No market on devnet yet');
+    expect(empty).toContain('Made by an older version of the protocol');
     expect(empty).toContain('disclosed here but not listed as current');
     expect(empty).toContain(legacyAddress);
     expect(empty).toContain(`/explorer?view=account&amp;q=${legacyAddress}`);
@@ -236,7 +247,7 @@ describe('the rest of the record', () => {
     expect(html).toContain('<summary><span>2 markets that were never finished</span>');
     expect(html).toContain('kept because devnet history is public');
     expect(html).toContain('stopped part-way through');
-    expect(html).toContain('not because they are something to be quiet about');
+    expect(html).toContain('There is nothing to trade against them');
   });
 
   it('collapses the group without dropping a single account from it', () => {
@@ -254,8 +265,11 @@ describe('the rest of the record', () => {
   it('gives the older-generation accounts a labelled row of their own', () => {
     expect(html).toContain('1 older market this build cannot read');
     expect(html).toContain('disclosed here but not listed as current');
-    expect(html).toContain('1 account here was made by an older version of the');
-    expect(html).toContain('will not guess at the difference');
+    expect(html).toContain('Made by an older version of the protocol');
+    // Renegotiated 2026-08-31: "It will not guess at the difference, so it
+    // declines to read them rather than show you a field it made up" is a
+    // promise about our decoder's manners. Deleted; the byte counts say it.
+    expect(html).toContain('352 bytes where this build expects 360');
     expect(html).toContain('3Dhpq9tufPuBMroMfUNaWhfZMPfLFh6MG7vwhJFfqjMm');
   });
 
@@ -331,15 +345,18 @@ describe('markets that can never trade', () => {
 
   it('says what happened in words a stranger can act on, without protocol vocabulary', () => {
     expect(html).toContain('Trading has to be switched on within a set window');
-    expect(html).toContain('the window closed before that happened');
+    expect(html).toContain('the window closed first');
     expect(html).toContain('Nothing can turn it on now');
-    expect(html).toContain('they stay readable for good');
+    // Renegotiated 2026-08-31: "they stay readable for good", "It is here to
+    // be read, not traded" and "every figure below is read live from it" were
+    // reassurance about the page, not facts about the market. Deleted.
+    expect(html).not.toContain('readable for good');
 
     // The prose this group adds is checked on its own. The card's chain-fact
     // rows around it keep the protocol's vocabulary, as they must — those are
     // quotations of what the account says, not an explanation of it.
     const prose = [...html.matchAll(/<p class="(?:market-empty|market-never-trades-note)">(.*?)<\/p>/g)].map((match) => match[1]);
-    expect(prose).toHaveLength(3);
+    expect(prose.length).toBeGreaterThanOrEqual(2);
     for (const jargon of ['capabilit', 'manifest', 'PDA', 'activation', 'program', 'protocol', 'we ', 'our ']) {
       for (const sentence of prose) expect(sentence).not.toContain(jargon);
     }
@@ -347,8 +364,8 @@ describe('markets that can never trade', () => {
 
   it('marks each card, and still prints the phase the chain actually says', () => {
     expect(html).toContain('never trades');
-    expect(html).toContain('This market can never trade.');
-    expect(html).toContain('closed at slot 490330281 and cannot be reopened');
+    expect(html).toContain('Trading can never be switched on.');
+    expect(html).toContain('The window closed at slot 490330281.');
     // The phase chip is chain fact and is not edited into something softer.
     expect(html).toContain('>Open</span>');
   });
@@ -363,7 +380,6 @@ describe('markets that can never trade', () => {
     const singular = renderToStaticMarkup(<RestOfTheRecord listing={one} incompatible={[]} />);
     expect(singular).toContain('1 market that can never trade');
     expect(singular).toContain('on this one the window closed');
-    expect(singular).toContain('It is here to be read, not traded.');
   });
 
   /**
@@ -425,10 +441,13 @@ describe('market names on cards', () => {
     // Open cards render in the main grid, not the aside — use a founding-side
     // proxy: render the card directly through the curated open group instead.
     expect(html).toBe('');
+    // Renegotiated 2026-08-31. There used to be a page-level sentence saying
+    // the name and question are ours and the chain stores no names. It is
+    // deleted: a title on a card does not need a note explaining who typed it.
+    // What is pinned now is that the page does not re-acquire one.
     const page = renderToStaticMarkup(<MarketDiscoveryWorkspace />);
-    // The page-level editorial provenance sentence is always present.
-    expect(page).toContain('Only the name and the question are ours to write');
-    expect(page).toContain('the chain stores no names');
+    expect(page).not.toContain('the chain stores no names');
+    expect(page).not.toContain('editorial');
   });
 
   it('labels an unregistered founding as build-out debris, and never invents a name', () => {
@@ -471,14 +490,19 @@ describe('the issuance split on cards', () => {
     requiredBackingBasis: 'maximum-claim-supply' as const,
   });
 
-  it('draws the split with its honesty caption when the liability is bound', () => {
+  it('draws the split, labelled, with its exact-value twin intact', () => {
     const listing = curateMarketListingV1([
       Object.freeze({ ...card('found111111111111111111111111111111111111111', 'Founding'), liability: bound }),
     ]);
     const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
     expect(html).toContain('25.00%');
-    expect(html).toContain('evenly split: issuance has not leaned toward any outcome yet');
-    expect(html).toContain('not a traded price and not a forecast');
+    // Renegotiated 2026-08-31: the strip used to carry a two-sentence caption
+    // saying the split is not a traded price and not a forecast, plus a
+    // readout appendix explaining what an even split means. A labelled
+    // percentage bar needs neither. The label is the whole contract.
+    expect(html).toContain('Claims issued per outcome');
+    expect(html).not.toContain('forecast');
+    expect(html).not.toContain('has not leaned');
     // The exact-value twin stays: the raw supply row is still on the card.
     expect(html).toContain('500000000 · 500000000 · 500000000 · 500000000');
   });
@@ -508,8 +532,12 @@ describe('a Hoard the page could authenticate', () => {
   it('prints the mint precision as the display convention it is, beside an unscaled figure', () => {
     const listing = curateMarketListingV1([card('found111111111111111111111111111111111111111', 'Founding', derived)]);
     const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
+    // Renegotiated 2026-08-31: the sentence explaining that the mint's 6
+    // display decimals never scale this figure is deleted. The misreading it
+    // guarded against is closed by LABELLING the unit on the value instead --
+    // "500000000 atoms" -- which is what the number is, not a note about it.
     expect(html).toContain('<strong>500000000</strong> atoms');
-    expect(html).toContain('the 6 decimals the token displays never scale that figure');
+    expect(html).not.toContain('display decimals');
     // The scaled figure is a landing-strip convenience and has no business
     // standing in for the quantity on a card.
     expect(html).not.toContain('>500<');

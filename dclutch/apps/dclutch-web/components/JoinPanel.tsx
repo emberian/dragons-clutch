@@ -100,7 +100,7 @@ export function JoinStanding({
   --keypair <your keypair.json> \\
   --output <admission journal.json>
 # preview first; add --execute to admit ${walletAddress}`}</pre>
-        <p className="direct-status">The browser can check your standing (above) but cannot yet build the admission transaction itself. That is a gap we intend to close, not a policy.</p>
+        <p className="direct-status">The browser cannot yet build the admission transaction itself.</p>
       </>}
   </>;
 }
@@ -156,12 +156,12 @@ export default function JoinPanel({
   }
 
   return <section className="trade-v3-card" id="join">
-    <header><span>05</span><div><h2>Join this market</h2><p>Trading here means holding claims of your own. They live in an account worked out from this market and your wallet — nothing is looked up. Connect a wallet to see where you stand.</p></div></header>
+    <header><span>05</span><div><h2>Join this market</h2><p>Connect a wallet to see where you stand.</p></div></header>
 
     <WalletDirectory directory={wallets} purpose="join inspection" onConnected={() => setInspection({ kind: 'idle' })} />
 
     {wallets.address === null
-      ? <p className="direct-status">No wallet is connected. Connecting only shares an address; nothing is signed.</p>
+      ? <p className="direct-status">No wallet connected. Connecting shares an address; nothing is signed.</p>
       : <div className="direct-actions">
         <button type="button" onClick={() => { void inspect(); }} disabled={inspection.kind === 'working'}>
           {inspection.kind === 'working' ? 'Reading your accounts…' : 'Check my standing on this market'}

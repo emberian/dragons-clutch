@@ -25,17 +25,17 @@ import { type SolanaRpcClient } from './rpc';
  * canonical Market and kernel transitions rather than from product language.
  */
 export const MARKET_PHASE_MEANING_V1: Readonly<Record<MarketCorePhaseV2, string>> = Object.freeze({
-  Founding: 'The market exists but is not running yet. Nobody holds a claim, it holds no collateral, and it cannot be given an answer.',
-  Open: 'The market is trading. Put collateral in and you get one claim on every outcome \u2014 a complete set; hand a complete set back and you take the collateral out again. No answer has been recorded yet, so nothing can be cashed in.',
-  Terminal: 'The answer is in. Exactly one outcome won, and that is now fixed. Claims can no longer be created or unwound; whoever holds the winning claim can cash it in, one unit of collateral per claim.',
-  Retiring: 'The market is closing down and no new claims can be created. If it got an answer, winning claims can still be cashed in; if it never got one, it is holding nothing to pay out.',
-  Retired: 'Finished. Nothing is left in it, and nothing more can be done with it.',
+  Founding: 'Not running yet. Nobody holds a claim and it holds no collateral.',
+  Open: 'Trading. Put collateral in and you get one claim on every outcome \u2014 a complete set; hand a complete set back and take the collateral out again. No answer yet, so nothing can be cashed in.',
+  Terminal: 'The answer is in and one outcome won. Claims can no longer be created or unwound; the winning claim cashes in at one unit of collateral per claim.',
+  Retiring: 'Closing down. No new claims. If it got an answer, winning claims can still be cashed in; if not, it is holding nothing.',
+  Retired: 'Finished. Nothing is left in it.',
 });
 
 /** What the exact required backing is measured against at this phase. */
 export const REQUIRED_BACKING_MEANING_V1: Readonly<Record<RequiredBackingBasisV2, string>> = Object.freeze({
-  'maximum-claim-supply': 'biggest claim count on any one outcome \u2014 until the answer is in, every claim could still be the one that pays',
-  'winning-claim-supply': 'claim count on the outcome that won \u2014 the answer is recorded, so only winning claims can still be paid',
+  'maximum-claim-supply': 'Measured against the biggest claim count on any one outcome.',
+  'winning-claim-supply': 'Measured against the claim count on the outcome that won.',
 });
 
 export function marketPhaseMeaningV1(phase: MarketCorePhaseV2): string {
@@ -127,13 +127,13 @@ export async function inspectMarketDetailV1(
     phaseMeaning: card.status === 'decoded' ? marketPhaseMeaningV1(card.phase) : null,
     realmProvenance: card.status === 'decoded'
       ? realmProvenanceV1(card.collateral)
-      : refusedSection('The market account did not read, so its collateral setup was never looked up.'),
+      : refusedSection('The market account did not read.'),
     liabilityProvenance: card.status === 'decoded'
       ? liabilityProvenanceV1(card.liability)
-      : refusedSection('The market account did not read, so we could not work out where its claims ledger is.'),
+      : refusedSection('The market account did not read.'),
     capabilityProvenance: card.status === 'decoded'
       ? capabilityProvenanceV1(card.capabilities)
-      : refusedSection('The market account did not read, so there is no list of what it can do to check.'),
+      : refusedSection('The market account did not read.'),
     reason: card.status === 'decoded'
       ? `Market ${card.address} decoded at finalized floor ${discovery.floorSlot}.`
       : `Market ${card.address} refused at finalized floor ${discovery.floorSlot}: ${card.refusal}`,

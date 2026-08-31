@@ -57,7 +57,7 @@ describe('the join surface', () => {
     />);
     expect(html).toContain('Join this market');
     expect(html).toContain('id="join"');
-    expect(html).toContain('No wallet is connected. Connecting only shares an address; nothing is signed.');
+    expect(html).toContain('No wallet connected. Connecting shares an address; nothing is signed.');
     // The idle shell promises nothing quantitative and never fakes an action.
     for (const forbidden of ['probability', 'odds', 'APY', 'APR', 'instantly', 'one click']) {
       expect(html).not.toContain(forbidden);
@@ -86,7 +86,10 @@ describe('the join surface', () => {
     expect(html).toContain(WALLET);
     // The wall is named as a gap, never dressed up as a virtue.
     expect(html).toContain('cannot yet build the admission transaction itself');
-    expect(html).toContain('a gap we intend to close, not a policy');
+    // Renegotiated 2026-08-31: "that is a gap we intend to close, not a
+    // policy" is us managing the reader's opinion of us. Deleted. The gap is
+    // still named in the sentence above, which is the part that matters.
+    expect(html).not.toContain('not a policy');
     expect(html).not.toContain('<button');
   });
 

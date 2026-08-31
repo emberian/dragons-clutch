@@ -26,7 +26,7 @@ export type SupplyShareStripPropsV1 = Readonly<{
   supplies: ReadonlyArray<string>;
   /** Editorial outcome names, index-aligned; the caller states their provenance. */
   outcomes?: ReadonlyArray<string> | null;
-  /** One plain sentence naming what the split is and is not. */
+  /** Short label for the strip. */
   caption: string;
   /** Shown instead of a plot when nothing has been issued. */
   emptyReason?: string;
@@ -44,7 +44,7 @@ export default function SupplyShareStrip({ supplies, outcomes, caption, emptyRea
 
   if (split === null) {
     return <figure className="viz-figure">
-      <p className="viz-caption">{emptyReason ?? 'Nothing has been issued on this aggregate, so no split exists to draw.'}</p>
+      <p className="viz-caption">{emptyReason ?? 'No claims issued yet.'}</p>
     </figure>;
   }
 
@@ -66,7 +66,7 @@ export default function SupplyShareStrip({ supplies, outcomes, caption, emptyRea
   const shownIndex = active ?? placed.reduce((widest, cell) => (cell.basisPoints > widest.basisPoints ? cell : widest), placed[0]).index;
   const shown = placed[shownIndex] ?? placed[0];
   const label = (cell: typeof placed[number]) =>
-    `claim ${cell.index}${cell.name === null ? '' : ` · ${cell.name}`} · ${cell.percent} of issued claims · ${cell.atoms} atoms`;
+    `${cell.name ?? `outcome ${cell.index}`} · ${cell.percent} · ${cell.atoms} claims`;
 
   return <figure className="viz-figure">
     <div className="viz-scroll"><svg
@@ -116,13 +116,12 @@ export default function SupplyShareStrip({ supplies, outcomes, caption, emptyRea
     <p className="viz-readout" aria-live="polite">
       <span className="viz-key" style={{ background: 'var(--viz-mark)' }} />
       <strong>{label(shown)}</strong>
-      {split.even && <> — evenly split: issuance has not leaned toward any outcome yet</>}
     </p>
     <details className="viz-table">
-      <summary>Exact issued supply behind every share</summary>
+      <summary>Exact numbers</summary>
       <div className="viz-table-scroll">
         <table>
-          <thead><tr><th>Claim</th><th>Share of issued claims</th><th>Issued atoms · raw u64</th></tr></thead>
+          <thead><tr><th>Outcome</th><th>Share</th><th>Claims issued</th></tr></thead>
           <tbody>
             {cells.map((cell) => <tr key={cell.index}>
               <td>{cell.index}{cell.name === null ? '' : ` · ${cell.name}`}</td>

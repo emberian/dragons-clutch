@@ -22,8 +22,12 @@ describe('the market-detail trade panel', () => {
   />);
 
   it('treats the named refusal as the product surface, not a disabled button', () => {
-    expect(html).toContain('says why in one sentence');
-    expect(html).toContain('never a greyed-out button with no reason');
+    // Renegotiated 2026-08-31: the header used to promise that this panel
+    // says why in one sentence and never shows a greyed-out button with no
+    // reason. That is a promise about the panel; the panel keeps it below,
+    // where the named refusals actually render, so the promise is deleted.
+    expect(html).toContain('Pick an outcome, choose how much');
+    expect(html).not.toContain('greyed-out');
   });
 
   it('carries the measured packet margin and the remaining prestate wall as exact facts', () => {
@@ -60,12 +64,14 @@ describe('the market-detail trade panel', () => {
     expect(html).toContain('Signing sends nothing.');
     expect(html).toContain('it happens once');
     expect(html).toContain('rather than sending a second one');
-    expect(html).toContain('Nothing is called a trade until the chain reports it finalized');
-    expect(html).toContain('re-reads both sides of the trade from the chain');
-    expect(html).toContain('If your wallet is paying');
-    expect(html).toContain('If an operator is paying');
-    expect(html).toContain('never your collateral account');
-    expect(html).toContain('the programs on chain are what is true');
+    // Renegotiated 2026-08-31. Three paragraphs of guarantees stood above the
+    // controls: what gets re-read before signing, who pays, what "finalized"
+    // means, and that everything on the page is a copy. What a reader needs
+    // there is the one thing that changes what they should DO -- signing is
+    // not sending, and sending happens once. The rest is deleted.
+    expect(html).not.toContain('everything on this page is a copy');
+    expect(html).not.toContain('re-reads both sides');
+    expect(html).not.toContain('the programs on chain are what is true');
     expect(html).not.toContain('taker collateral account and Position derive under it');
     expect(html).not.toContain('Build, sign as payer, and submit');
   });
