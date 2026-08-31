@@ -45,13 +45,13 @@ export default function SiteLanding() {
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Fully collateralized markets on real-world numbers</p>
+        <p className="eyebrow">Prediction markets on Solana, fully backed by collateral</p>
         <h1>Buy the answer<br /><em>you believe in.</em></h1>
-        <p>dClutch is a Solana protocol for markets on real-world numbers — where
-        a price will be at a stated time, for example. You buy claims on the
-        outcome you believe in; if you are right, each claim pays out one
-        collateral unit. Every claim is fully backed by collateral locked up
-        before the claim exists, so there is no leverage, no liquidation, and no
+        <p>Pick an outcome — where the SOL price lands on Friday, say — and buy
+        claims on it. If you are right, each claim pays you one unit of
+        collateral. If you are wrong, it pays nothing.</p>
+        <p>Every claim is backed by collateral locked up before the claim
+        exists. So there is nothing borrowed, nothing to be liquidated, and no
         way to lose more than you paid.</p>
       </div>
       {/* This aside is the one thing on the page that dates, so it reads the
@@ -86,11 +86,10 @@ export default function SiteLanding() {
         height={941}
         loading="lazy"
       />
-      <figcaption>The clutch: every claim fully backed by collateral the market holds like treasure, paid out on the answer.</figcaption>
     </figure>
 
     <section className="trade-v3-card">
-      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it; a zero means we read a zero. Where a total would have to span two different tokens you get both of them, each in its own units, because one figure covering both would be in no unit at all.</p></div></header>
+      <header><span>··</span><div><h2>What is out there right now</h2></div></header>
       {/* FE-CHART mount: LandingPulse reads the counts from the active
           deployment and feeds the presentational NumberStrip. */}
       <LandingPulse />
@@ -101,24 +100,21 @@ export default function SiteLanding() {
           aside did: it went on saying no market was open after one was. It
           reads the same published cut, so opening a market is still one
           fixture edit and the front door still stops claiming otherwise. */}
-      <header><span>01</span><div><h2>The app</h2><p>It opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed;{' '}
-        {PUBLIC_DEVNET_CUT_V1.market === null
-          ? <>anything that still needs an open market will tell you plainly that there is not one yet, instead of failing quietly.</>
-          : <>every surface tells you plainly what it could and could not read off the chain, instead of failing quietly.</>}</p></div></header>
+      <header><span>01</span><div><h2>Try it</h2><p>Seven programs, deployed on devnet.</p></div></header>
       <div className="direct-actions">
-        <Anchor className="secondary-action" href="/live">Launch story →</Anchor>
-        <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
-        <Anchor className="secondary-action" href="/create">Preview a Market design →</Anchor>
-        <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
-        <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
-        <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
+        <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
+        <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>
+        <Anchor className="secondary-action" href="/create">Design a market →</Anchor>
+        <Anchor className="secondary-action" href="/live">Watch a market being built →</Anchor>
+        <Anchor className="secondary-action" href="/explorer">Look up any account →</Anchor>
+        <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>
-      <p className="direct-status">You can open the human-readable deployment record or download the exact seven program addresses, ProgramData addresses, and observed deployment slots in one click.</p>
+      <p className="direct-status">Every program address and the slot it was deployed at:</p>
       <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />
     </section>
 
     {smokeStoryEnabledV1() && <section className="trade-v3-card">
-      <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a devnet market about a real mainnet event, and one we abandon on purpose so you can finish it and collect the bounty.</p></div></header>
+      <header><span>··</span><div><h2>Three markets, run in public</h2><p>A price market Pyth settles on its own, a market about a real mainnet event, and one abandoned on purpose for you to finish and collect the bounty.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/smoke">Read the story →</Anchor>
         <Anchor className="secondary-action" href="/bounty">How the bounty works →</Anchor>
@@ -126,7 +122,7 @@ export default function SiteLanding() {
     </section>}
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The documentation</h2><p>What a claim is, how protection works, how to run a market, how to build your own client — and how to try the whole thing yourself.</p></div></header>
+      <header><span>02</span><div><h2>The documentation</h2><p>What a claim is, how protection works, how to run a market, how to build a client.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={docsHrefV1('guides/README.html', 'docs/guides/README.md')}>Guides →</a>
         <a className="secondary-action" href={docsHrefV1('readme.html', 'README.md')}>The README →</a>
@@ -137,7 +133,7 @@ export default function SiteLanding() {
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>The code</h2><p>Building on it? The tests and run logs behind every claim on this site live in the repository, beside the programs they were run against.</p></div></header>
+      <header><span>03</span><div><h2>The code</h2><p>Programs, tests, and run logs.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={repositoryHrefV1()}>Repository →</a>
       </div>
@@ -150,7 +146,7 @@ export default function SiteLanding() {
         no external font, script, or image, so it is served as-is rather than
         rebuilt into this app's chrome. */}
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>How this was built</h2><p>This protocol was built twice before the version you are reading now, and both earlier builds were retired on purpose. These notes say why that was the plan from the beginning, what each attempt made visible that no amount of planning would have, and what was kept once the code itself was thrown away. They are written for someone who has never opened the repository, and they are honest about what is proved and what is still only tested.</p></div></header>
+      <header><span>04</span><div><h2>How this was built</h2><p>Two earlier builds, thrown away on purpose. Why that was the plan, and what survived each time.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>

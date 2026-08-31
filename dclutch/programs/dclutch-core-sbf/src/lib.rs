@@ -125,12 +125,12 @@ pub enum CoreSbfError {
     /// Core bootstrap profile, artifact, Loader, or immutability authority refused.
     Infrastructure = 0x300F,
     /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
     ///
     /// Decision 0012. Not a corrupted account and not an attack: the exact
     /// upgrade authority the release names shipped new bytes, so the cached
-    /// authentication no longer describes what is deployed. Every open market
-    /// on the superseded release generation refuses until a re-release
-    /// re-authenticates the new deployment and re-pins its slot.
+    /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x3010,
     /// A Source material bought a recovery walk that no live route can walk.
     ///
@@ -153,18 +153,103 @@ pub enum CoreSbfError {
     RecoveryWalkUnavailable = 0x3011,
 }
 
+impl CoreSbfError {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`CoreSbfError::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only
+    /// arm that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 18] = [
+        Self::Instruction,
+        Self::AccountFrame,
+        Self::FinalizedRecord,
+        Self::Reference,
+        Self::Release,
+        Self::Market,
+        Self::RentCredit,
+        Self::Creation,
+        Self::Funding,
+        Self::CallerAuthority,
+        Self::ChildCpi,
+        Self::ChildAck,
+        Self::Transition,
+        Self::Commit,
+        Self::Arithmetic,
+        Self::Infrastructure,
+        Self::ReleaseSuperseded,
+        Self::RecoveryWalkUnavailable,
+    ];
+
+    /// This refusal's position in [`CoreSbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism:
+    /// a nineteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::AccountFrame => 1,
+            Self::FinalizedRecord => 2,
+            Self::Reference => 3,
+            Self::Release => 4,
+            Self::Market => 5,
+            Self::RentCredit => 6,
+            Self::Creation => 7,
+            Self::Funding => 8,
+            Self::CallerAuthority => 9,
+            Self::ChildCpi => 10,
+            Self::ChildAck => 11,
+            Self::Transition => 12,
+            Self::Commit => 13,
+            Self::Arithmetic => 14,
+            Self::Infrastructure => 15,
+            Self::ReleaseSuperseded => 16,
+            Self::RecoveryWalkUnavailable => 17,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    CoreSbfError::Instruction as u32 == dclutch_refusal_registry::CORE_REFUSAL_BASE,
-    "CoreSbfError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (CoreSbfError::RecoveryWalkUnavailable as u32)
-        < dclutch_refusal_registry::CORE_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "CoreSbfError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        CoreSbfError::ALL[0] as u32 == dclutch_refusal_registry::CORE_REFUSAL_BASE,
+        "CoreSbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < CoreSbfError::ALL.len() {
+        let variant = CoreSbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "CoreSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::CORE_REFUSAL_BASE + index as u32,
+            "CoreSbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CORE_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
+            "CoreSbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<CoreSbfError> for ProgramError {
     fn from(value: CoreSbfError) -> Self {

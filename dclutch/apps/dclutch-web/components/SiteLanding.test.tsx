@@ -31,12 +31,21 @@ describe('the front door', () => {
     // It used to say "you can watch it all happen live below", above a strip
     // of three numbers.
     expect(html).not.toContain('watch it all happen live');
-    expect(html).toContain('read live from the chain every time you open this page');
+    // Renegotiated 2026-08-31: the strip used to be introduced by a paragraph
+    // saying the numbers are read live, never estimated, never remembered,
+    // that a dash means unread and a zero means zero. Three labelled numbers
+    // do not need a legend. Deleted; what is pinned is that no zero is
+    // invented in place of an unread value.
+    expect(html).not.toContain('>0</strong>');
   });
 
   it('describes what needs an open market without pretending there is one', () => {
-    expect(html).toContain('The seven programs are deployed');
-    expect(html).toContain('will tell you plainly that there is not one yet');
+    // Renegotiated 2026-08-31: the section used to promise that anything
+    // needing an open market "will tell you plainly that there is not one yet,
+    // instead of failing quietly". Deleted -- the pages do it, they no longer
+    // announce that they will.
+    expect(html).toContain('Seven programs, deployed on devnet');
+    expect(html).not.toContain('failing quietly');
   });
 
   it('offers the faucet to a reader who wants to try it, right beside the nothing-for-sale fact', () => {
@@ -56,14 +65,20 @@ describe('the front door', () => {
     expect(html).toContain('/notes/plan-to-compost-at-least-three/');
     expect(html).toContain('Plan to compost at least three');
     expect(html).toContain('How this was built');
-    expect(html).toContain('built twice before the version you are reading now');
-    expect(html).toContain('honest about what is proved and what is still only tested');
+    expect(html).toContain('Two earlier builds, thrown away on purpose');
+    // Renegotiated 2026-08-31: "and they are honest about what is proved and
+    // what is still only tested" is the field notes vouching for themselves.
+    // Deleted; the notes are linked and can speak for themselves.
+    expect(html).toContain('what survived each time');
   });
 
-  it('carries the key art with a described image and an honest caption', () => {
+  it('carries the key art with a described image', () => {
     expect(html).toContain('/art/dragons-clutch-key-art-v1-1672w.webp');
+    // Renegotiated 2026-08-31: the figcaption ("every claim fully backed by
+    // collateral the market holds like treasure") restated the hero in
+    // metaphor under a picture. Deleted; the alt text still describes it.
     expect(html).toContain('claw cradling a glowing, faceted gem');
-    expect(html).toContain('holds like treasure');
+    expect(html).not.toContain('<figcaption>');
     // Lazy: the art must never delay the numbers the page exists to show.
     expect(html).toContain('loading="lazy"');
   });

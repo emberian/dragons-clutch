@@ -31,7 +31,7 @@ export const SIMULATOR_STATUS_URL_V1 = '/simulator-status.json';
 
 /** One plain sentence for the shipped default state. */
 export const NO_SIMULATOR_SENTENCE_V1 =
-  'No simulator is publishing here right now. Nothing has been read, and nothing below is a zero.';
+  'No simulator running.';
 
 /** A pulse older than this renders as stale rather than running: the
  * simulator writes every cycle, and fifteen minutes of silence is a stopped
@@ -235,7 +235,7 @@ export function simulatorBeatV1(status: SimulatorStatusV1, nowMs: number): Simul
       return Object.freeze({
         state: 'stale' as const,
         sentence:
-          'The run said it would have written again by now and has not, so this pulse is a record, not a heartbeat.',
+          'The run is overdue for its next write.',
       });
     }
   } else if (nowMs - Date.parse(status.updatedAt) > STALE_AFTER_MS_V1) {

@@ -82,6 +82,14 @@ export type GeneralHotEnvelopeV3 = Readonly<{
   market: string;
   generation: bigint;
   rootPrestateDigest: string;
+  /**
+   * The eight caller-mined PDA bumps the envelope's tail carries, in
+   * `HotBumpHintsV1` slot order. Zero means the hint is absent and the route
+   * searches for that address exactly as it did before the block existed, so
+   * an all-zero tail is canonical and is NOT refused -- these bytes were
+   * required-zero reserved space only until `d0306a64`.
+   */
+  bumpHints: ReadonlyArray<number>;
 }>;
 
 export type GeneralPlanInspectionV5 = Readonly<{
@@ -361,12 +369,12 @@ function decodeEnvelope(bytes: Uint8Array): GeneralHotEnvelopeV3 {
   if (bytes.length !== Abi.GENERAL_HOT_ENVELOPE_BYTES_V3 || !same(slice(bytes, 0, 8), Abi.GENERAL_HOT_MAGIC_V3)
       || u16(bytes, 8) !== Abi.GENERAL_HOT_VERSION_V3 || u16(bytes, 10) !== Abi.GENERAL_HOT_PROFILE_V3
       || readU32(bytes, Abi.GENERAL_ENVELOPE_REQUEST_BYTES_OFFSET_V3) !== Abi.GENERAL_REQUEST_BYTES_V2) throw new Error('General Hot envelope is not exact V3/V2');
-  requireZero(bytes, Abi.GENERAL_ENVELOPE_RESERVED_OFFSET_V3, 8, 'General Hot envelope');
   return Object.freeze({
     releaseSet: idHex(bytes, Abi.GENERAL_ENVELOPE_RELEASE_SET_OFFSET_V3, 'Hot release set'),
     market: pubkeyHex(bytes, Abi.GENERAL_ENVELOPE_MARKET_OFFSET_V3, 'Hot Market'),
     generation: u64(bytes, Abi.GENERAL_ENVELOPE_GENERATION_OFFSET_V3),
     rootPrestateDigest: idHex(bytes, Abi.GENERAL_ENVELOPE_ROOT_PRESTATE_DIGEST_OFFSET_V3, 'Hot root prestate digest'),
+    bumpHints: Object.freeze([...slice(bytes, Abi.GENERAL_ENVELOPE_BUMP_HINTS_OFFSET_V3, Abi.GENERAL_ENVELOPE_BUMP_HINT_COUNT_V3)]),
   });
 }
 

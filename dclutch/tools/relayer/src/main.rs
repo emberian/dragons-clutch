@@ -531,6 +531,7 @@ struct Submitter {
     observed_cluster_id: [u8; ID_BYTES],
     source_material_id: [u8; ID_BYTES],
     provider_release_id: [u8; ID_BYTES],
+    relayer_key_set_id: [u8; ID_BYTES],
 }
 
 async fn prepare_submission(config: &Config) -> Result<Submitter> {
@@ -635,6 +636,7 @@ async fn prepare_submission(config: &Config) -> Result<Submitter> {
         observed_cluster_id: config.attested_cluster_id(),
         source_material_id: capability.source_material_id,
         provider_release_id: capability.provider_release_id,
+        relayer_key_set_id: capability.relayer_key_set_id,
     })
 }
 
@@ -821,7 +823,10 @@ impl SignedObservationSet {
             source_material_id: submitter.source_material_id,
             account_set_id: self.account_set_id,
             provider_release_id: submitter.provider_release_id,
-            relayer_key_set_id: submitter.relayer_key_set,
+            // The record carries the key set's IDENTITY; `relayer_key_set` is
+            // the record account's ADDRESS the frame passes, and the address is
+            // derived FROM the identity, so the two never compare equal.
+            relayer_key_set_id: submitter.relayer_key_set_id,
             observed_cluster_id: submitter.observed_cluster_id,
             observed_slot: self.observed_slot,
             bodies,

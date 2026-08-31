@@ -8,7 +8,14 @@ import { type RpcAccount, type SolanaRpcClient } from './rpc';
  * Exact MakerReplayRootV1 authority mirrored from
  * `crates/dclutch-direct-codec/src/successor.rs` and its generated ABI.
  */
-export const DIRECT_MAKER_REPLAY_BYTES_V1 = 152;
+export const DIRECT_MAKER_REPLAY_BYTES_V1 = 160;
+/**
+ * The pre-`fee_owed` width, still readable.
+ *
+ * `MakerReplayRootV1::decode` accepts both and reads `fee_owed = 0` at the
+ * legacy width, so an exterior reader never has to know which one it holds.
+ */
+export const DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 = 152;
 export const DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1 = new TextEncoder().encode('dclutch:direct-maker:v1');
 
 const DIRECT_MAKER_MAGIC_V1 = new TextEncoder().encode('DCLTDMR1');
@@ -23,6 +30,7 @@ const DIRECT_MAKER_LIVE_COUNT_OFFSET_V1 = 96;
 const DIRECT_MAKER_MINIMUM_LIVE_NONCE_OFFSET_V1 = 104;
 const DIRECT_MAKER_RENT_OWNER_OFFSET_V1 = 112;
 const DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1 = 144;
+const DIRECT_MAKER_FEE_OWED_OFFSET_V1 = 152;
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 
 const authenticatedDirectMakerNonceV1: unique symbol = Symbol('authenticated Direct maker nonce V1');
@@ -35,6 +43,8 @@ export type AuthenticatedDirectMakerNonceV1 = Readonly<{
   maker: string;
   observedSlot: string;
   nextNonce: bigint;
+  /** Unsettled Direct fee this maker owes; a legacy-width record reads zero. */
+  feeOwed: bigint;
   state: 'vacant' | 'existing';
   [authenticatedDirectMakerNonceV1]: true;
 }>;
@@ -105,8 +115,13 @@ function decodeExistingMakerReplayV1(
 ): AuthenticatedDirectMakerNonceV1 {
   if (account.owner !== expected.tradingProgram.toBase58()) throw new Error('maker replay root is not owned by the selected Trading program');
   if (account.executable) throw new Error('maker replay root is executable');
-  if (account.space !== DIRECT_MAKER_REPLAY_BYTES_V1 || account.data.length !== DIRECT_MAKER_REPLAY_BYTES_V1) {
-    throw new Error(`maker replay root must be exactly ${DIRECT_MAKER_REPLAY_BYTES_V1} bytes`);
+  const width = account.data.length;
+  if (account.space !== width
+      || (width !== DIRECT_MAKER_REPLAY_BYTES_V1 && width !== DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1)) {
+    throw new Error(
+      `maker replay root must be exactly ${DIRECT_MAKER_REPLAY_BYTES_V1}`
+      + ` or ${DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1} bytes`,
+    );
   }
   u64Text(account.lamports, 'maker replay root lamports');
   if (!same(slice(account.data, 0, 8), DIRECT_MAKER_MAGIC_V1)
@@ -125,6 +140,9 @@ function decodeExistingMakerReplayV1(
   const minimumLiveNonce = u64(account.data, DIRECT_MAKER_MINIMUM_LIVE_NONCE_OFFSET_V1);
   const rentOwner = slice(account.data, DIRECT_MAKER_RENT_OWNER_OFFSET_V1, 32);
   const rentPrincipal = u64(account.data, DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1);
+  const feeOwed = width === DIRECT_MAKER_REPLAY_BYTES_V1
+    ? u64(account.data, DIRECT_MAKER_FEE_OWED_OFFSET_V1)
+    : 0n;
   if (liveCount > nextNonce) throw new Error('maker replay live count exceeds its next nonce');
   if (minimumLiveNonce > nextNonce) throw new Error('maker replay minimum-live nonce exceeds its next nonce');
   if (isZero(rentOwner) || rentPrincipal === 0n) throw new Error('maker replay root has an invalid RentCredit beneficiary or rent principal');
@@ -137,6 +155,7 @@ function decodeExistingMakerReplayV1(
     maker: expected.maker.toBase58(),
     observedSlot: expected.observedSlot,
     nextNonce,
+    feeOwed,
     state: 'existing',
   });
 }
@@ -176,6 +195,7 @@ export async function inspectDirectMakerNonceV1(
       maker: maker.toBase58(),
       observedSlot: observation.slot,
       nextNonce: 0n,
+      feeOwed: 0n,
       state: 'vacant',
     });
   }
@@ -192,6 +212,7 @@ export async function inspectDirectMakerNonceV1(
       maker: maker.toBase58(),
       observedSlot: observation.slot,
       nextNonce: 0n,
+      feeOwed: 0n,
       state: 'vacant',
     });
   }

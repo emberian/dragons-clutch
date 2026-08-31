@@ -847,6 +847,35 @@ before a market accepts principal.
 `AGENTS.md:125` makes this a rule the tree is currently violating: *"Provisional
 bounds require a lifting plan."*
 
+**RESOLVED 2026-08-31 (KAPPA-CAP).** The row is closed, and the closure is worth
+recording precisely because of how it read while it was open. κ is enforced on
+chain: the Market root carries the bound (`CoreState.principal_cap_sets`, offset
+288), `Found` derives it from the one floor record the Source names and refuses
+a zero outright, and the bound is re-checked at founding and at all three
+principal-growing routes — so it is a cap and not a founding-time formality. The
+substitution attack the floor record was designed against is closed by
+`SourcePrincipalPolicyV1::BoundedByFloor(selected_floor_id)`. Since 2026-08-31
+the refusal also has its own name at each site rather than borrowing a
+neighbour's, which is what makes it legible in a validator log.
+
+Two honest caveats travel with the closure. **κ = 1/4 is still Provisional** —
+the lifting plan (measure the realisable fraction per venue, then state a
+`Measured` envelope) is unchanged and unstarted, so the AGENTS.md rule is
+satisfied only in the sense that the plan is written down. And the bound is
+**demonstrated on a real ELF at one site of four**: `affine_batch_v2`'s program
+test now founds at an exact cap and shows a credit past it refusing by name with
+no byte moved, proved red by unbinding the cap; `founding_v5`, `signed_delta_v3`
+and the legacy complete-set mint are enforced but still found at `u64::MAX` in
+their fixtures, so their refusing arms have not executed on chain.
+
+The row's own history is the lesson worth keeping. M-16 sat open through the
+window in which the work was *done* — `WAVE.md` still said "no on-chain route
+calls it" four days after routes called it, `CHAIN_STATE_SOURCES` §12.7 still
+listed landed items as owed, and the explorer told visitors "nothing on chain
+enforces this bound today". A ledger that lags in that direction is not merely
+untidy: the KAPPA-CAP lane was chartered to build a wire break that had already
+shipped, and nearly did.
+
 ### M-17. `OddScheduledMedian`'s cadence tolerance blocks a whole product class
 
 > `OddScheduledMedian` currently requires **strict equal cadence**. Under Solana
@@ -934,12 +963,19 @@ and then **as a question with a recommended answer**, not an inventory row."*
 
 Five are outstanding. Four are inventory rows. None is on the post-cook plan.
 
+**Count corrected 2026-08-31 (LEDGER-TRUE): four are outstanding, not five.**
+M-25 was answered by decision `0016` on 2026-08-30 and this paragraph was never
+updated — see its row. The count is left in place above rather than rewritten
+because the *reason* it drifted is the thing worth recording: a decision that
+closes a ledger row has to be carried into the ledger by the same commit, and
+`0016` closed M-25 in its own text without touching this file.
+
 | ID | Question | Where it sits | Recommended answer already written? |
 |---|---|---|---|
 | M-22 | **The first open Market cannot be redeemed.** Its aggregate is written and `custody_context` is not mutable — re-found at a new generation, or keep it as the recorded witness. *"Owner: ember."* | ADR 0008 §6.4 + board `:11058`; **absent from `WAVE.md`** | yes, two options |
 | M-23 | **The reentrancy decision.** *"Needs ember or the protocol owner."*, following *"NO CHILD ROUTE CAN EXECUTE UNDER A REGISTRY CONTINUATION"* | board `:8950`; `WAVE.md:423` records the *wall* as down, not the decision as made | partly |
 | M-24 | **The record-layout decision behind the fourteenth wall.** The shipped path spends 1,336,865–1,386,359 CU and **one draw in twenty exceeds 1,400,000 outright** | `WAVE.md:117` — correctly stated, not routed | yes: store each canonical bump in its record |
-| M-25 | **Does a checked release describe the artifact or the account?** Revocation is mandatory on deploy day, so every deployed role will be in the state the release cannot describe. *"Reported, not patched."* | `FRONTEND_LIVE_OPEN_MARKET_2026_08_27.md:193` — disowned with no recipient | no |
+| M-25 | **Does a checked release describe the artifact or the account?** Revocation is mandatory on deploy day, so every deployed role will be in the state the release cannot describe. *"Reported, not patched."* | `FRONTEND_LIVE_OPEN_MARKET_2026_08_27.md:193` — disowned with no recipient | ~~no~~ **ANSWERED AND CLOSED 2026-08-30 (verified 2026-08-31, LEDGER-TRUE).** The row is stale: it was answered the same day the decision packet ruled, and this table was never updated. [Decision 0016](decisions/0016-checked-release-identity.md) is `Status: **ADOPTED 2026-08-30 — option A, plus the 0012 residual**` (`0016:3`, veto window `27f7944b`), and says so in its own words twice: *"M-25 closes with this record"* (`0016:9`) and *"M-25 closes with a record rather than a fourth reader re-deriving it"* (`0016:137`). **The answer is "neither, and that is the point": three facts, three authors, no self-reference** — the source by `semantic_release_id`, the artifact by the ELF digest, and the account by a policy the live observation must satisfy (`decisions/DECISION_PACKET_2026_08_30.md:48-51`). Revocation-on-deploy-day is therefore not a state the release *cannot* describe; it is a live observation the account policy either admits or refuses. The 0012 residual was ruled in the same breath — `dclutch-release-tool` **stays strict**, an iteration substrate is named and never defaulted into |
 | M-26 | **What is the fee rate?** — open since day one | see below | no |
 
 M-26 is the oldest open question in the project and belongs in this tier because
@@ -2104,7 +2140,7 @@ Each verified as zero-in-successor unless noted.
 | G-16 | **Cross-market collateral netting** and its successor design, *"separately capitalized cross-market risk vaults… a frozen joint-state worst-case certificate and its own reserve; it may not borrow claimant principal from underlying Hoards"* | `OPEN_QUESTIONS:152`; `INSTRUMENT…` §9 | gen-3's nine `netting` hits are all *within* one Dealer scenario; the cross-market case is untouched. Adjacent to `U-004`'s open half (**M-11**) |
 | G-17 | **Price-measure and welfare certificates as first-class artifacts**, with the four-row profile→certificate table that *"turns profiles into honest compilation targets rather than arbitrary feature cuts"* | `INSTRUMENT…` §9 | the successor's capability profiles carry no certificate column |
 | G-18 | **IPFS pinning diversity and canonical release-manifest location** | `OPEN_QUESTIONS:139` (P3) | `IPFS`: zero. Bears directly on **M-15**, the unowned `semantic_release_id` |
-| G-19 | **AGPL source-offer** mechanics on distribution | `OPEN_QUESTIONS:141` | `source-offer`: zero; the Pages workflow now distributes |
+| G-19 | **AGPL source-offer** mechanics on distribution | `OPEN_QUESTIONS:141` | **HALF ANSWERED, 2026-08-30 (DIST).** The repository now distributes a *binary*: GitHub Releases `v0.1.0-devnet.*` of `dclutch-cli`. That leg carries the offer properly — the AGPL text ships inside every archive, and the release body states in one sentence that the repository IS the corresponding source, with the link. What is still open is the leg this row was written for: §13's **network-interaction** offer. The Pages site conveys no source link from the running program, and the released binary is a client that talks to a *cluster*, not a server the AGPL's §13 obliges. So: distribution-by-copy is covered, distribution-by-network is not. **IN FLIGHT 2026-08-31 (DESIGN lane) — verified in the working tree, NOT yet committed (LEDGER-TRUE).** The §13 leg is being built right now and this row should not be read as untouched work: `apps/dclutch-web/components/SiteFooter.tsx` exists and is mounted once from the root layout (`apps/dclutch-web/app/layout.tsx:5,62`), carrying a `Source` anchor to `https://github.com/emberian/dragons-clutch`. Its own doc comment states the reasoning this row asked for — that the condition is about network interaction, and that a footer on *some* pages would not discharge it because a reader can land on any route directly, which is why it is in the layout rather than in the workspaces. **Status is precisely "uncommitted"**: the component is untracked and the layout change is an unstaged 2-line diff, so at the moment of this verification the deployed site still conveys nothing. Do not close this row on the strength of this note — close it when the commit lands. **One residual the footer does not reach, named now so it is not lost:** §13 obliges the offer of *"the corresponding source of the version they are using"*, and a bare repository link is not version-pinned — a visitor gets `main`, not the commit the running site was built from. Discharging that wants the build's commit in the footer (or in a linked build record), which is a smaller change than this one and is the actual close condition |
 | G-20 | **Cross-Series portfolios and rolls** — calendar spreads, roll trades, multi-horizon ladders, *"not single-Market complete sets, so each Market Hoard remains segregated"* | `INSTRUMENT…` §9 | = `PRODUCT_THEORY_REDIRECTION`'s cross-expiry rolls (**M-8**), specified one generation earlier |
 | G-21 | The **error-code consolidation pass**: *"clutch-sbf carries a parallel 0x3000 numbering with the forbidden catch-all (**queued for the instruction-wave consolidation pass**)"*; *"the lossy 0x3fff collapse of eleven gate classes"* | `89e329c6`, `e2b887a9`, `1d0c2576` | **ACTIONED in principle** by ADR 0007 (namespaced refusal codes) — recorded here because it is the clearest case of a gen-1 debt row that a gen-3 *decision* silently discharged, which is what a sweep is for |
 | G-22 | The **12-gate E3 table** for the production source-registry flip | `R2_PHASE0_RUNBOOK.md` §4.1; `ADOPTED:74` | `12-gate`: zero in gen-3. `D-2` gates the flip; nothing enumerates what must be true first |
@@ -2755,7 +2791,7 @@ sources did not carry.
 | **M-4**, earlier still | `a81b609b`, 2026-08-18, `research/claim-algebra-model/ONE_HOT_VS_DERIVED.md` is the dated head-to-head that chose one-hot **on argument** and gated the derived branch's promotion on a benchmark that never ran — **N-7**. |
 | **M-5** | See **G-10**. The Aug 24/26/27 calendar is in a committed decision record, not only in `cv`. |
 | **M-8** | `PRODUCT_THEORY_REDIRECTION`'s seven upgrades are largely gen-1's `INSTRUMENT…` §9 re-derived; the gen-1 original is committed on `main` and was never swept, so the successor lost the same content twice, by two different mechanisms (branch-only, then generation boundary). |
-| **M-16** | See **C-4**. `κ` is a gen-1 P1 row, so it has survived two generations. |
+| **M-16** | See **C-4**. `κ` is a gen-1 P1 row, so it has survived two generations. **RESOLVED 2026-08-31 (KAPPA-CAP)** — enforced at founding and all three growth routes, refusal named, and demonstrated refusing on a real ELF at the affine-batch site; κ = 1/4 still Provisional, and the other three sites still found unbounded in their fixtures. |
 | **M-55** | See **G-2** and **N-9**. Succinct verification was *move 2 of exactly two* in gen-1's strategy document, its two gating quantities are named and explicitly must-not-be-estimated, and `SWARM_ROADMAP` §6 makes Breadstuffs' *"expensive proof freeze/MPC ceremony"* step 5 of its own five-step plan. |
 | **M-26** | Two sharpenings. `3e818be8` and `15122506` show the treasury was made **structurally** undecidable — *"the treasury pubkey **DEFERRED** as the structural `REVENUE-TREASURY-UNSET-SENTINEL1` byte string"*, and `525ec13f` makes `RevenueTreasuryUnset` fire *"on EVERY fee-bearing admission… **unreachable until ember binds a key in a new const**"*. Gen-1 built a protocol that could not take a fee until ember answered. And three more: **N-1**, the base geometry silently changed under the rate question; **N-15**, a formalization gate stands in front of it; and **§D.1 item 5**, gen-2 built `RevenuePolicyV2` — the immutable fee-bearing Realm record, streamed recipient allocation V3, registered calibrations, and treasury Position custody, all zero in the successor. M-26 reads as never-attempted. It was selected in gen-1, built in gen-2, and discarded in gen-3, three times without a decision record. |
 | **M-46** | Gen-1 had the abandonment problem too and solved it structurally rather than socially: `SWARM_ROADMAP` §8 rule 4 requires *"each lane to report: exact paths, commit, evidence plane, commands, test counts, artifact identity, negative boundaries, and remaining STOPs."* A lane that must report an artifact identity cannot vanish silently. Gen-3's `AGENTS.md` carries `semantic owner` (§8 rule 3) and none of rule 4. |

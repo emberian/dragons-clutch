@@ -119,7 +119,7 @@ for (const program of programs) {
       package: program.package,
       enumName: refusal.enum_name,
       variant: refusal.variant,
-      meaning: refusal.doc ?? null,
+      meaning: refusal.summary ?? null,
       provenance: refusal.provenance,
     });
   }

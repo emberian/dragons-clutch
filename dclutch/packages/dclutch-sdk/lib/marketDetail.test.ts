@@ -102,7 +102,7 @@ describe('Market detail projection', () => {
     if (card.status !== 'decoded') throw new Error(card.refusal);
     expect(card.phase).toBe('Open');
     expect(detail.phaseMeaning).toBe(marketPhaseMeaningV1('Open'));
-    expect(detail.phaseMeaning).toMatch(/no claim can be redeemed/);
+    expect(detail.phaseMeaning).toMatch(/nothing can be cashed in/);
     expect(card.identity).toMatchObject({
       schemaMagic: 'DCLTCOR3',
       schemaVersion: 3,
@@ -123,7 +123,10 @@ describe('Market detail projection', () => {
     if (openCard.status !== 'decoded' || openCard.liability.status !== 'bound') throw new Error('expected bound liabilities');
     expect(openCard.liability.requiredBackingAtoms).toBe('500000000');
     expect(openCard.liability.requiredBackingBasis).toBe('maximum-claim-supply');
-    expect(requiredBackingMeaningV1('maximum-claim-supply')).toMatch(/every claim could still be the one that pays/);
+    // Renegotiated 2026-08-31: the meaning strings carried a trailing
+    // justification ("until the answer is in, every claim could still be the
+    // one that pays"). They are captions on a labelled figure now.
+    expect(requiredBackingMeaningV1('maximum-claim-supply')).toMatch(/biggest claim count on any one outcome/);
 
     const terminal = await inspectMarketDetailV1(client(await chain(terminalMarket(2))), { ...full, address: LIVE.market.address });
     const terminalCard = terminal.card;
@@ -131,7 +134,7 @@ describe('Market detail projection', () => {
     expect(terminalCard.phase).toBe('Terminal');
     expect(terminalCard.settlement).toMatchObject({ status: 'terminal', winner: 2 });
     expect(terminalCard.liability.requiredBackingBasis).toBe('winning-claim-supply');
-    expect(requiredBackingMeaningV1('winning-claim-supply')).toMatch(/only winning claims can still be paid/);
+    expect(requiredBackingMeaningV1('winning-claim-supply')).toMatch(/claim count on the outcome that won/);
   });
 
   it('sources the supply vector from the Claims aggregate, never from the Market root', async () => {

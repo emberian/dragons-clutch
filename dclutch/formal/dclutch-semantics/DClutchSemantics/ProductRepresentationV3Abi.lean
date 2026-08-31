@@ -1,4 +1,5 @@
 import DClutchSemantics.AbiSchema
+import DClutchSemantics.ProductBasisV3Abi
 
 /-!
 # Product Representation V3 admission ABI
@@ -19,6 +20,30 @@ def magic : List UInt8 :=
 def version : Nat := 3
 def categoricalKind : Nat := 1
 def gradedKind : Nat := 2
+
+/-- The degree-2-to-3 spline family's admission tag, allocated to match
+`DClutchSemantics.ProductBasisV3Abi.splineDegree2To3Kind`.
+
+`DCRPADV3` is the *second* Rust author of the basis-kind byte, and until this
+allocation the two authors could have drifted: nothing re-ran this emitter and
+nothing compared its output to the accepted file.  The tag is allocated here so
+the two byte-16 vocabularies stay one vocabulary, and refused by the decoder so
+allocating it admits nothing. -/
+def splineDegree2To3Kind : Nat := 3
+
+theorem kind_tags_distinct :
+    categoricalKind ≠ gradedKind ∧ categoricalKind ≠ splineDegree2To3Kind ∧
+      gradedKind ≠ splineDegree2To3Kind := by
+  refine ⟨?_, ?_, ?_⟩ <;> decide
+
+/-- The two records agree on what each byte at their kind offsets means.  This
+is the whole content of "one vocabulary, two authors", and it is checked here
+rather than assumed because the `DCRPADV3` emitter is re-run by nothing. -/
+theorem kind_tags_agree_with_the_basis_record :
+    categoricalKind = ProductBasisV3Abi.categoricalKind ∧
+      gradedKind = ProductBasisV3Abi.gradedExactComplementKind ∧
+      splineDegree2To3Kind = ProductBasisV3Abi.splineDegree2To3Kind := by
+  refine ⟨?_, ?_, ?_⟩ <;> decide
 
 inductive Field where
   | magic | version | basisKind | reservedHeader

@@ -148,6 +148,23 @@ pub mod activation_registers_v2 {
     pub const ACTIVATION_ROOT_ACCOUNT_V2: u16 = 0;
     /// FundingState accounts follow the root, in role-request order.
     pub const ACTIVATION_FIRST_FUNDING_ACCOUNT_V2: u16 = 1;
+
+    /// Widest scalar bank the activation seam will run.
+    ///
+    /// Published for the same reason the coordinates above are: an artifact
+    /// author who cannot name the bound writes it down a second time. The seam
+    /// is the enforcer -- `outer.rs::seed_common_registers` refuses a profile
+    /// declaring more -- and an off-chain builder that checks it here refuses at
+    /// authoring time instead of on a submitted transaction.
+    pub const ACTIVATION_MAX_RUNTIME_SCALARS_V2: usize = 96;
+    /// Widest identity bank the activation seam will run.
+    pub const ACTIVATION_MAX_RUNTIME_IDENTITIES_V2: usize = 32;
+    /// Widest role request, and therefore the widest family root tail, the
+    /// activation seam will compose.
+    pub const ACTIVATION_MAX_ROLE_REQUEST_BYTES_V2: usize = 2_048;
+
+    const _: () = assert!(ACTIVATION_COMMON_SCALARS_V2 <= ACTIVATION_MAX_RUNTIME_SCALARS_V2);
+    const _: () = assert!(ACTIVATION_COMMON_IDENTITIES_V2 <= ACTIVATION_MAX_RUNTIME_IDENTITIES_V2);
 }
 
 /// Stable refusal from the capability-program contract.

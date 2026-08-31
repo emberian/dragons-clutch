@@ -21,6 +21,7 @@ use dclutch_execution_strategy_contract::v2::{
     StrategyDispositionV2, validate_admitted_aot_v4,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_activation_auth_v1::ActivationAuthErrorV1;
 use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ArtifactReleaseV1,
     require_slot_pinned_release_v1,
@@ -60,6 +61,35 @@ impl From<ShadowAcceleratorAuthErrorV4> for TradingSbfError {
             ShadowAcceleratorAuthErrorV4::Release => Self::Release,
             ShadowAcceleratorAuthErrorV4::Content => Self::Content,
             ShadowAcceleratorAuthErrorV4::ReleaseSuperseded => Self::ReleaseSuperseded,
+        }
+    }
+}
+
+/// The CPI-free activation-cache read raises Trading's own refusal codes.
+///
+/// Decision 0017's option B replaced Trading's top-level
+/// `RegistryInstructionV1::Reauthenticate` invocations with the local read every
+/// child role already performs. The invocation arm mapped EVERY failure --
+/// a malformed frame, a foreign cache, a moved deployment, an upgraded
+/// substrate -- onto `Release`, because a failed `invoke` carries no band:
+/// `.map_err(|_| TradingSbfError::Release)`. Three of this enum's four variants
+/// keep that code, so the conversion is refusal-invisible where it was.
+///
+/// The fourth does not, and the difference is deliberate.
+/// [`ActivationAuthErrorV1::ReleaseSuperseded`] is decision 0012's
+/// operator-actionable refusal -- the substrate's upgrade authority shipped new
+/// bytes and every open market on the previous generation must wait for a
+/// re-release. Under the CPI that fact reached the caller as a generic `Release`
+/// and the operator had to read Registry logs to learn it. Reading the cache
+/// directly, Trading knows it, so it says it: `0x4007`, the same band the
+/// continuation arm and `docs/reference/refusals.md` already carry for it.
+impl From<ActivationAuthErrorV1> for TradingSbfError {
+    fn from(value: ActivationAuthErrorV1) -> Self {
+        match value {
+            ActivationAuthErrorV1::AccountFrame
+            | ActivationAuthErrorV1::ActivationCache
+            | ActivationAuthErrorV1::Deployment => Self::Release,
+            ActivationAuthErrorV1::ReleaseSuperseded => Self::ReleaseSuperseded,
         }
     }
 }

@@ -12,7 +12,7 @@ describe('Core Found workspace', () => {
     expect(html).toContain('Construct unsigned lifecycle + Found transactions');
     expect(html).toContain('Immutable rent refund wallet');
     expect(html).toContain('No transaction has been constructed');
-    expect(html).toContain('No signing or submission occurs in this UI');
+    expect(html).toContain('No signing or submission here.');
     expect(html).toContain('Product Runtime V2 raw');
     expect(html).toContain('SourceMaterialV3 raw');
     expect(html).toContain('Linked basis raw');

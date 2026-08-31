@@ -37,6 +37,15 @@ pub const TERMINAL_CANDIDATE_DOMAIN_V3: &[u8] = b"dclutch/rational-terminal-cand
 pub enum Error {
     /// ProductBasisV3 decoding or terminal evaluation refused.
     ProductBasis,
+    /// The basis names the degree-2-to-3 spline family and this build carries
+    /// no evaluator for it.
+    ///
+    /// Split out of [`Error::ProductBasis`] because that variant is where the
+    /// `(kind, terminal)` wildcard used to send it, and a settlement that
+    /// failed with the same code as a corrupt record would be debugged as a
+    /// corrupt record. Maps to `ClaimsSbfError::BasisEvaluatorAbsent`
+    /// (`0x500C`) on chain.
+    SplineEvaluatorAbsent,
     /// An independently authenticated Product/representation identity differed.
     Representation,
     /// The finalized Product-to-Claims exposure bundle refused.
@@ -595,6 +604,13 @@ fn evaluate(
         (BasisKindV3::GradedExactComplement, TerminalScenarioV3::Failure) => basis
             .evaluate_failure(output)
             .map_err(|_| Error::ProductBasis),
+        // Named before the wildcard, which is what turns hostile 19 from a
+        // late generic refusal into a legible one. This is the *only* site in
+        // the tree where a spline basis could have reached evaluation, because
+        // it is the one that decodes a record and then evaluates it.
+        (BasisKindV3::SplineDegree2To3 { .. }, _) => Err(Error::SplineEvaluatorAbsent),
+        // Still fail-closed for every remaining (kind, terminal) mismatch: a
+        // categorical basis handed a rational coordinate, and so on.
         _ => Err(Error::ProductBasis),
     }
 }

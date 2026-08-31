@@ -1557,6 +1557,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-activation-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-sha256-adapter",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
@@ -1640,6 +1653,18 @@ dependencies = [
  "dclutch-sha256-adapter",
  "dclutch-token-svm",
  "dclutch-transition-vm",
+]
+
+[[package]]
+name = "dclutch-direct-ticket"
+version = "0.1.0"
+dependencies = [
+ "dclutch-direct-codec",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-program",
+ "solana-signature",
 ]
 
 [[package]]
@@ -1734,6 +1759,7 @@ name = "dclutch-general-adapter-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -1793,6 +1819,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-bearer-v2-operator",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",
@@ -1801,6 +1828,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
  "dclutch-direct-codec",
+ "dclutch-direct-ticket",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -1829,6 +1857,7 @@ dependencies = [
  "dclutch-request-profile-contract",
  "dclutch-resolution-core-v3-operator",
  "dclutch-series-v3-kernel",
+ "dclutch-structured-v2-kernel",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
  "dclutch-transition-vm",
@@ -2173,6 +2202,13 @@ version = "0.1.0"
 dependencies = [
  "dclutch-product-contract",
  "dclutch-product-runtime-v2",
+]
+
+[[package]]
+name = "dclutch-structured-v2-kernel"
+version = "0.1.0"
+dependencies = [
+ "dclutch-fractional-claim-kernel",
 ]
 
 [[package]]

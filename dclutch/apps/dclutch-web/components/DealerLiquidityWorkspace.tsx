@@ -108,7 +108,7 @@ export default function DealerLiquidityWorkspace() {
   const inspection = routeState.kind === 'ready' ? routeState.inspection : null;
 
   async function inspect(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setPlan(null); setSigned(null); setRouteState({ kind: 'loading', message: 'Reacquiring Dealer state and every selected artifact at finalized commitment…' });
+    event.preventDefault(); setPlan(null); setSigned(null); setRouteState({ kind: 'loading', message: 'Reading finalized state…' });
     try {
       const request = decodeBase64(requestText, 'Dealer request');
       const checked = infrastructureText === '' ? null : decodeBase64(infrastructureText, 'checked infrastructure', CHECKED_INFRASTRUCTURE_BYTES_V1);
@@ -155,30 +155,30 @@ export default function DealerLiquidityWorkspace() {
   }
 
   return <main className="product-shell trade-v3-shell">
-    <ConsoleHeader path="/liquidity" title="Liquidity" purpose="A dealer with an equity request in hand checks it against the chain, builds the unsigned transaction, signs, and downloads the packet." />
+    <ConsoleHeader path="/liquidity" title="Liquidity" purpose="Check an equity request against the chain, build the unsigned transaction, sign, and download the packet." />
 
-    <section className="trade-v3-hero"><div><h1>Dealer<br /><em>liquidity.</em></h1><p>You choose an action — contribute or redeem dealer equity — and the console reads the dealer&apos;s live custody state before building the exact unsigned transaction for it. Every pasted address and byte is checked against the chain before anything is built.</p></div><aside><span>Executable successor</span><strong>{inspection?.checkedOuter.status === 'checked' ? `${inspection.request.action} · P${inspection.request.signedPositionCount}` : 'fail closed'}</strong><p>Selectors 1–6 only. LP open/close and scenario trading remain hidden until their production outer routes are complete.</p></aside></section>
+    <section className="trade-v3-hero"><div><h1>Dealer<br /><em>liquidity.</em></h1><p>Contribute or redeem dealer equity. The dealer’s live custody state is read first, and every pasted address and byte is checked against the chain, before any transaction is built.</p></div><aside><span>Executable successor</span><strong>{inspection?.checkedOuter.status === 'checked' ? `${inspection.request.action} · P${inspection.request.signedPositionCount}` : 'fail closed'}</strong><p>Selectors 1–6 only. LP open/close and scenario trading remain hidden until their production outer routes are complete.</p></aside></section>
 
     <form className="trade-v3-card route-card" onSubmit={(event) => void inspect(event)}>
-      <header><span>01</span><div><h2>Authenticate one canonical Dealer request and route</h2><p>The request must come from the chain-derived Dealer equity constructor. The route map carries coordinates only; it cannot author Market, LP, obligation, Product width, release, revision, or authority.</p></div></header>
+      <header><span>01</span><div><h2>Authenticate one canonical Dealer request and route</h2><p>The request must come from the Dealer equity constructor. The route map carries coordinates only: it cannot author Market, LP, obligation, Product width, release, revision, or authority.</p></div></header>
       <div className="trade-v3-route-grid"><label><span>Finalized RPC endpoint</span><input type="url" required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Checked infrastructure manifest · base64, optional — <code>infrastructure.checked</code> from the release pipeline, {CHECKED_INFRASTRUCTURE_BYTES_V1.toLocaleString()} bytes</span><textarea value={infrastructureText} onChange={(event) => setInfrastructureText(event.target.value.trim())} /></label><label><span>Dealer equity request · base64 — produced by the operator program (<code>crates/dclutch-operator</code>)</span><textarea required spellCheck={false} value={requestText} onChange={(event) => setRequestText(event.target.value.trim())} /></label><label className="route-json"><span>Route manifest (Hot38 + admitted-AOT + runtime) · JSON — from the same operator run; every address in it is reacquired from the chain before use</span><textarea required spellCheck={false} value={routeText} onChange={(event) => setRouteText(event.target.value)} /></label></div>
       <button disabled={routeState.kind === 'loading'}>{routeState.kind === 'loading' ? 'Reading finalized Dealer route…' : 'Authenticate Dealer route'}</button><p className="direct-status" aria-live="polite">{routeState.message}</p>
       {inspection && <div className="trade-v3-evidence"><article><span>Action / Claims frame</span><strong>{inspection.request.action} · P{inspection.request.signedPositionCount}</strong><small>selector {inspection.request.selector}</small></article><article><span>Outcome width / shares</span><strong>{inspection.request.width} / {inspection.request.shares.toString()}</strong><small>Product + request joined</small></article><article><span>LP owner</span><strong>{short(inspection.request.lpOwner)}</strong><small>canonical LP PDA</small></article><article><span>Descriptor → strategy</span><strong>{inspection.selectedProgramDigest.slice(0, 8)}… → {inspection.strategyDigest.slice(0, 8)}…</strong><small>admitted AOT</small></article></div>}
     </form>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Construct the exact unsigned liquidity transaction</h2><p>One immutable Hot envelope carries the complete Dealer request. Runtime accounts are checked against the selected AccountProfile; lookup tables are reacquired and packet size is measured after v0 compilation.</p></div></header>
+      <header><span>02</span><div><h2>Construct the exact unsigned liquidity transaction</h2><p>One Hot envelope carries the complete Dealer request. Runtime accounts are checked against the selected AccountProfile, and packet size is measured after v0 compilation.</p></div></header>
       <button type="button" disabled={inspection === null} onClick={() => void build()}>Build exact unsigned v0 transaction</button><p className="direct-status" aria-live="polite">{buildStatus}</p>
       {inspection && <div className="direct-output"><dl><div><dt>Market / root</dt><dd>{inspection.request.market}<br />{inspection.request.childRoot}</dd></div><div><dt>Obligation / LP revision</dt><dd>{inspection.request.obligationRevision.toString()} / {inspection.request.lpRevision.toString()}</dd></div><div><dt>Collateral / shares</dt><dd>{inspection.request.collateral.toString()} / {inspection.request.shares.toString()}</dd></div><div><dt>Request expiry</dt><dd>slot {inspection.request.expiresAt.toString()} · observed {inspection.observedSlot}</dd></div></dl></div>}
     </section>
 
     <section className="trade-v3-card signing-card">
-      <header><span>03</span><div><h2>Wallet handoff and packet export</h2><p>Connecting reads identity only. Signing is an explicit separate action, the wallet may not rewrite the message, and submission remains outside this workbench.</p></div></header>
-      <WalletDirectory directory={wallets} purpose="transaction payer" onConnected={adoptIdentity} />
+      <header><span>03</span><div><h2>Wallet handoff and packet export</h2><p>Connecting reads identity only. Signing is a separate explicit action, the wallet may not rewrite the message, and there is no submit path.</p></div></header>
+      <WalletDirectory directory={wallets} onConnected={adoptIdentity} />
       <div className="signing-grid"><article><span>Wallet identity</span><strong>{wallet || 'not connected'}</strong><p>{walletStatus}</p></article><article><span>Unsigned / signed packet</span><strong>{plan ? `${plan.wireBytes.length} bytes · ${plan.loadedAddresses} ALT` : 'no transaction built'}</strong><button type="button" disabled={plan === null} onClick={() => void signTransaction()}>Sign as transaction payer</button><button type="button" disabled={plan === null} onClick={downloadPacket}>Download exact packet</button><p>{signed ? `${signed.complete ? 'Complete' : 'Partial'} signature set · ${signed.wireBytes.length} bytes. Export it to an external submitter.` : 'No transaction signature requested.'}</p></article></div>
       {plan && <details className="trade-v3-bytes"><summary>Exact transaction material</summary><dl><div><dt>Required signer</dt><dd>{plan.requiredSigners.join(', ')}</dd></div><div><dt>Wire bytes · base64</dt><dd>{base64(signed?.wireBytes ?? plan.wireBytes)}</dd></div><div><dt>Request bytes · base64</dt><dd>{base64(plan.request.bytes)}</dd></div></dl></details>}
     </section>
 
-    <footer className="product-footer"><span>Six real equity routes · no synthetic liquidity state</span><span>No automatic wallet request · no submission path</span></footer>
+    <footer className="product-footer"><span>Six equity routes</span><span>No automatic wallet request · no submission path</span></footer>
   </main>;
 }

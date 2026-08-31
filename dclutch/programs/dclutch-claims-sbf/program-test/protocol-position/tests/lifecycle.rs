@@ -21,16 +21,20 @@ use dclutch_claims_sbf::protocol_position_v2::{
 use dclutch_core_contract::ContentId;
 use dclutch_fractional_claim_contract::{
     FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
-    FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3, FRACTIONAL_RETIREMENT_CURSOR_PDA_SEED_V3,
+    FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3, FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3,
+    FRACTIONAL_RETIREMENT_CURSOR_PDA_SEED_V3, FRACTIONAL_RETIREMENT_FINISH_ACCOUNT_COUNT_V3,
     FractionalRetirementActionV3, FractionalRetirementCursorInputV3, FractionalRetirementCursorV3,
-    FractionalRetirementRequestInputV3, FractionalRetirementRequestV3, FractionalRootInputV1,
-    FractionalRootV1, NO_RETIREMENT_COORDINATE_V3,
+    FractionalRetirementLifecycleReceiptV3, FractionalRetirementRequestInputV3,
+    FractionalRetirementRequestV3, FractionalRootInputV1, FractionalRootV1,
+    NO_RETIREMENT_COORDINATE_V3,
 };
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsInputV2, FractionalExposureTermsV2, encode_fractional_exposure_terms_v2,
-    fractional_exposure_terms_bytes_v2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsInputV2, FractionalExposureTermsV2,
+    encode_fractional_exposure_terms_v2, encode_fractional_selection_config_v1,
+    fractional_exposure_terms_bytes_v2, fractional_selection_config_from_terms_v1,
 };
+use dclutch_market_core_codec::{CoreState, Identity, Phase as CorePhase};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
@@ -52,7 +56,7 @@ use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2,
     TokenBehaviorSelectionV2,
 };
-use solana_account::Account;
+use solana_account::{Account, AccountSharedData};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
 };
@@ -84,6 +88,13 @@ struct Artifacts {
     core: Vec<u8>,
     trading: Vec<u8>,
     rent: Vec<u8>,
+    /// The audited Token-2022 v11 ELF, provenance-checked by the runner.
+    ///
+    /// Required, not optional: the ordered walk is the campaign's only proof
+    /// that a fractional market can actually retire, and a fixture that
+    /// silently skipped it when the ELF was missing would be evidence of
+    /// nothing at all.
+    token: Vec<u8>,
 }
 
 fn artifacts() -> Artifacts {
@@ -95,6 +106,7 @@ fn artifacts() -> Artifacts {
         core: read("dclutch_core_sbf.so"),
         trading: read("dclutch_claims_liability_basis_test_caller_sbf.so"),
         rent: read("dclutch_rent_sbf.so"),
+        token: read("spl_token_2022.so"),
     }
 }
 
@@ -247,6 +259,36 @@ fn finalized_record(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> Finalize
     }
 }
 
+/// The selection-config identity a real Fractional activation writes.
+///
+/// The Market selects a market-free config; the terms are the market-bearing
+/// record it admits. `authenticate_root` re-projects the terms and compares,
+/// so a fixture that plants the terms record digest here is planting a root no
+/// activation could have produced.
+fn selection_config_digest(terms_bytes: &[u8]) -> [u8; 32] {
+    let terms_digest: [u8; 32] = hash(terms_bytes).to_bytes();
+    let terms = FractionalExposureTermsV2::decode(
+        terms_bytes,
+        FractionalExposureTermsAdmissionV2 {
+            selected_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            finalized_schema_id: FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2,
+            selected_terms_id: terms_digest,
+            finalized_terms_id: terms_digest,
+            recomputed_terms_digest: terms_digest,
+            finalized_terms_digest: terms_digest,
+            record_authenticated: true,
+        },
+    )
+    .expect("campaign terms decode");
+    let mut config = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut config,
+    )
+    .expect("campaign selection config");
+    hash(&config).to_bytes()
+}
+
 fn retirement_mint_bytes(controller: Pubkey) -> Vec<u8> {
     const TLV_START: usize = 166;
     let mut bytes = vec![0_u8; TLV_START];
@@ -286,11 +328,78 @@ struct Fixture {
     terms: FinalizedRecordFixtureV2,
     token_behavior: FinalizedRecordFixtureV2,
     mint: Pubkey,
+    begin: FractionalRetirementRequestV3,
     retirement: FractionalRetirementRequestV3,
+    finish: FractionalRetirementRequestV3,
+    cursor_rent: u64,
     graph: dclutch_claims_affine_batch_program_test::fixture::ProductLbv2FixtureV2,
 }
 
+/// Which of the two campaigns a fixture is being stood up for.
+///
+/// They differ in exactly three planted facts, and each one is load-bearing
+/// for one campaign and fatal to the other.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CampaignV1 {
+    /// A stub at the canonical Token address that refuses every instruction,
+    /// so the late Mint-close CPI is observable as a rollback boundary. The
+    /// cursor is planted, because this campaign never runs `Begin`.
+    LateTokenRefusal,
+    /// The audited Token-2022 v11 ELF and a vacant cursor address ALREADY
+    /// OVER-FUNDED past its own rent minimum -- the two things an ordered walk
+    /// needs in order to be driven end to end by the real routes rather than
+    /// around them, plus the griefing case: a stranger's donation must make
+    /// begin's bill smaller rather than making begin impossible, and the stray
+    /// lamports must come back out again at finish instead of being burned.
+    OrderedWalk,
+    /// The same, with the cursor address funded BELOW its rent minimum, so
+    /// begin has to top it up out of the payer rather than finding it ready.
+    OrderedWalkUnderfundedCursor,
+}
+
+impl CampaignV1 {
+    const fn walks(self) -> bool {
+        matches!(self, Self::OrderedWalk | Self::OrderedWalkUnderfundedCursor)
+    }
+}
+
+/// Lamports a stranger left on the cursor address before anyone began.
+const CURSOR_STRAY_LAMPORTS: u64 = 4_242;
+
+/// Resolve the Market between transactions, the way Resolution would.
+///
+/// The order matters and is not a convenience. `Admit` requires Core to be
+/// exactly `Open` and `Begin` requires it to be Terminal-or-Retiring, so a
+/// campaign that drives BOTH with the real routes has to move the Market
+/// between them -- which is what actually happens on chain, one resolution
+/// apart. Everything but the phase and the terminal receipt is left exactly as
+/// the shared Product/LBV2 fixture compiled it.
+async fn resolve_market(context: &mut ProgramTestContext, core_market: Pubkey) {
+    let account = context
+        .banks_client
+        .get_account(core_market)
+        .await
+        .expect("Core market")
+        .expect("Core market exists");
+    let mut state = CoreState::decode(&account.data).expect("Core state");
+    assert_eq!(
+        state.phase,
+        CorePhase::Open,
+        "the walk resolves an Open Market"
+    );
+    state.phase = CorePhase::Terminal;
+    state.terminal_winner = 0;
+    state.terminal_receipt = Some(Identity::new([0x7c; 32]).expect("terminal receipt"));
+    let mut resolved = account.clone();
+    resolved.data = state.encode().expect("terminal Core state").to_vec();
+    context.set_account(&core_market, &AccountSharedData::from(resolved));
+}
+
 fn fixture() -> (ProgramTest, Fixture) {
+    fixture_for(CampaignV1::LateTokenRefusal)
+}
+
+fn fixture_for(campaign: CampaignV1) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -312,12 +421,21 @@ fn fixture() -> (ProgramTest, Fixture) {
     ] {
         add_program(&mut test, name, id, elf);
     }
-    add_program(
-        &mut test,
-        "dclutch_claims_liability_basis_test_caller_sbf",
-        TOKEN_PROGRAM,
-        artifacts.trading.as_slice(),
-    );
+    if campaign.walks() {
+        add_program(
+            &mut test,
+            "spl_token_2022",
+            TOKEN_PROGRAM,
+            artifacts.token.as_slice(),
+        );
+    } else {
+        add_program(
+            &mut test,
+            "dclutch_claims_liability_basis_test_caller_sbf",
+            TOKEN_PROGRAM,
+            artifacts.trading.as_slice(),
+        );
+    }
     let (release, cache_bytes) = activation(&artifacts);
     let cache = Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release], &REGISTRY).0;
     add_account(&mut test, cache, REGISTRY, cache_bytes, 1);
@@ -421,7 +539,13 @@ fn fixture() -> (ProgramTest, Fixture) {
         ContentId::new([0x66; 32]).expect("manifest"),
         ContentId::new([0x67; 32]).expect("kind"),
         ContentId::new([0x68; 32]).expect("capability release"),
-        ContentId::new(terms.digest).expect("terms"),
+        // The digest of the market-free selection config the terms project
+        // to, which is what a real activation writes -- NOT the terms record
+        // digest. Planting the record digest here made `authenticate_root`'s
+        // config split refuse at `0x500B`, which had left this campaign's only
+        // retirement test red since that gate landed (`4630ad77` updated the
+        // fractional-atomic fixture and not this one).
+        ContentId::new(selection_config_digest(&terms.bytes)).expect("terms"),
     )
     .expect("selection");
     let root_header = CapabilityRootHeaderV1::new(
@@ -440,7 +564,14 @@ fn fixture() -> (ProgramTest, Fixture) {
         terms: terms.digest,
         market: graph.core_market.to_bytes(),
         rent_beneficiary: rent_credit.to_bytes(),
-        revision: 5,
+        // The root revision a real `Begin` would have consumed, which is the
+        // one `begin` is called with below. This used to be 5 -- one ahead of
+        // the value the cursor was begun from -- because the handler compared
+        // the frozen root revision to the CURSOR's current one, and coordinate
+        // 0 is the only step where those can both be satisfied. A width-2 walk
+        // was unreachable and nothing said so. The cursor now derives the root
+        // anchor instead, and this fixture states the root a real begin leaves.
+        revision: 4,
         historical_rent_principal: root_lamports,
     })
     .expect("root state");
@@ -527,18 +658,46 @@ fn fixture() -> (ProgramTest, Fixture) {
         },
     )
     .expect("cursor");
-    add_account(
-        &mut test,
-        cursor,
-        CLAIMS,
-        cursor_state.to_bytes().expect("cursor bytes").to_vec(),
-        cursor_rent,
-    );
+    match campaign {
+        // The walk creates this account with the real `Begin`, so the address
+        // must be VACANT -- system-owned and empty. What it holds is the
+        // variable, and both values are hostile in their own way.
+        CampaignV1::OrderedWalk => add_account(
+            &mut test,
+            cursor,
+            system_program::ID,
+            Vec::new(),
+            cursor_rent
+                .checked_add(CURSOR_STRAY_LAMPORTS)
+                .expect("over-funded cursor"),
+        ),
+        // `add_account` floors an empty account at the rent minimum for zero
+        // bytes, which is far below what 296 bytes costs, so this really is
+        // underfunded and begin really does have to transfer.
+        CampaignV1::OrderedWalkUnderfundedCursor => {
+            add_account(&mut test, cursor, system_program::ID, Vec::new(), 1)
+        }
+        CampaignV1::LateTokenRefusal => add_account(
+            &mut test,
+            cursor,
+            CLAIMS,
+            cursor_state.to_bytes().expect("cursor bytes").to_vec(),
+            cursor_rent,
+        ),
+    }
     let retirement = FractionalRetirementRequestV3::new(
         FractionalRetirementActionV3::RetireCoordinate,
         retirement_input(5, 0),
     )
     .expect("retirement");
+    // Each act consumes exactly one cursor revision: begin at the root's own
+    // 4, the single coordinate at 5, finish at 6. The root stays at 4 the
+    // whole time, which is the relation `root_revision_anchor` states.
+    let finish = FractionalRetirementRequestV3::new(
+        FractionalRetirementActionV3::Finish,
+        retirement_input(6, NO_RETIREMENT_COORDINATE_V3),
+    )
+    .expect("finish");
     let retirement_bytes = retirement.to_bytes().expect("retirement bytes");
     let retirement_seeds = CallerAuthoritySeedsV1::new(
         ContentId::new(release).expect("release"),
@@ -587,7 +746,10 @@ fn fixture() -> (ProgramTest, Fixture) {
             terms,
             token_behavior,
             mint,
+            begin,
             retirement,
+            finish,
+            cursor_rent,
             graph,
         },
     )
@@ -704,6 +866,64 @@ fn wrapped(
         program_id: TRADING,
         accounts,
         data,
+    }
+}
+
+/// One direct Claims `Begin`. No wrapper and no caller authority: begin is
+/// permissionless, because everything it writes is determined by the terms and
+/// the root it just authenticated.
+fn begin_instruction(f: &Fixture, payer: Pubkey) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new(payer, true),
+        AccountMeta::new_readonly(f.market, false),
+        AccountMeta::new_readonly(f.core_market, false),
+        AccountMeta::new_readonly(CORE, false),
+        AccountMeta::new_readonly(REGISTRY, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(TRADING, false),
+        AccountMeta::new_readonly(CLAIMS, false),
+        AccountMeta::new_readonly(f.root, false),
+        AccountMeta::new_readonly(f.rent_credit, false),
+        AccountMeta::new(f.cursor, false),
+        AccountMeta::new_readonly(f.terms.raw, false),
+        AccountMeta::new_readonly(f.terms.staging, false),
+        AccountMeta::new_readonly(f.token_behavior.raw, false),
+        AccountMeta::new_readonly(f.token_behavior.staging, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    assert_eq!(accounts.len(), FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3);
+    Instruction {
+        program_id: CLAIMS,
+        accounts,
+        data: f.begin.to_bytes().expect("begin bytes").to_vec(),
+    }
+}
+
+/// One direct Claims `Finish`, likewise unprivileged.
+fn finish_instruction(f: &Fixture) -> Instruction {
+    let accounts = vec![
+        AccountMeta::new_readonly(f.market, false),
+        AccountMeta::new_readonly(REGISTRY, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(TRADING, false),
+        AccountMeta::new_readonly(CLAIMS, false),
+        AccountMeta::new_readonly(f.root, false),
+        AccountMeta::new(f.rent_credit, false),
+        AccountMeta::new_readonly(RENT_PROGRAM, false),
+        AccountMeta::new(f.cursor, false),
+        AccountMeta::new_readonly(f.terms.raw, false),
+        AccountMeta::new_readonly(f.terms.staging, false),
+        AccountMeta::new_readonly(f.token_behavior.raw, false),
+        AccountMeta::new_readonly(f.token_behavior.staging, false),
+    ];
+    assert_eq!(
+        accounts.len(),
+        FRACTIONAL_RETIREMENT_FINISH_ACCOUNT_COUNT_V3
+    );
+    Instruction {
+        program_id: CLAIMS,
+        accounts,
+        data: f.finish.to_bytes().expect("finish bytes").to_vec(),
     }
 }
 
@@ -1470,5 +1690,452 @@ async fn a_strangers_lamport_cannot_block_admission_and_underfunding_still_refus
                 .await
                 .expect("read")
                 .is_none()
+    );
+}
+
+/// The refusal code the runtime actually returned, read out of its own logs.
+fn refusal_code(logs: &[String]) -> Option<u32> {
+    logs.iter()
+        .find_map(|line| line.split("failed: custom program error: 0x").nth(1))
+        .and_then(|code| u32::from_str_radix(code.trim(), 16).ok())
+}
+
+async fn lamports_of(context: &mut ProgramTestContext, key: Pubkey) -> u64 {
+    context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("account")
+        .map_or(0, |account| account.lamports)
+}
+
+/// A replay must be a genuinely new transaction, or the runtime deduplicates
+/// it and the campaign observes nothing.
+async fn advance_blockhash(context: &mut ProgramTestContext) {
+    context
+        .get_new_latest_blockhash()
+        .await
+        .expect("new blockhash");
+}
+
+fn lifecycle_receipt(
+    returned: Option<(Pubkey, Vec<u8>)>,
+    request: FractionalRetirementRequestV3,
+) -> FractionalRetirementLifecycleReceiptV3 {
+    let (program, bytes) = returned.expect("the act must emit a receipt");
+    assert_eq!(program, CLAIMS);
+    let receipt =
+        FractionalRetirementLifecycleReceiptV3::decode(&bytes).expect("lifecycle receipt decodes");
+    receipt
+        .verify_for(
+            request,
+            hash(&request.to_bytes().expect("request bytes")).to_bytes(),
+        )
+        .expect("the receipt must bind to the request that produced it");
+    receipt
+}
+
+/// The whole point of the family: a fractional market retires, end to end.
+///
+/// Four real transactions against real ELFs -- the audited Token-2022 v11
+/// included -- with no planted cursor and no planted intermediate state. Begin
+/// creates the cursor; the single coordinate closes the reserve Position, its
+/// admission and the zero-supply shard Mint; Finish closes the cursor. Before
+/// this lane none of the three retirement acts could run: `Begin` and `Finish`
+/// were refused outright, and even a planted cursor could not have advanced
+/// twice.
+///
+/// The conservation story is asserted at every step, in lamports:
+///   - begin tops a vacant address up to rent exemption and settles nothing;
+///   - the coordinate step moves the Position's and admission's whole balances
+///     to the RentCredit and leaves the cursor's alone;
+///   - finish moves the cursor's ENTIRE balance -- the principal plus the
+///     stray lamport the fixture planted on the address beforehand -- to the
+///     same RentCredit;
+///   - and the RentCredit's final balance is exactly its opening balance plus
+///     what the three closed Claims accounts held between them.
+#[tokio::test]
+async fn a_fractional_market_retires_end_to_end_from_begin_through_finish() {
+    let (test, f) = fixture_for(CampaignV1::OrderedWalk);
+    let mut context = test.start_with_context().await;
+    let payer = context.payer.pubkey();
+
+    let admit = wrapped(
+        &f,
+        request(&f, ProtocolPositionActionV2::Admit),
+        false,
+        f.owner,
+    );
+    let begin = begin_instruction(&f, payer);
+    let step = retirement_wrapped(&f);
+    let finish = finish_instruction(&f);
+    let addresses = lookup_addresses(
+        payer,
+        &[admit.clone(), begin.clone(), step.clone(), finish.clone()],
+    );
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+
+    let (accepted, logs, ..) = submit(
+        &mut context,
+        admit,
+        table,
+        &addresses,
+        "ordered walk: admit the zero root reserve Position",
+    )
+    .await
+    .expect("admit");
+    assert!(accepted, "admit must be accepted: {logs:#?}");
+    resolve_market(&mut context, f.core_market).await;
+
+    let donated = lamports_of(&mut context, f.cursor).await;
+    assert_eq!(
+        donated,
+        f.cursor_rent
+            .checked_add(CURSOR_STRAY_LAMPORTS)
+            .expect("over-funded cursor"),
+        "this walk begins on a vacant address a stranger has already over-funded"
+    );
+    let payer_before = lamports_of(&mut context, payer).await;
+    let rent_credit_before = lamports_of(&mut context, f.rent_credit).await;
+    let position_lamports = lamports_of(&mut context, f.position).await;
+    let admission_lamports = lamports_of(&mut context, f.admission).await;
+    // Token-2022 closes the shard Mint to the same beneficiary, so the
+    // coordinate step's conservation set is three accounts, not two.
+    let mint_lamports = lamports_of(&mut context, f.mint).await;
+
+    // ---- Begin -----------------------------------------------------------
+    let (accepted, logs, returned, begin_units) = submit(
+        &mut context,
+        begin,
+        table,
+        &addresses,
+        "ordered walk: begin creates the cursor on a terminal Market",
+    )
+    .await
+    .expect("begin");
+    assert!(accepted, "begin must be accepted: {logs:#?}");
+    assert!(begin_units > 10_000, "{begin_units} compute units");
+    let receipt = lifecycle_receipt(returned, f.begin);
+    assert_eq!(receipt.action(), FractionalRetirementActionV3::Begin);
+    assert_eq!(receipt.cursor(), f.cursor.to_bytes());
+    assert_eq!(receipt.lamports_settled(), 0, "begin settles nothing");
+    assert_eq!(receipt.revision(), 5);
+
+    let cursor_account = context
+        .banks_client
+        .get_account(f.cursor)
+        .await
+        .expect("cursor")
+        .expect("begin must create the cursor");
+    assert_eq!(cursor_account.owner, CLAIMS);
+    assert_eq!(
+        cursor_account.data.len(),
+        FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3
+    );
+    let created = FractionalRetirementCursorV3::decode(&cursor_account.data).expect("cursor state");
+    assert_eq!((created.next_coordinate(), created.revision()), (0, 5));
+    assert_eq!(created.representation_width(), 1);
+    // The relation this lane exists to make true.
+    assert_eq!(created.root_revision_anchor(), Ok(4));
+    assert_eq!(created.historical_rent_principal(), f.cursor_rent);
+    // A donation makes begin's bill SMALLER, never impossible: the cursor is
+    // already past its minimum, so nothing is transferred and the stranger has
+    // funded the retirement they meant to obstruct.
+    assert_eq!(cursor_account.lamports, donated);
+    assert!(
+        lamports_of(&mut context, payer).await >= payer_before.saturating_sub(100_000),
+        "an already-funded cursor must not be topped up out of the payer"
+    );
+    assert_eq!(
+        lamports_of(&mut context, f.rent_credit).await,
+        rent_credit_before
+    );
+
+    // ---- The single coordinate -------------------------------------------
+    let (accepted, logs, _, step_units) = submit(
+        &mut context,
+        step,
+        table,
+        &addresses,
+        "ordered walk: retire the sole coordinate against real Token-2022",
+    )
+    .await
+    .expect("coordinate");
+    assert!(accepted, "the coordinate step must be accepted: {logs:#?}");
+    assert!(step_units > 30_000, "{step_units} compute units");
+    let advanced = FractionalRetirementCursorV3::decode(
+        &context
+            .banks_client
+            .get_account(f.cursor)
+            .await
+            .expect("cursor")
+            .expect("the cursor survives its own coordinate")
+            .data,
+    )
+    .expect("advanced cursor");
+    assert_eq!((advanced.next_coordinate(), advanced.revision()), (1, 6));
+    // Frozen root, moving cursor, constant anchor. Under the comparison this
+    // route used to carry, the walk could not have taken a second step, and
+    // this is the only place that fact is observable on chain.
+    assert_eq!(advanced.root_revision_anchor(), Ok(4));
+    for closed in [f.position, f.admission, f.mint] {
+        assert!(
+            context
+                .banks_client
+                .get_account(closed)
+                .await
+                .expect("closed account")
+                .is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
+            "the coordinate must close the Position, its admission and the Mint"
+        );
+    }
+    let rent_credit_after_step = lamports_of(&mut context, f.rent_credit).await;
+    assert_eq!(
+        rent_credit_after_step,
+        rent_credit_before
+            .checked_add(position_lamports)
+            .and_then(|sum| sum.checked_add(admission_lamports))
+            .and_then(|sum| sum.checked_add(mint_lamports))
+            .expect("coordinate rent conservation"),
+        "the Position, admission and Mint rent lands whole in the RentCredit"
+    );
+
+    // ---- Finish ----------------------------------------------------------
+    let cursor_lamports = lamports_of(&mut context, f.cursor).await;
+    let (accepted, logs, returned, finish_units) = submit(
+        &mut context,
+        finish,
+        table,
+        &addresses,
+        "ordered walk: finish closes the completed cursor",
+    )
+    .await
+    .expect("finish");
+    assert!(accepted, "finish must be accepted: {logs:#?}");
+    assert!(finish_units > 10_000, "{finish_units} compute units");
+    let receipt = lifecycle_receipt(returned, f.finish);
+    assert_eq!(receipt.action(), FractionalRetirementActionV3::Finish);
+    assert_eq!(receipt.next_coordinate(), receipt.representation_width());
+    assert_eq!(receipt.revision(), 7);
+    assert_eq!(
+        receipt.lamports_settled(),
+        cursor_lamports,
+        "the receipt must name what actually moved"
+    );
+    assert!(
+        receipt.lamports_settled() > f.cursor_rent,
+        "the stray lamport is settled with the principal, not stranded"
+    );
+    assert!(
+        context
+            .banks_client
+            .get_account(f.cursor)
+            .await
+            .expect("cursor")
+            .is_none_or(|account| account.lamports == 0
+                && account.data.is_empty()
+                && account.owner == system_program::ID),
+        "finish must leave a vacant, system-owned address behind"
+    );
+    // Nothing created, nothing destroyed, across the whole walk.
+    assert_eq!(
+        lamports_of(&mut context, f.rent_credit).await,
+        rent_credit_before
+            .checked_add(position_lamports)
+            .and_then(|sum| sum.checked_add(admission_lamports))
+            .and_then(|sum| sum.checked_add(mint_lamports))
+            .and_then(|sum| sum.checked_add(cursor_lamports))
+            .expect("whole-walk conservation")
+    );
+    println!(
+        "fractional ordered retirement CU: begin={begin_units}, coordinate={step_units}, finish={finish_units}"
+    );
+}
+
+/// The writability exemption is real, and this is what would have been dead
+/// without it.
+///
+/// `Finish` must take the RentCredit writable; `Begin` only reads it. Solana
+/// merges privileges across the instructions of one transaction, so a builder
+/// that batches the two acts -- or that simply reuses one meta list -- hands
+/// `Begin` a writable RentCredit. Under an exact readonly pin that transaction
+/// is dead, and the two ends of one walk can never share a transaction. Here
+/// the same `Begin` is submitted with the RentCredit marked writable and must
+/// be accepted, producing the identical cursor.
+#[tokio::test]
+async fn begin_admits_a_readonly_coordinate_that_the_callers_other_instruction_writes() {
+    let (test, f) = fixture_for(CampaignV1::OrderedWalk);
+    let mut context = test.start_with_context().await;
+    let payer = context.payer.pubkey();
+    resolve_market(&mut context, f.core_market).await;
+
+    let mut begin = begin_instruction(&f, payer);
+    let rent_credit = begin
+        .accounts
+        .get_mut(9)
+        .expect("the begin frame's RentCredit coordinate");
+    assert_eq!(rent_credit.pubkey, f.rent_credit);
+    assert!(!rent_credit.is_writable, "begin itself only reads it");
+    rent_credit.is_writable = true;
+
+    let addresses = lookup_addresses(payer, std::slice::from_ref(&begin));
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let (accepted, logs, returned, _) = submit(
+        &mut context,
+        begin,
+        table,
+        &addresses,
+        "privilege exemption: begin accepts a RentCredit its neighbour writes",
+    )
+    .await
+    .expect("begin with a writable RentCredit");
+    assert!(
+        accepted,
+        "a readonly pin here would forbid the caller's transaction, not protect this one: {logs:#?}"
+    );
+    let receipt = lifecycle_receipt(returned, f.begin);
+    assert_eq!(receipt.cursor(), f.cursor.to_bytes());
+    assert_eq!(
+        receipt.lamports_settled(),
+        0,
+        "and it still settles nothing"
+    );
+    let created = FractionalRetirementCursorV3::decode(
+        &context
+            .banks_client
+            .get_account(f.cursor)
+            .await
+            .expect("cursor")
+            .expect("begin must create the cursor")
+            .data,
+    )
+    .expect("cursor state");
+    assert_eq!((created.next_coordinate(), created.revision()), (0, 5));
+    assert_eq!(created.root_revision_anchor(), Ok(4));
+}
+
+/// Finish is not available to a walk that has not walked.
+#[tokio::test]
+async fn an_incomplete_walk_cannot_be_finished_and_the_cursor_survives_the_attempt() {
+    let (test, f) = fixture_for(CampaignV1::OrderedWalk);
+    let mut context = test.start_with_context().await;
+    let payer = context.payer.pubkey();
+    resolve_market(&mut context, f.core_market).await;
+    let begin = begin_instruction(&f, payer);
+    // At the revision begin leaves behind, which is the only one a caller
+    // could try before the coordinate runs. It must still refuse, because the
+    // cursor still owes coordinate 0.
+    let premature = Instruction {
+        program_id: CLAIMS,
+        accounts: finish_instruction(&f).accounts,
+        data: FractionalRetirementRequestV3::new(
+            FractionalRetirementActionV3::Finish,
+            FractionalRetirementRequestInputV3 {
+                expected_revision: 5,
+                ..f.finish.input()
+            },
+        )
+        .expect("premature finish")
+        .to_bytes()
+        .expect("premature finish bytes")
+        .to_vec(),
+    };
+    let addresses = lookup_addresses(payer, &[begin.clone(), premature.clone()]);
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let (accepted, logs, ..) = submit(
+        &mut context,
+        begin,
+        table,
+        &addresses,
+        "premature finish: begin the walk",
+    )
+    .await
+    .expect("begin");
+    assert!(accepted, "begin must be accepted: {logs:#?}");
+    let before = context
+        .banks_client
+        .get_account(f.cursor)
+        .await
+        .expect("cursor");
+
+    let (accepted, logs, ..) = submit(
+        &mut context,
+        premature,
+        table,
+        &addresses,
+        "premature finish: a cursor that still owes a coordinate refuses",
+    )
+    .await
+    .expect("premature finish");
+    assert!(!accepted, "an incomplete walk must not finish");
+    assert_eq!(
+        refusal_code(&logs),
+        Some(0x5008),
+        "the completeness gate is a Representation refusal: {logs:#?}"
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(f.cursor)
+            .await
+            .expect("cursor"),
+        before,
+        "the refused finish must leave the cursor exactly as it found it"
+    );
+}
+
+/// A second begin finds a cursor that already exists, and there is no counter.
+#[tokio::test]
+async fn a_second_begin_refuses_on_the_cursors_own_existence() {
+    let (test, f) = fixture_for(CampaignV1::OrderedWalkUnderfundedCursor);
+    let mut context = test.start_with_context().await;
+    let payer = context.payer.pubkey();
+    resolve_market(&mut context, f.core_market).await;
+    let begin = begin_instruction(&f, payer);
+    let addresses = lookup_addresses(payer, std::slice::from_ref(&begin));
+    let table = create_live_lookup_table(&mut context, &addresses).await;
+    let (accepted, logs, ..) = submit(
+        &mut context,
+        begin.clone(),
+        table,
+        &addresses,
+        "replay: the first begin",
+    )
+    .await
+    .expect("begin");
+    assert!(accepted, "begin must be accepted: {logs:#?}");
+    // This fixture's cursor was underfunded, so begin took the transfer path
+    // and landed it on exactly the rent minimum for 296 bytes -- no more.
+    assert_eq!(lamports_of(&mut context, f.cursor).await, f.cursor_rent);
+    let created = context
+        .banks_client
+        .get_account(f.cursor)
+        .await
+        .expect("cursor");
+
+    advance_blockhash(&mut context).await;
+    let (accepted, logs, ..) = submit(
+        &mut context,
+        begin,
+        table,
+        &addresses,
+        "replay: the second begin refuses on the cursor's own vacancy",
+    )
+    .await
+    .expect("second begin");
+    assert!(!accepted, "a cursor that exists is a walk already begun");
+    assert_eq!(
+        refusal_code(&logs),
+        Some(0x5008),
+        "anti-replay is the account's own existence: {logs:#?}"
+    );
+    assert_eq!(
+        context
+            .banks_client
+            .get_account(f.cursor)
+            .await
+            .expect("cursor"),
+        created,
+        "the refused begin must not disturb the cursor it found"
     );
 }

@@ -71,10 +71,20 @@ describe('the supersession story decision 0012 registered', () => {
   it('says the pin moved and names the remedy, which is what a browser must repeat verbatim', () => {
     const meaning = releaseSupersededMeaningV1();
     expect(meaning).toContain('the substrate was upgraded');
-    expect(meaning).toContain('Decision 0012');
     // The remedy half. A refusal a reader cannot act on is a mystery, and the
     // registry is where the action lives.
     expect(meaning).toContain('re-release re-authenticates the new deployment and re-pins its slot');
+  });
+
+  it('is the refusal, not the reasoning behind it', () => {
+    // Both halves above are facts about the deployment the reader is holding.
+    // The decision reference and the it-is-not-an-attack reassurance are for
+    // someone reading the enum, so they stay in the doc comment's second
+    // paragraph and out of every caption generated from it.
+    const meaning = releaseSupersededMeaningV1();
+    expect(meaning).not.toContain('Decision 0012');
+    expect(meaning).not.toContain('not an attack');
+    expect(meaning.split('. ').length).toBeLessThanOrEqual(2);
   });
 });
 

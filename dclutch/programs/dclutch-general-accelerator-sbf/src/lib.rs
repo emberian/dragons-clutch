@@ -84,20 +84,80 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     InvalidAcknowledgement = 0xC004,
 }
 
+impl GeneralAcceleratorSbfErrorV3 {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`GeneralAcceleratorSbfErrorV3::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only
+    /// arm that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 5] = [
+        Self::InvalidRequest,
+        Self::InvalidFrame,
+        Self::InvalidTopLevelInstruction,
+        Self::InvalidScratchBank,
+        Self::InvalidAcknowledgement,
+    ];
+
+    /// This refusal's position in [`GeneralAcceleratorSbfErrorV3::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism:
+    /// a sixth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::InvalidRequest => 0,
+            Self::InvalidFrame => 1,
+            Self::InvalidTopLevelInstruction => 2,
+            Self::InvalidScratchBank => 3,
+            Self::InvalidAcknowledgement => 4,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    GeneralAcceleratorSbfErrorV3::InvalidRequest as u32
-        == dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE,
-    "GeneralAcceleratorSbfErrorV3 must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement as u32)
-        < dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE
-            + dclutch_refusal_registry::BAND_SPAN,
-    "GeneralAcceleratorSbfErrorV3 must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        GeneralAcceleratorSbfErrorV3::ALL[0] as u32
+            == dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE,
+        "GeneralAcceleratorSbfErrorV3 must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < GeneralAcceleratorSbfErrorV3::ALL.len() {
+        let variant = GeneralAcceleratorSbfErrorV3::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "GeneralAcceleratorSbfErrorV3::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32
+                == dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE + index as u32,
+            "GeneralAcceleratorSbfErrorV3 discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::GENERAL_ACCELERATOR_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "GeneralAcceleratorSbfErrorV3 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<GeneralAcceleratorSbfErrorV3> for ProgramError {
     fn from(value: GeneralAcceleratorSbfErrorV3) -> Self {
@@ -184,10 +244,22 @@ pub fn process_instruction(
     let ack_len = ACCELERATOR_ACK_HEADER_BYTES_V2
         .checked_add(ack.payload().len())
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
-    let mut output = vec![0_u8; ack_len];
-    ack.encode_into(&mut output)
+    // A stack buffer, deliberately. The SBF bump allocator never frees, so a
+    // heap acknowledgement here would sit on top of the peak the runtime-width
+    // input bank already sets -- and the GEN-SEVEN register widening (+648
+    // bytes across the bank) pushed exactly that peak past the 32KiB heap at
+    // Close N=258. The whole acknowledgement is bounded at 1,024 bytes
+    // (header 144 + chunk payload 880), which one stack frame carries with
+    // room; the frame-diagnostic gate is what checks that claim on every
+    // build.
+    let mut output = [0_u8; ACCELERATOR_ACK_HEADER_BYTES_V2
+        + dclutch_execution_strategy_contract::v2::ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2];
+    let output = output
+        .get_mut(..ack_len)
+        .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
+    ack.encode_into(output)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
-    set_return_data(&output);
+    set_return_data(output);
     Ok(())
 }
 

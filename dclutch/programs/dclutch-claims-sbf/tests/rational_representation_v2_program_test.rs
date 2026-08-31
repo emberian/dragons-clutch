@@ -128,6 +128,7 @@ use dclutch_rational_representation_v2_request_contract::{
     generated::{ASSET_COEFFICIENT_OFFSET, ASSET_SHARD_MINT_OFFSET},
 };
 use dclutch_structured_v2_operator::Error as StructuredOperatorError;
+use dclutch_structured_v2_operator::STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2;
 use structured_lowering::StructuredBasis;
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe1; 32]);
@@ -3529,11 +3530,28 @@ fn the_full_width_structured_frame_does_not_fit_a_packet_at_k_three() {
         "the packet caps IssueStructured/UnwrapStructured one coordinate BELOW \
          the RequestProfile ceiling decision 0011 §3b called hard"
     );
+    // WHICH WALL BINDS, as a checked fact rather than a sentence.
+    //
+    // The artifact ceiling was the number the cliff doctrine chartered a lift
+    // against (raise `finalizedRecordMaxBytes`, regenerate, widen K). This
+    // assertion is why that lift does not pay: the packet already caps
+    // full-width issuance strictly below the artifact ceiling, so widening the
+    // RequestProfile bound admits descriptors that can be published and
+    // denominated but never issued or unwrapped. Read against the real
+    // constant, so raising the bound cannot quietly make this comment false.
+    let artifact_ceiling_k =
+        usize::try_from(STRUCTURED_CHILD_MAXIMUM_OUTCOMES_V2).expect("artifact ceiling");
+    assert!(
+        executable_full_width_k < artifact_ceiling_k,
+        "the packet ceiling ({executable_full_width_k}) must be reported as the binding one \
+         against the artifact ceiling ({artifact_ceiling_k}); if this ever inverts, the \
+         RequestProfile bound became binding again and a lift is worth re-costing"
+    );
     eprintln!(
         "Rational V2 K={K} packet wall: full-width-v0-live-ALT={full_bytes}, \
 selected-v0-live-ALT={selected_bytes}, limit={PACKET_LIMIT}, over-by={}, \
 per-coordinate={PER_COORDINATE_WIRE_BYTES}, executable-full-width-K={executable_full_width_k}, \
-request-profile-ceiling-K=3",
+request-profile-ceiling-K={artifact_ceiling_k}",
         full_bytes - PACKET_LIMIT,
     );
 }

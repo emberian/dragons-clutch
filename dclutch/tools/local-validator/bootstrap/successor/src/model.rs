@@ -198,6 +198,18 @@ pub(crate) struct DirectMarketCapabilityV1 {
     pub(crate) activation_effect_hex: String,
     #[serde(default)]
     pub(crate) activation_descriptor_hex: String,
+    /// The maker-replay close artifact trio (cohort-9's fifth ProgramSet
+    /// entry, wall 22's missing decrement). Defaulted (empty) for the same
+    /// reason the activation trio is: market inputs sealed before this entry
+    /// existed must still parse for terminal and evidence paths, and every
+    /// authoring path refuses an input whose close artifacts are absent --
+    /// such an input describes a market that can never retire once filled.
+    #[serde(default)]
+    pub(crate) close_maker_account_profile_hex: String,
+    #[serde(default)]
+    pub(crate) close_maker_effect_hex: String,
+    #[serde(default)]
+    pub(crate) close_maker_descriptor_hex: String,
     pub(crate) program_set_hex: String,
     pub(crate) activation_deadline_slot: u64,
     pub(crate) root_rent_minimum_lamports: u64,
@@ -282,6 +294,82 @@ pub(crate) enum CheckedDeploymentDispositionV1 {
     Upgrade,
     /// An authenticated existing deployment and existing finalized artifact.
     CarryForward,
+    /// The role's live payload was READ BACK from a finalized cluster
+    /// observation and found byte-identical to the checked candidate, so no
+    /// Upgrade transaction exists, and none can: the Loader refuses to replace
+    /// a payload with itself and the tool refuses the replay ambiguity.
+    ///
+    /// This is deliberately a THIRD kind and never either of the other two.
+    ///
+    /// It is not an `Upgrade`: no receipt, no signature, no buffer, no fee. It
+    /// must never be counted or displayed as one.
+    ///
+    /// It is not `CarryForward` either, and the difference is the whole point.
+    /// Carry-forward is a whitelist: it asserts that two named roles were not
+    /// part of this cut and says NOTHING about their bytes. This asserts
+    /// EQUALITY -- that the bytes on chain are the bytes the checked gate
+    /// binds -- and it is refused unless that equality is read back from a
+    /// finalized observation at audit time.
+    ///
+    /// On evidence strength this is the stronger claim, which is why it is
+    /// admitted at all: an Upgrade receipt ARGUES from a transaction that the
+    /// right bytes arrived, while this READS the deployed bytes and compares
+    /// them to the candidate digest. The weaker link in a receipt-backed role
+    /// is the argument; here there is no argument.
+    AlreadyCurrent,
+}
+
+/// The one statement of what an `AlreadyCurrent` row may and may not carry.
+///
+/// Two facts, and they are the two that EVERY projection of a deployment-set
+/// row can see: whether the row claims an Upgrade receipt, and whether it
+/// carries the pinned baseline that fixes the width its equality was judged at.
+///
+/// This rule used to be written five times, across four functions in three
+/// files, with five unrelated error strings -- and three of those strings never
+/// named the field that was wrong, so an operator reading one learned only that
+/// some closure somewhere had failed. The projections genuinely differ: a
+/// journal row carries pinned equality evidence that a plan pin has no field
+/// for, and only the audit sees a live cluster. So each site still adds the
+/// conjuncts only it can see. What no site may do any more is restate THIS.
+pub(crate) struct AlreadyCurrentClosureV1<'a> {
+    /// The role this row is about, named in every refusal.
+    pub(crate) role: &'a str,
+    /// The row claims an Upgrade receipt, in any of the shapes a row can.
+    pub(crate) receipt_claimed: bool,
+    /// The row carries a well-formed pinned baseline.
+    pub(crate) baseline_present: bool,
+}
+
+impl AlreadyCurrentClosureV1<'_> {
+    /// Audit the shared closure, refusing with the field that is wrong.
+    pub(crate) fn audit(&self) -> crate::Result<()> {
+        if self.receipt_claimed {
+            return Err(crate::Error::new(format!(
+                "AlreadyCurrent role {}: an Upgrade receipt is claimed, and the two kinds of \
+                 evidence are exclusive -- no Upgrade exists for a payload that already IS the \
+                 checked candidate, and the Loader refuses to build one",
+                self.role
+            )));
+        }
+        if !self.baseline_present {
+            return Err(crate::Error::new(format!(
+                "AlreadyCurrent role {}: the pinned baseline is absent or malformed, and it is \
+                 what fixes the width the equality was judged at",
+                self.role
+            )));
+        }
+        Ok(())
+    }
+
+    /// Whether the shared closure holds.
+    ///
+    /// For the two sites that compose this rule into a larger boolean instead
+    /// of returning early. They keep their own outer refusal; they no longer
+    /// keep their own copy of the rule.
+    pub(crate) fn holds(&self) -> bool {
+        self.audit().is_ok()
+    }
 }
 
 /// One permanent devnet role and the exact evidence that authorized its
@@ -315,6 +403,40 @@ pub(crate) struct CheckedUpgradeRolePinV1 {
     /// This is a derived transport projection, never caller-authored prepare
     /// authority, and is absent for receipt-backed Upgrade roles.
     pub(crate) carried_programdata_base64: Option<String>,
+}
+
+impl CheckedUpgradeRolePinV1 {
+    /// Project this pin onto the shared `AlreadyCurrent` closure.
+    ///
+    /// The baseline standard is the STRICTER of the two the sites used to
+    /// carry: a present, non-empty path and a present, well-formed 32-byte
+    /// digest. One site checked only presence and the other checked
+    /// well-formedness, for the same field on the same type -- so the weaker
+    /// one admitted rows the stronger one refused, and nothing compared them.
+    pub(crate) fn already_current_closure(&self) -> AlreadyCurrentClosureV1<'_> {
+        AlreadyCurrentClosureV1 {
+            role: &self.role,
+            receipt_claimed: self.receipt_path.is_some() || self.receipt_sha256.is_some(),
+            baseline_present: self
+                .baseline_path
+                .as_deref()
+                .is_some_and(|path| !path.is_empty())
+                && self
+                    .baseline_sha256
+                    .as_deref()
+                    .is_some_and(|digest| crate::plan::hex32(digest).is_ok()),
+        }
+    }
+
+    /// Whether none of the carry-forward-only transport fields is present.
+    ///
+    /// Shared by the two sites that judge a cut-owned row, which had
+    /// byte-identical copies of this three-field predicate.
+    pub(crate) fn carries_no_transport_fields(&self) -> bool {
+        self.artifact_release_body_hex.is_none()
+            && self.artifact_release_id.is_none()
+            && self.carried_programdata_base64.is_none()
+    }
 }
 
 /// Exact singleton infrastructure evidence shared by the two CarryForward
@@ -610,7 +732,9 @@ mod refusal_pin_tests {
     fn reads_the_custom_code_out_of_an_instruction_error() {
         let refused = evidence(Some(json!({"InstructionError": [1, {"Custom": 0x600B}]})));
         assert_eq!(refused.refusal_code(), Some(0x600B));
-        let kept = refused.refusing(0x600B).expect("the pinned code is the observed one");
+        let kept = refused
+            .refusing(0x600B)
+            .expect("the pinned code is the observed one");
         assert_eq!(kept.label, "probe");
     }
 
@@ -638,5 +762,128 @@ mod refusal_pin_tests {
             assert!(failed.refusing(0x3001).is_err(), "{other}");
         }
         assert_eq!(evidence(None).refusal_code(), None);
+    }
+}
+
+#[cfg(test)]
+mod already_current_closure_tests {
+    use super::{AlreadyCurrentClosureV1, CheckedDeploymentDispositionV1, CheckedUpgradeRolePinV1};
+
+    const DIGEST: &str = "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff";
+
+    /// A canonical AlreadyCurrent plan pin: baseline present and well-formed,
+    /// no receipt, no carry-forward transport.
+    fn pin() -> CheckedUpgradeRolePinV1 {
+        CheckedUpgradeRolePinV1 {
+            role: "trading".into(),
+            disposition: CheckedDeploymentDispositionV1::AlreadyCurrent,
+            program_id: "program".into(),
+            programdata_id: "programdata".into(),
+            baseline_path: Some("/baseline.json".into()),
+            baseline_sha256: Some(DIGEST.into()),
+            receipt_path: None,
+            receipt_sha256: None,
+            dump_path: "/dump.so".into(),
+            dump_sha256: DIGEST.into(),
+            checked_candidate_elf_path: "/candidate.so".into(),
+            checked_candidate_elf_sha256: DIGEST.into(),
+            live_elf_sha256: DIGEST.into(),
+            deployment_slot: 490_000_000,
+            programdata_account_sha256: DIGEST.into(),
+            semantic_release_id: DIGEST.into(),
+            artifact_release_body_hex: None,
+            artifact_release_id: None,
+            carried_programdata_base64: None,
+        }
+    }
+
+    #[test]
+    fn a_canonical_already_current_row_is_admitted() {
+        let pin = pin();
+        assert!(pin.already_current_closure().holds());
+        assert!(pin.carries_no_transport_fields());
+        assert!(pin.already_current_closure().audit().is_ok());
+    }
+
+    #[test]
+    fn a_claimed_upgrade_receipt_refuses_and_says_which_field() {
+        // Red-proof by mutation, in both shapes a receipt can be claimed. The
+        // rule used to live at five sites; a row carrying a receipt must refuse
+        // no matter which of them reaches it first.
+        for mutate in [
+            |pin: &mut CheckedUpgradeRolePinV1| pin.receipt_path = Some("/receipt.json".into()),
+            |pin: &mut CheckedUpgradeRolePinV1| pin.receipt_sha256 = Some(DIGEST.into()),
+        ] {
+            let mut pin = pin();
+            mutate(&mut pin);
+            let message = pin
+                .already_current_closure()
+                .audit()
+                .expect_err("an AlreadyCurrent row never claims an Upgrade receipt")
+                .to_string();
+            assert!(message.contains("trading"), "{message}");
+            assert!(message.contains("Upgrade receipt is claimed"), "{message}");
+        }
+    }
+
+    #[test]
+    fn an_absent_or_malformed_baseline_refuses_at_the_baseline() {
+        // The stricter of the two standards the sites used to carry: one
+        // checked only presence, so it admitted the malformed digest and the
+        // empty path that the other refused.
+        for mutate in [
+            |pin: &mut CheckedUpgradeRolePinV1| pin.baseline_path = None,
+            |pin: &mut CheckedUpgradeRolePinV1| pin.baseline_path = Some(String::new()),
+            |pin: &mut CheckedUpgradeRolePinV1| pin.baseline_sha256 = None,
+            |pin: &mut CheckedUpgradeRolePinV1| pin.baseline_sha256 = Some("not-a-digest".into()),
+        ] {
+            let mut pin = pin();
+            mutate(&mut pin);
+            let message = pin
+                .already_current_closure()
+                .audit()
+                .expect_err("an AlreadyCurrent row carries the baseline its equality was judged at")
+                .to_string();
+            assert!(message.contains("trading"), "{message}");
+            assert!(message.contains("pinned baseline"), "{message}");
+        }
+    }
+
+    #[test]
+    fn a_carry_forward_transport_field_is_refused_by_its_own_conjunct() {
+        // Not part of the shared closure -- it is the row kind's own rule, and
+        // the two sites that judge it now share one copy of that too.
+        for mutate in [
+            |pin: &mut CheckedUpgradeRolePinV1| pin.artifact_release_body_hex = Some("00".into()),
+            |pin: &mut CheckedUpgradeRolePinV1| pin.artifact_release_id = Some(DIGEST.into()),
+            |pin: &mut CheckedUpgradeRolePinV1| {
+                pin.carried_programdata_base64 = Some("AA==".into())
+            },
+        ] {
+            let mut pin = pin();
+            mutate(&mut pin);
+            assert!(!pin.carries_no_transport_fields());
+            // The shared closure is untouched by transport fields, which is
+            // exactly why it is a separate conjunct.
+            assert!(pin.already_current_closure().holds());
+        }
+    }
+
+    #[test]
+    fn the_refusal_always_names_the_role_it_is_about() {
+        // Three of the five messages this replaces never named the failing
+        // field, and one never named the role either.
+        let refusal = AlreadyCurrentClosureV1 {
+            role: "resolution",
+            receipt_claimed: true,
+            baseline_present: true,
+        }
+        .audit()
+        .expect_err("a claimed receipt refuses")
+        .to_string();
+        assert!(
+            refusal.starts_with("AlreadyCurrent role resolution:"),
+            "{refusal}"
+        );
     }
 }

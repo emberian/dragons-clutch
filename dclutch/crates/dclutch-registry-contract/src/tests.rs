@@ -12,10 +12,12 @@ use crate::{
     ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_BYTES_V1, ARTIFACT_RELEASE_MAGIC_V1,
     ActivatedExecutionReleaseSetV1, ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1,
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1, Error,
-    ExecutionReleaseActivationInputsV1, RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_MAGIC_V1,
-    RELEASE_LINEAGE_PDA_DOMAIN_V1, RELEASE_LINEAGE_PDA_SEED_COUNT_V1, RELEASE_LINEAGE_PROFILE_V1,
+    ExecutionReleaseActivationInputsV1, LINEAGE_WALK_MAX_HOPS_V1, LineageAt, LineageWalkRefusal,
+    RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_MAGIC_V1, RELEASE_LINEAGE_PDA_DOMAIN_V1,
+    RELEASE_LINEAGE_PDA_SEED_COUNT_V1, RELEASE_LINEAGE_PROFILE_V1,
     RELEASE_LINEAGE_SCHEMA_VERSION_V1, ReleaseLineageV1, activate_execution_release_set_v1,
-    activate_execution_role_into_v1, initialize_activation_cache_v1, put_activation_cache_bump_v1,
+    activate_execution_role_into_v1, activation_cache_progress_v1, initialize_activation_cache_v1,
+    put_activation_cache_bump_v1, walk_lineage_to, walk_lineage_to_head,
 };
 
 const ROLE_CACHE_HEADER_BYTES: usize = 48;
@@ -577,6 +579,92 @@ fn streaming_activation_is_byte_identical_to_the_owned_host_api() {
     assert_eq!(view.release_set_projection(), Ok(fixture.release_set));
 }
 
+/// A cache the Registry actually wrote reports its own progress.
+///
+/// The regression this pins is one byte wide and it stopped every local
+/// founding in the tree. `ACTIVATION_CACHE_BUMP_OFFSET_V1` sits at 12, the
+/// first of what used to be four reserved bytes, and the selection comparison
+/// spanned `0..48` — so it compared the bump against
+/// `ActivatedExecutionReleaseSetV1::to_bytes`, a projection of the RELEASE SET
+/// that has no field for a fact about an ACCOUNT ADDRESS and leaves that byte
+/// zero. `put_activation_cache_bump_v1` refuses to write zero. The two are
+/// therefore unequal for every cache the Registry has ever signed into
+/// existence, and `ReleaseSetSelectionMismatch` was unreachable-by-success:
+/// role activation succeeded five times and the first read of the resulting
+/// cache refused.
+///
+/// The bump is a carrier, not a canonicality field — this file already says so
+/// where the decoder tolerates both a present and an absent bump. So a cache
+/// carrying ANY bump must report the same progress as one carrying none, and a
+/// real selection difference must still refuse.
+#[test]
+fn a_cache_carrying_its_own_bump_still_reports_its_progress() {
+    let fixture = Fixture::distinct();
+    let expected = fixture.activate();
+    let mut cache = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+    initialize_activation_cache_v1(&mut cache, fixture.release_set_id)
+        .expect("initialize exact cache");
+
+    // Nothing written yet, with and without the bump the Registry records.
+    let empty = activation_cache_progress_v1(&cache, expected).expect("vacant progress");
+    assert_eq!(empty.written_count(), 0);
+    put_activation_cache_bump_v1(&mut cache, 254).expect("record the bump");
+    let empty_with_bump =
+        activation_cache_progress_v1(&cache, expected).expect("vacant progress, bump carried");
+    assert_eq!(empty_with_bump.written_count(), 0);
+
+    // Then every role, one transaction at a time, exactly as the Registry does.
+    for (role, index) in [
+        (ExecutionRoleV1::Core, 0),
+        (ExecutionRoleV1::Claims, 1),
+        (ExecutionRoleV1::Trading, 2),
+        (ExecutionRoleV1::Resolution, 3),
+        (ExecutionRoleV1::Custody, 4),
+    ] {
+        activate_execution_role_into_v1(
+            &mut cache,
+            fixture.release_set_id,
+            &fixture.release_set,
+            role,
+            &activation_input(
+                copied(&fixture.artifact_ids, index),
+                copied(&fixture.releases, index),
+            ),
+        )
+        .expect("stream one authenticated role");
+        let progress = activation_cache_progress_v1(&cache, expected)
+            .expect("a Registry-written cache reports its own progress");
+        assert!(progress.is_written(role));
+        assert_eq!(progress.written_count(), index + 1);
+    }
+    assert!(
+        activation_cache_progress_v1(&cache, expected)
+            .expect("complete progress")
+            .is_complete()
+    );
+
+    // Every bump a derivation can produce behaves the same. 0 is not one of
+    // them, and is the "written before this byte existed" body.
+    for bump in [1_u8, 128, 255] {
+        let mut carried = cache;
+        put_activation_cache_bump_v1(&mut carried, bump).expect("record another bump");
+        assert!(
+            activation_cache_progress_v1(&carried, expected)
+                .expect("progress does not depend on which bump the address has")
+                .is_complete()
+        );
+    }
+
+    // And the check the span still owns: a projection naming another release
+    // set refuses against this cache, bump carried or not.
+    let mut foreign = Fixture::distinct();
+    foreign.release_set_id = content(92);
+    assert_eq!(
+        activation_cache_progress_v1(&cache, foreign.activate()),
+        Err(Error::ReleaseSetSelectionMismatch)
+    );
+}
+
 #[test]
 fn finalized_release_set_is_the_only_core_binding() {
     let fixture = Fixture::distinct();
@@ -1087,4 +1175,219 @@ fn lineage_consent_is_indexed_by_the_canonical_role_order() {
             "{role:?} mask byte must sit at its own role index"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Release-set lineage: following the chain
+// ---------------------------------------------------------------------------
+
+/// One declared hop, paired with the set whose lineage address holds it.
+fn lineage_hop(from: u8, to: u8) -> (ContentId, ReleaseLineageV1) {
+    (
+        content(from),
+        ReleaseLineageV1::new(
+            content(from),
+            content(to),
+            lineage_consent([true, false, true, false, false]),
+        )
+        .expect("canonical hop"),
+    )
+}
+
+/// A lookup in the shape every real reader holds: keyed by derived address,
+/// answering "undeclared" for every set nobody has superseded.
+fn lineage_source(hops: &[(ContentId, ReleaseLineageV1)]) -> impl Fn(ContentId) -> LineageAt + '_ {
+    move |sought| {
+        hops.iter()
+            .find(|(key, _)| *key == sought)
+            .map_or(LineageAt::Undeclared, |(_, record)| {
+                LineageAt::Declared(*record)
+            })
+    }
+}
+
+#[test]
+fn a_chain_walks_forward_to_the_set_nobody_has_superseded() {
+    // Three cuts: a market founded on 0x11 is two hops behind the world.
+    let hops = [lineage_hop(0x11, 0x22), lineage_hop(0x22, 0x33)];
+    let walk = walk_lineage_to_head(content(0x11), lineage_source(&hops))
+        .expect("a complete chain reaches its head");
+
+    assert_eq!(walk.endpoint(), content(0x33));
+    assert_eq!(walk.hops(), 2, "one MigrateMarket per cut behind");
+    assert!(!walk.is_already_current());
+}
+
+#[test]
+fn a_market_already_on_the_head_walks_zero_hops_and_reads_as_already_current() {
+    let hops = [lineage_hop(0x11, 0x22)];
+    let walk = walk_lineage_to_head(content(0x22), lineage_source(&hops))
+        .expect("the head of a chain is a complete walk");
+
+    assert_eq!(walk.endpoint(), content(0x22));
+    assert_eq!(walk.hops(), 0);
+    // The lineage form of the deployment set's AlreadyCurrent disposition:
+    // satisfied on an equality, with no receipt to produce.
+    assert!(walk.is_already_current());
+
+    let arrived = walk_lineage_to(content(0x22), content(0x22), lineage_source(&hops))
+        .expect("an origin that is already the destination has arrived");
+    assert!(arrived.is_already_current());
+}
+
+#[test]
+fn walking_to_a_destination_stops_there_rather_than_running_on_to_the_head() {
+    let hops = [lineage_hop(0x11, 0x22), lineage_hop(0x22, 0x33)];
+    let walk = walk_lineage_to(content(0x11), content(0x22), lineage_source(&hops))
+        .expect("the destination sits mid-chain");
+
+    assert_eq!(walk.endpoint(), content(0x22));
+    assert_eq!(walk.hops(), 1);
+}
+
+#[test]
+fn a_gap_refuses_by_naming_the_set_that_still_owes_a_successor() {
+    // The cut's real question: the world moved to 0x44, but the chain from the
+    // traded market's founding set stops at 0x33. The refusal is the repair
+    // instruction -- declare a successor FOR 0x33.
+    let hops = [lineage_hop(0x11, 0x22), lineage_hop(0x22, 0x33)];
+
+    assert_eq!(
+        walk_lineage_to(content(0x11), content(0x44), lineage_source(&hops)),
+        Err(LineageWalkRefusal::SuccessorUndeclared { at: content(0x33) })
+    );
+
+    // The same chain walked WITHOUT a destination is not a failure at all: an
+    // undeclared successor is what ends a head-walk rather than what breaks it.
+    assert_eq!(
+        walk_lineage_to_head(content(0x11), lineage_source(&hops))
+            .expect("a head-walk never refuses a gap")
+            .endpoint(),
+        content(0x33)
+    );
+}
+
+#[test]
+fn a_record_that_names_another_predecessor_is_evidence_about_nothing_here() {
+    // Red-proof by mutation: take the canonical record and rewrite only its
+    // predecessor run, then serve it at the address it no longer describes.
+    let mut forged = lineage_fixture().to_bytes();
+    let usurped = content(0x99).to_bytes();
+    forged
+        .get_mut(16..48)
+        .expect("predecessor run")
+        .copy_from_slice(usurped.as_slice());
+    let forged = ReleaseLineageV1::decode(&forged).expect("the mutation is still a valid record");
+    assert_eq!(forged.predecessor(), content(0x99));
+
+    // Served under 0x11 -- the address a market on 0x11 derives.
+    let hops = [(content(0x11), forged)];
+    assert_eq!(
+        walk_lineage_to_head(content(0x11), lineage_source(&hops)),
+        Err(LineageWalkRefusal::Misaddressed {
+            sought: content(0x11),
+            found: content(0x99),
+        })
+    );
+}
+
+#[test]
+fn an_undecodable_record_refuses_under_the_codecs_own_name() {
+    let cause = Error::InvalidMagic;
+    assert_eq!(
+        walk_lineage_to_head(content(0x11), |_| LineageAt::Undecodable(cause)),
+        Err(LineageWalkRefusal::Undecodable {
+            at: content(0x11),
+            cause,
+        })
+    );
+    assert_eq!(
+        Error::from(LineageWalkRefusal::Undecodable {
+            at: content(0x11),
+            cause,
+        }),
+        cause,
+        "a decode refusal keeps its own name rather than gaining a second one"
+    );
+}
+
+#[test]
+fn a_cycle_terminates_on_the_hop_bound_instead_of_running_forever() {
+    // DeclareSuccessor's forward-only conjunct makes this unbuildable on chain.
+    // Against a hostile off-chain source it must still be bounded and named.
+    let hops = [lineage_hop(0x11, 0x22), lineage_hop(0x22, 0x11)];
+    let refusal = walk_lineage_to(content(0x11), content(0x44), lineage_source(&hops))
+        .expect_err("a cycle never arrives");
+
+    assert!(matches!(refusal, LineageWalkRefusal::TooLong { .. }));
+    assert_eq!(Error::from(refusal), Error::LineageWalkTooLong);
+}
+
+#[test]
+fn the_walk_refuses_one_hop_past_its_own_bound() {
+    let hops: std::vec::Vec<_> = (0..=u8::from(LINEAGE_WALK_MAX_HOPS_V1))
+        .map(|step| lineage_hop(0x11 + step, 0x12 + step))
+        .collect();
+    let bound = usize::from(LINEAGE_WALK_MAX_HOPS_V1);
+
+    // Exactly at the bound the walk still arrives.
+    let reached = walk_lineage_to_head(content(0x11), lineage_source(&hops[..bound]))
+        .expect("a chain of exactly the bound is walkable");
+    assert_eq!(reached.hops(), LINEAGE_WALK_MAX_HOPS_V1);
+
+    // One hop further it refuses, naming where it stopped.
+    assert_eq!(
+        walk_lineage_to_head(content(0x11), lineage_source(&hops)),
+        Err(LineageWalkRefusal::TooLong {
+            at: content(0x11 + LINEAGE_WALK_MAX_HOPS_V1),
+        })
+    );
+}
+
+#[test]
+fn a_hop_authored_long_after_the_fact_is_byte_identical_to_a_timely_one() {
+    // The honesty of retroactive lineage rests on an absence: the record has no
+    // input that could express WHEN it was written, so a hop declared today for
+    // two cohorts that superseded each other months ago is not a backdated
+    // record -- it is the same record, and there is nothing in it to backdate.
+    let endpoints = (content(0x11), content(0x22));
+    let consent = lineage_consent([true, false, true, false, false]);
+
+    let timely = ReleaseLineageV1::new(endpoints.0, endpoints.1, consent).expect("timely hop");
+    let late = ReleaseLineageV1::new(endpoints.0, endpoints.1, consent).expect("late hop");
+
+    assert_eq!(
+        timely.to_bytes(),
+        late.to_bytes(),
+        "the encoding is a function of the endpoints and the consent, and of nothing else"
+    );
+    assert_eq!(timely, late);
+
+    // Both reserved runs stay zero, so there is no spare room in the record
+    // where a stamp could have been hidden and later disagreed with.
+    let bytes = late.to_bytes();
+    assert!(
+        bytes
+            .get(12..16)
+            .expect("header reserved")
+            .iter()
+            .all(|b| *b == 0)
+    );
+    assert!(
+        bytes
+            .get(85..88)
+            .expect("mask reserved")
+            .iter()
+            .all(|b| *b == 0)
+    );
+
+    // And a chain of such records walks, which is the whole deliverable: a
+    // history recovered late is followable exactly like one recorded on time.
+    let hops = [lineage_hop(0x11, 0x22), lineage_hop(0x22, 0x33)];
+    assert_eq!(
+        walk_lineage_to(content(0x11), content(0x33), lineage_source(&hops))
+            .expect("a retroactively authored chain is a chain")
+            .hops(),
+        2
+    );
 }

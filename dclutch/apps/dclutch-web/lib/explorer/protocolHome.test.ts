@@ -90,7 +90,7 @@ describe('the explorer protocol home', () => {
     // Roles arrive in the canonical seven-role order the merge walks.
     expect(home.activity[0].roles).toEqual(['claims', 'core']);
     expect(home.activity[1].succeeded).toBe(false);
-    expect(home.activityNote).toContain('never a protocol index');
+    expect(home.activityNote).toContain('this node’s own per-address signature history');
   });
 
   it('says when a node refused a history rather than presenting a shorter list as complete', async () => {

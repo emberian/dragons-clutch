@@ -3,7 +3,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use dclutch_market_core_codec::{Action, CoreState, Phase as CorePhase, Readiness, Request};
+use dclutch_market_core_codec::{
+    Action, CoreState, Identity, Phase as CorePhase, Readiness, Request,
+};
 use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, ProductRecordV2,
     RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -454,6 +456,46 @@ pub fn build_provider_submit_v3(
     })
 }
 
+/// The exact Core parent-request bytes and caller-authority PDA one Execute
+/// packet carries, derived from coordinates alone.
+///
+/// [`build_provider_execute_v3`] calls this, so the address is defined in one
+/// place. A caller that needs the key *before* it has a report — a lookup-table
+/// union planner does, because the table must be frozen before the packet that
+/// names it exists — derives the identical key from the identical bytes instead
+/// of maintaining a second implementation that can drift.
+///
+/// Every argument is a coordinate an exterior driver already pins against
+/// finalized chain: `market_id` and `generation` are the Market's own identity,
+/// `core_program` is the Market's owner. Supplying a coordinate the chain does
+/// not agree with yields an address the runtime will refuse, not a forgery.
+pub fn provider_execute_caller_authority_v3(
+    release_set: [u8; 32],
+    market: Pubkey,
+    market_id: Identity,
+    generation: u64,
+    source_state: Pubkey,
+    core_program: Pubkey,
+) -> Result<(Vec<u8>, Pubkey), ProviderTransportOperatorErrorV3> {
+    let core_request = Request::administrative(Action::ExecuteProvider, generation, market_id);
+    let core_bytes = core_request
+        .encode()
+        .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
+    let parent_request_digest = hash(&core_bytes).to_bytes();
+    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
+        release_set,
+        market.to_bytes(),
+        ExecutionRoleV1::Core,
+        source_state.to_bytes(),
+        parent_request_digest,
+    )
+    .map_err(|_| ProviderTransportOperatorErrorV3::Address)?;
+    Ok((
+        core_bytes.to_vec(),
+        Pubkey::find_program_address(&caller_seeds.as_slices(), &core_program).0,
+    ))
+}
+
 /// Build the permissionless Core-caller action that consumes one submitted provider update.
 ///
 /// The only caller choices are resolver, positive terminal sequence, and the
@@ -628,25 +670,15 @@ pub fn build_provider_execute_v3(
         &deployment.resolution_program,
     )
     .0;
-    let core_request = Request::administrative(
-        Action::ExecuteProvider,
-        market.identity.generation,
-        market.identity.market_id,
-    );
-    let core_bytes = core_request
-        .encode()
-        .map_err(|_| ProviderTransportOperatorErrorV3::Intent)?;
-    let parent_request_digest = hash(&core_bytes).to_bytes();
-    let caller_seeds = CallerAuthoritySeedsV1::from_bytes(
+    let (core_bytes, caller_authority) = provider_execute_caller_authority_v3(
         release_set,
-        snapshot.market.key.to_bytes(),
-        ExecutionRoleV1::Core,
-        snapshot.source_state.key.to_bytes(),
-        parent_request_digest,
-    )
-    .map_err(|_| ProviderTransportOperatorErrorV3::Address)?;
-    let caller_authority =
-        Pubkey::find_program_address(&caller_seeds.as_slices(), &snapshot.market.owner).0;
+        snapshot.market.key,
+        market.identity.market_id,
+        market.identity.generation,
+        snapshot.source_state.key,
+        snapshot.market.owner,
+    )?;
+    let parent_request_digest = hash(&core_bytes).to_bytes();
     let provider_request = ProviderExecutionRequestV3 {
         caller: ProviderCallerV3::Core,
         generation: market.identity.generation,
@@ -670,7 +702,7 @@ pub fn build_provider_execute_v3(
         parent_request_digest,
         post_params_body_digest: lifecycle.post_body_digest,
     };
-    let mut data = core_bytes.to_vec();
+    let mut data = core_bytes;
     data.extend_from_slice(
         &provider_request
             .to_bytes()
@@ -909,32 +941,72 @@ pub fn compile_provider_submit_v0(
 
 /// Compile one exact Core-caller provider execution into an unsigned v0 message.
 ///
-/// The permissionless resolver is the fee payer and sole transaction signer;
-/// the Core caller PDA becomes a signer only inside the onchain CPI.
+/// The resolver is a **readonly** signer: Core's outer frame demands it
+/// (`validate_outer_frame` writes `let writable = matches!(index, SOURCE_STATE
+/// | CERTIFICATE | LIFECYCLE)`), Core forwards the message's writability into
+/// the CPI, and the Resolution program demands the same thing at its own index.
+/// Solana's message compiler unconditionally promotes the fee payer to a
+/// *writable* signer, so the fee payer cannot be the resolver and cannot be any
+/// other account the instruction names — either choice would flip a privilege
+/// the frame pins and the packet would be refused on chain with
+/// `CoreSbfError::AccountFrame`. `payer` is therefore explicit and separate, and
+/// aliasing is refused here rather than 1,200 bytes and one cluster round-trip
+/// later. The Core caller PDA becomes a signer only inside the onchain CPI.
 #[cfg(feature = "transaction-planning")]
 pub fn compile_provider_execute_v0(
     report: &ProviderTransportReportV3,
     recent_blockhash: Hash,
     lookup_tables: &[ObservedAccount],
+    payer: Pubkey,
 ) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
     let request = validate_execute_report(report)?;
-    let required_signers = vec![Pubkey::new_from_array(request.resolver)];
+    let required_signers = readonly_signer_frame_signers(report, payer, request.resolver)?;
     compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
 }
 
 /// Compile one exact permissionless reclaim into an unsigned v0 message.
 ///
-/// The permissionless resolver is both fee payer and sole transaction signer.
-/// The Resolution update-authority PDA signs only the Receiver CPI onchain.
+/// Reclaim's frame is Execute's shape, not Submit's:
+/// `authenticate_reclaim_privileges` demands `is_signer != (index == 0)` and
+/// `is_writable != matches!(index, 1..=4)`, so its sole instruction signer — the
+/// resolver, at index 0 — must also be readonly. The fee payer is separate for
+/// exactly the reason given on [`compile_provider_execute_v0`]. The Resolution
+/// update-authority PDA signs only the Receiver CPI onchain.
 #[cfg(feature = "transaction-planning")]
 pub fn compile_provider_reclaim_v0(
     report: &ProviderTransportReportV3,
     recent_blockhash: Hash,
     lookup_tables: &[ObservedAccount],
+    payer: Pubkey,
 ) -> Result<ProviderTransportTransactionPlanV3, ProviderTransportTransactionErrorV3> {
     let request = validate_reclaim_report(report)?;
-    let required_signers = vec![Pubkey::new_from_array(request.resolver)];
+    let required_signers = readonly_signer_frame_signers(report, payer, request.resolver)?;
     compile_provider_v0(report, recent_blockhash, lookup_tables, required_signers)
+}
+
+/// The signer vector for a frame whose sole instruction signer must stay readonly.
+///
+/// Order is load-bearing twice over: the fee payer is always the message's first
+/// signature, and the readonly signer sorts after it, so `[payer, resolver]` is
+/// both the compiler's own ordering and the order a caller must present keys in.
+#[cfg(feature = "transaction-planning")]
+fn readonly_signer_frame_signers(
+    report: &ProviderTransportReportV3,
+    payer: Pubkey,
+    resolver: [u8; 32],
+) -> Result<Vec<Pubkey>, ProviderTransportTransactionErrorV3> {
+    let resolver = Pubkey::new_from_array(resolver);
+    if payer == resolver
+        || payer == Pubkey::default()
+        || report
+            .instruction
+            .accounts
+            .iter()
+            .any(|account| account.pubkey == payer)
+    {
+        return Err(ProviderTransportTransactionErrorV3::Frame);
+    }
+    Ok(vec![payer, resolver])
 }
 
 #[cfg(feature = "transaction-planning")]
@@ -1386,18 +1458,98 @@ mod tests {
         }
     }
 
+    /// A payer no instruction account names. Distinct from every fixture key.
+    fn stage_payer() -> Pubkey {
+        key(250)
+    }
+
     #[test]
-    fn reclaim_fits_inline_and_reports_only_permissionless_resolver() {
+    fn reclaim_fits_inline_and_keeps_its_permissionless_resolver_readonly() {
         let report = reclaim_report();
-        let plan = compile_provider_reclaim_v0(&report, Hash::new_from_array([7; 32]), &[])
-            .expect("inline reclaim");
+        let plan =
+            compile_provider_reclaim_v0(&report, Hash::new_from_array([7; 32]), &[], stage_payer())
+                .expect("inline reclaim");
         assert_eq!(
             plan.required_signers,
-            vec![report.instruction.accounts[0].pubkey]
+            vec![stage_payer(), report.instruction.accounts[0].pubkey]
         );
-        assert_eq!(plan.message.required_signatures, 1);
+        assert_eq!(plan.message.required_signatures, 2);
         assert_eq!(plan.message.loaded_addresses, 0);
         assert!(plan.message.wire_bytes <= dclutch_versioned_message_operator::PACKET_DATA_BYTES);
+    }
+
+    #[test]
+    fn a_fee_payer_that_aliases_the_frame_refuses_before_the_cluster_sees_it() {
+        // Every one of these compiled a sendable packet before wall 10, and every
+        // one of them would have been refused on chain with CoreSbfError::
+        // AccountFrame — the fee payer is promoted to a writable signer by the
+        // message compiler, and both frames pin these accounts' privileges.
+        let execute = execute_report();
+        let execute_table = lookup_table(&execute);
+        // Index 1 is the resolver, 2 the Source state, 5 an ordinary readonly
+        // account. Each is a different privilege the fee payer would flip.
+        for alias in [1_usize, 2, 5] {
+            let alias = execute.instruction.accounts[alias].pubkey;
+            assert_eq!(
+                compile_provider_execute_v0(
+                    &execute,
+                    Hash::new_from_array([7; 32]),
+                    core::slice::from_ref(&execute_table),
+                    alias,
+                ),
+                Err(ProviderTransportTransactionErrorV3::Frame),
+                "an Execute fee payer at {alias} aliases the frame and must refuse locally",
+            );
+        }
+        assert_eq!(
+            compile_provider_execute_v0(
+                &execute,
+                Hash::new_from_array([7; 32]),
+                core::slice::from_ref(&execute_table),
+                Pubkey::default(),
+            ),
+            Err(ProviderTransportTransactionErrorV3::Frame),
+        );
+
+        let reclaim = reclaim_report();
+        assert!(reclaim.instruction.accounts[0].is_signer);
+        assert!(!reclaim.instruction.accounts[0].is_writable);
+        for alias in [0_usize, 1, 4] {
+            let alias = reclaim.instruction.accounts[alias].pubkey;
+            assert_eq!(
+                compile_provider_reclaim_v0(&reclaim, Hash::new_from_array([7; 32]), &[], alias),
+                Err(ProviderTransportTransactionErrorV3::Frame),
+                "a Reclaim fee payer at {alias} aliases the frame and must refuse locally",
+            );
+        }
+    }
+
+    #[test]
+    fn the_execute_caller_authority_is_derived_in_exactly_one_place() {
+        let report = execute_report();
+        let request = ProviderExecutionRequestV3::decode(
+            &report.instruction.data[dclutch_market_core_codec::REQUEST_BYTES
+                ..dclutch_market_core_codec::REQUEST_BYTES + PROVIDER_EXECUTION_REQUEST_BYTES_V3],
+        )
+        .expect("execution request");
+        let (core_bytes, caller_authority) = provider_execute_caller_authority_v3(
+            request.release_set,
+            Pubkey::new_from_array(request.market),
+            Identity::new(request.market).expect("market identity"),
+            request.generation,
+            Pubkey::new_from_array(request.source_state),
+            Pubkey::new_from_array(request.caller_program),
+        )
+        .expect("caller authority");
+        assert_eq!(
+            caller_authority, report.instruction.accounts[0].pubkey,
+            "the shared derivation must reproduce the builder's own index-0 account",
+        );
+        assert_eq!(
+            hash(&core_bytes).to_bytes(),
+            request.parent_request_digest,
+            "and the identical parent-request bytes the instruction carries",
+        );
     }
 
     #[test]
@@ -1443,7 +1595,7 @@ mod tests {
     }
 
     #[test]
-    fn core_execution_requires_routing_and_only_the_resolver_signature() {
+    fn core_execution_requires_routing_and_a_payer_beside_its_readonly_resolver() {
         let report = execute_report();
         assert_eq!(PROVIDER_EXECUTE_ACCOUNT_COUNT_V3, 47);
         assert_eq!(
@@ -1455,7 +1607,7 @@ mod tests {
         assert_eq!(PROVIDER_EXECUTION_REQUEST_BYTES_V3, 608);
         assert_eq!(report.instruction.data.len(), 774);
         assert_eq!(
-            compile_provider_execute_v0(&report, Hash::new_from_array([7; 32]), &[]),
+            compile_provider_execute_v0(&report, Hash::new_from_array([7; 32]), &[], stage_payer()),
             Err(ProviderTransportTransactionErrorV3::Routing(
                 dclutch_versioned_message_operator::Error::PacketTooLarge,
             ))
@@ -1465,18 +1617,22 @@ mod tests {
             &report,
             Hash::new_from_array([7; 32]),
             core::slice::from_ref(&table),
+            stage_payer(),
         )
         .expect("table-routed provider execution");
         assert_eq!(
             plan.required_signers,
-            vec![report.instruction.accounts[1].pubkey]
+            vec![stage_payer(), report.instruction.accounts[1].pubkey]
         );
-        assert_eq!(plan.message.required_signatures, 1);
+        assert_eq!(plan.message.required_signatures, 2);
         assert_eq!(plan.message.loaded_addresses, 45);
-        assert_eq!(plan.message.wire_bytes, 1_072);
+        // A payer distinct from the resolver costs exactly 96 bytes: 64 for the
+        // second signature and 32 for its static key. That is the whole price of
+        // keeping the resolver readonly, and it is what §7.13 measured.
+        assert_eq!(plan.message.wire_bytes, 1_072 + 96);
         assert_eq!(
             dclutch_versioned_message_operator::PACKET_DATA_BYTES - plan.message.wire_bytes,
-            160,
+            64,
         );
     }
 
@@ -1497,6 +1653,7 @@ mod tests {
                 &reclaim,
                 Hash::new_from_array([7; 32]),
                 core::slice::from_ref(&stale),
+                stage_payer(),
             ),
             Err(ProviderTransportTransactionErrorV3::Routing(
                 dclutch_versioned_message_operator::Error::ObservationMismatch,
@@ -1506,7 +1663,12 @@ mod tests {
         let mut execute = execute_report();
         execute.instruction.accounts[0].is_signer = true;
         assert_eq!(
-            compile_provider_execute_v0(&execute, Hash::new_from_array([7; 32]), &[]),
+            compile_provider_execute_v0(
+                &execute,
+                Hash::new_from_array([7; 32]),
+                &[],
+                stage_payer()
+            ),
             Err(ProviderTransportTransactionErrorV3::Frame)
         );
 
@@ -1514,7 +1676,12 @@ mod tests {
         direct_resolution.instruction.program_id =
             direct_resolution.instruction.accounts[15].pubkey;
         assert_eq!(
-            compile_provider_execute_v0(&direct_resolution, Hash::new_from_array([7; 32]), &[],),
+            compile_provider_execute_v0(
+                &direct_resolution,
+                Hash::new_from_array([7; 32]),
+                &[],
+                stage_payer(),
+            ),
             Err(ProviderTransportTransactionErrorV3::Frame),
             "the unsigned caller PDA cannot bypass the Core wrapper through a top-level Resolution instruction",
         );

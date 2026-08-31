@@ -485,9 +485,35 @@ export function activationCacheProgressV1(observed: Uint8Array, expected: Uint8A
   return Object.freeze(written);
 }
 
-function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: string): Readonly<{ releaseSetId: string; artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>; artifactIds: Readonly<Record<RegistryRole, string>> }> {
+function requireActivationCacheHeader(bytes: Uint8Array): void {
   if (bytes.length !== ACTIVATION_CACHE_BYTES || ascii(bytes, 0, 8) !== 'DCLTACT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) throw new Error('activation cache has the wrong exact header');
-  requireZero(bytes, 12, 4, 'activation cache header'); const releaseSetId = hex(slice(bytes, 16, 32)); requireNonzero(slice(bytes, 16, 32), 'activation release-set identity');
+  requireZero(bytes, 12, 4, 'activation cache header');
+}
+
+/**
+ * The current program one execution role's activated release names.
+ *
+ * The activation cache is the only account in the hot fixed frame that names
+ * the release set's Claims, Resolution and Custody deployments; none of the
+ * three is a frame coordinate of its own. A caller that needs one of those
+ * programs -- to derive an address that program owns, say -- reaches it here
+ * rather than being told it, which is the same path
+ * `direct_inline_hot_bump_hints_v1` takes to the Custody program.
+ *
+ * The header and the artifact body are both hostile-decoded, so this refuses
+ * rather than returning a program read out of an account that is not a cache.
+ */
+export function activatedRoleProgramV1(bytes: Uint8Array, role: RegistryRole): string {
+  const index = REGISTRY_ROLES.indexOf(role);
+  if (index < 0) throw new Error('activation cache does not name this execution role');
+  requireActivationCacheHeader(bytes);
+  const offset = REGISTRY_ACTIVATION_CACHE_ROLES_OFFSET + index * REGISTRY_ACTIVATED_ROLE_BYTES;
+  return decodeArtifactReleaseV1(slice(bytes, offset + 32, ARTIFACT_RELEASE_BYTES)).program;
+}
+
+function parseCache(bytes: Uint8Array, registryProgram: string, cacheAddress: string): Readonly<{ releaseSetId: string; artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>; artifactIds: Readonly<Record<RegistryRole, string>> }> {
+  requireActivationCacheHeader(bytes);
+  const releaseSetId = hex(slice(bytes, 16, 32)); requireNonzero(slice(bytes, 16, 32), 'activation release-set identity');
   const registry = key(registryProgram, 'Registry program'); const derived = PublicKey.findProgramAddressSync([ACTIVATION_SEED, slice(bytes, 16, 32)], registry)[0].toBase58();
   if (derived !== cacheAddress) throw new Error('activation cache is not the release-derived Registry PDA');
   const artifacts: ArtifactReleaseV1[] = []; const artifactIds: string[] = [];

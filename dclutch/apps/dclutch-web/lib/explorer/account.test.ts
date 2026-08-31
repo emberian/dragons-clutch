@@ -123,7 +123,7 @@ describe('the account view over live chain bytes', () => {
     if (result.status !== 'found') throw new Error(result.reason);
     expect(result.account.decoded).toBeNull();
     expect(result.account.header).toBe('DCLTZZZ9');
-    expect(result.account.note).toContain('no layout is applied');
+    expect(result.account.note).toContain('declares no record with the magic');
     // The bytes are still shown, so an unknown account is not a blank page.
     expect(result.account.headHex.length).toBeGreaterThan(0);
   });

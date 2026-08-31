@@ -61,8 +61,8 @@ use crate::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, MAINNET_BETA_GENESIS_HASH,
     },
     model::{
-        CheckedDeploymentDispositionV1, CheckedInfrastructureCarryForwardPinV1,
-        CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
+        AlreadyCurrentClosureV1, CheckedDeploymentDispositionV1,
+        CheckedInfrastructureCarryForwardPinV1, CheckedUpgradeRolePinV1, CheckedUpgradeSetPinV1,
     },
     rpc::{Rpc, RpcAccount, WritePolicyV1},
 };
@@ -292,6 +292,21 @@ struct SetOptionalFileV1 {
     sha256: Option<String>,
 }
 
+/// The equality evidence behind an `AlreadyCurrent` row: the finalized slot the
+/// live payload was read at, and the digest it was read to be.
+///
+/// Both are PINNED here and both are RE-READ at every audit. The pin alone
+/// confers nothing -- a journal that merely claims equality is refused unless a
+/// fresh finalized observation agrees with it AND with the checked candidate.
+/// Recording the slot is what makes the claim falsifiable later: it says which
+/// observation was believed, so a reader can go and disagree with it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SetAlreadyCurrentV1 {
+    observed_slot: u64,
+    live_elf_sha256: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct UpgradeSetRoleV1 {
@@ -302,6 +317,11 @@ struct UpgradeSetRoleV1 {
     baseline: Option<SetPinnedFileV1>,
     receipt: SetOptionalFileV1,
     dump: SetOptionalFileV1,
+    /// Present exactly when `disposition` is `AlreadyCurrent`, absent otherwise.
+    /// Defaulted so every journal written before this variant existed still
+    /// parses unchanged.
+    #[serde(default)]
+    already_current: Option<SetAlreadyCurrentV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -370,6 +390,10 @@ struct AuthenticatedCarryForwardV1 {
 enum SetRoleStatusV1 {
     CarriedForward,
     Complete,
+    /// Satisfied by proven byte equality with the checked candidate rather than
+    /// by an Upgrade receipt. Reported as its own status so it can never be read
+    /// as a completed Upgrade in a summary, a count, or a screenshot.
+    AlreadyCurrent,
     Prepared,
     Submitted,
     AwaitingExtensionAndFreshBaseline,
@@ -424,6 +448,11 @@ struct SetLocalRoleV1 {
     args: UpgradeArgsV1,
     admission: UpgradeAdmissionV1,
     receipt_phase: Option<ReceiptPhaseV1>,
+    /// The journal's pinned equality evidence, present only for an
+    /// `AlreadyCurrent` row. Such a row is SATISFIED rather than complete: it
+    /// never holds a receipt, so it must never be counted through
+    /// `receipt_phase`.
+    already_current: Option<SetAlreadyCurrentV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1503,7 +1532,14 @@ umask 077
 set -C
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' 'dclutch-buffer-writer-lease-v2' "$operation" "$attempt" "$pid" "$pgid" "$started" "$nonce" "$command_sha" > "$lease"
 /bin/sync
-while [ ! -f "$permit" ]; do sleep 0.05; done
+# A permit that never arrives means the granting harness died; without a
+# deadline this shell outlives it forever (six did, for 62 hours, 2026-08-31).
+waited=0
+while [ ! -f "$permit" ]; do
+  [ "$waited" -lt 18000 ] || { echo 'dclutch-buffer-writer: no permit within 900s; the granting harness is gone' >&2; exit 97; }
+  waited=$((waited+1))
+  sleep 0.05
+done
 [ ! -L "$permit" ]
 actual=$(cat "$permit")
 expected=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' 'dclutch-buffer-writer-permit-v1' "$operation" "$attempt" "$pid" "$started" "$nonce" "$command_sha")
@@ -1898,13 +1934,18 @@ fn audit_set_journal_with_runner(
     let gate_path = PathBuf::from(&journal.checked_release_gate.canonical_path);
     let upgrade_rows = &journal.roles[2..];
 
+    // An AlreadyCurrent row is neither unstarted nor "evidence pinned early": it
+    // has no receipt because none can exist, and its dump is the whole point of
+    // it. Counting it either way would make the gap rule refuse every set that
+    // contains one, which is the same mistake as demanding an Upgrade for a role
+    // whose bytes are already the candidate.
     if let Some(first_unpinned) = upgrade_rows
         .iter()
-        .position(|role| role.receipt.sha256.is_none())
-        && let Some(later) = upgrade_rows
-            .iter()
-            .skip(first_unpinned + 1)
-            .find(|role| role.receipt.sha256.is_some() || role.dump.sha256.is_some())
+        .position(|role| role.already_current.is_none() && role.receipt.sha256.is_none())
+        && let Some(later) = upgrade_rows.iter().skip(first_unpinned + 1).find(|role| {
+            role.already_current.is_none()
+                && (role.receipt.sha256.is_some() || role.dump.sha256.is_some())
+        })
     {
         return Err(Error::new(format!(
             "deployment-set Upgrade gap: role {} pins evidence after unstarted role {}",
@@ -1972,7 +2013,12 @@ fn audit_set_journal_with_runner(
                 role.role
             )));
         }
+        // This closure is about UPGRADE evidence: a dump is only legitimate
+        // alongside a complete receipt. An AlreadyCurrent row is the one shape
+        // where a dump without a receipt is exactly right, and its own closure
+        // was already enforced when the journal was parsed.
         match (&receipt_phase, &role.dump.sha256) {
+            _ if role.already_current.is_some() => {}
             (Some(ReceiptPhaseV1::Complete), Some(_)) => {}
             (Some(ReceiptPhaseV1::Complete), None) => {
                 return Err(Error::new(format!(
@@ -1998,12 +2044,16 @@ fn audit_set_journal_with_runner(
             args: role_args,
             admission,
             receipt_phase,
+            already_current: role.already_current.clone(),
         });
     }
 
-    let first_incomplete = local_roles
-        .iter()
-        .position(|role| role.receipt_phase != Some(ReceiptPhaseV1::Complete));
+    // An AlreadyCurrent row is SATISFIED without a receipt, so it can neither be
+    // "the next mutation" nor block a later role. Its equality is proved against
+    // the cluster further down, before any of this is reported.
+    let first_incomplete = local_roles.iter().position(|role| {
+        role.already_current.is_none() && role.receipt_phase != Some(ReceiptPhaseV1::Complete)
+    });
     if let Some(first) = first_incomplete {
         for later in local_roles.iter().skip(first + 1) {
             if later.receipt_phase.is_some() {
@@ -2025,8 +2075,53 @@ fn audit_set_journal_with_runner(
     // CarryForward is one atomic finalized observation. Revalidate all nine
     // accounts on every invocation before reporting progress for any Upgrade.
     require_fresh_carry_forward(&carry, args, runner)?;
+    // Every AlreadyCurrent row proves itself HERE, on every invocation, against a
+    // fresh finalized observation -- never against the pin alone. Three things
+    // must agree: what the cluster says is live, what the checked gate says the
+    // candidate is, and what the journal claims was seen. Any disagreement is a
+    // refusal, and a role whose bytes genuinely differ can never reach this path
+    // because equality is the only thing that admits it.
+    for role in &local_roles {
+        let Some(pinned) = &role.already_current else {
+            continue;
+        };
+        let observation = read_snapshot(runner, &role.args, role.admission.baseline.context_slot)?;
+        if observation.loader.live_elf_sha256 != role.admission.live_elf_sha256 {
+            return Err(Error::new(format!(
+                "deployment-set role {} is journaled AlreadyCurrent but its live payload {} is not \
+                 the checked candidate {}; an AlreadyCurrent row is admitted on byte equality alone",
+                role.args.role, observation.loader.live_elf_sha256, role.admission.live_elf_sha256
+            )));
+        }
+        if pinned.live_elf_sha256 != observation.loader.live_elf_sha256 {
+            return Err(Error::new(format!(
+                "deployment-set role {} pinned AlreadyCurrent digest {} but the cluster reads {}",
+                role.args.role, pinned.live_elf_sha256, observation.loader.live_elf_sha256
+            )));
+        }
+        if observation.context_slot < pinned.observed_slot {
+            return Err(Error::new(format!(
+                "deployment-set role {} AlreadyCurrent observation went backwards: pinned slot {} \
+                 is ahead of the finalized context {}",
+                role.args.role, pinned.observed_slot, observation.context_slot
+            )));
+        }
+        // Same rule, a different source: here the receipt is the one loaded off
+        // disk rather than the one the journal row claims. The baseline is not
+        // an Option on this shape -- `UpgradeAdmissionV1` holds one by
+        // construction -- so it is present, not merely assumed present.
+        AlreadyCurrentClosureV1 {
+            role: &role.args.role,
+            receipt_claimed: role.receipt_phase.is_some(),
+            baseline_present: true,
+        }
+        .audit()?;
+    }
     let completed_upgrades = first_incomplete.unwrap_or(local_roles.len());
     for role in local_roles.iter().take(completed_upgrades) {
+        if role.already_current.is_some() {
+            continue;
+        }
         let report = preflight_with_runner(&role.args, runner)?;
         if report.receipt_phase != Some(ReceiptPhaseV1::Complete) {
             return Err(Error::new(
@@ -2062,7 +2157,9 @@ fn audit_set_journal_with_runner(
         });
     }
     for (relative, (role, local)) in upgrade_rows.iter().zip(&local_roles).enumerate() {
-        let status = if relative < completed_upgrades {
+        let status = if local.already_current.is_some() {
+            SetRoleStatusV1::AlreadyCurrent
+        } else if relative < completed_upgrades {
             SetRoleStatusV1::Complete
         } else if Some(relative) != first_incomplete {
             SetRoleStatusV1::WaitingForEarlierRole
@@ -2239,15 +2336,59 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
                 {expected_role}:{expected_program}:{expected_programdata}"
             )));
         }
-        let expected_disposition = if index < 2 {
-            CheckedDeploymentDispositionV1::CarryForward
+        // Rows 0 and 1 are the carry-forward whitelist and nothing else may join
+        // it. Rows 2..7 are the cut's own roles: each is either a receipt-backed
+        // Upgrade or -- when this cut did not change that role's bytes at all --
+        // an AlreadyCurrent row whose equality is re-read from the cluster below.
+        let disposition_admitted = if index < 2 {
+            role.disposition == CheckedDeploymentDispositionV1::CarryForward
         } else {
-            CheckedDeploymentDispositionV1::Upgrade
+            matches!(
+                role.disposition,
+                CheckedDeploymentDispositionV1::Upgrade
+                    | CheckedDeploymentDispositionV1::AlreadyCurrent
+            )
         };
-        if role.disposition != expected_disposition {
+        if !disposition_admitted {
             return Err(Error::new(format!(
                 "set journal {expected_role} disposition is not the canonical mixed deployment-set choice"
             )));
+        }
+        // The equality block and the tag travel together in both directions, so
+        // neither an unbacked claim nor a silent tag change can pass.
+        match (role.disposition, &role.already_current) {
+            (CheckedDeploymentDispositionV1::AlreadyCurrent, None) => {
+                return Err(Error::new(format!(
+                    "set journal {expected_role} is AlreadyCurrent without its observed slot and live digest"
+                )));
+            }
+            (CheckedDeploymentDispositionV1::AlreadyCurrent, Some(pin)) => {
+                require_digest(&pin.live_elf_sha256, "set AlreadyCurrent live ELF SHA-256")?;
+                // The shared closure: no receipt, and the baseline present.
+                // Presence is pure data, so it belongs here rather than in the
+                // evidence-opening pass below -- nothing is read to check it.
+                AlreadyCurrentClosureV1 {
+                    role: expected_role,
+                    receipt_claimed: role.receipt.sha256.is_some(),
+                    baseline_present: role.baseline.is_some(),
+                }
+                .audit()?;
+                // A dump IS required, and only this projection can say so: the
+                // deployed bytes read back from the cluster are the whole
+                // evidence, and evidence that lives only in a JSON field is not
+                // evidence at all.
+                if role.dump.sha256.as_deref() != Some(pin.live_elf_sha256.as_str()) {
+                    return Err(Error::new(format!(
+                        "set journal {expected_role} is AlreadyCurrent and its dump digest must be the pinned live payload"
+                    )));
+                }
+            }
+            (_, Some(_)) => {
+                return Err(Error::new(format!(
+                    "set journal {expected_role} carries AlreadyCurrent evidence without the AlreadyCurrent disposition"
+                )));
+            }
+            (_, None) => {}
         }
         if !identities.insert(program) || !identities.insert(programdata) {
             return Err(Error::new(
@@ -2275,6 +2416,31 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
                     )));
                 }
                 read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+            }
+            // Same file closure as an Upgrade minus the two artifacts it does not
+            // and must not have: no receipt, no dump. Its baseline is still
+            // required, because the baseline is what fixes the width the
+            // candidate is padded to before the equality is judged.
+            CheckedDeploymentDispositionV1::AlreadyCurrent => {
+                let baseline = role.baseline.as_ref().ok_or_else(|| {
+                    Error::new(format!(
+                        "AlreadyCurrent role {} omitted its baseline",
+                        role.role
+                    ))
+                })?;
+                read_pinned_reference(baseline, &format!("{} baseline", role.role))?;
+                // The receipt half of this rule is the shared closure, already
+                // audited above before any file was opened. What is left is the
+                // dump, which only this row shape carries.
+                if role.dump.sha256.is_none() {
+                    return Err(Error::new(format!(
+                        "AlreadyCurrent role {}: the live dump is absent, and the deployed bytes \
+                         read back from the cluster are the whole evidence",
+                        role.role
+                    )));
+                }
+                read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?;
+                read_optional_reference(&role.dump, &format!("{} dump", role.role))?;
             }
             CheckedDeploymentDispositionV1::Upgrade => {
                 let baseline = role.baseline.as_ref().ok_or_else(|| {
@@ -2423,15 +2589,23 @@ fn require_mutation_permit(
         .zip(PERMANENT_DEVNET_UPGRADE_TARGETS_V1)
         .enumerate()
     {
-        let expected_disposition = if index < 2 {
-            CheckedDeploymentDispositionV1::CarryForward
+        // The MUTATION TARGET must still be an Upgrade -- an AlreadyCurrent row
+        // has nothing to mutate and that is enforced below. This is only the
+        // scan that walks past the rows it is not mutating, so it admits the
+        // same three dispositions the journal itself admits.
+        let disposition_admitted = if index < 2 {
+            role.disposition == CheckedDeploymentDispositionV1::CarryForward
         } else {
-            CheckedDeploymentDispositionV1::Upgrade
+            matches!(
+                role.disposition,
+                CheckedDeploymentDispositionV1::Upgrade
+                    | CheckedDeploymentDispositionV1::AlreadyCurrent
+            )
         };
         if role.role != *expected_role
             || role.program_id != *expected_program
             || role.programdata_id != *expected_programdata
-            || role.disposition != expected_disposition
+            || !disposition_admitted
         {
             return Err(Error::new(format!(
                 "deployment-set mutation row {index} is not exact permanent {expected_role} with its canonical disposition"
@@ -2443,6 +2617,11 @@ fn require_mutation_permit(
                     "Registry and Rent are CarryForward and can never enter an Upgrade/Extend mutation path",
                 ));
             }
+            continue;
+        }
+        // Satisfied by proven equality, so it is never the incomplete role the
+        // next mutation should target, and its missing receipt is not a gap.
+        if role.disposition == CheckedDeploymentDispositionV1::AlreadyCurrent {
             continue;
         }
         match &role.receipt.sha256 {
@@ -3144,9 +3323,23 @@ fn final_set_digest(journal: &UpgradeSetJournalV1) -> Result<String> {
         hasher.update([match role.disposition {
             CheckedDeploymentDispositionV1::CarryForward => 0,
             CheckedDeploymentDispositionV1::Upgrade => 1,
+            // A distinct tag byte, so the final set digest can never collide with
+            // the same set claiming a different kind of evidence for a role.
+            CheckedDeploymentDispositionV1::AlreadyCurrent => 2,
         }]);
         hasher.update(parse_pubkey(&role.program_id, "set Program")?.as_ref());
         hasher.update(parse_pubkey(&role.programdata_id, "set ProgramData")?.as_ref());
+        // The equality evidence is part of what the set digest commits to, so a
+        // final digest cannot be reproduced from a journal that pinned a
+        // different slot or a different live digest for the same role.
+        match &role.already_current {
+            Some(pin) => {
+                hasher.update([1]);
+                hasher.update(pin.observed_slot.to_le_bytes());
+                hash_text(&mut hasher, &pin.live_elf_sha256)?;
+            }
+            None => hasher.update([0]),
+        }
         match &role.baseline {
             Some(baseline) => {
                 hasher.update([1]);
@@ -3227,6 +3420,92 @@ pub(crate) fn authenticate_complete_upgrade_set_for_prepare(
     let mut roles = vec![carry.registry.clone(), carry.rent.clone()];
     for role in &journal.roles[2..] {
         let baseline = role.baseline.as_ref().expect("mixed closure checked");
+        // An AlreadyCurrent role has no receipt to reauthenticate, so its pin is
+        // built from the two things it does have: the baseline that fixed the
+        // width, and the dump of the deployed bytes. The dump must equal the
+        // checked candidate padded to that width -- which is the same equality
+        // the live audit re-reads from the cluster, asserted here offline over
+        // the artifact so the plan cannot be projected from a stale dump.
+        if role.disposition == CheckedDeploymentDispositionV1::AlreadyCurrent {
+            let pinned = role
+                .already_current
+                .as_ref()
+                .expect("journal closure checked AlreadyCurrent evidence");
+            let dump_bytes =
+                read_optional_reference(&role.dump, &format!("{} dump", role.role))?
+                    .ok_or_else(|| Error::new(format!("{} dump is not present", role.role)))?;
+            let elf_path = set_role_elf_path(&gate_path, &role.role)?;
+            let role_args = UpgradeArgsV1 {
+                origin: offline_origin.clone(),
+                role: role.role.clone(),
+                program_id: parse_pubkey(&role.program_id, "deployment-set Program")?,
+                programdata_id: parse_pubkey(&role.programdata_id, "deployment-set ProgramData")?,
+                expected_upgrade_authority: authority,
+                authority_keypair: PathBuf::from("/offline-upgrade-authority-not-read"),
+                fee_payer: payer,
+                fee_payer_keypair: PathBuf::from("/offline-fee-payer-not-read"),
+                buffer_pubkey: Pubkey::default(),
+                buffer_keypair: PathBuf::from("/offline-buffer-not-read"),
+                deployment_set_journal_path: journal_path.to_path_buf(),
+                elf_path: elf_path.clone(),
+                checked_release_gate_path: gate_path.clone(),
+                expected_checked_release_gate_sha256: journal.checked_release_gate.sha256.clone(),
+                expected_source_revision: journal.source_revision.clone(),
+                expected_source_tree_sha256: journal.source_tree_sha256.clone(),
+                baseline_path: PathBuf::from(&baseline.canonical_path),
+                receipt_path: PathBuf::from(&role.receipt.canonical_path),
+                dump_path: PathBuf::from(&role.dump.canonical_path),
+                solana_cli: PathBuf::from("/offline-solana-not-run"),
+                expected_deployment_solana_cli_version: journal.solana_cli_version.clone(),
+                target_acknowledgment: format!("{}:{}", role.role, role.program_id),
+                exclusive_payer_window_acknowledgment: Some(format!(
+                    "{}:{}:{}",
+                    role.role, role.program_id, journal.fee_payer
+                )),
+                execute: false,
+                preflight: false,
+                stop_after_buffer_ready: false,
+                adopt_existing_buffer: false,
+                adopt_finalized_cli_upgrade_signature: None,
+            };
+            let admission = admit_upgrade(&role_args)?;
+            let dump_sha256 = digest(&dump_bytes);
+            if dump_sha256 != admission.live_elf_sha256 || dump_sha256 != pinned.live_elf_sha256 {
+                return Err(Error::new(format!(
+                    "AlreadyCurrent role {} dump {} is neither the checked candidate {} nor the pinned live payload {}",
+                    role.role, dump_sha256, admission.live_elf_sha256, pinned.live_elf_sha256
+                )));
+            }
+            roles.push(CheckedUpgradeRolePinV1 {
+                role: role.role.clone(),
+                disposition: CheckedDeploymentDispositionV1::AlreadyCurrent,
+                program_id: role.program_id.clone(),
+                programdata_id: role.programdata_id.clone(),
+                baseline_path: Some(baseline.canonical_path.clone()),
+                baseline_sha256: Some(baseline.sha256.clone()),
+                receipt_path: None,
+                receipt_sha256: None,
+                dump_path: role.dump.canonical_path.clone(),
+                dump_sha256,
+                checked_candidate_elf_path: fs::canonicalize(&elf_path)?.display().to_string(),
+                checked_candidate_elf_sha256: admission.gate.raw_elf_sha256,
+                live_elf_sha256: admission.live_elf_sha256,
+                deployment_slot: admission.baseline.observation.deployment_slot,
+                programdata_account_sha256: admission
+                    .baseline
+                    .observation
+                    .programdata_account_sha256
+                    .clone(),
+                semantic_release_id: checked_semantic_release_id(
+                    &role.role,
+                    &journal.source_revision,
+                )?,
+                artifact_release_body_hex: None,
+                artifact_release_id: None,
+                carried_programdata_base64: None,
+            });
+            continue;
+        }
         let receipt_bytes =
             read_optional_reference(&role.receipt, &format!("{} receipt", role.role))?
                 .ok_or_else(|| Error::new(format!("{} receipt is not complete", role.role)))?;
@@ -10221,6 +10500,10 @@ mod tests {
                                 .expect("dump path"),
                             sha256: None,
                         },
+                        // This fixture builds only CarryForward and Upgrade
+                        // roles, and the field is present exactly when the
+                        // disposition is AlreadyCurrent.
+                        already_current: None,
                     }
                 })
                 .collect();
@@ -10640,6 +10923,7 @@ mod tests {
                         baseline: None,
                         receipt: receipt_ref,
                         dump: dump_ref,
+                        already_current: None,
                     });
                     continue;
                 }
@@ -10859,6 +11143,7 @@ mod tests {
                     }),
                     receipt: receipt_ref,
                     dump: dump_ref,
+                    already_current: None,
                 });
             }
 

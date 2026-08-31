@@ -23,11 +23,19 @@ use crate::{
 };
 
 /// Exact common scalar-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 90;
+///
+/// Coordinates 0..=89 are the settlement bank; 90..=150 are the GEN-SEVEN
+/// widening for the collection and candidate actions. Widening changed the
+/// two-byte width field in every artifact header — every General artifact
+/// digest moved — and no settlement conjunct, because no settlement program
+/// addresses a widened coordinate. General has no published on-chain substrate,
+/// so the re-digest strands nothing; the next cohort cut publishes the new
+/// records.
+pub const GENERAL_HOT_COMMON_SCALARS_V3: u32 = 151;
 /// Outcome index, quantity, three claim magnitudes, and cursor inventory.
 pub const GENERAL_HOT_ITEM_SCALAR_STRIDE_V3: u32 = 6;
 /// Exact common identity-register count in the General Hot38 ABI.
-pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 40;
+pub const GENERAL_HOT_COMMON_IDENTITIES_V3: u32 = 45;
 /// General has no per-outcome identity tail.
 pub const GENERAL_HOT_ITEM_IDENTITY_STRIDE_V3: u32 = 0;
 
@@ -221,6 +229,134 @@ pub mod scalar {
     pub const ROOT_LIFECYCLE_OBSERVATION: u32 = 88;
     /// Transition-owned `GeneralLifecycleV2::Active` constant.
     pub const ROOT_LIFECYCLE_ACTIVE: u32 = 89;
+
+    // ------------------------------------------------------------------
+    // The GEN-SEVEN widening: coordinates for the collection and candidate
+    // actions. The settlement seven never address anything below.
+    // ------------------------------------------------------------------
+
+    /// Trusted current-slot projection for window-gated actions.
+    pub const CURRENT_SLOT: u32 = 90;
+    /// Transition-owned constant one, for exact decrements and clamps.
+    pub const ONE: u32 = 91;
+    /// Transition-owned scratch for compound-window arithmetic.
+    pub const SCRATCH_A: u32 = 92;
+    /// Transition-owned second scratch for compound-window arithmetic.
+    pub const SCRATCH_B: u32 = 93;
+    /// Request-projected optimistic root revision for root-writing actions.
+    pub const ROOT_EXPECTED_REVISION: u32 = 94;
+    /// AccountProfile-projected `GeneralRootV2::revision`.
+    pub const ROOT_REVISION_OBSERVATION: u32 = 95;
+    /// Transition-owned successor root revision (`observation + 1`).
+    pub const ROOT_POST_REVISION: u32 = 96;
+    /// AccountProfile-projected `GeneralRootV2::next_batch_sequence`.
+    pub const ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION: u32 = 97;
+    /// Transition-owned successor next-batch sequence.
+    pub const ROOT_POST_BATCH_SEQUENCE: u32 = 98;
+    /// AccountProfile-projected `GeneralRootV2::open_batches`.
+    pub const ROOT_OPEN_BATCHES_OBSERVATION: u32 = 99;
+    /// Transition-owned successor open-batch count (+1 open, -1 close).
+    pub const ROOT_POST_OPEN_BATCHES: u32 = 100;
+    /// `GeneralConfigV3::collection_slots`, projected from the config record.
+    pub const CONFIG_COLLECTION_SLOTS: u32 = 101;
+    /// `GeneralConfigV3::selection_slots`, projected from the config record.
+    pub const CONFIG_SELECTION_SLOTS: u32 = 102;
+    /// `GeneralConfigV3::settlement_slots`, projected from the config record.
+    pub const CONFIG_SETTLEMENT_SLOTS: u32 = 103;
+    /// `GeneralConfigV3::max_orders_per_candidate` as the per-batch bound.
+    pub const CONFIG_MAX_ORDERS: u32 = 104;
+    /// AccountProfile-projected batch status byte.
+    pub const BATCH_STATUS_OBSERVATION: u32 = 105;
+    /// Transition-owned successor batch status.
+    pub const BATCH_POST_STATUS: u32 = 106;
+    /// AccountProfile-projected admitted-order count.
+    pub const BATCH_ORDER_COUNT_OBSERVATION: u32 = 107;
+    /// Transition-owned successor admitted-order count.
+    pub const BATCH_POST_ORDER_COUNT: u32 = 108;
+    /// AccountProfile-projected cancelled-order count.
+    pub const BATCH_CANCELLED_COUNT_OBSERVATION: u32 = 109;
+    /// Transition-owned successor cancelled-order count.
+    pub const BATCH_POST_CANCELLED_COUNT: u32 = 110;
+    /// AccountProfile-projected committed quote reserve.
+    pub const BATCH_QUOTE_RESERVE_OBSERVATION: u32 = 111;
+    /// Transition-owned successor committed quote reserve.
+    pub const BATCH_POST_QUOTE_RESERVE: u32 = 112;
+    /// Batch collection-close slot: computed at open, projected afterwards.
+    pub const BATCH_COLLECTION_CLOSE_SLOT: u32 = 113;
+    /// Batch settlement-close slot: computed at open, projected afterwards.
+    pub const BATCH_SETTLEMENT_CLOSE_SLOT: u32 = 114;
+    /// Signed-order candidate-wide maximum fill.
+    pub const ORDER_MAX_LOTS: u32 = 115;
+    /// Signed-order maximum quote debit per filled lot.
+    pub const ORDER_MAX_QUOTE_DEBIT_PER_LOT: u32 = 116;
+    /// Transition-checked exact worst-case quote obligation.
+    pub const ORDER_QUOTE_RESERVE: u32 = 117;
+    /// Signed-order settlement validity horizon.
+    pub const ORDER_VALID_UNTIL_SLOT: u32 = 118;
+    /// AccountProfile-projected order escrow phase.
+    pub const ORDER_PHASE_OBSERVATION: u32 = 119;
+    /// Transition-owned successor order escrow phase.
+    pub const ORDER_POST_PHASE: u32 = 120;
+    /// AccountProfile-projected order admission slot.
+    pub const ORDER_ADMITTED_SLOT_OBSERVATION: u32 = 121;
+    /// Transition-owned successor released-at slot.
+    pub const ORDER_POST_RELEASED_SLOT: u32 = 122;
+    /// Observed order-escrow vault balance for the residual release.
+    pub const ESCROW_BALANCE_OBSERVATION: u32 = 123;
+    /// Candidate submission's declared immutable page count.
+    pub const CANDIDATE_PAGE_COUNT: u32 = 124;
+    /// Candidate submission's pinned page revision.
+    pub const CANDIDATE_PAGE_REVISION: u32 = 125;
+    /// Candidate submission's declared execution-row count.
+    pub const CANDIDATE_ROW_COUNT: u32 = 126;
+    /// Exact lamports one crank of this candidate's work pays.
+    pub const CANDIDATE_REWARD_RATE: u32 = 127;
+    /// AccountProfile-projected candidate submission status.
+    pub const CANDIDATE_STATUS_OBSERVATION: u32 = 128;
+    /// Transition-owned successor candidate submission status.
+    pub const CANDIDATE_POST_STATUS: u32 = 129;
+    /// AccountProfile-projected verification-compartment lamports.
+    pub const CANDIDATE_VERIFICATION_REMAINING_OBSERVATION: u32 = 130;
+    /// Transition-owned successor verification-compartment lamports.
+    pub const CANDIDATE_POST_VERIFICATION_REMAINING: u32 = 131;
+    /// AccountProfile-projected cleanup-compartment lamports.
+    pub const CANDIDATE_CLEANUP_REMAINING_OBSERVATION: u32 = 132;
+    /// Transition-owned successor cleanup-compartment lamports.
+    pub const CANDIDATE_POST_CLEANUP_REMAINING: u32 = 133;
+    /// Candidate submission slot stamp.
+    pub const CANDIDATE_SUBMITTED_SLOT: u32 = 134;
+    /// Evaluator-asserted terminal-row indicator for one verification step.
+    pub const VERIFY_TERMINAL: u32 = 135;
+    /// AccountProfile-projected verifier-cursor revision.
+    pub const VERIFY_REVISION_OBSERVATION: u32 = 136;
+    /// Transition-owned successor verifier-cursor revision.
+    pub const VERIFY_POST_REVISION: u32 = 137;
+    /// AccountProfile-projected verifier page cursor.
+    pub const VERIFY_PAGE_OBSERVATION: u32 = 138;
+    /// Transition-owned successor verifier page cursor.
+    pub const VERIFY_POST_PAGE: u32 = 139;
+    /// AccountProfile-projected verifier row cursor.
+    pub const VERIFY_ROW_OBSERVATION: u32 = 140;
+    /// Transition-owned successor verifier row cursor.
+    pub const VERIFY_POST_ROW: u32 = 141;
+    /// AccountProfile-projected distinct grouped-order count.
+    pub const VERIFY_ORDER_COUNT_OBSERVATION: u32 = 142;
+    /// Transition-owned successor distinct grouped-order count.
+    pub const VERIFY_POST_ORDER_COUNT: u32 = 143;
+    /// Evaluator-asserted manifest rows emitted by one verification step.
+    pub const VERIFY_MANIFEST_ORDER_COUNT: u32 = 144;
+    /// Request-projected conditional result-state bump witness.
+    pub const RESULT_STATE_BUMP: u32 = 145;
+    /// AccountProfile-owned result-record bump observation.
+    pub const RESULT_BUMP_OBSERVATION: u32 = 146;
+    /// AccountProfile-owned result-record rent-principal observation.
+    pub const RESULT_PRINCIPAL_OBSERVATION: u32 = 147;
+    /// Lifecycle-owned result-record creation indicator.
+    pub const RESULT_CREATED: u32 = 148;
+    /// Lifecycle-owned result-record canonical bump.
+    pub const RESULT_CANONICAL_BUMP: u32 = 149;
+    /// Lifecycle-owned result-record historical Rent principal.
+    pub const RESULT_RENT_PRINCIPAL: u32 = 150;
 }
 
 /// Scalar coordinates within each Product-outcome item bank.
@@ -321,6 +457,21 @@ pub mod identity {
     pub const TERMINAL_STATE: u32 = 38;
     /// Lifecycle-owned terminal-record Trading program owner.
     pub const TERMINAL_OWNER: u32 = 39;
+
+    // ------------------------------------------------------------------
+    // The GEN-SEVEN widening.
+    // ------------------------------------------------------------------
+
+    /// Immutable `GeneralConfigV3` content identity, projected from the root.
+    pub const GENERAL_CONFIG_ID: u32 = 40;
+    /// AccountProfile-owned result-record RentCredit beneficiary observation.
+    pub const RESULT_BENEFICIARY_OBSERVATION: u32 = 41;
+    /// Lifecycle-owned result-record RentCredit beneficiary.
+    pub const RESULT_BENEFICIARY: u32 = 42;
+    /// Lifecycle-owned exact result-record PDA.
+    pub const RESULT_STATE: u32 = 43;
+    /// Lifecycle-owned result-record Trading program owner.
+    pub const RESULT_OWNER: u32 = 44;
 }
 
 /// Independently authenticated environment needed by exact Claims/Custody packets.

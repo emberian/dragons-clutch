@@ -459,11 +459,38 @@ tier_programs() {
   # both live in this tree, so running a working-tree harness against archived
   # ELFs would compare one revision's threshold to another revision's route --
   # and produce a number belonging to neither.
+  # THE THREE SKIPPED CASES, and why skipping them is the correct answer rather
+  # than the convenient one.
+  #
+  # They are `registry_hot_continuation` rows that each stage an isolated child
+  # ADVERSARY -- a corrupted Claims, Custody or Token program -- and prove
+  # Trading refuses the exact post-child mismatch and rolls the whole
+  # transaction back. They read `POSTJOIN_SBF_OUT_DIR` for those hostile ELFs.
+  # This tier builds the real release set and has no hostile directory to give
+  # them, and `POSTJOIN_SBF_OUT_DIR` appeared NOWHERE in this file, so all three
+  # failed here on an unset variable while proving nothing -- the same shape as
+  # the fee-leg probe above.
+  #
+  # Setting the variable is not the fix either. They exercise the Hot
+  # CONTINUATION, which decision 0030 demoted to harness-only after HEAPRED
+  # measured it +35,127 CU above the top-level route the public actually uses.
+  # A demoted route must not gate the production tier: this tier's red means the
+  # PUBLIC Direct route lost margin, and that sentence has to stay true.
+  #
+  # Their real home is `run-postjoin-hostiles.sh`, which builds both the real
+  # set and the three adversaries and sets all three variables itself. It is now
+  # a row of the `suites` tier, so these cases run -- they just run where their
+  # prerequisites exist. If a fourth hostile case is added and not listed here,
+  # it fails loudly in this tier rather than passing silently, which is the
+  # right way for this list to go stale.
   local result=0
   (cd "$build_root" && SBF_OUT_DIR="$elf_dir" cargo test \
     --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
     ${DCLUTCH_CI_PROGRAM_TESTS:+$DCLUTCH_CI_PROGRAM_TESTS} \
-    -- --nocapture) || result=1
+    -- --nocapture \
+    --skip nonselected_claims_supply_corruption_after_real_child_commit_rolls_back \
+    --skip omitted_token_close_authority_corruption_after_real_custody_commit_rolls_back \
+    --skip omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls_back) || result=1
 
   [ -n "$owned" ] && rm -rf -- "$elf_dir"
   [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
@@ -481,6 +508,383 @@ tier_programs() {
 }
 
 # ---------------------------------------------------------------------------
+# journey -- does the journey campaign still COMPILE. Minutes, cargo only.
+#
+# THE CLASS THIS EXISTS FOR, and it is not hypothetical: on 2026-08-30 this
+# binary had not built on main for about two days, and nobody knew.
+#
+# It is built to break that way ON PURPOSE. The tier-1 producer's modules are
+# compiled into it VERBATIM by `#[path]` out of
+# tools/local-validator/bootstrap/successor/src/, so the journey does not fork
+# the founding and cannot drift into a mirror of it. Its own Cargo.toml says
+# the resulting fragility "is the intended tripwire". That is a good design and
+# it has exactly one requirement: SOMETHING HAS TO PULL THE TRIPWIRE. Nothing
+# did, so a deliberate alarm rang into an empty room for two days.
+#
+# WHY `cargo check` AND NOT A CAMPAIGN RUN, said plainly because the cheaper
+# thing is the one that gets to run often. A full journey campaign needs a real
+# `solana-test-validator`, stages a whole founding through open, and is tens of
+# minutes -- that belongs to the cut, not to a push. `cargo check` catches the
+# entire two-day class (a moved or reshaped upstream module) for the price of a
+# type-check, and it is the only part of the journey that a push can afford. It
+# does NOT tell you the campaign still passes; those are different claims and
+# this tier only makes the first one.
+# `--commit` REACHES THIS TIER, and the author needed teaching twice.
+#
+# I built the archive machinery below for the `programs` tier and framed it as
+# a COMPUTE concern -- a CU number off a shared tree is worthless. Then I ran
+# this tier, watched it go red on a real-looking compile error, and was about
+# to report a live breakage. It was another lane's uncommitted mid-edit state:
+# nineteen files dirty under crates/ and programs/ at the time, zero an hour
+# later, and the commit I suspected of fixing it was already an ancestor of the
+# revision I had "measured".
+#
+# So the lesson generalises past compute, and this is the corrected form of it:
+# ON A SHARED WORKING TREE, ANY TIER THAT COMPILES IS A TIER THAT NEEDS A
+# REVISION. A red that belongs to a colleague's half-written file is worse than
+# no gate, because it is a gate that cries wolf at whoever runs it next.
+tier_journey() {
+  say "journey -- the journey campaign still compiles"
+  if ! have cargo; then
+    record journey $EXIT_PREREQ_MISSING "cargo not on PATH"
+    return
+  fi
+
+  local root="$repo_root" archive_root=""
+  if [ -n "$commit_rev" ]; then
+    local resolved
+    resolved="$(cd "$repo_root" && git rev-parse --verify "$commit_rev^{commit}" 2>/dev/null)" || {
+      record journey $EXIT_PREREQ_MISSING "--commit $commit_rev does not name a commit"
+      return
+    }
+    archive_root="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-ci-journey.XXXXXX")"
+    note "checking COMMIT $resolved (clean git archive)"
+    archive_revision "$resolved" "$archive_root"
+    root="$archive_root"
+  else
+    local dirty
+    dirty="$(cd "$repo_root" && git status --porcelain -- programs crates tools 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${dirty:-0}" != 0 ]; then
+      note "checking the WORKING TREE, and it has $dirty uncommitted files."
+      note "A compile error here may belong to a neighbouring lane rather than"
+      note "to this revision. For a red you intend to REPORT, use --commit."
+    fi
+  fi
+
+  local manifest="$root/tools/gauntlet/journey/Cargo.toml"
+  if [ ! -f "$manifest" ]; then
+    record journey $EXIT_PREREQ_MISSING "the journey tier is not in this tree"
+    [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+    return
+  fi
+  # Its own `[workspace]` table, so it resolves independently of the protocol
+  # workspace and gets its own target directory whether we ask or not.
+  local code=0
+  (cd "$root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+    cargo check --manifest-path "$manifest") || code=$?
+  [ -n "$archive_root" ] && rm -rf -- "$archive_root"
+  if [ "$code" = 0 ]; then
+    record journey $EXIT_PASS
+  else
+    note "The journey campaign does not compile. Most often this is the"
+    note "\`#[path]\` tripwire doing its job: a module under"
+    note "tools/local-validator/bootstrap/successor/src/ moved or changed"
+    note "shape, and the journey links those files verbatim rather than"
+    note "copying them. Fix the journey to match its upstream -- do NOT fork"
+    note "the module, which is the exact mirror this arrangement prevents."
+    record journey $EXIT_GATE_FAILED
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# suites -- the SBF program-test suites that are not the trading one.
+#
+# EACH ROW NAMES A RUNNER, NEVER AN ELF LIST. That is the whole design of this
+# tier. Every one of these suites needs a DIFFERENT set of built programs --
+# core wants registry, rent, custody and a series-consume caller; custody wants
+# its own test caller; claims wants a resolution-proof link and a token fixture
+# -- and each of those sets is already written down, correctly and by the lane
+# that owns it, inside the runner script beside the suite.
+#
+# Restating those lists here would be this project's signature defect with a
+# fresh coat of paint: a value duplicated instead of read, agreeing right up
+# until the day somebody adds a program to their runner and not to my table.
+# So this tier discovers nothing and asserts nothing about ELFs. It runs the
+# script the suite's owner maintains, and reports what it said.
+#
+# WHAT THESE RUNNERS DO NOT DO, named as inherited debt rather than papered
+# over, because a reader will otherwise assume this tier is as strict as
+# `programs`:
+#
+#   - They build the WORKING TREE. None of them takes a revision, so `--commit`
+#     cannot reach them and this tier says so instead of pretending. For a
+#     pass/fail compile-and-run answer that is tolerable in a way it is NOT for
+#     a compute number; it is still worth fixing at the runners.
+#   - They do not carry the SBF stack-frame-overwrite refusal that `programs`
+#     and the accelerator links have. A frame diagnostic on one of these links
+#     would exit zero here. That is owed by the runners, and it is the same
+#     hole ee3dbe8f closed in two other places. (`tools/gauntlet/dealer` and
+#     `tools/gauntlet/claims-extended` DO refuse on it; the four rows below are
+#     the cheaper per-suite runners, which do not.)
+#
+# WHAT EACH ROW COSTS AND NEEDS, from the runners themselves:
+#
+#   custody  three SBF links, its own test caller. The cheapest row.
+#   core     six links, and now 5 of 5 targets. The gap this comment used to
+#            NAME (five targets in programs/dclutch-core-sbf/tests/, three
+#            driven; capability_close_alias and retirement_replay_handoff run
+#            by nothing at all) was closed on 2026-08-30 by the runner rather
+#            than by a list here: it globs its own tests/ directory, so a
+#            sixth target is run the day it lands and cannot rot unrun. Both
+#            orphans were GREEN at the first real run -- but between them they
+#            carried fifteen hostile assertions that named no refusal code,
+#            which is the shape 67e96e5b caught passing for the wrong reason;
+#            all fifteen now assert an exact code. The sixth link is Trading:
+#            capability_close_alias closes through the real Core-to-Trading
+#            native-close route.
+#   claims   needs an AUDITED Token-2022 v11 fixture, digest-checked against
+#            programs/dclutch-claims-sbf/fixtures/token-2022-v11.provenance.
+#            The runner builds it from the cargo registry's
+#            spl-token-2022-11.0.0.crate, so a host with no populated registry
+#            cannot run this row -- and that is a MISSING PREREQUISITE, not a
+#            claims defect. It is why this tier reports absence per row.
+#   dealer   six links, about three minutes cold. This row has the strongest
+#            history for a gate: its campaign was uncompilable for days once,
+#            and tools/gauntlet/dealer's family test was red from 2026-08-27
+#            until 33a61576, both times because a release-path change touched
+#            seven programs and zero campaigns.
+#
+# NOT A ROW, and the reason is a cost rather than a judgement: the SUCCESSOR
+# BOOTSTRAP has no runner script, needs a real solana-test-validator, and its
+# founding is about thirteen minutes with NO resume. That is a cut-tier
+# campaign, not a push-tier suite. Its HOST tests
+# (`cargo test --manifest-path tools/local-validator/bootstrap/successor/`)
+# are ordinary and would fit here; they are simply not wired yet.
+#
+# SCRATCH DISCIPLINE, because this tier can start several of these at once:
+# every runner builds into its own `mktemp -d` and traps EXIT/HUP/INT/TERM, so
+# a clean exit cleans up. A killed run does NOT -- each leaks 3-7 GB, and
+# /tmp/dclutch-* reached 373 GB and filled the volume once. If you interrupt
+# this tier, check /tmp yourself.
+readonly SUITE_RUNNERS="\
+custody|programs/dclutch-custody-sbf/run-program-test.sh|Custody vault routes against a real caller link
+core|programs/dclutch-core-sbf/run-open-market-program-test.sh|every core program-test target, discovered from tests/
+claims|programs/dclutch-claims-sbf/run-rational-representation-v2-program-test.sh|the rational representation V2 lowering
+dealer|programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh|the dealer accelerator link and its family tests
+fee2tx|programs/dclutch-trading-sbf/program-test/run-fee-second-transaction.sh|the Direct fee leg in a transaction of its own, against real Custody
+postjoin|programs/dclutch-trading-sbf/program-test/run-postjoin-hostiles.sh|Trading refuses three isolated child adversaries and rolls the whole transaction back"
+
+tier_suites() {
+  say "suites -- the other SBF program-test suites"
+  if ! have cargo-build-sbf; then
+    note "cargo-build-sbf is not installed, so NO suite ran and no program was"
+    note "built. Install the Solana/Agave toolchain:"
+    note "    sh -c \"\$(curl -sSfL https://release.anza.xyz/stable/install)\""
+    record suites $EXIT_PREREQ_MISSING "cargo-build-sbf not on PATH"
+    return
+  fi
+  if [ -n "$commit_rev" ]; then
+    note "NOTE: --commit does not reach this tier. These runners build the"
+    note "working tree and take no revision; see the comment above. The"
+    note "suites below measured whatever is on disk."
+  fi
+
+  local wanted="${DCLUTCH_CI_SUITES:-}"
+  local row name script what present=0 failed=0 absent="" unrun="" row_code=0
+  local IFS_SAVE="$IFS"
+  while IFS='|' read -r name script what; do
+    [ -n "$name" ] || continue
+    if [ -n "$wanted" ]; then
+      case " $wanted " in *" $name "*) ;; *) continue ;; esac
+    fi
+    if [ ! -x "$repo_root/$script" ]; then
+      note "$name: runner absent ($script)"
+      absent="$absent $name"
+      continue
+    fi
+    present=$((present + 1))
+    note "$name -- $what"
+    # A row exiting 2 means IT could not run -- the same convention this whole
+    # script uses, now honoured per row instead of only for the whole tier.
+    # Before this, every nonzero row exit became a gate failure, so a host
+    # without the claims fixture's builder archive produced "an SBF
+    # program-test suite failed ... treat this as a real finding about the
+    # protocol". The comment above SUITE_RUNNERS already claimed this tier
+    # "reports absence per row"; it did not, because the rows had no way to say
+    # it. The wrapper's own missing-prerequisite branch was unreachable for the
+    # exact case its author wrote it for.
+    row_code=0
+    (cd "$repo_root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
+      "$repo_root/$script") || row_code=$?
+    case "$row_code" in
+    0) ;;
+    "$EXIT_PREREQ_MISSING")
+      note "$name: DID NOT RUN -- the row reports a missing prerequisite"
+      unrun="$unrun $name"
+      ;;
+    *)
+      note "$name: FAILED"
+      failed=$((failed + 1))
+      ;;
+    esac
+  done <<EOF
+$SUITE_RUNNERS
+EOF
+  IFS="$IFS_SAVE"
+
+  [ -n "$absent" ] && note "runners not in this tree:$absent"
+  [ -n "$unrun" ] && note "rows that did not run:$unrun"
+  # A real failure outranks an absence: if one row genuinely failed, the tier
+  # failed, and the rows that never ran are reported beside it rather than
+  # softening it.
+  if [ "$present" = 0 ]; then
+    record suites $EXIT_PREREQ_MISSING "no suite runner is present in this tree"
+  elif [ "$failed" -gt 0 ]; then
+    record suites $EXIT_GATE_FAILED "$failed of $present suites failed"
+  elif [ -n "$unrun" ]; then
+    record suites $EXIT_PREREQ_MISSING "rows did not run:$unrun"
+  else
+    record suites $EXIT_PASS
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# workspaces -- does EVERY tracked Cargo workspace still check. The cut tier.
+#
+# The root workspace is not an inventory of this repository: program-test,
+# fixture, generator and operator trees carry their own `[workspace]` tables on
+# purpose, so a `cargo check` at the root is silent about most of them. That is
+# the general shape of the journey break above, and this repository already had
+# the right tool for it -- `tools/release/check-all-workspaces.py`, which
+# discovers every workspace from an ARCHIVED revision, gives each a fresh
+# target directory, and proves no Cargo invocation moved a lockfile.
+#
+# It had NO CALLERS ANYWHERE. A fifth gate that existed and never ran.
+#
+# It is genuinely expensive -- a cold locked/offline check of every workspace
+# with no shared target directory -- so it is not in `all` and does not belong
+# on a push. It belongs to the cut and to the nightly schedule, which is where
+# the wrapper puts it.
+tier_workspaces() {
+  say "workspaces -- every tracked Cargo workspace checks"
+  local tool="$repo_root/tools/release/check-all-workspaces.py"
+  if [ ! -f "$tool" ]; then
+    record workspaces $EXIT_PREREQ_MISSING "check-all-workspaces.py is not in this tree"
+    return
+  fi
+  if ! have cargo; then
+    record workspaces $EXIT_PREREQ_MISSING "cargo not on PATH"
+    return
+  fi
+  # --work must not already exist, which is the tool's own guard against
+  # reporting a previous run's artifacts as this run's evidence.
+  local work
+  work="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-ci-ws.XXXXXX")/run"
+  local code=0
+  (cd "$repo_root" && python3 "$tool" --work "$work" \
+    --commit "${commit_rev:-HEAD}") || code=$?
+  rm -rf -- "$(dirname "$work")"
+  if [ "$code" = 0 ]; then
+    record workspaces $EXIT_PASS
+  else
+    note "A tracked Cargo workspace does not check at this revision, or a"
+    note "Cargo invocation moved a lockfile inside the archive. The root"
+    note "workspace passing says nothing about the others -- that is why"
+    note "this tier exists."
+    record workspaces $EXIT_GATE_FAILED
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# release -- the release-tooling refusal suites, which ran nowhere.
+#
+# tools/release/ holds the machinery that decides whether a build may be
+# released at all: SBF build-freshness admission, the devnet activity and
+# demo-pulse wrappers, and the sponsored-market-open stager. Each of those
+# carries a test script sitting directly beside it. NOTHING RAN ANY OF THEM.
+# That is the same defect as `check-all-workspaces.py` above -- a gate that
+# exists and never runs -- except four times over.
+#
+# They are the cheapest thing in this file: about five seconds for all four,
+# needing bash, python3 and git and nothing else. Despite three of them having
+# "devnet" in the name NONE of them reaches a chain. Each builds a scratch
+# sandbox, writes stub `solana`, `solana-keygen`, `spl-token` and `dclutch`
+# executables onto PATH, and points the tool under test at
+# `https://example.invalid` so that a real fetch would fail loudly rather than
+# quietly succeed. That is why this is a push tier and not a cut tier.
+#
+# WHAT THEY ACTUALLY GATE IS REFUSALS -- the cases where the release tooling
+# has to say no. Stale or forged build evidence must not be admitted. A market
+# must not be founded at a nonzero Direct fee rate, which founds a market that
+# can never trade, nor against a founder key nobody holds, which strands
+# collateral forever. Both are irreversible. A refusal test that never runs is
+# indistinguishable from a tool that has quietly stopped refusing.
+#
+# ONE HONEST LIMIT, because it changes what a green here means: the stager
+# suite reaches for real git history, to re-run its red controls against the
+# last revision BEFORE its guards existed. That is the right design -- a
+# control pinned to HEAD stops discriminating the moment the fix lands -- but
+# on a shallow clone, or in a vendored subtree whose history does not carry
+# that path, it prints its own note and two of its thirteen cases do not run.
+# It reports that itself. This tier deliberately does not restate the count,
+# because a second copy of it here would be one more number to get wrong.
+tier_release() {
+  say "release -- the release-tooling refusal suites"
+  local dir="$repo_root/tools/release"
+  # Named one by one and never globbed. A glob turns a script that was DELETED
+  # into a tier that silently got smaller, which is a quieter version of the
+  # exact defect this tier exists to end.
+  local scripts=(
+    test-checked-release-freshness.sh
+    test-devnet-activity.sh
+    test-devnet-demo-pulse.sh
+    test-stage-devnet-sponsored-market-open.sh
+  )
+  local present=() missing=() name
+  for name in "${scripts[@]}"; do
+    if [ -f "$dir/$name" ]; then
+      present+=("$name")
+    else
+      missing+=("$name")
+    fi
+  done
+  if [ "${#present[@]}" = 0 ]; then
+    record release $EXIT_PREREQ_MISSING "tools/release test scripts are not in this tree"
+    return
+  fi
+  if ! have python3; then
+    record release $EXIT_PREREQ_MISSING "python3 not on PATH"
+    return
+  fi
+  local failed=() code=0
+  for name in "${present[@]}"; do
+    code=0
+    (cd "$repo_root" && bash "$dir/$name") || code=$?
+    [ "$code" = 0 ] || failed+=("$name")
+  done
+  if [ "${#failed[@]}" -gt 0 ]; then
+    note "a release-tooling refusal suite FAILED:"
+    for name in "${failed[@]}"; do note "  $name"; done
+    note "Each of these proves the release machinery still says no to something"
+    note "irreversible -- forged build evidence, a market founded at a fee rate"
+    note "that can never trade, a founder key nobody holds. Read the failing"
+    note "case before you change either side of it."
+    record release $EXIT_GATE_FAILED
+    return
+  fi
+  if [ "${#missing[@]}" -gt 0 ]; then
+    # Everything present passed, and that is still not a pass for this tier:
+    # some of it was not here to run. Under --require this becomes a failure,
+    # which is the correct behaviour for a release candidate.
+    note "these release suites are not in this tree and did NOT run:"
+    for name in "${missing[@]}"; do note "  $name"; done
+    record release $EXIT_PREREQ_MISSING "${#missing[@]} of ${#scripts[@]} release suites absent from this tree"
+    return
+  fi
+  record release $EXIT_PASS
+}
+
+# ---------------------------------------------------------------------------
 
 list_tiers() {
   cat <<'EOF'
@@ -490,14 +894,46 @@ census    milliseconds python3            a generated file arriving with no
                                           re-emit guard, or losing one
 seam      ~20s         ast-grep           six structural seam defect classes,
                                           new findings against a triaged baseline
+release   ~5s          python3            the four release-tooling REFUSAL
+                                          suites: build-freshness admission,
+                                          the devnet activity and demo-pulse
+                                          wrappers, the sponsored-market-open
+                                          stager. All hermetic -- stub binaries
+                                          and an invalid RPC, never a chain
 web       ~1 min       node               the web + SDK vitest suites
 emission  minutes      lake (Lean)        every generated file still byte-
                                           matches the emitter that printed it
-programs  minutes      cargo-build-sbf    the programs build, and the public
+journey   ~2 min       cargo              the journey campaign still COMPILES.
+                                          Not that it passes -- a real campaign
+                                          needs a validator and is tens of
+                                          minutes, so it belongs to the cut.
+                                          This catches the class that hid a
+                                          two-day breakage: a `#[path]` module
+                                          upstream moving out from under it
+programs  minutes      cargo-build-sbf    the programs build with no SBF stack-
+                                          frame diagnostic, and the public
                                           Direct route holds its compute margin
                                           across 32 pinned seeds
+suites    ~15 min      cargo-build-sbf    the other SBF program-test suites:
+                                          custody, core, claims, dealer, plus the
+                                          fee2tx and postjoin probes, which own
+                                          the cases the programs tier cannot
+                                          stage. Each row runs the runner its
+                                          owning lane maintains, never a copy of
+                                          its ELF list
+workspaces  slow       cargo              EVERY tracked Cargo workspace checks
+                                          from an archived revision. The general
+                                          form of the journey break. Cut tier --
+                                          fresh target dir per workspace, so it
+                                          is not in `all`
 
-aliases:  cheap = census seam        all = census seam web emission programs
+aliases:  cheap = census seam release
+          all   = census seam release web emission journey programs suites
+          (`workspaces` is deliberately outside `all` -- it is the cut tier)
+
+environment:
+  DCLUTCH_CI_SUITES="core custody"   run only those rows of the suites tier
+  CARGO_BUILD_JOBS=4                 honoured by the cargo tiers (default 4)
 
 options:
   --commit REV   build and test a clean `git archive` of REV instead of the
@@ -536,9 +972,11 @@ main() {
       sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
-    cheap) tiers+=(census seam) ;;
-    all) tiers+=(census seam web emission programs) ;;
-    census | seam | web | emission | programs) tiers+=("$1") ;;
+    cheap) tiers+=(census seam release) ;;
+    all) tiers+=(census seam release web emission journey programs suites) ;;
+    census | seam | release | web | emission | journey | programs | suites | workspaces)
+      tiers+=("$1")
+      ;;
     *)
       printf 'tools/ci/run.sh: unknown tier %s\n\n' "$1" >&2
       list_tiers >&2

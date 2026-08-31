@@ -107,11 +107,11 @@ function NotFoundSurface({ pathname }: Readonly<{ pathname: string }>) {
       <header><span>01</span><div><h2>Where to go instead</h2><p>Every route this site serves, and what each one is for.</p></div></header>
       <div className="direct-actions">
         <Anchor className="secondary-action" href="/">The front door →</Anchor>
-        <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
-        <Anchor className="secondary-action" href="/create">Preview a Market design →</Anchor>
-        <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
-        <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
-        <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
+        <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
+        <Anchor className="secondary-action" href="/create">Design a market →</Anchor>
+        <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>
+        <Anchor className="secondary-action" href="/explorer">Look up any account →</Anchor>
+        <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>
     </section>
   </main>;

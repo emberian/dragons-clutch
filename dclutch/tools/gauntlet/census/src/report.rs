@@ -259,7 +259,7 @@ pub fn render(inventory: &Inventory, ledger: &Ledger, blocked: &BlockedSet) -> (
                     "| {status} | {code} | `{}::{}` | {} | `{}` |",
                     refusal.enum_name,
                     refusal.variant,
-                    refusal.doc.as_deref().unwrap_or(""),
+                    refusal.summary.as_deref().unwrap_or(""),
                     refusal.provenance
                 );
             }

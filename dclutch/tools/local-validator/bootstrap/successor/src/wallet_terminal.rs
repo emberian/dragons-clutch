@@ -1051,6 +1051,14 @@ fn terminal_scenario(
                 denominator: certificate.result_denominator,
             })
         }
+        // The devnet driver refuses the same pair the program refuses
+        // (`ClaimsSbfError::BasisEvaluatorAbsent`, 0x500C). A driver that
+        // guessed a scenario here would build a transaction the chain then
+        // rejects, and the operator would debug the rejection instead of the
+        // guess.
+        BasisKindV3::SplineDegree2To3 { .. } => Err(Error::new(
+            "basis names the degree-2-to-3 spline family and no evaluator exists",
+        )),
     }
 }
 

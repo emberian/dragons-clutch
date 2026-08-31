@@ -61,12 +61,15 @@ import {
 /**
  * The Market a real dClutch chain actually holds.
  *
- * `DCLTCOR3` is the current Core state: 360 fixed bytes emitted by
- * `formal/dclutch-semantics/EmitMarketCoreRust.lean` into
+ * `DCLTCOR3` is the current Core state: `CORE_STATE_BYTES` fixed bytes emitted
+ * by `formal/dclutch-semantics/EmitMarketCoreRust.lean` into
  * `crates/dclutch-market-core-codec/src/generated.rs`, from which every offset
  * below is generated rather than retyped. It carries identity, lifecycle, and
- * the source-derived cap on complete principal sets. Older 352-byte devnet
- * Markets predate that cap and are incompatible with this generation.
+ * the source-derived cap on complete principal sets. Earlier devnet Markets
+ * were narrower and are incompatible with this generation; the widths they were
+ * actually seen at are `SUPERSEDED_CORE_STATE_WIDTHS`. Neither number is spelled
+ * here, because a literal in prose is a literal that goes stale silently -- this
+ * sentence said "360 fixed bytes" while the constant said 368.
  *
  * What it deliberately does NOT carry is the economics. There is no Hoard
  * figure, no per-claim supply vector and no settlement summary in these bytes:
@@ -198,9 +201,37 @@ export type MarketCoreStateV2 = Readonly<{
   settlement: MarketCoreSettlementV2;
 }>;
 
+/**
+ * Widths a real Market has been observed at before the current one.
+ *
+ * A LIST, and generated-constant-relative, because a single literal here has to
+ * be updated in lockstep with `CORE_STATE_BYTES` and nothing made it. It was
+ * written as `=== 352` when the current width was 360; the width then moved to
+ * 368, 360 became a superseded generation, and the explanatory sentence stopped
+ * firing for the accounts it was written for. Six devnet Markets were stranded
+ * at 360 and 368 at the time this was found, and the three at 360 were being
+ * refused with a bare byte count that read like corruption rather than like an
+ * older generation.
+ *
+ * `coreStateWidthGuardIsCoherent` keeps the list honest: every entry must be
+ * strictly below the current width, so a width bump that leaves a stale entry
+ * behind fails a test instead of quietly orphaning the help again.
+ */
+export const SUPERSEDED_CORE_STATE_WIDTHS: ReadonlyArray<number> = Object.freeze([352, 360]);
+
+/**
+ * Whether the superseded-width list can still be true of the current width.
+ *
+ * Exported for the test that asserts it. A superseded width that is not below
+ * the current one is either a typo or a width that never existed.
+ */
+export function coreStateWidthGuardIsCoherent(): boolean {
+  return SUPERSEDED_CORE_STATE_WIDTHS.every((width) => width < CORE_STATE_BYTES);
+}
+
 function requireCurrentCoreStateWidth(bytes: Uint8Array): void {
   if (bytes.length === CORE_STATE_BYTES) return;
-  const legacy = bytes.length === 352
+  const legacy = SUPERSEDED_CORE_STATE_WIDTHS.includes(bytes.length)
     ? ' This older devnet Market generation is incompatible.'
     : '';
   throw new Error(`Core Market state is ${bytes.length} bytes; the exact current width is ${CORE_STATE_BYTES}.${legacy}`);

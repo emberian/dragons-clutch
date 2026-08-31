@@ -871,6 +871,17 @@ fn encode_effect(
     Ok(output)
 }
 
+/// Claims frame width and root coordinate for one executable action.
+///
+/// **Exhaustive on purpose: there is no wildcard arm.** This match used to end
+/// in `_ => Err(InvalidInput)`, which meant an eighth
+/// [`FractionalExposureActionV2`] would compile on the day it was added and
+/// silently become "invalid input" -- an action refused because nobody had
+/// looked at it, reported identically to an action refused because somebody
+/// had. Those are different facts and this file is where they are told apart.
+/// Every variant now answers, so adding one to the contract crate is a
+/// compile error here until its geometry is stated or its refusal is written
+/// down beside the three below.
 fn action_geometry(
     action: FractionalExposureActionV2,
 ) -> Result<(u16, u16), FractionalSelectedArtifactErrorV4> {
@@ -884,7 +895,28 @@ fn action_geometry(
             narrow_u16(FRACTIONAL_TERMINAL_ACCOUNT_COUNT_V3)?,
             narrow_u16(FRACTIONAL_TERMINAL_ROOT_V3)?,
         )),
-        _ => Err(FractionalSelectedArtifactErrorV4::InvalidInput),
+        // Refused, each for its own reason rather than by sharing a wildcard:
+        //
+        // - `Transfer` moves raw atoms of an already-minted shard Mint. It
+        //   locks no Claims coordinate and touches no reserve, so it has no
+        //   Claims frame to state a width for -- there is no route here to
+        //   give a geometry to, which is a different thing from a route whose
+        //   geometry is unknown.
+        // - `Terminalize` binds the root to a terminal Product coordinate.
+        //   It is a root-only administrative step with no Claims leg at all.
+        // - `ZeroSupplyRetire` runs after every shard supply and Claims
+        //   reserve is already zero, so by its own precondition there is
+        //   nothing left for a Claims route to reach.
+        //
+        // None of the three is an oversight, and a compaction is not a fourth
+        // entry here either: its wire carries a different magic at a different
+        // width with different offsets, so it needs its own request profile
+        // rather than an arm in this match (design §17.6).
+        FractionalExposureActionV2::Transfer
+        | FractionalExposureActionV2::Terminalize
+        | FractionalExposureActionV2::ZeroSupplyRetire => {
+            Err(FractionalSelectedArtifactErrorV4::InvalidInput)
+        }
     }
 }
 
@@ -1033,12 +1065,25 @@ mod tests {
 
     #[test]
     fn unsupported_action_frame_and_root_privilege_substitution_refuse() {
+        // ALL THREE non-executable actions, not just the first one. The match
+        // they land in is exhaustive now, so this is the list that keeps it
+        // honest: if a later edit gives one of them a geometry by accident --
+        // by folding it into a neighbouring arm, say -- the bundle it builds
+        // stops being a refusal and this reds. `Transfer` alone proved only
+        // that one arm existed.
         let empty = frame(FractionalExposureActionV2::Wrap);
-        let mut unsupported = input(FractionalExposureActionV2::Transfer, &empty);
-        assert_eq!(
-            build_fractional_selected_bundle_v4(unsupported),
-            Err(FractionalSelectedArtifactErrorV4::InvalidInput)
-        );
+        for refused in [
+            FractionalExposureActionV2::Transfer,
+            FractionalExposureActionV2::Terminalize,
+            FractionalExposureActionV2::ZeroSupplyRetire,
+        ] {
+            assert_eq!(
+                build_fractional_selected_bundle_v4(input(refused, &empty)),
+                Err(FractionalSelectedArtifactErrorV4::InvalidInput),
+                "{refused:?} has no Claims frame, and must say so"
+            );
+        }
+        let mut unsupported;
 
         let mut wrong_width = frame(FractionalExposureActionV2::Wrap);
         wrong_width.pop();

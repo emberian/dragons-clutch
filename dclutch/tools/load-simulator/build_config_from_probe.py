@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
-"""Build a load-simulator config from a HELD private-validator probe.
+"""Build a simulator config from a HELD private-validator probe.
 
 The probe is tools/release/private-validator-lifecycle/run.py run with
 ``--through participant --seeds 1 --hold-after-participant``.  At the hold it
 writes ``runs/seed-01/participant-handoff.json`` and SIGSTOPs itself, leaving
 the validator alive.  This adapter reads the handoff plus the founding and
-participant evidence and emits one dclutch-load-simulator-config-v1 JSON.
+participant evidence and emits one config JSON.
+
+Two shapes, and ``--simlife`` chooses the second:
+
+* ``dclutch-load-simulator-config-v1`` -- simulator.py, ONE market that already
+  exists, bound by hand from the probe's own evidence.
+* ``dclutch-simlife-config-v1`` -- simlife_drive.py's ``lifecycle`` substrate,
+  a whole POPULATION that founds its own markets.  It needs no bindings at all
+  (a market this run founds is bound from the founding's own evidence) and
+  instead needs the substrate's protocol identities: the campaign payer's
+  keypair, the two founding identities, and the key directory the Direct trade
+  and the resolution read their non-founding roles from.
+
+  Those were hand-typed into a config file before this mode existed, which is
+  how a substrate ends up described by a document nobody re-derives.
 
 It never reads key bytes; it only names paths the accepted drivers open
 themselves.  Missing facts refuse with the exact field named rather than
@@ -54,6 +68,163 @@ def find_first(body, predicate, path=""):
     return None
 
 
+
+SIMLIFE_SCHEMA_V1 = "dclutch-simlife-config-v1"
+
+# The two identities the founding campaign authenticates as a PARTITION, read
+# from the preparation stage's own report rather than typed. `run.py` refuses
+# unless the report carries exactly these two and they differ, so this reads a
+# document another gate has already checked.
+PREPARE_STAGE_DIRECTORY = "01-prepare-mutable"
+
+
+def campaign_public_identities(probe: Path) -> dict:
+    """`founding-founder` and `substituted-founder`, from the probe's own stage.
+
+    Neither is a keypair in the key directory -- the substituted founder has no
+    key at all, because the whole point of the partition is that it is an
+    identity the founding refunds to and never signs as -- so they cannot be
+    derived from the files on disk and have to come from the report.
+    """
+    stdout = probe / "runs" / "seed-01" / "stages" / PREPARE_STAGE_DIRECTORY / "stdout.bin"
+    if not stdout.is_file():
+        raise Refusal(f"the probe's preparation stage wrote no report: {stdout}")
+    try:
+        body = json.loads(stdout.read_bytes().decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise Refusal(f"the probe's preparation report is not JSON: {error}") from error
+    identities = body.get("campaign_public_identities")
+    if not isinstance(identities, dict):
+        raise Refusal("the preparation report carries no campaign_public_identities")
+    for role in ("founding-founder", "substituted-founder"):
+        if not identities.get(role):
+            raise Refusal(f"campaign_public_identities lacks {role!r}")
+    if identities["founding-founder"] == identities["substituted-founder"]:
+        raise Refusal("the two public founding identities alias, which the campaign refuses")
+    return identities
+
+
+def substrate_source_revision(args, probe: Path):
+    """The revision the programs ON THIS CHAIN were built from.
+
+    A HELD probe has no `SUMMARY.json` -- it is SIGSTOPed at the participant
+    boundary and writes that file only when it finishes -- so reading the
+    revision from there produced a capture labelled with no substrate at all,
+    which is the one thing a published artifact must never be. The checked
+    release's own gate names it, and that is the authority: those are the bytes
+    the validator loaded.
+    """
+    root = getattr(args, "release_root", None)
+    if root:
+        gate = Path(root) / "CHECKED_UPGRADE_GATE.json"
+        if not gate.is_file():
+            raise Refusal(f"checked release gate absent: {gate}")
+        revision = load(gate, "checked release gate").get("source_revision")
+        if not isinstance(revision, str) or len(revision) != 40:
+            raise Refusal("the checked release gate names no forty-character source revision")
+        return revision
+    summary = probe / "SUMMARY.json"
+    if summary.is_file():
+        try:
+            found = json.loads(summary.read_text()).get("source_revision")
+        except ValueError:
+            found = None
+        if isinstance(found, str) and len(found) == 40:
+            return found
+    raise Refusal(
+        "no source revision for this substrate: pass --release-root so the capture can say "
+        "which programs it was driven against. A held probe has no SUMMARY.json, and a capture "
+        "that names no substrate is the one thing a published artifact must not be"
+    )
+
+
+def write_simlife_config(args, probe: Path, boot: str, rpc_url: str, plan: str,
+                         key_directory: str) -> int:
+    """One `dclutch-simlife-config-v1` for the lifecycle substrate.
+
+    NO BINDINGS, and that is the point of the substrate rather than an omission:
+    a market this run founds is bound from the FOUNDING's own evidence, so the
+    census observes exactly the accounts the chain gave it rather than anything
+    a config typed by hand.
+    """
+    if not args.seed:
+        raise Refusal(
+            "--seed is required for --simlife: a world is named by the sentence it was "
+            "drawn from, and an unnamed run cannot be re-run by typing its name"
+        )
+    keys = Path(key_directory)
+    payer_keypair = keys / "campaign-payer.json"
+    if not payer_keypair.is_file():
+        raise Refusal(f"the probe's key directory has no campaign-payer.json: {keys}")
+    # Named rather than swept: the lifecycle substrate reads exactly these from
+    # the substrate key directory, and each was established by a driver refusing
+    # and SAYING which identity it authenticated instead.
+    for required in ("core-upgrade-authority.json", "founding-founder.json"):
+        if not (keys / required).is_file():
+            raise Refusal(f"the probe's key directory has no {required}, which a Direct trade reads")
+    identities = campaign_public_identities(probe)
+    revision = substrate_source_revision(args, probe)
+    config = {
+        "schema": SIMLIFE_SCHEMA_V1,
+        "cluster": {"label": "local", "rpc_url": rpc_url},
+        "bootstrap_bin": boot,
+        "work_dir": args.sim_work,
+        "substrate": "lifecycle",
+        "substrate_label": args.substrate_label or (
+            "a fresh loopback validator carrying the seven-role successor release set, "
+            f"held at the participant boundary by {probe}"
+        ),
+        "cadence": {
+            "period_seconds": args.period_seconds,
+            "jitter_fraction": args.jitter_fraction,
+        },
+        "world": {
+            "seed": args.seed,
+            "markets": args.markets,
+            "ticks": args.ticks,
+            "archetype_mix": args.archetype_mix,
+            "slots_per_tick": args.slots_per_tick,
+        },
+        "lifecycle": {
+            "plan": plan,
+            "campaign_payer_keypair": str(payer_keypair),
+            "founding_founder": identities["founding-founder"],
+            "substituted_founder": identities["substituted-founder"],
+            "substrate_keys": key_directory,
+            "driver_timeout_seconds": args.driver_timeout_seconds,
+        },
+        "bindings": {},
+    }
+    config["source_revision"] = revision
+    if args.solana_keygen:
+        if not Path(args.solana_keygen).is_file():
+            raise Refusal(f"solana-keygen absent: {args.solana_keygen}")
+        config["lifecycle"]["solana_keygen"] = args.solana_keygen
+    if args.pyth_facts:
+        # A fact about the CHAIN rather than about a market: one provisioning
+        # serves every market on this validator, so it is named once here rather
+        # than per market. Required to EXIST, because a resolution driver handed
+        # a path to nothing refuses several minutes into a run.
+        if not Path(args.pyth_facts).is_file():
+            raise Refusal(f"pyth facts document absent: {args.pyth_facts}")
+        config["lifecycle"]["pyth_facts"] = args.pyth_facts
+    if args.max_lamports_spent is not None:
+        if args.max_lamports_spent <= 0:
+            raise Refusal("--max-lamports-spent must be positive; omit it for an unbounded run")
+        config["budget"] = {"max_lamports_spent": args.max_lamports_spent}
+    out = Path(args.output)
+    out.write_text(json.dumps(config, sort_keys=True, indent=2) + "\n")
+    print(f"config written: {out}")
+    print(f"rpc: {rpc_url}")
+    print(f"world: {args.seed!r}, {args.markets} markets over {args.ticks} ticks "
+          f"({args.archetype_mix})")
+    print("budget: " + (f"{args.max_lamports_spent} lamports"
+                        if args.max_lamports_spent is not None
+                        else "UNBOUNDED -- nothing will stop this run for spending"))
+    return 0
+
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--probe-work", required=True, help="the probe --work dir")
@@ -65,6 +236,31 @@ def main(argv=None) -> int:
     parser.add_argument("--no-census", action="store_true",
                         help="omit the census block (NOT for real runs; the "
                              "reconciliation loop is part of the deliverable)")
+    parser.add_argument("--simlife", action="store_true",
+                        help="emit a dclutch-simlife-config-v1 for the lifecycle "
+                             "substrate instead of a one-market simulator config")
+    parser.add_argument("--seed", help="the world's seed preimage (--simlife)")
+    parser.add_argument("--markets", type=int, default=12)
+    parser.add_argument("--ticks", type=int, default=48)
+    parser.add_argument("--slots-per-tick", type=int, default=900)
+    parser.add_argument("--archetype-mix", default="design-space",
+                        choices=("design-space", "foundable-today"))
+    parser.add_argument("--jitter-fraction", type=float, default=0.25)
+    parser.add_argument("--driver-timeout-seconds", type=float, default=1800.0)
+    parser.add_argument("--max-lamports-spent", type=int, default=None,
+                        help="the run dies when its fee payers have spent this much; "
+                             "omit for a run nothing will stop for spending")
+    parser.add_argument("--solana-keygen",
+                        help="solana-keygen, which the lifecycle substrate uses to make "
+                             "one disposable key per founding role and participant wallet")
+    parser.add_argument("--substrate-label")
+    parser.add_argument("--release-root",
+                        help="the checked release the substrate's programs were built from; its "
+                             "gate names the source revision this run was driven against")
+    parser.add_argument("--pyth-facts",
+                        help="a dclutch-flagship-pyth-update-facts-v1 document; without one "
+                             "every resolution refuses, because the producer will not invent "
+                             "the Pyth update account it reads")
     args = parser.parse_args(argv)
 
     probe = Path(args.probe_work)
@@ -79,6 +275,18 @@ def main(argv=None) -> int:
     founding_evidence = need(handoff, "foundingEvidence", "handoff")
     participant_evidence = need(handoff, "participantEvidence", "handoff")
     key_directory = need(handoff, "keyDirectory", "handoff")
+
+    if args.simlife:
+        # BEFORE the one-market evidence is read, and deliberately: a lifecycle
+        # world founds its OWN markets, so the probe's founding and participant
+        # documents describe a market it will never bind. Requiring them here
+        # would refuse a config for a substrate that does not need them.
+        boot = args.bootstrap_bin or str(
+            probe / "host-target" / "release" / "dclutch-local-successor-bootstrap"
+        )
+        if not Path(boot).is_file():
+            raise Refusal(f"bootstrap binary absent: {boot}")
+        return write_simlife_config(args, probe, boot, rpc_url, plan, key_directory)
 
     founding = load(Path(founding_evidence), "founding evidence")
     targets = need(founding, "founding_targets", "founding evidence")

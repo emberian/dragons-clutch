@@ -27,8 +27,8 @@ describe('the pulse surface, with nothing published', () => {
   });
 
   it('explains what the robot is in plain terms', () => {
-    expect(html).toContain('It sends the same transactions you would send');
-    expect(html).toContain('it stops loudly and this page shows the stop');
+    expect(html).toContain('runs against the protocol on a loop');
+    expect(html).toContain('If a check fails, it stops.');
   });
 
   it('keeps the ledger-check spot honest instead of green', () => {

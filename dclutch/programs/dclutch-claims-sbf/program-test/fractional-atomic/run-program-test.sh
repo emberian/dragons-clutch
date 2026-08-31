@@ -19,6 +19,12 @@ cargo build-sbf --manifest-path programs/dclutch-custody-sbf/Cargo.toml --sbf-ou
 cargo build-sbf \
   --manifest-path programs/dclutch-claims-sbf/test-programs/fractional-atomic-caller/Cargo.toml \
   --sbf-out-dir "$sbf_out"
+# The escrow-signer: the only thing in this tree that can produce a claim-check
+# escrow's signature, because `invoke_signed` signs for the calling program's own
+# addresses and no Claims route derives one yet.
+cargo build-sbf \
+  --manifest-path programs/dclutch-claims-sbf/test-programs/claim-check-escrow-signer/Cargo.toml \
+  --sbf-out-dir "$sbf_out"
 
 # Token-2022 is the audited v11 fixture. The campaign's Token behaviour is only
 # evidence if this is that exact artifact, so the digest is checked against the
@@ -52,4 +58,21 @@ cp "$token_2022_so" "$sbf_out/spl_token_2022.so"
 SBF_OUT_DIR="$sbf_out" cargo test \
   --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
   --test fractional_atomic \
+  -- --nocapture
+
+# The permissioned-burn wall. It loads only Token-2022, so it is cheap, and it
+# is what stops the fractional claim-check's redemption route from being
+# designed around a burn no shard holder can ever perform.
+SBF_OUT_DIR="$sbf_out" cargo test \
+  --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
+  --test permissioned_burn_wall \
+  -- --nocapture
+
+# The hand-off with a DERIVED escrow, over a Mint carrying the whole shard
+# profile, with Token2022BehaviorProfileV2 run against the bytes Token-2022
+# itself wrote before and after the SetAuthority. Closes the two gaps the wall
+# named in its own evidence.
+SBF_OUT_DIR="$sbf_out" cargo test \
+  --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
+  --test escrow_pda_handover \
   -- --nocapture

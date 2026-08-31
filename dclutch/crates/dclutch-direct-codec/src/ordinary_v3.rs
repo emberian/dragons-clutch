@@ -391,9 +391,9 @@ mod tests {
                     nonce: 4,
                     valid_from: 10,
                     valid_through: 30,
-                    maximum_fill: 25,
+                    maximum_fill: 50,
                     limit_price: 40,
-                    fee_basis_points: 1_000,
+                    fee_basis_points: 500,
                     collateral_account: id(20),
                 },
             },
@@ -408,13 +408,16 @@ mod tests {
                     nonce: 9,
                     valid_from: 5,
                     valid_through: 40,
-                    maximum_fill: 30,
+                    maximum_fill: 50,
                     limit_price: 60,
-                    fee_basis_points: 1_000,
+                    fee_basis_points: 500,
                     collateral_account: id(21),
                 },
             },
-            fill: 20,
+            // Forty, not twenty: five percent of a gross of ten floors to
+            // nothing per side, and a fee-bearing fixture with no fee tests
+            // the zero-fee route twice.
+            fill: 40,
             execution_price: 50,
         }
     }
@@ -519,19 +522,19 @@ mod tests {
     }
 
     #[test]
-    fn exact_program_admits_price_improved_ioc_and_conserves_two_fee_routes() {
-        let config = DirectExecutionConfigV1::new(100, 1_000, id(60)).expect("config");
+    fn exact_program_admits_price_improved_ioc_and_routes_the_seller_leg_alone() {
+        let config = DirectExecutionConfigV1::new(100, 500, id(60)).expect("config");
         let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
             + 4 * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
         let mut output = std::vec![99_u64; scalar_width];
         execute(request(), context(config), &mut output).expect("ordinary transition");
-        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_712);
+        assert_eq!(DIRECT_ORDINARY_TRANSITION_BYTES_V3, 1_784);
         assert_eq!(output[SCALAR_SELLER_NONCE_AFTER_V3], 5);
         assert_eq!(output[SCALAR_BUYER_NONCE_AFTER_V3], 10);
-        assert_eq!(output[SCALAR_GROSS_V3], 10);
+        assert_eq!(output[SCALAR_GROSS_V3], 20);
         assert_eq!(output[SCALAR_FEE_V3], 1);
-        assert_eq!(output[SCALAR_SELLER_NET_V3], 9);
-        assert_eq!(output[SCALAR_BUYER_DEBIT_V3], 11);
+        assert_eq!(output[SCALAR_SELLER_NET_V3], 19);
+        assert_eq!(output[SCALAR_BUYER_DEBIT_V3], 21);
         assert_eq!(output[SCALAR_COMBINED_FEE_V3], 2);
         assert_eq!(
             output[SCALAR_SELLER_NET_V3] + output[SCALAR_COMBINED_FEE_V3],
@@ -541,7 +544,15 @@ mod tests {
         assert_eq!(output[SCALAR_SELLER_TERMINAL_ROUTE_ENABLED_V3], 0);
         assert_eq!(output[SCALAR_SELLER_INTERMEDIATE_ROUTE_ENABLED_V3], 1);
         assert_eq!(output[SCALAR_FEE_NONZERO_V3], 1);
+        // The two retirements, read off an ADMITTED fee-bearing frame rather
+        // than argued: the fee leg settles in a second transaction, and slot 3
+        // is unreachable under the band.
+        assert_eq!(output[SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3], 0);
         assert_eq!(output[SCALAR_FEE_SOLE_ROUTE_ENABLED_V3], 0);
+        assert_eq!(
+            output[SCALAR_MAX_FEE_BPS_V3],
+            u64::from(crate::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1)
+        );
         assert_eq!(
             output[SCALAR_MAKER_MAGIC_V3],
             crate::successor::DirectMakerReplayLayoutV1::MAGIC_WORD
@@ -550,9 +561,10 @@ mod tests {
             output[SCALAR_MAKER_VERSION_V3],
             u64::from(crate::successor::DirectMakerReplayLayoutV1::ABI_VERSION)
         );
+        // One Custody CPI, not two: the replay advances once in tx1.
         assert_eq!(output[SCALAR_CUSTODY_AFTER_SELLER_V3], 15);
-        assert_eq!(output[SCALAR_CUSTODY_AFTER_FEE_V3], 16);
-        assert_eq!(output[SCALAR_CLAIM_TRANSFER_V3], 20);
+        assert_eq!(output[SCALAR_CUSTODY_AFTER_FEE_V3], 15);
+        assert_eq!(output[SCALAR_CLAIM_TRANSFER_V3], 40);
         for item in 0..4 {
             let base = DIRECT_ORDINARY_COMMON_SCALARS_V3
                 + item * usize::from(DIRECT_ORDINARY_ITEM_SCALAR_STRIDE_V3);
@@ -562,14 +574,14 @@ mod tests {
             );
             assert_eq!(
                 output[base + usize::from(ITEM_SCALAR_CLAIM_QUANTITY_V3)],
-                if item == 2 { 20 } else { 0 }
+                if item == 2 { 40 } else { 0 }
             );
         }
     }
 
     #[test]
     fn only_the_canonical_zero_system_program_identity_is_admitted_atomically() {
-        let config = DirectExecutionConfigV1::new(100, 1_000, id(60)).expect("config");
+        let config = DirectExecutionConfigV1::new(100, 500, id(60)).expect("config");
         let mut canonical = context(config);
         canonical.system_program = [0; 32];
         let scalar_width = DIRECT_ORDINARY_COMMON_SCALARS_V3
@@ -614,7 +626,7 @@ mod tests {
 
     #[test]
     fn signer_config_fee_and_late_exact_quote_substitutions_refuse_atomically() {
-        let config = DirectExecutionConfigV1::new(100, 1_000, id(60)).expect("config");
+        let config = DirectExecutionConfigV1::new(100, 500, id(60)).expect("config");
         let mut wrong_signer = context(config);
         wrong_signer.seller_native_signer = id(90);
         let mut wrong_fee = request();
@@ -681,7 +693,7 @@ mod tests {
 
     #[test]
     fn transition_effects_equal_the_successor_semantic_owner() {
-        let config = DirectExecutionConfigV1::new(100, 1_000, id(60)).expect("config");
+        let config = DirectExecutionConfigV1::new(100, 500, id(60)).expect("config");
         let mut request = request();
         request.seller.intent.nonce = 0;
         request.buyer.intent.nonce = 0;

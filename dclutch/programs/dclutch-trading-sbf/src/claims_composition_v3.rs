@@ -18,6 +18,10 @@ use dclutch_claims_svm::{
         CLAIMS_FOUNDING_POST_RESOURCE_DIGEST_DOMAIN_V5, CLAIMS_FOUNDING_REQUEST_MAGIC_V5,
         ClaimsFoundingReceiptV5, ClaimsFoundingRequestV5,
     },
+    fractional_claim_check_compaction_request_v1::FractionalCompactToClaimCheckRequestV1,
+    fractional_claim_check_v1::{
+        FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1, FractionalCompactionRoleV1,
+    },
     protocol_position_v2::{
         PROTOCOL_POSITION_REQUEST_MAGIC_V2, ProtocolPositionActionV2, ProtocolPositionAdmissionV2,
         ProtocolPositionCloseReceiptV2, ProtocolPositionRequestV2,
@@ -62,6 +66,7 @@ use solana_program::{
 
 use crate::{
     TradingSbfError,
+    child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4},
     child_receipt_v3::{
         ReceiptDeliveryV3, deliver_receipt_dependency_v3, receipt_dependency_width_v3,
     },
@@ -128,6 +133,11 @@ pub(crate) fn execute_claims_route_v3<'info>(
     buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
     sparse_post_resource_verification: SparsePostResourceVerificationV3,
+    // The caller's mined bump for this route's Trading caller authority. The
+    // Claims route is the one child route with no preflight derivation to
+    // reuse, so without a hint this is where the search happens. `None` keeps
+    // it; `Some` reproduces and refuses at the coordinate-0 equality below.
+    hint: PreflightedCallerBumpV4,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if effect
         .account_count(tail_count)
@@ -158,8 +168,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
         return Err(TradingSbfError::Content.into());
     }
     let (authority_seeds, receipt_kind) = route_authority(request, invocation.kind)?;
-    let (expected_authority, bump) =
-        Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+    let (expected_authority, bump) = child_caller_authority_v4(&authority_seeds, program_id, hint)?;
     if buffers
         .accounts
         .first()
@@ -273,6 +282,28 @@ pub(crate) fn execute_claims_route_v3<'info>(
                 .key
                 .to_bytes(),
         ),
+        // Stated rather than left to the fallthrough below. The receipt
+        // verifier refuses this kind today, so the evidence is unread either
+        // way -- which is exactly why writing it now is worth the four lines:
+        // when the receipt lands it will be checked against the root, and a
+        // `None` inherited from a wildcard would have made that check compare
+        // against nothing while still looking verified.
+        //
+        // The index is the frame declaration's, not a second constant. The
+        // three arms above each name their family's own root coordinate; this
+        // one asks the enum that owns the compaction frame where its root sits.
+        ReceiptKindV3::FractionalClaimCheckCompaction => PostResourceEvidenceV3::FractionalRoot(
+            buffers
+                .accounts
+                .get(
+                    FractionalCompactionRoleV1::FractionalCapabilityRoot
+                        .index()
+                        .ok_or(TradingSbfError::Content)?,
+                )
+                .ok_or(TradingSbfError::Content)?
+                .key
+                .to_bytes(),
+        ),
         _ => PostResourceEvidenceV3::None,
     };
     verify_route_receipt(
@@ -349,6 +380,7 @@ enum ReceiptKindV3 {
     FractionalAtomic,
     FractionalTerminalAtomic,
     FractionalRetirementCoordinate,
+    FractionalClaimCheckCompaction,
     Close,
 }
 
@@ -382,7 +414,13 @@ impl ReceiptKindV3 {
             | Self::RationalRepresentation
             | Self::FractionalAtomic
             | Self::FractionalTerminalAtomic
-            | Self::FractionalRetirementCoordinate => ReceiptDeliveryV3::VerifiedOnly,
+            | Self::FractionalRetirementCoordinate
+            // Same answer as its two Fractional siblings, and for the reason
+            // stated above rather than by proximity: the Claims compaction
+            // handler will hash its whole instruction data into the packet
+            // digest its caller authority is derived from, so a suffix does not
+            // merely go unread -- it changes the digest and the child refuses.
+            | Self::FractionalClaimCheckCompaction => ReceiptDeliveryV3::VerifiedOnly,
         }
     }
 }
@@ -654,9 +692,53 @@ fn route_authority(
         )
         .map_err(|_| TradingSbfError::Content)?;
         Ok((seeds, ReceiptKindV3::FractionalRetirementCoordinate))
+    } else if request.get(..8) == Some(FRACTIONAL_CLAIM_CHECK_COMPACT_MAGIC_V1.as_slice()) {
+        fractional_compaction_authority(request, kind, packet_digest)
     } else {
         Err(TradingSbfError::Content.into())
     }
+}
+
+/// The compaction arm, kept out of `route_authority`'s own frame.
+///
+/// `#[inline(never)]` is load-bearing here, and it was added after measuring
+/// rather than on principle. A fractional compaction request is 744 bytes and
+/// decodes into a struct embedding the whole `TerminalSettlementRequestV3`, so
+/// inlining this arm put that struct on the frame every OTHER Claims route also
+/// pays for: `route_authority` measured **3,072 bytes before this arm and 3,712
+/// after**, dropping its spare from 1,024 to 384 in a single edit, on a link
+/// whose deepest function already sits at 4,032 of 4,096.
+///
+/// Split out, `route_authority` returns to its old frame and the decode pays for
+/// its own. Same discipline as `claim_check_compaction_v1::authenticate_compaction`
+/// and `hot_v3::decode_claims_composition_boxed_v3`; worth restating because the
+/// cost is invisible without `tools/sbf-frame-sizes.py` -- the plain build
+/// reports zero diagnostics at 3,712 exactly as it does at 3,072.
+#[inline(never)]
+fn fractional_compaction_authority(
+    request: &[u8],
+    kind: RouteKindV3,
+    packet_digest: [u8; 32],
+) -> Result<(CallerAuthoritySeedsV1, ReceiptKindV3), ProgramError> {
+    if kind != RouteKindV3::Once {
+        return Err(TradingSbfError::Content.into());
+    }
+    let request = FractionalCompactToClaimCheckRequestV1::decode(request)
+        .map_err(|_| TradingSbfError::Content)?;
+    let input = request.input();
+    // The fourth seed is `terms`, as it is for both the other Fractional
+    // families -- and here it is the terms the compaction request carries
+    // rather than a settlement field, because the terminal header has no terms
+    // and the denominator's author is what this route is bound to.
+    let seeds = CallerAuthoritySeedsV1::new(
+        ContentId::new(input.release_set).map_err(|_| TradingSbfError::Content)?,
+        input.market,
+        ExecutionRoleV1::Trading,
+        request.coordinates().terms,
+        packet_digest,
+    )
+    .map_err(|_| TradingSbfError::Content)?;
+    Ok((seeds, ReceiptKindV3::FractionalClaimCheckCompaction))
 }
 
 fn verify_route_receipt(
@@ -746,6 +828,23 @@ fn verify_route_receipt(
                 },
             )
         }
+        // NO RECEIPT TYPE EXISTS YET, SO THIS REFUSES. It is the only arm here
+        // that does, and the refusal is the correct behaviour rather than a
+        // stub: a receipt verifier's whole job is to prove the child did what
+        // the request asked, and there is nothing yet to prove it against. The
+        // alternatives are both worse. Admitting the route with no verification
+        // would make "verified" mean "unchecked" for one kind, which is exactly
+        // the shape a reader cannot see. Inventing a receipt now would fix a
+        // field set to what a route that does not exist is guessed to produce
+        // -- FRACCHECK-2 declined to write it for that reason, and being the
+        // lane that writes the route does not make the guess safer, only more
+        // convincing.
+        //
+        // So route selection is real from here up (the composer admits the
+        // request, the caller authority derives, the frame width is bound) and
+        // the transaction stops at exactly one named place until the Claims
+        // route and its receipt land together.
+        ReceiptKindV3::FractionalClaimCheckCompaction => Err(TradingSbfError::Transition.into()),
         ReceiptKindV3::Close => {
             verify_close_receipt(request, receipt, request_digest, claims_program)
         }
@@ -829,6 +928,72 @@ struct FractionalRootSignerV3 {
     bump: u8,
 }
 
+/// What one Fractional kind expects of the capability root in its own frame.
+///
+/// The four kinds agree about every root fact but one, so the facts they share
+/// are checked once below and only the differences are carried here. The
+/// difference that matters is [`Self::writable`]: it is stated by the arm that
+/// decodes the request, so a kind cannot end up with one arm's revision and
+/// another arm's privileges.
+#[derive(Clone, Copy)]
+struct FractionalRootExpectationV3 {
+    release_set: [u8; 32],
+    market: [u8; 32],
+    terms: [u8; 32],
+    revision: u64,
+    index: usize,
+    /// Whether the frame declares the root writable, and the frame decides.
+    ///
+    /// The three exposure and retirement kinds require a **writable** root
+    /// because their effect program writes the root's revision commit-last: a
+    /// read-only root there is a route that cannot finish its own job. A
+    /// fractional compaction revises nothing about the root -- it spends the
+    /// root's signature on one `SetAuthority` and leaves the record untouched --
+    /// so its frame declares `(signer, not writable)` and this arm requires
+    /// exactly that. Design §17.8 ruling 1; witness w3 pins the inversion so it
+    /// cannot be quietly "fixed" back toward its three neighbours.
+    writable: bool,
+}
+
+/// Root coordinates of a fractional compaction, decoded off its own frame.
+///
+/// **`#[inline(never)]` is load-bearing, not tidiness.** The compaction request
+/// is 744 bytes and decodes into a struct embedding the whole
+/// `TerminalSettlementRequestV3`. Inlined here it would join
+/// [`fractional_root_signer`]'s frame, which every Fractional route in this link
+/// pays for, on a link whose deepest function sits 64 bytes from the 4,096
+/// bound -- and `cargo build-sbf` reports a frame under the bound exactly as it
+/// reports one far below it, so the growth would be invisible to the gate CI
+/// runs. FRACCHECK-3 watched this happen prospectively on `route_authority`
+/// (3,072 -> 3,712 for the same 744 bytes); measure with
+/// `tools/sbf-frame-sizes.py`, never trust a zero-diagnostic build.
+#[inline(never)]
+fn fractional_compaction_root_expectation(
+    request: &[u8],
+) -> Result<FractionalRootExpectationV3, ProgramError> {
+    let request = FractionalCompactToClaimCheckRequestV1::decode(request)
+        .map_err(|_| TradingSbfError::Content)?;
+    let input = request.input();
+    let coordinates = request.coordinates();
+    Ok(FractionalRootExpectationV3 {
+        release_set: input.release_set,
+        market: input.market,
+        // The Fractional exposure terms, off the coordinates this wire adds --
+        // NOT anything in the terminal header, which carries an exposure id and
+        // digest but no terms. This is the same account the exposure arms pin,
+        // and it is the denominator's sole author.
+        terms: coordinates.terms,
+        // The field's only purpose, and the reason it is on the wire at all.
+        revision: coordinates.expected_root_revision,
+        // The frame declaration is the one author of where the root sits; this
+        // asks it rather than writing a second constant down.
+        index: FractionalCompactionRoleV1::FractionalCapabilityRoot
+            .index()
+            .ok_or(TradingSbfError::Content)?,
+        writable: false,
+    })
+}
+
 fn fractional_root_signer(
     program_id: &Pubkey,
     kind: ReceiptKindV3,
@@ -841,40 +1006,63 @@ fn fractional_root_signer(
         ReceiptKindV3::FractionalAtomic
             | ReceiptKindV3::FractionalTerminalAtomic
             | ReceiptKindV3::FractionalRetirementCoordinate
+            | ReceiptKindV3::FractionalClaimCheckCompaction
     ) {
         return Ok(None);
     }
-    let (release_set, market, terms, expected_revision, root_index) = match kind {
+    let expectation = match kind {
         ReceiptKindV3::FractionalAtomic | ReceiptKindV3::FractionalTerminalAtomic => {
             let request = FractionalExposureRequestV2::decode(request)
                 .map_err(|_| TradingSbfError::Content)?;
             let input = request.input();
-            (
-                input.release_set,
-                input.market,
-                input.terms,
-                input.expected_revision,
-                if kind == ReceiptKindV3::FractionalAtomic {
+            FractionalRootExpectationV3 {
+                release_set: input.release_set,
+                market: input.market,
+                terms: input.terms,
+                revision: input.expected_revision,
+                index: if kind == ReceiptKindV3::FractionalAtomic {
                     FRACTIONAL_ATOMIC_ROOT_V3
                 } else {
                     FRACTIONAL_TERMINAL_ROOT_V3
                 },
-            )
+                writable: true,
+            }
         }
         ReceiptKindV3::FractionalRetirementCoordinate => {
             let request = FractionalRetirementRequestV3::decode(request)
                 .map_err(|_| TradingSbfError::Content)?;
             let input = request.input();
-            (
-                input.release_set,
-                input.market,
-                input.terms,
-                input.expected_revision,
-                FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3,
-            )
+            FractionalRootExpectationV3 {
+                release_set: input.release_set,
+                market: input.market,
+                terms: input.terms,
+                revision: input.expected_revision,
+                index: FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3,
+                writable: true,
+            }
+        }
+        // Design §17.8 ruling 1. The root's signature is load-bearing on this
+        // route exactly once, and its once is the hand-off: `SetAuthority`
+        // (`PermissionedBurn`), root -> escrow, which Token-2022 refuses without
+        // the CURRENT authority's signature and which nothing but a Trading
+        // `invoke_signed` can produce -- and nothing can produce after the
+        // market retires. That is why §17.4 made this route Trading-composed at
+        // all. After the hand-off the root signs nothing ever again; redemption
+        // is holder plus escrow. The decode is split out because of its frame,
+        // not its length; see the helper.
+        ReceiptKindV3::FractionalClaimCheckCompaction => {
+            fractional_compaction_root_expectation(request)?
         }
         _ => return Err(TradingSbfError::Content.into()),
     };
+    let FractionalRootExpectationV3 {
+        release_set,
+        market,
+        terms,
+        revision: expected_revision,
+        index: root_index,
+        writable: root_writable,
+    } = expectation;
     let root_account = accounts.get(root_index).ok_or(TradingSbfError::Content)?;
     let root_data = root_account
         .try_borrow_data()
@@ -888,7 +1076,11 @@ fn fractional_root_signer(
     if root_account.key != &expected
         || root_account.owner != program_id
         || root_account.is_signer
-        || !root_account.is_writable
+        // The ONE predicate that differs by kind, and it is an equality against
+        // what the kind's own frame declares rather than a `!` every kind must
+        // share. A compaction whose root arrived writable is refused here, on
+        // the same line that refuses an exposure whose root arrived read-only.
+        || root_account.is_writable != root_writable
         || root_account.executable
         || header.release_set().to_bytes() != release_set
         || header.market() != market
@@ -901,7 +1093,11 @@ fn fractional_root_signer(
         return Err(TradingSbfError::Content.into());
     }
     let meta = metas.get_mut(root_index).ok_or(TradingSbfError::Content)?;
-    if meta.pubkey != expected || !meta.is_writable {
+    // And the meta the child CPI will carry has to agree with the account the
+    // parent authenticated, writability included -- otherwise a compaction
+    // could authenticate a read-only root and then hand the child a writable
+    // one, which is the whole point of checking the meta separately at all.
+    if meta.pubkey != expected || meta.is_writable != root_writable {
         return Err(TradingSbfError::Content.into());
     }
     meta.is_signer = true;
@@ -1270,6 +1466,33 @@ mod tests {
         request: FractionalExposureRequestV2,
         trading: Pubkey,
     ) -> (AccountInfo<'static>, u8) {
+        let input = request.input();
+        // The exposure and retirement frames declare a WRITABLE root, because
+        // their effect program commits the revision last.
+        fractional_root_info_at(
+            trading,
+            input.release_set,
+            input.market,
+            input.terms,
+            input.expected_revision,
+            true,
+        )
+    }
+
+    /// One capability root, built at exactly the facts a caller states.
+    ///
+    /// Split out of `fractional_root_info` so the compaction witnesses can name
+    /// a revision and a writability of their own without a second copy of the
+    /// root's byte layout -- the layout has one author here, and the two callers
+    /// differ only in what they ask of it.
+    fn fractional_root_info_at(
+        trading: Pubkey,
+        release_set: [u8; 32],
+        market: [u8; 32],
+        terms: [u8; 32],
+        revision: u64,
+        writable: bool,
+    ) -> (AccountInfo<'static>, u8) {
         use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
         use dclutch_fractional_claim_contract::{
             FRACTIONAL_CAPABILITY_ROOT_BYTES_V4, FRACTIONAL_CAPABILITY_ROOT_STATE_OFFSET_V4,
@@ -1277,18 +1500,17 @@ mod tests {
         };
         use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
 
-        let input = request.input();
         let selection = CapabilityExecutionSelectionV1::new(
             0,
             ContentId::new(id(51)).expect("manifest"),
             ContentId::new(id(52)).expect("kind"),
             ContentId::new(id(53)).expect("capability release"),
-            ContentId::new(input.terms).expect("terms config"),
+            ContentId::new(terms).expect("terms config"),
         )
         .expect("selection");
         let header = CapabilityRootHeaderV1::new(
-            ContentId::new(input.release_set).expect("release set"),
-            input.market,
+            ContentId::new(release_set).expect("release set"),
+            market,
             1,
             selection,
             SelectedRecordBumpsV1::default(),
@@ -1297,10 +1519,10 @@ mod tests {
         let (root_key, bump) = Pubkey::find_program_address(&header.seeds().as_slices(), &trading);
         let state = FractionalRootV1::new(FractionalRootInputV1 {
             bump,
-            terms: input.terms,
-            market: input.market,
+            terms,
+            market,
             rent_beneficiary: id(50),
-            revision: input.expected_revision,
+            revision,
             historical_rent_principal: 1,
         })
         .expect("root state");
@@ -1315,7 +1537,7 @@ mod tests {
             AccountInfo::new(
                 root_key,
                 false,
-                true,
+                writable,
                 root_lamports,
                 root_data,
                 root_owner,
@@ -2151,6 +2373,243 @@ mod tests {
         assert!(metas[FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3].is_signer);
         metas[FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3].pubkey = Pubkey::new_unique();
         assert!(fractional_root_signer(&trading, kind, &request, &accounts, &mut metas).is_err());
+    }
+
+    fn fractional_compaction_bytes(root: [u8; 32]) -> Vec<u8> {
+        use dclutch_claims_svm::terminal_settlement_v3::{
+            TerminalSettlementRequestInputV3, TerminalSettlementRequestV3,
+        };
+        let settlement = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
+            caller_role: CallerRole::Claims,
+            release_set: id(1),
+            market: id(2),
+            realm: id(3),
+            parent_context: id(4),
+            product_record_digest: id(5),
+            exposure_id: id(6),
+            exposure_digest: id(7),
+            terminal_record_digest: id(8),
+            // The reserve Position's owner IS the capability root; the request
+            // reads it from here rather than carrying a second field.
+            owner: root,
+            position: id(10),
+            recipient_owner: id(40),
+            recipient_token_account: id(41),
+            claims_program: id(20),
+            custody_program: id(13),
+            collateral_mint: id(14),
+            token_program: id(15),
+            semantic_basis_id: id(16),
+            linked_basis_record_digest: id(17),
+            generation: 9,
+            expected_market_revision: 3,
+            expected_position_revision: 4,
+            expected_custody_revision: 5,
+            quantity: 700,
+            claim_index: 1,
+            transfer_index: 0,
+        })
+        .expect("settlement");
+        FractionalCompactToClaimCheckRequestV1::new(
+            dclutch_claims_svm::fractional_claim_check_compaction_request_v1::FractionalCompactionCoordinatesV1 {
+                terms: id(32),
+                token_behavior: id(33),
+                expected_root_revision: 11,
+                representation_coordinate: 6,
+                payout_per_claim: 4_000,
+            },
+            settlement,
+        )
+        .expect("fractional compaction request")
+        .to_bytes()
+        .expect("fractional compaction bytes")
+        .to_vec()
+    }
+
+    #[test]
+    fn fractional_compaction_selects_a_route_and_stops_at_its_missing_receipt() {
+        // The layer FRACCHECK-2 found absent, from the execution side. Route
+        // selection is what was missing -- a magic that reached
+        // `route_authority` at all -- and this asserts it now resolves to its
+        // own receipt kind with its own authority context.
+        let trading = Pubkey::new_from_array(id(21));
+        let seed_request =
+            FractionalExposureRequestV2::decode(&fractional_bytes()).expect("seed request");
+        let (root_info, _bump) = fractional_root_info(seed_request, trading);
+        let request = fractional_compaction_bytes(root_info.key.to_bytes());
+        let decoded =
+            FractionalCompactToClaimCheckRequestV1::decode(&request).expect("compaction request");
+        let digest = hash(&request).to_bytes();
+
+        let (seeds, kind) = route_authority(&request, RouteKindV3::Once).expect("authority");
+        assert_eq!(kind, ReceiptKindV3::FractionalClaimCheckCompaction);
+        // The fourth seed is `terms`, as it is for both Fractional siblings --
+        // and it comes from the compaction coordinates, because the terminal
+        // header this request embeds carries no terms at all.
+        assert_eq!(seeds.context(), decoded.coordinates().terms);
+        assert_ne!(seeds.context(), decoded.input().parent_context);
+        assert_eq!(seeds.role_request_digest(), digest);
+        // One route kind, like every other Claims once-route.
+        assert!(route_authority(&request, RouteKindV3::AffineOnce).is_err());
+
+        // AND THE HONEST HALF. There is no receipt type yet, so the verifier
+        // refuses rather than admitting an unchecked route. This test exists to
+        // make that refusal a stated property: if a later lane adds a receipt
+        // and forgets this arm, the assertion below fails and says so.
+        assert!(
+            verify_route_receipt(
+                kind,
+                &request,
+                &[],
+                id(20),
+                trading.to_bytes(),
+                PostResourceEvidenceV3::FractionalRoot(root_info.key.to_bytes()),
+            )
+            .is_err(),
+            "a route with no receipt type must refuse, never verify vacuously"
+        );
+
+        // The delivery answer is the Fractional siblings', not the suffix
+        // families': a suffix would change the packet digest the child derives
+        // its caller authority from, so it is refused rather than ignored.
+        assert_eq!(kind.delivery(), ReceiptDeliveryV3::VerifiedOnly);
+        assert!(!carries_caller_bump_suffix_v4(kind));
+    }
+
+    /// The compaction frame, with its root at the index the declaration names.
+    ///
+    /// `writable` and `revision` are the caller's, because the two hostile
+    /// witnesses below differ from the admitted one in exactly one of them.
+    fn fractional_compaction_frame(
+        trading: Pubkey,
+        revision: u64,
+        writable: bool,
+    ) -> (
+        Vec<u8>,
+        Pubkey,
+        u8,
+        Vec<AccountInfo<'static>>,
+        Vec<solana_program::instruction::AccountMeta>,
+        usize,
+    ) {
+        // `fractional_compaction_bytes` pins release set 1, market 2 and terms
+        // 32; the root has to be built at the same three or it is a different
+        // root, which is a different refusal than the one under test.
+        let (root_info, bump) =
+            fractional_root_info_at(trading, id(1), id(2), id(32), revision, writable);
+        let root_key = *root_info.key;
+        let request = fractional_compaction_bytes(root_key.to_bytes());
+        let root_index = FractionalCompactionRoleV1::FractionalCapabilityRoot
+            .index()
+            .expect("the root is admitted to its own frame");
+        let mut accounts: Vec<_> = (0
+            ..dclutch_claims_svm::fractional_claim_check_v1::FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1)
+            .map(|_| account_info(false, false))
+            .collect();
+        accounts[root_index] = root_info;
+        let metas: Vec<_> = accounts
+            .iter()
+            .map(|account| {
+                if account.is_writable {
+                    solana_program::instruction::AccountMeta::new(*account.key, false)
+                } else {
+                    solana_program::instruction::AccountMeta::new_readonly(*account.key, false)
+                }
+            })
+            .collect();
+        (request, root_key, bump, accounts, metas, root_index)
+    }
+
+    #[test]
+    fn fractional_compaction_root_signs_read_only_and_refuses_a_writable_one() {
+        // Design §17.8 ruling 1, witnesses w1-w4. The gate gains the compaction
+        // kind so the root's signature can reach the ONE thing on this route
+        // that can happen no other way: `SetAuthority(PermissionedBurn)`,
+        // root -> escrow, which Token-2022 refuses without the current
+        // authority's signature and which nothing but a Trading `invoke_signed`
+        // can produce.
+        let trading = Pubkey::new_from_array(id(21));
+        let kind = ReceiptKindV3::FractionalClaimCheckCompaction;
+        // 11 is `fractional_compaction_bytes`'s own `expected_root_revision`,
+        // written here as the literal it is rather than read back off the
+        // request under test.
+        let revision = 11;
+
+        // w1 -- THE ARM WORKS. A read-only root at the declared index is
+        // authenticated, its meta is marked a signer, and the seeds and bump
+        // handed back are the root's own.
+        let (request, root_key, bump, accounts, mut metas, root_index) =
+            fractional_compaction_frame(trading, revision, false);
+        let signer = fractional_root_signer(&trading, kind, &request, &accounts, &mut metas)
+            .expect("the compaction arm authenticates its root")
+            .expect("and returns a signer rather than None");
+        assert_eq!(signer.bump, bump);
+        assert_eq!(
+            Pubkey::find_program_address(&signer.seeds.as_slices(), &trading),
+            (root_key, bump),
+            "the seeds handed back must re-derive the very root that was read"
+        );
+        assert!(metas[root_index].is_signer, "w1: the meta is marked signer");
+        // And the signature did NOT come with write access. This is the half
+        // that makes the inversion worth having: a compaction revises nothing.
+        assert!(
+            !metas[root_index].is_writable,
+            "w1: the root signs a compaction without becoming writable"
+        );
+        // The shared predicates still bite on this kind: a substituted meta is
+        // refused exactly as it is for the three neighbouring kinds.
+        metas[root_index].pubkey = Pubkey::new_unique();
+        assert!(fractional_root_signer(&trading, kind, &request, &accounts, &mut metas).is_err());
+
+        // w2 -- REVISION MISMATCH REFUSED. The root is otherwise perfect and
+        // sits at the right index; only its recorded revision disagrees with
+        // the request's `expected_root_revision`, which is that field's whole
+        // purpose. Off by one, because a test that moves it far proves less.
+        let (request, _, _, accounts, mut metas, _) =
+            fractional_compaction_frame(trading, revision + 1, false);
+        assert!(
+            fractional_root_signer(&trading, kind, &request, &accounts, &mut metas).is_err(),
+            "w2: a root at the wrong revision must not be handed a signature"
+        );
+
+        // w3 -- THE INVERSION, WITNESSED. A WRITABLE root is refused on this
+        // kind. Its three neighbours require exactly the opposite, so without
+        // this assertion a later reader "restoring consistency" with them would
+        // silently widen what a compaction may touch, and every other test here
+        // would stay green. That is the mutation this line exists to red.
+        let (request, _, _, accounts, mut metas, _) =
+            fractional_compaction_frame(trading, revision, true);
+        assert!(
+            fractional_root_signer(&trading, kind, &request, &accounts, &mut metas).is_err(),
+            "w3: a compaction revises nothing, so a writable root is refused -- \
+             this is the ONE predicate that inverts against the exposure arms"
+        );
+
+        // w4 -- THE KEPT CONTROL. The gate is a gate: a kind it does not name
+        // gets `Ok(None)` and no signature, over these very accounts. Before
+        // ruling 1 the compaction kind was in this class, which is why the route
+        // was unreachable; deleting the arm from the `matches!` returns it here.
+        // Verified by mutation, not by assertion: with the compaction kind
+        // removed from the gate, w1 fails at `.expect("and returns a signer
+        // rather than None")`.
+        let (request, _, _, accounts, mut metas, root_index) =
+            fractional_compaction_frame(trading, revision, false);
+        assert!(
+            fractional_root_signer(
+                &trading,
+                ReceiptKindV3::RationalRepresentation,
+                &request,
+                &accounts,
+                &mut metas,
+            )
+            .expect("an unnamed kind is not an error, it is simply not signed")
+            .is_none(),
+            "w4: the gate signs only for the kinds it names"
+        );
+        assert!(
+            !metas[root_index].is_signer,
+            "w4: and it leaves the meta alone on the way out"
+        );
     }
 
     #[test]

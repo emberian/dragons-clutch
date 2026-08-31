@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { atomBarPathV1, planAtomBarsV1 } from './atomGeometry';
+import { FIGURE_AXIS_PX, useFigureScale } from './useFigureScale';
 
 /**
  * The cell strip: one Market's claim cells across its outcome domain, each
@@ -42,7 +43,11 @@ export type CellStripPropsV1 = Readonly<{
 const PLOT_HEIGHT = 110;
 const TOP_PAD = 8;
 const SIDE_PAD = 6;
-const AXIS_BAND = 16;
+/* The band under the baseline holds text, and text is sized in real pixels now
+   (see useFigureScale), so the room it needs depends on what the slot made one
+   unit worth. This is the floor, kept so a full-width figure lays out exactly
+   as it did before. */
+const MIN_AXIS_BAND = 16;
 
 export default function CellStrip({
   supplies,
@@ -55,15 +60,21 @@ export default function CellStrip({
 }: CellStripPropsV1) {
   const [active, setActive] = useState<number | null>(null);
 
-  if (supplies.length === 0) {
+  // Planned before the empty check, because this figure's viewBox width is its
+  // own bar plan and the measurement hook has to run on every render.
+  const plan = supplies.length === 0 ? null : planAtomBarsV1(supplies, { referenceAtoms: requiredBackingAtoms });
+  const width = plan === null ? 0 : plan.plotWidth + SIDE_PAD * 2;
+  const { figureRef, units } = useFigureScale(width);
+
+  if (plan === null) {
     return <figure className="viz-figure">
-      <p className="viz-caption">{emptyReason ?? 'This aggregate lists no claim cells, so there is nothing to draw.'}</p>
+      <p className="viz-caption">{emptyReason ?? 'No claims.'}</p>
     </figure>;
   }
 
-  const plan = planAtomBarsV1(supplies, { referenceAtoms: requiredBackingAtoms });
-  const width = plan.plotWidth + SIDE_PAD * 2;
-  const height = TOP_PAD + PLOT_HEIGHT + AXIS_BAND;
+  const axisSize = units(FIGURE_AXIS_PX);
+  const axisBand = Math.max(MIN_AXIS_BAND, axisSize + units(5));
+  const height = TOP_PAD + PLOT_HEIGHT + axisBand;
   const baselineY = TOP_PAD + PLOT_HEIGHT;
   const terminal = winner !== null;
 
@@ -80,6 +91,7 @@ export default function CellStrip({
 
   return <figure className="viz-figure">
     <div className="viz-scroll"><svg
+      ref={figureRef}
       viewBox={`0 0 ${width} ${height}`}
       style={{ maxWidth: `${width}px`, minWidth: plan.bars.length > 24 ? `${width}px` : undefined }}
       role="group"
@@ -124,9 +136,9 @@ export default function CellStrip({
       {indexLabels.map((index) => <text
         key={index}
         x={SIDE_PAD + index * slot + plan.barWidth / 2}
-        y={baselineY + 11}
+        y={height - units(5)}
         textAnchor="middle"
-        fontSize={7}
+        fontSize={axisSize}
         fill="var(--viz-muted)"
       >{index}</text>)}
     </svg></div>

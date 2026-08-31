@@ -48,8 +48,7 @@ use crate::{
     retirement_v1::{
         DIRECT_BEGIN_RETIRING_EXPECTED_MAGIC_SCALAR_V1,
         DIRECT_BEGIN_RETIRING_EXPECTED_OPEN_HEADER_SCALAR_V1,
-        DIRECT_BEGIN_RETIRING_EXPECTED_SELECTOR_SCALAR_V1,
-        DIRECT_BEGIN_RETIRING_EXPECTED_ZERO_SCALAR_V1, DIRECT_BEGIN_RETIRING_IDENTITY_COUNT_V1,
+        DIRECT_BEGIN_RETIRING_EXPECTED_SELECTOR_SCALAR_V1, DIRECT_BEGIN_RETIRING_IDENTITY_COUNT_V1,
         DIRECT_BEGIN_RETIRING_MAKER_COUNT_SCALAR_V1, DIRECT_BEGIN_RETIRING_REQUEST_SCHEMA_ID_V1,
         DIRECT_BEGIN_RETIRING_RETIRING_HEADER_SCALAR_V1, DIRECT_BEGIN_RETIRING_ROOT_ACCOUNT_V1,
         DIRECT_BEGIN_RETIRING_ROOT_HEADER_SCALAR_V1, DIRECT_BEGIN_RETIRING_ROOT_IDENTITY_V1,
@@ -316,7 +315,6 @@ fn build_transition() -> Result<Vec<u8>, DirectBeginRetiringBundleErrorV1> {
             DIRECT_BEGIN_RETIRING_EXPECTED_OPEN_HEADER_SCALAR_V1,
             read_u64(&open, DirectRootStateLayoutV1::VERSION)?,
         ),
-        TransitionInstructionV2::load_const(DIRECT_BEGIN_RETIRING_EXPECTED_ZERO_SCALAR_V1, 0),
         TransitionInstructionV2::load_const(
             DIRECT_BEGIN_RETIRING_RETIRING_HEADER_SCALAR_V1,
             read_u64(&retiring, DirectRootStateLayoutV1::VERSION)?,
@@ -333,10 +331,14 @@ fn build_transition() -> Result<Vec<u8>, DirectBeginRetiringBundleErrorV1> {
             DIRECT_BEGIN_RETIRING_ROOT_HEADER_SCALAR_V1,
             DIRECT_BEGIN_RETIRING_EXPECTED_OPEN_HEADER_SCALAR_V1,
         ),
-        TransitionInstructionV2::scalar_eq(
-            DIRECT_BEGIN_RETIRING_MAKER_COUNT_SCALAR_V1,
-            DIRECT_BEGIN_RETIRING_EXPECTED_ZERO_SCALAR_V1,
-        ),
+        // Deliberately NO `MAKER_COUNT == 0` conjunct (cohort-9 review item 1,
+        // amendment 1): begin-retiring admits standing maker roots, which
+        // drain inside Retiring via `close_maker_replay_v2`. The count gate
+        // that protects Retired stays at both physical-close sites -- this
+        // bundle's sibling in `native_close_bundle_v1` still pins it to zero.
+        // The count scalar is still projected (register geometry and the
+        // account profile are unchanged); its zero-expectation register is
+        // simply no longer compared here.
     ];
     let width = transition_program_v2_bytes(instructions.len())
         .map_err(|_| DirectBeginRetiringBundleErrorV1::Transition)?;

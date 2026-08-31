@@ -61,7 +61,7 @@ use dclutch_custody_contract::{
 };
 use dclutch_direct_codec::{
     direct_finalization_v3::{
-        DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectInlineAccountPrestateV3,
+        DIRECT_INLINE_POSTSTATE_COUNT_V3, DirectFinalizationErrorV3, DirectInlineAccountPrestateV3,
         DirectInlineAccountPrestatesV3, DirectInlineFinalizationInputV3,
         DirectInlineFinalizationProgramsV3, DirectInlineFinalizationV3,
         DirectInlinePoststateCommitmentV3, DirectInlinePoststateRoleV3, HotExecutionAckInputV3,
@@ -71,7 +71,8 @@ use dclutch_direct_codec::{
     execution_v3::{DirectExecutionRequestV3, DirectInlineOrdinaryRequestV3},
     inline_candidate_v2::{
         DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3, DirectExternalCollateralV2,
-        DirectExternalDebitV2, DirectInlineCandidateContextV2, DirectInlineCollateralFrameV2,
+        DirectExternalDebitV2, DirectInlineCandidateContextV2, DirectInlineCandidateErrorV2,
+        DirectInlineCollateralFrameV2, prepare_and_verify_inline_effect_partition_v2,
     },
     ordinary_effect_artifacts_v3::{
         DIRECT_INLINE_CLAIMS_ACCOUNT_START_V3, DIRECT_INLINE_CUSTODY_PROGRAM_ACCOUNT_V3,
@@ -80,7 +81,10 @@ use dclutch_direct_codec::{
         DIRECT_INLINE_SELLER_INTERMEDIATE_ACCOUNT_START_V3,
         DIRECT_INLINE_SELLER_TERMINAL_ACCOUNT_START_V3,
     },
-    ordinary_route_projection_v3::project_direct_inline_ordinary_child_requests_v3,
+    ordinary_route_projection_v3::{
+        DirectInlineOrdinaryChildProjectionErrorV3,
+        project_direct_inline_ordinary_child_requests_v3,
+    },
     ordinary_v3::DirectOrdinaryAuthenticatedContextV3,
     state_artifacts_v3::{
         DIRECT_BUYER_MAKER_ACCOUNT_V3, DIRECT_LIFECYCLE_RENT_CREDIT_ACCOUNT_V3,
@@ -100,6 +104,7 @@ use dclutch_realm_contract::{REALM_SCHEMA_RELEASE_ID_V1, RealmV1};
 use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_release_tool::{CHECKED_MULTIPROGRAM_BYTES_V1, CheckedExecutionReleaseSetV1};
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_token_svm::{AccountState, COption, Mint, TokenAccount};
 use solana_address_lookup_table_interface::{
     instruction::{create_lookup_table, extend_lookup_table, freeze_lookup_table},
@@ -113,6 +118,8 @@ use solana_program::{
     pubkey::Pubkey,
 };
 use solana_sdk_ids::bpf_loader_upgradeable;
+
+use core::fmt;
 
 use crate::versioned::compile_v0_message;
 
@@ -317,8 +324,607 @@ pub enum DirectInlineRouteErrorV3 {
     Profile,
     /// The canonical write-once capability seal closure refused.
     Seal,
-    /// The exact ordinary Direct finalizer or complete poststate projection refused.
-    Finalization,
+    /// The exact ordinary Direct finalizer or complete poststate projection
+    /// refused, at the named clause.
+    Finalization(DirectInlineFinalizationRefusalV3),
+}
+
+impl fmt::Display for DirectInlineRouteErrorV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Observation => f.write_str(
+                "an input account came from another observation or repeated where distinctness is required",
+            ),
+            Self::FixedFrame => f.write_str("the fixed Hot prefix could not be assembled exactly"),
+            Self::ChildFrame => f.write_str("a child FrameSpec refused its semantic role"),
+            Self::Profile => {
+                f.write_str("AccountProfile width, alias, privilege, or physical geometry refused")
+            }
+            Self::Seal => {
+                f.write_str("the canonical write-once capability seal closure refused")
+            }
+            Self::Finalization(refusal) => write!(f, "{refusal}"),
+        }
+    }
+}
+
+/// Which side of the trade a participant clause refused on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectInlineParticipantSideV3 {
+    /// The seller half.
+    Seller,
+    /// The buyer half.
+    Buyer,
+}
+
+impl fmt::Display for DirectInlineParticipantSideV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Seller => "seller",
+            Self::Buyer => "buyer",
+        })
+    }
+}
+
+/// Which of the three collateral token accounts a clause refused on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectInlineCollateralRoleV3 {
+    /// The buyer's debited collateral source.
+    Buyer,
+    /// The seller's credited collateral destination.
+    Seller,
+    /// The fee recipient's credited destination.
+    Fee,
+}
+
+impl fmt::Display for DirectInlineCollateralRoleV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Buyer => "buyer",
+            Self::Seller => "seller",
+            Self::Fee => "fee",
+        })
+    }
+}
+
+/// The flattened shape of a sealed-execution-report projection refusal.
+///
+/// [`project_direct_inline_sealed_execution_report_v3`] returns
+/// [`DirectInlineRoutedTransactionErrorV3`], which carries a
+/// [`DirectInlineRouteErrorV3`] of its own; embedding it here would make this
+/// type recursive. The discriminant is what a caller can act on, so only the
+/// discriminant crosses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectInlineSealedReportProjectionRefusalV3 {
+    /// The route failed its own canonical semantic projection.
+    Route,
+    /// Report, route, payer, or table observations did not form one snapshot.
+    Snapshot,
+    /// The report's exact instruction sequence differed from the assembled route.
+    Instruction,
+    /// The supplied table was not the exact activated frozen stable-only table.
+    LookupTable,
+    /// Message-required signers differed from the semantic route.
+    Signer,
+    /// The complete static-plus-loaded key set exceeded devnet's active limit.
+    AccountLocks,
+    /// Versioned-message construction or packet admission refused.
+    Routing,
+}
+
+impl DirectInlineSealedReportProjectionRefusalV3 {
+    fn from_transaction_error(error: &DirectInlineRoutedTransactionErrorV3) -> Self {
+        match error {
+            DirectInlineRoutedTransactionErrorV3::Route(_) => Self::Route,
+            DirectInlineRoutedTransactionErrorV3::Snapshot => Self::Snapshot,
+            DirectInlineRoutedTransactionErrorV3::Instruction => Self::Instruction,
+            DirectInlineRoutedTransactionErrorV3::LookupTable => Self::LookupTable,
+            DirectInlineRoutedTransactionErrorV3::Signer => Self::Signer,
+            DirectInlineRoutedTransactionErrorV3::AccountLocks => Self::AccountLocks,
+            DirectInlineRoutedTransactionErrorV3::Routing(_) => Self::Routing,
+        }
+    }
+}
+
+impl fmt::Display for DirectInlineSealedReportProjectionRefusalV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Route => "the route failed its own semantic projection",
+            Self::Snapshot => "report, route, payer and table were not one snapshot",
+            Self::Instruction => "the report's instruction sequence differed from the route",
+            Self::LookupTable => "the table was not the activated frozen stable-only table",
+            Self::Signer => "message-required signers differed from the semantic route",
+            Self::AccountLocks => "the static-plus-loaded key set exceeded the active limit",
+            Self::Routing => "versioned-message construction or packet admission refused",
+        })
+    }
+}
+
+/// Every sealed-report fact that disagreed with the authenticated chain.
+///
+/// All of them are collected rather than the first, because an operator who
+/// fixes one and re-runs has learned almost nothing. Same reason as
+/// `refusing_ticket_half_clauses_v1` in the Direct trade producer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectInlineSealedReportFactsRefusalV3 {
+    /// The selected execution program differed.
+    pub selected_program: bool,
+    /// The outcome count differed, observed then authenticated.
+    pub outcome_count: Option<(u32, u32)>,
+    /// The product record digest differed.
+    pub product_record: bool,
+    /// The Trading artifact release differed.
+    pub trading_artifact_release: bool,
+    /// The checked manifest digest differed.
+    pub checked_manifest_digest: bool,
+}
+
+impl DirectInlineSealedReportFactsRefusalV3 {
+    fn refuses(&self) -> bool {
+        self.selected_program
+            || self.outcome_count.is_some()
+            || self.product_record
+            || self.trading_artifact_release
+            || self.checked_manifest_digest
+    }
+}
+
+impl fmt::Display for DirectInlineSealedReportFactsRefusalV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut clauses: Vec<String> = Vec::new();
+        if self.selected_program {
+            clauses.push("selected program".to_owned());
+        }
+        if let Some((observed, expected)) = self.outcome_count {
+            clauses.push(format!(
+                "outcome count {observed} is not the authenticated {expected}"
+            ));
+        }
+        if self.product_record {
+            clauses.push("product record digest".to_owned());
+        }
+        if self.trading_artifact_release {
+            clauses.push("Trading artifact release".to_owned());
+        }
+        if self.checked_manifest_digest {
+            clauses.push("checked manifest digest".to_owned());
+        }
+        write!(
+            f,
+            "the projected sealed report disagrees with the authenticated chain on: {}",
+            clauses.join(", ")
+        )
+    }
+}
+
+/// Every descriptor/strategy closure clause that refused.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectInlineStrategyClosureRefusalV3 {
+    /// The strategy disposition was not `Interpreted`.
+    pub disposition: bool,
+    /// The strategy named a certificate program.
+    pub certificate_program: bool,
+    /// The strategy named an admission program.
+    pub admission_program: bool,
+    /// The strategy's Transition program is not the descriptor's.
+    pub transition_program: bool,
+    /// The descriptor's strategy program is not the hash of the strategy bytes.
+    pub strategy_digest: bool,
+}
+
+impl DirectInlineStrategyClosureRefusalV3 {
+    fn refuses(&self) -> bool {
+        self.disposition
+            || self.certificate_program
+            || self.admission_program
+            || self.transition_program
+            || self.strategy_digest
+    }
+}
+
+impl fmt::Display for DirectInlineStrategyClosureRefusalV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut clauses: Vec<&str> = Vec::new();
+        if self.disposition {
+            clauses.push("the strategy disposition is not Interpreted");
+        }
+        if self.certificate_program {
+            clauses.push("the strategy names a certificate program");
+        }
+        if self.admission_program {
+            clauses.push("the strategy names an admission program");
+        }
+        if self.transition_program {
+            clauses.push("the strategy Transition program is not the descriptor's");
+        }
+        if self.strategy_digest {
+            clauses.push("the descriptor's strategy program is not the strategy bytes' digest");
+        }
+        write!(
+            f,
+            "the descriptor/strategy closure refuses: {}",
+            clauses.join(", ")
+        )
+    }
+}
+
+/// Every clause on which the decoded family request disagreed with the
+/// authenticated signed intents.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectInlineRequestIntentRefusalV3 {
+    /// The request's seller maker is not the authenticated seller.
+    pub seller_maker: bool,
+    /// The request's seller intent is not the authenticated signed intent.
+    pub seller_intent: bool,
+    /// The request's buyer maker is not the authenticated buyer.
+    pub buyer_maker: bool,
+    /// The request's buyer intent is not the authenticated signed intent.
+    pub buyer_intent: bool,
+    /// The request fill differed, observed then authenticated.
+    pub fill: Option<(u64, u64)>,
+    /// The request execution price differed, observed then authenticated.
+    pub execution_price: Option<(u64, u64)>,
+}
+
+impl DirectInlineRequestIntentRefusalV3 {
+    fn refuses(&self) -> bool {
+        self.seller_maker
+            || self.seller_intent
+            || self.buyer_maker
+            || self.buyer_intent
+            || self.fill.is_some()
+            || self.execution_price.is_some()
+    }
+}
+
+impl fmt::Display for DirectInlineRequestIntentRefusalV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut clauses: Vec<String> = Vec::new();
+        if self.seller_maker {
+            clauses.push("seller maker".to_owned());
+        }
+        if self.seller_intent {
+            clauses.push("seller signed intent".to_owned());
+        }
+        if self.buyer_maker {
+            clauses.push("buyer maker".to_owned());
+        }
+        if self.buyer_intent {
+            clauses.push("buyer signed intent".to_owned());
+        }
+        if let Some((observed, expected)) = self.fill {
+            clauses.push(format!(
+                "fill {observed} is not the authenticated {expected}"
+            ));
+        }
+        if let Some((observed, expected)) = self.execution_price {
+            clauses.push(format!(
+                "execution price {observed} is not the authenticated {expected}"
+            ));
+        }
+        write!(
+            f,
+            "the decoded family request disagrees with the authenticated intents on: {}",
+            clauses.join(", ")
+        )
+    }
+}
+
+/// Every clause on which a first-use maker replay was not a fundable vacancy.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectInlineVacancyRefusalV3 {
+    /// The account is not System-owned.
+    pub owner: bool,
+    /// The account is executable.
+    pub executable: bool,
+    /// The account carries data, observed width.
+    pub data_len: Option<usize>,
+    /// The declared rent beneficiary is the zero address.
+    pub rent_beneficiary: bool,
+    /// The declared rent principal is zero.
+    pub rent_principal: bool,
+}
+
+impl DirectInlineVacancyRefusalV3 {
+    fn refuses(&self) -> bool {
+        self.owner
+            || self.executable
+            || self.data_len.is_some()
+            || self.rent_beneficiary
+            || self.rent_principal
+    }
+}
+
+impl fmt::Display for DirectInlineVacancyRefusalV3 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut clauses: Vec<String> = Vec::new();
+        if self.owner {
+            clauses.push("its owner is not the System program".to_owned());
+        }
+        if self.executable {
+            clauses.push("it is executable".to_owned());
+        }
+        if let Some(observed) = self.data_len {
+            clauses.push(format!("it carries {observed} data bytes, not 0"));
+        }
+        if self.rent_beneficiary {
+            clauses.push("the rent beneficiary is the zero address".to_owned());
+        }
+        if self.rent_principal {
+            clauses.push("the rent principal is 0".to_owned());
+        }
+        write!(f, "{}", clauses.join(", "))
+    }
+}
+
+/// Which clause of the exterior Hot finalization refused, and what it observed.
+///
+/// Every refusing site in [`prepare_direct_inline_hot_finalization_v3`] and its
+/// three helpers gets its own variant. Before this existed, all of them shared
+/// the bare `Finalization` unit, so the driver could print only "Direct Hot
+/// finalization: Finalization" and an operator had to instrument the binary to
+/// find out which of two dozen clauses had fired. That is the same defect class
+/// as the Direct producer's owner-or-width sentence and the ticket's twelve-way
+/// blanket OR, both of which this repository has already paid to remove.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectInlineFinalizationRefusalV3 {
+    /// The distinct-account report did not project onto the authenticated route.
+    SealedReportProjection(DirectInlineSealedReportProjectionRefusalV3),
+    /// The projected sealed report disagreed with the authenticated chain.
+    SealedReportFacts(DirectInlineSealedReportFactsRefusalV3),
+    /// The signed family request did not decode at this outcome count.
+    FamilyRequestDecode {
+        /// Outcome count the decode was attempted at.
+        outcome_count: u32,
+        /// Complete family request width.
+        request_bytes: usize,
+    },
+    /// The family request decoded as another Direct execution shape.
+    FamilyRequestNotInlineOrdinary,
+    /// Transition/Effect child-request projection refused.
+    ChildRequestProjection(DirectInlineOrdinaryChildProjectionErrorV3),
+    /// The assembled child request bank was not the exact ordinary width.
+    RequestBankWidth {
+        /// Width assembled from the projected Claims and Custody requests.
+        observed: usize,
+        /// Exact ordinary bank width.
+        expected: usize,
+    },
+    /// The route's capability descriptor did not decode as `CapabilityProgramV4`.
+    DescriptorDecode {
+        /// Raw descriptor account width.
+        descriptor_bytes: usize,
+    },
+    /// The route's strategy artifact did not decode as `ExecutionStrategyProgramV2`.
+    StrategyDecode {
+        /// Raw strategy account width.
+        strategy_bytes: usize,
+    },
+    /// The descriptor/strategy closure refused.
+    StrategyClosure(DirectInlineStrategyClosureRefusalV3),
+    /// The canonical Direct finalizer refused.
+    Finalizer {
+        /// The finalizer's own refusal.
+        error: DirectFinalizationErrorV3,
+        /// The candidate partition's own refusal, when the finalizer's was the
+        /// `Candidate` collapse. See
+        /// [`rederive_direct_inline_candidate_refusal_v3`].
+        candidate: Option<DirectInlineCandidateErrorV2>,
+    },
+    /// A commitment index had no canonical poststate role.
+    PoststateRoleIndex {
+        /// Ordered commitment index.
+        index: usize,
+    },
+    /// A commitment carried another role than its ordered index requires.
+    PoststateRoleOrder {
+        /// Ordered commitment index.
+        index: usize,
+        /// Role the commitment declared.
+        observed: DirectInlinePoststateRoleV3,
+        /// Role the ordered index requires.
+        expected: DirectInlinePoststateRoleV3,
+    },
+    /// A commitment's declared width did not fit host addressing.
+    PoststateWidth {
+        /// Ordered commitment index.
+        index: usize,
+        /// Declared width.
+        data_len: u32,
+    },
+    /// Materializing one exact poststate refused.
+    PoststateProjection {
+        /// Ordered commitment index.
+        index: usize,
+        /// Role being materialized.
+        role: DirectInlinePoststateRoleV3,
+        /// The finalizer's own refusal.
+        error: DirectFinalizationErrorV3,
+        /// The candidate partition's own refusal, when the finalizer's was the
+        /// `Candidate` collapse.
+        candidate: Option<DirectInlineCandidateErrorV2>,
+    },
+    /// A materialized poststate did not hash to its own commitment.
+    PoststateDigest {
+        /// Ordered commitment index.
+        index: usize,
+        /// Role whose bytes disagreed.
+        role: DirectInlinePoststateRoleV3,
+    },
+    /// The Direct root account was shorter than the capability root header.
+    RootHeaderWidth {
+        /// Complete root account width.
+        observed: usize,
+        /// Capability root header width.
+        header: usize,
+    },
+    /// The Direct root tail did not decode as `DirectRootStateV1`.
+    RootStateDecode {
+        /// Width of the tail handed to the decoder.
+        tail_bytes: usize,
+    },
+    /// The decoded request disagreed with the authenticated signed intents.
+    RequestIntents(DirectInlineRequestIntentRefusalV3),
+    /// One participant's adjacent-ed25519 intent did not authenticate.
+    ParticipantIntent {
+        /// Side whose intent refused.
+        side: DirectInlineParticipantSideV3,
+    },
+    /// A first-use participant's maker replay was not a fundable vacancy.
+    ParticipantVacancy {
+        /// Side whose replay refused.
+        side: DirectInlineParticipantSideV3,
+        /// Every vacancy clause that refused.
+        clauses: DirectInlineVacancyRefusalV3,
+    },
+    /// An existing participant's maker replay did not decode.
+    ParticipantMakerReplayDecode {
+        /// Side whose replay refused.
+        side: DirectInlineParticipantSideV3,
+        /// Observed replay account width.
+        data_bytes: usize,
+        /// Exact maker replay width.
+        expected_bytes: usize,
+    },
+    /// A collateral token account did not parse as a Token account.
+    CollateralTokenParse {
+        /// Which of the three token accounts refused.
+        role: DirectInlineCollateralRoleV3,
+        /// Observed account width.
+        data_bytes: usize,
+    },
+    /// The buyer's collateral account carried no delegate.
+    ///
+    /// Direct debits the buyer through a delegated allowance; an undelegated
+    /// source account has nothing for Custody to spend.
+    BuyerCollateralDelegateAbsent {
+        /// The buyer collateral account that carries no delegate.
+        account: Pubkey,
+        /// Its token owner.
+        owner: Pubkey,
+    },
+}
+
+impl fmt::Display for DirectInlineFinalizationRefusalV3 {
+    #[allow(clippy::too_many_lines)]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SealedReportProjection(refusal) => write!(
+                f,
+                "the distinct-account report does not project onto the authenticated route: {refusal}"
+            ),
+            Self::SealedReportFacts(refusal) => write!(f, "{refusal}"),
+            Self::FamilyRequestDecode {
+                outcome_count,
+                request_bytes,
+            } => write!(
+                f,
+                "the {request_bytes}-byte family request does not decode as a Direct execution request at outcome count {outcome_count}"
+            ),
+            Self::FamilyRequestNotInlineOrdinary => f.write_str(
+                "the family request decodes as another Direct execution shape, not InlineOrdinary",
+            ),
+            Self::ChildRequestProjection(error) => write!(
+                f,
+                "child-request projection through the authenticated Transition/Effect refused: {error:?}"
+            ),
+            Self::RequestBankWidth { observed, expected } => write!(
+                f,
+                "the projected child request bank is {observed} bytes, not the exact ordinary {expected}"
+            ),
+            Self::DescriptorDecode { descriptor_bytes } => write!(
+                f,
+                "the {descriptor_bytes}-byte capability descriptor does not decode as CapabilityProgramV4"
+            ),
+            Self::StrategyDecode { strategy_bytes } => write!(
+                f,
+                "the {strategy_bytes}-byte strategy artifact does not decode as ExecutionStrategyProgramV2"
+            ),
+            Self::StrategyClosure(refusal) => write!(f, "{refusal}"),
+            Self::Finalizer {
+                error,
+                candidate: Some(candidate),
+            } => write!(
+                f,
+                "the canonical Direct finalizer refused: {error:?}, and the candidate partition re-run on the same inputs refuses at {candidate:?}"
+            ),
+            Self::Finalizer {
+                error,
+                candidate: None,
+            } => write!(f, "the canonical Direct finalizer refused: {error:?}"),
+            Self::PoststateRoleIndex { index } => write!(
+                f,
+                "commitment index {index} has no canonical poststate role"
+            ),
+            Self::PoststateRoleOrder {
+                index,
+                observed,
+                expected,
+            } => write!(
+                f,
+                "commitment {index} declares role {observed:?}, but that ordered index is {expected:?}"
+            ),
+            Self::PoststateWidth { index, data_len } => write!(
+                f,
+                "commitment {index} declares a {data_len}-byte poststate, which does not fit host addressing"
+            ),
+            Self::PoststateProjection {
+                index,
+                role,
+                error,
+                candidate: Some(candidate),
+            } => write!(
+                f,
+                "materializing the {role:?} poststate at commitment {index} refused: {error:?}, and the candidate partition re-run on the same inputs refuses at {candidate:?}"
+            ),
+            Self::PoststateProjection {
+                index,
+                role,
+                error,
+                candidate: None,
+            } => write!(
+                f,
+                "materializing the {role:?} poststate at commitment {index} refused: {error:?}"
+            ),
+            Self::PoststateDigest { index, role } => write!(
+                f,
+                "the materialized {role:?} poststate at commitment {index} does not hash to its own commitment digest"
+            ),
+            Self::RootHeaderWidth { observed, header } => write!(
+                f,
+                "the Direct root account is {observed} bytes, shorter than the {header}-byte capability root header"
+            ),
+            Self::RootStateDecode { tail_bytes } => write!(
+                f,
+                "the {tail_bytes}-byte Direct root tail does not decode as DirectRootStateV1"
+            ),
+            Self::RequestIntents(refusal) => write!(f, "{refusal}"),
+            Self::ParticipantIntent { side } => write!(
+                f,
+                "the {side} adjacent-ed25519 signed intent does not authenticate"
+            ),
+            Self::ParticipantVacancy { side, clauses } => write!(
+                f,
+                "the {side} maker replay is declared first-use but is not a fundable vacancy: {clauses}"
+            ),
+            Self::ParticipantMakerReplayDecode {
+                side,
+                data_bytes,
+                expected_bytes,
+            } => write!(
+                f,
+                "the existing {side} maker replay is {data_bytes} bytes and does not decode as the {expected_bytes}-byte MakerReplayRootV1"
+            ),
+            Self::CollateralTokenParse { role, data_bytes } => write!(
+                f,
+                "the {role} collateral account is {data_bytes} bytes and does not parse as a Token account"
+            ),
+            Self::BuyerCollateralDelegateAbsent { account, owner } => write!(
+                f,
+                "buyer collateral account {account} owned by {owner} carries no delegate, so Custody has no allowance to spend"
+            ),
+        }
+    }
 }
 
 /// Refusal from route-aware immutable-ALT compilation.
@@ -349,10 +955,55 @@ pub struct DirectInlineChildAuthoritiesV3 {
     pub claims_request_digest: [u8; 32],
     /// Claims child caller-authority PDA.
     pub claims_authority: Pubkey,
-    /// Custody child request digests in Effect route order.
+    /// Custody child request digests in FIXED SLOT order.
+    ///
+    /// The slots are the four request shapes a Direct inline execution can
+    /// take -- seller terminal, seller intermediate, fee continuation, fee
+    /// sole -- and NOT the order the Effect executes them in. Which one
+    /// actually runs is `DirectInlineEffectDispatchV2::custody_slots`, and
+    /// exactly one of the four does.
     pub custody_request_digests: [[u8; 32]; 4],
-    /// Custody child caller-authority PDAs in Effect route order.
+    /// Custody child caller-authority PDAs in FIXED SLOT order, as above.
     pub custody_authorities: [Pubkey; 4],
+    /// Canonical bump of `claims_authority`, mined here so Trading need not.
+    ///
+    /// This projection already ran the search to produce the address above; the
+    /// bump it threw away is the one byte that lets the on-chain walk reproduce
+    /// the same address with `create_program_address` instead of searching for
+    /// it again. It is a hint and never an authority -- Trading rebuilds the
+    /// seeds itself and refuses unless the address reproduces the account at
+    /// coordinate 0. See `HotBumpHintsV1`.
+    pub claims_authority_bump: u8,
+    /// Canonical bumps of `custody_authorities`, in the same FIXED SLOT order.
+    ///
+    /// Indexing this array with a literal is a bug. The slot that runs depends
+    /// on the settlement: `expected_custody_slots` picks slot 0 only when
+    /// `total_fee_transfer == 0`, and slot 1 whenever a fee is transferred.
+    /// Use `child_caller_bumps`, which is already ordered the way the on-chain
+    /// walk assigns its hint slots.
+    pub custody_authority_bumps: [u8; 4],
+    /// The two `HotBumpHintsV1::child_caller` slots, ready to hand to the hot
+    /// envelope with no indexing at the call site.
+    ///
+    /// The on-chain walk numbers its hint slots route-major over child
+    /// INVOCATIONS (`hot_v3::child_caller_hint_v1` reads `child_caller[ordinal]`),
+    /// so for InlineOrdinary slot 0 is the Claims route and slot 1 is the ONE
+    /// enabled Custody route. That route is named by
+    /// `DirectInlineEffectDispatchV2::custody_slots` and is slot 1 of the fixed
+    /// four for every fee-bearing fill, so a caller that reached into
+    /// `custody_authority_bumps[0]` mined the ZERO-FEE route's bump and the
+    /// program refused `Release` reproducing it. This field exists so that
+    /// mistake has nowhere left to live.
+    ///
+    /// A hint is a memo and never an authority: a wrong one reproduces a
+    /// different address and refuses, and a zero searches.
+    pub child_caller_bumps: [u8; 2],
+    /// Which of the four fixed Custody slots this execution actually runs.
+    ///
+    /// Reported because it is the fact `child_caller_bumps[1]` turns on, and a
+    /// bump byte is too coarse to test against: two Custody routes routinely
+    /// share one. `None` means no Custody child runs.
+    pub enabled_custody_slot: Option<u8>,
 }
 
 /// Release-authenticated program and ProgramData coordinates used by Direct.
@@ -1001,9 +1652,25 @@ pub fn compile_direct_inline_capability_seal_routed_v0_v3(
     // registry proof and hashing the body of each - before it writes the
     // closure, so like Hot it does not fit Solana's default allocation and
     // must declare its own.
+    //
+    // ALLOCATION IS TWO GRANTS, AND THIS SITE USED TO SEND ONE. The sentence
+    // above says allocation, which is the HEAP; the list below asked only for
+    // compute units, so every seal write this compiler produced arrived with
+    // the runtime's default 32 KiB ceiling. Trading's adapter declares the seal
+    // outer's extended heap profile and then refuses by name when the grant
+    // does not arrive -- `TradingSbfError::HeapFrame`, 0x4008, whose own
+    // documentation names this exact remedy -- so the first locally executed
+    // Direct trade died at its seal stage having consumed 24,033 CU of the
+    // 1,399,850 it had asked for and none of the heap it had not. The
+    // instructions sysvar the adapter reads to see this grant is already in the
+    // frame: it is `HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3` of the Hot fixed
+    // prefix, which the seal reuses whole.
     let instructions = [
         solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
             crate::direct_inline_v3::DIRECT_SEAL_COMPUTE_UNIT_LIMIT_V1,
+        ),
+        solana_compute_budget_interface::ComputeBudgetInstruction::request_heap_frame(
+            dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
         ),
         plan.instruction.clone(),
     ];
@@ -1303,13 +1970,37 @@ struct DirectMakerRouteFactsV3 {
     next_nonce: u64,
 }
 
+/// Authenticate one maker replay root, or project the one the chain will create.
+///
+/// `rent_beneficiary` is the wallet the Trading program will record as the
+/// root's rent owner when it creates it, and it must be the founding lifecycle
+/// RentCredit's `refund_wallet()` — never the payer. `hot_v3.rs` builds
+/// `MakerReplayFirstUseV1` with `rent_owner: plan.beneficiary`, and that
+/// beneficiary comes from the RentCredit, because a maker replay root is a
+/// shared structure of the MARKET: if its rent followed whoever paid, a stranger
+/// paying their own fees would walk away owning the rent of something the market
+/// depends on, and this route deliberately admits that stranger as the payer.
+///
+/// This projection previously answered `payer`, and that was the same stale
+/// model `9d4935d2` corrected in the producer's `maker_facts_v1` — a
+/// hand-written duplicate the producer's fix did not reach.
+///
+/// It stayed hidden for the least comfortable reason: BOTH sides were wrong
+/// together. A market's first fill is exactly where this branch runs, because
+/// the Hot action is what creates the maker roots (`direct_replay_setup_v1`
+/// creates the Custody replay, not these). While the producer also answered
+/// `payer`, the two agreed, the equality below passed, and the error survived
+/// as far as the poststate check that FILL-2 measured. Correcting only the
+/// producer broke the agreement and turned a landed-but-wrong fill into a
+/// `ChildFrame` refusal on these 32 bytes, with every other field of the
+/// authenticated context already equal. Half a duplicate is worse than none.
 fn authenticate_direct_maker_route_v3(
     account: &ObservedAccount,
     trading: Pubkey,
     market: [u8; 32],
     generation: u64,
     maker: Pubkey,
-    payer: Pubkey,
+    rent_beneficiary: Pubkey,
     rent: &solana_program::rent::Rent,
 ) -> Result<DirectMakerRouteFactsV3, DirectInlineRouteErrorV3> {
     let coordinates = DirectCoordinatesV1::new(market, generation)
@@ -1328,7 +2019,7 @@ fn authenticate_direct_maker_route_v3(
             rent_principal_observation: 0,
             rent_principal: rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1),
             rent_beneficiary_observation: [0; 32],
-            rent_beneficiary: payer.to_bytes(),
+            rent_beneficiary: rent_beneficiary.to_bytes(),
             next_nonce: 0,
         });
     }
@@ -1396,13 +2087,23 @@ fn authenticate_direct_ordinary_context_v3(
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
 
+    // The rent owner a created maker root will carry comes from the founding
+    // lifecycle RentCredit the chain itself reads, not from who is paying for
+    // this one trade. `authenticate_named_route_v3` has already proven this
+    // account is owned by the route's rent program.
+    let maker_rent_beneficiary = Pubkey::new_from_array(
+        LifecycleRentCreditV2::decode(&route.lifecycle_rent_credit.data)
+            .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?
+            .refund_wallet()
+            .to_bytes(),
+    );
     let seller = authenticate_direct_maker_route_v3(
         &route.seller_maker,
         fixed.trading_program.key,
         fixed.market.key.to_bytes(),
         core.identity.generation,
         authentication.seller.maker,
-        route.payer.key,
+        maker_rent_beneficiary,
         &rent,
     )?;
     let buyer = authenticate_direct_maker_route_v3(
@@ -1411,7 +2112,7 @@ fn authenticate_direct_ordinary_context_v3(
         fixed.market.key.to_bytes(),
         core.identity.generation,
         authentication.buyer.maker,
-        route.payer.key,
+        maker_rent_beneficiary,
         &rent,
     )?;
 
@@ -1623,6 +2324,41 @@ fn has_duplicate(keys: &[Pubkey]) -> bool {
         .any(|(index, key)| keys.iter().take(index).any(|earlier| earlier == key))
 }
 
+/// Order the two `child_caller` hint slots the way the on-chain walk reads them.
+///
+/// `hot_v3::child_caller_hint_v1` indexes `HotBumpHintsV1::child_caller` by the
+/// child INVOCATION ordinal, route-major, so for InlineOrdinary slot 0 is the
+/// Claims route and slot 1 is the one enabled Custody route. `custody_slots`
+/// names that route; the four-slot arrays are in FIXED shape order and indexing
+/// them with a literal is the bug this function exists to make unrepresentable.
+///
+/// Returns the hint block and which Custody slot it followed.
+fn child_caller_hint_slots_v1(
+    claims_authority_bump: u8,
+    custody_authority_bumps: [u8; 4],
+    dispatch: dclutch_direct_codec::inline_candidate_v2::DirectInlineEffectDispatchV2,
+) -> Result<([u8; 2], Option<u8>), DirectInlineRouteErrorV3> {
+    let enabled = dispatch
+        .custody_slots
+        .get(..usize::from(dispatch.custody_count))
+        .and_then(<[u8]>::first)
+        .copied();
+    match enabled {
+        Some(slot) => Ok((
+            [
+                claims_authority_bump,
+                *custody_authority_bumps
+                    .get(usize::from(slot))
+                    .ok_or(DirectInlineRouteErrorV3::ChildFrame)?,
+            ],
+            Some(slot),
+        )),
+        // No Custody child runs, so the second slot is ABSENT and the walk
+        // searches for whatever it does reach: correct, and merely slower.
+        None => Ok(([claims_authority_bump, 0], None)),
+    }
+}
+
 fn derive_child_authorities(
     context: DirectOrdinaryAuthenticatedContextV3,
     family_request: [u8; crate::direct_inline_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3],
@@ -1641,9 +2377,11 @@ fn derive_child_authorities(
         claims_request_digest,
     )
     .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
-    let claims_authority = Pubkey::find_program_address(&claims_seeds.as_slices(), &trading).0;
+    let (claims_authority, claims_authority_bump) =
+        Pubkey::find_program_address(&claims_seeds.as_slices(), &trading);
     let mut custody_request_digests = [[0_u8; 32]; 4];
     let mut custody_authorities = [Pubkey::default(); 4];
+    let mut custody_authority_bumps = [0_u8; 4];
     for (index, request) in projected.custody.iter().enumerate() {
         let digest = hash(request).to_bytes();
         let seeds = CallerAuthoritySeedsV1::new(
@@ -1657,10 +2395,13 @@ fn derive_child_authorities(
         *custody_request_digests
             .get_mut(index)
             .ok_or(DirectInlineRouteErrorV3::ChildFrame)? = digest;
+        let (authority, bump) = Pubkey::find_program_address(&seeds.as_slices(), &trading);
         *custody_authorities
             .get_mut(index)
-            .ok_or(DirectInlineRouteErrorV3::ChildFrame)? =
-            Pubkey::find_program_address(&seeds.as_slices(), &trading).0;
+            .ok_or(DirectInlineRouteErrorV3::ChildFrame)? = authority;
+        *custody_authority_bumps
+            .get_mut(index)
+            .ok_or(DirectInlineRouteErrorV3::ChildFrame)? = bump;
     }
     if custody_authorities
         .iter()
@@ -1674,12 +2415,21 @@ fn derive_child_authorities(
     {
         return Err(DirectInlineRouteErrorV3::ChildFrame);
     }
+    let (child_caller_bumps, enabled_custody_slot) = child_caller_hint_slots_v1(
+        claims_authority_bump,
+        custody_authority_bumps,
+        projected.dispatch,
+    )?;
     Ok(DirectInlineChildAuthoritiesV3 {
         family_request,
         claims_request_digest,
         claims_authority,
         custody_request_digests,
         custody_authorities,
+        claims_authority_bump,
+        custody_authority_bumps,
+        child_caller_bumps,
+        enabled_custody_slot,
     })
 }
 
@@ -1810,23 +2560,50 @@ pub fn prepare_direct_inline_hot_finalization_v3(
         authentication,
     )?;
     let sealed_report =
-        project_direct_inline_sealed_execution_report_v3(distinct_report, &authenticated)
-            .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
-    if sealed_report.selected_program != authenticated.chain.selected_program
-        || sealed_report.outcome_count != authenticated.chain.outcome_count
-        || sealed_report.product_record != authenticated.chain.product_record
-        || sealed_report.trading_artifact_release != authenticated.chain.trading_artifact_release
-        || sealed_report.checked_manifest_digest != authenticated.checked_manifest_digest
-    {
-        return Err(DirectInlineRouteErrorV3::Finalization);
+        project_direct_inline_sealed_execution_report_v3(distinct_report, &authenticated).map_err(
+            |error| {
+                DirectInlineRouteErrorV3::Finalization(
+                    DirectInlineFinalizationRefusalV3::SealedReportProjection(
+                        DirectInlineSealedReportProjectionRefusalV3::from_transaction_error(&error),
+                    ),
+                )
+            },
+        )?;
+    let sealed_report_facts = DirectInlineSealedReportFactsRefusalV3 {
+        selected_program: sealed_report.selected_program != authenticated.chain.selected_program,
+        outcome_count: (sealed_report.outcome_count != authenticated.chain.outcome_count)
+            .then_some((
+                sealed_report.outcome_count,
+                authenticated.chain.outcome_count,
+            )),
+        product_record: sealed_report.product_record != authenticated.chain.product_record,
+        trading_artifact_release: sealed_report.trading_artifact_release
+            != authenticated.chain.trading_artifact_release,
+        checked_manifest_digest: sealed_report.checked_manifest_digest
+            != authenticated.checked_manifest_digest,
+    };
+    if sealed_report_facts.refuses() {
+        return Err(DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::SealedReportFacts(sealed_report_facts),
+        ));
     }
 
     let family_request = authenticated.child_authorities.family_request;
     let ordinary_request = match DirectExecutionRequestV3::decode(&family_request, outcome_count)
-        .map_err(|_| DirectInlineRouteErrorV3::Finalization)?
-    {
+        .map_err(|_| {
+            DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::FamilyRequestDecode {
+                    outcome_count,
+                    request_bytes: family_request.len(),
+                },
+            )
+        })? {
         DirectExecutionRequestV3::InlineOrdinary(request) => request,
-        _ => return Err(DirectInlineRouteErrorV3::Finalization),
+        _ => {
+            return Err(DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::FamilyRequestNotInlineOrdinary,
+            ));
+        }
     };
     let projected = project_direct_inline_ordinary_child_requests_v3(
         ordinary_request,
@@ -1835,14 +2612,23 @@ pub fn prepare_direct_inline_hot_finalization_v3(
         &named_route.fixed.transition.raw.data,
         &named_route.fixed.effect.raw.data,
     )
-    .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+    .map_err(|error| {
+        DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::ChildRequestProjection(error),
+        )
+    })?;
     let mut request_bank = Vec::with_capacity(DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3);
     request_bank.extend_from_slice(&projected.claims);
     for request in &projected.custody {
         request_bank.extend_from_slice(request);
     }
     if request_bank.len() != DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3 {
-        return Err(DirectInlineRouteErrorV3::Finalization);
+        return Err(DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::RequestBankWidth {
+                observed: request_bank.len(),
+                expected: DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3,
+            },
+        ));
     }
 
     let direct =
@@ -1850,18 +2636,35 @@ pub fn prepare_direct_inline_hot_finalization_v3(
     let context = direct_inline_finalization_context_v3(authentication.context);
     let collateral = direct_inline_finalization_collateral_v3(&named_route)?;
     let accounts = direct_inline_finalization_prestates_v3(&named_route);
-    let descriptor = CapabilityProgramV4::decode(&named_route.fixed.descriptor.raw.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+    let descriptor =
+        CapabilityProgramV4::decode(&named_route.fixed.descriptor.raw.data).map_err(|_| {
+            DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::DescriptorDecode {
+                    descriptor_bytes: named_route.fixed.descriptor.raw.data.len(),
+                },
+            )
+        })?;
     let strategy = ExecutionStrategyProgramV2::decode(&named_route.fixed.strategy.raw.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
-    if strategy.disposition() != StrategyDispositionV2::Interpreted
-        || strategy.certificate_program().is_some()
-        || strategy.admission_program().is_some()
-        || strategy.transition_program().to_bytes() != descriptor.transition().program().to_bytes()
-        || descriptor.strategy().program().to_bytes()
-            != hash(&named_route.fixed.strategy.raw.data).to_bytes()
-    {
-        return Err(DirectInlineRouteErrorV3::Finalization);
+        .map_err(|_| {
+            DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::StrategyDecode {
+                    strategy_bytes: named_route.fixed.strategy.raw.data.len(),
+                },
+            )
+        })?;
+    let strategy_closure = DirectInlineStrategyClosureRefusalV3 {
+        disposition: strategy.disposition() != StrategyDispositionV2::Interpreted,
+        certificate_program: strategy.certificate_program().is_some(),
+        admission_program: strategy.admission_program().is_some(),
+        transition_program: strategy.transition_program().to_bytes()
+            != descriptor.transition().program().to_bytes(),
+        strategy_digest: descriptor.strategy().program().to_bytes()
+            != hash(&named_route.fixed.strategy.raw.data).to_bytes(),
+    };
+    if strategy_closure.refuses() {
+        return Err(DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::StrategyClosure(strategy_closure),
+        ));
     }
     let ack = HotExecutionAckInputV3 {
         release_set: authenticated.chain.release_set,
@@ -1905,8 +2708,12 @@ pub fn prepare_direct_inline_hot_finalization_v3(
         },
         ack: &ack,
     };
-    let finalization = prepare_direct_inline_finalization_v3(&input)
-        .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+    let finalization = prepare_direct_inline_finalization_v3(&input).map_err(|error| {
+        DirectInlineRouteErrorV3::Finalization(DirectInlineFinalizationRefusalV3::Finalizer {
+            error,
+            candidate: rederive_direct_inline_candidate_refusal_v3(&input, error),
+        })
+    })?;
     let mut poststates: [DirectInlineExpectedPoststateV3; DIRECT_INLINE_POSTSTATE_COUNT_V3] =
         finalization
             .poststates
@@ -1915,20 +2722,47 @@ pub fn prepare_direct_inline_hot_finalization_v3(
                 data: Vec::new(),
             });
     for (index, expected) in poststates.iter_mut().enumerate() {
-        let role = DirectInlinePoststateRoleV3::from_index(index)
-            .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+        let role = DirectInlinePoststateRoleV3::from_index(index).map_err(|_| {
+            DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::PoststateRoleIndex { index },
+            )
+        })?;
         if role != expected.commitment.role {
-            return Err(DirectInlineRouteErrorV3::Finalization);
+            return Err(DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::PoststateRoleOrder {
+                    index,
+                    observed: expected.commitment.role,
+                    expected: role,
+                },
+            ));
         }
         expected.data.resize(
-            usize::try_from(expected.commitment.data_len)
-                .map_err(|_| DirectInlineRouteErrorV3::Finalization)?,
+            usize::try_from(expected.commitment.data_len).map_err(|_| {
+                DirectInlineRouteErrorV3::Finalization(
+                    DirectInlineFinalizationRefusalV3::PoststateWidth {
+                        index,
+                        data_len: expected.commitment.data_len,
+                    },
+                )
+            })?,
             0,
         );
-        project_direct_inline_account_poststate_v3(&input, role, &mut expected.data)
-            .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+        project_direct_inline_account_poststate_v3(&input, role, &mut expected.data).map_err(
+            |error| {
+                DirectInlineRouteErrorV3::Finalization(
+                    DirectInlineFinalizationRefusalV3::PoststateProjection {
+                        index,
+                        role,
+                        error,
+                        candidate: rederive_direct_inline_candidate_refusal_v3(&input, error),
+                    },
+                )
+            },
+        )?;
         if hash(&expected.data).to_bytes() != expected.commitment.data_digest {
-            return Err(DirectInlineRouteErrorV3::Finalization);
+            return Err(DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::PoststateDigest { index, role },
+            ));
         }
     }
     Ok(DirectInlineHotFinalizationPlanV3 {
@@ -1938,21 +2772,64 @@ pub fn prepare_direct_inline_hot_finalization_v3(
     })
 }
 
+/// Name the clause behind a `Candidate` refusal by re-running the same public
+/// candidate partition on the same inputs.
+///
+/// `DirectFinalizationErrorV3::Candidate` is the next collapse down: six sites
+/// in `dclutch-direct-codec` share it, and the largest of them discards a whole
+/// nine-variant `DirectInlineCandidateErrorV2` through a `map_err`. That crate
+/// compiles into the Trading SBF program, where widening a refusal is a stack
+/// frame's worth of on-chain cost for a diagnosis nobody on chain can read, so
+/// the discard is defensible THERE and only there. This host is where the
+/// operator reads the message, so this host pays for it: on the refusal path
+/// only, never on the success path, the exact same public entry point is called
+/// with the exact same five arguments the finalizer just used. This is not a
+/// second reader of the accounts -- there is no reimplemented rule here to
+/// drift -- it is the one reader, asked again with its own answer kept.
+///
+/// `None` means the candidate partition itself accepts, so the `Candidate` came
+/// from one of the other five sites (a settlement encode, or the Custody
+/// receipt join) rather than from the partition.
+fn rederive_direct_inline_candidate_refusal_v3(
+    input: &DirectInlineFinalizationInputV3<'_>,
+    error: DirectFinalizationErrorV3,
+) -> Option<DirectInlineCandidateErrorV2> {
+    if error != DirectFinalizationErrorV3::Candidate {
+        return None;
+    }
+    prepare_and_verify_inline_effect_partition_v2(
+        *input.direct,
+        *input.context,
+        *input.collateral,
+        input.request_bank,
+        input.dispatch,
+    )
+    .err()
+}
+
 fn direct_inline_finalization_input_v3(
     route: &DirectInlineOrdinaryRouteV3,
     authentication: DirectInlineRouteAuthenticationV3,
     request: DirectInlineOrdinaryRequestV3,
 ) -> Result<InlineOrdinaryInputV2, DirectInlineRouteErrorV3> {
-    let root = DirectRootStateV1::decode(
-        route
-            .fixed
-            .root
-            .data
-            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
-            .ok_or(DirectInlineRouteErrorV3::Finalization)?,
-    )
-    .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+    let root_tail = route
+        .fixed
+        .root
+        .data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::RootHeaderWidth {
+                observed: route.fixed.root.data.len(),
+                header: CAPABILITY_ROOT_HEADER_BYTES_V1,
+            },
+        ))?;
+    let root = DirectRootStateV1::decode(root_tail).map_err(|_| {
+        DirectInlineRouteErrorV3::Finalization(DirectInlineFinalizationRefusalV3::RootStateDecode {
+            tail_bytes: root_tail.len(),
+        })
+    })?;
     let seller = direct_inline_finalization_participant_v3(
+        DirectInlineParticipantSideV3::Seller,
         &route.seller_maker,
         authentication.seller,
         authentication.context.seller_created,
@@ -1961,6 +2838,7 @@ fn direct_inline_finalization_input_v3(
         authentication.context.seller_rent_principal,
     )?;
     let buyer = direct_inline_finalization_participant_v3(
+        DirectInlineParticipantSideV3::Buyer,
         &route.buyer_maker,
         authentication.buyer,
         authentication.context.buyer_created,
@@ -1968,14 +2846,19 @@ fn direct_inline_finalization_input_v3(
         authentication.context.buyer_rent_beneficiary,
         authentication.context.buyer_rent_principal,
     )?;
-    if request.seller.maker != authentication.seller.maker.to_bytes()
-        || request.seller.intent != authentication.seller.intent
-        || request.buyer.maker != authentication.buyer.maker.to_bytes()
-        || request.buyer.intent != authentication.buyer.intent
-        || request.fill != authentication.fill
-        || request.execution_price != authentication.execution_price
-    {
-        return Err(DirectInlineRouteErrorV3::Finalization);
+    let intents = DirectInlineRequestIntentRefusalV3 {
+        seller_maker: request.seller.maker != authentication.seller.maker.to_bytes(),
+        seller_intent: request.seller.intent != authentication.seller.intent,
+        buyer_maker: request.buyer.maker != authentication.buyer.maker.to_bytes(),
+        buyer_intent: request.buyer.intent != authentication.buyer.intent,
+        fill: (request.fill != authentication.fill).then_some((request.fill, authentication.fill)),
+        execution_price: (request.execution_price != authentication.execution_price)
+            .then_some((request.execution_price, authentication.execution_price)),
+    };
+    if intents.refuses() {
+        return Err(DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::RequestIntents(intents),
+        ));
     }
     Ok(InlineOrdinaryInputV2 {
         root,
@@ -1992,6 +2875,7 @@ fn direct_inline_finalization_input_v3(
 }
 
 fn direct_inline_finalization_participant_v3(
+    side: DirectInlineParticipantSideV3,
     maker_replay: &ObservedAccount,
     signed: SignedDirectIntentV3,
     created: bool,
@@ -2001,15 +2885,26 @@ fn direct_inline_finalization_participant_v3(
 ) -> Result<InlineParticipantV2, DirectInlineRouteErrorV3> {
     let authenticated =
         AuthenticatedCompactIntentV2::from_adjacent_ed25519(signed.maker.to_bytes(), signed.intent)
-            .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+            .map_err(|_| {
+                DirectInlineRouteErrorV3::Finalization(
+                    DirectInlineFinalizationRefusalV3::ParticipantIntent { side },
+                )
+            })?;
     let (maker_replay, first_use) = if created {
-        if maker_replay.owner != solana_sdk_ids::system_program::ID
-            || maker_replay.executable
-            || !maker_replay.data.is_empty()
-            || rent_owner == [0; 32]
-            || rent_principal == 0
-        {
-            return Err(DirectInlineRouteErrorV3::Finalization);
+        let vacancy = DirectInlineVacancyRefusalV3 {
+            owner: maker_replay.owner != solana_sdk_ids::system_program::ID,
+            executable: maker_replay.executable,
+            data_len: (!maker_replay.data.is_empty()).then_some(maker_replay.data.len()),
+            rent_beneficiary: rent_owner == [0; 32],
+            rent_principal: rent_principal == 0,
+        };
+        if vacancy.refuses() {
+            return Err(DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::ParticipantVacancy {
+                    side,
+                    clauses: vacancy,
+                },
+            ));
         }
         (
             MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(
@@ -2024,8 +2919,15 @@ fn direct_inline_finalization_participant_v3(
     } else {
         (
             MakerReplayObservationV1::Existing(
-                MakerReplayRootV1::decode(&maker_replay.data)
-                    .map_err(|_| DirectInlineRouteErrorV3::Finalization)?,
+                MakerReplayRootV1::decode(&maker_replay.data).map_err(|_| {
+                    DirectInlineRouteErrorV3::Finalization(
+                        DirectInlineFinalizationRefusalV3::ParticipantMakerReplayDecode {
+                            side,
+                            data_bytes: maker_replay.data.len(),
+                            expected_bytes: DIRECT_MAKER_REPLAY_BYTES_V1,
+                        },
+                    )
+                })?,
             ),
             None,
         )
@@ -2065,15 +2967,40 @@ fn direct_inline_finalization_context_v3(
 fn direct_inline_finalization_collateral_v3(
     route: &DirectInlineOrdinaryRouteV3,
 ) -> Result<DirectInlineCollateralFrameV2, DirectInlineRouteErrorV3> {
-    let buyer = TokenAccount::parse(&route.custody.buyer_token.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
-    let seller = TokenAccount::parse(&route.custody.seller_token.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
-    let fee = TokenAccount::parse(&route.custody.fee_token.data)
-        .map_err(|_| DirectInlineRouteErrorV3::Finalization)?;
+    let buyer = TokenAccount::parse(&route.custody.buyer_token.data).map_err(|_| {
+        DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::CollateralTokenParse {
+                role: DirectInlineCollateralRoleV3::Buyer,
+                data_bytes: route.custody.buyer_token.data.len(),
+            },
+        )
+    })?;
+    let seller = TokenAccount::parse(&route.custody.seller_token.data).map_err(|_| {
+        DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::CollateralTokenParse {
+                role: DirectInlineCollateralRoleV3::Seller,
+                data_bytes: route.custody.seller_token.data.len(),
+            },
+        )
+    })?;
+    let fee = TokenAccount::parse(&route.custody.fee_token.data).map_err(|_| {
+        DirectInlineRouteErrorV3::Finalization(
+            DirectInlineFinalizationRefusalV3::CollateralTokenParse {
+                role: DirectInlineCollateralRoleV3::Fee,
+                data_bytes: route.custody.fee_token.data.len(),
+            },
+        )
+    })?;
     let delegate = match buyer.delegate {
         COption::Some(delegate) => delegate,
-        COption::None => return Err(DirectInlineRouteErrorV3::Finalization),
+        COption::None => {
+            return Err(DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::BuyerCollateralDelegateAbsent {
+                    account: route.custody.buyer_token.key,
+                    owner: Pubkey::new_from_array(buyer.owner),
+                },
+            ));
+        }
     };
     Ok(DirectInlineCollateralFrameV2 {
         buyer_source: DirectExternalDebitV2 {
@@ -3153,16 +4080,17 @@ mod tests {
     use super::{
         DirectClaimsRouteV3, DirectCustodyRouteV3, DirectHotFixedRouteV3,
         DirectInlineAddressClassV3, DirectInlineAddressPlacementV3,
-        DirectInlineCheckedProgramAccountsV3, DirectInlineLookupTableProvisionV3,
-        DirectInlineOrdinaryRouteV3, DirectInlinePhysicalRouteV3,
-        DirectInlineRouteAuthenticationV3, DirectInlineRouteErrorV3,
-        DirectInlineRoutedTransactionErrorV3, FinalizedRecordRouteV3,
+        DirectInlineCheckedProgramAccountsV3, DirectInlineFinalizationRefusalV3,
+        DirectInlineLookupTableProvisionV3, DirectInlineOrdinaryRouteV3,
+        DirectInlinePhysicalRouteV3, DirectInlineRouteAuthenticationV3, DirectInlineRouteErrorV3,
+        DirectInlineRoutedTransactionErrorV3, DirectInlineSealedReportFactsRefusalV3,
+        DirectInlineSealedReportProjectionRefusalV3, FinalizedRecordRouteV3,
         admit_direct_inline_devnet_account_lock_count_v3,
         assemble_authenticated_direct_inline_ordinary_route_v3,
         build_direct_inline_capability_seal_v3, build_direct_inline_lookup_table_provision_v3,
-        compile_direct_inline_capability_seal_routed_v0_v3, compile_direct_inline_routed_v0_v3,
-        derive_direct_inline_child_authorities_v3, insert_once, merge_placement,
-        prepare_direct_inline_hot_finalization_v3,
+        child_caller_hint_slots_v1, compile_direct_inline_capability_seal_routed_v0_v3,
+        compile_direct_inline_routed_v0_v3, derive_direct_inline_child_authorities_v3, insert_once,
+        merge_placement, prepare_direct_inline_hot_finalization_v3,
         project_direct_inline_sealed_execution_physical_v3,
         project_direct_inline_sealed_execution_report_v3, verify_direct_inline_capability_seal_v3,
     };
@@ -3176,6 +4104,8 @@ mod tests {
         },
     };
     use dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1;
+    use dclutch_direct_codec::direct_finalization_v3::DirectFinalizationErrorV3;
+    use dclutch_direct_codec::inline_candidate_v2::DirectInlineCandidateErrorV2;
     use dclutch_market_core_codec::StateBumpsV1;
 
     fn key(byte: u8) -> Pubkey {
@@ -3327,6 +4257,39 @@ mod tests {
             executable: geometry.privileges().executable(),
             data: vec![0; data_len],
         }
+    }
+
+    /// The founding RentCredit's refund wallet, deliberately NOT the payer.
+    ///
+    /// A maker replay root's rent belongs to the market, so the chain records
+    /// this wallet as its rent owner however the trade is paid for. Holding it
+    /// distinct from the payer is what lets these fixtures tell the two models
+    /// apart; while they were the same key, a projection answering `payer` was
+    /// indistinguishable from a correct one.
+    fn maker_rent_beneficiary() -> Pubkey {
+        key(0x5a)
+    }
+
+    /// A real founding lifecycle RentCredit, not a zero-filled placeholder.
+    fn lifecycle_rent_credit_account(
+        profile: AccountProfileV2<'_>,
+        key_value: Pubkey,
+        rent_program: Pubkey,
+    ) -> ObservedAccount {
+        let mut account = profiled_account(profile, 7, key_value, rent_program);
+        let credit = dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2::new(
+            dclutch_rent_contract::RefundAuthority::new(maker_rent_beneficiary().to_bytes())
+                .expect("refund wallet"),
+            dclutch_rent_contract::lifecycle_v2::LifecycleAccountIdV2::new([0x5b; 32])
+                .expect("market"),
+            dclutch_rent_contract::lifecycle_v2::LifecycleAccountIdV2::new([0x5c; 32])
+                .expect("release set"),
+            7,
+            255,
+        )
+        .expect("lifecycle RentCredit");
+        account.data = credit.to_bytes().to_vec();
+        account
     }
 
     fn record(raw: ObservedAccount, staging_key: Pubkey) -> FinalizedRecordRouteV3 {
@@ -4137,9 +5100,9 @@ mod tests {
             buyer_maker_root: route.buyer_maker.key.to_bytes(),
             system_program: system_program::ID.to_bytes(),
             custody_authority: custody_authority.to_bytes(),
-            seller_rent_beneficiary: route.payer.key.to_bytes(),
+            seller_rent_beneficiary: maker_rent_beneficiary().to_bytes(),
             seller_rent_beneficiary_observation: [0; 32],
-            buyer_rent_beneficiary: route.payer.key.to_bytes(),
+            buyer_rent_beneficiary: maker_rent_beneficiary().to_bytes(),
             buyer_rent_beneficiary_observation: [0; 32],
             fee_token_account: route.custody.fee_token.key.to_bytes(),
             seller_token_account: route.custody.seller_token.key.to_bytes(),
@@ -4509,7 +5472,7 @@ mod tests {
             fixed,
             seller_maker: profiled_account(profile, 5, key(42), trading),
             payer: profiled_account(profile, 6, payer, system_program::ID),
-            lifecycle_rent_credit: profiled_account(profile, 7, key(67), rent_program),
+            lifecycle_rent_credit: lifecycle_rent_credit_account(profile, key(67), rent_program),
             buyer_maker: profiled_account(profile, 8, key(43), trading),
             rent_program: profiled_account(profile, 10, rent_program, bpf_loader_upgradeable::ID),
             system_program: profiled_account(profile, 11, system_program::ID, key(200)),
@@ -5483,15 +6446,212 @@ mod tests {
 
         let mut substituted_report = report;
         substituted_report.product_record = [0x99; 32];
+        let refused = prepare_direct_inline_hot_finalization_v3(
+            route,
+            3,
+            authentication,
+            &substituted_report,
+        )
+        .expect_err("substituted product record");
         assert_eq!(
-            prepare_direct_inline_hot_finalization_v3(
-                route,
-                3,
-                authentication,
-                &substituted_report,
-            ),
-            Err(DirectInlineRouteErrorV3::Finalization)
+            refused,
+            DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::SealedReportFacts(
+                    DirectInlineSealedReportFactsRefusalV3 {
+                        product_record: true,
+                        ..DirectInlineSealedReportFactsRefusalV3::default()
+                    }
+                )
+            )
         );
+        assert_eq!(
+            refused.to_string(),
+            "the projected sealed report disagrees with the authenticated chain on: product record digest"
+        );
+    }
+
+    /// The clause split earns its keep only if a refusal NAMES its site.
+    ///
+    /// Three independent mutations of the same fixture, each reaching a
+    /// different site, each asserted on the exact rendered sentence rather than
+    /// on a discriminant. Before the split all three produced the identical
+    /// four-word string "Direct Hot finalization: Finalization", which is what
+    /// sent the first local Direct fill to a lane with no way to tell a missing
+    /// token delegate from a corrupt strategy artifact.
+    #[test]
+    fn distinct_finalization_clauses_refuse_under_their_own_names() {
+        let (sealed_report, _, route, authentication, _, _, _) = named_fixture();
+        let authenticated = assemble_authenticated_direct_inline_ordinary_route_v3(
+            route.clone(),
+            3,
+            authentication,
+        )
+        .expect("authenticated distinct route");
+        let mut report = sealed_report;
+        report.selected_program = authenticated.chain.selected_program;
+        report.outcome_count = authenticated.chain.outcome_count;
+        report.product_record = authenticated.chain.product_record;
+        report.trading_artifact_release = authenticated.chain.trading_artifact_release;
+        report.checked_manifest_digest = authenticated.checked_manifest_digest;
+        for (index, meta) in authenticated.physical.fixed_accounts.iter().enumerate() {
+            report.instructions[3].accounts[index] = AccountMeta {
+                pubkey: meta.account.key,
+                is_signer: meta.is_signer,
+                is_writable: meta.is_writable,
+            };
+        }
+        prepare_direct_inline_hot_finalization_v3(route.clone(), 3, authentication, &report)
+            .expect("the unmutated fixture still finalizes");
+
+        // 1. The caller's report names an account the assembled route does not.
+        // Before the split this was indistinguishable from every clause below.
+        let mut substituted_instruction = report.clone();
+        substituted_instruction.instructions[3].accounts[0].pubkey = key(0xEE);
+        let refused = prepare_direct_inline_hot_finalization_v3(
+            route.clone(),
+            3,
+            authentication,
+            &substituted_instruction,
+        )
+        .expect_err("a report instruction the route does not name");
+        assert_eq!(
+            refused,
+            DirectInlineRouteErrorV3::Finalization(
+                DirectInlineFinalizationRefusalV3::SealedReportProjection(
+                    DirectInlineSealedReportProjectionRefusalV3::Instruction
+                )
+            )
+        );
+        assert_eq!(
+            refused.to_string(),
+            "the distinct-account report does not project onto the authenticated route: the report's instruction sequence differed from the route"
+        );
+
+        // 2. The buyer's collateral source cannot pay for the fill. This is the
+        // clause an operator hits with an underfunded admission, and it is the
+        // one the bare `Finalization` unit hid most expensively: the fix is on
+        // the chain, not in the driver, and nothing in the old message said so.
+        let buyer_token =
+            TokenAccount::parse(&route.custody.buyer_token.data).expect("fixture buyer token");
+        let buyer_delegate = match buyer_token.delegate {
+            super::COption::Some(delegate) => Pubkey::new_from_array(delegate),
+            super::COption::None => panic!("the fixture buyer token is delegated"),
+        };
+        let mut unfunded = route.clone();
+        unfunded.custody.buyer_token.data = token_account_bytes(
+            Pubkey::new_from_array(buyer_token.mint),
+            Pubkey::new_from_array(buyer_token.owner),
+            0,
+            Some(buyer_delegate),
+            buyer_token.delegated_amount,
+        );
+        let refused =
+            prepare_direct_inline_hot_finalization_v3(unfunded, 3, authentication, &report)
+                .expect_err("a buyer who cannot pay for the fill");
+        assert_eq!(
+            refused,
+            DirectInlineRouteErrorV3::Finalization(DirectInlineFinalizationRefusalV3::Finalizer {
+                error: DirectFinalizationErrorV3::Candidate,
+                candidate: Some(DirectInlineCandidateErrorV2::Binding),
+            })
+        );
+        assert_eq!(
+            refused.to_string(),
+            "the canonical Direct finalizer refused: Candidate, and the candidate partition re-run on the same inputs refuses at Binding"
+        );
+
+        // 3. The buyer can pay but Custody has no allowance to spend. A
+        // DIFFERENT chain fact reaching the SAME clause -- recorded that way on
+        // purpose: `Binding` is where this chase currently ends, and the pair
+        // is the standing evidence of how much further it could usefully go.
+        let mut unallowed = route.clone();
+        unallowed.custody.buyer_token.data = token_account_bytes(
+            Pubkey::new_from_array(buyer_token.mint),
+            Pubkey::new_from_array(buyer_token.owner),
+            buyer_token.amount,
+            Some(buyer_delegate),
+            0,
+        );
+        let refused =
+            prepare_direct_inline_hot_finalization_v3(unallowed, 3, authentication, &report)
+                .expect_err("a buyer whose delegate may spend nothing");
+        assert_eq!(
+            refused,
+            DirectInlineRouteErrorV3::Finalization(DirectInlineFinalizationRefusalV3::Finalizer {
+                error: DirectFinalizationErrorV3::Candidate,
+                candidate: Some(DirectInlineCandidateErrorV2::Binding),
+            })
+        );
+    }
+
+    /// Which finalization clauses the assembled route reaches, and which are
+    /// backstops behind an earlier gate.
+    ///
+    /// `assemble_authenticated_direct_inline_ordinary_route_v3` runs first and
+    /// refuses in its own vocabulary, so several finalization clauses cannot
+    /// fire through this entry point at all. That is not a reason to delete
+    /// them -- they are the second reader of the same bytes -- but it IS a fact
+    /// an operator reading a refusal needs, because a clause that never fires
+    /// is a clause you should stop suspecting. Recorded as a test so it stays
+    /// true rather than as a comment that decays.
+    #[test]
+    fn earlier_gates_own_the_clauses_the_finalizer_never_reaches() {
+        let (sealed_report, _, route, authentication, _, _, _) = named_fixture();
+        let authenticated = assemble_authenticated_direct_inline_ordinary_route_v3(
+            route.clone(),
+            3,
+            authentication,
+        )
+        .expect("authenticated distinct route");
+        let mut report = sealed_report;
+        report.selected_program = authenticated.chain.selected_program;
+        report.outcome_count = authenticated.chain.outcome_count;
+        report.product_record = authenticated.chain.product_record;
+        report.trading_artifact_release = authenticated.chain.trading_artifact_release;
+        report.checked_manifest_digest = authenticated.checked_manifest_digest;
+        for (index, meta) in authenticated.physical.fixed_accounts.iter().enumerate() {
+            report.instructions[3].accounts[index] = AccountMeta {
+                pubkey: meta.account.key,
+                is_signer: meta.is_signer,
+                is_writable: meta.is_writable,
+            };
+        }
+        let buyer_token =
+            TokenAccount::parse(&route.custody.buyer_token.data).expect("fixture buyer token");
+        let mut undelegated = route.clone();
+        undelegated.custody.buyer_token.data = token_account_bytes(
+            Pubkey::new_from_array(buyer_token.mint),
+            Pubkey::new_from_array(buyer_token.owner),
+            buyer_token.amount,
+            None,
+            0,
+        );
+        let mut truncated_root = route.clone();
+        truncated_root.fixed.root.data.clear();
+        let mut grown_strategy = route.clone();
+        grown_strategy.fixed.strategy.raw.data.push(0);
+        let mut grown_descriptor = route.clone();
+        grown_descriptor.fixed.descriptor.raw.data.push(0);
+        let mut grown_replay = route.clone();
+        grown_replay.seller_maker.data.push(0);
+        for (mutated, expected) in [
+            // The undelegated buyer source: the child Custody FrameSpec reads
+            // the delegate before the finalizer's collateral frame does.
+            (undelegated, DirectInlineRouteErrorV3::ChildFrame),
+            // An absent root, wearing the zero-length placeholder the finalized
+            // snapshot renders for a MISSING account: AccountProfile geometry.
+            (truncated_root, DirectInlineRouteErrorV3::Profile),
+            // Artifact bytes the sealed descriptor closure does not cover.
+            (grown_strategy, DirectInlineRouteErrorV3::Seal),
+            (grown_descriptor, DirectInlineRouteErrorV3::Seal),
+            // A maker replay of the wrong width.
+            (grown_replay, DirectInlineRouteErrorV3::ChildFrame),
+        ] {
+            assert_eq!(
+                prepare_direct_inline_hot_finalization_v3(mutated, 3, authentication, &report),
+                Err(expected)
+            );
+        }
     }
 
     #[test]
@@ -5504,6 +6664,127 @@ mod tests {
         assert_eq!(
             admit_direct_inline_devnet_account_lock_count_v3(0),
             Err(DirectInlineRoutedTransactionErrorV3::AccountLocks)
+        );
+    }
+
+    /// The Custody hint slot follows the ENABLED Custody route, never slot 0.
+    ///
+    /// `expected_custody_slots` picks the terminal slot 0 only when
+    /// `total_fee_transfer == 0`, and the non-terminal slot 1 -- the one that
+    /// leaves the fee's allowance standing for the settlement transaction --
+    /// whenever a fee is transferred. The devnet trade driver handed
+    /// `custody_authority_bumps[0]` to the hot envelope, which is right for
+    /// every zero-fee fill this protocol had ever assembled and wrong for the
+    /// first fee-bearing one: Trading reproduced the terminal route's bump for
+    /// the intermediate route's seeds, `create_program_address` refused the
+    /// off-curve check, and the fill returned `Release` 771,347 CU in.
+    ///
+    /// Measured on cohort-8's market22 against the deployed ELF: the enabled
+    /// slot's canonical bump was 252 and slot 0's was 255.
+    #[test]
+    fn the_custody_hint_slot_follows_a_fee_bearing_settlement() {
+        let (_, _, route, authentication, _, _, _) = named_fixture();
+        let child = derive_direct_inline_child_authorities_v3(
+            authentication.seller,
+            authentication.buyer,
+            authentication.fill,
+            authentication.execution_price,
+            authentication.context,
+            &route.fixed.account_profile.raw.data,
+            &route.fixed.transition.raw.data,
+            &route.fixed.effect.raw.data,
+        )
+        .expect("child authorities");
+
+        // Hint slot 0 is the Claims route and is not at issue.
+        assert_eq!(child.child_caller_bumps[0], child.claims_authority_bump);
+
+        // The hint follows whatever slot the projection enabled -- never a
+        // literal index.
+        let slot = child.enabled_custody_slot.expect("an enabled Custody slot");
+        assert_eq!(
+            child.child_caller_bumps[1],
+            child.custody_authority_bumps[usize::from(slot)],
+        );
+
+        // And a standing note on this fixture, so nobody reads the assertion
+        // above as covering the bug. Its intents fill 20 at price 50 against a
+        // price scale of 100, so gross is 10 and 50 bps of that FLOORS TO
+        // ZERO. It is nominally fee-bearing and economically not, so it takes
+        // the terminal slot 0 -- which is exactly the byte the old call site
+        // hardcoded. Every fixture in this crate is in the same position, and
+        // that is why indexing `[0]` survived here for as long as it did. The
+        // discriminating coverage is the unit test below.
+        assert_eq!(slot, 0, "this fixture's 50 bps floors to a zero fee");
+    }
+
+    /// The Custody hint slot follows the ENABLED Custody route, never slot 0.
+    ///
+    /// `expected_custody_slots` picks the terminal slot 0 only when
+    /// `total_fee_transfer == 0`, and the non-terminal slot 1 -- the one that
+    /// leaves the fee's allowance standing for the settlement transaction --
+    /// whenever a fee is actually transferred. That selection is proven
+    /// two-sidedly in the codec by
+    /// `a_zero_fee_fill_closes_the_delegation_and_a_fee_bearing_one_does_not`.
+    ///
+    /// What no test covered was whether the hint handed to the hot envelope
+    /// FOLLOWS that selection. It did not: the devnet trade driver passed
+    /// `custody_authority_bumps[0]`, which is right for every zero-fee fill
+    /// this protocol had ever assembled and wrong for the first fee-bearing
+    /// one. Trading reproduced the terminal route's bump against the
+    /// intermediate route's seeds, `create_program_address` refused the
+    /// off-curve check, and the fill returned `Release` 771,347 CU in.
+    ///
+    /// Measured on cohort-8's market22 against the deployed ELF: the enabled
+    /// slot's canonical bump was 252 and slot 0's was 255.
+    #[test]
+    fn the_child_caller_hint_follows_the_enabled_custody_slot() {
+        // Four distinct bumps, so picking the wrong slot cannot coincidentally
+        // reproduce the right byte and no assertion below can go vacuous.
+        let bumps = [251_u8, 252, 253, 254];
+        let claims = 250_u8;
+        let dispatch = |slot: u8, count: u8| {
+            dclutch_direct_codec::inline_candidate_v2::DirectInlineEffectDispatchV2 {
+                custody_slots: [slot],
+                custody_count: count,
+                child_dispatch_writable: [false; 4],
+            }
+        };
+
+        // A zero-fee fill takes the terminal route at slot 0.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(0, 1)),
+            Ok(([claims, 251], Some(0))),
+        );
+        // A fee-bearing fill takes the intermediate route at slot 1, and the
+        // hint must move with it. This is the case the old call site got wrong.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(1, 1)),
+            Ok(([claims, 252], Some(1))),
+        );
+        // The remaining shapes are not reachable from an inline fill today, but
+        // the mapping must not silently hand back a neighbour's byte if one
+        // ever becomes reachable.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(2, 1)),
+            Ok(([claims, 253], Some(2))),
+        );
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(3, 1)),
+            Ok(([claims, 254], Some(3))),
+        );
+
+        // No Custody child: the slot is ABSENT and the walk searches.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(0, 0)),
+            Ok(([claims, 0], None)),
+        );
+
+        // A slot outside the fixed four is refused rather than wrapped or
+        // silently dropped.
+        assert_eq!(
+            child_caller_hint_slots_v1(claims, bumps, dispatch(4, 1)),
+            Err(DirectInlineRouteErrorV3::ChildFrame),
         );
     }
 

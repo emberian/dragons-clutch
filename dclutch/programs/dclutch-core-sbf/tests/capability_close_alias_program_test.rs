@@ -46,9 +46,9 @@ use dclutch_direct_codec::{
     },
 };
 use dclutch_market_core_codec::{
-    Action, CapabilityFundingHeaderV2, CoreEffectActionV1, CoreEffectEnvelopeV1, CoreState,
-    Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness, Request, Role, STATE_BYTES,
-    StateBumpsV1,
+    Action, CapabilityFundingHeaderV2, CapabilityRouteLayoutV1, CoreEffectActionV1,
+    CoreEffectEnvelopeV1, CoreState, Identity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
+    Readiness, Request, Role, STATE_BYTES, StateBumpsV1,
 };
 use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_HEADER_BYTES_V3;
 use dclutch_product_runtime_v2::{
@@ -88,9 +88,33 @@ use solana_program::{
     rent::Rent,
 };
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::Signer;
+use solana_sdk::{instruction::InstructionError, signature::Signer, transaction::TransactionError};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
+
+/// The exact close frame Core parses and `dclutch-operator`'s
+/// `project_direct_native_close_coordinate_closure_v1` emits: five record and
+/// Market accounts, an `F=2` physical funding slice, eleven Core-owned fixed
+/// accounts, and a twenty-account Direct child tail.
+///
+/// The frame's WIDTH and every coordinate the hostilities aim at are read off
+/// this layout rather than written down as positions. `67e96e5b` is why:
+/// `open_market_program_test` carried its frame as literals, `2dc53776` moved
+/// the route, and the file spent four days submitting a frame one account
+/// short -- with four hostile assertions passing on the length refusal none of
+/// them was about. The honest frame below is still assembled in order, because
+/// it is the frame's CONTENT and no semantic owner can supply the fixture's
+/// keys; the width assertion is what catches it drifting.
+fn close_layout() -> CapabilityRouteLayoutV1 {
+    CapabilityRouteLayoutV1::new(2, 20).expect("the F=2 twenty-tail close layout is in bounds")
+}
+
+/// `CoreSbfError::AccountFrame`, `::Release` and `::Funding`.
+const CORE_ACCOUNT_FRAME: u32 = 0x3001;
+const CORE_RELEASE: u32 = 0x3004;
+const CORE_FUNDING: u32 = 0x3008;
+/// `TradingSbfError::Root`.
+const TRADING_ROOT: u32 = 0x4002;
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc1; 32]);
 const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc2; 32]);
@@ -100,7 +124,7 @@ const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xc5; 32]);
 const GENERATION: u64 = 9;
 const CAPACITY_PROFILE: [u8; 32] = [0x44; 32];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Fault {
     None,
     MissingAlias,
@@ -825,21 +849,39 @@ fn build_fixture(fault: Fault) -> (ProgramTest, Fixture) {
         AccountMeta::new_readonly(RENT_PROGRAM_ID, false),
         AccountMeta::new(rent_credit, false),
     ];
+    let layout = close_layout();
+    // The first of the seven exact close aliases: the Registry activation
+    // cache, carried once for Core and once again inside the Direct child
+    // tail. Both halves come from `close_alias_pairs()`, so a route that
+    // moves its aliases moves these hostilities with it.
+    let (cache_left, cache_right) = layout
+        .close_alias_pairs()
+        .first()
+        .copied()
+        .expect("the close route admits seven aliases");
+    // Two child-tail coordinates that are NOT an admitted pair: the System
+    // program and the Rent program. Aliasing them is the extra-alias case.
+    let unpaired_left = layout.child_start() + 15;
+    let unpaired_right = layout.child_start() + 18;
     match fault {
         Fault::None => {}
-        Fault::MissingAlias => accounts[26] = AccountMeta::new_readonly(hostile, false),
-        Fault::ShiftedAlias => accounts[26] = accounts[9].clone(),
+        Fault::MissingAlias => accounts[cache_right] = AccountMeta::new_readonly(hostile, false),
+        Fault::ShiftedAlias => accounts[cache_right] = accounts[layout.core_program()].clone(),
         Fault::PairSubstitution => {
-            accounts[8] = AccountMeta::new_readonly(hostile, false);
-            accounts[26] = AccountMeta::new_readonly(hostile, false);
+            accounts[cache_left] = AccountMeta::new_readonly(hostile, false);
+            accounts[cache_right] = AccountMeta::new_readonly(hostile, false);
         }
-        Fault::ExtraAlias => accounts[33] = accounts[36].clone(),
-        Fault::DependencyWritable => accounts[5].is_writable = true,
-        Fault::DependencyReordered => accounts.swap(5, 6),
-        Fault::DependencySubstitution => accounts[5] = AccountMeta::new_readonly(hostile, false),
+        Fault::ExtraAlias => accounts[unpaired_left] = accounts[unpaired_right].clone(),
+        Fault::DependencyWritable => accounts[layout.funding_start()].is_writable = true,
+        Fault::DependencyReordered => {
+            accounts.swap(layout.funding_start(), layout.funding_end() - 1)
+        }
+        Fault::DependencySubstitution => {
+            accounts[layout.funding_start()] = AccountMeta::new_readonly(hostile, false);
+        }
         Fault::DependencyMutated => {}
     }
-    assert_eq!(accounts.len(), 38);
+    assert_eq!(accounts.len(), layout.account_count());
     (
         test,
         Fixture {
@@ -1112,6 +1154,30 @@ async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Option<Accoun
         .expect("account lookup")
 }
 
+/// The exact custom refusal a submission produced, or `None` if it succeeded.
+///
+/// Every hostile case in this file asserted only `expect_err` until
+/// 2026-08-30, which is the assertion shape `67e96e5b` caught passing on the
+/// wrong refusal in `open_market_program_test`. Naming the code is what makes
+/// a hostility about its own conjunct rather than about whatever the program
+/// happened to reach first.
+fn refusal(result: Result<(), BanksClientError>) -> Option<u32> {
+    match result {
+        Ok(()) => None,
+        Err(BanksClientError::TransactionError(error)) => transaction_refusal(Err(error)),
+        Err(other) => panic!("expected a program refusal, got {other:?}"),
+    }
+}
+
+/// The same reading, for the metadata-carrying submission path.
+fn transaction_refusal(result: Result<(), TransactionError>) -> Option<u32> {
+    match result {
+        Ok(()) => None,
+        Err(TransactionError::InstructionError(_, InstructionError::Custom(code))) => Some(code),
+        Err(other) => panic!("expected a program refusal, got {other:?}"),
+    }
+}
+
 async fn submit(
     context: &mut ProgramTestContext,
     instruction: Instruction,
@@ -1178,11 +1244,17 @@ async fn canonical_high_selector_closes_through_real_core_and_trading() {
 
 #[tokio::test]
 async fn shifted_substituted_and_extra_aliases_refuse_with_rollback() {
-    for fault in [
-        Fault::MissingAlias,
-        Fault::ShiftedAlias,
-        Fault::PairSubstitution,
-        Fault::ExtraAlias,
+    // A dropped alias, a shifted one and a spurious one are all frame
+    // geometry, and Core refuses them at `require_authenticated_suffix_aliases`
+    // before it reads a byte of state -- 8.4k to 18.4k compute units.
+    // Substituting BOTH halves of a pair keeps the geometry exact, so that one
+    // survives the frame check and is refused where it actually differs: the
+    // Registry activation cache no longer authenticates the release.
+    for (fault, expected) in [
+        (Fault::MissingAlias, CORE_ACCOUNT_FRAME),
+        (Fault::ShiftedAlias, CORE_ACCOUNT_FRAME),
+        (Fault::PairSubstitution, CORE_RELEASE),
+        (Fault::ExtraAlias, CORE_ACCOUNT_FRAME),
     ] {
         let (test, fixture) = build_fixture(fault);
         let mut context = test.start_with_context().await;
@@ -1192,9 +1264,11 @@ async fn shifted_substituted_and_extra_aliases_refuse_with_rollback() {
             account(&mut context, fixture.funding).await,
             account(&mut context, fixture.rent_credit).await,
         ];
-        submit(&mut context, fixture.instruction)
-            .await
-            .expect_err("hostile alias frame refuses");
+        assert_eq!(
+            refusal(submit(&mut context, fixture.instruction).await),
+            Some(expected),
+            "{fault:?} must refuse with its own code"
+        );
         let after = [
             account(&mut context, fixture.market).await,
             account(&mut context, fixture.root).await,
@@ -1207,11 +1281,17 @@ async fn shifted_substituted_and_extra_aliases_refuse_with_rollback() {
 
 #[tokio::test]
 async fn dependency_writable_reordered_substituted_and_mutated_refuse_with_rollback() {
-    for fault in [
-        Fault::DependencyWritable,
-        Fault::DependencyReordered,
-        Fault::DependencySubstitution,
-        Fault::DependencyMutated,
+    // None of these four is a frame refusal. The physical funding slice is
+    // width- and privilege-checked by the FundingLedger validator, not by the
+    // alias geometry, so a writable, reordered, substituted or byte-mutated
+    // dependency ledger all arrive at `CoreSbfError::Funding` -- and they do
+    // so at four different depths (110k to 228k compute units), which is the
+    // evidence that they are four hostilities rather than one.
+    for (fault, expected) in [
+        (Fault::DependencyWritable, CORE_FUNDING),
+        (Fault::DependencyReordered, CORE_FUNDING),
+        (Fault::DependencySubstitution, CORE_FUNDING),
+        (Fault::DependencyMutated, CORE_FUNDING),
     ] {
         let (test, fixture) = build_fixture(fault);
         let mut context = test.start_with_context().await;
@@ -1222,9 +1302,11 @@ async fn dependency_writable_reordered_substituted_and_mutated_refuse_with_rollb
             account(&mut context, fixture.funding).await,
             account(&mut context, fixture.rent_credit).await,
         ];
-        submit(&mut context, fixture.instruction)
-            .await
-            .expect_err("hostile dependency frame refuses");
+        assert_eq!(
+            refusal(submit(&mut context, fixture.instruction).await),
+            Some(expected),
+            "{fault:?} must refuse with its own code"
+        );
         let after = [
             account(&mut context, fixture.market).await,
             account(&mut context, fixture.root).await,
@@ -1367,7 +1449,16 @@ async fn begin_direct_retiring_m61_twenty_seed_real_sbf_campaign() {
         .process_transaction_with_metadata(transaction)
         .await
         .expect("replay Banks RPC");
-    assert!(processed.result.is_err(), "replay must refuse");
+    // The refusal must be Trading's, about the root it names: the request
+    // still carries the Open preimage that the first pass consumed, so the
+    // immutable child root no longer matches. `is_err()` alone would also
+    // have accepted a Core frame refusal, which would mean this replay never
+    // reached the statement it is here to exercise.
+    assert_eq!(
+        transaction_refusal(processed.result),
+        Some(TRADING_ROOT),
+        "replay must refuse at the Trading root"
+    );
     let after = account(&mut context, replay.root)
         .await
         .expect("Retiring root after replay");

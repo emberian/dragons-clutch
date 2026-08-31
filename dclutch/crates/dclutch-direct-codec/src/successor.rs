@@ -26,10 +26,45 @@ pub const DIRECT_EXECUTION_CONFIG_BYTES_V1: usize = generated::DIRECT_EXECUTION_
 pub const DIRECT_ROOT_STATE_BYTES_V1: usize = generated::DIRECT_ROOT_STATE_BYTES_V1;
 /// Per-maker replay-root byte width.
 pub const DIRECT_MAKER_REPLAY_BYTES_V1: usize = generated::DIRECT_MAKER_REPLAY_BYTES_V1;
+/// The pre-`fee_owed` per-maker replay-root width, still readable.
+///
+/// [`MakerReplayRootV1::decode`] accepts this width and reads `fee_owed = 0`,
+/// following the tree's `direct_with_witness` precedent, so an exterior reader
+/// -- an operator, an indexer, the web -- never has to know which width it
+/// holds. **This is not a migration story for the on-chain account.** The
+/// AccountProfile pins the replay account's data length to
+/// [`DIRECT_MAKER_REPLAY_BYTES_V1`] exactly
+/// (`ordinary_account_artifacts_v3.rs`, `AccountPrestateV2::LifecycleBound`),
+/// so a live replay at the legacy width is refused by the profile before any
+/// decode is reached. Widening the record IS a migration at the account tier;
+/// the both-width reader only keeps exterior code honest about it.
+pub const DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1: usize = 152;
+
+const _: () = assert!(DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 + 8 == DIRECT_MAKER_REPLAY_BYTES_V1);
 /// One live successor registered-intent record width.
 pub const DIRECT_REGISTERED_RECORD_BYTES_V2: usize = generated::DIRECT_REGISTERED_RECORD_BYTES_V2;
 /// Basis-point denominator and sole fee floor denominator.
 pub const DIRECT_FEE_DENOMINATOR_V1: u16 = 10_000;
+/// The admissible venue fee band, in basis points (decision 0014 D2).
+///
+/// Until this constant existed the band was one `test` line in
+/// `tools/release/stage-devnet-sponsored-market-open.sh`, so a founding that did
+/// not go through that script was unbounded
+/// (`docs/evidence/SLIPPED_THROUGH_SWEEP_2026_08_30.md`). It is checked here at
+/// config construction -- which every founding path reaches, because the
+/// immutable record is built from this type -- and again as a relation of the
+/// authored transition program (`DClutchSemantics.DirectOrdinaryV3`, prelude
+/// `.scalarLe policyFeeBps maxFeeBps`), so neither an exterior builder nor a
+/// hand-assembled config record can exceed it.
+///
+/// The band is also what retires `CUSTODY_ROUTES_V3` slot 3, `FeeSole`: that
+/// route is enabled by `seller_net == 0 && combined_fee != 0`, which for a
+/// positive gross forces a rate of exactly 10,000. See
+/// `DClutch.Direct.banded_fee_leaves_a_positive_seller_net` for the proof, and
+/// [`DirectInlineCandidateErrorV2::FeeSoleRetired`] for the refusal.
+pub const DIRECT_MAX_FEE_BASIS_POINTS_V1: u16 = 500;
+
+const _: () = assert!(DIRECT_MAX_FEE_BASIS_POINTS_V1 <= DIRECT_FEE_DENOMINATOR_V1);
 
 /// Canonical projection coordinates of [`DirectExecutionConfigV1`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,6 +161,18 @@ impl DirectMakerReplayLayoutV1 {
     pub const RENT_OWNER: usize = generated::DIRECT_MAKER_RENT_OWNER_OFFSET_V1;
     /// Historical rent principal (`u64`, little-endian).
     pub const RENT_PRINCIPAL: usize = generated::DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1;
+    /// Unsettled Direct fee this maker owes (`u64`, little-endian).
+    ///
+    /// **This surface is what an Effect emitter writes through, and a field
+    /// missing from it is a field the chain never writes.** The record grew
+    /// `fee_owed` and this coordinate did not arrive with it, so
+    /// `ordinary_effect_artifacts_v3::push_maker_state` wrote eleven fields out
+    /// of twelve: the contract-side settlement recorded the obligation, the
+    /// Effect left the account's last eight bytes zero, and the fee-bearing
+    /// fill refused at `TradingSbfError::Commit` on the poststate digest --
+    /// after 1,155,154 CU of completed work, which is what made it look like a
+    /// compute problem instead of a missing write.
+    pub const FEE_OWED: usize = generated::DIRECT_MAKER_FEE_OWED_OFFSET_V1;
 
     /// Exact encoded magic word used only by typed state initialization.
     pub const MAGIC_WORD: u64 = u64::from_le_bytes(generated::DIRECT_MAKER_MAGIC_V1);
@@ -247,8 +294,13 @@ pub enum SuccessorError {
     ZeroIdentity,
     /// Authenticated config content differed from the descriptor selection.
     ConfigSelectionMismatch,
-    /// Price scale was zero or the fee rate exceeded 10,000 basis points.
+    /// Price scale was zero.
     InvalidExecutionConfig,
+    /// The immutable venue rate exceeded `DIRECT_MAX_FEE_BASIS_POINTS_V1`.
+    FeeBandExceeded,
+    /// A fee-bearing fill met a buyer maker replay that still owes a fee, or a
+    /// settlement did not name exactly the amount recorded.
+    FeeOwedOutstanding,
     /// Root phase was unknown or did not admit the requested action.
     InvalidRootPhase,
     /// A maker root differed from Market/generation/maker coordinates.
@@ -339,8 +391,11 @@ impl DirectExecutionConfigV1 {
         fee_basis_points: u16,
         fee_recipient: [u8; 32],
     ) -> SuccessorResult<Self> {
-        if price_scale == 0 || fee_basis_points > DIRECT_FEE_DENOMINATOR_V1 {
+        if price_scale == 0 {
             return Err(SuccessorError::InvalidExecutionConfig);
+        }
+        if fee_basis_points > DIRECT_MAX_FEE_BASIS_POINTS_V1 {
+            return Err(SuccessorError::FeeBandExceeded);
         }
         require_nonzero(fee_recipient)?;
         Ok(Self {
@@ -695,6 +750,7 @@ pub struct MakerReplayRootV1 {
     minimum_live_nonce: u64,
     rent_owner: [u8; 32],
     rent_principal: u64,
+    fee_owed: u64,
     bump: u8,
 }
 
@@ -720,13 +776,20 @@ impl MakerReplayRootV1 {
             minimum_live_nonce: 0,
             rent_owner,
             rent_principal,
+            fee_owed: 0,
             bump,
         })
     }
 
-    /// Hostile-decode one exact Trading-owned replay account.
+    /// Hostile-decode one Trading-owned replay account at either declared width.
+    ///
+    /// The canonical width carries `fee_owed`; the legacy width predates it and
+    /// reads zero. Both are decoded by the same relations otherwise, and
+    /// [`MakerReplayRootV1::encode`] always emits the canonical width.
     pub fn decode(input: &[u8]) -> SuccessorResult<Self> {
-        exact_width(input, DIRECT_MAKER_REPLAY_BYTES_V1)?;
+        if input.len() != DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 {
+            exact_width(input, DIRECT_MAKER_REPLAY_BYTES_V1)?;
+        }
         exact(
             input,
             generated::DIRECT_MAKER_MAGIC_OFFSET_V1,
@@ -746,6 +809,11 @@ impl MakerReplayRootV1 {
             )?,
             rent_owner: array_at(input, generated::DIRECT_MAKER_RENT_OWNER_OFFSET_V1)?,
             rent_principal: u64_at(input, generated::DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1)?,
+            fee_owed: if input.len() == DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 {
+                0
+            } else {
+                u64_at(input, generated::DIRECT_MAKER_FEE_OWED_OFFSET_V1)?
+            },
             bump: byte_at(input, generated::DIRECT_MAKER_BUMP_OFFSET_V1)?,
         };
         value.validate()?;
@@ -810,6 +878,11 @@ impl MakerReplayRootV1 {
             &mut output,
             generated::DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1,
             &self.rent_principal.to_le_bytes(),
+        );
+        put(
+            &mut output,
+            generated::DIRECT_MAKER_FEE_OWED_OFFSET_V1,
+            &self.fee_owed.to_le_bytes(),
         );
         Ok(output)
     }
@@ -889,6 +962,50 @@ impl MakerReplayRootV1 {
     /// Stored canonical PDA bump.
     pub const fn bump(self) -> u8 {
         self.bump
+    }
+
+    /// Unsettled Direct fee this maker owes the market's configured recipient.
+    ///
+    /// Nonzero exactly between the fill that owed it and the second
+    /// transaction that pays it; see `docs/design/FEE_SECOND_TRANSACTION_V1.md`
+    /// section 2.4.
+    pub const fn fee_owed(self) -> u64 {
+        self.fee_owed
+    }
+
+    /// Record the obligation one fee-bearing fill leaves behind.
+    ///
+    /// At most one unsettled fee exists per maker per market, which is what
+    /// makes the admission gate a single comparison. Recording onto a replay
+    /// that already owes is refused rather than accumulated: the fill that
+    /// would do it is already refused one step earlier by
+    /// [`SuccessorError::FeeOwedOutstanding`], and a second site that quietly
+    /// added instead would make that gate bypassable.
+    pub fn record_fee_owed(self, amount: u64) -> SuccessorResult<Self> {
+        self.validate()?;
+        if amount == 0 || self.fee_owed != 0 {
+            return Err(SuccessorError::FeeOwedOutstanding);
+        }
+        Ok(Self {
+            fee_owed: amount,
+            ..self
+        })
+    }
+
+    /// Clear the obligation, for exactly the amount recorded.
+    ///
+    /// Never "whatever is delegated": a buyer who re-approved a smaller amount
+    /// would otherwise settle short and clear the flag
+    /// (`FEE_SECOND_TRANSACTION_V1` section 2.4, invariant 4).
+    pub fn settle_fee_owed(self, amount: u64) -> SuccessorResult<Self> {
+        self.validate()?;
+        if amount == 0 || self.fee_owed != amount {
+            return Err(SuccessorError::FeeOwedOutstanding);
+        }
+        Ok(Self {
+            fee_owed: 0,
+            ..self
+        })
     }
 
     /// Close one live registered record after every child resource closes.
@@ -1070,6 +1187,16 @@ pub fn consume_nonce_v2(
                 return Err(SuccessorError::MakerRootCountInvariant);
             }
             existing.validate_coordinate(intent.coordinates, intent.maker)?;
+            // The lockout (`FEE_SECOND_TRANSACTION_V1` section 2.4, invariant
+            // 2). A maker who owes this market an unsettled fee consumes no
+            // further nonce in it, on either side, until the second
+            // transaction lands. The cure is the debtor's alone and needs no
+            // counterparty: re-approve if the delegation was revoked, submit
+            // the fee transaction, trade again -- which is the condition
+            // ember's E5 ruling made binding.
+            if existing.fee_owed != 0 {
+                return Err(SuccessorError::FeeOwedOutstanding);
+            }
             (root, existing, None)
         }
         _ => return Err(SuccessorError::InvalidFirstUse),
@@ -1255,10 +1382,21 @@ pub fn settle_inline_ordinary_v2(
         NonceConsumptionV2::Inline,
         input.buyer.first_use,
     )?;
+    // The obligation, recorded where the gate above reads it. The seller is
+    // whole the instant the fill lands -- the seller-side fee is a reduced
+    // credit, not a later debit -- so the whole unpaid `total_fee_transfer`
+    // sits in the buyer's account and is owed by the buyer alone.
+    let buyer_maker_root = if total_fee_transfer == 0 {
+        buyer_consumed.maker_root
+    } else {
+        buyer_consumed
+            .maker_root
+            .record_fee_owed(total_fee_transfer)?
+    };
     Ok(InlineOrdinarySettlementV2 {
         root: buyer_consumed.root,
         seller_maker_root: seller_consumed.maker_root,
-        buyer_maker_root: buyer_consumed.maker_root,
+        buyer_maker_root,
         seller_creation: seller_consumed.creation,
         buyer_creation: buyer_consumed.creation,
         effects: InlineOrdinaryEffectsV2 {
@@ -2337,7 +2475,14 @@ pub struct MakerReplayCloseResultV2 {
     pub plan: MakerReplayClosePlanV2,
 }
 
-/// Close one zero-live maker root after global retirement begins.
+/// Close one zero-live, zero-debt maker root after global retirement begins.
+///
+/// The `fee_owed` refusal is the FEE-TX2 amendment (cohort-9 review item 1,
+/// amendment 2): this account is the SOLE record of the receivable, so a close
+/// that ignored it would erase a debt with no residue. `fee_settlement_v1` is
+/// deliberately phase-free, so settle-then-close is always available in
+/// Retiring; the refusal strands nobody. Lean: `closeMaker` /
+/// `close_conserves_fee_receivable` in `DirectSuccessor.lean`.
 pub fn close_maker_replay_v2(
     root: DirectRootStateV1,
     maker_root: MakerReplayRootV1,
@@ -2349,6 +2494,9 @@ pub fn close_maker_replay_v2(
     maker_root.validate()?;
     if maker_root.live_count != 0 {
         return Err(SuccessorError::LiveCountInvariant);
+    }
+    if maker_root.fee_owed != 0 {
+        return Err(SuccessorError::FeeOwedOutstanding);
     }
     if observed_lamports < maker_root.rent_principal {
         return Err(SuccessorError::InvalidRent);
@@ -2499,7 +2647,7 @@ mod tests {
     }
 
     fn config() -> DirectExecutionConfigV1 {
-        DirectExecutionConfigV1::new(100, 1_000, id(99)).expect("config")
+        DirectExecutionConfigV1::new(100, 500, id(99)).expect("config")
     }
 
     fn registered_intent(
@@ -2522,7 +2670,7 @@ mod tests {
             valid_through: 20,
             maximum_fill,
             limit_price,
-            fee_basis_points: 1_000,
+            fee_basis_points: 500,
             collateral_account: collateral,
         }
     }
@@ -2551,7 +2699,7 @@ mod tests {
             valid_through: 20,
             maximum_fill,
             limit_price,
-            fee_basis_points: 1_000,
+            fee_basis_points: 500,
             collateral_account: collateral,
         }
     }
@@ -2757,16 +2905,40 @@ mod tests {
             DirectExecutionConfigV1::decode_selected(exact, exact, &zero_scale),
             Err(SuccessorError::InvalidExecutionConfig)
         );
-        let mut high_fee = generated::DIRECT_CONFIG_EXAMPLE_V1;
-        overwrite(
-            &mut high_fee,
-            generated::DIRECT_CONFIG_FEE_BPS_OFFSET_V1,
-            &10_001_u16.to_le_bytes(),
-        );
-        assert_eq!(
-            DirectExecutionConfigV1::decode_selected(exact, exact, &high_fee),
-            Err(SuccessorError::InvalidExecutionConfig)
-        );
+        // The band (decision 0014 D2), one basis point either side of it, at
+        // the old denominator bound, and above it. Only the first is admitted,
+        // and the three refusals are the band's own code -- not the price-scale
+        // one they used to share.
+        for (basis_points, expected) in [
+            (DIRECT_MAX_FEE_BASIS_POINTS_V1, None),
+            (
+                DIRECT_MAX_FEE_BASIS_POINTS_V1 + 1,
+                Some(SuccessorError::FeeBandExceeded),
+            ),
+            (
+                DIRECT_FEE_DENOMINATOR_V1,
+                Some(SuccessorError::FeeBandExceeded),
+            ),
+            (
+                DIRECT_FEE_DENOMINATOR_V1 + 1,
+                Some(SuccessorError::FeeBandExceeded),
+            ),
+        ] {
+            let mut banded = generated::DIRECT_CONFIG_EXAMPLE_V1;
+            overwrite(
+                &mut banded,
+                generated::DIRECT_CONFIG_FEE_BPS_OFFSET_V1,
+                &basis_points.to_le_bytes(),
+            );
+            let decoded = DirectExecutionConfigV1::decode_selected(exact, exact, &banded);
+            match expected {
+                None => assert_eq!(
+                    decoded.expect("banded config").fee_basis_points(),
+                    basis_points
+                ),
+                Some(error) => assert_eq!(decoded, Err(error)),
+            }
+        }
         let mut zero_recipient = generated::DIRECT_CONFIG_EXAMPLE_V1;
         overwrite(
             &mut zero_recipient,
@@ -2826,6 +2998,246 @@ mod tests {
         assert_eq!(next.maker_root.next_nonce(), 2);
     }
 
+    /// One fee-bearing fill, and every state the obligation puts the buyer in.
+    ///
+    /// `FEE_SECOND_TRANSACTION_V1` section 2.4 states four invariants. This is
+    /// the first three: tx1 sets `fee_owed := combined_fee`; `fee_owed == 0` is
+    /// a precondition of the next fill; and nothing but the settle path clears
+    /// it. The fourth -- that settlement moves exactly the owed amount -- is
+    /// the test below.
+    #[test]
+    fn a_fee_bearing_fill_records_the_obligation_and_locks_that_market() {
+        let settlement = fee_bearing_settlement();
+        assert_eq!(settlement.effects.total_fee_transfer, 4);
+        // The buyer owes; the seller is whole the instant the fill lands,
+        // because the seller-side fee is a reduced credit and not a later
+        // debit (`FEE_SECOND_TRANSACTION_V1` section 2.2).
+        assert_eq!(settlement.buyer_maker_root.fee_owed(), 4);
+        assert_eq!(settlement.seller_maker_root.fee_owed(), 0);
+
+        // The lockout. The debtor's next nonce in this market refuses, on
+        // either side, with the obligation's own code.
+        let owing = settlement.buyer_maker_root;
+        for side in [0_u8, 1] {
+            assert_eq!(
+                consume_nonce_v2(
+                    open_root(),
+                    MakerReplayObservationV1::Existing(owing),
+                    AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                        id(3),
+                        inline_intent(
+                            side,
+                            DirectLifecycleV2::InlineFillOrKill,
+                            1,
+                            100,
+                            50,
+                            id(31)
+                        )
+                    )
+                    .expect("authentication projection")
+                    .replay()
+                    .expect("replay projection"),
+                    NonceConsumptionV2::Inline,
+                    None,
+                ),
+                Err(SuccessorError::FeeOwedOutstanding)
+            );
+        }
+
+        // And the seller, who owes nothing, is not locked out by the buyer's
+        // debt. The lockout is scoped to the debtor.
+        assert!(
+            consume_nonce_v2(
+                open_root(),
+                MakerReplayObservationV1::Existing(settlement.seller_maker_root),
+                AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                    id(2),
+                    inline_intent(0, DirectLifecycleV2::InlineFillOrKill, 1, 100, 40, id(30))
+                )
+                .expect("authentication projection")
+                .replay()
+                .expect("replay projection"),
+                NonceConsumptionV2::Inline,
+                None,
+            )
+            .is_ok()
+        );
+
+        // No second obligation can be stacked onto a maker who already owes.
+        assert_eq!(
+            owing.record_fee_owed(1),
+            Err(SuccessorError::FeeOwedOutstanding)
+        );
+    }
+
+    /// **ember's E5 condition, as a test per leg.**
+    ///
+    /// E5 accepted the lockout *conditional on guaranteed self-cure*: "as long
+    /// as they are always free to unblock themselves." That is a charter
+    /// requirement, so it is stated here as the four ways a cure could fail and
+    /// the reason each one cannot.
+    #[test]
+    fn the_debtor_can_always_settle_unilaterally() {
+        let settlement = fee_bearing_settlement();
+        let owing = settlement.buyer_maker_root;
+        let owed = owing.fee_owed();
+        assert_ne!(owed, 0);
+
+        // Leg 1 -- NOBODY ELSE IS IN THE WAY. Clearing the obligation is a
+        // function of the record and the amount it already names. No
+        // counterparty identity, no signature, no creditor consent and no slot
+        // appears in it, so no third party can withhold the cure.
+        let settled = owing.settle_fee_owed(owed).expect("unilateral settlement");
+        assert_eq!(settled.fee_owed(), 0);
+
+        // Leg 2 -- THE CURE ACTUALLY UNBLOCKS. After settlement the same
+        // maker's next nonce in the same market is admitted again, so the
+        // lockout is a gate and not a punishment.
+        let reopened = consume_nonce_v2(
+            open_root(),
+            MakerReplayObservationV1::Existing(settled),
+            AuthenticatedCompactIntentV2::from_adjacent_ed25519(
+                id(3),
+                inline_intent(1, DirectLifecycleV2::InlineFillOrKill, 1, 100, 60, id(31)),
+            )
+            .expect("authentication projection")
+            .replay()
+            .expect("replay projection"),
+            NonceConsumptionV2::Inline,
+            None,
+        )
+        .expect("settled maker trades again");
+        assert_eq!(reopened.maker_root.fee_owed(), 0);
+        assert_eq!(reopened.maker_root.next_nonce(), owing.next_nonce() + 1);
+
+        // Leg 3 -- THE CURE CANNOT BE FAKED SHORT. A buyer who re-approved a
+        // smaller allowance cannot settle for less and clear the flag, and
+        // cannot clear it for nothing. Invariant 4 of section 2.4.
+        for short in [0, owed - 1, owed + 1] {
+            assert_eq!(
+                owing.settle_fee_owed(short),
+                Err(SuccessorError::FeeOwedOutstanding)
+            );
+        }
+
+        // Leg 4 -- SETTLING TWICE IS NOT A SECOND CURE, and the cleared record
+        // cannot be re-settled into a credit.
+        assert_eq!(
+            settled.settle_fee_owed(owed),
+            Err(SuccessorError::FeeOwedOutstanding)
+        );
+    }
+
+    /// The obligation survives the record's own round trip, at both widths.
+    ///
+    /// The canonical width carries `fee_owed`; the legacy 152-byte width
+    /// predates it and reads zero. An exterior reader -- an operator, an
+    /// indexer, the web -- decodes either without knowing which it holds.
+    #[test]
+    fn the_obligation_round_trips_and_a_legacy_width_reads_zero() {
+        let owing = fee_bearing_settlement().buyer_maker_root;
+        assert_eq!(owing.fee_owed(), 4);
+        let encoded = owing.encode().expect("canonical encoding");
+        assert_eq!(encoded.len(), DIRECT_MAKER_REPLAY_BYTES_V1);
+        assert_eq!(MakerReplayRootV1::decode(&encoded), Ok(owing));
+
+        let legacy = encoded
+            .get(..DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1)
+            .expect("legacy prefix");
+        let decoded = MakerReplayRootV1::decode(legacy).expect("legacy width");
+        assert_eq!(decoded.fee_owed(), 0);
+        assert_eq!(
+            decoded,
+            MakerReplayRootV1 {
+                fee_owed: 0,
+                ..owing
+            }
+        );
+        // Every other width is still refused: reading two widths is not
+        // reading any width.
+        for width in [
+            DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 - 1,
+            DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 + 1,
+            DIRECT_MAKER_REPLAY_BYTES_V1 - 1,
+        ] {
+            assert_eq!(
+                MakerReplayRootV1::decode(encoded.get(..width).expect("prefix")),
+                Err(SuccessorError::InvalidLength)
+            );
+        }
+    }
+
+    /// The seam the second-transaction lane plugs into, pinned.
+    ///
+    /// This lane does not build the fee route. What it owes that lane is a
+    /// state whose every economic value is already fixed, and this is the list:
+    /// the amount to move, the allowance that must still be standing to move
+    /// it, and the fact that the fee recipient has not been paid yet. A change
+    /// to any of the three is a change to the fee transaction's contract.
+    #[test]
+    fn the_second_transaction_seam_is_fully_determined_by_state() {
+        let settlement = fee_bearing_settlement();
+        let combined_fee = settlement.effects.total_fee_transfer;
+        // What tx2 moves: the recorded obligation, which equals the combined
+        // fee -- never "whatever is delegated".
+        assert_eq!(settlement.buyer_maker_root.fee_owed(), combined_fee);
+        // What tx2 spends: the residual allowance tx1 deliberately left
+        // standing, which is the same number. `S1` of section 2.1.
+        assert_eq!(
+            settlement
+                .effects
+                .buyer_collateral_debit
+                .checked_sub(settlement.effects.seller_net_collateral_credit),
+            Some(combined_fee)
+        );
+        // Where tx2 sends it: an account of the config's recipient, which the
+        // fill never touched.
+        assert_eq!(settlement.effects.fee_recipient, id(99));
+        // And conservation across the interval: the buyer's debit is the
+        // seller's credit plus the unsettled fee, in S0, S1 and S2 alike.
+        assert_eq!(
+            settlement
+                .effects
+                .seller_net_collateral_credit
+                .checked_add(combined_fee),
+            Some(settlement.effects.buyer_collateral_debit)
+        );
+    }
+
+    fn open_root() -> DirectRootStateV1 {
+        let mut root = DirectRootStateV1::new();
+        root.open_maker_root_count = 2;
+        root
+    }
+
+    /// Fill 100 at 50 of 100 is a gross of 50; five percent of fifty floors to
+    /// two per side, so the combined fee is four and the obligation is real.
+    fn fee_bearing_settlement() -> InlineOrdinarySettlementV2 {
+        settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
+            root: DirectRootStateV1::new(),
+            seller: first_inline_participant(
+                id(2),
+                inline_intent(0, DirectLifecycleV2::InlineFillOrKill, 0, 100, 40, id(30)),
+                11,
+                3,
+            ),
+            buyer: first_inline_participant(
+                id(3),
+                inline_intent(1, DirectLifecycleV2::InlineFillOrKill, 0, 100, 60, id(31)),
+                12,
+                130,
+            ),
+            execution: InlineExecutionV2 {
+                config: config(),
+                outcome_count: 3,
+                slot: 7,
+                fill: 100,
+                execution_price: 50,
+            },
+        })
+        .expect("fee-bearing inline FOK match")
+    }
+
     #[test]
     fn inline_fok_price_improvement_binds_conserving_ordered_effects() {
         let seller = first_inline_participant(
@@ -2877,9 +3289,9 @@ mod tests {
         );
         assert_eq!(settlement.effects.claim_transfer, 100);
         assert_eq!(settlement.effects.gross_collateral, 50);
-        assert_eq!(settlement.effects.seller_net_collateral_credit, 45);
-        assert_eq!(settlement.effects.buyer_collateral_debit, 55);
-        assert_eq!(settlement.effects.total_fee_transfer, 10);
+        assert_eq!(settlement.effects.seller_net_collateral_credit, 48);
+        assert_eq!(settlement.effects.buyer_collateral_debit, 52);
+        assert_eq!(settlement.effects.total_fee_transfer, 4);
         assert_eq!(settlement.effects.fee_recipient, id(99));
         assert_eq!(settlement.effects.seller_collateral_destination, id(30));
         assert_eq!(settlement.effects.buyer_collateral_source, id(31));
@@ -2926,9 +3338,9 @@ mod tests {
         };
         let settlement = settle_inline_ordinary_v2(input).expect("inline IOC match");
         assert_eq!(settlement.effects.gross_collateral, 20);
-        assert_eq!(settlement.effects.buyer_collateral_debit, 22);
-        assert_eq!(maximum_buy_reserve_v2(config(), buyer_intent), Ok(66));
-        assert!(settlement.effects.buyer_collateral_debit < 66);
+        assert_eq!(settlement.effects.buyer_collateral_debit, 21);
+        assert_eq!(maximum_buy_reserve_v2(config(), buyer_intent), Ok(63));
+        assert!(settlement.effects.buyer_collateral_debit < 63);
 
         let replay = settle_inline_ordinary_v2(InlineOrdinaryInputV2 {
             root: settlement.root,
@@ -3154,6 +3566,74 @@ mod tests {
         );
     }
 
+    /// FEE-TX2 amendment red-proof, both ways (cohort-9 review item 1,
+    /// amendment 2): a debtor's close refuses by name -- the replay is the
+    /// SOLE record of the receivable, and `fee_settlement_v1` needs this
+    /// account's projection, so a close that ignored the debt would erase it
+    /// with no residue -- and the exact settlement unlocks the very same
+    /// close. Lean twin: `DirectSuccessor.Examples.debtor_settles_before_closing`.
+    #[test]
+    fn debtor_close_refuses_by_name_and_settle_then_close_succeeds() {
+        let created = consume_nonce_v2(
+            DirectRootStateV1::new(),
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(8, 3)),
+            intent(id(2), 0),
+            NonceConsumptionV2::Inline,
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: id(9),
+                rent_principal: 100,
+            }),
+        )
+        .expect("create");
+        let owing = created.maker_root.record_fee_owed(4).expect("record");
+        let retiring = created.root.begin_retiring().expect("retiring");
+        assert_eq!(
+            close_maker_replay_v2(retiring, owing, 111),
+            Err(SuccessorError::FeeOwedOutstanding)
+        );
+        // A short settlement cannot clear the flag on the way past.
+        assert_eq!(
+            owing.settle_fee_owed(3),
+            Err(SuccessorError::FeeOwedOutstanding)
+        );
+        let settled = owing.settle_fee_owed(4).expect("exact settlement");
+        let closed = close_maker_replay_v2(retiring, settled, 111).expect("settled close");
+        assert_eq!(closed.root.open_maker_root_count(), 0);
+        assert_eq!(closed.plan.rent_owner, id(9));
+    }
+
+    /// Reachability red-proof (cohort-9 review item 1, amendment 1): the
+    /// filled market's path -- begin retiring with the count STANDING, then
+    /// drain it inside Retiring -- is now the semantic function's own happy
+    /// path, where the old ordering made `close_maker_replay_v2` dead code.
+    #[test]
+    fn begin_retiring_over_standing_makers_reaches_the_close() {
+        let created = consume_nonce_v2(
+            DirectRootStateV1::new(),
+            MakerReplayObservationV1::Vacant(MakerReplayVacancyV1::new(8, 3)),
+            intent(id(2), 0),
+            NonceConsumptionV2::Inline,
+            Some(MakerReplayFirstUseV1 {
+                rent_owner: id(9),
+                rent_principal: 100,
+            }),
+        )
+        .expect("create");
+        assert_eq!(created.root.open_maker_root_count(), 1);
+        let retiring = created.root.begin_retiring().expect("retiring over makers");
+        assert_eq!(retiring.open_maker_root_count(), 1);
+        assert_eq!(
+            retiring.require_closable(),
+            Err(SuccessorError::MakerRootCountInvariant),
+            "Retired stays gated on zero makers -- the invariant never moved",
+        );
+        let closed = close_maker_replay_v2(retiring, created.maker_root, 111).expect("close");
+        closed
+            .root
+            .require_closable()
+            .expect("drained root closable");
+    }
+
     #[test]
     fn malformed_root_and_maker_bytes_refuse() {
         let mut root = generated::DIRECT_ROOT_EXAMPLE_V1;
@@ -3234,11 +3714,14 @@ mod tests {
 
     #[test]
     fn registered_partial_fees_are_partition_independent() {
-        let signed = registered_intent(1, 0, id(1), 0, 10, 100, id(20));
+        // Forty atoms, not ten. Inside the 500 bp band a ten-atom notional
+        // floors its fee to zero, and a partition-independence claim about a
+        // fee of zero is not a claim.
+        let signed = registered_intent(1, 0, id(1), 0, 40, 100, id(20));
         let created = register(DirectRootStateV1::new(), id(2), signed, 3);
         assert_eq!(created.root.open_maker_root_count(), 1);
         assert_eq!(created.maker_root.live_count(), 1);
-        assert_eq!(created.record.reserved_collateral(), 11);
+        assert_eq!(created.record.reserved_collateral(), 42);
         assert_eq!(created.record_creation.top_up_lamports, 93);
         assert_eq!(
             register_intent_v2(
@@ -3262,7 +3745,7 @@ mod tests {
         let mut maker_root = created.maker_root;
         let mut record = created.record;
         let mut partition_fee = 0_u64;
-        for step in 0..10 {
+        for step in 0..40 {
             let candidate =
                 preview(created.root, maker_root, record, 1, 100, 107).expect("one-atom fill");
             partition_fee = partition_fee
@@ -3271,21 +3754,21 @@ mod tests {
             maker_root = candidate.maker_root;
             match candidate.record {
                 RegisteredRecordAfterFillV2::Live(next) => {
-                    assert!(step < 9);
+                    assert!(step < 39);
                     record = next;
                 }
                 RegisteredRecordAfterFillV2::Closed(close) => {
-                    assert_eq!(step, 9);
+                    assert_eq!(step, 39);
                     assert_eq!(close.collateral_refund, 0);
                     assert_eq!(close.unclassified_donation, 7);
                 }
             }
         }
-        assert_eq!(partition_fee, 1);
+        assert_eq!(partition_fee, 2);
         assert_eq!(maker_root.live_count(), 0);
 
         let single = register(DirectRootStateV1::new(), id(2), signed, 3);
-        let candidate = preview(single.root, single.maker_root, single.record, 10, 100, 100)
+        let candidate = preview(single.root, single.maker_root, single.record, 40, 100, 100)
             .expect("single fill");
         assert_eq!(candidate.effects.fee_transfer, partition_fee);
     }
@@ -3320,17 +3803,17 @@ mod tests {
                 config: config(),
                 outcome_count: 3,
                 slot: 5,
-                fill: 20,
+                fill: 40,
                 execution_price: 50,
             },
         };
         let settled = settle_registered_ordinary_v2(input).expect("ordinary");
-        assert_eq!(settled.gross_collateral, 10);
-        assert_eq!(settled.seller_net_collateral_credit, 9);
-        assert_eq!(settled.buyer_collateral_debit, 11);
+        assert_eq!(settled.gross_collateral, 20);
+        assert_eq!(settled.seller_net_collateral_credit, 19);
+        assert_eq!(settled.buyer_collateral_debit, 21);
         assert_eq!(settled.total_fee_transfer, 2);
-        assert_eq!(settled.seller.effects.claim_custody_debit, 20);
-        assert_eq!(settled.buyer.effects.claim_position_credit, 20);
+        assert_eq!(settled.seller.effects.claim_custody_debit, 40);
+        assert_eq!(settled.buyer.effects.claim_position_credit, 40);
         assert_eq!(
             settle_registered_ordinary_v2(RegisteredOrdinaryInputV2 {
                 execution: RegisteredExecutionV2 {
@@ -3498,7 +3981,7 @@ mod tests {
         })
         .expect("split");
         assert_eq!(split.market_vault_transfer, 100);
-        assert_eq!(split.total_fee_transfer, 10);
+        assert_eq!(split.total_fee_transfer, 4);
         assert!(
             scratch.iter().all(|candidate| matches!(
                 candidate.record,
@@ -3561,7 +4044,7 @@ mod tests {
         })
         .expect("merge");
         assert_eq!(merge.market_vault_transfer, 100);
-        assert_eq!(merge.total_fee_transfer, 10);
+        assert_eq!(merge.total_fee_transfer, 4);
     }
 
     #[test]
@@ -3596,6 +4079,7 @@ mod tests {
                 minimum_live_nonce: 0,
                 rent_owner: id(90),
                 rent_principal: 100,
+                fee_owed: 0,
                 bump,
             });
             records.push(DirectRegisteredIntentV2 {

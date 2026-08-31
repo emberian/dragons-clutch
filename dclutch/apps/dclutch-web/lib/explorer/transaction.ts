@@ -129,7 +129,7 @@ export function projectTransaction(
   let note: string | null = null;
 
   if (outer === null) {
-    note = 'The transaction bytes did not deserialize, so its outer instructions could not be read. The inner CPI frames below come from the chain’s own metadata and are unaffected.';
+    note = 'The transaction bytes could not be read, so its top-level instructions are missing. The inner calls come from the chain’s own record of the run.';
   } else if (outer.length === 0) {
     note = 'The transaction carries no instructions.';
   }

@@ -16,9 +16,17 @@ dclutch-capability-seal-contract = { path = "../../../crates/dclutch-capability-
 dclutch-claims-svm = { path = "../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
+# `direct_hot_fee_second_transaction` asserts the exact Custody refusal codes
+# two hostile orderings carry, and decision 0007 forbids writing them as bare
+# numbers. Custody ships an rlib beside its cdylib for exactly this, the same
+# way Registry does above.
+dclutch-custody-sbf = { path = "../../dclutch-custody-sbf", features = [
+    "no-entrypoint",
+] }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
 dclutch-direct-hot-program-test-support = { path = "direct-hot" }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
+dclutch-general-adapter-contract = { path = "../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-config-contract = { path = "../../../crates/dclutch-general-config-contract" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
@@ -52,6 +60,28 @@ solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 solana-transaction = "=4.2.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# `direct_hot_fee_second_transaction` is a PROBE, not a member of this suite.
+# It substitutes the Trading ELF with `test-programs/custody-leg-caller` and
+# stages its own release set, so it means something only under the runner that
+# builds that set -- `run-fee-second-transaction.sh`, which is also the only
+# thing that sets `DCLUTCH_CUSTODY_LEG_CALLER_ELF`. Swept into the ordinary run
+# it cannot work: it would be pointed at the REAL Trading ELF, which is exactly
+# the substitution the probe exists to avoid.
+#
+# Until this gate it was auto-discovered like the other twelve, so
+# `tools/ci/run.sh programs` ran it, got `NotPresent` for that variable, and
+# reported a MISSING PREREQUISITE as a failed compute-margin gate. That is the
+# one sentence that tier must never say wrongly: its red is supposed to mean
+# the public Direct route got more expensive, and a reader who learns that red
+# is sometimes a missing env var stops believing it when it is real.
+[features]
+fee-second-transaction = []
+
+[[test]]
+name = "direct_hot_fee_second_transaction"
+path = "tests/direct_hot_fee_second_transaction.rs"
+required-features = ["fee-second-transaction"]
 
 [lints.rust]
 unsafe_code = "forbid"

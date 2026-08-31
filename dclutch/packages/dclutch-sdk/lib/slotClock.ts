@@ -124,7 +124,7 @@ export function deadlineMomentPhraseV1(clock: SlotClockV1, deadlineSlot: string,
 /** The sentence that must render on any surface showing these estimates. */
 export function slotClockCaveatV1(clock: SlotClockV1): string {
   if (clock.basis === 'measured') {
-    return `Times are estimates from this cluster's own recent block times (≈ ${Math.round(clock.msPerSlot)} ms per slot over the last ${clock.measuredOverSlots} slots); slot time wobbles, and the chain's own clock is slots.`;
+    return `Times estimated at ≈ ${Math.round(clock.msPerSlot)} ms per slot.`;
   }
-  return `Times are estimates assuming the nominal ${ASSUMED_MS_PER_SLOT_V1} ms per slot — the cluster's actual rate could not be measured, and devnet often runs far from nominal.`;
+  return `Times estimated at the nominal ${ASSUMED_MS_PER_SLOT_V1} ms per slot; this cluster's actual rate could not be measured.`;
 }

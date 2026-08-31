@@ -11,7 +11,7 @@
 use std::{io::Write, path::PathBuf};
 
 use dclutch_claims_svm::liability_basis_state_v2::{
-    LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
+    LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
 use dclutch_market_core_codec::{CoreState, StateBumpsV1};
 use dclutch_operator::ObservedAccount;
@@ -55,6 +55,21 @@ pub(crate) const DIRECT_NATIVE_CLOSE_LABELS_V1: [&str; 3] = [
     "direct_native_close_account_profile_record",
     "direct_native_close_effect_record",
     "direct_native_close_descriptor_record",
+];
+
+/// The maker-replay close artifact records, published at founding since the
+/// five-entry Direct ProgramSet landed (cohort-9, wall 22).
+///
+/// Deliberately NOT chained into `require_direct_retirement_evidence`, for the
+/// activation trio's reason: markets founded on earlier sets carry sealed
+/// campaign evidence that legitimately lacks these labels, and their terminal
+/// paths must stay drivable. The on-chain close route demands a ProgramSet
+/// entry those markets never selected, which is refusal enough.
+#[allow(dead_code)]
+pub(crate) const DIRECT_CLOSE_MAKER_LABELS_V1: [&str; 3] = [
+    "direct_close_maker_account_profile_record",
+    "direct_close_maker_effect_record",
+    "direct_close_maker_descriptor_record",
 ];
 
 /// The capability-activation artifact records, published at founding since the
@@ -142,7 +157,27 @@ fn produce_wallet_terminal_input_v1(
         .ok_or_else(|| Error::new("Core Market has no accepted terminal receipt"))?
         .to_bytes();
 
-    let mut input = routed_input(&plan, &evidence, &arguments, terminal_receipt)?;
+    // Decision 0008 §1: the Claims aggregate is the SOLE persisted owner of
+    // this Market's Custody namespace, and no route may re-guess it. The
+    // campaign report's `founding_custody_context` records the founding's own
+    // action pre-image, and Custody addresses the Claims-role replay a payout
+    // decodes under that pre-image's projected-hoard digest — so taking the
+    // context from evidence here addressed a replay that has never existed at
+    // any market, and the refusal named the raw-form address.
+    //
+    // The refresh is the remedy where a document must carry the row
+    // (EVIDENCE_REFRESH_V1 §3, and `chain_persisted_custody_context`). Here no
+    // document is needed at all: this command already holds a finalized RPC and
+    // the aggregate is on chain, so it reads the owner of the namespace
+    // directly. That is the decision applied rather than worked around.
+    let custody_context = chain_custody_context_v1(&mut rpc, &plan, arguments.market)?;
+    let mut input = routed_input(
+        &plan,
+        &evidence,
+        &arguments,
+        terminal_receipt,
+        custody_context,
+    )?;
     let routed = SelectedInputV1::parse(&input, LookupTableRequirementV1::Absent)?;
     authenticate_routing_hints(&routed, &evidence)?;
 
@@ -295,11 +330,43 @@ pub(crate) fn finalized_snapshot(rpc: &mut Rpc, keys: &[Pubkey]) -> Result<Final
     FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &keys, values)
 }
 
+/// The Market's Custody namespace, read from the account that owns it.
+///
+/// The aggregate is addressed by derivation rather than by an evidence label,
+/// so a substituted document cannot point this at another market's namespace;
+/// the seed is the one every other `LiabilityBasisV2` consumer uses.
+fn chain_custody_context_v1(
+    rpc: &mut Rpc,
+    plan: &SuccessorPlan,
+    market: Pubkey,
+) -> Result<[u8; 32]> {
+    let claims = pubkey(&plan.claims.program_id)?;
+    let key =
+        Pubkey::find_program_address(&[LIABILITY_BASIS_MARKET_SEED_V2, market.as_ref()], &claims).0;
+    let snapshot = finalized_snapshot(rpc, &[key])?;
+    let account = snapshot.required(key, "Claims aggregate")?;
+    if account.owner != claims || account.executable {
+        return Err(Error::new(format!(
+            "the Claims aggregate at {key} is owned by {}, not the plan's Claims program {claims}",
+            account.owner
+        )));
+    }
+    let aggregate = LiabilityBasisMarketViewV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("Claims aggregate: {error:?}")))?;
+    if aggregate.logical_market != market.to_bytes() {
+        return Err(Error::new(
+            "the Claims aggregate names another logical market",
+        ));
+    }
+    Ok(aggregate.custody_context)
+}
+
 fn routed_input(
     plan: &SuccessorPlan,
     evidence: &CampaignTerminalEvidenceV1,
     arguments: &ArgumentsV1,
     terminal_receipt: [u8; 32],
+    custody_context: [u8; 32],
 ) -> Result<PlanInputV1> {
     let record_digest = |label: &str| -> Result<String> {
         Ok(required_account(evidence, label)?.data_sha256.clone())
@@ -319,7 +386,7 @@ fn routed_input(
         claim_index: arguments.claim_index,
         transfer_index: 0,
         parent_context: hex(&[1; 32]),
-        custody_context: evidence.founding_custody_context.clone(),
+        custody_context: hex(&custody_context),
         release_set: plan.release_set_id.clone(),
         terminal_certificate: Pubkey::new_from_array(terminal_receipt).to_string(),
         lookup_table: None,
@@ -474,7 +541,10 @@ pub(crate) fn require_direct_retirement_evidence(
     for label in DIRECT_BEGIN_RETIRING_LABELS_V1
         .into_iter()
         .chain(DIRECT_NATIVE_CLOSE_LABELS_V1)
-        .chain(["direct_program_set_record", "direct_execution_config_record"])
+        .chain([
+            "direct_program_set_record",
+            "direct_execution_config_record",
+        ])
     {
         required_account(evidence, label).map_err(|_| {
             Error::new(format!(
@@ -482,7 +552,37 @@ pub(crate) fn require_direct_retirement_evidence(
             ))
         })?;
     }
+    require_distinct_funding_ledgers_v1(evidence)?;
     require_direct_first_use_evidence_v1(evidence)
+}
+
+/// The Resolution and Trading funding ledgers are two accounts, never one.
+///
+/// The close frame names both, at adjacent indices, and its distinctness clause
+/// refuses the whole thirty-eight-account projection with an undifferentiated
+/// `Frame` if they alias. That refusal names nothing, so the same aliasing is
+/// worth catching here, at admission, where the evidence itself can be blamed.
+///
+/// The hazard is a label that reads semantic and is ordinal.
+/// `founding_funding_ledger_v2_N` is indexed by the campaign's own sort of its
+/// controller subsets — by each mask's lowest manifest bit — and the selected
+/// trade entry sits at manifest index 0 in every campaign this tree founds, so
+/// ordinal 0 is the TRADING ledger. `resolution_funding_ledger` is the semantic
+/// label for the other one, and it is among the eleven immutable founding
+/// records, so a refresh reproduces it byte-identically.
+fn require_distinct_funding_ledgers_v1(evidence: &CampaignTerminalEvidenceV1) -> Result<()> {
+    let resolution = required_account(evidence, "resolution_funding_ledger")?;
+    let trading = required_account(evidence, "direct_trading_funding_ledger")?;
+    if resolution.address == trading.address {
+        return Err(Error::new(format!(
+            "terminal sequence is blocked: campaign evidence gives the Resolution and Trading \
+             funding ledgers the same address {}. They are distinct controller subsets and the \
+             native-close frame names both; one address for both cannot be a two-controller \
+             founding.",
+            resolution.address
+        )));
+    }
+    Ok(())
 }
 
 /// Demand the first-use accounts EXACTLY WHEN the route that creates them ran.
@@ -1206,6 +1306,7 @@ mod tests {
                 "direct_execution_config_record",
                 "direct_capability_root",
                 "direct_trading_funding_ledger",
+                "resolution_funding_ledger",
             ])
         {
             accounts.insert(label.into(), row());
@@ -1226,6 +1327,31 @@ mod tests {
                 .expect_err("missing begin-retiring label must refuse");
             assert!(error.to_string().contains(label));
         }
+
+        // The two funding ledgers are two accounts. Reading the ordinal label
+        // `founding_funding_ledger_v2_0` as the Resolution one gives them a
+        // single address, which the native-close frame refuses with an
+        // undifferentiated `Frame` thirty-eight accounts later. Admission
+        // blames the evidence instead.
+        let mut aliased = exact.clone();
+        let trading = aliased
+            .accounts
+            .get("direct_trading_funding_ledger")
+            .expect("fixture trading ledger")
+            .clone();
+        let shared = trading.address.clone();
+        aliased
+            .accounts
+            .insert("resolution_funding_ledger".into(), trading);
+        let error = require_direct_retirement_evidence(&aliased)
+            .expect_err("one address for both funding ledgers must refuse");
+        assert!(
+            error.to_string().contains(&shared)
+                && error
+                    .to_string()
+                    .contains("funding ledgers the same address"),
+            "refusal must name the shared address: {error}"
+        );
     }
 
     #[test]

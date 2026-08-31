@@ -595,9 +595,41 @@ zero defaults happen to be correct pass, and the rest refuse.
 signs nothing and performs no CPI. The commit half — Trading's
 `process_hot_execution_v3` writing the capability root and returning a
 `DCLTHAK3` ack — additionally needs a founded Market whose capability manifest
-selects General, and no driver in this tree founds one.
+selects General, and whose capability root exists. Both now have drivers:
+`local-private-validator-market-v1` with `DCLUTCH_MARKET_CAPABILITY=general`
+compiles the selected market input, and
+`local-private-validator-general-capability-activation-v1` creates the root.
 `general_market_selection_requirements_v1` states the six facts such a Market
 must carry.
+
+## General capability activation
+
+```sh
+dclutch-local-successor-bootstrap \
+  local-private-validator-general-capability-activation-v1 \
+  --rpc-url http://127.0.0.1:PORT/ \
+  --plan ABSOLUTE_PLAN_JSON --campaign-report ABSOLUTE_FOUNDING_JSON \
+  --payer-keypair ABSOLUTE_DISPOSABLE_JSON \
+  --output ABSOLUTE_NEW_JSON [--execute]
+```
+
+One Core-signed transaction creates `CapabilityRootHeaderV1 || GeneralRootV2` at
+the manifest-selected root PDA, moving the funding ledger's parked Rent quote
+into it. Without `--execute` it plans, writes the derived coordinates, and
+signs nothing. A live Trading-owned root reports `already-active`.
+
+The campaign report supplies two ROUTING coordinates — the Market address and
+the Trading funding-ledger address. Everything semantic is re-derived from
+chain: the manifest from the Market's own identity, the General entry found in
+it by kind, the ProgramSet from that entry's `release_id` (which must
+authenticate as `SettlementWithActivation` — a seven-entry General release
+refuses here, because nothing founded on it could ever create a root), the
+activation descriptor selected out of that set, and the account-profile and
+effect records off that descriptor. The poststate is read with General's own
+decoder and checked against `GeneralRootV2::active`,
+`general_root_creation_tail_v2`, and `FundingLedgerV2::activate_in_place`.
+
+Loopback only. The Direct family has the same pair; see below.
 
 **Series compiles its wire and refuses.** See that command's own refusal text
 for the exact reason; the short version is that the common authenticated Shadow
@@ -612,6 +644,82 @@ journal is polled rather than resubmitted. Rerunning a completed campaign
 produces byte-identical signatures and slots and submits nothing. A journal
 whose action, width, caller or family-request digest differs from the run in
 hand is refused rather than resumed.
+
+## Direct capability activation, on either cluster
+
+```sh
+dclutch-local-successor-bootstrap \
+  local-private-validator-direct-capability-activation-v1 \
+  --rpc-url http://127.0.0.1:PORT/ \
+  --plan ABSOLUTE_JSON --expected-plan-sha256 HEX64 \
+  --market-input ABSOLUTE_JSON --expected-market-input-sha256 HEX64 \
+  --campaign-report ABSOLUTE_JSON --expected-campaign-report-sha256 HEX64 \
+  --payer PUBKEY --payer-keypair ABSOLUTE_JSON \
+  --output ABSOLUTE_NEW_JSON [--execute]
+```
+
+`devnet-direct-capability-activation-v1` is the same command on an
+acknowledged devnet endpoint, and takes `--i-mean-devnet GENESIS` besides. One
+body serves both: the cluster decides only whether the acknowledgment is
+required or refused, which cluster the campaign evidence must have been
+produced against, and the report schema. Every other fact is derived from the
+chain and from the sealed artifacts.
+
+**FOUNDING DOES NOT CREATE THE EXECUTION ROOT, and nothing else does either.**
+The campaign's last stage is `founding`; the root is written by Core's
+`ActivateCapability` route CPI-ing Trading's `process_activation`, and this
+frame is the only thing in this tree that reaches it. The order for a Direct
+trade is therefore
+
+> compile the market input → `campaign --founding-only --through founding`
+> → **this command** → `local-private-validator-user-position-admission-v1`
+> → `local-private-validator-direct-trade-produce-v1`
+> → `local-private-validator-direct-trade-v1 --execute`
+
+and skipping the third step is not a slower route to the same place, it is a
+route that ends at the producer refusing the root. Idempotent: a live
+Trading-owned root reports `already-active` and signs nothing.
+
+The founding checkpoint's recorded `direct_capability_root` is NOT this
+address. It is the founding-permit namespace coordinate (its selection config
+is the generic-founding preimage digest, decision 0004) and no account can ever
+exist there; the execution root is rebuilt from the sealed manifest entry and
+the live Open Market's own identity, and both the activation and Hot paths
+force `selection.config == entry.config_id`.
+
+### Why this command did not exist until 2026-08-30
+
+Until it did, **no Direct capability root could be created on a loopback
+validator at all** — the devnet endpoint refuses a loopback origin before it
+reads anything — so every local Direct trade ever attempted refused at the
+producer's root check, at every market width. The population run in
+`docs/evidence/SIMULATOR_POPULATION_DRIVEN_2026_08_30.md` recorded that as
+twenty-one refused fills and read the producer's sentence, "Direct root owner
+or width changed", as a claim about a widened market's outcome count. It was
+not: both sides of that width comparison are compile-time constants
+(232 + 24 = 256), `CapabilityRootSeedsV1` carries no width term, and the
+finalized snapshot renders a MISSING account as a System-owned zero-length
+placeholder, so absence arrived at that check wearing an owner change's
+clothes. The producer now says absence in its own words and names this command.
+
+### Two walls still in front of a landed local fill
+
+Neither is this command's, and both are cheap to walk into, so they are stated
+here rather than discovered again:
+
+1. **The owned-loopback producer authors its own terms and pins them.** It has
+   no ticket to read, so it requires the market's Direct execution config to be
+   exactly price scale 1,000,000 and fee 50 bps
+   (`direct_trade_producer.rs`, `EXPECTED_PRICE_SCALE_V1`/`FEE_BASIS_POINTS_V1`).
+   The scale is `10^collateral_display_decimals` and comes out right; the fee
+   does not unless the market was founded with `--fee-basis-points 50`. A
+   zero-fee local market can never be filled by this driver, whatever its root.
+   The devnet arm has no such pin — it reads the fee from the ticket and
+   requires only that the ticket agree with the market's own config — so a
+   zero-fee devnet market is unaffected.
+2. **The buyer needs 50,250,000 collateral atoms**, from
+   `FILL_ATOMS_V1 x EXECUTION_PRICE_V1 / scale` plus the 50-bps floor. An
+   admission funded with less refuses on the balance, not on the trade.
 
 ## Series: the first executed Found
 

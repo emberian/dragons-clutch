@@ -269,3 +269,34 @@ Keyed by file rather than by function on purpose. Function-level keys
 inventoried 586 guards and would have failed the gate twice — once `GONE`, once
 `NEW` — on every rename of a guarded function. A ratchet nobody can live with
 gets switched off, and then it guards nothing.
+
+---
+
+## 2026-08-31 — cohort-9 CLOSEMAKER: six entries, four tags, no new class
+
+`direct_close_maker_v1` (the maker-replay close, wall 22's missing decrement)
+deliberately mirrors `direct_begin_retiring_v1`'s frame machinery, and it
+inherits that family's registered debts with it, entry for entry:
+
+- **debt-derivation-restatement ×2** (`RAW_RECORD_PDA_SEED_V1`,
+  `STAGING_CURSOR_PDA_SEED_V1` in the new route): the same
+  `authenticate_finalized_record`/`authenticate_persisted_raw` spelling the
+  begin-retiring and fee-settlement routes carry. The real fix is one shared
+  helper for all three routes — a refactor across a shipped route, not this
+  lane's cut. The population grows by exactly the two the sibling already has.
+- **hazard-privilege-pin ×1**, **hazard-signer-census ×1** (`parse`): the
+  exact-privilege and no-signer frame is the begin-retiring lifecycle shape,
+  registered for that route with the same tags. Both routes are standalone
+  permissionless cranks whose fee payer is never a frame member; the batching
+  cost the tags record is real and shared, and any fix belongs to the family,
+  not to one member.
+- **inventory-guard-present ×2**: two new codec files grew unset-pubkey
+  guards; recorded so their loss trips the ratchet, per this class's own note.
+
+Convergence addendum (CLOSEMAKER landing, 2026-08-31): MIGRATE's
+`registry/declare_successor_v1/tests.rs` reached main without its two
+`debt-derivation-restatement` rows — the seam gate was red on main itself, not
+on any lane. Recorded here with the class's standing reason (a test file
+spelling the record-contract's seed tuple, like its many sibling test files)
+so the landed tree is green; the fix remains the class's shared-constructor
+refactor.

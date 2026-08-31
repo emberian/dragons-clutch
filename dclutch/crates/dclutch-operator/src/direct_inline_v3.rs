@@ -34,7 +34,7 @@ use dclutch_capability_program_contract::{
         HOT_ROOT_ACCOUNT_V3, HOT_RUNTIME_FIXED_COORDINATE_COUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotBumpHintsV1, HotExecutionEnvelopeV3,
     },
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
@@ -42,6 +42,7 @@ use dclutch_capability_program_contract::{
         SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
     },
 };
+use dclutch_custody_contract::{CallerRoleV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1};
 use dclutch_direct_codec::{
     artifacts_v4::{
         DirectArtifactBundleV4, DirectArtifactBytesV4, DirectArtifactSelectionV4,
@@ -52,7 +53,6 @@ use dclutch_direct_codec::{
         DirectExecutionActionV3, DirectExecutionRequestV3, DirectRegistrationRequestV3,
         encode_header_v3, native_signature_count_v3,
     },
-    intent_v2::CompactIntentV2,
     native_evidence_v3::{
         DIRECT_NATIVE_EVIDENCE_BYTES_V3, DirectNativeEvidenceContainerV3,
         direct_native_evidence_bytes_v3,
@@ -60,6 +60,7 @@ use dclutch_direct_codec::{
         encode_direct_native_evidence_many_v3_atomic, encode_direct_native_evidence_v3_atomic,
     },
     registered_requests_v4::encode_direct_registration_request_v3_atomic,
+    successor::{DirectCoordinatesV1, MakerReplaySeedsV1},
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
 use dclutch_product_payoff_v2_codec::{
@@ -88,6 +89,118 @@ use solana_sdk_ids::{bpf_loader_upgradeable, ed25519_program, sysvar};
 use crate::versioned::{VersionedMessagePlanV0, compile_v0_message};
 
 pub use dclutch_direct_codec::execution_v3::DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3;
+
+/// Mine the bumps the hot route would otherwise search for, off chain.
+///
+/// Every one of these is a `find_program_address` the PROGRAM used to run, at
+/// 1,500 CU per rejected candidate, on a depth drawn from the participant keys.
+/// Run here it costs the caller nothing anybody measures, and the program
+/// reproduces each address with `create_program_address` and refuses unless it
+/// reproduces the account it was handed. See `HotBumpHintsV1`.
+///
+/// The two child caller-authority slots are NOT filled here. Their seeds end in
+/// a digest over each child's projected request, which this builder does not
+/// compute; `derive_direct_inline_child_authorities_v3` does, and reports them
+/// on `DirectInlineChildAuthoritiesV3`. A slot left zero searches, so a caller
+/// that has not projected its children is correct and merely slower.
+fn direct_hot_bump_hints_v1(
+    state: &DirectInlineHotStateV3,
+    trading_program: &Pubkey,
+) -> Result<HotBumpHintsV1, Error> {
+    let market_account = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
+    let core_program = fixed_account(state, HOT_CORE_PROGRAM_ACCOUNT_V3)?
+        .account
+        .key;
+    let market = CoreState::decode(&market_account.data).map_err(|_| Error::ArtifactMismatch)?;
+    let market_bump = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(market.identity).as_slices(),
+        &core_program,
+    )
+    .1;
+    let root_account = &fixed_account(state, HOT_ROOT_ACCOUNT_V3)?.account;
+    let root = CapabilityRootHeaderV1::decode(
+        root_account
+            .data
+            .get(..CAPABILITY_ROOT_HEADER_BYTES_V1)
+            .ok_or(Error::ArtifactMismatch)?,
+    )
+    .map_err(|_| Error::ArtifactMismatch)?;
+    let root_bump = Pubkey::find_program_address(&root.seeds().as_slices(), trading_program).1;
+    Ok(HotBumpHintsV1 {
+        market: market_bump,
+        root: root_bump,
+        ..HotBumpHintsV1::ABSENT
+    })
+}
+
+/// Add the two maker-replay bumps an InlineOrdinary lifecycle creates.
+///
+/// Seller then buyer, because that is the order the lifecycle materializes
+/// them in and the slot an account owns is its position in that order. A
+/// mis-ordered pair is not a hazard, only a slower trade: each slot is
+/// reproduced against the account the frame supplies and a swap refuses.
+fn direct_inline_hot_bump_hints_v1(
+    state: &DirectInlineHotStateV3,
+    trading_program: &Pubkey,
+    seller: SignedDirectIntentV3,
+    buyer: SignedDirectIntentV3,
+) -> Result<HotBumpHintsV1, Error> {
+    let market_account = &fixed_account(state, HOT_MARKET_ACCOUNT_V3)?.account;
+    let coordinates = DirectCoordinatesV1::new(market_account.key.to_bytes(), state.generation)
+        .map_err(|_| Error::ArtifactMismatch)?;
+    let mut lifecycle = [0_u8; 2];
+    let mut buyer_maker_root = Pubkey::default();
+    for (slot, maker) in lifecycle.iter_mut().zip([seller.maker, buyer.maker]) {
+        let seeds = MakerReplaySeedsV1::new(coordinates, maker.to_bytes())
+            .map_err(|_| Error::ArtifactMismatch)?;
+        let (address, bump) = Pubkey::find_program_address(&seeds.as_slices(), trading_program);
+        *slot = bump;
+        buyer_maker_root = address;
+    }
+    // The two addresses Custody derives for ITSELF and can carry from nowhere:
+    // its replay, whose context is the buyer's maker-replay root, and its
+    // transfer authority. Both run through the Market, so both move with the
+    // participant keys; neither can be stored, because CUSTODY_REPLAY_BYTES_V1
+    // is exactly packed and Lean-emitted and the replay's own bump would have
+    // to be written before the account exists. Mined here and relayed after the
+    // Custody child request.
+    // Custody is not in the hot fixed frame; the Market's activation cache is,
+    // and it names the release set's Custody deployment.
+    let activation = &fixed_account(state, HOT_ACTIVATION_CACHE_ACCOUNT_V3)?.account;
+    let custody_program = Pubkey::new_from_array(
+        ActivatedExecutionReleaseSetViewV1::decode(&activation.data)
+            .map_err(|_| Error::ArtifactMismatch)?
+            .role(ExecutionRoleV1::Custody)
+            .map_err(|_| Error::ArtifactMismatch)?
+            .release()
+            .program()
+            .to_bytes(),
+    );
+    let child_relay = [
+        Pubkey::find_program_address(
+            &CustodyReplaySeedsV1::new(
+                market_account.key.to_bytes(),
+                state.release_set,
+                CallerRoleV1::Trading,
+                buyer_maker_root.to_bytes(),
+            )
+            .as_slices(),
+            &custody_program,
+        )
+        .1,
+        Pubkey::find_program_address(
+            &CustodyAuthoritySeedsV1::new(market_account.key.to_bytes(), state.release_set)
+                .as_slices(),
+            &custody_program,
+        )
+        .1,
+    ];
+    Ok(HotBumpHintsV1 {
+        lifecycle,
+        child_relay,
+        ..direct_hot_bump_hints_v1(state, trading_program)?
+    })
+}
 
 /// Direct Hot cannot execute within Solana's default transaction CU allocation.
 pub const DIRECT_HOT_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
@@ -119,15 +232,16 @@ pub const DIRECT_HOT_UNSIGNED_TRADING_INSTRUCTION_INDEX_V1: usize = 2;
 pub const DIRECT_SEAL_COMPUTE_UNIT_LIMIT_V1: u32 = 1_400_000;
 
 /// One exact detached maker signature and its canonical signed intent.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SignedDirectIntentV3 {
-    /// Native Ed25519 maker public key.
-    pub maker: Pubkey,
-    /// Detached Ed25519 signature over `intent.signed_preimage()`.
-    pub signature: [u8; 64],
-    /// Exact runtime-width Direct V2 semantic intent.
-    pub intent: CompactIntentV2,
-}
+///
+/// DECLARED IN `dclutch-direct-ticket`, not here, and re-exported so this
+/// module's path is unchanged for every caller. The struct the ticket author
+/// signs into and the struct this builder consumes must be the same struct or
+/// they will drift, and the author is the one that cannot afford to depend on
+/// this crate: it is called by the released read-only CLI, which links no
+/// program. The dependency therefore points down, and this crate takes the ticket
+/// crate with `default-features = false` -- no signer comes in with it, so the
+/// sentence at the top of this file stays true.
+pub use dclutch_direct_ticket::SignedDirectIntentV3;
 
 /// One same-finalized account plus the privileges requested by the transaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -425,6 +539,12 @@ pub fn build_direct_inline_hot_v4(
     buyer: SignedDirectIntentV3,
     fill: u64,
     execution_price: u64,
+    // The two child caller-authority bumps, Claims then Custody, from
+    // `derive_direct_inline_child_authorities_v3`. Their seeds end in a digest
+    // over each child's PROJECTED request, which this builder does not compute,
+    // so they are the caller's to supply. `[0, 0]` is correct and merely
+    // slower: the on-chain walk searches for them exactly as it used to.
+    child_caller: [u8; 2],
 ) -> Result<DirectInlineHotReportV3, Error> {
     let checked = state.hot_outer.ok_or(Error::HotOuterUnavailable)?;
     if checked.artifact_release == [0; 32]
@@ -474,7 +594,11 @@ pub fn build_direct_inline_hot_v4(
         state.generation,
         hash(&root.data).to_bytes(),
     )
-    .map_err(|_| Error::FixedFrameMismatch)?;
+    .map_err(|_| Error::FixedFrameMismatch)?
+    .with_bump_hints(HotBumpHintsV1 {
+        child_caller,
+        ..direct_inline_hot_bump_hints_v1(state, &checked.trading_program, seller, buyer)?
+    });
     let mut hot_instruction_data = Vec::with_capacity(HOT_FAMILY_REQUEST_OFFSET_V3 + request.len());
     hot_instruction_data.extend_from_slice(&envelope.to_bytes());
     hot_instruction_data.extend_from_slice(&request);
@@ -575,7 +699,11 @@ pub fn build_direct_hot_request_v4(
         state.generation,
         hash(&root.data).to_bytes(),
     )
-    .map_err(|_| Error::FixedFrameMismatch)?;
+    .map_err(|_| Error::FixedFrameMismatch)?
+    // Family-neutral: the Market and the capability root are read by every hot
+    // action. Family-specific slots stay zero here and search, which is what a
+    // builder that does not know the action's lifecycle should do.
+    .with_bump_hints(direct_hot_bump_hints_v1(state, &checked.trading_program)?);
     let mut hot_instruction_data = Vec::with_capacity(HOT_FAMILY_REQUEST_OFFSET_V3 + request.len());
     hot_instruction_data.extend_from_slice(&envelope.to_bytes());
     hot_instruction_data.extend_from_slice(request);
@@ -1819,6 +1947,11 @@ mod tests {
             DIRECT_REGISTRATION_REQUEST_BYTES_V3, DirectRegistrationRequestV3,
             DirectSignedParticipantV3,
         },
+        // Only the tests build an intent here: the module's own code takes one
+        // already signed, inside a `SignedDirectIntentV3` that now arrives from
+        // `dclutch-direct-ticket`. Importing it at file scope would be unused in
+        // the lib build, which is exactly how it got dropped in the first place.
+        intent_v2::CompactIntentV2,
         ordinary_account_artifacts_v3::DirectInlineOrdinaryAccountProfileInputV3,
         ordinary_bundle_v4::{
             DirectInlineOrdinaryHotBundleInputV4, build_direct_inline_ordinary_hot_bundle_v4,

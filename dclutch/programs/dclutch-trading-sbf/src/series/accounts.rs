@@ -58,10 +58,73 @@ pub enum SeriesAccountErrorV3 {
     Commit = 0x4104,
 }
 
-const _: () = assert!(
-    SeriesAccountErrorV3::State as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE + 0x100,
-    "the Series account boundary must sit in Trading's registered band"
-);
+impl SeriesAccountErrorV3 {
+    /// Every refusal this boundary can raise, in discriminant order.
+    ///
+    /// This is what the sub-band assertions below read. It is kept honest by
+    /// [`SeriesAccountErrorV3::ordinal`], whose match is exhaustive: a variant added to the enum
+    /// does not compile until its author writes an arm here, and the only arm that satisfies the
+    /// assertions is its own index in this array.
+    pub const ALL: [Self; 5] = [
+        Self::State,
+        Self::Frame,
+        Self::Funding,
+        Self::Creation,
+        Self::Commit,
+    ];
+
+    /// This refusal's position in [`SeriesAccountErrorV3::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a sixth variant is a
+    /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::State => 0,
+            Self::Frame => 1,
+            Self::Funding => 2,
+            Self::Creation => 3,
+            Self::Commit => 4,
+        }
+    }
+}
+
+// THIS BOUNDARY HAD NO UPPER BOUND AT ALL. The assertion below used to be one
+// line: `State` sits at the sub-band offset, and nothing more. Not a stale
+// ceiling -- no ceiling, which is why a sweep grepping for `BAND_SPAN` walked
+// straight past this file. The doc comment above records that this enum was
+// already invisible to the gauntlet census once, for want of a `#[repr]`; it
+// was invisible to the band gate too, for want of the second half of the check.
+//
+// It is now the same weld every other refusal enum in the tree carries: the run
+// is contiguous from the sub-band offset, every code is inside Trading's band,
+// and `ALL` is welded to the enum by the exhaustive `ordinal` match, so a sixth
+// variant cannot join without answering for itself.
+const _: () = {
+    const SUB_BAND: u32 = dclutch_refusal_registry::TRADING_REFUSAL_BASE + 0x100;
+    assert!(
+        SeriesAccountErrorV3::ALL[0] as u32 == SUB_BAND,
+        "the Series account boundary must sit in Trading's registered band"
+    );
+    let mut index = 0;
+    while index < SeriesAccountErrorV3::ALL.len() {
+        let variant = SeriesAccountErrorV3::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "SeriesAccountErrorV3::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == SUB_BAND + index as u32,
+            "SeriesAccountErrorV3 discriminants are not the contiguous run from the sub-band offset that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::TRADING_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "SeriesAccountErrorV3 must not run past Trading's registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<SeriesAccountErrorV3> for ProgramError {
     fn from(value: SeriesAccountErrorV3) -> Self {

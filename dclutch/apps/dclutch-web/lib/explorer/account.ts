@@ -93,15 +93,15 @@ async function rentStatus(
       exemptionMinimum: observation.lamports,
       exempt,
       note: exempt
-        ? 'At or above the rent-exemption minimum for its size.'
-        : 'Below the rent-exemption minimum for its size. The runtime will reclaim it.',
+        ? 'Its balance covers the cost of storing it, so the runtime will keep it.'
+        : 'Its balance does not cover the cost of storing it. The runtime will reclaim it.',
     });
   } catch (error) {
     return Object.freeze({
       lamports,
       exemptionMinimum: null,
       exempt: null,
-      note: `The rent-exemption minimum could not be read: ${error instanceof Error ? error.message : 'the request failed'}`,
+      note: `The minimum balance for an account this size could not be read: ${error instanceof Error ? error.message : 'the request failed'}`,
     });
   }
 }
@@ -144,11 +144,11 @@ export async function inspectAccount(
     const header = leadingMagic(data);
     note =
       header === null
-        ? 'The first eight bytes are not printable ASCII, so this account carries no dClutch record magic. Its bytes are shown raw.'
-        : `No generated module declares the magic ${header}, so no layout is applied. The bytes are shown raw rather than matched to a similar record.`;
+        ? 'The first eight bytes are not readable text, so this account carries no dClutch record magic.'
+        : `The protocol declares no record with the magic ${header}.`;
   } else if (derivations.length === 0) {
     note =
-      'No PDA derivation is reproducible from this record’s own bytes, so none is asserted. That is not a claim the account is not a PDA — only that its seeds are not recoverable from what it carries.';
+      'This record does not carry the seeds its address would be derived from.';
   }
 
   return Object.freeze({

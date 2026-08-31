@@ -141,7 +141,7 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
   const heartbeat = simulatorHeartbeatV1(series);
   const span = simulatorSeriesSpanV1(series);
   if (heartbeat === null || span === null) {
-    return <p className="market-empty">Only one cycle was recorded, and a rate needs two readings to be measured between.</p>;
+    return <p className="market-empty">Only one cycle recorded.</p>;
   }
 
   const stats: ReadonlyArray<NumberStripStatV1> = Object.freeze([
@@ -179,12 +179,12 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
       lines={[heartbeat.slotAdvance]}
       xLabels={heartbeat.xLabels}
       unit="slots"
-      caption="Slots the chain advanced between one reading and the next. This is the chain's own clock as this run observed it — a tall column is a long wait between readings, not a fast chain."
+      caption="Slots the chain advanced between readings."
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
 
     {heartbeat.cadence === null
-      ? <p className="market-empty">Some cycles did not record when they happened, so the cadence between them cannot be drawn without guessing.</p>
+      ? <p className="market-empty">Some cycles recorded no timestamp.</p>
       : <>
         <h3 className="detail-subhead">How often it came back</h3>
         {/* FE-CHART mount: the run's own rhythm, and its stalls. */}
@@ -192,7 +192,7 @@ export function Heartbeat({ read }: Readonly<{ read: SimulatorSeriesReadV1 | nul
           lines={[heartbeat.cadence]}
           xLabels={heartbeat.xLabels}
           unit="seconds"
-          caption="Wall-clock seconds between consecutive readings. A spike is a reading that took longer to come back — a stall, and then a resume."
+          caption="Seconds between readings."
           emptyReason={NO_SERIES_SENTENCE_V1}
         />
         <p className="slot-clock-note">
@@ -227,7 +227,7 @@ export function ConservationLaws({ series }: Readonly<{ series: SimulatorSeriesV
       rows={rows}
       cycles={cycles}
       glosses={LAW_GLOSSES}
-      caption="Each row is one conservation law; each column is one cycle boundary the run checked it at. Open the table for what every law asks and what it found at the newest cycle."
+      caption="One row per check, one column per cycle."
       emptyReason={NO_SERIES_SENTENCE_V1}
     />
   </>;
@@ -283,7 +283,7 @@ export function RecordedCycles({ read }: Readonly<{ read: SimulatorSeriesReadV1 
       lines={supplyLines}
       xLabels={xLabels}
       unit="atoms"
-      caption="Issued claims on each outcome, at every cycle the run recorded. These are claim counts in raw atoms, read from the market's Claims aggregate — not a forecast and not a rate."
+      caption="Claims issued per outcome, per cycle."
       flatNote={everyLineFlatV1(supplyLines)
         ? 'unchanged at every recorded cycle: no trade has landed in this run yet'
         : undefined}
@@ -341,7 +341,7 @@ export function WhoIsHolding({ series }: Readonly<{ series: SimulatorSeriesV1 }>
           </tbody>
         </table>
       </div>
-      <p className="market-editorial-note">The account names are the run operator&apos;s own labels, not anything the chain stores; the note that the hoard is the market&apos;s vault is this site&apos;s. Every address and every figure beside them is read from the chain. A holder of collateral is not a holder of claims: these accounts hold the token the market settles in, and only a position holds claims on the answer.</p>
+      <p>Collateral holders hold the token the market settles in; only a position holds claims on the answer.</p>
     </>}
   </>;
 }
@@ -390,14 +390,14 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
       <div>
         <p className="eyebrow">The pulse · a robot trades here so you can watch</p>
         <h1>Is anybody home?<br /><em>Ask the robot.</em></h1>
-        <p>We run a small automated trader against the protocol — the simulator. It sends the same transactions you would send, on a loop: fund a wallet, trade, then re-check that every unit of collateral is exactly where the ledger says it must be. If a single check ever fails, it stops loudly and this page shows the stop. This page reads the last thing it wrote, and nothing else.</p>
+        <p>A small automated trader — the simulator — runs against the protocol on a loop: fund a wallet, trade, then re-check that every unit of collateral is where the ledger says it must be. If a check fails, it stops.</p>
       </div>
       <aside>
         <span>Where this stands</span>
         <strong>{status === null ? 'No simulator running' : status.halted ? 'Halted — loudly, on purpose' : 'Publishing its pulse'}</strong>
         {status === null
-          ? <p>No pulse artifact is published beside this site right now. The simulator exists and runs against local rehearsal validators; when a run publishes here, this page fills in by itself. Until then it stays empty rather than showing you a rehearsal as if it were live.</p>
-          : <p>Everything below comes from one file the simulator rewrites after every cycle. It is a report by the robot about itself, checked against the chain it trades on — not an estimate, and not a marketing counter. This site is a set of files, so it carries the robot&apos;s last write before the site was published, not the one happening now; the heartbeat says how old that is.</p>}
+          ? <p>No run published yet.</p>
+          : <p>One file, rewritten after every cycle. This site is static, so it shows the last write before publication.</p>}
       </aside>
     </section>
 
@@ -418,33 +418,33 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </div>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>The pulse, by the numbers</h2><p>Three counts from the simulator&apos;s last write. A dash is an unread value, never a zero; a read zero is shown as the zero it is.</p></div></header>
+      <header><span>01</span><div><h2>The pulse, by the numbers</h2><p>From the simulator&apos;s last write.</p></div></header>
       {/* FE-CHART mount: the pulse feeds the presentational NumberStrip; the
           reader in lib/simulatorStatus.ts decides what may appear here. */}
       <NumberStrip stats={status === null ? UNREAD_STATS : loadedStats(status)} provenance={provenance(read)} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The heartbeat</h2><p>Two things move between one reading and the next, and neither of them belongs to us: how far the chain got, and how long we took to come back. This is the part of the record that answers whether anything is on the other end of the line.</p></div></header>
+      <header><span>02</span><div><h2>The heartbeat</h2><p>How far the chain got between readings, and how long each reading took.</p></div></header>
       <Heartbeat read={series} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>Every law, at every boundary</h2><p>Seven conservation laws are re-checked after each cycle — that the collateral is all still somewhere we can name, that the positions add up to the issued supply, that the vault covers the worst outcome it could be asked to pay. Each row is one law; each column is one cycle.</p></div></header>
+      <header><span>03</span><div><h2>The seven checks, after every cycle</h2><p>After each cycle the simulator re-checks seven things: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay, and four more like them. Each row is one check; each column is one cycle.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <ConservationLaws series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
     </section>
 
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>What the run looked like over time</h2><p>Every other chart on this site draws one moment. This one draws the run: one point per cycle, from the run&apos;s own records.</p></div></header>
+      <header><span>04</span><div><h2>What the run looked like over time</h2><p>One point per cycle.</p></div></header>
       <RecordedCycles read={series} />
     </section>
 
     <section className="trade-v3-card">
       <header><span>05</span><div><h2>The last ledger check</h2><p>After trading, the simulator re-reads the chain and proves conservation: every lamport and every collateral atom accounted for. This is the check that halts it.</p></div></header>
       {status === null || status.lastReconciliation === null
-        ? <p className="market-empty">No check has been read. When a run publishes here, its most recent conservation verdict appears in this spot — pass or fail, with its timestamp.</p>
+        ? <p className="market-empty">No check has been read.</p>
         : <p className="direct-status">
           <span className={`status-chip ${status.lastReconciliation.ok ? 'pass' : 'fail'}`}>{status.lastReconciliation.ok ? 'conserved' : 'violated'}</span>
           {' '}Checked at {status.lastReconciliation.checkedAt}.
@@ -454,7 +454,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </section>
 
     <section className="trade-v3-card">
-      <header><span>06</span><div><h2>Who is in this market</h2><p>Every position on the market and every account holding its collateral, as of the last recorded cycle. This is the table a prediction market usually calls a leaderboard; it is not called that here, because ordering one position ranks nothing. The first trade changes that by itself.</p></div></header>
+      <header><span>06</span><div><h2>Who is in this market</h2><p>Every position on the market, and every account holding its collateral, as of the last recorded cycle.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <WhoIsHolding series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
@@ -490,8 +490,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </section>
 
     <footer className="product-footer">
-      <span>The robot&apos;s own report · one file, rewritten every cycle</span>
-      <span>No estimates · no synthesized runs · a missing file renders as the missing file it is</span>
+      <span>The simulator&apos;s own report · one file, rewritten every cycle</span>
     </footer>
   </main>;
 }

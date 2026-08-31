@@ -49,7 +49,7 @@ describe('band attribution', () => {
     expect(attribution.disposition).toBe('banded');
     if (attribution.disposition !== 'banded') return;
     expect(attribution.band.label).toBe('core');
-    expect(describeAttribution(attribution)).toContain('the meaning is not');
+    expect(describeAttribution(attribution)).toContain('no refusal is declared at this code');
   });
 
   it('separates an unallocated band from a foreign one', () => {

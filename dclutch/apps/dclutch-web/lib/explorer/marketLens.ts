@@ -94,31 +94,31 @@ const IDENTITY_SCHEMAS: ReadonlyArray<
     field: 'realmId',
     schema: REALM_SCHEMA_RELEASE_ID_V1,
     title: 'Realm record',
-    summary: 'The collateral binding: which token program and mint back every claim.',
+    summary: 'What this market pays out in: the exact token behind every claim it issues.',
   },
   {
     field: 'productRecordId',
     schema: PRODUCT_RECORD_SCHEMA_ID_V2,
     title: 'Product record',
-    summary: 'The admitted product this Market grades its claims against.',
+    summary: 'The product this market grades its claims against.',
   },
   {
     field: 'resolutionPolicyId',
     schema: SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
     title: 'Source material',
-    summary: 'The resolution policy slot. A Found37 founding publishes the Source material record here.',
+    summary: 'How this market decides its outcome: the source material it settles on.',
   },
   {
     field: 'capabilityManifestId',
     schema: CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
     title: 'Capability manifest record',
-    summary: 'The immutable list of capabilities this Market was founded with.',
+    summary: 'The fixed list of what this market is allowed to do, set at founding.',
   },
   {
     field: 'selectedReleaseSetId',
     schema: EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1,
     title: 'Execution release set',
-    summary: 'The exact program releases every action on this Market executes under.',
+    summary: 'The exact program builds every action on this market runs under.',
   },
 ]);
 
@@ -157,7 +157,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         facts: Object.freeze([]),
       }),
     );
-    gaps.push('The Market itself did not decode, so no edge from it can be followed.');
+    gaps.push('The Market itself did not decode.');
     return Object.freeze({
       address: detail.address,
       floorSlot: detail.floorSlot,
@@ -179,7 +179,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
       id: 'market',
       band: 'market',
       title: 'Market · Core state',
-      summary: detail.phaseMeaning ?? 'The Market account itself.',
+      summary: detail.phaseMeaning ?? 'The market account itself.',
       address: card.address,
       contentId: null,
       provenance: Object.freeze({ kind: 'observed', slot: card.observedSlot }),
@@ -223,7 +223,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
               })
             : Object.freeze({
                 kind: 'derived',
-                how: 'raw-record PDA of this identity under the selected Registry program; not reacquired by this view — open it to re-hash the bytes',
+                how: 'raw-record PDA of this identity under the selected Registry program; not reacquired',
               }),
         facts: Object.freeze([fact('Content identity', identity)]),
       }),
@@ -236,12 +236,12 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
       id: 'productInstance',
       band: 'identity',
       title: 'Product instance',
-      summary: 'The product identity the payoff is graded under. A digest inside the Product record’s body, not a record of its own.',
+      summary: 'The product the payout is graded under. It lives inside the product record, not in an account of its own.',
       address: null,
       contentId: card.identity.productInstanceId,
       provenance: Object.freeze({
         kind: 'stated',
-        how: 'read from the Market’s own seed; no record account holds it, so nothing is derived',
+        how: 'read from the Market’s own seed; no record account holds it',
       }),
       facts: Object.freeze([fact('Content identity', card.identity.productInstanceId)]),
     }),
@@ -255,7 +255,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'realm',
         band: 'collateral',
         title: 'Realm, authenticated',
-        summary: 'The Realm record was reacquired at this floor and its bytes re-hashed to the identity the Market names.',
+        summary: 'The record naming the token this market pays out in.',
         address: card.collateral.realmAddress,
         contentId: card.collateral.realmContentId,
         provenance: Object.freeze({ kind: 'observed', slot: card.collateral.observedSlot }),
@@ -274,7 +274,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'collateralMint',
         band: 'collateral',
         title: 'Collateral mint',
-        summary: 'The token every claim in this Market is collateralized in.',
+        summary: 'The token every claim in this market is backed by.',
         address: card.collateral.collateralMint,
         contentId: null,
         provenance: Object.freeze({ kind: 'observed', slot: card.collateral.observedSlot }),
@@ -293,7 +293,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'aggregate',
         band: 'liability',
         title: 'Claims aggregate',
-        summary: 'The total claim supply this Market has issued, and the Custody namespace its Hoard sits in.',
+        summary: 'How many claims this market has issued in total, and where the collateral behind them sits.',
         address: card.liability.aggregateAddress,
         contentId: null,
         provenance: Object.freeze({ kind: 'observed', slot: card.liability.observedSlot }),
@@ -320,7 +320,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'hoard',
         band: 'liability',
         title: 'Hoard',
-        summary: 'The Custody vault holding the collateral that backs every outstanding claim.',
+        summary: 'The vault holding the collateral behind every outstanding claim.',
         address: card.hoard.address,
         contentId: null,
         provenance: Object.freeze({ kind: 'observed', slot: card.hoard.observedSlot }),
@@ -339,7 +339,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'custodyAuthority',
         band: 'liability',
         title: 'Custody authority',
-        summary: 'The PDA that owns the Hoard token account.',
+        summary: 'The account that owns the vault.',
         address: card.hoard.custodyAuthority,
         contentId: null,
         provenance: Object.freeze({
@@ -361,7 +361,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         id: 'manifest',
         band: 'capability',
         title: 'Capability manifest, authenticated',
-        summary: `${card.capabilities.badges.length} capability entries, re-hashed to the identity the Market names.`,
+        summary: `${card.capabilities.badges.length} things this market is allowed to do.`,
         address: card.capabilities.recordAddress,
         contentId: card.capabilities.manifestId,
         provenance: Object.freeze({ kind: 'observed', slot: card.capabilities.observedSlot }),
@@ -377,8 +377,8 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
           band: 'capability',
           title: `Capability ${badge.index} · ${badge.label}`,
           summary: badge.recognized
-            ? 'A capability kind this client recognizes.'
-            : 'This client does not recognize this capability kind; its identity is shown rather than named.',
+            ? 'A named capability kind.'
+            : 'An unnamed capability kind, identified by its fingerprint.',
           address: null,
           contentId: badge.kindId,
           provenance: Object.freeze({ kind: 'observed', slot: card.capabilities.observedSlot }),
@@ -417,7 +417,7 @@ export function projectMarketLens(detail: MarketDetailV1): MarketLens {
         contentId: card.settlement.receiptId,
         provenance: Object.freeze({
           kind: 'stated',
-          how: 'read from the Market’s own terminal receipt slot; this client knows no schema pairing for it, so no record address is derived',
+          how: 'read from the Market’s own terminal receipt slot; no schema pairing is declared for it',
         }),
         facts: Object.freeze([
           fact('Winner', String(card.settlement.winner)),

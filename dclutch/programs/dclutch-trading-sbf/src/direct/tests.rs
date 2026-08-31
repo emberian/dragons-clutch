@@ -259,7 +259,7 @@ fn ordinary_fixture(fee_basis_points: u16) -> RegisteredOrdinaryInputV2 {
 
 #[test]
 fn state_candidate_is_commit_last_for_partial_and_terminal_records() {
-    let input = ordinary_fixture(1_000);
+    let input = ordinary_fixture(500);
     let selected = input.execution.config;
     let width = input.execution.outcome_count;
     let partial = dclutch_direct_codec::successor::settle_registered_ordinary_v2(input)
@@ -413,10 +413,10 @@ fn complementary_candidates(
             valid_through: 20,
             maximum_fill: 100,
             limit_price: 20,
-            fee_basis_points: 1_000,
+            fee_basis_points: 500,
             collateral_account: id(30),
         },
-        config(1_000, id(6)),
+        config(500, id(6)),
     );
     let mut roots = [seed.maker_root; 3];
     let mut records = [seed.record; 3];
@@ -438,10 +438,10 @@ fn complementary_candidates(
                 valid_through: 20,
                 maximum_fill: 100,
                 limit_price: price,
-                fee_basis_points: 1_000,
+                fee_basis_points: 500,
                 collateral_account: id(u8::try_from(index + 30).expect("collateral")),
             },
-            config(1_000, id(6)),
+            config(500, id(6)),
         );
         root = created.root;
         *roots.get_mut(index).expect("root slot") = created.maker_root;
@@ -455,7 +455,7 @@ fn complementary_candidates(
             observed_record_lamports: 100,
         },
         execution: RegisteredExecutionV2 {
-            config: config(1_000, id(6)),
+            config: config(500, id(6)),
             outcome_count: 3,
             slot: 5,
             fill: 100,
@@ -478,7 +478,7 @@ fn complementary_candidates(
             execution_prices: &prices,
         },
         scratch: &mut scratch,
-        config: config(1_000, id(6)),
+        config: config(500, id(6)),
         outcome_count: 3,
         slot: 5,
         fill: 100,
@@ -495,7 +495,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
             market_vault_transfer: 100,
             total_fee_transfer: 10,
         },
-        config(1_000, id(6)),
+        config(500, id(6)),
         complementary_context(),
     )
     .expect("split aggregate preflight");
@@ -573,7 +573,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
         record_before: buy_record,
         candidate: buy_candidate,
         participant,
-        config: config(1_000, id(6)),
+        config: config(500, id(6)),
         context: complementary_context(),
     };
     let principal = project_complementary_custody_effect_v2(projection(
@@ -589,7 +589,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     assert_ne!(principal.request.destination_vault_context, id(1));
     assert_eq!(principal.request.semantic.transfer_index, 0);
     assert_eq!(principal.request.expected_revision, 10);
-    assert_eq!(principal.buy_vault_after, Some(3));
+    assert_eq!(principal.buy_vault_after, Some(1));
     let mut market_as_hoard_context = principal.request;
     market_as_hoard_context.destination_vault_context = id(1);
     assert_eq!(
@@ -602,7 +602,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     ))
     .expect("split fee")
     .expect("positive split fee");
-    assert_eq!(fee.request.amount, 3);
+    assert_eq!(fee.request.amount, 1);
     assert_eq!(fee.request.destination, id(22));
     assert_eq!(fee.request.semantic.transfer_index, 1);
     assert_eq!(fee.request.expected_revision, 11);
@@ -657,7 +657,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
             market_vault_transfer: 100,
             total_fee_transfer: 10,
         },
-        config(1_000, id(6)),
+        config(500, id(6)),
         complementary_context(),
     )
     .expect("merge aggregate preflight");
@@ -673,7 +673,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
                 market_vault_transfer: 100,
                 total_fee_transfer: 10,
             },
-            config(1_000, id(6)),
+            config(500, id(6)),
             underfunded,
         ),
         Err(DirectPhysicalError::Arithmetic)
@@ -700,7 +700,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
         record_before: sell_record,
         candidate: sell_candidate,
         participant: seller_participant,
-        config: config(1_000, id(6)),
+        config: config(500, id(6)),
         context: complementary_context(),
     };
     let net = project_complementary_custody_effect_v2(merge_projection(
@@ -708,7 +708,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     ))
     .expect("merge net")
     .expect("positive merge net");
-    assert_eq!(net.request.amount, 45);
+    assert_eq!(net.request.amount, 48);
     assert_eq!(net.request.source, id(41));
     assert_eq!(net.request.destination, seller.account);
     assert_eq!(net.request.source_vault_context, id(40));
@@ -718,7 +718,7 @@ fn complementary_custody_routes_are_affine_ordered_and_hostile_bound() {
     ))
     .expect("merge fee")
     .expect("positive merge fee");
-    assert_eq!(merge_fee.request.amount, 5);
+    assert_eq!(merge_fee.request.amount, 2);
     assert_eq!(merge_fee.request.destination, id(22));
     assert_eq!(merge_fee.request.semantic.transfer_index, 1);
 }
@@ -997,8 +997,8 @@ fn sell_escrow_fixture() -> (
     let creation = register_canonical(
         DirectRootStateV1::new(),
         id(2),
-        intent(0, 0, id(20), 1_000),
-        config(1_000, id(6)),
+        intent(0, 0, id(20), 500),
+        config(500, id(6)),
     );
     let record_seeds = RegisteredIntentSeedsV2::from_record(creation.record);
     let (record, bump) = derive_pda(id(10), &record_seeds.as_slices());
@@ -1300,7 +1300,7 @@ fn sell_partial_fill_releases_only_from_record_position() {
             observed_record_lamports: 100,
         },
         execution: RegisteredExecutionV2 {
-            config: config(1_000, id(6)),
+            config: config(500, id(6)),
             outcome_count: 3,
             slot: 5,
             fill: 20,
@@ -1367,7 +1367,7 @@ fn sell_unwind_refunds_residual_then_closes_to_persisted_rent_credit() {
         creation.root,
         creation.maker_root,
         creation.record,
-        config(1_000, id(6)),
+        config(500, id(6)),
         3,
         RegisteredTerminalEvidenceV2::Cancel(
             AuthenticatedCompactIntentV2::from_adjacent_ed25519(
@@ -1479,9 +1479,9 @@ fn buy_escrow_fixture() -> (
     DirectBuyEscrowAccountsV2,
     DirectExternalDebitV2,
 ) {
-    let selected = config(1_000, id(6));
+    let selected = config(500, id(6));
     let maker = id(3);
-    let signed = intent(1, 0, id(21), 1_000);
+    let signed = intent(1, 0, id(21), 500);
     let authenticated = AuthenticatedCompactIntentV2::from_adjacent_ed25519(maker, signed)
         .expect("authenticated Buy");
     let record_seeds = RegisteredIntentSeedsV2::new(authenticated).expect("record seeds");
@@ -1642,7 +1642,7 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
         creation.root,
         creation.maker_root,
         creation.record,
-        config(1_000, id(6)),
+        config(500, id(6)),
         3,
         RegisteredTerminalEvidenceV2::Cancel(
             AuthenticatedCompactIntentV2::from_adjacent_ed25519(
@@ -1693,13 +1693,13 @@ fn buy_cancel_refunds_then_closes_vault_and_replay() {
             .operation,
         OperationV1::CloseReplay
     );
-    assert_eq!(plan.refund_destination_after, 76);
+    assert_eq!(plan.refund_destination_after, 73);
 
     let expired = terminate_registered_intent_v2(
         creation.root,
         creation.maker_root,
         creation.record,
-        config(1_000, id(6)),
+        config(500, id(6)),
         3,
         RegisteredTerminalEvidenceV2::Expire { slot: 21 },
         100,
@@ -1742,7 +1742,7 @@ fn full_buy_fill_with_zero_residual_closes_without_refund_transfer() {
             observed_record_lamports: 100,
         },
         execution: RegisteredExecutionV2 {
-            config: config(1_000, id(6)),
+            config: config(500, id(6)),
             outcome_count: 3,
             slot: 5,
             fill: 100,
@@ -1806,8 +1806,8 @@ fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrow
     let seller = register(
         buyer.root,
         id(2),
-        intent(0, 0, id(20), 1_000),
-        config(1_000, id(6)),
+        intent(0, 0, id(20), 500),
+        config(500, id(6)),
         7,
     );
     let direct = RegisteredOrdinaryInputV2 {
@@ -1823,7 +1823,7 @@ fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrow
             observed_record_lamports: 100,
         },
         execution: RegisteredExecutionV2 {
-            config: config(1_000, id(6)),
+            config: config(500, id(6)),
             outcome_count: 3,
             slot: 5,
             fill,
@@ -1872,20 +1872,22 @@ fn ordinary_buy_escrow_input(fill: u64, execution_price: u64) -> DirectBuyEscrow
 
 #[test]
 fn partial_buy_fill_spends_record_vault_and_keeps_lifecycle_live() {
-    let input = ordinary_buy_escrow_input(20, 50);
+    // Forty, not twenty: inside the 500 bp band a gross of ten floors its fee
+    // to zero, and the fee route this test exists to see would disappear.
+    let input = ordinary_buy_escrow_input(40, 50);
     assert_eq!(input.record_lifecycle, None);
     let plan = prepare_buy_escrow_fill_v2(&input).expect("partial escrow fill");
     assert_eq!(plan.request_count, 2);
     assert!(!plan.closes_escrow);
-    assert_eq!(plan.vault_after, 55);
-    assert_eq!(plan.seller_destination_after, 39);
+    assert_eq!(plan.vault_after, 42);
+    assert_eq!(plan.seller_destination_after, 49);
     assert_eq!(plan.fee_destination_after, 42);
-    assert_eq!(plan.buyer_refund_destination_after, 34);
+    assert_eq!(plan.buyer_refund_destination_after, 37);
     let net = plan.requests.first().expect("net transfer request");
     assert_eq!(net.operation, OperationV1::Transfer);
     assert_eq!(net.source_compartment, CompartmentV1::TradingPrincipal);
     assert_eq!(net.source, input.accounts.vault);
-    assert_eq!(net.amount, 9);
+    assert_eq!(net.amount, 19);
     assert_eq!(net.expected_revision, 3);
     let fee = plan.requests.get(1).expect("fee transfer request");
     assert_eq!(fee.amount, 2);
@@ -1930,25 +1932,29 @@ fn terminal_price_improved_buy_fill_refunds_and_closes_after_transfers() {
     assert_eq!(plan.request_count, 5);
     assert!(plan.closes_escrow);
     assert_eq!(plan.vault_after, 0);
-    assert_eq!(plan.seller_destination_after, 75);
-    assert_eq!(plan.fee_destination_after, 50);
-    assert_eq!(plan.buyer_refund_destination_after, 45);
+    assert_eq!(plan.seller_destination_after, 78);
+    assert_eq!(plan.fee_destination_after, 44);
+    assert_eq!(plan.buyer_refund_destination_after, 48);
+    // Seller net, combined fee, then the buyer's refund -- and the three sum
+    // to the vault's whole reserve, which is why `vault_after` is zero. The
+    // labels used to name the first request a refund; they never matched the
+    // order the plan actually emits.
     assert_eq!(
         plan.requests
             .first()
-            .expect("buyer refund transfer request")
+            .expect("seller net transfer request")
             .amount,
-        45
+        48
+    );
+    assert_eq!(
+        plan.requests.get(1).expect("fee transfer request").amount,
+        4
     );
     assert_eq!(
         plan.requests
-            .get(1)
-            .expect("seller net transfer request")
+            .get(2)
+            .expect("buyer refund transfer request")
             .amount,
-        10
-    );
-    assert_eq!(
-        plan.requests.get(2).expect("fee transfer request").amount,
         11
     );
     assert_eq!(
@@ -1981,7 +1987,7 @@ fn inline_compact(
         valid_through: 20,
         maximum_fill: 100,
         limit_price: if side == 0 { 40 } else { 60 },
-        fee_basis_points: 1_000,
+        fee_basis_points: 500,
         collateral_account,
     }
 }
@@ -2113,7 +2119,7 @@ fn inline_physical_fixture(
             seller,
             buyer,
             execution: InlineExecutionV2 {
-                config: config(1_000, id(6)),
+                config: config(500, id(6)),
                 outcome_count: 3,
                 slot: 7,
                 fill,
@@ -2231,7 +2237,7 @@ fn maker_lifecycle_plan(
 
 #[test]
 fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
@@ -2243,15 +2249,22 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
         &mut claims_output,
     )
     .expect("inline physical plan");
-    assert_eq!(plan.custody_count, 2);
-    assert_eq!(plan.buyer_source_after, 78);
-    assert_eq!(plan.buyer_delegated_after, 0);
-    assert_eq!(plan.seller_destination_after, 48);
-    assert_eq!(plan.fee_destination_after, 44);
+    // State S1 of `FEE_SECOND_TRANSACTION_V1` section 2.1, exactly: one Custody
+    // CPI, the buyer debited the seller's net and no more, the fee recipient
+    // untouched, and a delegation still standing for exactly the combined fee.
+    assert_eq!(plan.custody_count, 1);
+    assert_eq!(plan.buyer_source_after, 81);
+    assert_eq!(plan.buyer_delegated_after, 2);
+    assert_eq!(plan.seller_destination_after, 49);
+    assert_eq!(plan.fee_destination_after, 40);
+    assert_eq!(plan.settlement.effects.total_fee_transfer, 2);
+    // The obligation, recorded where the next fill's gate reads it.
+    assert_eq!(plan.settlement.buyer_maker_root.fee_owed(), 2);
+    assert_eq!(plan.settlement.seller_maker_root.fee_owed(), 0);
     let net =
         project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
             .expect("seller net");
-    assert_eq!(net.request.custody.amount, 18);
+    assert_eq!(net.request.custody.amount, 19);
     assert_eq!(net.request.custody.expected_revision, 7);
     assert_eq!(net.request.custody.semantic.transfer_index, 0);
     assert_eq!(
@@ -2264,20 +2277,15 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
     );
     assert!(net.request.starts_atomic_debit);
     assert!(!net.request.terminal);
-    assert_eq!(net.request.allowance_before, 22);
-    assert_eq!(net.request.allowance_after, 4);
-    assert_eq!(net.delegated_after, 4);
-    let fee =
-        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1)
-            .expect("combined fee");
-    assert_eq!(fee.request.custody.amount, 4);
-    assert_eq!(fee.request.custody.expected_revision, 8);
-    assert_eq!(fee.request.custody.semantic.transfer_index, 1);
-    assert!(!fee.request.starts_atomic_debit);
-    assert!(fee.request.terminal);
-    assert_eq!(fee.request.allowance_before, 4);
-    assert_eq!(fee.request.allowance_after, 0);
-    assert_eq!(fee.delegated_after, 0);
+    assert_eq!(net.request.delegate_after, net.request.delegate_before);
+    assert_eq!(net.request.allowance_before, 21);
+    assert_eq!(net.request.allowance_after, 2);
+    assert_eq!(net.delegated_after, 2);
+    // There is no second leg here. The fee settles in its own transaction.
+    assert_eq!(
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1),
+        Err(DirectPhysicalError::Width)
+    );
     let claims = SparseNativeTransferV1::decode(&claims_output).expect("Claims transfer");
     let claims = claims.input();
     assert_eq!(claims.source_owner, id(2));
@@ -2311,7 +2319,7 @@ fn inline_ioc_projects_sparse_claims_and_exhausts_exact_atomic_delegate() {
 
 #[test]
 fn inline_fok_price_improvement_exhausts_exact_actual_allowance() {
-    let (direct, context, collateral) = inline_physical_fixture(100, 0, 55);
+    let (direct, context, collateral) = inline_physical_fixture(100, 0, 52);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
@@ -2324,14 +2332,15 @@ fn inline_fok_price_improvement_exhausts_exact_actual_allowance() {
     )
     .expect("price-improved FOK");
     assert_eq!(plan.settlement.effects.gross_collateral, 50);
-    assert_eq!(plan.settlement.effects.buyer_collateral_debit, 55);
-    assert_eq!(plan.buyer_source_after, 45);
-    assert_eq!(plan.buyer_delegated_after, 0);
+    assert_eq!(plan.settlement.effects.buyer_collateral_debit, 52);
+    assert_eq!(plan.buyer_source_after, 52);
+    assert_eq!(plan.buyer_delegated_after, 4);
+    assert_eq!(plan.settlement.buyer_maker_root.fee_owed(), 4);
 }
 
 #[test]
 fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
@@ -2420,7 +2429,7 @@ fn inline_receipts_bind_exact_claims_custody_and_delegate_poststate() {
 
 #[test]
 fn inline_effect_partition_is_exhaustive_ordered_and_inactive_safe() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let plan = prepare_inline_ordinary_physical_v2(
@@ -2435,25 +2444,24 @@ fn inline_effect_partition_is_exhaustive_ordered_and_inactive_safe() {
     let net =
         project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 0)
             .expect("seller net");
-    let fee =
-        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1)
-            .expect("combined fee");
+    // The fee leg is NOT a route of this transaction. Asking for a second
+    // transfer is a width refusal, not a second projected request.
+    assert_eq!(
+        project_inline_custody_effect_physical_v2(direct, context, collateral, plan.settlement, 1),
+        Err(DirectPhysicalError::Width)
+    );
     let mut bank = [0xa5_u8; DIRECT_INLINE_ORDINARY_REQUEST_BANK_BYTES_V3];
     bank.get_mut(..DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2)
         .expect("Claims bank")
         .copy_from_slice(&claims_output);
-    for (slot, effect) in [(1_usize, net), (2_usize, fee)] {
-        let start =
-            DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2 + slot * DELEGATED_CUSTODY_REQUEST_BYTES_V2;
-        let end = start + DELEGATED_CUSTODY_REQUEST_BYTES_V2;
-        bank.get_mut(start..end)
-            .expect("Custody slot")
-            .copy_from_slice(&effect.request.encode().expect("Custody request"));
-    }
+    let start = DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2 + DELEGATED_CUSTODY_REQUEST_BYTES_V2;
+    bank.get_mut(start..start + DELEGATED_CUSTODY_REQUEST_BYTES_V2)
+        .expect("Custody slot")
+        .copy_from_slice(&net.request.encode().expect("Custody request"));
     let dispatch = DirectInlineEffectDispatchV2 {
-        custody_slots: [1, 2],
-        custody_count: 2,
-        child_dispatch_writable: [false, true, true, false],
+        custody_slots: [1],
+        custody_count: 1,
+        child_dispatch_writable: [false, true, false, false],
     };
     verify_inline_effect_partition_physical_v2(direct, context, collateral, &bank, dispatch)
         .expect("canonical partition");
@@ -2471,7 +2479,7 @@ fn inline_effect_partition_is_exhaustive_ordered_and_inactive_safe() {
     .expect("inactive raw bytes do not affect candidate arithmetic");
 
     let mut active_changed = bank;
-    active_changed[DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2 + DELEGATED_CUSTODY_REQUEST_BYTES_V2] ^= 1;
+    active_changed[start] ^= 1;
     assert_eq!(
         verify_inline_effect_partition_physical_v2(
             direct,
@@ -2483,27 +2491,38 @@ fn inline_effect_partition_is_exhaustive_ordered_and_inactive_safe() {
         Err(DirectPhysicalError::Postcondition)
     );
     for hostile in [
+        // The terminal seller route, whose request would close the delegation
+        // the fee transaction has to spend.
         DirectInlineEffectDispatchV2 {
-            custody_slots: [2, 1],
+            custody_slots: [0],
+            child_dispatch_writable: [true, false, false, false],
+            ..dispatch
+        },
+        // The fee continuation, dispatched from tx1.
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [2],
+            child_dispatch_writable: [false, false, true, false],
+            ..dispatch
+        },
+        // The retired fee-only route.
+        DirectInlineEffectDispatchV2 {
+            custody_slots: [3],
+            child_dispatch_writable: [false, false, false, true],
+            ..dispatch
+        },
+        // A count the capacity cannot hold.
+        DirectInlineEffectDispatchV2 {
+            custody_count: 2,
+            ..dispatch
+        },
+        // The right route, dispatched with a frame the Effect never enabled.
+        DirectInlineEffectDispatchV2 {
+            child_dispatch_writable: [false, true, true, false],
             ..dispatch
         },
         DirectInlineEffectDispatchV2 {
-            custody_slots: [1, 1],
-            child_dispatch_writable: [false, true, false, false],
-            ..dispatch
-        },
-        DirectInlineEffectDispatchV2 {
-            custody_slots: [1, 0],
-            custody_count: 1,
-            child_dispatch_writable: [false, true, false, false],
-        },
-        DirectInlineEffectDispatchV2 {
-            custody_slots: [0, 1],
-            child_dispatch_writable: [true, true, false, false],
-            ..dispatch
-        },
-        DirectInlineEffectDispatchV2 {
-            child_dispatch_writable: [true, true, true, false],
+            custody_count: 0,
+            child_dispatch_writable: [false, false, false, false],
             ..dispatch
         },
     ] {
@@ -2514,9 +2533,78 @@ fn inline_effect_partition_is_exhaustive_ordered_and_inactive_safe() {
     }
 }
 
+/// **ember's E5 condition, at the destination.**
+///
+/// E5 accepted the maker lockout only if the debtor is *always* free to unblock
+/// themselves -- "including when the fee recipient's token account has
+/// vanished (create-idempotent or equivalent)". The protocol answer is that the
+/// fee destination was never bound by address: `validate_collateral` requires
+/// `fee_destination.owner == config.fee_recipient` and nothing more. So a
+/// recipient account that is closed between the fill and its settlement is not
+/// a stranding: any account of that owner will do, the debtor may create one
+/// (an idempotent associated-token-account creation is permissionless and needs
+/// no signature but the payer's), and the settlement routes there.
+///
+/// The two halves of that claim are here: a DIFFERENT account of the same owner
+/// is admitted, and a same-address account of a DIFFERENT owner is refused. The
+/// second is what stops "any account will do" from meaning "any account".
+#[test]
+fn the_fee_destination_is_bound_by_owner_and_never_by_address() {
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
+    let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let mut claims_output = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
+    let recipient = direct.execution.config.fee_recipient();
+    assert_eq!(collateral.fee_destination.owner, recipient);
+
+    // A second, freshly created account of the same recipient -- the shape the
+    // debtor would produce after the first one was closed.
+    let replacement = DirectInlineCollateralFrameV2 {
+        fee_destination: DirectExternalCollateralV2 {
+            account: id(60),
+            owner: recipient,
+            balance: 0,
+        },
+        ..collateral
+    };
+    let plan = prepare_inline_ordinary_physical_v2(
+        direct,
+        context,
+        inline_lifecycle_plans(direct, context),
+        replacement,
+        &mut claims_scratch,
+        &mut claims_output,
+    )
+    .expect("a fresh account of the same recipient is admitted");
+    // And tx1 still does not pay it: the balance it arrived with is the balance
+    // it leaves with, obligation and all.
+    assert_eq!(plan.fee_destination_after, 0);
+    assert_eq!(plan.settlement.buyer_maker_root.fee_owed(), 2);
+
+    // A stranger's account at the same coordinate is refused by binding, so
+    // owner-binding is a real check and not an absence of one.
+    let stranger = DirectInlineCollateralFrameV2 {
+        fee_destination: DirectExternalCollateralV2 {
+            owner: id(61),
+            ..collateral.fee_destination
+        },
+        ..collateral
+    };
+    assert_eq!(
+        prepare_inline_ordinary_physical_v2(
+            direct,
+            context,
+            inline_lifecycle_plans(direct, context),
+            stranger,
+            &mut claims_scratch,
+            &mut claims_output,
+        ),
+        Err(DirectPhysicalError::Binding)
+    );
+}
+
 #[test]
 fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 20);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let before = claims_output;
@@ -2562,7 +2650,7 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             inline_lifecycle_plans(direct, bad_replay),
             DirectInlineCollateralFrameV2 {
                 buyer_source: DirectExternalDebitV2 {
-                    delegated_amount: 22,
+                    delegated_amount: 21,
                     ..collateral.buyer_source
                 },
                 ..collateral
@@ -2580,7 +2668,7 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
             balance: 40,
         },
         buyer_source: DirectExternalDebitV2 {
-            delegated_amount: 22,
+            delegated_amount: 21,
             ..collateral.buyer_source
         },
         ..collateral
@@ -2654,7 +2742,7 @@ fn inline_refuses_underallowance_alias_replay_and_lifecycle_substitution() {
     let first_lifecycle = inline_lifecycle_plans(first_use, context);
     let funded_collateral = DirectInlineCollateralFrameV2 {
         buyer_source: DirectExternalDebitV2 {
-            delegated_amount: 22,
+            delegated_amount: 21,
             ..collateral.buyer_source
         },
         ..collateral
@@ -2731,7 +2819,7 @@ fn maker_replay_bump_spectrum(program: [u8; 32], maker: [u8; 32]) -> (u8, u8, u8
 
 #[test]
 fn inline_maker_root_reproduction_refuses_bump_and_coordinate_hostiles() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let before = claims_output;
@@ -2890,7 +2978,7 @@ fn inline_maker_root_reproduction_refuses_bump_and_coordinate_hostiles() {
 
 #[test]
 fn inline_first_use_refuses_wrong_plan_bump_and_noncanonical_vacancy() {
-    let (direct, context, collateral) = inline_physical_fixture(40, 1, 22);
+    let (direct, context, collateral) = inline_physical_fixture(40, 1, 21);
     let mut claims_scratch = [0_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let mut claims_output = [0xa5_u8; DIRECT_INLINE_CLAIMS_REQUEST_BYTES_V2];
     let before = claims_output;
@@ -2898,7 +2986,7 @@ fn inline_first_use_refuses_wrong_plan_bump_and_noncanonical_vacancy() {
     let buyer_bump = maker_replay_bump_spectrum(id(10), id(3)).0;
     let funded_collateral = DirectInlineCollateralFrameV2 {
         buyer_source: DirectExternalDebitV2 {
-            delegated_amount: 22,
+            delegated_amount: 21,
             ..collateral.buyer_source
         },
         ..collateral

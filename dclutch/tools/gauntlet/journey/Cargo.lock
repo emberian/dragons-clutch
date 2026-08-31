@@ -386,6 +386,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-activation-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-sha256-adapter",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
@@ -472,6 +485,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-direct-ticket"
+version = "0.1.0"
+dependencies = [
+ "dclutch-direct-codec",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-program",
+ "solana-signature",
+]
+
+[[package]]
 name = "dclutch-economic-slice-kernel"
 version = "0.1.0"
 
@@ -521,6 +546,7 @@ name = "dclutch-general-adapter-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -641,6 +667,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-bearer-v2-operator",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",
@@ -649,6 +676,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-dealer-codec",
  "dclutch-direct-codec",
+ "dclutch-direct-ticket",
  "dclutch-economic-slice-kernel",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",
@@ -927,12 +955,15 @@ dependencies = [
 name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
  "dclutch-core-contract",
  "dclutch-execution-strategy-contract",
  "dclutch-pyth-svm",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
+ "serde_json",
  "sha2 0.10.9",
  "solana-program",
 ]
@@ -2345,9 +2376,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.149"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "itoa",
  "memchr",

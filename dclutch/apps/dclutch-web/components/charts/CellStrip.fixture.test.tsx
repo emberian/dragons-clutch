@@ -64,6 +64,6 @@ describe('CellStrip over the live fixture', () => {
     expect(html.split('viz-hit').length - 1).toBe(card.liability.claimCount);
     expect(html).toContain(`claim 0 · ${card.liability.supplyAtoms[0]} atoms`);
     expect(html).toContain(`required backing · ${card.liability.requiredBackingAtoms} atoms`);
-    expect(html).toContain('largest claim supply');
+    expect(html).toContain('biggest claim count');
   });
 });

@@ -1302,6 +1302,16 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     let mut rpc_url = None;
     let mut fee_basis_points = None;
     let mut fee_recipient_keypair = None;
+    // The shape knobs. Absent means "the value this fixture has always
+    // emitted", so every command line written before they existed compiles the
+    // same market it always did -- and a caller who wants a different width
+    // says so rather than editing a constant.
+    let mut cuts_raw = None;
+    let mut cut_denominator_raw = None;
+    let mut coefficients_raw = None;
+    let mut initial_collateral_raw = None;
+    let mut window_width_raw = None;
+    let mut generation_raw = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -1312,6 +1322,12 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
             "--rpc-url" => &mut rpc_url,
             "--fee-basis-points" => &mut fee_basis_points,
             "--fee-recipient-keypair" => &mut fee_recipient_keypair,
+            "--cuts" => &mut cuts_raw,
+            "--cut-denominator" => &mut cut_denominator_raw,
+            "--coefficients" => &mut coefficients_raw,
+            "--initial-collateral-atoms" => &mut initial_collateral_raw,
+            "--terminal-window-width-seconds" => &mut window_width_raw,
+            "--generation" => &mut generation_raw,
             _ => {
                 return Err(Error::new(format!(
                     "unknown local-private-validator-market-v1 argument: {argument}"
@@ -1340,6 +1356,14 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
         crate::campaign::read_keypair_file(&recipient_path, "retirement-beneficiary")?;
     let recipient = Keypair::new_from_array(recipient_secret).pubkey();
     let rpc_url = required(rpc_url, "--rpc-url")?;
+    let shape = market_shape_from_arguments_v1(
+        cuts_raw,
+        cut_denominator_raw,
+        coefficients_raw,
+        initial_collateral_raw,
+        window_width_raw,
+        generation_raw,
+    )?;
     // Capability selection follows the split-founding precedent: an
     // environment toggle rather than a new required flag, so every existing
     // caller keeps compiling the Direct-selected demo market unchanged.
@@ -1349,6 +1373,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
             &rpc_url,
             registry,
             recipient,
+            &shape,
         )?,
         // Rational needs one fact General does not: its config record binds
         // the immutable Realm, and the Realm is RealmV1 over the collateral
@@ -1375,7 +1400,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
                 .parse::<solana_sdk::pubkey::Pubkey>()
                 .map_err(|_| Error::new("DCLUTCH_RATIONAL_COLLATERAL_MINT must be base58"))?;
             crate::rational_market::demo_rational_market_input(
-                &plan_path, &rpc_url, registry, mint,
+                &plan_path, &rpc_url, registry, mint, &shape,
             )?
         }
         // Structured INHERITS Rational's config type -- TokenBehaviorSelectionV2
@@ -1397,7 +1422,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
                 .parse::<solana_sdk::pubkey::Pubkey>()
                 .map_err(|_| Error::new("DCLUTCH_STRUCTURED_COLLATERAL_MINT must be base58"))?;
             crate::structured_market::demo_structured_market_input(
-                &plan_path, &rpc_url, registry, mint,
+                &plan_path, &rpc_url, registry, mint, &shape,
             )?
         }
         Ok(family) if family != "direct" => {
@@ -1414,7 +1439,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
                 Some(fee_basis_points),
                 Some(recipient),
             )?;
-            crate::market::demo_market_input(registry, direct.compiler())?
+            crate::market::demo_market_input_shaped(registry, direct.compiler(), &shape)?
         }
     };
     let mut stdout = std::io::stdout();
@@ -1423,12 +1448,92 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// Turn the six optional shape flags into a [`LocalMarketShapeV1`].
+///
+/// Every one of them defaults to the value this fixture has always emitted, so
+/// omitting all six is byte-for-byte the market the command compiled before
+/// they existed. The pair rule is the one that matters: `--cuts` decides the
+/// market's WIDTH and `--coefficients` must then have `cuts + 2` entries, so
+/// passing one without the other is refused rather than silently padded --
+/// a padded payout vector is a market whose caption and payoff disagree.
+fn market_shape_from_arguments_v1(
+    cuts: Option<String>,
+    cut_denominator: Option<String>,
+    coefficients: Option<String>,
+    initial_collateral_atoms: Option<String>,
+    terminal_window_width_seconds: Option<String>,
+    generation: Option<String>,
+) -> Result<crate::market::LocalMarketShapeV1> {
+    let default = crate::market::LocalMarketShapeV1::default();
+    let parse_list = |raw: &str| -> Vec<String> {
+        raw.split(',')
+            .map(|part| part.trim().to_string())
+            .filter(|part| !part.is_empty())
+            .collect()
+    };
+    // `--cuts ""` is the two-outcome market -- the whole coordinate domain as
+    // one region plus the explicit failure outcome -- and is the only way this
+    // compiler reaches a two-cell market at all, so an empty list is a value
+    // here rather than a mistake.
+    let cuts = match &cuts {
+        None => default.cuts.clone(),
+        Some(raw) => parse_list(raw)
+            .into_iter()
+            .map(|part| {
+                part.parse::<i128>()
+                    .map_err(|_| Error::new("--cuts must be a comma-separated list of i128"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let coefficients = match &coefficients {
+        None => default.coefficients.clone(),
+        Some(raw) => parse_list(raw)
+            .into_iter()
+            .map(|part| {
+                part.parse::<u64>().map_err(|_| {
+                    Error::new("--coefficients must be a comma-separated list of u64")
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let scalar = |value: Option<String>, label: &str, fallback: u64| -> Result<u64> {
+        match value {
+            None => Ok(fallback),
+            Some(raw) => raw
+                .parse::<u64>()
+                .map_err(|_| Error::new(format!("{label} must be a decimal u64"))),
+        }
+    };
+    let shape = crate::market::LocalMarketShapeV1 {
+        cut_denominator: scalar(cut_denominator, "--cut-denominator", default.cut_denominator)?,
+        cuts,
+        coefficients,
+        initial_collateral_atoms: scalar(
+            initial_collateral_atoms,
+            "--initial-collateral-atoms",
+            default.initial_collateral_atoms,
+        )?,
+        terminal_window_width_seconds: match terminal_window_width_seconds {
+            None => default.terminal_window_width_seconds,
+            Some(raw) => raw.parse::<i64>().map_err(|_| {
+                Error::new("--terminal-window-width-seconds must be a decimal i64")
+            })?,
+        },
+        generation: scalar(generation, "--generation", default.generation)?,
+    };
+    shape.validate()?;
+    Ok(shape)
+}
+
 pub(crate) fn usage() -> &'static str {
     "\n  dclutch-local-successor-bootstrap local-mutable-prepare-v1 --work ABSOLUTE_NEW_DIR \\\n     --output ABSOLUTE_NEW_JSON --checked-release-gate ABSOLUTE_CHECKED_UPGRADE_GATE_JSON \\\n     --expected-checked-release-gate-sha256 HEX64 --expected-source-revision HEX40 \\\n     --expected-source-tree-sha256 HEX64 --seed HEX64\n  \\
      dclutch-local-successor-bootstrap local-mutable-plan-authenticate-v1 --plan ABSOLUTE_JSON\n  \\
      dclutch-local-successor-bootstrap local-private-validator-market-v1 --plan ABSOLUTE_JSON \\
      --rpc-url http://127.0.0.1:PORT/ --fee-basis-points U16 \\
-     --fee-recipient-keypair ABSOLUTE_DISPOSABLE_JSON\n\nThe prepare and authentication commands are offline and localhost-evidence-only. The first derives disposable role keys, seven pairwise-distinct local program identities, and seven exact mutable ProgramData bodies from one checked-release gate. The market command admits only a literal loopback validator, authenticates the live seven-pair substrate read-only, and prints one canonical local MarketRunInput."
+     --fee-recipient-keypair ABSOLUTE_DISPOSABLE_JSON \\
+     [--cuts I128,..] [--cut-denominator U64] [--coefficients U64,..] \\
+     [--initial-collateral-atoms U64] [--terminal-window-width-seconds I64] \\
+     [--generation U64]\n\nThe prepare and authentication commands are offline and localhost-evidence-only. The first derives disposable role keys, seven pairwise-distinct local program identities, and seven exact mutable ProgramData bodies from one checked-release gate. The market command admits only a literal loopback validator, authenticates the live seven-pair substrate read-only, and prints one canonical local MarketRunInput. The six shape flags are optional and each defaults to the value this fixture has always emitted, so a command line written without them compiles the same market it always did; --cuts sets the market's WIDTH (outcomes = cuts + 2, the two tails plus the explicit failure outcome) and --coefficients must then carry exactly that many payouts. The claim unit is NOT a flag: compile_linked_basis_v3 hard-wires it beside the categorical basis kind, so varying it is the same edit as emitting a graded basis."
 }
 
 fn derive(domain: &[u8], seed: [u8; 32], label: &str) -> [u8; 32] {

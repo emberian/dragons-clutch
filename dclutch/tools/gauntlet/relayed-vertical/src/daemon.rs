@@ -53,6 +53,9 @@ pub(crate) struct LaunchCapabilityV1<'a> {
     pub(crate) market_owner: Pubkey,
     pub(crate) source_material_id: [u8; 32],
     pub(crate) provider_release_id: [u8; 32],
+    /// The key set's IDENTITY, which is what the observation record carries.
+    /// `relayer_key_set` above is the record ACCOUNT the frame passes.
+    pub(crate) relayer_key_set_id: [u8; 32],
     pub(crate) accepted_caller_receipt_path: &'a Path,
     pub(crate) accepted_caller_receipt_sha256: [u8; 32],
 }
@@ -116,13 +119,14 @@ pub(crate) fn render_config(
         text.push_str(&format!(
             "\n[submit.launch_capability]\nsubmission_enabled = true\nrelay_program_data = \
              \"{}\"\nrelay_program_deployment_slot = {}\nmarket_owner = \"{}\"\nsource_material_id = \
-             \"{}\"\nprovider_release_id = \"{}\"\naccepted_caller_receipt_path = \
+             \"{}\"\nprovider_release_id = \"{}\"\nrelayer_key_set_id = \"{}\"\naccepted_caller_receipt_path = \
              \"{}\"\naccepted_caller_receipt_sha256 = \"{}\"\n",
             capability.relay_program_data,
             capability.relay_program_deployment_slot,
             capability.market_owner,
             hex_lower(&capability.source_material_id),
             hex_lower(&capability.provider_release_id),
+            hex_lower(&capability.relayer_key_set_id),
             capability.accepted_caller_receipt_path.display(),
             hex_lower(&capability.accepted_caller_receipt_sha256),
         ));

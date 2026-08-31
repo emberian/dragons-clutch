@@ -33,7 +33,8 @@ dclutch market show <ADDRESS>          the Market Core account, every field
 dclutch market decode --base64 <DATA>  the same, from bytes you already have
 dclutch capability show <ADDRESS>      the Trading root that gates execution
 dclutch capability decode ...          the same, offline
-dclutch ticket ...                     a named seam; see below
+dclutch ticket author --keypair-env VAR ...  sign a Direct intent into a ticket
+dclutch ticket verify <PATH>           check a ticket's signature, no key needed
 ```
 
 `--rpc <URL>` picks the cluster (default `https://api.devnet.solana.com`; also
@@ -53,21 +54,53 @@ $ dclutch capability show 7kPABbyrKFmqP65FUWDKxNinb2mW7gP3EXGkeEjFWy3N
   Direct trading is open on this market: new intents are admitted.
 ```
 
+## Authoring a ticket
+
+A Direct inline fill settles two independently signed intents. A ticket is one
+of them: the maker, their detached Ed25519 signature, and every field that
+signature covers.
+
+```
+$ export DCLUTCH_MAKER_KEY=/absolute/path/to/keypair.json
+$ dclutch ticket author \
+    --keypair-env DCLUTCH_MAKER_KEY \
+    --maker <PUBKEY> --market <PUBKEY> --collateral-account <PUBKEY> \
+    --side sell --lifecycle ioc --outcome 3 --generation 7 --nonce 9 \
+    --valid-from 11 --valid-through 4294967295 \
+    --maximum-fill 100000000 --limit-price 500000 --fee-basis-points 50 \
+    --out /absolute/path/seller-ticket.json
+```
+
+The bytes it writes are **byte-identical to the ones the browser trade panel
+signs**, signature included — there is one ticket author per language, this is
+the Rust one, and a cross-language vector pins the two together. It prints a
+receipt carrying the ticket's SHA-256, which is exactly what the producer wants
+told to it next.
+
+**The key path is never an argument.** `--keypair-env` names an *environment
+variable* holding the path; any flag that would carry a key, or a path to one,
+is refused at parse — because a path on the command line is a path in the
+process table and in the shell history. Nothing about the key reaches the
+receipt or any refusal message either. Nothing is read off a cluster to fill a
+field in: this command guesses no nonce, generation or slot window, because a
+guessed field is a signature over something you did not mean.
+
+`dclutch ticket verify <PATH>` reads a ticket back, checks the signature, and
+prints every field it binds. It takes no key and no network.
+
 ## What it does not do
 
-It never signs, never submits a transaction, never opens a key file, and never
-writes to a cluster. It takes no credential of any kind. Every subcommand is a
-read.
+It never submits a transaction and never writes to a cluster. Reading takes no
+credential of any kind; `ticket author` opens one key file, named by an
+environment variable, and signs onto local disk.
 
-`dclutch ticket` is therefore a **named seam and not a command**. Authoring a
-Direct trade ticket needs a key. The Rust author exists —
-`direct-intent-ticket-author-v1` in the operator binary
-`dclutch-local-successor-bootstrap`, under
-`tools/local-validator/bootstrap/successor/` — but it is private to that crate,
-and copying it here would make a second author of a signing preimage. There is
-one ticket author per language and it stays that way; the seam takes over when
-the author becomes callable. To trade today, use the web panel at
-<https://clutch.dregg.pro>, which signs with your wallet.
+**Authoring is not submitting.** Settling a ticket needs the other side's ticket
+and a transaction, and this binary sends none. A pair is settled by
+`devnet-direct-trade-produce-v1` in the operator binary
+`dclutch-local-successor-bootstrap`, which re-checks every signed field against
+finalized chain state and refuses on any mismatch. To trade from a browser
+instead, the panel at <https://clutch.dregg.pro> signs with your wallet and
+never sees a key file at all.
 
 ## Single authorship
 

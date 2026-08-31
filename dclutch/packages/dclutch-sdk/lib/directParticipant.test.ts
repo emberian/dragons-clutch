@@ -5,7 +5,9 @@ import { LIVE, liveRpcAccount, mutate } from '../fixtures/liveOpenMarket';
 import { hex, sha256 } from './bytes';
 import {
   admitDirectParticipantCrossingV1,
+  deriveDirectSellerTokenAddressV1,
   inspectDirectParticipantReadinessV1,
+  inspectDirectSellerReadinessV1,
   type DirectParticipantReadinessV1,
 } from './directParticipant';
 import { type DirectCrossingPlanV1 } from './directTicket';
@@ -170,6 +172,139 @@ describe('Direct participant readiness', () => {
     const overdelegated = token(OWNER, c.custody, 9n, 10n);
     const overResult = await inspectDirectParticipantReadinessV1(await client(new Map([[c.collateral, rpcAccount(Abi.TOKEN_2022_PROGRAM_ID_V1, overdelegated)]])), request());
     expect(overResult.reason).toContain('delegation exceeds');
+  });
+});
+
+/**
+ * The seller's Direct token account exactly as Trading creates it.
+ *
+ * `direct_token_setup_v1` calls `initialize_account3(token_program, resource,
+ * collateral_mint, seller_owner)` and then asserts the result byte-for-byte
+ * against `TokenAccount::initialized_base_bytes(mint, owner)` -- mint, owner,
+ * Initialized, and every other field zero. There is NO delegate, which is the
+ * whole reason the buyer's participant model cannot be pointed at it.
+ */
+function sellerToken(owner: string, amount = 0n): Uint8Array {
+  const bytes = new Uint8Array(Abi.TOKEN_ACCOUNT_BYTES_V1);
+  const view = new DataView(bytes.buffer);
+  bytes.set(new PublicKey(REALM.collateralMint).toBytes(), Abi.TOKEN_ACCOUNT_MINT_OFFSET_V1);
+  bytes.set(new PublicKey(owner).toBytes(), Abi.TOKEN_ACCOUNT_OWNER_OFFSET_V1);
+  view.setBigUint64(Abi.TOKEN_ACCOUNT_AMOUNT_OFFSET_V1, amount, true);
+  bytes[Abi.TOKEN_ACCOUNT_STATE_OFFSET_V1] = Abi.TOKEN_ACCOUNT_INITIALIZED_STATE_V1;
+  return bytes;
+}
+
+const SELLER_TOKEN = deriveDirectSellerTokenAddressV1(TRADING, MARKET, GENERATION, OWNER);
+
+describe('Direct seller readiness', () => {
+  /**
+   * The founder shape, which is market19's seller: it holds every claim through
+   * the founding campaign, so it has a canonical Claims Position and was never
+   * admitted by `devnet-user-position-admission-v1` -- no admission record, and
+   * no participant collateral account.
+   *
+   * The buyer's model cannot describe it. The seller's model is the chain's:
+   * `direct_token_setup_v1` names no admission account at any of its
+   * twenty-three indices and derives the collateral itself.
+   */
+  it('is ready on the founder shape the participant model refuses, with a vacant Direct token account', async () => {
+    const c = await coordinates();
+    // Both readings of the founder, because the participant-shaped collateral
+    // address is the one thing certainly vacant -- nothing on chain ever creates
+    // it for a seller -- while whether an admission record accompanies the
+    // founding Position decides only WHICH participant refusal the panel showed.
+    for (const [label, chain, participantStatus, fragment] of [
+      [
+        'Position and admission, no participant collateral',
+        await client(new Map([[c.collateral, null]])),
+        'incomplete',
+        'missing collateral account',
+      ],
+      [
+        'Position alone',
+        await client(new Map([[c.admission, null], [c.collateral, null]])),
+        'refused',
+        'only one of the atomic Claims Position and admission record exists',
+      ],
+    ] as const) {
+      const asParticipant = await inspectDirectParticipantReadinessV1(chain, request());
+      expect(asParticipant.status, label).toBe(participantStatus);
+      expect(asParticipant.reason, label).toContain(fragment);
+
+      const asSeller = await inspectDirectSellerReadinessV1(chain, request());
+      expect(asSeller.status, label).toBe('ready');
+      if (asSeller.status !== 'ready') throw new Error(asSeller.reason);
+      expect(asSeller.coordinates.collateral, label).toBe(SELLER_TOKEN);
+      expect(asSeller.coordinates, label).not.toHaveProperty('admission');
+      expect(asSeller.collateralPrestate, label).toBe('vacant');
+      expect(asSeller.positionBalances, label).toHaveLength(4);
+      expect(asSeller.reason, label).toContain('still vacant');
+    }
+  });
+
+  /**
+   * The single line this lane exists for: the account Trading BUILDS for the
+   * seller is refused by the model the panel was applying to it, because
+   * `initialize_account3` leaves it with no delegate and the participant decoder
+   * requires a Custody delegate. Wrong address AND wrong shape, independently.
+   */
+  it('accepts the live account Trading creates, which the participant decoder refuses for having no Custody delegate', async () => {
+    const c = await coordinates();
+    const live = new Map([
+      [c.admission, null],
+      [c.collateral, null],
+      [SELLER_TOKEN, rpcAccount(Abi.TOKEN_2022_PROGRAM_ID_V1, sellerToken(OWNER, 4_000n))],
+    ]);
+    const asSeller = await inspectDirectSellerReadinessV1(await client(live), request());
+    expect(asSeller).toMatchObject({ status: 'ready', collateralPrestate: 'initialized' });
+
+    const asParticipant = await inspectDirectParticipantReadinessV1(
+      await client(new Map([[c.collateral, rpcAccount(Abi.TOKEN_2022_PROGRAM_ID_V1, sellerToken(OWNER))]])),
+      request(),
+    );
+    expect(asParticipant.status).toBe('refused');
+    expect(asParticipant.reason).toContain('not delegated to this Market');
+  });
+
+  it('refuses a seller with no Claims Position, and every prestate neither on-chain site admits', async () => {
+    const c = await coordinates();
+    const noPosition = await inspectDirectSellerReadinessV1(
+      await client(new Map([[c.position, null], [c.admission, null], [c.collateral, null]])),
+      request(),
+    );
+    expect(noPosition).toMatchObject({ status: 'incomplete', missing: ['Claims Position'] });
+
+    const frozen = sellerToken(OWNER);
+    frozen[Abi.TOKEN_ACCOUNT_STATE_OFFSET_V1] = 2;
+    const substituted = sellerToken(MARKET);
+    for (const [label, account, fragment] of [
+      ['frozen', rpcAccount(Abi.TOKEN_2022_PROGRAM_ID_V1, frozen), 'frozen'],
+      ['substituted owner', rpcAccount(Abi.TOKEN_2022_PROGRAM_ID_V1, substituted), 'substitutes another Realm Mint or seller owner'],
+      ['System-owned with data', rpcAccount('11111111111111111111111111111111', new Uint8Array(8)), 'System-owned but carries data'],
+      ['a foreign program', rpcAccount(CLAIMS, sellerToken(OWNER)), 'neither the System program nor Token-2022'],
+    ] as const) {
+      const refused = await inspectDirectSellerReadinessV1(await client(new Map([[SELLER_TOKEN, account]])), request());
+      expect(refused.status, label).toBe('refused');
+      expect(refused.reason, label).toContain(fragment);
+    }
+  });
+
+  /**
+   * A cross-language control on the derivation itself, against market19's real
+   * coordinates and the address the Rust test
+   * `the_seller_direct_token_pda_is_not_the_participant_collateral_address`
+   * pins in `direct_trade_producer.rs`. Two independent implementations, one
+   * address -- and it is not the one the 2026-08-31 ticket was authored with.
+   */
+  it('reproduces the Rust seller Direct token PDA for market19, and it is not the participant address', () => {
+    const derived = deriveDirectSellerTokenAddressV1(
+      '5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk',
+      '6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4',
+      2n,
+      'B6qxQCSwVeSfgcFyhNx38mcHs6FrTqRYpuDyQ4TVJ7cs',
+    );
+    expect(derived).toBe('2xGo6Cxtfb41HJCrrqWBf73TSaJrbjUmFqr2urDi91q8');
+    expect(derived).not.toBe('HxwXjVqB9aFgNkcxpVHRycB9NqkTvVM3EPx3dxATyDcJ');
   });
 });
 

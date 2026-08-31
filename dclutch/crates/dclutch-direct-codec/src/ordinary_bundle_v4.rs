@@ -65,18 +65,18 @@ pub const DIRECT_INLINE_ORDINARY_STRATEGY_BYTES_V3: usize = EXECUTION_STRATEGY_P
 pub const DIRECT_INLINE_ORDINARY_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V4_BYTES;
 /// SHA-256 identity of the exact runtime-polymorphic fixed-topology AccountProfile14.
 pub const DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3: [u8; 32] = [
-    0x89, 0x33, 0x50, 0x73, 0x38, 0x30, 0x2f, 0xfc, 0x75, 0xbd, 0xda, 0xe6, 0x5a, 0x8a, 0xfc, 0x4f,
-    0xdf, 0xf1, 0x61, 0xca, 0x63, 0x4c, 0xef, 0xb3, 0x03, 0xbe, 0xc0, 0x5e, 0x39, 0x5b, 0x49, 0x58,
+    0x57, 0xc4, 0x4d, 0x0f, 0xc4, 0xab, 0x76, 0x25, 0xf4, 0x86, 0x23, 0xc2, 0x1e, 0x12, 0x77, 0x2f,
+    0x96, 0xea, 0xf0, 0x5f, 0x7d, 0x21, 0x87, 0x2a, 0xec, 0x4b, 0x42, 0xdc, 0xee, 0x20, 0xf7, 0xc2,
 ];
 /// SHA-256 identity of the exact maker LifecycleV5 policy.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5: [u8; 32] = [
-    0x19, 0x3b, 0xe6, 0xe3, 0xb1, 0x1e, 0x70, 0x88, 0x31, 0xc4, 0xe0, 0xa8, 0x41, 0xdf, 0xe9, 0x8c,
-    0x0b, 0xd7, 0x09, 0xa9, 0x07, 0x23, 0xd1, 0xf1, 0x93, 0x5d, 0xf2, 0xb3, 0x3d, 0xc5, 0x85, 0xbc,
+    0xe5, 0xdf, 0xb5, 0xbe, 0x57, 0xd5, 0xc0, 0x54, 0x27, 0xc9, 0xec, 0x83, 0xbd, 0xe0, 0xe8, 0x5a,
+    0x31, 0x4f, 0x14, 0x47, 0xd7, 0x3f, 0x2d, 0x92, 0x5d, 0x73, 0xaa, 0xb9, 0xdb, 0x85, 0x7e, 0x5c,
 ];
 /// SHA-256 identity of the exact ordered EffectProgramV4.
 pub const DIRECT_INLINE_ORDINARY_EFFECT_ID_V4: [u8; 32] = [
-    0xea, 0xb2, 0x81, 0x96, 0x91, 0xc7, 0xd7, 0xa5, 0x17, 0xab, 0x95, 0x8a, 0xd3, 0x94, 0xce, 0x6a,
-    0x38, 0xad, 0x9b, 0x0d, 0x8f, 0x76, 0xd5, 0x03, 0x44, 0x6c, 0xec, 0xf0, 0x8b, 0xba, 0xf7, 0x7a,
+    0xe6, 0xa1, 0x00, 0xb7, 0xc9, 0xf8, 0x5c, 0xd5, 0x03, 0x33, 0x48, 0x1d, 0xd9, 0x27, 0x38, 0x76,
+    0x9f, 0x7f, 0x24, 0xb1, 0xbe, 0x13, 0xf1, 0xe2, 0x42, 0x6e, 0xa9, 0xe1, 0x7f, 0x31, 0x3c, 0xbc,
 ];
 
 /// Chain-selected facts that are not owned by the Direct artifact family.
@@ -377,6 +377,7 @@ pub(crate) mod tests {
         LIABILITY_BASIS_MARKET_HEADER_BYTES_V2, LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
     };
     use dclutch_custody_contract::CustodyReplayLayoutV1;
+    use dclutch_market_core_codec::STATE_BYTES as CORE_STATE_BYTES;
     use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
     use dclutch_product_runtime_v2::{
         DOMAIN_CUT_BYTES, DOMAIN_HEADER_BYTES, PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES,
@@ -698,6 +699,49 @@ pub(crate) mod tests {
         // Not vacuous: a resolver that errored on every bank would report no
         // reads at all and pass. This Effect reads most of its own banks.
         assert!(read >= 40, "only {read} registers measured as read");
+    }
+
+    /// The published AccountProfile identity is a function of the Lean-emitted
+    /// Market Core state width, and this is the row that says so.
+    ///
+    /// Coordinate 23 of the profile is that width
+    /// (`ordinary_account_artifacts_v3.rs`), the profile's SHA-256 is
+    /// `DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3`, and that identity is
+    /// named by digest inside the Direct ordinary descriptor and its
+    /// ProgramSet. So a widening of `dclutch_market_core_codec::STATE_BYTES`
+    /// silently restates three published identities.
+    ///
+    /// It has now happened twice: 352 to 360, and 360 to 368 in `e93fe5e9`,
+    /// which ran every byte-identity gate this repository has and moved this
+    /// pin anyway -- because the gates guard EMITTED FILES against their
+    /// emitter, and this is a hand-pinned digest OF an emitted constant, which
+    /// no emitter authors. The polymorphism test below does compare the same
+    /// digest, but it is named for basis polymorphism and reports a 32-byte
+    /// array diff; nobody changing an account layout finds it or reads it as
+    /// this. This one is named for the dependency and says which side moved.
+    #[test]
+    fn the_account_profile_identity_is_pinned_to_the_core_state_width_it_embeds() {
+        let profile =
+            build(u32::try_from(BASIS_WIDTH_OFFSET_V3 + 4).expect("basis")).account_profile;
+        let computed = digest(&profile);
+        assert_eq!(
+            computed,
+            DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3,
+            "the Direct ordinary AccountProfile identity is stale.\n\
+             It embeds dclutch_market_core_codec::STATE_BYTES ({core}) at \
+             coordinate 23, so any change to the Lean-emitted Market Core \
+             layout restates it.\n\
+             Recomputed: {computed}\n\
+             Three pinned identities move together and all three belong in \
+             one commit:\n\
+             - DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3, in this file\n\
+             - DIRECT_HOT_FIXTURE_DESCRIPTOR_ID_V5 and \
+             DIRECT_HOT_FIXTURE_PROGRAM_SET_ID_V5, in \
+             programs/dclutch-trading-sbf/program-test/direct-hot/src/lib.rs, \
+             whose own tests report their recomputed values.",
+            core = CORE_STATE_BYTES,
+            computed = std::format!("{computed:02x?}"),
+        );
     }
 
     #[test]

@@ -1556,6 +1556,16 @@ name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-claim-check-escrow-signer-test-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-claims-svm",
+ "dclutch-refusal-registry",
+ "solana-program",
+ "spl-token-2022-interface",
+]
+
+[[package]]
 name = "dclutch-claims-affine-batch-program-test"
 version = "0.1.0"
 dependencies = [
@@ -1664,6 +1674,7 @@ name = "dclutch-fractional-atomic-program-test"
 version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
+ "dclutch-claim-check-escrow-signer-test-sbf",
  "dclutch-claims-affine-batch-program-test",
  "dclutch-claims-sbf",
  "dclutch-claims-svm",
@@ -1691,7 +1702,9 @@ dependencies = [
  "solana-program-test",
  "solana-sdk",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
  "solana-transaction 4.1.6",
+ "spl-token-2022-interface",
  "tokio",
 ]
 

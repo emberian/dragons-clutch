@@ -87,7 +87,7 @@ describe('searching a listing', () => {
   });
 
   it('matches the name this site gives a market', () => {
-    const found = filterMarketCardsV1(cards, 'orphan');
+    const found = filterMarketCardsV1(cards, 'never activated');
     expect(found).toHaveLength(1);
     expect(found[0].address).toBe(ORPHAN);
   });
@@ -104,8 +104,8 @@ describe('searching a listing', () => {
 
   it('narrows with every added term rather than widening', () => {
     expect(filterMarketCardsV1(cards, 'sol/usd').length).toBe(3);
-    expect(filterMarketCardsV1(cards, 'sol/usd orphan').length).toBe(1);
-    expect(filterMarketCardsV1(cards, 'sol/usd orphan nonsense').length).toBe(0);
+    expect(filterMarketCardsV1(cards, 'sol/usd activated').length).toBe(1);
+    expect(filterMarketCardsV1(cards, 'sol/usd activated nonsense').length).toBe(0);
   });
 
   /**
@@ -137,7 +137,8 @@ describe('ordering a listing', () => {
   it('sorts by name, and puts a market with no name last', () => {
     const ordered = sortMarketCardsV1(cards, 'name').map((entry) => entry.address);
     expect(ordered[2]).toBe(UNNAMED);
-    // "the first market that can trade" sorts before "the first public market".
+    // Titles shortened 2026-08-31; "closed by an upgrade" still sorts before
+    // "first public market".
     expect(ordered.slice(0, 2)).toEqual([TRADEABLE, FIRST_PUBLIC]);
   });
 
@@ -161,13 +162,20 @@ describe('ordering a listing', () => {
     expect(sortMarketCardsV1([b, a], 'issued').map((entry) => entry.address)).toEqual([TRADEABLE, FIRST_PUBLIC]);
   });
 
-  it('offers only orderings that say what they do and do not claim', () => {
+  /**
+   * Renegotiated 2026-08-31: `meaning` used to be a sentence rendered under the
+   * order dropdown explaining what the ordering does NOT claim ("Nothing is
+   * ranked", "it is not a measure of interest"). The dropdown no longer renders
+   * it, and the strings are short labels now, so the floor inverts into a
+   * ceiling: a dropdown option is a label, not an essay.
+   */
+  it('offers only orderings whose descriptions stay label-sized', () => {
     expect(MARKET_SORT_CHOICES_V1).toHaveLength(3);
     for (const choice of MARKET_SORT_CHOICES_V1) {
       expect(choice.label.length).toBeGreaterThan(0);
-      expect(choice.meaning.length).toBeGreaterThan(20);
+      expect(choice.meaning.length).toBeLessThan(40);
     }
-    expect(MARKET_SORT_CHOICES_V1[2].meaning).toContain('not a measure of interest');
+    expect(MARKET_SORT_CHOICES_V1[2].meaning).toBe('Most claims issued first');
   });
 });
 

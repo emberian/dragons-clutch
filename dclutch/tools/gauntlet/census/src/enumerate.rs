@@ -462,18 +462,26 @@ fn push_refusals(enumeration: &ItemEnum, label: &str, relative: &str, out: &mut 
             implicit = code.saturating_add(1);
         }
         let variant_name = variant.ident.to_string();
+        let (summary, detail) = doc_text(&variant.attrs);
         out.push(Refusal {
             id: format!("{label}/{enum_name}::{variant_name}"),
             enum_name: enum_name.clone(),
             variant: variant_name,
             code,
-            doc: doc_text(&variant.attrs),
+            summary,
+            detail,
             provenance: at(relative, variant.ident.span()),
         });
     }
 }
 
-fn doc_text(attributes: &[Attribute]) -> Option<String> {
+/// Split a variant's doc comment the way rustdoc does: the first paragraph is
+/// the summary, everything after the first blank line is rationale.
+///
+/// Joining the two produces a caption that opens with the meaning and then
+/// lectures, which is wrong in every place a caption is rendered. Keeping them
+/// apart costs one field and loses nothing.
+fn doc_text(attributes: &[Attribute]) -> (Option<String>, Option<String>) {
     let mut lines = Vec::new();
     for attribute in attributes {
         if !attribute.path().is_ident("doc") {
@@ -486,11 +494,18 @@ fn doc_text(attributes: &[Attribute]) -> Option<String> {
             lines.push(text.value().trim().to_string());
         }
     }
-    if lines.is_empty() {
+    let mut paragraphs = lines
+        .split(String::is_empty)
+        .map(|block| block.join(" ").trim().to_string())
+        .filter(|block| !block.is_empty());
+    let summary = paragraphs.next();
+    let rest = paragraphs.collect::<Vec<_>>();
+    let detail = if rest.is_empty() {
         None
     } else {
-        Some(lines.join(" "))
-    }
+        Some(rest.join("\n\n"))
+    };
+    (summary, detail)
 }
 
 // ------------------------------------------------------------------ dispatch
@@ -1537,5 +1552,80 @@ fn specific_tag(selectors: &[Selector]) -> String {
         (Some(tag), _) => tag,
         (None, true) => "else".to_string(),
         (None, false) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod doc_tests {
+    use super::doc_text;
+    use syn::parse_quote;
+
+    fn split(item: syn::Variant) -> (Option<String>, Option<String>) {
+        doc_text(&item.attrs)
+    }
+
+    #[test]
+    fn a_one_paragraph_comment_is_all_summary_and_no_detail() {
+        let (summary, detail) = split(parse_quote! {
+            /// Account count, order, privilege, or aliasing was invalid.
+            AccountFrame = 0x1001
+        });
+        assert_eq!(
+            summary.as_deref(),
+            Some("Account count, order, privilege, or aliasing was invalid.")
+        );
+        assert_eq!(detail, None);
+    }
+
+    #[test]
+    fn rationale_after_the_blank_line_never_reaches_the_summary() {
+        let (summary, detail) = split(parse_quote! {
+            /// The release's pinned deployment slot moved: the substrate was upgraded.
+            ///
+            /// Decision 0012. Not a corrupted account and not an attack: the exact
+            /// upgrade authority the release names shipped new bytes.
+            ReleaseSuperseded = 0x100D
+        });
+        assert_eq!(
+            summary.as_deref(),
+            Some("The release's pinned deployment slot moved: the substrate was upgraded.")
+        );
+        let detail = detail.expect("the rationale paragraph is carried, not dropped");
+        assert!(detail.starts_with("Decision 0012."));
+        assert!(!detail.contains("pinned deployment slot moved"));
+    }
+
+    #[test]
+    fn a_summary_that_wraps_two_lines_is_one_sentence() {
+        let (summary, detail) = split(parse_quote! {
+            /// A moved role's consenting upgrade authority did not sign,
+            /// or cannot.
+            ReleaseLineageAuthorityMissing = 0x1011
+        });
+        assert_eq!(
+            summary.as_deref(),
+            Some("A moved role's consenting upgrade authority did not sign, or cannot.")
+        );
+        assert_eq!(detail, None);
+    }
+
+    #[test]
+    fn several_rationale_paragraphs_stay_separate() {
+        let (_, detail) = split(parse_quote! {
+            /// Summary.
+            ///
+            /// First.
+            ///
+            /// Second.
+            Variant = 1
+        });
+        assert_eq!(detail.as_deref(), Some("First.\n\nSecond."));
+    }
+
+    #[test]
+    fn a_variant_with_no_doc_comment_has_neither() {
+        let (summary, detail) = split(parse_quote! { Undocumented = 2 });
+        assert_eq!(summary, None);
+        assert_eq!(detail, None);
     }
 }

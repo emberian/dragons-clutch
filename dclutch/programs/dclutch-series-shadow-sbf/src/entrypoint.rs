@@ -78,20 +78,79 @@ pub enum SeriesShadowSbfErrorV4 {
     InvalidAcknowledgement = 0xB004,
 }
 
+impl SeriesShadowSbfErrorV4 {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`SeriesShadowSbfErrorV4::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only
+    /// arm that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 5] = [
+        Self::InvalidInvocation,
+        Self::NoSelectedRelease,
+        Self::Runtime,
+        Self::FinalizedRecord,
+        Self::InvalidAcknowledgement,
+    ];
+
+    /// This refusal's position in [`SeriesShadowSbfErrorV4::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism:
+    /// a sixth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::InvalidInvocation => 0,
+            Self::NoSelectedRelease => 1,
+            Self::Runtime => 2,
+            Self::FinalizedRecord => 3,
+            Self::InvalidAcknowledgement => 4,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    SeriesShadowSbfErrorV4::InvalidInvocation as u32
-        == dclutch_refusal_registry::SERIES_SHADOW_REFUSAL_BASE,
-    "SeriesShadowSbfErrorV4 must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (SeriesShadowSbfErrorV4::InvalidAcknowledgement as u32)
-        < dclutch_refusal_registry::SERIES_SHADOW_REFUSAL_BASE
-            + dclutch_refusal_registry::BAND_SPAN,
-    "SeriesShadowSbfErrorV4 must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        SeriesShadowSbfErrorV4::ALL[0] as u32
+            == dclutch_refusal_registry::SERIES_SHADOW_REFUSAL_BASE,
+        "SeriesShadowSbfErrorV4 must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < SeriesShadowSbfErrorV4::ALL.len() {
+        let variant = SeriesShadowSbfErrorV4::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "SeriesShadowSbfErrorV4::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::SERIES_SHADOW_REFUSAL_BASE + index as u32,
+            "SeriesShadowSbfErrorV4 discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::SERIES_SHADOW_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "SeriesShadowSbfErrorV4 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<SeriesShadowSbfErrorV4> for ProgramError {
     fn from(value: SeriesShadowSbfErrorV4) -> Self {

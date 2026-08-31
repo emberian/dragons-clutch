@@ -117,6 +117,6 @@ export function marketEditorialV1(marketAddress: string): MarketEditorialEntryV1
  */
 export function fallbackMarketTitleV1(phase: MarketCorePhaseV2 | null, marketAddress: string): string {
   const short = shortAddressV1(marketAddress, 4);
-  if (phase === 'Founding') return `Build-out founding · ${short}`;
-  return `Unnamed market · ${short}`;
+  if (phase === 'Founding') return `Unfinished · ${short}`;
+  return `Unnamed · ${short}`;
 }

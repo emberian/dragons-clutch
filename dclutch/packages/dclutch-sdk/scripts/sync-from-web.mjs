@@ -33,6 +33,9 @@ const WEB_ONLY = new Set([
   'lib/walletStandard.ts',
   'lib/walletStandard.test.ts',
   'lib/sbomVerify.test.ts',
+  // Repo-wide gates: they read BOTH trees, so a copy here would compare a
+  // package against itself and pass on anything.
+  'lib/twinIdentity.test.ts',
 ]);
 
 /** App compatibility shims that already re-export their SDK semantic owner. */

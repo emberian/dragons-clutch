@@ -61,6 +61,42 @@ def cursorPhaseTerminal : Nat := 8
 def lifecycleActive : Nat := 1
 /-- `OperationV1::Transfer` as the Custody operation tag. -/
 def custodyOperationTransfer : Nat := 2
+/-- `GeneralLocalStateKindV3::Batch.tag()`. -/
+def kindBatch : Nat := 3
+/-- `GeneralLocalStateKindV3::Order.tag()`. -/
+def kindOrder : Nat := 4
+/-- `GeneralLocalStateKindV3::Candidate.tag()`. -/
+def kindCandidate : Nat := 5
+/-- `GeneralLocalStateKindV3::Verifier.tag()`. -/
+def kindVerifier : Nat := 6
+/-- `GeneralBatchV1::record_magic_u64()` -- little-endian `DCGBAT01`. -/
+def batchRecordMagicWord : Nat := 3544425546002154308
+/-- `GeneralBatchV1::record_version_value()`; also the constant one the
+transition loads into the `one` register, and they are deliberately the same
+value so one `loadConst` serves both. -/
+def batchRecordVersion : Nat := 1
+/-- `GeneralBatchV1::record_phase_value()`. -/
+def batchRecordPhase : Nat := 20
+/-- `BatchStatusV1::Collecting.tag()`. -/
+def batchStatusCollecting : Nat := 1
+/-- `BatchStatusV1::Closed.tag()`. -/
+def batchStatusClosed : Nat := 2
+/-- `GeneralOrderPhaseV1::Placed.tag()`. -/
+def orderPhasePlaced : Nat := 1
+/-- `GeneralOrderLayoutV1::magic_u64()` -- little-endian `DCGORD01`. -/
+def orderRecordMagicWord : Nat := 3544408027048657732
+/-- `GeneralOrderLayoutV1::phase_value()`. -/
+def orderRecordPhase : Nat := 21
+/-- `GeneralOrderPhaseV1::Cancelled.tag()`. -/
+def orderPhaseCancelled : Nat := 2
+/-- `GeneralOrderPhaseV1::Released.tag()`. -/
+def orderPhaseReleased : Nat := 3
+/-- `DeltaDirectionV2::Neutral.tag()` -- the sole direction for magnitude zero. -/
+def claimsDeltaNeutral : Nat := 0
+/-- `DeltaDirectionV2::Credit.tag()`. -/
+def claimsDeltaCredit : Nat := 1
+/-- `DeltaDirectionV2::Debit.tag()`. -/
+def claimsDeltaDebit : Nat := 2
 
 inductive ScalarSlot where
   | action | completeSetMove | claimsAffineActive | custodyActive
@@ -86,6 +122,25 @@ inductive ScalarSlot where
   | terminalRentPrincipal | localStateMagic | localStateVersion | localStateKind
   | selectionBestFilledLots | selectionBestQuoteSurplus | inputScratchPageCount | manifestOrderIndex
   | rootLifecycleObservation | rootLifecycleActive
+  -- The GEN-SEVEN widening. Everything below serves the seven collection and
+  -- candidate actions; the settlement seven never address these coordinates,
+  -- so widening the bank changes their header bytes and none of their conjuncts.
+  | currentSlot | one | scratchA | scratchB
+  | rootExpectedRevision | rootRevisionObservation | rootPostRevision | rootNextBatchSequenceObservation
+  | rootPostBatchSequence | rootOpenBatchesObservation | rootPostOpenBatches | configCollectionSlots
+  | configSelectionSlots | configSettlementSlots | configMaxOrders | batchStatusObservation
+  | batchPostStatus | batchOrderCountObservation | batchPostOrderCount | batchCancelledCountObservation
+  | batchPostCancelledCount | batchQuoteReserveObservation | batchPostQuoteReserve | batchCollectionCloseSlot
+  | batchSettlementCloseSlot | orderMaxLots | orderMaxQuoteDebitPerLot | orderQuoteReserve
+  | orderValidUntilSlot | orderPhaseObservation | orderPostPhase | orderAdmittedSlotObservation
+  | orderPostReleasedSlot | escrowBalanceObservation | candidatePageCount | candidatePageRevision
+  | candidateRowCount | candidateRewardRate | candidateStatusObservation | candidatePostStatus
+  | candidateVerificationRemainingObservation | candidatePostVerificationRemaining | candidateCleanupRemainingObservation | candidatePostCleanupRemaining
+  | candidateSubmittedSlot | verifyTerminal | verifyRevisionObservation | verifyPostRevision
+  | verifyPageObservation | verifyPostPage | verifyRowObservation | verifyPostRow
+  | verifyOrderCountObservation | verifyPostOrderCount | verifyManifestOrderCount | resultStateBump
+  | resultBumpObservation | resultPrincipalObservation | resultCreated | resultCanonicalBump
+  | resultRentPrincipal
   deriving DecidableEq, Repr
 
 namespace ScalarSlot
@@ -114,7 +169,23 @@ def all : List ScalarSlot := [
   .terminalBumpObservation, .terminalPrincipalObservation, .terminalCreated, .terminalCanonicalBump,
   .terminalRentPrincipal, .localStateMagic, .localStateVersion, .localStateKind,
   .selectionBestFilledLots, .selectionBestQuoteSurplus, .inputScratchPageCount, .manifestOrderIndex,
-  .rootLifecycleObservation, .rootLifecycleActive
+  .rootLifecycleObservation, .rootLifecycleActive,
+  .currentSlot, .one, .scratchA, .scratchB,
+  .rootExpectedRevision, .rootRevisionObservation, .rootPostRevision, .rootNextBatchSequenceObservation,
+  .rootPostBatchSequence, .rootOpenBatchesObservation, .rootPostOpenBatches, .configCollectionSlots,
+  .configSelectionSlots, .configSettlementSlots, .configMaxOrders, .batchStatusObservation,
+  .batchPostStatus, .batchOrderCountObservation, .batchPostOrderCount, .batchCancelledCountObservation,
+  .batchPostCancelledCount, .batchQuoteReserveObservation, .batchPostQuoteReserve, .batchCollectionCloseSlot,
+  .batchSettlementCloseSlot, .orderMaxLots, .orderMaxQuoteDebitPerLot, .orderQuoteReserve,
+  .orderValidUntilSlot, .orderPhaseObservation, .orderPostPhase, .orderAdmittedSlotObservation,
+  .orderPostReleasedSlot, .escrowBalanceObservation, .candidatePageCount, .candidatePageRevision,
+  .candidateRowCount, .candidateRewardRate, .candidateStatusObservation, .candidatePostStatus,
+  .candidateVerificationRemainingObservation, .candidatePostVerificationRemaining, .candidateCleanupRemainingObservation, .candidatePostCleanupRemaining,
+  .candidateSubmittedSlot, .verifyTerminal, .verifyRevisionObservation, .verifyPostRevision,
+  .verifyPageObservation, .verifyPostPage, .verifyRowObservation, .verifyPostRow,
+  .verifyOrderCountObservation, .verifyPostOrderCount, .verifyManifestOrderCount, .resultStateBump,
+  .resultBumpObservation, .resultPrincipalObservation, .resultCreated, .resultCanonicalBump,
+  .resultRentPrincipal
 ]
 
 @[simp] def index : ScalarSlot → Nat
@@ -208,6 +279,67 @@ def all : List ScalarSlot := [
   | .manifestOrderIndex => 87
   | .rootLifecycleObservation => 88
   | .rootLifecycleActive => 89
+  | .currentSlot => 90
+  | .one => 91
+  | .scratchA => 92
+  | .scratchB => 93
+  | .rootExpectedRevision => 94
+  | .rootRevisionObservation => 95
+  | .rootPostRevision => 96
+  | .rootNextBatchSequenceObservation => 97
+  | .rootPostBatchSequence => 98
+  | .rootOpenBatchesObservation => 99
+  | .rootPostOpenBatches => 100
+  | .configCollectionSlots => 101
+  | .configSelectionSlots => 102
+  | .configSettlementSlots => 103
+  | .configMaxOrders => 104
+  | .batchStatusObservation => 105
+  | .batchPostStatus => 106
+  | .batchOrderCountObservation => 107
+  | .batchPostOrderCount => 108
+  | .batchCancelledCountObservation => 109
+  | .batchPostCancelledCount => 110
+  | .batchQuoteReserveObservation => 111
+  | .batchPostQuoteReserve => 112
+  | .batchCollectionCloseSlot => 113
+  | .batchSettlementCloseSlot => 114
+  | .orderMaxLots => 115
+  | .orderMaxQuoteDebitPerLot => 116
+  | .orderQuoteReserve => 117
+  | .orderValidUntilSlot => 118
+  | .orderPhaseObservation => 119
+  | .orderPostPhase => 120
+  | .orderAdmittedSlotObservation => 121
+  | .orderPostReleasedSlot => 122
+  | .escrowBalanceObservation => 123
+  | .candidatePageCount => 124
+  | .candidatePageRevision => 125
+  | .candidateRowCount => 126
+  | .candidateRewardRate => 127
+  | .candidateStatusObservation => 128
+  | .candidatePostStatus => 129
+  | .candidateVerificationRemainingObservation => 130
+  | .candidatePostVerificationRemaining => 131
+  | .candidateCleanupRemainingObservation => 132
+  | .candidatePostCleanupRemaining => 133
+  | .candidateSubmittedSlot => 134
+  | .verifyTerminal => 135
+  | .verifyRevisionObservation => 136
+  | .verifyPostRevision => 137
+  | .verifyPageObservation => 138
+  | .verifyPostPage => 139
+  | .verifyRowObservation => 140
+  | .verifyPostRow => 141
+  | .verifyOrderCountObservation => 142
+  | .verifyPostOrderCount => 143
+  | .verifyManifestOrderCount => 144
+  | .resultStateBump => 145
+  | .resultBumpObservation => 146
+  | .resultPrincipalObservation => 147
+  | .resultCreated => 148
+  | .resultCanonicalBump => 149
+  | .resultRentPrincipal => 150
 
 end ScalarSlot
 
@@ -245,6 +377,8 @@ inductive IdentitySlot where
   | selectionProduct | selectionBatch | selectionPolicy | bestVerifiedDigest
   | primaryBeneficiaryObservation | primaryBeneficiary | primaryState | primaryOwner
   | terminalBeneficiaryObservation | terminalBeneficiary | terminalState | terminalOwner
+  | generalConfigId | resultBeneficiaryObservation | resultBeneficiary | resultState
+  | resultOwner
   deriving DecidableEq, Repr
 
 namespace IdentitySlot
@@ -260,7 +394,9 @@ def all : List IdentitySlot := [
   .custodyDestinationOwner, .positionZeroOwner, .positionOneOwner, .generalRoot,
   .selectionProduct, .selectionBatch, .selectionPolicy, .bestVerifiedDigest,
   .primaryBeneficiaryObservation, .primaryBeneficiary, .primaryState, .primaryOwner,
-  .terminalBeneficiaryObservation, .terminalBeneficiary, .terminalState, .terminalOwner
+  .terminalBeneficiaryObservation, .terminalBeneficiary, .terminalState, .terminalOwner,
+  .generalConfigId, .resultBeneficiaryObservation, .resultBeneficiary, .resultState,
+  .resultOwner
 ]
 
 @[simp] def index : IdentitySlot → Nat
@@ -304,6 +440,11 @@ def all : List IdentitySlot := [
   | .terminalBeneficiary => 37
   | .terminalState => 38
   | .terminalOwner => 39
+  | .generalConfigId => 40
+  | .resultBeneficiaryObservation => 41
+  | .resultBeneficiary => 42
+  | .resultState => 43
+  | .resultOwner => 44
 
 end IdentitySlot
 
@@ -320,10 +461,22 @@ def commonIdentities : Nat := IdentitySlot.all.length
 /-- General has no per-outcome identity tail. -/
 def itemIdentityStride : Nat := 0
 
-/-- The two state kinds the seven settlement actions select between. -/
+/-- The local-state kind each action's PRIMARY state envelope carries.
+
+The batch four share the Batch envelope because their primary state is the
+batch window itself -- `PlaceOrder` and `CancelOrder` authenticate it and touch
+their order as a SECONDARY state. The candidate pair's primary is the
+submission record, and `ReleaseOrder`'s is the order it refunds. -/
 def stateKind (action : Action) : Nat :=
   match action with
   | .consider | .freeze => kindSelection
+  -- The register feeds the envelope an action CREATES (or, for a
+  -- non-creating action, nothing at all): the batch pair creates or flips the
+  -- Batch envelope, and PlaceOrder creates the ORDER envelope even though its
+  -- primary derived state is the batch window it is admitted into.
+  | .openBatch | .cancelOrder | .closeBatch => kindBatch
+  | .submitCandidate | .verifyCandidateRow => kindCandidate
+  | .placeOrder | .releaseOrder => kindOrder
   | _ => kindSettlement
 
 /-- Every action's shared prelude.
@@ -390,8 +543,8 @@ def vaultContextOps (action : Action) : List Op :=
 
 /-- The action-selected half of each prelude.
 
-Exhaustive by name, and the seven collection and candidate actions answer with
-the empty list: they have no authored program, and `authoredActions` below is
+Exhaustive by name, and the five still-unauthored actions answer with the
+empty list: they have no authored program, and `authoredActions` below is
 what says so rather than a silently inherited default. -/
 def actionOps (action : Action) : List Op :=
   match action with
@@ -445,6 +598,264 @@ def actionOps (action : Action) : List Op :=
       .nonzero (s .cursorTerminalCoordinate),
       .nonzero (s .terminalCoordinate)
     ] ++ vaultContextOps .close
+  | .openBatch => [
+      -- The caller's optimistic root revision must be the observed one, and
+      -- the three root advances are exact: this is `GeneralRootV2::open_batch`
+      -- stated as conjuncts. The EffectProgram writes the successor root tail
+      -- from the three POST registers and the new batch record from the
+      -- observation registers, so a program that skipped an increment would
+      -- write a root that replays.
+      .scalarEq (s .rootExpectedRevision) (s .rootRevisionObservation),
+      .incrementInto (s .rootRevisionObservation) (s .rootPostRevision),
+      .incrementInto (s .rootNextBatchSequenceObservation) (s .rootPostBatchSequence),
+      .incrementInto (s .rootOpenBatchesObservation) (s .rootPostOpenBatches),
+      -- A zero window or a zero admission bound is a batch that can admit
+      -- nothing and never close by fullness; the config refuses it at
+      -- construction and this refuses a projection that lost it.
+      .nonzero (s .configCollectionSlots),
+      .nonzero (s .configSelectionSlots),
+      .nonzero (s .configSettlementSlots),
+      .nonzero (s .configMaxOrders),
+      -- The windows are config-derived, never caller-chosen:
+      -- collection close = now + collection, settlement close = collection
+      -- close + selection + settlement. `checkedAddInto` refuses overflow, so
+      -- the close slots always lie strictly after the current slot.
+      .checkedAddInto (s .currentSlot) (s .configCollectionSlots) (s .batchCollectionCloseSlot),
+      .checkedAddInto (s .batchCollectionCloseSlot) (s .configSelectionSlots) (s .scratchA),
+      .checkedAddInto (s .scratchA) (s .configSettlementSlots) (s .batchSettlementCloseSlot),
+      -- The record constants the EffectProgram writes into the vacant account:
+      -- status Collecting, and the batch record's own magic/version/phase.
+      -- `one` doubles as the record version, which is 1.
+      .loadConst (s .batchPostStatus) batchStatusCollecting,
+      .loadConst (s .one) batchRecordVersion,
+      .loadConst (s .scratchA) batchRecordMagicWord,
+      .loadConst (s .scratchB) batchRecordPhase
+    ]
+  | .closeBatch => [
+      -- `GeneralRootV2::close_batch` as conjuncts: revision advances by one
+      -- and the open-batch count decrements by exactly one -- `subInto`
+      -- refuses at zero, which is the root refusing a close it never opened.
+      .scalarEq (s .rootExpectedRevision) (s .rootRevisionObservation),
+      .incrementInto (s .rootRevisionObservation) (s .rootPostRevision),
+      .loadConst (s .one) 1,
+      .subInto (s .rootOpenBatchesObservation) (s .one) (s .rootPostOpenBatches),
+      -- Only a collecting batch closes, and it closes to Closed.
+      .loadConst (s .scratchA) batchStatusCollecting,
+      .scalarEq (s .batchStatusObservation) (s .scratchA),
+      .loadConst (s .batchPostStatus) batchStatusClosed,
+      -- `close_is_permissionless`: the window is over, OR the batch is full.
+      -- A disjunction over an all-conjunct vocabulary, built exactly:
+      --   d1 := close - min(now, close)        (zero iff the window is over)
+      --   d2 := bound - min(count, bound)      (zero iff the batch is full)
+      --   min(d1,1) * min(d2,1) = 0            (the disjunction, clamped so
+      --                                         the product cannot overflow)
+      -- Anything else is an early close that truncates a maker's window.
+      .minInto (s .currentSlot) (s .batchCollectionCloseSlot) (s .scratchA),
+      .subInto (s .batchCollectionCloseSlot) (s .scratchA) (s .scratchA),
+      .minInto (s .scratchA) (s .one) (s .scratchA),
+      .minInto (s .batchOrderCountObservation) (s .configMaxOrders) (s .scratchB),
+      .subInto (s .configMaxOrders) (s .scratchB) (s .scratchB),
+      .minInto (s .scratchB) (s .one) (s .scratchB),
+      .checkedMulInto (s .scratchA) (s .scratchB) (s .scratchA),
+      .loadConst (s .scratchB) 0,
+      .scalarEq (s .scratchA) (s .scratchB)
+    ]
+  | .placeOrder => [
+      -- The second derived state -- the order record this admission CREATES
+      -- -- anchored exactly as a created secondary always is.
+      .scalarEq (s .terminalRecordBump) (s .terminalCanonicalBump),
+      .identityEq (d .terminalOwner) (d .tradingProgram),
+      .nonzero (s .terminalRentPrincipal),
+      -- The signed terms' width must be the Product width the prelude
+      -- already equated with the batch's.
+      .scalarEq (s .scratchA) (s .outcomeCount),
+      -- Admission: a COLLECTING batch, inside its window, under its bound.
+      .loadConst (s .one) 1,
+      .scalarEq (s .batchStatusObservation) (s .one),
+      .scalarLt (s .currentSlot) (s .batchCollectionCloseSlot),
+      .scalarLt (s .batchOrderCountObservation) (s .configMaxOrders),
+      .incrementInto (s .batchOrderCountObservation) (s .batchPostOrderCount),
+      -- THE EXPIRY PIN (recorded choice 6): the signed valid_until_slot IS
+      -- the batch's settlement close, exactly. Stricter than the pure admit,
+      -- which accepts any later slot -- a later valid_until buys nothing (the
+      -- batch cannot settle past its window) and is the one coordinate that
+      -- could strand escrow past every window, failing E5's guaranteed
+      -- self-cure. It is also what lets ReleaseOrder gate on the order alone.
+      .scalarEq (s .orderValidUntilSlot) (s .batchSettlementCloseSlot),
+      -- The escrow the admission MOVES: the exact worst case, into the
+      -- order's own vault, and the batch commits exactly that.
+      .nonzero (s .orderMaxLots),
+      .checkedMulInto (s .orderMaxLots) (s .orderMaxQuoteDebitPerLot) (s .orderQuoteReserve),
+      .copyScalar (s .orderQuoteReserve) (s .custodyAmount),
+      .checkedAddInto (s .batchQuoteReserveObservation) (s .orderQuoteReserve)
+        (s .batchPostQuoteReserve),
+      -- Record constants the EffectProgram writes into the vacant account.
+      -- `scratchA` carried the signed terms' width until the equality above
+      -- consumed it; from here it carries the record magic.
+      .loadConst (s .orderPostPhase) orderPhasePlaced,
+      .loadConst (s .scratchB) orderRecordPhase,
+      .loadConst (s .scratchA) orderRecordMagicWord,
+      -- The quote-deposit route's guard is a PROVEN consequence of the signed
+      -- terms: active exactly when the reserve is nonzero. A runtime bank can
+      -- therefore never skip a deposit the batch just committed, and a
+      -- pure-claims order (zero reserve) does not attempt a zero transfer.
+      .minInto (s .orderQuoteReserve) (s .one) (s .custodyActive),
+      -- The claims escrow-in: maker source (index zero) to the freshly
+      -- admitted escrow Position (index one), nothing minted. A Position
+      -- admit does not advance the Claims market (its evidence records
+      -- before == after), so the escrow transfer expects the same observation
+      -- the admit did and leaves its successor; a freshly admitted Position's
+      -- revision is ZERO, and pinning it here means only a Position the admit
+      -- just created can receive the escrow.
+      .incrementInto (s .claimsMarketRevision) (s .claimsPostMarketRevision),
+      .loadConst (s .positionOneRevision) 0,
+      .loadConst (s .claimsSourcePresent) 1,
+      .loadConst (s .claimsDestinationPresent) 1,
+      .loadConst (s .claimsSourcePositionIndex) 0,
+      .loadConst (s .claimsDestinationPositionIndex) 1,
+      .loadConst (s .claimsAggregateDirection) claimsDeltaNeutral,
+      .loadConst (s .claimsSourceDirection) claimsDeltaDebit,
+      .loadConst (s .claimsDestinationDirection) claimsDeltaCredit,
+      -- The 0010 SS2a addressing discipline, deposit direction: atoms leave
+      -- the MAKER's external account and claims leave the MAKER's Position,
+      -- and both arrive at addresses keyed by the order's own identity.
+      .identityEq (d .destinationVaultContext) (d .order),
+      .identityEq (d .custodySourceOwner) (d .owner),
+      .identityEq (d .positionZeroOwner) (d .owner),
+      .identityEq (d .positionOneOwner) (d .order),
+      .identityEq (d .settlementPositionOwner) (d .order),
+      .identityEq (d .rentCredit) (d .owner),
+      .loadConst (s .custodyOperation) custodyOperationTransfer
+    ]
+  | .cancelOrder => [
+      -- The second derived state: the order the maker is cancelling. Its bump
+      -- witness, Trading ownership, and live rent principal are anchored the
+      -- way settlement Close anchors its terminal record.
+      .scalarEq (s .terminalRecordBump) (s .terminalCanonicalBump),
+      .identityEq (d .terminalOwner) (d .tradingProgram),
+      .nonzero (s .terminalRentPrincipal),
+      -- The order record's width must be the Product width the prelude
+      -- already equated with the batch's (`zero`).
+      .scalarEq (s .scratchA) (s .outcomeCount),
+      -- Only while the batch is COLLECTING, and only a PLACED order: after
+      -- the close the order set is final and a candidate may already be built
+      -- against this escrow. `Collecting.tag()` and `Placed.tag()` are both
+      -- one by construction, so one constant serves both conjuncts.
+      .loadConst (s .scratchB) batchStatusCollecting,
+      .scalarEq (s .batchStatusObservation) (s .scratchB),
+      .scalarEq (s .orderPhaseObservation) (s .scratchB),
+      .scalarLt (s .currentSlot) (s .batchCollectionCloseSlot),
+      .loadConst (s .orderPostPhase) orderPhaseCancelled,
+      .copyScalar (s .currentSlot) (s .orderPostReleasedSlot),
+      .scalarLe (s .orderAdmittedSlotObservation) (s .currentSlot),
+      -- The refund is the WHOLE reserve, exactly: the batch is still
+      -- collecting, so no Collect can have drawn on this vault, and a partial
+      -- refund would strand the difference. The batch counter surrenders
+      -- exactly what admission committed -- `subInto` refuses a batch that
+      -- never held it.
+      .checkedMulInto (s .orderMaxLots) (s .orderMaxQuoteDebitPerLot) (s .orderQuoteReserve),
+      .copyScalar (s .orderQuoteReserve) (s .custodyAmount),
+      .subInto (s .batchQuoteReserveObservation) (s .orderQuoteReserve)
+        (s .batchPostQuoteReserve),
+      -- One more cancellation, and never more cancellations than admissions.
+      .scalarLt (s .batchCancelledCountObservation) (s .batchOrderCountObservation),
+      .incrementInto (s .batchCancelledCountObservation) (s .batchPostCancelledCount),
+      -- The four-route close suite and the claims refund advance exactly as
+      -- ReleaseOrder's do: one revision per custody operation, one Claims
+      -- market advance, and the escrow Position close expects its post-affine
+      -- successor.
+      .incrementInto (s .custodyExpectedRevision) (s .custodyResultingRevision),
+      .incrementInto (s .custodyResultingRevision) (s .custodyCloseVaultExpectedRevision),
+      .incrementInto (s .custodyCloseVaultExpectedRevision) (s .custodyCloseVaultResultingRevision),
+      .incrementInto
+        (s .custodyCloseVaultResultingRevision) (s .custodyCloseReplayResultingRevision),
+      .loadConst (s .custodyOperation) custodyOperationTransfer,
+      .incrementInto (s .claimsMarketRevision) (s .claimsPostMarketRevision),
+      .incrementInto (s .positionZeroRevision) (s .settlementPositionRevision),
+      .incrementInto (s .settlementPositionRevision) (s .settlementPostPositionRevision),
+      .loadConst (s .claimsSourcePresent) 1,
+      .loadConst (s .claimsDestinationPresent) 1,
+      .loadConst (s .claimsSourcePositionIndex) 0,
+      .loadConst (s .claimsDestinationPositionIndex) 1,
+      .loadConst (s .claimsAggregateDirection) claimsDeltaNeutral,
+      .loadConst (s .claimsSourceDirection) claimsDeltaDebit,
+      .loadConst (s .claimsDestinationDirection) claimsDeltaCredit,
+      -- The 0010 SS2a addressing discipline, identical to ReleaseOrder's:
+      -- the order's own vault, the recorded maker, the order's Position, and
+      -- the maker's rent on every close.
+      .identityEq (d .sourceVaultContext) (d .order),
+      .identityEq (d .custodyDestinationOwner) (d .owner),
+      .identityEq (d .positionZeroOwner) (d .order),
+      .identityEq (d .positionOneOwner) (d .owner),
+      .identityEq (d .settlementPositionOwner) (d .order),
+      .identityEq (d .rentCredit) (d .owner),
+      .identityEq (d .rentRefund) (d .owner)
+    ]
+  | .releaseOrder => [
+      -- Only a placed order releases, and it releases to Released. A vacant
+      -- state account projects phase zero, which is not Placed, so a release
+      -- aimed at an address nothing occupies refuses here.
+      .loadConst (s .scratchA) orderPhasePlaced,
+      .scalarEq (s .orderPhaseObservation) (s .scratchA),
+      .loadConst (s .orderPostPhase) orderPhaseReleased,
+      -- The window gate, from the order alone. PlaceOrder pins the signed
+      -- valid_until_slot to the batch's settlement close EXACTLY (the recorded
+      -- choice that makes this action batch-free), so strictly-after-valid
+      -- is strictly-after-the-window, one slot conservative, and no batch
+      -- account enters the frame. A maker can therefore ALWAYS reach this
+      -- refund: the gate is a constant of the record they signed.
+      .scalarLt (s .orderValidUntilSlot) (s .currentSlot),
+      -- The successor's released slot is now, and now is not before admission.
+      .copyScalar (s .currentSlot) (s .orderPostReleasedSlot),
+      .scalarLe (s .orderAdmittedSlotObservation) (s .currentSlot),
+      -- The residual is the observed vault balance -- never computed, exactly
+      -- as decision 0010 states -- and it can never exceed the exact worst
+      -- case admission escrowed.
+      .checkedMulInto (s .orderMaxLots) (s .orderMaxQuoteDebitPerLot) (s .orderQuoteReserve),
+      .scalarLe (s .escrowBalanceObservation) (s .orderQuoteReserve),
+      .copyScalar (s .escrowBalanceObservation) (s .custodyAmount),
+      -- The four-route close suite advances one revision per Custody
+      -- operation: transfer, then vault close, then replay close -- the same
+      -- chain settlement Close carries.
+      .incrementInto (s .custodyExpectedRevision) (s .custodyResultingRevision),
+      .incrementInto (s .custodyResultingRevision) (s .custodyCloseVaultExpectedRevision),
+      .incrementInto (s .custodyCloseVaultExpectedRevision) (s .custodyCloseVaultResultingRevision),
+      .incrementInto
+        (s .custodyCloseVaultResultingRevision) (s .custodyCloseReplayResultingRevision),
+      .loadConst (s .custodyOperation) custodyOperationTransfer,
+      -- The claims residual advances the Claims market once, and the escrow
+      -- Position close that follows it expects exactly that successor; the
+      -- Position's own close-time revision is its post-affine successor.
+      .incrementInto (s .claimsMarketRevision) (s .claimsPostMarketRevision),
+      .incrementInto (s .positionZeroRevision) (s .settlementPositionRevision),
+      .incrementInto (s .settlementPositionRevision) (s .settlementPostPositionRevision),
+      -- The residual claims row plumbing is constant at authoring time: the
+      -- escrow Position is the sole source (index zero), the maker's the sole
+      -- destination (index one), and a transfer mints nothing, so the
+      -- aggregate is neutral. The ROW COUNT is deliberately not pinned: an
+      -- empty residual carries zero rows, and a runtime that omits a row a
+      -- balance still requires leaves the Position nonzero, which the Claims
+      -- Position close refuses -- conservation fails closed.
+      .loadConst (s .claimsSourcePresent) 1,
+      .loadConst (s .claimsDestinationPresent) 1,
+      .loadConst (s .claimsSourcePositionIndex) 0,
+      .loadConst (s .claimsDestinationPositionIndex) 1,
+      .loadConst (s .claimsAggregateDirection) claimsDeltaNeutral,
+      .loadConst (s .claimsSourceDirection) claimsDeltaDebit,
+      .loadConst (s .claimsDestinationDirection) claimsDeltaCredit,
+      -- The 0010 §2a addressing discipline, stated for every leg: the vault
+      -- drawn on is the ORDER's own, the refunded owner is the record's maker,
+      -- the closed Position is the order's, and every rent credit is the
+      -- maker's -- an order's collateral and rent are reachable by exactly
+      -- the identities the record names.
+      .identityEq (d .sourceVaultContext) (d .order),
+      .identityEq (d .custodyDestinationOwner) (d .owner),
+      .identityEq (d .positionZeroOwner) (d .order),
+      .identityEq (d .positionOneOwner) (d .owner),
+      .identityEq (d .settlementPositionOwner) (d .order),
+      .identityEq (d .rentCredit) (d .owner),
+      .identityEq (d .rentRefund) (d .owner)
+    ]
   | _ => []
 
 /-- The Product-owned item body, folded once per authenticated outcome. -/
@@ -453,10 +864,21 @@ def itemOps (action : Action) : List Op :=
     match action with
     | .consider | .freeze | .materialize => []
     | .initializeSettlement => [.loadConst (t .cursorInventory) 0]
-    | .collect | .distribute => [
+    -- `cancelOrder` and `releaseOrder` move their refund claims through the
+    -- same two-Position transfer shape as the settlement rows: nothing
+    -- minted, source and destination magnitudes exactly the row quantity.
+    | .collect | .distribute | .cancelOrder | .releaseOrder => [
         .loadConst (t .claimsAggregateMagnitude) 0,
         .scalarEq (t .claimsSourceMagnitude) (t .quantity),
         .scalarEq (t .claimsDestinationMagnitude) (t .quantity)
+      ]
+    -- `placeOrder` derives its escrow row from the signed terms: the claim
+    -- reserve at each outcome is deliver-per-lot times the order's maximum
+    -- fill, moved whole from the maker to the escrow.
+    | .placeOrder => [
+        .loadConst (t .claimsAggregateMagnitude) 0,
+        .checkedMulInto (t .quantity) (s .orderMaxLots) (t .claimsSourceMagnitude),
+        .copyScalar (t .claimsSourceMagnitude) (t .claimsDestinationMagnitude)
       ]
     | .close => [
         .loadConst (t .quantity) 0,
@@ -478,15 +900,20 @@ def program (action : Action) : Program := {
   epilogue := []
 }
 
-/-- The seven actions whose transition program is authored here. -/
+/-- The actions whose transition program is authored here, in tag order.
+
+`openBatch` and `closeBatch` are the root-writing pair of GEN-SEVEN: the two
+that advance the `GeneralRootV2` tail and route to no Claims or Custody child.
+The remaining five keep their place in `unauthoredActions` until each one's
+complete quadruple lands. -/
 def authoredActions : List Action := [
-  .consider, .freeze, .initializeSettlement, .collect, .materialize, .distribute, .close
+  .consider, .freeze, .initializeSettlement, .collect, .materialize, .distribute, .close,
+  .openBatch, .placeOrder, .cancelOrder, .closeBatch, .releaseOrder
 ]
 
-/-- The seven that are not, and whose triple is the open work. -/
+/-- The two that are not, and whose quadruple is the open work. -/
 def unauthoredActions : List Action := [
-  .openBatch, .placeOrder, .cancelOrder, .closeBatch,
-  .submitCandidate, .verifyCandidateRow, .releaseOrder
+  .submitCandidate, .verifyCandidateRow
 ]
 
 def programs : List Program := authoredActions.map program
@@ -496,7 +923,7 @@ def programs : List Program := authoredActions.map program
 -- ---------------------------------------------------------------------------
 
 theorem the_register_schema_is_the_declared_bank :
-    commonScalars = 90 ∧ itemScalarStride = 6 ∧ commonIdentities = 40 ∧
+    commonScalars = 151 ∧ itemScalarStride = 6 ∧ commonIdentities = 45 ∧
       itemIdentityStride = 0 := by native_decide
 
 /-- Every constructor list is its own index sequence, so a reordered enum is a
@@ -517,7 +944,8 @@ theorem authored_section_counts :
         (fun action =>
           ((program action).prelude.length, (program action).itemBody.length,
             (program action).epilogue.length)) =
-      [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0)] := by
+      [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
+        (26, 1, 0), (45, 4, 0), (49, 4, 0), (27, 1, 0), (42, 4, 0)] := by
   native_decide
 
 /-- No two authored actions emit the same program. A shared prelude plus an
@@ -526,7 +954,7 @@ the digest is what the descriptor and the capability seal name. -/
 theorem authored_programs_are_pairwise_distinct :
     programs.Nodup := by native_decide
 
-/-- The seven unauthored actions carry no program, and this is what says so.
+/-- The unauthored actions carry no program, and this is what says so.
 
 `program` is total, so it answers for all fourteen; what it must never do is
 answer with something an emitter could mistake for an artifact. An unauthored
@@ -561,7 +989,316 @@ theorem exactly_the_fixed_direction_actions_bind_their_vault_context :
 def encodedWidth (action : Action) : Nat := (Codec.encodeProgram (program action)).length
 
 theorem authored_encoded_widths :
-    authoredActions.map encodedWidth = [416, 464, 584, 632, 440, 632, 824] := by
+    authoredActions.map encodedWidth =
+      [416, 464, 584, 632, 440, 632, 824, 680, 1208, 1304, 704, 1136] := by
+  native_decide
+
+-- ---------------------------------------------------------------------------
+-- The root-writing pair, executed
+-- ---------------------------------------------------------------------------
+
+/-- One register bank at Product width 1: every named coordinate set, the rest
+zero. Identities are the abstract `Nat` identities of the VM model. -/
+private def bankOf (values : List (Nat × Nat)) (identities : List (Nat × Nat)) : State :=
+  ⟨values.foldl (fun bank (coordinate, value) => bank.setIfInBounds coordinate value)
+      ((List.replicate (commonScalars + itemScalarStride) 0).toArray),
+    identities.foldl (fun bank (coordinate, value) => bank.setIfInBounds coordinate value)
+      ((List.replicate commonIdentities 0).toArray)⟩
+
+/-- The shared prelude's demands at width one, plus a live root. -/
+private def commonBank : List (Nat × Nat) := [
+  (ScalarSlot.index .rootLifecycleObservation, lifecycleActive),
+  (ScalarSlot.index .outcomeCount, 1), (ScalarSlot.index .zero, 1),
+  (ScalarSlot.index .stateBump, 7), (ScalarSlot.index .primaryCanonicalBump, 7),
+  (ScalarSlot.index .primaryRentPrincipal, 1)
+]
+
+private def commonIdentityBank : List (Nat × Nat) := [
+  (IdentitySlot.index .primaryOwner, 9), (IdentitySlot.index .tradingProgram, 9)
+]
+
+/-- An OpenBatch bank whose optimistic revision matches the observed root. -/
+private def openBatchBank (expectedRevision : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .currentSlot, 1000),
+      (ScalarSlot.index .rootExpectedRevision, expectedRevision),
+      (ScalarSlot.index .rootRevisionObservation, 5),
+      (ScalarSlot.index .rootNextBatchSequenceObservation, 3),
+      (ScalarSlot.index .rootOpenBatchesObservation, 0),
+      (ScalarSlot.index .configCollectionSlots, 10),
+      (ScalarSlot.index .configSelectionSlots, 10),
+      (ScalarSlot.index .configSettlementSlots, 10),
+      (ScalarSlot.index .configMaxOrders, 8)
+    ]) commonIdentityBank
+
+/-- OpenBatch accepts the exact bank and computes the three root advances and
+the two config-derived windows. -/
+theorem open_batch_accepts_and_advances_the_root :
+    ((program .openBatch).execute 1 (openBatchBank 5)).map (fun state =>
+        (state.scalars[ScalarSlot.index .rootPostRevision]!,
+          state.scalars[ScalarSlot.index .rootPostBatchSequence]!,
+          state.scalars[ScalarSlot.index .rootPostOpenBatches]!,
+          state.scalars[ScalarSlot.index .batchCollectionCloseSlot]!,
+          state.scalars[ScalarSlot.index .batchSettlementCloseSlot]!)) =
+      some (6, 4, 1, 1010, 1030) := by native_decide
+
+/-- The replay guard is real: a stale optimistic revision refuses. -/
+theorem open_batch_refuses_a_stale_root_revision :
+    (program .openBatch).execute 1 (openBatchBank 4) = none := by native_decide
+
+/-- A CloseBatch bank: window state and batch counters are the parameters. -/
+private def closeBatchBank (currentSlot orderCount openBatches : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .currentSlot, currentSlot),
+      (ScalarSlot.index .rootExpectedRevision, 6),
+      (ScalarSlot.index .rootRevisionObservation, 6),
+      (ScalarSlot.index .rootOpenBatchesObservation, openBatches),
+      (ScalarSlot.index .batchStatusObservation, batchStatusCollecting),
+      (ScalarSlot.index .batchCollectionCloseSlot, 500),
+      (ScalarSlot.index .batchOrderCountObservation, orderCount),
+      (ScalarSlot.index .configMaxOrders, 8)
+    ]) commonIdentityBank
+
+/-- After the window, a close accepts and the decrement is exact. -/
+theorem close_batch_accepts_after_the_window :
+    ((program .closeBatch).execute 1 (closeBatchBank 1000 0 1)).map (fun state =>
+        (state.scalars[ScalarSlot.index .rootPostRevision]!,
+          state.scalars[ScalarSlot.index .rootPostOpenBatches]!,
+          state.scalars[ScalarSlot.index .batchPostStatus]!)) =
+      some (7, 0, batchStatusClosed) := by native_decide
+
+/-- A full batch may close early: nobody's window is truncated. -/
+theorem close_batch_accepts_a_full_batch_early :
+    ((program .closeBatch).execute 1 (closeBatchBank 100 8 1)).isSome = true := by
+  native_decide
+
+/-- A live, unfull batch refuses an early close: this is the griefing arm of
+`close_is_permissionless`, and it is the disjunction's only refusing branch. -/
+theorem close_batch_refuses_an_early_close_of_a_live_batch :
+    (program .closeBatch).execute 1 (closeBatchBank 100 7 1) = none := by native_decide
+
+/-- A close the root never opened refuses: the decrement has no minuend. -/
+theorem close_batch_refuses_when_no_batch_is_open :
+    (program .closeBatch).execute 1 (closeBatchBank 1000 0 0) = none := by native_decide
+
+-- ---------------------------------------------------------------------------
+-- PlaceOrder, executed
+-- ---------------------------------------------------------------------------
+
+/-- A PlaceOrder bank: the batch window, its counters, and the signed terms
+are the parameters; the identity bindings hold unless a test breaks one. -/
+private def placeOrderBank
+    (currentSlot orderCount maxOrders validUntil : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .currentSlot, currentSlot),
+      (ScalarSlot.index .terminalRecordBump, 9), (ScalarSlot.index .terminalCanonicalBump, 9),
+      (ScalarSlot.index .terminalRentPrincipal, 1),
+      (ScalarSlot.index .scratchA, 1),
+      (ScalarSlot.index .batchStatusObservation, batchStatusCollecting),
+      (ScalarSlot.index .batchCollectionCloseSlot, 1000),
+      (ScalarSlot.index .batchSettlementCloseSlot, 3000),
+      (ScalarSlot.index .configMaxOrders, maxOrders),
+      (ScalarSlot.index .batchOrderCountObservation, orderCount),
+      (ScalarSlot.index .batchQuoteReserveObservation, 58),
+      (ScalarSlot.index .orderMaxLots, 6),
+      (ScalarSlot.index .orderMaxQuoteDebitPerLot, 7),
+      (ScalarSlot.index .orderValidUntilSlot, validUntil),
+      (ScalarSlot.index .claimsMarketRevision, 11)
+    ]) (commonIdentityBank ++ [
+      (IdentitySlot.index .order, 3), (IdentitySlot.index .owner, 4),
+      (IdentitySlot.index .terminalOwner, 9),
+      (IdentitySlot.index .destinationVaultContext, 3),
+      (IdentitySlot.index .custodySourceOwner, 4),
+      (IdentitySlot.index .positionZeroOwner, 4), (IdentitySlot.index .positionOneOwner, 3),
+      (IdentitySlot.index .settlementPositionOwner, 3),
+      (IdentitySlot.index .rentCredit, 4)
+    ])
+
+/-- Inside the window, under the bound, with the expiry pinned to the batch's
+settlement close, an admission accepts: the batch commits exactly the worst
+case, the count advances by one, and the deposit amount IS that worst case. -/
+theorem place_order_accepts_and_commits_the_exact_worst_case :
+    ((program .placeOrder).execute 1 (placeOrderBank 100 3 8 3000)).map
+        (fun state =>
+          [state.scalars[ScalarSlot.index .orderPostPhase]!,
+            state.scalars[ScalarSlot.index .orderQuoteReserve]!,
+            state.scalars[ScalarSlot.index .custodyAmount]!,
+            state.scalars[ScalarSlot.index .batchPostQuoteReserve]!,
+            state.scalars[ScalarSlot.index .batchPostOrderCount]!,
+            state.scalars[ScalarSlot.index .claimsPostMarketRevision]!,
+            state.scalars[ScalarSlot.index .positionOneRevision]!,
+            state.scalars[ScalarSlot.index .custodyActive]!]) =
+      some [orderPhasePlaced, 42, 42, 100, 4, 12, 0, 1] := by native_decide
+
+/-- At or after the collection close, no admission. -/
+theorem place_order_refuses_outside_the_window :
+    (program .placeOrder).execute 1 (placeOrderBank 1000 3 8 3000) = none := by native_decide
+
+/-- A full batch admits nothing further. -/
+theorem place_order_refuses_a_full_batch :
+    (program .placeOrder).execute 1 (placeOrderBank 100 8 8 3000) = none := by native_decide
+
+/-- The expiry pin is exact in both directions: an order that would outlive
+the window is refused exactly as one that would die inside it. Recorded
+choice 6 -- this is what makes the batch-free ReleaseOrder gate sound and
+every escrow self-curable. -/
+theorem place_order_refuses_an_unpinned_expiry :
+    (program .placeOrder).execute 1 (placeOrderBank 100 3 8 3001) = none ∧
+      (program .placeOrder).execute 1 (placeOrderBank 100 3 8 2999) = none := by native_decide
+
+/-- A deposit whose destination vault is keyed by anything but the order's
+own identity refuses: the escrow an admission funds must be the one a
+cancellation or release can reach. -/
+theorem place_order_refuses_a_substituted_escrow_destination :
+    ((program .placeOrder).execute 1
+        (⟨(placeOrderBank 100 3 8 3000).scalars,
+          ((placeOrderBank 100 3 8 3000).identities.setIfInBounds
+            (IdentitySlot.index .destinationVaultContext) 8)⟩ : State)) = none := by
+  native_decide
+
+-- ---------------------------------------------------------------------------
+-- CancelOrder, executed
+-- ---------------------------------------------------------------------------
+
+/-- A CancelOrder bank: the batch window, the counters, and the order phase
+are the parameters; the identity bindings hold unless a test breaks one. -/
+private def cancelOrderBank
+    (currentSlot phase orderCount cancelledCount batchReserve : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .currentSlot, currentSlot),
+      (ScalarSlot.index .terminalRecordBump, 9), (ScalarSlot.index .terminalCanonicalBump, 9),
+      (ScalarSlot.index .terminalRentPrincipal, 1),
+      (ScalarSlot.index .scratchA, 1),
+      (ScalarSlot.index .batchStatusObservation, batchStatusCollecting),
+      (ScalarSlot.index .batchCollectionCloseSlot, 1000),
+      (ScalarSlot.index .orderPhaseObservation, phase),
+      (ScalarSlot.index .orderAdmittedSlotObservation, 10),
+      (ScalarSlot.index .orderMaxLots, 6),
+      (ScalarSlot.index .orderMaxQuoteDebitPerLot, 7),
+      (ScalarSlot.index .batchQuoteReserveObservation, batchReserve),
+      (ScalarSlot.index .batchOrderCountObservation, orderCount),
+      (ScalarSlot.index .batchCancelledCountObservation, cancelledCount),
+      (ScalarSlot.index .custodyExpectedRevision, 5),
+      (ScalarSlot.index .claimsMarketRevision, 11),
+      (ScalarSlot.index .positionZeroRevision, 3)
+    ]) (commonIdentityBank ++ [
+      (IdentitySlot.index .order, 3), (IdentitySlot.index .owner, 4),
+      (IdentitySlot.index .terminalOwner, 9),
+      (IdentitySlot.index .sourceVaultContext, 3),
+      (IdentitySlot.index .custodyDestinationOwner, 4),
+      (IdentitySlot.index .positionZeroOwner, 3), (IdentitySlot.index .positionOneOwner, 4),
+      (IdentitySlot.index .settlementPositionOwner, 3),
+      (IdentitySlot.index .rentCredit, 4), (IdentitySlot.index .rentRefund, 4)
+    ])
+
+/-- While the batch collects, a placed order cancels: the phase flips to
+Cancelled, the refund is the EXACT whole reserve, the batch surrenders
+exactly what admission committed, and the cancellation counter advances by
+one. -/
+theorem cancel_order_accepts_and_refunds_the_exact_reserve :
+    ((program .cancelOrder).execute 1 (cancelOrderBank 100 orderPhasePlaced 3 1 100)).map
+        (fun state =>
+          [state.scalars[ScalarSlot.index .orderPostPhase]!,
+            state.scalars[ScalarSlot.index .orderPostReleasedSlot]!,
+            state.scalars[ScalarSlot.index .custodyAmount]!,
+            state.scalars[ScalarSlot.index .batchPostQuoteReserve]!,
+            state.scalars[ScalarSlot.index .batchPostCancelledCount]!,
+            state.scalars[ScalarSlot.index .custodyCloseReplayResultingRevision]!]) =
+      some [orderPhaseCancelled, 100, 42, 58, 2, 9] := by native_decide
+
+/-- After the collection window a cancellation refuses: the order set is
+final and a candidate may already be built against this escrow. Release is
+the verb that remains. -/
+theorem cancel_order_refuses_after_the_window :
+    (program .cancelOrder).execute 1 (cancelOrderBank 1000 orderPhasePlaced 3 1 100) = none := by
+  native_decide
+
+/-- A cancelled order does not cancel again, and a vacant state was never an
+order. -/
+theorem cancel_order_refuses_an_order_that_is_not_placed :
+    (program .cancelOrder).execute 1 (cancelOrderBank 100 orderPhaseCancelled 3 1 100) = none ∧
+      (program .cancelOrder).execute 1 (cancelOrderBank 100 0 3 1 100) = none := by
+  native_decide
+
+/-- A batch whose committed reserve does not hold this order's worst case is
+not the batch that admitted it: the subtraction has no minuend. -/
+theorem cancel_order_refuses_a_batch_that_never_held_the_reserve :
+    (program .cancelOrder).execute 1 (cancelOrderBank 100 orderPhasePlaced 3 1 41) = none := by
+  native_decide
+
+/-- Cancellations can never outnumber admissions. -/
+theorem cancel_order_refuses_when_every_admission_is_already_cancelled :
+    (program .cancelOrder).execute 1 (cancelOrderBank 100 orderPhasePlaced 3 3 100) = none := by
+  native_decide
+
+-- ---------------------------------------------------------------------------
+-- ReleaseOrder, executed
+-- ---------------------------------------------------------------------------
+
+/-- A ReleaseOrder bank: the phase, the clock, and the observed residual are
+the parameters; the identity bindings hold unless a test breaks one. -/
+private def releaseOrderBank
+    (phase currentSlot escrowBalance sourceVaultContext : Nat) : State :=
+  bankOf (commonBank ++ [
+      (ScalarSlot.index .currentSlot, currentSlot),
+      (ScalarSlot.index .orderPhaseObservation, phase),
+      (ScalarSlot.index .orderValidUntilSlot, 500),
+      (ScalarSlot.index .orderAdmittedSlotObservation, 10),
+      (ScalarSlot.index .orderMaxLots, 6),
+      (ScalarSlot.index .orderMaxQuoteDebitPerLot, 7),
+      (ScalarSlot.index .escrowBalanceObservation, escrowBalance),
+      (ScalarSlot.index .custodyExpectedRevision, 5),
+      (ScalarSlot.index .claimsMarketRevision, 11),
+      (ScalarSlot.index .positionZeroRevision, 3)
+    ]) (commonIdentityBank ++ [
+      (IdentitySlot.index .order, 3), (IdentitySlot.index .owner, 4),
+      (IdentitySlot.index .sourceVaultContext, sourceVaultContext),
+      (IdentitySlot.index .custodyDestinationOwner, 4),
+      (IdentitySlot.index .positionZeroOwner, 3), (IdentitySlot.index .positionOneOwner, 4),
+      (IdentitySlot.index .settlementPositionOwner, 3),
+      (IdentitySlot.index .rentCredit, 4), (IdentitySlot.index .rentRefund, 4)
+    ])
+
+/-- After the signed expiry, a placed order releases: the phase flips to
+Released, the released slot is now, the amount moved is the OBSERVED balance
+(never the computed reserve), and the custody close chain advances one
+revision per operation. -/
+theorem release_order_accepts_and_returns_the_observed_residual :
+    ((program .releaseOrder).execute 1 (releaseOrderBank orderPhasePlaced 1000 40 3)).map
+        (fun state =>
+          [state.scalars[ScalarSlot.index .orderPostPhase]!,
+            state.scalars[ScalarSlot.index .orderPostReleasedSlot]!,
+            state.scalars[ScalarSlot.index .custodyAmount]!,
+            state.scalars[ScalarSlot.index .orderQuoteReserve]!,
+            state.scalars[ScalarSlot.index .custodyCloseReplayResultingRevision]!,
+            state.scalars[ScalarSlot.index .claimsPostMarketRevision]!,
+            state.scalars[ScalarSlot.index .settlementPostPositionRevision]!]) =
+      some [orderPhaseReleased, 1000, 40, 42, 9, 12, 5] := by native_decide
+
+/-- At or before the signed expiry the release refuses: the maker's window
+promise holds to its last slot. -/
+theorem release_order_refuses_before_its_signed_expiry :
+    (program .releaseOrder).execute 1 (releaseOrderBank orderPhasePlaced 500 40 3) = none := by
+  native_decide
+
+/-- A released order does not release again, and a vacant state (phase zero)
+was never an order: both refuse on the same conjunct. -/
+theorem release_order_refuses_an_order_that_is_not_placed :
+    (program .releaseOrder).execute 1 (releaseOrderBank orderPhaseReleased 1000 40 3) = none ∧
+      (program .releaseOrder).execute 1 (releaseOrderBank 0 1000 40 3) = none := by
+  native_decide
+
+/-- A residual above the exact admission reserve is not this order's money:
+the bound the per-order address was said to give for free, stated as a
+conjunct. -/
+theorem release_order_refuses_a_residual_above_the_reserve :
+    (program .releaseOrder).execute 1 (releaseOrderBank orderPhasePlaced 1000 43 3) = none := by
+  native_decide
+
+/-- A vault keyed by anything but the order's own identity refuses: one maker
+can never be refunded out of another maker's escrow. -/
+theorem release_order_refuses_a_substituted_vault_context :
+    (program .releaseOrder).execute 1 (releaseOrderBank orderPhasePlaced 1000 40 8) = none := by
   native_decide
 
 end DClutch.General.TransitionV3

@@ -146,7 +146,62 @@ ROLE_ORDER = ("registry", "rent", "custody", "resolution", "claims", "trading", 
 DEVELOPMENT_FEE_BASIS_POINTS = 50
 FEE_BASIS_POINTS_DENOMINATOR = 10_000
 PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS = 100_000_000
+
+# THE PARTICIPANT'S BANKROLL AND ONE TRADE'S AUTHORIZATION ARE DIFFERENT
+# NUMBERS, and this probe used to pass the first where the second belongs.
+#
+# `PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS` above is how many atoms the founding
+# mints into the participant's SOURCE token account. That is a bankroll, and a
+# round number is exactly right for it.
+#
+# What the admission's `--collateral-quantity-atoms` sets is something else: it
+# is simultaneously the balance moved into the buyer's collateral account and
+# the DELEGATED ALLOWANCE granted to the Custody authority over it. And
+# `validate_collateral` in `dclutch-direct-codec`, which is what the Trading
+# program runs, tests the allowance as an EQUALITY against the trade's debit,
+# not as a floor -- the delegation is a single-use authorization spent to zero
+# by the Custody effect, so an allowance LARGER than the debit is not generous,
+# it is a different trade's authorization and the chain refuses it.
+#
+# The probe passed the bankroll to both. Against the owned-loopback producer's
+# own pinned terms the debit is 50,250,000, so the probe admitted EXACTLY TWICE
+# what its own trade debits and no Direct fill could ever land from it. The
+# refusal an operator saw for this was `Finalization`, one unit variant shared
+# by 27 sites, and nothing anywhere named the number.
+#
+# These four mirror `direct_trade_producer.rs`'s `FILL_ATOMS_V1`,
+# `EXECUTION_PRICE_V1`, `EXPECTED_PRICE_SCALE_V1` and `FEE_BASIS_POINTS_V1`.
+# They are asserted against the produced public manifest in
+# `accepted_direct_production` below, so a Rust-side change to any of them
+# breaks this probe loudly instead of silently reintroducing the wall.
+DIRECT_FILL_ATOMS_V1 = 100_000_000
+DIRECT_EXECUTION_PRICE_V1 = 500_000
+DIRECT_PRICE_SCALE_V1 = 1_000_000
+DIRECT_FEE_BASIS_POINTS_V1 = DEVELOPMENT_FEE_BASIS_POINTS
+
+
+def direct_buyer_collateral_debit_v1() -> int:
+    """The exact atoms one owned-loopback Direct trade debits from the buyer.
+
+    Mirrors `exact_quote_v1` then `fee_floor_v1` in `direct_trade_producer.rs`:
+    the quote must be exactly representable at the configured scale, and the fee
+    is a floor over basis points. Both are integer-exact by construction here,
+    and the exactness is asserted rather than assumed.
+    """
+
+    product = DIRECT_FILL_ATOMS_V1 * DIRECT_EXECUTION_PRICE_V1
+    if DIRECT_PRICE_SCALE_V1 == 0 or product % DIRECT_PRICE_SCALE_V1 != 0:
+        raise Refusal(
+            "the pinned Direct quote is not exactly representable at its scale"
+        )
+    gross = product // DIRECT_PRICE_SCALE_V1
+    fee = gross * DIRECT_FEE_BASIS_POINTS_V1 // FEE_BASIS_POINTS_DENOMINATOR
+    return gross + fee
+
+
 VALIDATOR_MINT_ROLE = "core-upgrade-authority"
+# Shreds of root-slot history the session keeps. See `validator_argv`.
+VALIDATOR_LEDGER_SHRED_CAP_V1 = 100_000_000
 CAMPAIGN_PAYER_ROLE = "campaign-payer"
 LOCAL_TEST_BANKROLL_LAMPORTS = 100_000_000_000
 LOCAL_TEST_BANKROLL_SCHEMA = "dclutch-private-validator-local-test-bankroll-v1"
@@ -1000,6 +1055,70 @@ def rpc(url: str, method: str, params: Sequence[Any] = ()) -> Any:
     return decoded.get("result")
 
 
+# The address lookup table program, and the two offsets in `LookupTableMeta`
+# this needs: a u32 discriminator, a u64 deactivation slot, a u64 last-extended
+# slot, a u8 start index, then `Option<Pubkey>` authority at byte 21 and the
+# 32-byte addresses from byte 56.
+ADDRESS_LOOKUP_TABLE_PROGRAM_V1 = "AddressLookupTab1e1111111111111111111111111"
+ALT_HEADER_BYTES_V1 = 56
+ALT_AUTHORITY_FLAG_OFFSET_V1 = 21
+
+
+def frozen_founding_routing_table(url: str, market_address: str) -> str:
+    """The founding's own frozen DCLTGMF3 table, read off the chain.
+
+    THE ADMISSION MESSAGE DOES NOT FIT A LEGACY TRANSACTION. Without a table it
+    refuses `admission message compilation: PacketTooLarge` after the prefund
+    transfer has already landed, which is where `--through participant` stopped
+    for every probe that reached it.
+
+    The founding creates five routing tables and freezes exactly one; passing
+    all five refuses `DuplicateAddress`, so the contract is that ONE table. The
+    founding campaign does not record its address in its evidence and does not
+    have to: a frozen table is one whose authority is `None`, and the founding's
+    own is the frozen table whose address list contains the market. Both facts
+    are already on the chain, so this reads them rather than asking the campaign
+    to start writing a sixth thing down.
+
+    Compared as BYTES, never as text: the market address is decoded once and
+    matched against the table's raw entries, so this needs no base58 encoder and
+    cannot disagree with one.
+    """
+    wanted = base58_bytes(market_address, 32, "founding market address")
+    accounts = (
+        rpc(url, "getProgramAccounts", [
+            ADDRESS_LOOKUP_TABLE_PROGRAM_V1,
+            {"encoding": "base64"},
+        ])
+        or []
+    )
+    frozen: list[str] = []
+    for entry in accounts:
+        try:
+            raw = base64.b64decode(entry["account"]["data"][0])
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+        if len(raw) < ALT_HEADER_BYTES_V1:
+            continue
+        if raw[ALT_AUTHORITY_FLAG_OFFSET_V1] != 0:
+            # An authority is still set, so this table can still be extended and
+            # is not the frozen one the founding committed to.
+            continue
+        body = raw[ALT_HEADER_BYTES_V1:]
+        if any(
+            body[32 * index : 32 * (index + 1)] == wanted
+            for index in range(len(body) // 32)
+        ):
+            frozen.append(canonical_pubkey(entry["pubkey"], "frozen routing table"))
+    if len(frozen) != 1:
+        raise Refusal(
+            "the founding's frozen DCLTGMF3 routing table could not be identified on this "
+            f"chain: {len(frozen)} frozen lookup tables contain {market_address} and the "
+            "admission message does not fit a legacy transaction without exactly one"
+        )
+    return frozen[0]
+
+
 def wait_ready(url: str, child: subprocess.Popen[bytes], timeout: float = 60.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1316,6 +1435,37 @@ def validator_argv(
         mint_address,
         "--ticks-per-slot",
         "16",
+        # KEEP THE TRANSACTION HISTORY FOR THE WHOLE SESSION.
+        #
+        # Every driver in this pipeline re-verifies its earlier stages from
+        # transaction history on every invocation, and the Direct trade and the
+        # flagship resolution advance ONE durable action per invocation with
+        # minutes or hours between them. `solana-test-validator` purges root
+        # slots in multi-thousand-slot chunks under its own default, and a purge
+        # that lands between two stages strands the journal PERMANENTLY: the
+        # later stage can no longer authenticate what the earlier one did, and
+        # no retry recovers it because the history is gone rather than late.
+        #
+        # Measured by the FINALIZATION lane on 2026-08-31 and recorded there as
+        # the first thing whoever restages should change.
+        #
+        # THE COST IS REAL AND IT IS NOT SMALL. This comment used to reason that
+        # a loopback session writes "a few tens of megabytes whatever the cap
+        # is". It was wrong by two orders of magnitude: measured at about
+        # 470 KB PER SLOT on a session that landed well under a hundred
+        # transactions -- 5.9 GB by slot 12,779 on the first-fill run, 9.9 GB by
+        # slot 21,000 on the population run. The bytes are the validator's own
+        # block and shred bookkeeping rather than campaign traffic, which is
+        # precisely why the default purges them and precisely why the default
+        # ends campaigns.
+        #
+        # The cap stays, because a stranded sequence is unrecoverable and disk
+        # is not. But BUDGET FOR IT: several concurrent lanes each holding a
+        # ledger is tens of gigabytes, and this machine has already lost a night
+        # to a full volume. Reap a session's ledger when its evidence is
+        # captured. See docs/evidence/FIRST_LOCAL_DIRECT_FILL_2026_08_31.md.
+        "--limit-ledger-size",
+        str(VALIDATOR_LEDGER_SHRED_CAP_V1),
         "--bind-address",
         "127.0.0.1",
         "--rpc-port",
@@ -3366,6 +3516,31 @@ def authenticate_direct_producer_receipt(
         or public.get("cluster") != "owned-loopback"
     ):
         raise Refusal("Direct public manifest changed its owned-loopback schema")
+    # THE TERMS THIS PROBE PREDICTED, AGAINST THE TERMS THE PRODUCER SIGNED.
+    #
+    # The buyer's collateral was delegated back at admission time for exactly
+    # `direct_buyer_collateral_debit_v1()`, derived from the three constants
+    # below, and that allowance is spent as an equality by the chain. So if the
+    # Rust producer's pinned terms ever move, this probe has already granted the
+    # wrong allowance and the trade will refuse much later with a message about
+    # a token account rather than about a constant.
+    #
+    # Checking it HERE, against the signed manifest, turns that into one
+    # sentence naming both numbers at the first moment both exist.
+    if (
+        public.get("fill") != DIRECT_FILL_ATOMS_V1
+        or public.get("executionPrice") != DIRECT_EXECUTION_PRICE_V1
+        or public.get("feeBasisPoints") != DIRECT_FEE_BASIS_POINTS_V1
+    ):
+        raise Refusal(
+            "the Direct producer signed terms this probe did not predict: manifest "
+            f"fill={public.get('fill')} price={public.get('executionPrice')} "
+            f"bps={public.get('feeBasisPoints')}, probe "
+            f"fill={DIRECT_FILL_ATOMS_V1} price={DIRECT_EXECUTION_PRICE_V1} "
+            f"bps={DIRECT_FEE_BASIS_POINTS_V1}. The buyer collateral was already "
+            f"delegated for {direct_buyer_collateral_debit_v1()} atoms against these "
+            "predicted terms, and the chain tests that allowance as an equality"
+        )
     market = canonical_pubkey(public.get("market"), "Direct Market")
     return session_path, root / "direct-trade-finalized.json", market
 
@@ -4220,6 +4395,17 @@ def run_one(
                 str(payer_key),
                 "--minimum-finalized-slot",
                 str(minimum_slot),
+                # The founding's OWN frozen table. Without it the admission
+                # refuses `PacketTooLarge` at message compilation, after the
+                # prefund transfer has landed.
+                "--routing-table",
+                frozen_founding_routing_table(
+                    url,
+                    canonical_pubkey(
+                        campaign_report.get("founding_targets", {}).get("open_market"),
+                        "founding campaign open market",
+                    ),
+                ),
                 "--output",
                 str(participant),
                 "--collateral-source-owner",
@@ -4228,8 +4414,12 @@ def run_one(
                 str(participant_key),
                 "--collateral-source-account",
                 fixture_source_address,
+                # The DEBIT, not the bankroll. The admission sets the moved
+                # balance and the delegated allowance to this one number, and
+                # the chain tests the allowance as an equality against the
+                # trade's debit. See `direct_buyer_collateral_debit_v1`.
                 "--collateral-quantity-atoms",
-                str(PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS),
+                str(direct_buyer_collateral_debit_v1()),
                 "--execute",
             ],
         )
@@ -4251,11 +4441,11 @@ def run_one(
             or participant_report["collateral"].get("intent", {}).get("sourceOwner")
             != participant_address
             or participant_report["collateral"].get("intent", {}).get("quantityAtoms")
-            != PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS
+            != direct_buyer_collateral_debit_v1()
         ):
             raise Refusal(
                 "participant admission did not preserve finalized admission plus exact "
-                "100,000,000-atom collateral preparation"
+                f"{direct_buyer_collateral_debit_v1():,}-atom collateral preparation"
             )
 
         founding_metrics = founding_compute_units(campaign_report)

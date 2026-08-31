@@ -1324,3 +1324,67 @@ document's line citations, and the census's own, decay within hours in a
 twelve-lane tree. The census's rent-credit row was accurate when written and
 drifted about sixty lines the same afternoon when an unrelated rent commit
 landed. **Cite by symbol and function name; treat every line number as a hint.**
+
+### 14.8 What the reader half needed, and the two ids that block the rest
+
+Added by the MIGRATE lane, 2026-08-31, after commits 1-3 had been in the tree
+through two further cuts. Four corrections and one finding.
+
+**§5.2's widths are stale, and the pattern will repeat.** `STATE_BYTES` is
+**368** at HEAD, not the 360 §5.2 records, and `state_schema_width` proves
+`stateBytes = 368` (`formal/dclutch-semantics/DClutchSemantics/MarketCoreAbi.lean`).
+`active_release_set` therefore lands at offset 368 and takes the state to 400,
+not 392. More usefully: CoreState has now widened twice while this design sat,
+so commit 4's `+32` must **join whatever batched widening the cut is already
+making** rather than open a third restrand of its own. A lane picking this up
+should confirm the current width from `generated.rs` and the Lean theorem
+rather than from any prose, including this paragraph.
+
+**The Registry codes are allocated; the Core codes are not.** §8.1's
+`0x100E`-`0x1012` are live in `programs/dclutch-registry-sbf/src/lib.rs` and
+mirrored into `docs/reference/refusals.md` and both TypeScript refusal
+registries. `0x3012`-`0x3014` remain unallocated, and the Core band is still
+contiguous through `RecoveryWalkUnavailable = 0x3011`, so §8.1's Core rows are
+still accurate as written.
+
+**Commits 1-3 left the record with no reader, and that was the real gap.**
+`release_lineage_address_v1` and `is_lineage_account_v1` had zero production
+callers, because a link is not a history: nothing in the tree could follow two
+hops. `crates/dclutch-registry-contract/src/lineage_walk.rs` is now the single
+authority for turning links into a chain, and
+`packages/dclutch-sdk/lib/releaseLineage.ts` mirrors it for the SDK and the
+site. The walk deliberately is not a fetcher — its three callers (an on-chain
+route reading its own frame, a host tool reading RPC, a test reading a fixture)
+cannot share one, but they must share the rule.
+
+Two things fell out of writing it that this document should own. The **gap**
+deserves its own refusal and gets one: a chain that ends before reaching the
+world names the set that still owes a declaration, which is a repair
+instruction rather than a complaint. And the **hop bound refuses only once a
+further hop is offered** — a chain of exactly the bound arrives — which is not
+what the first implementation did, and a test caught it.
+
+**Retroactive authoring is admitted, and §4.2 is why.** The clause that omitted
+`declared_at_slot` on the grounds that no conjunct would read it has a
+consequence §4.2 did not draw: **lineage is retroactively authorable, honestly.**
+A hop declared today for two cohorts that superseded each other weeks ago
+encodes to exactly the bytes it would have encoded to at the time, so there is
+no stamp to backdate and no contemporaneity to counterfeit. That is now asserted
+in both languages rather than argued. It also dissolves the traded-market
+worry: market22 does not need to survive a cut, it needs its history to be
+followable across one, and a declaration authored after the fact does that.
+
+**The finding, and it blocks the rest.** The full 32-byte release-set ids of
+**cohort-7 and cohort-8 are not recorded anywhere in this repository** — they
+exist only as eight-character truncations in `SESSION_STATE.md:14,665` and
+`GOAL.md:280`. A truncation authors nothing: the lineage PDA seeds on all 32
+bytes and both endpoints are derived from activation-cache accounts rather than
+supplied. So the declarations that would make market22 followable cannot be
+built from the tree as it stands, and this is a hard prerequisite rather than
+an untidiness. Both ids are mechanically recoverable from chain — a market's own
+bytes carry its founding set and prove it by its address, and superseded
+activation caches are never deleted — and
+`docs/evidence/RELEASE_SET_COHORT_LINEAGE_2026_08_31.md` records the mapping,
+the three ids that ARE recorded, and the exact recovery route for the two that
+are not. That file is also where cut gate 6's durable predecessor mapping
+belongs.

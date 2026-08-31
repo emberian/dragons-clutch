@@ -43,6 +43,7 @@ pub mod claim_check_redemption_v1;
 pub mod custody_replay_v1;
 pub mod founding_v5;
 pub mod fractional_atomic_v3;
+pub mod fractional_claim_check_v1;
 mod fractional_retirement_v3;
 pub mod liability_basis_v2;
 pub mod market_closure_v1;
@@ -185,12 +186,12 @@ pub enum ClaimsSbfError {
     /// Token-2022 mint/account profile or CPI refused.
     Token = 0x5009,
     /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
     ///
     /// Decision 0012. Not a corrupted account and not an attack: the exact
     /// upgrade authority the release names shipped new bytes, so the cached
-    /// authentication no longer describes what is deployed. Every open market
-    /// on the superseded release generation refuses until a re-release
-    /// re-authenticates the new deployment and re-pins its slot.
+    /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x500A,
     /// The execution terms disagree with the Market-selected config.
     ///
@@ -203,20 +204,123 @@ pub enum ClaimsSbfError {
     /// that keeps a market-free manifest config honest about the
     /// market-bearing terms it admits.
     SelectionConfig = 0x500B,
+    /// The Market's basis names the degree-2-to-3 spline family, for which
+    /// this deployment carries no evaluator.
+    ///
+    /// Distinct from [`ClaimsSbfError::Representation`] because nothing is
+    /// wrong with the records: the basis is authentic, the certificate is
+    /// authentic, and the join holds. What is missing is a capability. A
+    /// generic refusal here would send whoever hits it looking for a
+    /// substituted account, which is the one thing it is not.
+    ///
+    /// Unreachable while `ProductBasisV3::decode` refuses kind byte 3 -- a
+    /// Market cannot be founded on this basis, so settlement cannot meet one.
+    /// It is allocated now because the alternative is that the first person to
+    /// reach it debugs a settlement failure with no signal at all.
+    BasisEvaluatorAbsent = 0x500C,
+    /// Minting a complete set would grow total principal past the Market's
+    /// carried manipulation-capacity cap, or that cap was never stated.
+    ///
+    /// Distinct from [`ClaimsSbfError::Economic`], which is conservation: an
+    /// amount that does not add up. This one adds up exactly and is refused
+    /// anyway, because the Market may not carry that much principal against the
+    /// venue behind its Source. Conflating the two would hide the single
+    /// refusal this protocol exists to make -- a reader who cannot separate
+    /// them cannot tell a broken mint from a bounded one.
+    PrincipalCapacity = 0x500D,
+}
+
+impl ClaimsSbfError {
+    /// Every refusal this adapter can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`ClaimsSbfError::ordinal`], whose match is exhaustive: a variant added
+    /// to the enum does not compile until its author writes an arm here, and
+    /// the only arm that satisfies the assertions is its own index in this
+    /// array.
+    pub const ALL: [Self; 14] = [
+        Self::Instruction,
+        Self::Accounts,
+        Self::Identity,
+        Self::Release,
+        Self::Authority,
+        Self::Economic,
+        Self::CustodyRequired,
+        Self::Receipt,
+        Self::Representation,
+        Self::Token,
+        Self::ReleaseSuperseded,
+        Self::SelectionConfig,
+        Self::BasisEvaluatorAbsent,
+        Self::PrincipalCapacity,
+    ];
+
+    /// This refusal's position in [`ClaimsSbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a
+    /// fifteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::Accounts => 1,
+            Self::Identity => 2,
+            Self::Release => 3,
+            Self::Authority => 4,
+            Self::Economic => 5,
+            Self::CustodyRequired => 6,
+            Self::Receipt => 7,
+            Self::Representation => 8,
+            Self::Token => 9,
+            Self::ReleaseSuperseded => 10,
+            Self::SelectionConfig => 11,
+            Self::BasisEvaluatorAbsent => 12,
+            Self::PrincipalCapacity => 13,
+        }
+    }
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    ClaimsSbfError::Instruction as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE,
-    "ClaimsSbfError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (ClaimsSbfError::ReleaseSuperseded as u32)
-        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "ClaimsSbfError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one", and it had already been wrong once:
+// it still named `ReleaseSuperseded` (0x500A) after `SelectionConfig` (0x500B)
+// landed, so for as long as that stood, the newest refusal in the program was
+// checked by nothing. A hand-named ceiling says nothing about the variants
+// after it and goes stale silently every single time the enum grows -- the
+// failure is not that the number was wrong, it is that nothing could notice.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        ClaimsSbfError::ALL[0] as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE,
+        "ClaimsSbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < ClaimsSbfError::ALL.len() {
+        let variant = ClaimsSbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "ClaimsSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + index as u32,
+            "ClaimsSbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "ClaimsSbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<ClaimsSbfError> for ProgramError {
     fn from(value: ClaimsSbfError) -> Self {
@@ -1208,7 +1312,7 @@ fn authenticate_complete_set_growth(
     let added_sets = plan.quantity(0).map_err(|_| ClaimsSbfError::Instruction)?;
     MarketPrincipalCapSetsV1::read(core.principal_cap_sets)
         .admit_growth(outstanding_sets, added_sets)
-        .map_err(|_| ClaimsSbfError::Economic.into())
+        .map_err(|_| ClaimsSbfError::PrincipalCapacity.into())
 }
 
 pub(crate) fn authenticate_core_market(

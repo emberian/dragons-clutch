@@ -18,7 +18,7 @@ never used, meaning a code below `0x1000` came from some other program in
 your transaction, not from dClutch. Bands at `0x100000` and above belong
 to test-only programs that are never deployed.
 
-The tables below carry all **213** codes, with meanings taken
+The tables below carry all **271** codes, with meanings taken
 from the source code's own documentation.
 
 ## Band allocation
@@ -50,23 +50,26 @@ from the source code's own documentation.
 | `0x109000` | 0x109 | Band 0x109 — `dclutch-general-accelerator-sbf` test caller `general-caller` |
 | `0x10A000` | 0x10A | Band 0x10A — `dclutch-svm-harness` test caller `resolution-receipt-caller` |
 | `0x10B000` | 0x10B | Band 0x10B — `dclutch-claims-sbf` test caller `fractional-atomic-caller` |
+| `0x10C000` | 0x10C | Band 0x10C — `dclutch-claims-sbf` test signer `claim-check-escrow-signer` |
 
 ## claims
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x5000` | `ClaimsSbfError::Instruction` | Instruction bytes were hostile or selected no supported family. | `programs/dclutch-claims-sbf/src/lib.rs:166` |
-| `0x5001` | `ClaimsSbfError::Accounts` | Account count, privileges, owners, or executable flags were wrong. | `programs/dclutch-claims-sbf/src/lib.rs:168` |
-| `0x5002` | `ClaimsSbfError::Identity` | Market or Position semantic identities did not join the packet. | `programs/dclutch-claims-sbf/src/lib.rs:170` |
-| `0x5003` | `ClaimsSbfError::Release` | Registry receipt or current deployment authentication failed. | `programs/dclutch-claims-sbf/src/lib.rs:172` |
-| `0x5004` | `ClaimsSbfError::Authority` | Caller PDA authority did not authenticate the packet. | `programs/dclutch-claims-sbf/src/lib.rs:174` |
-| `0x5005` | `ClaimsSbfError::Economic` | Claims economic transition refused. | `programs/dclutch-claims-sbf/src/lib.rs:176` |
-| `0x5006` | `ClaimsSbfError::CustodyRequired` | This action requires the canonical Custody child composition. | `programs/dclutch-claims-sbf/src/lib.rs:178` |
-| `0x5007` | `ClaimsSbfError::Receipt` | Receipt construction or post-state commitment failed. | `programs/dclutch-claims-sbf/src/lib.rs:180` |
-| `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | `programs/dclutch-claims-sbf/src/lib.rs:182` |
-| `0x5009` | `ClaimsSbfError::Token` | Token-2022 mint/account profile or CPI refused. | `programs/dclutch-claims-sbf/src/lib.rs:184` |
-| `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-claims-sbf/src/lib.rs:192` |
-| `0x500B` | `ClaimsSbfError::SelectionConfig` | The execution terms disagree with the Market-selected config.  Distinct from [`ClaimsSbfError::Representation`] because the cause and the fix are different. Representation means a record was substituted or a root did not authenticate; this means both records are authentic and the Market selected a DIFFERENT INSTRUMENT than the terms describe -- a different denominator, width, Token program, or source graph. It is the runtime half of the Fractional config split, and it is the check that keeps a market-free manifest config honest about the market-bearing terms it admits. | `programs/dclutch-claims-sbf/src/lib.rs:203` |
+| `0x5000` | `ClaimsSbfError::Instruction` | Instruction bytes were hostile or selected no supported family. | `programs/dclutch-claims-sbf/src/lib.rs:169` |
+| `0x5001` | `ClaimsSbfError::Accounts` | Account count, privileges, owners, or executable flags were wrong. | `programs/dclutch-claims-sbf/src/lib.rs:171` |
+| `0x5002` | `ClaimsSbfError::Identity` | Market or Position semantic identities did not join the packet. | `programs/dclutch-claims-sbf/src/lib.rs:173` |
+| `0x5003` | `ClaimsSbfError::Release` | Registry receipt or current deployment authentication failed. | `programs/dclutch-claims-sbf/src/lib.rs:175` |
+| `0x5004` | `ClaimsSbfError::Authority` | Caller PDA authority did not authenticate the packet. | `programs/dclutch-claims-sbf/src/lib.rs:177` |
+| `0x5005` | `ClaimsSbfError::Economic` | Claims economic transition refused. | `programs/dclutch-claims-sbf/src/lib.rs:179` |
+| `0x5006` | `ClaimsSbfError::CustodyRequired` | This action requires the canonical Custody child composition. | `programs/dclutch-claims-sbf/src/lib.rs:181` |
+| `0x5007` | `ClaimsSbfError::Receipt` | Receipt construction or post-state commitment failed. | `programs/dclutch-claims-sbf/src/lib.rs:183` |
+| `0x5008` | `ClaimsSbfError::Representation` | Representation descriptor/state or unified wrapper transition refused. | `programs/dclutch-claims-sbf/src/lib.rs:185` |
+| `0x5009` | `ClaimsSbfError::Token` | Token-2022 mint/account profile or CPI refused. | `programs/dclutch-claims-sbf/src/lib.rs:187` |
+| `0x500A` | `ClaimsSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-claims-sbf/src/lib.rs:195` |
+| `0x500B` | `ClaimsSbfError::SelectionConfig` | The execution terms disagree with the Market-selected config. | `programs/dclutch-claims-sbf/src/lib.rs:206` |
+| `0x500C` | `ClaimsSbfError::BasisEvaluatorAbsent` | The Market's basis names the degree-2-to-3 spline family, for which this deployment carries no evaluator. | `programs/dclutch-claims-sbf/src/lib.rs:220` |
+| `0x500D` | `ClaimsSbfError::PrincipalCapacity` | Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/lib.rs:230` |
 | `0x5100` | `LiabilityBasisSbfErrorV2::Instruction` | Instruction bytes were not the sole canonical V2 action. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:53` |
 | `0x5101` | `LiabilityBasisSbfErrorV2::Accounts` | Account count, order, privilege, owner, or alias checks refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:55` |
 | `0x5102` | `LiabilityBasisSbfErrorV2::ClaimsState` | Claims aggregate or Position bytes/PDA/revision refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:57` |
@@ -78,17 +81,17 @@ from the source code's own documentation.
 | `0x5108` | `LiabilityBasisSbfErrorV2::CustodyCpi` | Custody CPI failed. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:69` |
 | `0x5109` | `LiabilityBasisSbfErrorV2::Postcondition` | Custody return data or physical postconditions refused. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:71` |
 | `0x510A` | `LiabilityBasisSbfErrorV2::Commit` | Complete candidate state could not be committed atomically. | `programs/dclutch-claims-sbf/src/liability_basis_v2.rs:73` |
-| `0x5140` | `ProtocolPositionSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical lifecycle ABI. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:112` |
-| `0x5141` | `ProtocolPositionSbfErrorV2::Accounts` | Account count, privilege, executable, or alias facts refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:114` |
-| `0x5142` | `ProtocolPositionSbfErrorV2::Release` | Current release selection or caller authority refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:116` |
-| `0x5143` | `ProtocolPositionSbfErrorV2::Market` | Claims aggregate identity, revision, release, or generation refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:118` |
-| `0x5144` | `ProtocolPositionSbfErrorV2::ProductBasis` | Product graph, linked basis, Core, or runtime width refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:120` |
-| `0x5145` | `ProtocolPositionSbfErrorV2::Position` | Position/admission PDA vacancy, shape, owner, or balance refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:122` |
-| `0x5146` | `ProtocolPositionSbfErrorV2::Rent` | Prepaid rent or authenticated RentCredit facts refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:124` |
-| `0x5147` | `ProtocolPositionSbfErrorV2::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:126` |
-| `0x5148` | `ProtocolPositionSbfErrorV2::Admission` | Persisted admission did not join the requested terminal close. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:128` |
-| `0x5149` | `ProtocolPositionSbfErrorV2::Commit` | Complete candidate state or rent-credit reclamation did not commit. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:130` |
-| `0x514A` | `ProtocolPositionSbfErrorV2::Receipt` | Immediate receipt construction or poststate commitment refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:132` |
+| `0x5140` | `ProtocolPositionSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical lifecycle ABI. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:114` |
+| `0x5141` | `ProtocolPositionSbfErrorV2::Accounts` | Account count, privilege, executable, or alias facts refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:116` |
+| `0x5142` | `ProtocolPositionSbfErrorV2::Release` | Current release selection or caller authority refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:118` |
+| `0x5143` | `ProtocolPositionSbfErrorV2::Market` | Claims aggregate identity, revision, release, or generation refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:120` |
+| `0x5144` | `ProtocolPositionSbfErrorV2::ProductBasis` | Product graph, linked basis, Core, or runtime width refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:122` |
+| `0x5145` | `ProtocolPositionSbfErrorV2::Position` | Position/admission PDA vacancy, shape, owner, or balance refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:124` |
+| `0x5146` | `ProtocolPositionSbfErrorV2::Rent` | Prepaid rent or authenticated RentCredit facts refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:126` |
+| `0x5147` | `ProtocolPositionSbfErrorV2::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:128` |
+| `0x5148` | `ProtocolPositionSbfErrorV2::Admission` | Persisted admission did not join the requested terminal close. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:130` |
+| `0x5149` | `ProtocolPositionSbfErrorV2::Commit` | Complete candidate state or rent-credit reclamation did not commit. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:132` |
+| `0x514A` | `ProtocolPositionSbfErrorV2::Receipt` | Immediate receipt construction or poststate commitment refused. | `programs/dclutch-claims-sbf/src/protocol_position_v2.rs:134` |
 | `0x5160` | `AffineBatchSbfErrorV2::Instruction` | Instruction bytes did not decode as the canonical public ABI. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:101` |
 | `0x5161` | `AffineBatchSbfErrorV2::Accounts` | Account count, order, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:103` |
 | `0x5162` | `AffineBatchSbfErrorV2::Release` | Registry current-release authentication or caller authority refused. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:105` |
@@ -97,24 +100,27 @@ from the source code's own documentation.
 | `0x5165` | `AffineBatchSbfErrorV2::Candidate` | An exact delta overflowed, underflowed, or selected an invalid coordinate. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:111` |
 | `0x5166` | `AffineBatchSbfErrorV2::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:113` |
 | `0x5167` | `AffineBatchSbfErrorV2::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:115` |
-| `0x5180` | `ClaimsFoundingSbfErrorV5::Instruction` | Instruction bytes did not decode as the sole FoundingV5 ABI. | `programs/dclutch-claims-sbf/src/founding_v5.rs:104` |
-| `0x5181` | `ClaimsFoundingSbfErrorV5::Accounts` | Account count, privileges, executable flags, or aliases refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:106` |
-| `0x5182` | `ClaimsFoundingSbfErrorV5::Release` | Core caller authority or current release selection refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:108` |
-| `0x5183` | `ClaimsFoundingSbfErrorV5::Custody` | Custody source, Hoard, or replay post-observations refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:110` |
-| `0x5184` | `ClaimsFoundingSbfErrorV5::ProductBasis` | Product graph, linked basis, or Founding Core Market refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:112` |
-| `0x5185` | `ClaimsFoundingSbfErrorV5::ClaimsState` | Claims aggregate, Position, or admission PDA/vacancy refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:114` |
-| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:116` |
-| `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:118` |
-| `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:120` |
-| `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:122` |
-| `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:105` |
-| `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:107` |
-| `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:109` |
-| `0x5203` | `SignedDeltaSbfErrorV3::ProductBasis` | Product graph, linked basis, semantic identity, or Core join refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:111` |
-| `0x5204` | `SignedDeltaSbfErrorV3::ClaimsState` | Aggregate or Position PDA, width, identity, or revision refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:113` |
-| `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:115` |
-| `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:117` |
-| `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:119` |
+| `0x5168` | `AffineBatchSbfErrorV2::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/affine_batch_v2.rs:123` |
+| `0x5180` | `ClaimsFoundingSbfErrorV5::Instruction` | Instruction bytes did not decode as the sole FoundingV5 ABI. | `programs/dclutch-claims-sbf/src/founding_v5.rs:109` |
+| `0x5181` | `ClaimsFoundingSbfErrorV5::Accounts` | Account count, privileges, executable flags, or aliases refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:111` |
+| `0x5182` | `ClaimsFoundingSbfErrorV5::Release` | Core caller authority or current release selection refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:113` |
+| `0x5183` | `ClaimsFoundingSbfErrorV5::Custody` | Custody source, Hoard, or replay post-observations refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:115` |
+| `0x5184` | `ClaimsFoundingSbfErrorV5::ProductBasis` | Product graph, linked basis, or Founding Core Market refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:117` |
+| `0x5185` | `ClaimsFoundingSbfErrorV5::ClaimsState` | Claims aggregate, Position, or admission PDA/vacancy refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:119` |
+| `0x5186` | `ClaimsFoundingSbfErrorV5::Rent` | Rent sysvar, exact principals, target lamports, or RentCredit refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:121` |
+| `0x5187` | `ClaimsFoundingSbfErrorV5::Allocation` | System allocation or assignment refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:123` |
+| `0x5188` | `ClaimsFoundingSbfErrorV5::Receipt` | Candidate receipt or post-resource digest refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:125` |
+| `0x5189` | `ClaimsFoundingSbfErrorV5::Commit` | State-last copy or immutable postcondition refused. | `programs/dclutch-claims-sbf/src/founding_v5.rs:127` |
+| `0x518A` | `ClaimsFoundingSbfErrorV5::PrincipalCapacity` | The founding principal exceeded the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/founding_v5.rs:137` |
+| `0x5200` | `SignedDeltaSbfErrorV3::Instruction` | Instruction bytes did not decode as the canonical public ABI. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:125` |
+| `0x5201` | `SignedDeltaSbfErrorV3::Accounts` | Account count, order, privileges, owners, or aliases refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:127` |
+| `0x5202` | `SignedDeltaSbfErrorV3::Release` | Registry current-release authentication or caller authority refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:129` |
+| `0x5203` | `SignedDeltaSbfErrorV3::ProductBasis` | Product graph, linked basis, semantic identity, or Core join refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:131` |
+| `0x5204` | `SignedDeltaSbfErrorV3::ClaimsState` | Aggregate or Position PDA, width, identity, or revision refused. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:133` |
+| `0x5205` | `SignedDeltaSbfErrorV3::Candidate` | An exact signed delta overflowed or underflowed a resource. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:135` |
+| `0x5206` | `SignedDeltaSbfErrorV3::Commit` | Complete candidate buffers could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:137` |
+| `0x5207` | `SignedDeltaSbfErrorV3::Receipt` | The canonical success receipt could not be constructed. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:139` |
+| `0x5208` | `SignedDeltaSbfErrorV3::PrincipalCapacity` | A positive aggregate delta would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated. | `programs/dclutch-claims-sbf/src/signed_delta_v3.rs:147` |
 | `0x5210` | `RationalLifecycleSbfErrorV2::Instruction` | Instruction bytes or runtime width refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:127` |
 | `0x5211` | `RationalLifecycleSbfErrorV2::Accounts` | Account frame, privilege, or alias refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:129` |
 | `0x5212` | `RationalLifecycleSbfErrorV2::Release` | Current release selection or Trading caller refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:131` |
@@ -124,20 +130,57 @@ from the source code's own documentation.
 | `0x5216` | `RationalLifecycleSbfErrorV2::Token` | Token-2022 resource state or effect refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:139` |
 | `0x5217` | `RationalLifecycleSbfErrorV2::Position` | Canonical protocol Position lifecycle refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:141` |
 | `0x5218` | `RationalLifecycleSbfErrorV2::Receipt` | Final resource observation or typed receipt refused. | `programs/dclutch-claims-sbf/src/rational_lifecycle_v2.rs:143` |
-| `0x5260` | `SparseNativeTransferSbfErrorV1::Instruction` | Request bytes refused the canonical fixed codec. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:80` |
-| `0x5261` | `SparseNativeTransferSbfErrorV1::Accounts` | Account count, privilege, owner, or alias refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:82` |
-| `0x5262` | `SparseNativeTransferSbfErrorV1::Release` | Registry current-role or caller authority refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:84` |
-| `0x5263` | `SparseNativeTransferSbfErrorV1::Product` | Product Runtime V3, linked basis, or Core join refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:86` |
-| `0x5264` | `SparseNativeTransferSbfErrorV1::ClaimsState` | Aggregate or Position identity, width, PDA, or revision refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:88` |
-| `0x5265` | `SparseNativeTransferSbfErrorV1::Candidate` | Debit, credit, revision, or conservation arithmetic refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:90` |
-| `0x5266` | `SparseNativeTransferSbfErrorV1::Commit` | Candidate accounts could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:92` |
-| `0x5267` | `SparseNativeTransferSbfErrorV1::Receipt` | Exact success receipt construction refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:94` |
+| `0x5260` | `SparseNativeTransferSbfErrorV1::Instruction` | Request bytes refused the canonical fixed codec. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:81` |
+| `0x5261` | `SparseNativeTransferSbfErrorV1::Accounts` | Account count, privilege, owner, or alias refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:83` |
+| `0x5262` | `SparseNativeTransferSbfErrorV1::Release` | Registry current-role or caller authority refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:85` |
+| `0x5263` | `SparseNativeTransferSbfErrorV1::Product` | Product Runtime V3, linked basis, or Core join refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:87` |
+| `0x5264` | `SparseNativeTransferSbfErrorV1::ClaimsState` | Aggregate or Position identity, width, PDA, or revision refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:89` |
+| `0x5265` | `SparseNativeTransferSbfErrorV1::Candidate` | Debit, credit, revision, or conservation arithmetic refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:91` |
+| `0x5266` | `SparseNativeTransferSbfErrorV1::Commit` | Candidate accounts could not all be borrowed and committed last. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:93` |
+| `0x5267` | `SparseNativeTransferSbfErrorV1::Receipt` | Exact success receipt construction refused. | `programs/dclutch-claims-sbf/src/sparse_native_transfer_v1.rs:95` |
 | `0x5500` | `ClaimsMarketClosureSbfErrorV1::Accounts` | The fixed account frame or privileges refused. | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:77` |
 | `0x5501` | `ClaimsMarketClosureSbfErrorV1::Authority` | Caller PDA or current Registry releases refused. | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:79` |
 | `0x5502` | `ClaimsMarketClosureSbfErrorV1::Identity` | Core/aggregate/RentCredit identities or revisions refused. | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:81` |
 | `0x5503` | `ClaimsMarketClosureSbfErrorV1::Liability` | A nonzero aggregate supply prevented closure. | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:83` |
 | `0x5504` | `ClaimsMarketClosureSbfErrorV1::Commit` | Checked refund accounting or commit-last closure refused. | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:85` |
 | `0x5505` | `ClaimsMarketClosureSbfErrorV1::Receipt` | Typed receipt construction refused. | `programs/dclutch-claims-sbf/src/market_closure_v1.rs:87` |
+| `0x5600` | `ClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:72` |
+| `0x5601` | `ClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:74` |
+| `0x5602` | `ClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:76` |
+| `0x5603` | `ClaimCheckCompactionSbfErrorV1::Deadline` | The compaction deadline had not elapsed at the observed slot. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:78` |
+| `0x5604` | `ClaimCheckCompactionSbfErrorV1::Phase` | The Core phase, or the absence of a terminal receipt, refused. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:80` |
+| `0x5605` | `ClaimCheckCompactionSbfErrorV1::AlreadyCompacted` | The claim-check address was already occupied. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:82` |
+| `0x5606` | `ClaimCheckCompactionSbfErrorV1::Conservation` | A plan's atoms or lamports did not balance. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:84` |
+| `0x5607` | `ClaimCheckCompactionSbfErrorV1::Economic` | The terminal payout derivation refused. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:86` |
+| `0x5608` | `ClaimCheckCompactionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:88` |
+| `0x5609` | `ClaimCheckCompactionSbfErrorV1::Escrow` | The escrow was absent, or its mint or token program did not match. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:90` |
+| `0x560A` | `ClaimCheckCompactionSbfErrorV1::Scope` | A position kind this version does not compact. | `programs/dclutch-claims-sbf/src/claim_check_compaction_v1.rs:92` |
+| `0x5620` | `ClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:48` |
+| `0x5621` | `ClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the record's sole entitled holder. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:50` |
+| `0x5622` | `ClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or the vault did not match. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:52` |
+| `0x5623` | `ClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit did not equal the record's entitlement. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:54` |
+| `0x5624` | `ClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:56` |
+| `0x5625` | `ClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while claim-checks were still live. | `programs/dclutch-claims-sbf/src/claim_check_redemption_v1.rs:58` |
+| `0x5640` | `FractionalClaimCheckCompactionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:44` |
+| `0x5641` | `FractionalClaimCheckCompactionSbfErrorV1::Authority` | A signer the route does not admit was present, or a required one absent. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:50` |
+| `0x5642` | `FractionalClaimCheckCompactionSbfErrorV1::Identity` | Coordinates did not derive the passed account, or aliased, or were zero. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:52` |
+| `0x5643` | `FractionalClaimCheckCompactionSbfErrorV1::Deadline` | The compaction deadline had not elapsed at the observed slot. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:54` |
+| `0x5644` | `FractionalClaimCheckCompactionSbfErrorV1::Phase` | The Core phase, or the absence of a terminal receipt, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:56` |
+| `0x5645` | `FractionalClaimCheckCompactionSbfErrorV1::AlreadyCompacted` | The fractional claim-check address was already occupied. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:58` |
+| `0x5646` | `FractionalClaimCheckCompactionSbfErrorV1::Conservation` | A plan's atoms, shards or lamports did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:60` |
+| `0x5647` | `FractionalClaimCheckCompactionSbfErrorV1::Economic` | The terminal payout derivation refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:62` |
+| `0x5648` | `FractionalClaimCheckCompactionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:64` |
+| `0x5649` | `FractionalClaimCheckCompactionSbfErrorV1::Escrow` | The escrow was absent, or its mint or token program did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:66` |
+| `0x564A` | `FractionalClaimCheckCompactionSbfErrorV1::Scope` | A position kind this route does not fractionally compact. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:68` |
+| `0x564B` | `FractionalClaimCheckCompactionSbfErrorV1::Terms` | The finalized exposure terms, or the coordinate they declare, refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:70` |
+| `0x564C` | `FractionalClaimCheckCompactionSbfErrorV1::ShardMint` | The shard Mint's profile, supply, or burn-authority hand-off refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:72` |
+| `0x5660` | `FractionalClaimCheckRedemptionSbfErrorV1::Accounts` | The fixed account frame, ownership, or writability refused. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:198` |
+| `0x5661` | `FractionalClaimCheckRedemptionSbfErrorV1::Authority` | The signer was not the presented shard account's own owner. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:203` |
+| `0x5662` | `FractionalClaimCheckRedemptionSbfErrorV1::Identity` | The record was not at its derived address, or a mint did not match. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:205` |
+| `0x5663` | `FractionalClaimCheckRedemptionSbfErrorV1::Conservation` | The vault debit, the shard burn, or the pay-down did not balance. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:207` |
+| `0x5664` | `FractionalClaimCheckRedemptionSbfErrorV1::Receipt` | Observed post-balances did not match the admitted plan. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:209` |
+| `0x5665` | `FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim` | The shard balance presented forms no whole Claims coordinate. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:216` |
+| `0x5666` | `FractionalClaimCheckRedemptionSbfErrorV1::Vault` | An escrow close was attempted while fractional claim-checks were live. | `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs:218` |
 
 ## core
 
@@ -159,8 +202,8 @@ from the source code's own documentation.
 | `0x300D` | `CoreSbfError::Commit` | Commit-last Core state persistence postcheck refused. | `programs/dclutch-core-sbf/src/lib.rs:122` |
 | `0x300E` | `CoreSbfError::Arithmetic` | Checked arithmetic or bounded conversion refused. | `programs/dclutch-core-sbf/src/lib.rs:124` |
 | `0x300F` | `CoreSbfError::Infrastructure` | Core bootstrap profile, artifact, Loader, or immutability authority refused. | `programs/dclutch-core-sbf/src/lib.rs:126` |
-| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:134` |
-| `0x3011` | `CoreSbfError::RecoveryWalkUnavailable` | A Source material bought a recovery walk that no live route can walk.  Liveness census R2/Q2 (`docs/evidence/LIVENESS_CENSUS_2026_08_29.md`). `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses any material carrying a recovery policy (`source_resolution_v2.rs`, `Error::RecoveryNotExhausted`), and the ordered ladder that was supposed to consume those paid-for legs has no live call site — `funded::process_funded_transition` is reachable only from a `#[cfg(any())]` function. So a resolution fund created over such a material admits neither the success capture nor the failure walk at its deadline: it has no terminal at all, and every holder's principal stays in it forever.  `CreateFund` is therefore refused for a recovery-policy material. This is a weld, not a design: it refuses to *create* the un-terminalizable resolution state. `VerifyFundReady` and `CloseFund` are deliberately untouched, so any state that already exists keeps every route it has. The weld lifts when the ladder gets a live route. | `programs/dclutch-core-sbf/src/lib.rs:153` |
+| `0x3010` | `CoreSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-core-sbf/src/lib.rs:134` |
+| `0x3011` | `CoreSbfError::RecoveryWalkUnavailable` | A Source material bought a recovery walk that no live route can walk. | `programs/dclutch-core-sbf/src/lib.rs:153` |
 
 ## custody
 
@@ -177,8 +220,8 @@ from the source code's own documentation.
 | `0x6008` | `CustodySbfError::TokenCpi` | Exact token or close-account CPI refused. | `programs/dclutch-custody-sbf/src/lib.rs:109` |
 | `0x6009` | `CustodySbfError::Postcondition` | Exact CPI postcondition or checked balance arithmetic refused. | `programs/dclutch-custody-sbf/src/lib.rs:111` |
 | `0x600A` | `CustodySbfError::Commit` | Replay state could not be committed after all effects succeeded. | `programs/dclutch-custody-sbf/src/lib.rs:113` |
-| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time.  The kernel has always distinguished this from [`Self::Replay`]; this program used to flatten both into it, so a projection refusing an early unwind reported "replay PDA, owner, bytes, or revision refused" - which is not what happened and is not what a reader needs to know. For a terminal whose entire safety property is that it refuses while the founding is still satisfiable, the refusal has to be able to say so. | `programs/dclutch-custody-sbf/src/lib.rs:122` |
-| `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-custody-sbf/src/lib.rs:130` |
+| `0x600B` | `CustodySbfError::Expiry` | An expiry-gated terminal was attempted at the wrong time. | `programs/dclutch-custody-sbf/src/lib.rs:122` |
+| `0x600C` | `CustodySbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-custody-sbf/src/lib.rs:130` |
 
 ## dealer
 
@@ -194,7 +237,7 @@ from the source code's own documentation.
 | `0x7007` | `DealerSbfError::Claims` | The canonical Claims child action or receipt refused. | `programs/dclutch-dealer-sbf/src/lib.rs:123` |
 | `0x7008` | `DealerSbfError::Custody` | A canonical Custody child transfer, receipt, or postcondition refused. | `programs/dclutch-dealer-sbf/src/lib.rs:125` |
 | `0x7009` | `DealerSbfError::Commit` | State data could not be borrowed or commit width changed. | `programs/dclutch-dealer-sbf/src/lib.rs:127` |
-| `0x700A` | `DealerSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-dealer-sbf/src/lib.rs:135` |
+| `0x700A` | `DealerSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-dealer-sbf/src/lib.rs:135` |
 
 ## dealer-accelerator
 
@@ -241,20 +284,25 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | `programs/dclutch-registry-sbf/src/lib.rs:72` |
-| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | `programs/dclutch-registry-sbf/src/lib.rs:74` |
-| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | `programs/dclutch-registry-sbf/src/lib.rs:76` |
-| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | `programs/dclutch-registry-sbf/src/lib.rs:78` |
-| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | `programs/dclutch-registry-sbf/src/lib.rs:80` |
-| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | `programs/dclutch-registry-sbf/src/lib.rs:82` |
-| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | `programs/dclutch-registry-sbf/src/lib.rs:84` |
-| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | `programs/dclutch-registry-sbf/src/lib.rs:86` |
-| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | `programs/dclutch-registry-sbf/src/lib.rs:88` |
-| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | `programs/dclutch-registry-sbf/src/lib.rs:90` |
-| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | `programs/dclutch-registry-sbf/src/lib.rs:92` |
-| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | `programs/dclutch-registry-sbf/src/lib.rs:94` |
-| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | `programs/dclutch-registry-sbf/src/lib.rs:96` |
-| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-registry-sbf/src/lib.rs:104` |
+| `0x1000` | `RegistryError::Instruction` | Instruction bytes were not the one canonical Registry wire. | `programs/dclutch-registry-sbf/src/lib.rs:73` |
+| `0x1001` | `RegistryError::AccountFrame` | Account count, order, privilege, or aliasing was invalid. | `programs/dclutch-registry-sbf/src/lib.rs:75` |
+| `0x1002` | `RegistryError::FinalizedRecord` | A finalized record owner, digest, PDA, rent, or vacancy proof refused. | `programs/dclutch-registry-sbf/src/lib.rs:77` |
+| `0x1003` | `RegistryError::Deployment` | Loader Program, ProgramData, linkage, slot, ELF, or authority refused. | `programs/dclutch-registry-sbf/src/lib.rs:79` |
+| `0x1004` | `RegistryError::Release` | Release-set or artifact semantic admission refused. | `programs/dclutch-registry-sbf/src/lib.rs:81` |
+| `0x1005` | `RegistryError::ActivationCache` | The activation cache owner, PDA, bytes, or lifecycle refused. | `programs/dclutch-registry-sbf/src/lib.rs:83` |
+| `0x1006` | `RegistryError::CreateCpi` | System account creation failed or produced the wrong account. | `programs/dclutch-registry-sbf/src/lib.rs:85` |
+| `0x1007` | `RegistryError::Borrow` | Account data could not be borrowed. | `programs/dclutch-registry-sbf/src/lib.rs:87` |
+| `0x1008` | `RegistryError::Arithmetic` | Checked width or lamport arithmetic refused. | `programs/dclutch-registry-sbf/src/lib.rs:89` |
+| `0x1009` | `RegistryError::Sysvar` | Clock-independent Rent or native-program authentication refused. | `programs/dclutch-registry-sbf/src/lib.rs:91` |
+| `0x100A` | `RegistryError::Batch` | A batched request or receipt failed its canonical fixed-width contract. | `programs/dclutch-registry-sbf/src/lib.rs:93` |
+| `0x100B` | `RegistryError::Continuation` | Registry-authenticated continuation header, signer, or child refused. | `programs/dclutch-registry-sbf/src/lib.rs:95` |
+| `0x100C` | `RegistryError::Record` | Immutable-record publication wire, frame, transition, or account refused. | `programs/dclutch-registry-sbf/src/lib.rs:97` |
+| `0x100D` | `RegistryError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-registry-sbf/src/lib.rs:105` |
+| `0x100E` | `RegistryError::ReleaseLineageAlreadyDeclared` | This release set already declared a successor, and lineage never forks. | `programs/dclutch-registry-sbf/src/lib.rs:111` |
+| `0x100F` | `RegistryError::ReleaseLineageRoleIdentityMoved` | A declared hop changed some role's program id. | `programs/dclutch-registry-sbf/src/lib.rs:117` |
+| `0x1010` | `RegistryError::ReleaseLineageSelfSuccession` | A declaration named one release set as its own successor. | `programs/dclutch-registry-sbf/src/lib.rs:119` |
+| `0x1011` | `RegistryError::ReleaseLineageAuthorityMissing` | A moved role's consenting upgrade authority did not sign, or cannot. | `programs/dclutch-registry-sbf/src/lib.rs:127` |
+| `0x1012` | `RegistryError::ReleaseLineageNotForward` | A moved role's successor deployment slot was not strictly later. | `programs/dclutch-registry-sbf/src/lib.rs:133` |
 
 ## rent
 
@@ -271,7 +319,7 @@ from the source code's own documentation.
 | `0x2008` | `RentSbfError::Release` | Registry refused the current Core deployment or returned other bytes. | `programs/dclutch-rent-sbf/src/lib.rs:77` |
 | `0x2009` | `RentSbfError::Caller` | Current Core did not sign with the exact lifecycle-close authority. | `programs/dclutch-rent-sbf/src/lib.rs:79` |
 | `0x200A` | `RentSbfError::Closure` | Complete retirement evidence or the final close plan refused. | `programs/dclutch-rent-sbf/src/lib.rs:81` |
-| `0x200B` | `RentSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-rent-sbf/src/lib.rs:89` |
+| `0x200B` | `RentSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-rent-sbf/src/lib.rs:89` |
 
 ## resolution
 
@@ -287,19 +335,19 @@ from the source code's own documentation.
 | `0x8007` | `ResolutionError::SourceMaterial` | Source material or one of its embedded content identities was inconsistent. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:58` |
 | `0x8008` | `ResolutionError::ProductDomain` | The external Product-owned result-domain identity or bytes differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:60` |
 | `0x8009` | `ResolutionError::ProviderRelease` | The selected Pyth provider-release record or Loader accounts differed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:62` |
-| `0x800A` | `ResolutionError::ProviderObservation` | Fully verified update authentication failed: the posted bytes, their digest, the write authority, the posted slot, or an evidence identity was not the one this frame committed to.  This used to be all of §12.3 as well. It is not any more: the three questions `docs/design/MAINNET_STATE_RELAY.md` §12.3 says an operator must be able to tell apart now have their own codes (`ProviderWindow`, `ProviderFreshness`, `ProviderConfiguration`), and this one is the residue — "the update itself did not authenticate". | `programs/dclutch-resolution-proof-sbf/src/lib.rs:72` |
+| `0x800A` | `ResolutionError::ProviderObservation` | Fully verified update authentication failed: the posted bytes, their digest, the write authority, the posted slot, or an evidence identity was not the one this frame committed to. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:72` |
 | `0x800B` | `ResolutionError::Sysvar` | Clock or Rent sysvar identity or bytes were invalid. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:74` |
 | `0x800C` | `ResolutionError::Transition` | Provider-neutral Source admission or Product mapping refused. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:76` |
 | `0x800D` | `ResolutionError::Arithmetic` | Checked physical arithmetic or signed timestamp conversion failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:78` |
 | `0x800E` | `ResolutionError::Funding` | Canonical capability funding, typed custody, or exact bounty debit failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:80` |
 | `0x800F` | `ResolutionError::RelayedRecord` | The sealed relayed observation record was not consumable against this Market's authenticated Source graph. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:83` |
 | `0x8010` | `ResolutionError::RelayedWindow` | The relayed observation was admissible but did not satisfy the Product's own window: it is no answer rather than a wrong one, and the market is still live. Distinct from every "the bytes were wrong" refusal on purpose, because "come back later" and "something is broken" are not the same message to whoever is holding the position. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:89` |
-| `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`.  Like `RelayedWindow`, and for the same reason: this is no answer rather than a wrong one, and the Market is still live. §12.3's first operator question. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:96` |
-| `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`.  §12.3's second operator question, and the one whose answer is an instruction: if the publication is too OLD, a pinned fixture has outlived its declared shelf life and must be recaptured — not widened. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:104` |
-| `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits.  §12.3's third operator question. Unlike the first two this one is not "come back later": nothing about waiting changes it. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:111` |
-| `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:119` |
+| `0x8011` | `ResolutionError::ProviderWindow` | The provider's observation is not ABOUT the period this Market sold: its publication time is outside `[window.start, window.end]`. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:96` |
+| `0x8012` | `ResolutionError::ProviderFreshness` | The provider's observation is about the right period and this cluster will not act on it: its publication time is outside `[now - max_age, now + max_future_skew]`. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:104` |
+| `0x8013` | `ResolutionError::ProviderConfiguration` | The provider's observation is timely and about the right period, and its feed identity, exponent, or confidence is not what this Market's adapter configuration admits. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:111` |
+| `0x8014` | `ResolutionError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:119` |
 | `0x8015` | `ResolutionError::SponsoredPush` | Sponsored-push candidate, head, release, or deadline authentication failed. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:121` |
-| `0x8016` | `ResolutionError::RecordStillConsumable` | `RetireRecord` was aimed at evidence a still-live market could consume.  Liveness census Y3 / queue Q9. `RetireRecord` is permissionless and it CLOSES the account, so before this code existed anyone could delete a fully sealed quorum observation for a transaction fee and force the market onto the failure walk — where the walker collects a bounty and the holders get the pre-disclosed failure outcome instead of the real one. Retiring evidence that is not yet `Consumed` now requires the Market to carry a terminal receipt.  This is "not yet", not "never": consumption is itself permissionless, the funded failure walk terminalizes the market with no identified party's help, and once `terminal_receipt` is `Some` every phase retires exactly as it always did. No rent is stranded, only deferred. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:136` |
+| `0x8016` | `ResolutionError::RecordStillConsumable` | `RetireRecord` was aimed at evidence a still-live market could consume. | `programs/dclutch-resolution-proof-sbf/src/lib.rs:136` |
 
 ## series-shadow
 
@@ -315,14 +363,25 @@ from the source code's own documentation.
 
 | code | refusal | meaning | provenance |
 | --- | --- | --- | --- |
-| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:174` |
-| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:176` |
-| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:178` |
-| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:180` |
-| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:182` |
-| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:184` |
-| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:186` |
-| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded.  Decision 0012. Not a corrupted account and not an attack: the exact upgrade authority the release names shipped new bytes, so the cached authentication no longer describes what is deployed. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:194` |
+| `0x4000` | `TradingSbfError::UnsupportedContent` | The instruction is not supported by an admitted content profile. | `programs/dclutch-trading-sbf/src/lib.rs:180` |
+| `0x4001` | `TradingSbfError::Release` | The Registry receipt did not authenticate this Program as current Trading. | `programs/dclutch-trading-sbf/src/lib.rs:182` |
+| `0x4002` | `TradingSbfError::Root` | The immutable Trading child root or its PDA refused. | `programs/dclutch-trading-sbf/src/lib.rs:184` |
+| `0x4003` | `TradingSbfError::Content` | Manifest, selected entry, descriptor, or config content refused. | `programs/dclutch-trading-sbf/src/lib.rs:186` |
+| `0x4004` | `TradingSbfError::Transition` | The checked data-defined transition refused. | `programs/dclutch-trading-sbf/src/lib.rs:188` |
+| `0x4005` | `TradingSbfError::Commit` | A projected physical mutation or account write could not commit. | `programs/dclutch-trading-sbf/src/lib.rs:190` |
+| `0x4006` | `TradingSbfError::NativeSignature` | Instructions-sysvar or native-signature evidence was not exact. | `programs/dclutch-trading-sbf/src/lib.rs:192` |
+| `0x4007` | `TradingSbfError::ReleaseSuperseded` | The release's pinned deployment slot moved: the substrate was upgraded. Every open market on the superseded release generation refuses until a re-release re-authenticates the new deployment and re-pins its slot. | `programs/dclutch-trading-sbf/src/lib.rs:200` |
+| `0x4008` | `TradingSbfError::HeapFrame` | This route needs the extended heap and the transaction did not grant it. | `programs/dclutch-trading-sbf/src/lib.rs:213` |
+| `0x4009` | `TradingSbfError::CloseSealAccount` | The account offered to `CloseSeal` is not a live canonical seal. | `programs/dclutch-trading-sbf/src/lib.rs:223` |
+| `0x400A` | `TradingSbfError::CloseSealLiveRelease` | `CloseSeal` was aimed at a seal the live Trading release still addresses. | `programs/dclutch-trading-sbf/src/lib.rs:239` |
+| `0x400B` | `TradingSbfError::CloseSealFrame` | The `CloseSeal` frame was not the exact permissionless closing shape. | `programs/dclutch-trading-sbf/src/lib.rs:248` |
+| `0x400C` | `TradingSbfError::FeeNotOwed` | The maker replay this fee settlement names records no obligation. | `programs/dclutch-trading-sbf/src/lib.rs:257` |
+| `0x400D` | `TradingSbfError::FeeDestination` | The fee destination is not a token account of the configured recipient. | `programs/dclutch-trading-sbf/src/lib.rs:265` |
+| `0x400E` | `TradingSbfError::FeeSource` | The fee source is not a token account of the debtor. | `programs/dclutch-trading-sbf/src/lib.rs:274` |
+| `0x400F` | `TradingSbfError::CloseMakerFrame` | The `CloseMakerReplay` frame was not the exact permissionless shape. | `programs/dclutch-trading-sbf/src/lib.rs:283` |
+| `0x4010` | `TradingSbfError::CloseMakerReplayAccount` | The account offered as the maker replay is not the canonical one. | `programs/dclutch-trading-sbf/src/lib.rs:292` |
+| `0x4011` | `TradingSbfError::CloseMakerFeeOutstanding` | The maker replay still owes its recorded Direct fee. | `programs/dclutch-trading-sbf/src/lib.rs:300` |
+| `0x4012` | `TradingSbfError::CloseMakerLiveIntents` | The maker replay still has registered live intents. | `programs/dclutch-trading-sbf/src/lib.rs:306` |
 | `0x4100` | `SeriesAccountErrorV3::State` | Owner, width, key, phase, or canonical bytes refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:50` |
 | `0x4101` | `SeriesAccountErrorV3::Frame` | Signer, writable, executable, System, or alias contract refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:52` |
 | `0x4102` | `SeriesAccountErrorV3::Funding` | Exact native funding or checked arithmetic refused. | `programs/dclutch-trading-sbf/src/series/accounts.rs:54` |

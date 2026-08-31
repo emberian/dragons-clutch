@@ -441,7 +441,8 @@ mod tests {
                 enum_name: enum_name.into(),
                 variant: variant.into(),
                 code: Some(code),
-                doc: None,
+                summary: None,
+                detail: None,
                 provenance: "src/lib.rs:1".into(),
             },
         }

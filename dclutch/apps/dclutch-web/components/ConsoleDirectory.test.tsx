@@ -14,7 +14,7 @@ describe('the console index', () => {
 
   it('states readiness boundaries and names the provenance answer key', () => {
     expect(html).toContain('does not update programs');
-    expect(html).toContain('does not mean it can send a transaction');
+    expect(html).toContain('does not mean a page can send a transaction');
     expect(html).toContain('For market authors');
     expect(html).toContain('Wallet redemption');
     // The blurb used to offer redemption as something a reader could do today.
@@ -22,7 +22,10 @@ describe('the console index', () => {
     expect(html).toContain('Paying out winning claims is not available yet');
     // Names the provenance answer key and its standard.
     expect(html).toContain('The artifacts, and where they come from');
-    expect(html).toContain('a bug in the console');
+    // Renegotiated 2026-08-31: "if a console ever asks for something and you
+    // cannot tell where it comes from, that is a bug in the console" is a
+    // promise about us. Deleted; the pointer to the answer key survives.
+    expect(html).toContain('names the tool that');
   });
 
   it('sends readers who are not operators back to the product', () => {

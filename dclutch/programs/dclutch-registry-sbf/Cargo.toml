@@ -33,5 +33,17 @@ solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
+[dev-dependencies]
+# The host builder under test. `DeclareSuccessor` is the one route whose frame
+# nothing outside the operator crate can construct, so the campaign drives the
+# real ELF with the real builder rather than a second hand-assembled frame that
+# could agree with the program while the shipped builder does not.
+dclutch-operator = { path = "../../crates/dclutch-operator" }
+solana-account = "=4.6.0"
+solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
+solana-sdk = "=3.0.0"
+solana-transaction = "=4.2.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
 [lints]
 workspace = true

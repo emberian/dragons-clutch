@@ -15,9 +15,13 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+};
+use dclutch_capability_program_contract::{
+    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
 };
 use dclutch_capability_seal_contract::CAPABILITY_SEAL_PDA_DOMAIN_V1;
 use dclutch_claims_svm::{
@@ -40,9 +44,9 @@ use dclutch_direct_codec::{
     },
 };
 use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
-use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
-use dclutch_capability_program_contract::{
-    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
+use dclutch_operator::{
+    direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
+    direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
 };
 use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_product_runtime_v2_admission::{
@@ -50,10 +54,8 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_operator::{
-    direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
-    direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
-};
+use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
+use dclutch_token_svm::{ACCOUNT_BYTES, AccountState, COption, TokenAccount};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -69,6 +71,7 @@ use crate::{
     cluster::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
     },
+    direct_ticket::{parse_portable_direct_ticket_v1, sign_direct_intent_v1 as signed_intent_v1},
     direct_trade::{
         AuthenticatedDevnetDirectSessionSourceV1, authenticate_devnet_direct_session_source_v1,
     },
@@ -96,7 +99,6 @@ pub(crate) const DEVNET_DIRECT_PRODUCER_COMMAND_V1: &str = "devnet-direct-trade-
 const DEVNET_PUBLIC_MANIFEST_SCHEMA_V1: &str = "dclutch-devnet-direct-trade-public-manifest-v1";
 const DEVNET_DIRECT_PRODUCER_JOURNAL_SCHEMA_V1: &str =
     "dclutch-devnet-direct-trade-producer-journal-v1";
-const PORTABLE_DIRECT_TICKET_KIND_V1: &str = "dclutch/direct-intent-ticket/v1";
 
 const FILL_ATOMS_V1: u64 = 100_000_000;
 const EXECUTION_PRICE_V1: u64 = 500_000;
@@ -154,32 +156,6 @@ struct DevnetDirectProducerArgumentsV1 {
     payer: Pubkey,
     payer_keypair: PathBuf,
     output_dir: PathBuf,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct PortableDirectTicketIntentV1 {
-    side: u8,
-    lifecycle: u8,
-    outcome: u32,
-    market: String,
-    generation: String,
-    nonce: String,
-    valid_from: String,
-    valid_through: String,
-    maximum_fill: String,
-    limit_price: String,
-    fee_basis_points: u16,
-    collateral_account: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PortableDirectTicketV1 {
-    kind: String,
-    maker: String,
-    signature: String,
-    intent: PortableDirectTicketIntentV1,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -499,11 +475,43 @@ struct MakerFactsV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectTradeTermsV1 {
-    outcome: u32,
-    fill: u64,
-    execution_price: u64,
-    fee_basis_points: u16,
+pub(crate) struct DirectTradeTermsV1 {
+    pub(crate) outcome: u32,
+    pub(crate) fill: u64,
+    pub(crate) execution_price: u64,
+    pub(crate) fee_basis_points: u16,
+}
+
+/// Which of the two prestates the chain admits a Direct token destination to be
+/// in, as observed on chain before this trade is produced.
+///
+/// THE CHAIN ADMITS TWO PRESTATES AND THIS PRODUCER USED TO ADMIT ONE, which is
+/// why no market in this tree could ever trade twice. The two are owned by two
+/// different instructions and neither is optional:
+///
+/// - [`Vacant`](Self::Vacant) is what `direct_token_setup_v1` requires in order
+///   to CREATE the account. `authenticate_setup` refuses on
+///   `seller_account.owner != &system_program::ID || seller_account.data_len()
+///   != 0` (`programs/dclutch-trading-sbf/src/direct_token_setup_v1.rs`), so a
+///   destination that already exists cannot be set up again, ever.
+/// - [`Initialized`](Self::Initialized) is what the TRADE requires in order to
+///   EXECUTE against the account. `project_tokens_v3` in
+///   `dclutch-direct-codec` refuses on owner, length, state, native profile,
+///   Mint and token-owner (`crates/dclutch-direct-codec/src/direct_finalization_v3.rs`),
+///   so a vacant destination cannot be paid.
+///
+/// A market's FIRST trade sees `Vacant` and runs token setup. Every later trade
+/// sees `Initialized` and must skip it. Admitting only the first is a producer
+/// that refuses every market it has already traded on -- the same defect WALL4
+/// dissolved in the TypeScript panel on 2026-08-31, which the Rust producer
+/// never got the pass for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DirectTokenDestinationPrestateV1 {
+    /// System-owned and data-empty. Token setup will create it.
+    Vacant,
+    /// The initialized Token-2022 account for this Realm Mint and this owner.
+    /// Token setup has already run; the trade executes against it.
+    Initialized,
 }
 
 #[derive(Clone)]
@@ -550,6 +558,335 @@ struct PreparedPublicFactsV1 {
     participant: user_position_admission::FinalizedDirectParticipantEvidenceV1,
 }
 
+/// The finalized facts each caller-owned ticket half must match exactly.
+///
+/// Lifted out of [`assemble_public_manifest_v1`] so the ticket gate is
+/// reachable without seven hundred lines of chain reads behind it: a refusal
+/// nobody can reproduce offline is a refusal nobody can diagnose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FinalizedTicketExpectationV1 {
+    seller: Pubkey,
+    buyer: Pubkey,
+    market: Pubkey,
+    generation: u64,
+    observation_slot: u64,
+    seller_next_nonce: u64,
+    buyer_next_nonce: u64,
+    /// The Direct token PDA `direct_token_setup_v1` CREATES for the seller, not
+    /// an admission-created participant collateral account: the seller half of
+    /// this route has no admission, and the producer separately requires this
+    /// address to be a System-owned data-empty prestate.
+    seller_collateral: Pubkey,
+    /// The buyer's own admission-created, Custody-delegated collateral account.
+    buyer_collateral: Pubkey,
+    terms: DirectTradeTermsV1,
+}
+
+impl FinalizedTicketExpectationV1 {
+    fn of(public: &PreparedPublicFactsV1, terms: DirectTradeTermsV1) -> Self {
+        Self {
+            seller: public.seller,
+            buyer: public.buyer,
+            market: public.market,
+            generation: public.generation,
+            observation_slot: public.observation_slot,
+            seller_next_nonce: public.seller_facts.next_nonce,
+            buyer_next_nonce: public.buyer_facts.next_nonce,
+            seller_collateral: public.seller_token,
+            buyer_collateral: public.participant.collateral_account,
+            terms,
+        }
+    }
+}
+
+/// Every clause of one ticket half that refuses, each naming what the ticket
+/// carries and what the finalized chain requires.
+///
+/// This returns ALL of them rather than the first, and the caller prints them.
+/// The single-line refusal this replaced could not distinguish a stale nonce
+/// from a wrong collateral account from an expired validity window, and the
+/// operator who hit it had to instrument the binary to find out which.
+fn refusing_ticket_half_clauses_v1(
+    label: &str,
+    signed: SignedDirectIntentV3,
+    maker: Pubkey,
+    side: u8,
+    next_nonce: u64,
+    collateral: Pubkey,
+    expected: &FinalizedTicketExpectationV1,
+) -> Vec<String> {
+    let intent = signed.intent;
+    let terms = expected.terms;
+    let mut refusing = Vec::new();
+    if signed.maker != maker {
+        refusing.push(format!(
+            "{label} ticket maker {} is not the finalized {label} {maker}",
+            signed.maker
+        ));
+    }
+    if intent.side != side {
+        refusing.push(format!("{label} ticket side {} is not {side}", intent.side));
+    }
+    if intent.lifecycle != 0 {
+        refusing.push(format!(
+            "{label} ticket lifecycle {} is not fill-or-kill (0)",
+            intent.lifecycle
+        ));
+    }
+    if intent.outcome != terms.outcome {
+        refusing.push(format!(
+            "{label} ticket outcome {} is not the trade outcome {}",
+            intent.outcome, terms.outcome
+        ));
+    }
+    if intent.market != expected.market.to_bytes() {
+        refusing.push(format!(
+            "{label} ticket Market {} is not the finalized Market {}",
+            Pubkey::new_from_array(intent.market),
+            expected.market
+        ));
+    }
+    if intent.generation != expected.generation {
+        refusing.push(format!(
+            "{label} ticket generation {} is not the Open Market generation {}",
+            intent.generation, expected.generation
+        ));
+    }
+    if intent.nonce != next_nonce {
+        refusing.push(format!(
+            "{label} ticket nonce {} is not the finalized next nonce {next_nonce}",
+            intent.nonce
+        ));
+    }
+    if intent.valid_from > expected.observation_slot {
+        refusing.push(format!(
+            "{label} ticket validFrom {} is after the observation slot {}",
+            intent.valid_from, expected.observation_slot
+        ));
+    }
+    if intent.valid_through < expected.observation_slot {
+        refusing.push(format!(
+            "{label} ticket validThrough {} is before the observation slot {}",
+            intent.valid_through, expected.observation_slot
+        ));
+    }
+    if intent.maximum_fill != terms.fill {
+        refusing.push(format!(
+            "{label} ticket maximumFill {} is not the exact fill {}",
+            intent.maximum_fill, terms.fill
+        ));
+    }
+    if intent.limit_price != terms.execution_price {
+        refusing.push(format!(
+            "{label} ticket limitPrice {} is not the execution price {}",
+            intent.limit_price, terms.execution_price
+        ));
+    }
+    if intent.fee_basis_points != terms.fee_basis_points {
+        refusing.push(format!(
+            "{label} ticket feeBasisPoints {} is not the config fee {}",
+            intent.fee_basis_points, terms.fee_basis_points
+        ));
+    }
+    if intent.collateral_account != collateral.to_bytes() {
+        refusing.push(format!(
+            "{label} ticket collateralAccount {} is not the finalized {label} collateral account {collateral}",
+            Pubkey::new_from_array(intent.collateral_account)
+        ));
+    }
+    refusing
+}
+
+/// Every clause on which the finalized buyer collateral account cannot fund
+/// this exact trade, each naming what the chain holds and what it requires.
+///
+/// THE ALLOWANCE IS AN EQUALITY, NOT A FLOOR, and this function exists because
+/// the producer used to model it as a floor over the wrong number entirely. It
+/// tested `participant.collateral_quantity_atoms < required_buyer_collateral`
+/// -- one `<` against the admission REPORT -- while `validate_collateral` in
+/// `dclutch-direct-codec`, which is what the Trading program actually runs,
+/// tests two different things about the finalized TOKEN ACCOUNT:
+///
+/// - `balance < buyer_collateral_debit` refuses. A floor, as expected.
+/// - `delegated_amount != buyer_collateral_debit` refuses. An EQUALITY. The
+///   delegation is a single-use authorization for exactly this trade, spent to
+///   zero by the Custody effect; an allowance larger than the debit is not
+///   generous, it is a different trade's authorization.
+///
+/// So an admission funded with MORE than the trade needs was accepted here and
+/// refused on chain, and the chain said `Candidate`, and the exterior said
+/// `Finalization`, and nothing anywhere named the number. That is the whole
+/// distance between a produced session and a landed fill.
+fn refusing_buyer_collateral_clauses_v1(
+    account_data: &[u8],
+    admitted_quantity_atoms: u64,
+    custody_authority: Pubkey,
+    required_buyer_collateral: u64,
+) -> Result<Vec<String>> {
+    let token = TokenAccount::parse(account_data)
+        .map_err(|error| Error::new(format!("buyer collateral token account: {error:?}")))?;
+    let mut refusing = Vec::new();
+    if token.amount < required_buyer_collateral {
+        refusing.push(format!(
+            "its balance {} is below the {required_buyer_collateral} atoms this trade debits",
+            token.amount
+        ));
+    }
+    match token.delegate {
+        COption::Some(delegate) if delegate == custody_authority.to_bytes() => {}
+        COption::Some(delegate) => refusing.push(format!(
+            "its delegate {} is not the Custody authority {custody_authority}",
+            Pubkey::new_from_array(delegate)
+        )),
+        COption::None => {
+            refusing.push("it carries no delegate, so Custody has no allowance to spend".to_owned())
+        }
+    }
+    if token.delegated_amount != required_buyer_collateral {
+        refusing.push(format!(
+            "its delegated allowance {} is not exactly the {required_buyer_collateral} atoms this trade debits -- the allowance authorizes one trade and is spent to zero, so more is as refused as less",
+            token.delegated_amount
+        ));
+    }
+    // The admission REPORT's quantity is deliberately not a clause. The chain
+    // reads this token account and nothing else at trade time, and adding a
+    // rule the chain does not have is the same drift as missing one -- it just
+    // fails in the safe direction, which is how a producer ends up refusing
+    // trades the validator would accept. It is carried only to be NAMED beside
+    // the allowance when they disagree, because that disagreement is the single
+    // most useful sentence for an operator holding an oversized admission.
+    if !refusing.is_empty() && admitted_quantity_atoms != token.delegated_amount {
+        refusing.push(format!(
+            "for context, the admission record says {admitted_quantity_atoms} atoms while the account delegates {}",
+            token.delegated_amount
+        ));
+    }
+    Ok(refusing)
+}
+
+/// Classify a Direct token destination against the two prestates the chain
+/// admits, or name every clause on which it is neither.
+///
+/// Returns `Some(prestate)` with no clauses, or `None` with at least one. The
+/// clauses are ALL of them, not the first, on PAIRFIX's
+/// `refusing_ticket_half_clauses_v1` grounds: an operator who fixes one clause
+/// and re-runs has learned almost nothing.
+///
+/// WHAT THIS DELIBERATELY DOES NOT REQUIRE, and each omission is a wall that
+/// mirroring the wrong instruction would have built:
+///
+/// - **not `amount == 0`.** `direct_token_setup_v1`'s POSTSTATE is
+///   `TokenAccount::initialized_base_bytes`, whose balance is zero, and mirroring
+///   that here would admit a destination only until the first time it was paid --
+///   a market that could trade exactly twice instead of exactly once. The trade
+///   reads `seller.amount` as an observation and binds it to its own snapshot;
+///   it never requires a particular value.
+/// - **not `lamports == exact_rent`.** That clause belongs to token setup's rent
+///   normalization, which is settling who paid for the account. The trade does
+///   not read the destination's lamports at all.
+/// - **not the delegate or close authority.** `project_tokens_v3` reads those
+///   for the BUYER source, where the allowance is the authorization; for the
+///   seller and fee destinations it reads neither, and a producer that invents
+///   a rule the chain does not have fails in the safe direction, which is how a
+///   producer ends up refusing trades the validator would accept.
+///
+/// What it DOES require is exactly `project_tokens_v3`'s own conjunction over a
+/// destination: the token program owns it, it is `ACCOUNT_BYTES` long, it parses,
+/// it is `Initialized`, it carries no native reserve, and its Mint and owner are
+/// this trade's.
+fn classify_direct_token_destination_v1(
+    account: Option<&crate::rpc::RpcAccount>,
+    mint: Pubkey,
+    owner: Pubkey,
+    token_program: Pubkey,
+) -> (Option<DirectTokenDestinationPrestateV1>, Vec<String>) {
+    // A MISSING account and an existing System-owned data-empty one are the same
+    // prestate: the runtime renders the first as the second to any instruction
+    // that declares it, which is exactly how token setup creates the PDA.
+    let Some(account) = account else {
+        return (Some(DirectTokenDestinationPrestateV1::Vacant), Vec::new());
+    };
+    if account.owner == system_program::ID && !account.executable && account.data.is_empty() {
+        return (Some(DirectTokenDestinationPrestateV1::Vacant), Vec::new());
+    }
+    let mut refusing = Vec::new();
+    if account.owner != token_program {
+        refusing.push(format!(
+            "it is owned by {} rather than the Realm token program {token_program}, and it is not the System-owned data-empty prestate token setup would create either",
+            account.owner
+        ));
+    }
+    if account.executable {
+        refusing.push("it is executable".to_owned());
+    }
+    if account.data.len() != ACCOUNT_BYTES {
+        refusing.push(format!(
+            "it holds {} bytes rather than the {ACCOUNT_BYTES} of a Token-2022 account",
+            account.data.len()
+        ));
+    }
+    match TokenAccount::parse(&account.data) {
+        Err(error) => refusing.push(format!("its bytes are not a token account: {error:?}")),
+        Ok(token) => {
+            if token.state != AccountState::Initialized {
+                refusing.push(format!(
+                    "its state is {:?} rather than Initialized",
+                    token.state
+                ));
+            }
+            if !token.native_reserve.is_none() {
+                refusing.push(
+                    "it carries a native reserve, so it is a wrapped-SOL account".to_owned(),
+                );
+            }
+            if token.mint != mint.to_bytes() {
+                refusing.push(format!(
+                    "its Mint {} is not this Market's collateral Mint {mint}",
+                    Pubkey::new_from_array(token.mint)
+                ));
+            }
+            if token.owner != owner.to_bytes() {
+                refusing.push(format!(
+                    "its token owner {} is not {owner}",
+                    Pubkey::new_from_array(token.owner)
+                ));
+            }
+        }
+    }
+    if refusing.is_empty() {
+        (Some(DirectTokenDestinationPrestateV1::Initialized), refusing)
+    } else {
+        (None, refusing)
+    }
+}
+
+/// Both halves' refusing clauses, seller first.
+fn refusing_ticket_clauses_v1(
+    expected: &FinalizedTicketExpectationV1,
+    seller_signed: SignedDirectIntentV3,
+    buyer_signed: SignedDirectIntentV3,
+) -> Vec<String> {
+    let mut refusing = refusing_ticket_half_clauses_v1(
+        "seller",
+        seller_signed,
+        expected.seller,
+        0,
+        expected.seller_next_nonce,
+        expected.seller_collateral,
+        expected,
+    );
+    refusing.extend(refusing_ticket_half_clauses_v1(
+        "buyer",
+        buyer_signed,
+        expected.buyer,
+        1,
+        expected.buyer_next_nonce,
+        expected.buyer_collateral,
+        expected,
+    ));
+    refusing
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn assemble_public_manifest_v1(
     public: &PreparedPublicFactsV1,
@@ -561,37 +898,16 @@ fn assemble_public_manifest_v1(
     schema: &str,
     cluster: ExpectedClusterV1,
 ) -> Result<ProducedDirectTradePublicManifestV1> {
-    if seller_signed.maker != public.seller
-        || buyer_signed.maker != public.buyer
-        || seller_signed.intent.side != 0
-        || buyer_signed.intent.side != 1
-        || seller_signed.intent.lifecycle != 0
-        || buyer_signed.intent.lifecycle != 0
-        || seller_signed.intent.outcome != terms.outcome
-        || buyer_signed.intent.outcome != terms.outcome
-        || seller_signed.intent.market != public.market.to_bytes()
-        || buyer_signed.intent.market != public.market.to_bytes()
-        || seller_signed.intent.generation != public.generation
-        || buyer_signed.intent.generation != public.generation
-        || seller_signed.intent.nonce != public.seller_facts.next_nonce
-        || buyer_signed.intent.nonce != public.buyer_facts.next_nonce
-        || seller_signed.intent.valid_from > public.observation_slot
-        || buyer_signed.intent.valid_from > public.observation_slot
-        || seller_signed.intent.valid_through < public.observation_slot
-        || buyer_signed.intent.valid_through < public.observation_slot
-        || seller_signed.intent.maximum_fill != terms.fill
-        || buyer_signed.intent.maximum_fill != terms.fill
-        || seller_signed.intent.limit_price != terms.execution_price
-        || buyer_signed.intent.limit_price != terms.execution_price
-        || seller_signed.intent.fee_basis_points != terms.fee_basis_points
-        || buyer_signed.intent.fee_basis_points != terms.fee_basis_points
-        || seller_signed.intent.collateral_account != public.seller_token.to_bytes()
-        || buyer_signed.intent.collateral_account
-            != public.participant.collateral_account.to_bytes()
-    {
-        return Err(refusal(
-            "caller-owned Direct tickets differ from the finalized seller, buyer, nonce, validity, collateral, or exact trade terms",
-        ));
+    let refusing = refusing_ticket_clauses_v1(
+        &FinalizedTicketExpectationV1::of(public, terms),
+        seller_signed,
+        buyer_signed,
+    );
+    if !refusing.is_empty() {
+        return Err(refusal(format!(
+            "caller-owned Direct tickets differ from the finalized seller, buyer, nonce, validity, collateral, or exact trade terms: {}",
+            refusing.join("; ")
+        )));
     }
     let context = dclutch_direct_codec::ordinary_v3::DirectOrdinaryAuthenticatedContextV3 {
         parent_request_digest: hash(
@@ -1196,106 +1512,7 @@ fn produce_devnet_direct_trade_v1(
     )
 }
 
-fn parse_portable_direct_ticket_v1(bytes: &[u8], label: &str) -> Result<SignedDirectIntentV3> {
-    if bytes.is_empty() || bytes.len() > 4_096 {
-        return Err(refusal(format!(
-            "{label} Direct ticket is outside the 1..4096 byte bound"
-        )));
-    }
-    require_unique_json_v1(bytes, &format!("{label} Direct ticket"))?;
-    let value = parse_json_without_duplicate_keys_v1(bytes)?;
-    let ticket: PortableDirectTicketV1 = serde_json::from_value(value.clone())
-        .map_err(|error| Error::new(format!("{label} Direct ticket shape: {error}")))?;
-    if serde_json::to_value(&ticket)? != value || ticket.kind != PORTABLE_DIRECT_TICKET_KIND_V1 {
-        return Err(refusal(format!(
-            "{label} Direct ticket kind, field set, or canonical JSON values changed"
-        )));
-    }
-    let maker = canonical_ticket_pubkey_v1(&ticket.maker, &format!("{label} maker"))?;
-    let market = canonical_ticket_pubkey_v1(&ticket.intent.market, &format!("{label} Market"))?;
-    let collateral = canonical_ticket_pubkey_v1(
-        &ticket.intent.collateral_account,
-        &format!("{label} collateral account"),
-    )?;
-    if maker == Pubkey::default()
-        || market == Pubkey::default()
-        || collateral == Pubkey::default()
-        || ticket.intent.side > 1
-        || ticket.intent.lifecycle > 1
-        || ticket.intent.fee_basis_points > 10_000
-    {
-        return Err(refusal(format!(
-            "{label} Direct ticket has an invalid identity, enum, or fee width"
-        )));
-    }
-    let signature_bytes = decode_hex_v1(&ticket.signature, &format!("{label} signature"))?;
-    let signature: [u8; 64] = signature_bytes
-        .try_into()
-        .map_err(|_| refusal(format!("{label} signature is not exactly 64 bytes")))?;
-    if signature.iter().all(|byte| *byte == 0) {
-        return Err(refusal(format!("{label} signature is all zero")));
-    }
-    let intent = CompactIntentV2 {
-        side: ticket.intent.side,
-        lifecycle: ticket.intent.lifecycle,
-        outcome: ticket.intent.outcome,
-        market: market.to_bytes(),
-        generation: canonical_ticket_u64_v1(&ticket.intent.generation, "generation")?,
-        nonce: canonical_ticket_u64_v1(&ticket.intent.nonce, "nonce")?,
-        valid_from: canonical_ticket_u64_v1(&ticket.intent.valid_from, "validFrom")?,
-        valid_through: canonical_ticket_u64_v1(&ticket.intent.valid_through, "validThrough")?,
-        maximum_fill: canonical_ticket_u64_v1(&ticket.intent.maximum_fill, "maximumFill")?,
-        limit_price: canonical_ticket_u64_v1(&ticket.intent.limit_price, "limitPrice")?,
-        fee_basis_points: ticket.intent.fee_basis_points,
-        collateral_account: collateral.to_bytes(),
-    };
-    let encoded = intent
-        .encode()
-        .map_err(|error| Error::new(format!("{label} Direct intent encode: {error:?}")))?;
-    if CompactIntentV2::decode(&encoded)
-        .map_err(|error| Error::new(format!("{label} Direct intent decode: {error:?}")))?
-        != intent
-    {
-        return Err(refusal(format!(
-            "{label} Direct ticket intent failed canonical codec roundtrip"
-        )));
-    }
-    let preimage = intent
-        .signed_preimage()
-        .map_err(|error| Error::new(format!("{label} Direct signed preimage: {error:?}")))?;
-    if !Signature::from(signature).verify(maker.as_ref(), &preimage) {
-        return Err(refusal(format!(
-            "{label} Direct ticket detached signature did not verify"
-        )));
-    }
-    Ok(SignedDirectIntentV3 {
-        maker,
-        signature,
-        intent,
-    })
-}
-
-fn canonical_ticket_pubkey_v1(value: &str, label: &str) -> Result<Pubkey> {
-    let key = pubkey(value)?;
-    if key.to_string() != value {
-        return Err(refusal(format!("{label} is not canonical base58 text")));
-    }
-    Ok(key)
-}
-
-fn canonical_ticket_u64_v1(value: &str, label: &str) -> Result<u64> {
-    let parsed = value
-        .parse::<u64>()
-        .map_err(|_| refusal(format!("Direct ticket {label} is not a u64")))?;
-    if parsed.to_string() != value {
-        return Err(refusal(format!(
-            "Direct ticket {label} is not canonical decimal text"
-        )));
-    }
-    Ok(parsed)
-}
-
-fn exact_ticket_pair_terms_v1(
+pub(crate) fn exact_ticket_pair_terms_v1(
     seller: &SignedDirectIntentV3,
     buyer: &SignedDirectIntentV3,
 ) -> Result<DirectTradeTermsV1> {
@@ -1959,6 +2176,10 @@ fn prepare_public_facts_v1(
             aggregate,
             seller_position,
             participant.position,
+            // The buyer's collateral account joins the snapshot because the
+            // allowance the chain requires is a fact of THIS account at THIS
+            // commitment, not of the admission report that once described it.
+            participant.collateral_account,
             mint,
             lifecycle_rent_credit,
             sysvar::rent::ID,
@@ -2002,15 +2223,7 @@ fn prepare_public_facts_v1(
     }
     let market_rent_beneficiary = Pubkey::new_from_array(market_state.rent_beneficiary.to_bytes());
     let root_account = snapshot.account(root)?;
-    if root_account.owner != trading
-        || root_account.executable
-        || root_account.data.len()
-            != CAPABILITY_ROOT_HEADER_BYTES_V1
-                .checked_add(dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1)
-                .ok_or_else(|| refusal("Direct root width overflowed"))?
-    {
-        return Err(refusal("Direct root owner or width changed"));
-    }
+    authenticate_direct_execution_root_shape_v1(root, root_account, trading)?;
     let root_header = CapabilityRootHeaderV1::decode(
         root_account
             .data
@@ -2110,10 +2323,18 @@ fn prepare_public_facts_v1(
     let required_buyer_collateral = gross
         .checked_add(fee)
         .ok_or_else(|| refusal("Direct buyer reserve overflowed"))?;
-    if participant.collateral_quantity_atoms < required_buyer_collateral {
+    let buyer_collateral_account = snapshot.account(participant.collateral_account)?;
+    let refusing = refusing_buyer_collateral_clauses_v1(
+        &buyer_collateral_account.data,
+        participant.collateral_quantity_atoms,
+        participant.custody_authority,
+        required_buyer_collateral,
+    )?;
+    if !refusing.is_empty() {
         return Err(refusal(format!(
-            "Direct participant has {} collateral atoms; this exact trade requires {required_buyer_collateral}",
-            participant.collateral_quantity_atoms
+            "the finalized buyer collateral account {} cannot fund this exact trade: {}",
+            participant.collateral_account,
+            refusing.join("; ")
         )));
     }
     let rent_account = snapshot.account(sysvar::rent::ID)?;
@@ -2129,6 +2350,8 @@ fn prepare_public_facts_v1(
         Pubkey::find_program_address(&seller_seeds.as_slices(), &trading);
     let (buyer_maker, buyer_bump) =
         Pubkey::find_program_address(&buyer_seeds.as_slices(), &trading);
+    // Read from the RentCredit the chain itself reads, not from who is paying.
+    let maker_rent_beneficiary = maker_root_rent_beneficiary_v1(rpc, lifecycle_rent_credit)?;
     let seller_facts = maker_facts_v1(
         rpc,
         seller_maker,
@@ -2137,7 +2360,7 @@ fn prepare_public_facts_v1(
         market,
         generation,
         seller,
-        payer,
+        maker_rent_beneficiary,
         &rent,
     )?;
     let buyer_facts = maker_facts_v1(
@@ -2148,7 +2371,7 @@ fn prepare_public_facts_v1(
         market,
         generation,
         participant.owner,
-        payer,
+        maker_rent_beneficiary,
         &rent,
     )?;
     let custody_replay = Pubkey::find_program_address(
@@ -2198,36 +2421,120 @@ fn prepare_public_facts_v1(
     .map_err(|error| Error::new(format!("fee Direct token seeds: {error:?}")))?;
     let seller_token = Pubkey::find_program_address(&seller_token_seeds.as_slices(), &trading).0;
     let fee_token = Pubkey::find_program_address(&fee_token_seeds.as_slices(), &trading).0;
-    require_distinct_v1(&[
-        seller,
-        participant.owner,
-        payer,
-        fee_recipient,
-        seller_token,
-        fee_token,
-        participant.collateral_account,
-        seller_maker,
-        buyer_maker,
-        custody_replay,
-        custody_authority,
-        market_rent_beneficiary,
-    ])?;
-    for (address, label) in [
-        (seller_token, "seller Token-2022 destination"),
-        (fee_token, "fee Token-2022 destination"),
+    // The payer may be the buyer, and only the buyer.
+    //
+    // What the distinctness is FOR, at its two on-chain sites, is the
+    // transaction-level privilege-and-lamport merge: a key repeated across two
+    // coordinates arrives as ONE account whose writability is the union, and
+    // both setup instructions close over exact lamport deltas that a merged
+    // account would silently satisfy from the wrong side.
+    // `direct_replay_setup_v1` states its own hazard set exactly -- payer vs
+    // rent refund, and the created maker root vs payer/refund/Market -- and
+    // then asserts `payer_before - top_up == payer.lamports()` against
+    // `refund_before + refunded_excess == rent_refund.lamports()`.
+    // `direct_token_setup_v1` asserts the same shape over PAYER and
+    // RENT_REFUND plus a digest over every account it declares immutable.
+    //
+    // Neither instruction carries the BUYER at any account index: replay setup
+    // takes the maker as instruction DATA and derives the root PDA, and token
+    // setup is about the seller and the venue fee. In the trade itself both
+    // makers authorize with a detached Ed25519 intent signature over the
+    // 172-byte compact preimage, never with a transaction signature -- the
+    // compiled route names exactly one signer, the payer -- so a buyer who
+    // pays holds no privilege the trade did not already give the payer.
+    //
+    // A stranger paying their own fees is the product, not a hazard: the
+    // browser panel compiles only when the route's payer IS the connected
+    // wallet, so refusing this pair refused every wallet-paid trade.
+    require_distinct_v1(
+        &[
+            ("seller", seller),
+            ("buyer", participant.owner),
+            ("payer", payer),
+            ("fee recipient", fee_recipient),
+            ("seller Direct token account", seller_token),
+            ("fee Direct token account", fee_token),
+            ("buyer collateral account", participant.collateral_account),
+            ("seller maker replay root", seller_maker),
+            ("buyer maker replay root", buyer_maker),
+            ("Custody replay", custody_replay),
+            ("Custody authority", custody_authority),
+            ("Market rent beneficiary", market_rent_beneficiary),
+        ],
+        &[("payer", "buyer")],
+    )?;
+    // The two destinations are classified independently and then required to
+    // AGREE, because a market with one vacant and one initialized destination is
+    // a half-run token setup: setup refuses (one is not vacant) and the trade
+    // refuses (one is not initialized), so there is no instruction that can move
+    // it forward, and saying so here is the only place an operator learns it.
+    let mut destination_prestates = Vec::new();
+    for (address, label, token_owner) in [
+        (seller_token, "seller Token-2022 destination", seller),
+        (fee_token, "fee Token-2022 destination", fee_recipient),
     ] {
-        if rpc.account(address)?.is_some_and(|account| {
-            account.owner != system_program::ID || account.executable || !account.data.is_empty()
-        }) {
-            return Err(refusal(format!(
-                "{label} was not a System-owned data-empty PDA prestate"
-            )));
+        let observed = rpc.account(address)?;
+        let (prestate, refusing) = classify_direct_token_destination_v1(
+            observed.as_ref(),
+            mint,
+            token_owner,
+            token_program,
+        );
+        match prestate {
+            Some(prestate) => destination_prestates.push((label, prestate)),
+            None => {
+                return Err(refusal(format!(
+                    "{label} {address} is neither of the two prestates the chain admits -- not the System-owned data-empty account `direct_token_setup_v1` creates, and not the initialized Token-2022 account the trade pays: {}",
+                    refusing.join("; ")
+                )));
+            }
         }
     }
+    let token_setup_prestate = match destination_prestates.as_slice() {
+        [(_, seller_prestate), (_, fee_prestate)] if seller_prestate == fee_prestate => {
+            *seller_prestate
+        }
+        [(seller_label, seller_prestate), (fee_label, fee_prestate)] => {
+            return Err(refusal(format!(
+                "Direct token setup is half run on this Market: the {seller_label} {seller_token} is {seller_prestate:?} while the {fee_label} {fee_token} is {fee_prestate:?}. Token setup creates both in one instruction and refuses unless BOTH are vacant; the trade pays both and refuses unless BOTH are initialized. No instruction can move this Market forward"
+            )));
+        }
+        _ => return Err(refusal("Direct token destinations were not classified")),
+    };
+    // WHAT REMAINS OF WALL 7, NAMED RATHER THAN DISCOVERED ON CHAIN.
+    //
+    // The producer now admits both prestates the chain admits, which is the
+    // half of this that was wrong: it used to call an initialized destination
+    // malformed. But admitting it is only useful if the SETUP STAGE MACHINE
+    // then skips a token setup whose accounts already exist, and it does not
+    // yet -- `execute_direct_setup_action_v1` selects TokenSetup purely on
+    // journal phase, and a fresh session has no journal, so it would send the
+    // instruction and `direct_token_setup_v1` would refuse it for not finding
+    // the vacancy it needs to create anything.
+    //
+    // So this refuses HERE, before signing two intents and writing a session
+    // that could never advance, and it says which stage owns the gap. That is
+    // strictly better than producing the session and reading `Content` off the
+    // chain twenty minutes later, and it is honest that the market still cannot
+    // trade twice.
+    if token_setup_prestate == DirectTokenDestinationPrestateV1::Initialized {
+        return Err(refusal(format!(
+            "Direct token setup has already run on Market {market} generation {generation}: the seller destination {seller_token} and fee destination {fee_token} are both the initialized Token-2022 accounts this trade would pay. The producer admits that prestate; the setup stage machine cannot yet SKIP a finished token setup, so this session would stall at the token-setup stage. That skip is the remaining half of wall 7"
+        )));
+    }
 
-    let descriptor = record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_descriptor_record")?;
-    let descriptor_pair =
-        resolved_record_v1(plan, market_input, campaign, "direct_ordinary_descriptor_record")?;
+    let descriptor = record_coordinates_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_descriptor_record",
+    )?;
+    let descriptor_pair = resolved_record_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_descriptor_record",
+    )?;
     let descriptor_digest = hex32(&descriptor_pair.content_sha256)?;
     let trading_semantic_release = hex32(&plan.trading.semantic_release_id)?;
     let capability_seal = derive_capability_seal_v1(
@@ -2240,10 +2547,25 @@ fn prepare_public_facts_v1(
         fixed: ProducedDirectFixedCoordinatesV1 {
             market: market.to_string(),
             root: root.to_string(),
-            manifest: record_coordinates_v1(plan, market_input, campaign, "capability_manifest_record")?,
-            program_set: record_coordinates_v1(plan, market_input, campaign, "direct_program_set_record")?,
+            manifest: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "capability_manifest_record",
+            )?,
+            program_set: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_program_set_record",
+            )?,
             descriptor,
-            config: record_coordinates_v1(plan, market_input, campaign, "direct_execution_config_record")?,
+            config: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_execution_config_record",
+            )?,
             account_profile: record_coordinates_v1(
                 plan,
                 market_input,
@@ -2256,15 +2578,30 @@ fn prepare_public_facts_v1(
                 campaign,
                 "direct_ordinary_request_profile_record",
             )?,
-            transition: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_transition_record")?,
-            effect: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_effect_record")?,
+            transition: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_ordinary_transition_record",
+            )?,
+            effect: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_ordinary_effect_record",
+            )?,
             lifecycle: record_coordinates_v1(
                 plan,
                 market_input,
                 campaign,
                 "direct_ordinary_lifecycle_policy_record",
             )?,
-            strategy: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_strategy_record")?,
+            strategy: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_ordinary_strategy_record",
+            )?,
             activation_cache: plan.activation.clone(),
             core_program: plan.core.program_id.clone(),
             core_programdata: plan.core.programdata_id.clone(),
@@ -2272,9 +2609,19 @@ fn prepare_public_facts_v1(
             trading_programdata: plan.trading.programdata_id.clone(),
             registry_program: plan.registry.program_id.clone(),
             product: record_coordinates_v1(plan, market_input, campaign, "product_record")?,
-            result_domain: record_coordinates_v1(plan, market_input, campaign, "result_domain_record")?,
+            result_domain: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "result_domain_record",
+            )?,
             portfolio: record_coordinates_v1(plan, market_input, campaign, "portfolio_record")?,
-            linked_basis: record_coordinates_v1(plan, market_input, campaign, "linked_liability_basis_record")?,
+            linked_basis: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "linked_liability_basis_record",
+            )?,
             capability_seal: capability_seal.to_string(),
         },
         seller_maker: seller_maker.to_string(),
@@ -2349,13 +2696,32 @@ fn prepare_public_facts_v1(
         token_program: token_program.to_string(),
         trading_program: trading.to_string(),
     };
-    let account_profile_bytes =
-        record_body_v1(plan, market_input, campaign, "direct_ordinary_account_profile_record")?;
-    let transition_bytes = record_body_v1(plan, market_input, campaign, "direct_ordinary_transition_record")?;
-    let effect_bytes = record_body_v1(plan, market_input, campaign, "direct_ordinary_effect_record")?;
+    let account_profile_bytes = record_body_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_account_profile_record",
+    )?;
+    let transition_bytes = record_body_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_transition_record",
+    )?;
+    let effect_bytes = record_body_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_effect_record",
+    )?;
     let product_digest = record_digest_v1(plan, market_input, campaign, "product_record")?;
     let realm_digest = record_digest_v1(plan, market_input, campaign, "realm_record")?;
-    let linked_basis_digest = record_digest_v1(plan, market_input, campaign, "linked_liability_basis_record")?;
+    let linked_basis_digest = record_digest_v1(
+        plan,
+        market_input,
+        campaign,
+        "linked_liability_basis_record",
+    )?;
     let linked_basis_semantic = crate::market::semantic_basis_identity_v3(&decode_hex_v1(
         &market_input.linked_basis_hex,
         "linked liability basis",
@@ -2429,11 +2795,39 @@ fn prepare_public_facts_v1(
         route_without_children,
         replay_setup,
         token_setup,
+
         participant,
     })
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The refund wallet the chain will write into a maker root it creates.
+///
+/// THE LIFECYCLE LANE MOVED THIS AND THE PRODUCER DID NOT FOLLOW. `maker_facts_v1`
+/// used to answer `payer` here, under a comment that said so and named itself as
+/// "the single producer coordinate to change" if maker-root rent ever moved to
+/// RentCredit. It moved. `hot_v3.rs` builds `MakerReplayFirstUseV1` with
+/// `rent_owner: plan.beneficiary`, and that beneficiary is
+/// `credit.refund_wallet()` of the founding lifecycle RentCredit -- not the
+/// wallet that happened to pay for one trade.
+///
+/// The distinction is the point rather than a detail. A maker replay root is a
+/// shared structure of the MARKET; if its rent followed whoever paid, a stranger
+/// paying their own fees would walk away owning the rent of something the market
+/// depends on. The same route deliberately admits that stranger as the payer.
+///
+/// Measured 2026-08-31 on a landed fill: the producer projected the payer, the
+/// chain wrote the refund wallet, and the driver refused its own fill's
+/// poststate on those 32 bytes with every economic cell already agreeing.
+fn maker_root_rent_beneficiary_v1(rpc: &mut Rpc, lifecycle_rent_credit: Pubkey) -> Result<Pubkey> {
+    let account = rpc
+        .account(lifecycle_rent_credit)?
+        .ok_or_else(|| refusal("Direct founding lifecycle RentCredit is absent"))?;
+    let credit = LifecycleRentCreditV2::decode(&account.data)
+        .map_err(|error| Error::new(format!("Direct lifecycle RentCredit: {error:?}")))?;
+    Ok(Pubkey::new_from_array(credit.refund_wallet().to_bytes()))
+}
+
 fn maker_facts_v1(
     rpc: &mut Rpc,
     address: Pubkey,
@@ -2442,7 +2836,7 @@ fn maker_facts_v1(
     market: Pubkey,
     generation: u64,
     maker: Pubkey,
-    payer: Pubkey,
+    rent_beneficiary: Pubkey,
     rent: &Rent,
 ) -> Result<MakerFactsV1> {
     let Some(account) = rpc.account(address)? else {
@@ -2454,10 +2848,7 @@ fn maker_facts_v1(
             rent_principal_observation: 0,
             rent_principal: rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1),
             rent_beneficiary_observation: Pubkey::default(),
-            // Current Direct operator first-use semantics assign maker-root rent
-            // to the authenticated payer. If the lifecycle lane moves this to
-            // RentCredit, this is the single producer coordinate to change.
-            rent_beneficiary: payer,
+            rent_beneficiary,
         });
     };
     if account.owner == system_program::ID && account.data.is_empty() {
@@ -2469,7 +2860,7 @@ fn maker_facts_v1(
             rent_principal_observation: 0,
             rent_principal: rent.minimum_balance(DIRECT_MAKER_REPLAY_BYTES_V1),
             rent_beneficiary_observation: Pubkey::default(),
-            rent_beneficiary: payer,
+            rent_beneficiary,
         });
     }
     if account.owner != trading || account.executable {
@@ -2541,23 +2932,6 @@ fn authenticate_or_admit_pending_replay_v1(
         ));
     }
     Ok(())
-}
-
-fn signed_intent_v1(keypair: &Keypair, intent: CompactIntentV2) -> Result<SignedDirectIntentV3> {
-    let preimage = intent
-        .signed_preimage()
-        .map_err(|error| Error::new(format!("Direct intent preimage: {error:?}")))?;
-    let signature = keypair.sign_message(&preimage);
-    if !signature.verify(keypair.pubkey().as_ref(), &preimage) {
-        return Err(refusal("fresh Direct signature did not verify"));
-    }
-    Ok(SignedDirectIntentV3 {
-        maker: keypair.pubkey(),
-        signature: signature.as_ref().try_into().map_err(|_| {
-            refusal("fresh Direct Ed25519 signature did not have the exact 64-byte width")
-        })?,
-        intent,
-    })
 }
 
 fn signed_manifest_v1(value: SignedDirectIntentV3) -> Result<ProducedSignedIntentManifestV1> {
@@ -2647,7 +3021,9 @@ pub(crate) fn resolved_record_v1(
     // downstream as an address mismatch that named neither field.
     let key = RecordKeyV1::new(
         SchemaReleaseId::new(schema).map_err(|_| {
-            refusal(format!("campaign {label} record schema is the zero identity"))
+            refusal(format!(
+                "campaign {label} record schema is the zero identity"
+            ))
         })?,
         ContentDigest::new(digest).map_err(|_| {
             refusal(format!(
@@ -2682,10 +3058,7 @@ pub(crate) fn resolved_record_v1(
 
 /// The schema each devnet market record was published under; descriptor-owned
 /// schemas come from the decoded ordinary descriptor itself.
-fn devnet_market_record_schema_v1(
-    market_input: &MarketRunInput,
-    label: &str,
-) -> Result<[u8; 32]> {
+fn devnet_market_record_schema_v1(market_input: &MarketRunInput, label: &str) -> Result<[u8; 32]> {
     let direct = market_input.direct_capability.as_ref().ok_or_else(|| {
         refusal("devnet Direct record resolution requires the typed Direct capability payload")
     })?;
@@ -2694,7 +3067,8 @@ fn devnet_market_record_schema_v1(
         "direct_program_set_record" => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         "direct_ordinary_descriptor_record" => CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         "direct_activation_account_profile_record" => {
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1()
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1(
+            )
         }
         "direct_activation_effect_record" => {
             dclutch_direct_codec::activation_bundle_v1::direct_activation_effect_schema_v1()
@@ -2746,10 +3120,7 @@ fn devnet_market_record_schema_v1(
 }
 
 /// The Market input field that authors one devnet record body, when one does.
-fn devnet_market_record_body_hex_v1(
-    market_input: &MarketRunInput,
-    label: &str,
-) -> Option<String> {
+fn devnet_market_record_body_hex_v1(market_input: &MarketRunInput, label: &str) -> Option<String> {
     let direct = market_input.direct_capability.as_ref()?;
     Some(match label {
         "capability_manifest_record" => market_input.capability_manifest_hex.clone(),
@@ -2825,6 +3196,80 @@ fn require_market_body_matches_record_v1(
     Ok(())
 }
 
+/// The Direct EXECUTION capability root's account shape, with each condition
+/// said on its own.
+///
+/// This used to be one disjunction reported as "Direct root owner or width
+/// changed", and that sentence is the reason it now has a function of its own.
+///
+/// **Absence is checked first and named as absence.** The finalized snapshot
+/// represents an account that does not exist as a System-owned, zero-lamport,
+/// zero-length placeholder rather than refusing
+/// (`FinalizedSnapshotV1::from_rpc`), so a root that was never created arrives
+/// here looking exactly like a root whose owner changed — and the operator was
+/// told the WIDTH changed. It cost a lane a day: a population run read
+/// twenty-one refused fills as evidence that a widened market's capability
+/// closure had not followed its outcome count
+/// (`docs/evidence/SIMULATOR_POPULATION_DRIVEN_2026_08_30.md`). Width was never
+/// the question. Both sides of the width comparison are compile-time constants
+/// (`CAPABILITY_ROOT_HEADER_BYTES_V1 + DIRECT_ROOT_STATE_BYTES_V1`), the root
+/// PDA's own seeds carry no width term, and the roots simply had never been
+/// activated — because until the loopback activation endpoint existed, no
+/// Direct root could be created on a local validator at all.
+fn authenticate_direct_execution_root_shape_v1(
+    root: Pubkey,
+    account: &dclutch_operator::ObservedAccount,
+    trading: Pubkey,
+) -> Result<()> {
+    let expected_bytes = CAPABILITY_ROOT_HEADER_BYTES_V1
+        .checked_add(dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1)
+        .ok_or_else(|| refusal("Direct root width overflowed"))?;
+    // ABSENCE IS EXCLUSIVE and is answered alone. Unlike the clauses below it
+    // is not one fact among several that could be wrong together: when the
+    // account does not exist, the owner, the executable flag and the width all
+    // belong to the snapshot's placeholder rather than to any root, so
+    // reporting them beside this would be reporting three facts about nothing.
+    if account.owner == system_program::ID && account.lamports == 0 && account.data.is_empty() {
+        return Err(refusal(format!(
+            "the Direct execution capability root {root} does not exist. Founding never creates \
+             it and no other route can: run {} against an owned loopback validator, or {} against \
+             acknowledged devnet, before producing a trade on this Market",
+            crate::direct_capability_activation::LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1,
+            crate::direct_capability_activation::DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1,
+        )));
+    }
+    // An OCCUPIED root can be wrong in all three ways at once, so all three are
+    // collected and reported together, the way `refusing_ticket_half_clauses_v1`
+    // reports a ticket's. Returning only the first is what the sentence this
+    // replaced did, one disjunct at a time, and an operator staring at a
+    // foreign-owned root of the wrong width would have to fix it twice to find
+    // that out.
+    let mut refusing = Vec::new();
+    if account.owner != trading {
+        refusing.push(format!(
+            "it is owned by {} rather than by Trading {trading}",
+            account.owner
+        ));
+    }
+    if account.executable {
+        refusing.push("it is executable".to_owned());
+    }
+    if account.data.len() != expected_bytes {
+        refusing.push(format!(
+            "it is {} bytes, not the exact {expected_bytes} this release's capability header and \
+             Direct tail occupy",
+            account.data.len()
+        ));
+    }
+    if refusing.is_empty() {
+        return Ok(());
+    }
+    Err(refusal(format!(
+        "the Direct execution capability root {root} is not the account this release activates: {}",
+        refusing.join("; ")
+    )))
+}
+
 fn authenticate_campaign_record_v1(
     campaign: &campaign::CampaignTerminalEvidenceV1,
     label: &str,
@@ -2876,7 +3321,8 @@ pub(crate) fn derived_direct_execution_root_v1(
     market: Pubkey,
     entry_index: u16,
 ) -> Result<Pubkey> {
-    let manifest_pair = resolved_record_v1(plan, market_input, campaign, "capability_manifest_record")?;
+    let manifest_pair =
+        resolved_record_v1(plan, market_input, campaign, "capability_manifest_record")?;
     let manifest_body = decode_hex_v1(&manifest_pair.body_hex, "capability manifest")?;
     if sha256_hex(&manifest_body) != manifest_pair.content_sha256 {
         return Err(refusal("capability manifest body digest changed"));
@@ -2959,16 +3405,56 @@ fn fee_floor_v1(gross: u64, basis_points: u16) -> Result<u64> {
         .map_err(|_| refusal("Direct fee overflowed"))
 }
 
-fn require_distinct_v1(keys: &[Pubkey]) -> Result<()> {
-    if keys.iter().any(|key| *key == Pubkey::default())
-        || keys
-            .iter()
-            .enumerate()
-            .any(|(index, key)| keys.iter().skip(index + 1).any(|other| other == key))
-    {
-        return Err(refusal("Direct participant/setup coordinates alias"));
+/// Refuse when a coordinate is the default key, or when two coordinates that
+/// must stay separate accounts carry the same key.
+///
+/// Every refusal NAMES the coordinates that collided and reports all of them,
+/// not the first: twelve anonymous coordinates refusing as one line is a
+/// diagnosis the operator cannot make from outside the process.
+///
+/// `admitted_alias` lists the coordinate pairs that MAY be one key. Both names
+/// in a pair must appear in `coordinates`, so a renamed or misspelled
+/// coordinate widens nothing -- it refuses instead.
+fn require_distinct_v1(
+    coordinates: &[(&str, Pubkey)],
+    admitted_alias: &[(&str, &str)],
+) -> Result<()> {
+    for (name, key) in coordinates {
+        if *key == Pubkey::default() {
+            return Err(refusal(format!(
+                "Direct setup coordinate {name} is the default public key"
+            )));
+        }
     }
-    Ok(())
+    for (left, right) in admitted_alias {
+        if !coordinates.iter().any(|(name, _)| name == left)
+            || !coordinates.iter().any(|(name, _)| name == right)
+        {
+            return Err(Error::new(format!(
+                "admitted Direct coordinate alias {left}/{right} names a coordinate this check does not carry"
+            )));
+        }
+    }
+    let admitted = |left: &str, right: &str| {
+        admitted_alias.iter().any(|(one, other)| {
+            (*one == left && *other == right) || (*one == right && *other == left)
+        })
+    };
+    let mut aliased = Vec::new();
+    for (index, (name, key)) in coordinates.iter().enumerate() {
+        for (other, other_key) in coordinates.iter().skip(index.saturating_add(1)) {
+            if other_key == key && !admitted(name, other) {
+                aliased.push(format!("{name} and {other} are both {key}"));
+            }
+        }
+    }
+    if aliased.is_empty() {
+        return Ok(());
+    }
+    Err(refusal(format!(
+        "Direct participant/setup coordinates alias: {}",
+        aliased.join("; ")
+    )))
 }
 
 pub(crate) fn read_keypair_v1(path: &Path, label: &str) -> Result<Keypair> {
@@ -3222,16 +3708,22 @@ fn authenticate_devnet_direct_participant_pair_v1(
             "Direct public route/tickets and seller/buyer participant snapshots do not form one exact Market, replay, Position, collateral, Mint, and Custody closure",
         ));
     }
-    require_distinct_v1(&[
-        source.seller,
-        source.buyer,
-        source.seller_replay,
-        source.buyer_replay,
-        source.seller_position,
-        source.buyer_position,
-        source.seller_collateral,
-        source.buyer_collateral,
-    ])?;
+    // No admitted alias here: these are the two participants' OWN identities
+    // and owned accounts. The payer is not among them, so nothing on this list
+    // is the pair the trade site admits.
+    require_distinct_v1(
+        &[
+            ("seller", source.seller),
+            ("buyer", source.buyer),
+            ("seller maker replay root", source.seller_replay),
+            ("buyer maker replay root", source.buyer_replay),
+            ("seller Position", source.seller_position),
+            ("buyer Position", source.buyer_position),
+            ("seller collateral account", source.seller_collateral),
+            ("buyer collateral account", source.buyer_collateral),
+        ],
+        &[],
+    )?;
     Ok(())
 }
 
@@ -3476,7 +3968,7 @@ fn require_unique_json_v1(bytes: &[u8], label: &str) -> Result<()> {
     Ok(())
 }
 
-fn decode_hex_v1(value: &str, label: &str) -> Result<Vec<u8>> {
+pub(crate) fn decode_hex_v1(value: &str, label: &str) -> Result<Vec<u8>> {
     if value.len() % 2 != 0
         || value
             .bytes()
@@ -3534,23 +4026,34 @@ mod tests {
         signature::{Keypair, Signer as _},
     };
 
+    use dclutch_token_svm::{TokenAccount, state::TokenAccountLayoutV1};
+    use solana_sdk_ids::system_program;
+
+    use crate::rpc::RpcAccount;
+
     use super::{
-        CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_DIRECT_PRODUCER_COMMAND_V1,
+        ACCOUNT_BYTES, CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_DIRECT_PRODUCER_COMMAND_V1,
+        DirectTokenDestinationPrestateV1, classify_direct_token_destination_v1,
         DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1, DevnetDirectParticipantSourceV1,
         DevnetDirectSessionProducerJournalV1, DevnetDirectSessionProducerPhaseV1,
-        EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
-        OwnedLoopbackDirectProducerReceiptV1, PortableDirectTicketIntentV1, PortableDirectTicketV1,
-        ProducedDirectTradePrivateSessionV1, ProducedReplaySetupV1, ProducedTokenSetupV1,
+        DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTradeTermsV1,
+        EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1, FinalizedTicketExpectationV1,
+        OwnedLoopbackDirectProducerReceiptV1, ProducedDirectTradePrivateSessionV1,
+        ProducedReplaySetupV1, ProducedTokenSetupV1, SignedDirectIntentV3,
         authenticate_devnet_direct_participant_pair_v1,
-        authenticate_devnet_session_producer_recovery_v1, derive_capability_seal_v1,
+        authenticate_devnet_session_producer_recovery_v1,
+        authenticate_direct_execution_root_shape_v1, derive_capability_seal_v1,
         devnet_direct_usage, devnet_session_producer_state_sha256_v1, devnet_session_usage,
         exact_quote_v1, exact_ticket_pair_terms_v1, fee_floor_v1, parse_devnet_direct_arguments_v1,
-        parse_devnet_session_arguments_v1, parse_portable_direct_ticket_v1,
-        private_session_sha256_v1, producer_receipt_sha256_v1, require_distinct_v1,
-        signed_intent_v1,
+        parse_devnet_session_arguments_v1, private_session_sha256_v1, producer_receipt_sha256_v1,
+        refusing_ticket_clauses_v1, require_distinct_v1,
     };
     use crate::{
         cluster::{DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
+        direct_ticket::{
+            encode_portable_direct_ticket_v1, parse_portable_direct_ticket_v1,
+            sign_direct_intent_v1 as signed_intent_v1,
+        },
         direct_trade::AuthenticatedDevnetDirectSessionSourceV1,
         user_position_admission::FinalizedDirectParticipantEvidenceV1,
     };
@@ -3563,6 +4066,156 @@ mod tests {
         assert_eq!(fee_floor_v1(gross, FEE_BASIS_POINTS_V1)?, 250_000);
         assert!(exact_quote_v1(1, EXECUTION_PRICE_V1, 1_000_000).is_err());
         Ok(())
+    }
+
+    /// One `ObservedAccount` at an exact shape, built the way the finalized
+    /// snapshot builds one.
+    fn observed_root_v1(
+        key: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        executable: bool,
+        data: Vec<u8>,
+    ) -> dclutch_operator::ObservedAccount {
+        dclutch_operator::ObservedAccount {
+            observation: dclutch_operator::Observation {
+                slot: 1,
+                unix_timestamp: 1_800_000_000,
+                finality: dclutch_operator::Finality::Finalized,
+            },
+            key,
+            owner,
+            lamports,
+            executable,
+            data,
+        }
+    }
+
+    /// The regression this whole lane exists for.
+    ///
+    /// A root that was never activated arrives as the snapshot's System-owned,
+    /// zero-lamport, zero-length placeholder. The sentence it produces must say
+    /// the root DOES NOT EXIST and must name the route that creates it — and it
+    /// must not say "width", because a population lane spent a day reading the
+    /// old sentence as a claim about a widened market's outcome count.
+    #[test]
+    fn an_unactivated_direct_root_refuses_as_absent_and_never_as_a_width() {
+        let root = Pubkey::new_unique();
+        let trading = Pubkey::new_unique();
+        let error = authenticate_direct_execution_root_shape_v1(
+            root,
+            &observed_root_v1(root, super::system_program::ID, 0, false, Vec::new()),
+            trading,
+        )
+        .expect_err("an absent root must refuse");
+        let text = error.to_string();
+        assert!(text.contains(&root.to_string()), "{text}");
+        assert!(text.contains("does not exist"), "{text}");
+        assert!(
+            text.contains("local-private-validator-direct-capability-activation-v1"),
+            "the refusal must name the loopback activation endpoint: {text}"
+        );
+        assert!(
+            text.contains("devnet-direct-capability-activation-v1"),
+            "the refusal must name the devnet activation endpoint: {text}"
+        );
+        assert!(
+            !text.contains("width") && !text.contains("bytes"),
+            "an absent root is not a width finding: {text}"
+        );
+    }
+
+    /// An occupied root names every clause that failed, not the first, and a
+    /// correctly activated root says nothing at all.
+    #[test]
+    fn an_occupied_direct_root_names_every_clause_that_failed() {
+        let root = Pubkey::new_unique();
+        let trading = Pubkey::new_unique();
+        let exact = dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+            + dclutch_direct_codec::successor::DIRECT_ROOT_STATE_BYTES_V1;
+        // The width both halves of the old comparison were made of. It is a
+        // pair of compile-time constants and no Market's outcome count reaches
+        // either one.
+        assert_eq!(exact, 256);
+
+        authenticate_direct_execution_root_shape_v1(
+            root,
+            &observed_root_v1(root, trading, 2_672_640, false, vec![0; exact]),
+            trading,
+        )
+        .expect("an activated root of the exact width is admitted");
+
+        let foreign = Pubkey::new_unique();
+        let owner_error = authenticate_direct_execution_root_shape_v1(
+            root,
+            &observed_root_v1(root, foreign, 1, false, vec![0; exact]),
+            trading,
+        )
+        .expect_err("a foreign-owned root must refuse")
+        .to_string();
+        assert!(owner_error.contains("owned by"), "{owner_error}");
+        assert!(owner_error.contains(&foreign.to_string()), "{owner_error}");
+        assert!(
+            !owner_error.contains("does not exist"),
+            "an occupied root is present: {owner_error}"
+        );
+
+        let executable_error = authenticate_direct_execution_root_shape_v1(
+            root,
+            &observed_root_v1(root, trading, 1, true, vec![0; exact]),
+            trading,
+        )
+        .expect_err("an executable root must refuse")
+        .to_string();
+        assert!(
+            executable_error.contains("is executable"),
+            "{executable_error}"
+        );
+
+        let width_error = authenticate_direct_execution_root_shape_v1(
+            root,
+            &observed_root_v1(root, trading, 1, false, vec![0; exact - 1]),
+            trading,
+        )
+        .expect_err("a short root must refuse")
+        .to_string();
+        assert!(width_error.contains("255 bytes"), "{width_error}");
+        assert!(width_error.contains("256"), "{width_error}");
+
+        // ALL of them, when an occupied root is wrong in every way at once.
+        // Reporting only the first is what the disjunction this replaced did.
+        let every_way = authenticate_direct_execution_root_shape_v1(
+            root,
+            &observed_root_v1(root, foreign, 1, true, vec![0; exact - 1]),
+            trading,
+        )
+        .expect_err("a root wrong in three ways must refuse")
+        .to_string();
+        for clause in ["owned by", "is executable", "255 bytes"] {
+            assert!(
+                every_way.contains(clause),
+                "every failing clause must be named, {clause} was not: {every_way}"
+            );
+        }
+        assert_eq!(
+            every_way.matches("; ").count(),
+            2,
+            "three clauses join with exactly two separators: {every_way}"
+        );
+
+        // A System-owned account that is NOT the snapshot's absence
+        // placeholder — it has been paid — is present, not absent.
+        let funded_error = authenticate_direct_execution_root_shape_v1(
+            root,
+            &observed_root_v1(root, super::system_program::ID, 1, false, Vec::new()),
+            trading,
+        )
+        .expect_err("a funded System account at the root coordinate must refuse")
+        .to_string();
+        assert!(
+            !funded_error.contains("does not exist") && funded_error.contains("owned by"),
+            "{funded_error}"
+        );
     }
 
     #[test]
@@ -3653,12 +4306,267 @@ mod tests {
     }
 
     #[test]
-    fn aliases_and_zero_coordinates_are_refused() {
+    fn aliases_and_zero_coordinates_are_refused_and_named() {
         let a = Pubkey::new_unique();
         let b = Pubkey::new_unique();
-        assert!(require_distinct_v1(&[a, b]).is_ok());
-        assert!(require_distinct_v1(&[a, a]).is_err());
-        assert!(require_distinct_v1(&[a, Pubkey::default()]).is_err());
+        assert!(require_distinct_v1(&[("payer", a), ("buyer", b)], &[]).is_ok());
+        let aliased = require_distinct_v1(&[("payer", a), ("buyer", a)], &[])
+            .expect_err("an unadmitted alias refuses");
+        let named = format!("{aliased}");
+        assert!(named.contains("payer"), "{named}");
+        assert!(named.contains("buyer"), "{named}");
+        assert!(named.contains(&a.to_string()), "{named}");
+        let zero = require_distinct_v1(&[("payer", a), ("buyer", Pubkey::default())], &[])
+            .expect_err("a default coordinate refuses");
+        assert!(format!("{zero}").contains("buyer"), "{zero}");
+    }
+
+    /// Every aliasing pair is reported, not the first one found.
+    #[test]
+    fn every_aliasing_pair_is_named_in_one_refusal() {
+        let a = Pubkey::new_unique();
+        let b = Pubkey::new_unique();
+        let refused = require_distinct_v1(
+            &[
+                ("payer", a),
+                ("fee recipient", a),
+                ("seller", b),
+                ("buyer", b),
+            ],
+            &[],
+        )
+        .expect_err("two independent aliases refuse");
+        let named = format!("{refused}");
+        assert!(named.contains("payer and fee recipient"), "{named}");
+        assert!(named.contains("seller and buyer"), "{named}");
+    }
+
+    /// The wallet-paid trade: the payer IS the buyer, and nothing else may
+    /// borrow that key. Neither on-chain setup instruction carries the buyer at
+    /// any account index, and both makers authorize with a detached Ed25519
+    /// intent signature rather than a transaction signature, so this pair is
+    /// the product model rather than a privilege merge.
+    #[test]
+    fn the_payer_may_be_the_buyer_and_no_other_coordinate() {
+        let buyer = Pubkey::new_unique();
+        let seller = Pubkey::new_unique();
+        let refund = Pubkey::new_unique();
+        assert!(
+            require_distinct_v1(
+                &[
+                    ("seller", seller),
+                    ("buyer", buyer),
+                    ("payer", buyer),
+                    ("Market rent beneficiary", refund),
+                ],
+                &[("payer", "buyer")],
+            )
+            .is_ok(),
+            "a buyer paying their own fees must plan"
+        );
+        for (label, coordinates) in [
+            (
+                "seller",
+                [
+                    ("seller", seller),
+                    ("buyer", buyer),
+                    ("payer", seller),
+                    ("Market rent beneficiary", refund),
+                ],
+            ),
+            (
+                "Market rent beneficiary",
+                [
+                    ("seller", seller),
+                    ("buyer", buyer),
+                    ("payer", refund),
+                    ("Market rent beneficiary", refund),
+                ],
+            ),
+        ] {
+            let refused = require_distinct_v1(&coordinates, &[("payer", "buyer")])
+                .expect_err("only the buyer pair is admitted");
+            assert!(format!("{refused}").contains(label), "{refused}");
+        }
+        assert!(
+            require_distinct_v1(
+                &[("seller", seller), ("buyer", seller)],
+                &[("payer", "buyer")]
+            )
+            .is_err(),
+            "an admitted pair naming an absent coordinate must not widen the check"
+        );
+    }
+
+    fn key_v1(text: &str) -> Pubkey {
+        core::str::FromStr::from_str(text).expect("canonical base58 address")
+    }
+
+    fn ticket_v1(maker: Pubkey, intent: CompactIntentV2) -> SignedDirectIntentV3 {
+        SignedDirectIntentV3 {
+            maker,
+            signature: [1; 64],
+            intent,
+        }
+    }
+
+    /// market19's real coordinates, and the two DIFFERENT addresses the two
+    /// derivations produce for the same seller.
+    ///
+    /// The 2026-08-31 session authored the seller ticket with the PARTICIPANT
+    /// collateral derivation -- `create_with_seed(owner, sha256("dclutch:
+    /// direct-collateral:v1" | market | owner | release set)[..32], Token-2022)`
+    /// -- which is the buyer's shape. The seller half of this route has no
+    /// admission and no such account; its collateral destination is the Direct
+    /// token PDA `direct_token_setup_v1` creates, which is why the producer
+    /// separately requires that address to be a vacant System-owned prestate.
+    /// The producer refused and named nothing, and the diagnosis cost a session.
+    #[test]
+    fn the_seller_direct_token_pda_is_not_the_participant_collateral_address() {
+        let market = key_v1("6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4");
+        let seller = key_v1("B6qxQCSwVeSfgcFyhNx38mcHs6FrTqRYpuDyQ4TVJ7cs");
+        let trading = key_v1("5ywjTNdo6DGTe7bC8p9CgFYWFrBNePx61xeXp8Cdhbkk");
+        let seeds = DirectTokenAccountSeedsV1::new(
+            market.to_bytes(),
+            2,
+            seller.to_bytes(),
+            DirectTokenAccountRoleV1::Seller,
+        )
+        .expect("seller Direct token seeds");
+        let seller_token = Pubkey::find_program_address(&seeds.as_slices(), &trading).0;
+        assert_eq!(
+            seller_token.to_string(),
+            "2xGo6Cxtfb41HJCrrqWBf73TSaJrbjUmFqr2urDi91q8"
+        );
+        assert_ne!(
+            seller_token.to_string(),
+            "HxwXjVqB9aFgNkcxpVHRycB9NqkTvVM3EPx3dxATyDcJ",
+            "the participant collateral derivation is not the seller's Direct token account"
+        );
+    }
+
+    /// The convicted clause, through the gate that convicted it.
+    #[test]
+    fn the_ticket_gate_names_the_seller_collateral_account_it_refused() {
+        let market = key_v1("6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4");
+        let seller = key_v1("B6qxQCSwVeSfgcFyhNx38mcHs6FrTqRYpuDyQ4TVJ7cs");
+        let buyer = key_v1("3bGyTA4FU2n3hn8Be9rwDiw6ri5ikM6wVTVFVgHCG2Lp");
+        let seller_token = key_v1("2xGo6Cxtfb41HJCrrqWBf73TSaJrbjUmFqr2urDi91q8");
+        let authored = key_v1("HxwXjVqB9aFgNkcxpVHRycB9NqkTvVM3EPx3dxATyDcJ");
+        let buyer_collateral = key_v1("6XUhhHLRrYjrwW7YJU2yqyPJPQgZT8BqBsGDMRV3YyUo");
+        let terms = DirectTradeTermsV1 {
+            outcome: 0,
+            fill: 1_000_000,
+            execution_price: 250_000,
+            fee_basis_points: 0,
+        };
+        let expected = FinalizedTicketExpectationV1 {
+            seller,
+            buyer,
+            market,
+            generation: 2,
+            observation_slot: 490_712_924,
+            seller_next_nonce: 0,
+            buyer_next_nonce: 0,
+            seller_collateral: seller_token,
+            buyer_collateral,
+            terms,
+        };
+        let half = |side: u8, collateral: Pubkey| CompactIntentV2 {
+            side,
+            lifecycle: 0,
+            outcome: 0,
+            market: market.to_bytes(),
+            generation: 2,
+            nonce: 0,
+            valid_from: 490_000_000,
+            valid_through: 506_000_000,
+            maximum_fill: 1_000_000,
+            limit_price: 250_000,
+            fee_basis_points: 0,
+            collateral_account: collateral.to_bytes(),
+        };
+        let good_buyer = ticket_v1(buyer, half(1, buyer_collateral));
+        assert!(
+            refusing_ticket_clauses_v1(
+                &expected,
+                ticket_v1(seller, half(0, seller_token)),
+                good_buyer,
+            )
+            .is_empty(),
+            "the corrected pair must plan"
+        );
+        let refusing =
+            refusing_ticket_clauses_v1(&expected, ticket_v1(seller, half(0, authored)), good_buyer);
+        assert_eq!(refusing.len(), 1, "{refusing:?}");
+        let clause = &refusing[0];
+        assert!(
+            clause.contains("seller ticket collateralAccount"),
+            "{clause}"
+        );
+        assert!(clause.contains(&authored.to_string()), "{clause}");
+        assert!(clause.contains(&seller_token.to_string()), "{clause}");
+    }
+
+    /// A refusal reports every failing clause, not the first: the single line
+    /// this replaced could not tell a stale nonce from an expired window.
+    #[test]
+    fn the_ticket_gate_names_every_refusing_clause_on_both_halves() {
+        let market = Pubkey::new_unique();
+        let seller = Pubkey::new_unique();
+        let buyer = Pubkey::new_unique();
+        let expected = FinalizedTicketExpectationV1 {
+            seller,
+            buyer,
+            market,
+            generation: 2,
+            observation_slot: 500,
+            seller_next_nonce: 3,
+            buyer_next_nonce: 4,
+            seller_collateral: Pubkey::new_unique(),
+            buyer_collateral: Pubkey::new_unique(),
+            terms: DirectTradeTermsV1 {
+                outcome: 0,
+                fill: 1_000_000,
+                execution_price: 250_000,
+                fee_basis_points: 0,
+            },
+        };
+        let half = |side: u8, nonce: u64, collateral: Pubkey| CompactIntentV2 {
+            side,
+            lifecycle: 0,
+            outcome: 0,
+            market: market.to_bytes(),
+            generation: 2,
+            nonce,
+            valid_from: 1,
+            valid_through: 1_000,
+            maximum_fill: 1_000_000,
+            limit_price: 250_000,
+            fee_basis_points: 0,
+            collateral_account: collateral.to_bytes(),
+        };
+        let mut stale = half(0, 2, expected.seller_collateral);
+        stale.valid_through = 400;
+        let mut wrong_buyer = half(1, 4, Pubkey::new_unique());
+        wrong_buyer.generation = 3;
+        let refusing = refusing_ticket_clauses_v1(
+            &expected,
+            ticket_v1(seller, stale),
+            ticket_v1(buyer, wrong_buyer),
+        );
+        assert_eq!(refusing.len(), 4, "{refusing:?}");
+        for fragment in [
+            "seller ticket nonce 2",
+            "seller ticket validThrough 400",
+            "buyer ticket generation 3",
+            "buyer ticket collateralAccount",
+        ] {
+            assert!(
+                refusing.iter().any(|clause| clause.contains(fragment)),
+                "{fragment} missing from {refusing:?}"
+            );
+        }
     }
 
     #[test]
@@ -3911,35 +4819,14 @@ mod tests {
         }
     }
 
+    /// The real writer, not a test-only restatement of it: this is exactly the
+    /// text `direct-intent-ticket-author-v1` writes and the browser panel emits.
     fn portable_ticket_bytes(
         signed: &dclutch_operator::direct_inline_v3::SignedDirectIntentV3,
     ) -> Vec<u8> {
-        let signature = signed
-            .signature
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        serde_json::to_vec(&PortableDirectTicketV1 {
-            kind: super::PORTABLE_DIRECT_TICKET_KIND_V1.into(),
-            maker: signed.maker.to_string(),
-            signature,
-            intent: PortableDirectTicketIntentV1 {
-                side: signed.intent.side,
-                lifecycle: signed.intent.lifecycle,
-                outcome: signed.intent.outcome,
-                market: Pubkey::new_from_array(signed.intent.market).to_string(),
-                generation: signed.intent.generation.to_string(),
-                nonce: signed.intent.nonce.to_string(),
-                valid_from: signed.intent.valid_from.to_string(),
-                valid_through: signed.intent.valid_through.to_string(),
-                maximum_fill: signed.intent.maximum_fill.to_string(),
-                limit_price: signed.intent.limit_price.to_string(),
-                fee_basis_points: signed.intent.fee_basis_points,
-                collateral_account: Pubkey::new_from_array(signed.intent.collateral_account)
-                    .to_string(),
-            },
-        })
-        .expect("ticket")
+        encode_portable_direct_ticket_v1(signed)
+            .expect("ticket")
+            .into_bytes()
     }
 
     #[test]
@@ -4058,5 +4945,159 @@ mod tests {
         for forbidden in ["--seller-keypair", "--buyer-keypair", "--secret-key"] {
             assert!(!usage.contains(forbidden), "usage exposed {forbidden}");
         }
+    }
+
+    /// Both prestates the chain admits are admitted, and every clause of the
+    /// third thing is proven red by mutating exactly one field away from a
+    /// destination that would otherwise pass.
+    ///
+    /// This is the red-proof for wall 7. The producer used to admit vacancy
+    /// alone, so a market that had run token setup once could never trade
+    /// again; the failure it produced named a "System-owned data-empty PDA
+    /// prestate", which describes the prestate of the instruction that CREATES
+    /// the account and says nothing about the one that PAYS it.
+    #[test]
+    fn both_admitted_token_destination_prestates_and_every_refusing_clause() {
+        let mint = key_v1("2xGo6Cxtfb41HJCrrqWBf73TSaJrbjUmFqr2urDi91q8");
+        let owner = Pubkey::new_unique();
+        let token_program = Pubkey::new_unique();
+        let initialized = TokenAccount::initialized_base_bytes(mint.to_bytes(), owner.to_bytes())
+            .expect("initialized base");
+
+        // A MISSING account is the vacant prestate: the runtime renders it that
+        // way to the instruction that creates the PDA.
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(None, mint, owner, token_program);
+        assert_eq!(prestate, Some(DirectTokenDestinationPrestateV1::Vacant));
+        assert!(clauses.is_empty(), "{clauses:?}");
+
+        let vacant = RpcAccount {
+            lamports: 0,
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+            data: Vec::new(),
+        };
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&vacant), mint, owner, token_program);
+        assert_eq!(prestate, Some(DirectTokenDestinationPrestateV1::Vacant));
+        assert!(clauses.is_empty(), "{clauses:?}");
+
+        let good = RpcAccount {
+            lamports: 2_039_280,
+            owner: token_program,
+            executable: false,
+            rent_epoch: 0,
+            data: initialized.to_vec(),
+        };
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&good), mint, owner, token_program);
+        assert_eq!(
+            prestate,
+            Some(DirectTokenDestinationPrestateV1::Initialized),
+            "{clauses:?}"
+        );
+        assert!(clauses.is_empty(), "{clauses:?}");
+
+        // THE BALANCE IS NOT A CLAUSE, and this is the assertion that keeps it
+        // from becoming one. `direct_token_setup_v1`'s poststate is the ZERO
+        // balance of `initialized_base_bytes`, and mirroring that here would
+        // admit a destination only until the first time it was paid -- a market
+        // that could trade exactly twice instead of exactly once. The trade
+        // reads this balance as an observation, never as a requirement.
+        let mut paid = good.clone();
+        paid.data = TokenAccount::project_amount_poststate(&initialized, 50_000_000)
+            .expect("paid seller destination")
+            .to_vec();
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&paid), mint, owner, token_program);
+        assert_eq!(
+            prestate,
+            Some(DirectTokenDestinationPrestateV1::Initialized),
+            "a seller destination that has been paid once is still payable: {clauses:?}"
+        );
+
+        // Nor are the lamports: that clause belongs to token setup's rent
+        // normalization, and the trade does not read this account's lamports.
+        let mut underfunded = good.clone();
+        underfunded.lamports = 1;
+        let (prestate, _) =
+            classify_direct_token_destination_v1(Some(&underfunded), mint, owner, token_program);
+        assert_eq!(prestate, Some(DirectTokenDestinationPrestateV1::Initialized));
+
+        // Each mutation below moves exactly one field and must refuse by name.
+        let cases: [(&str, Box<dyn Fn(&mut RpcAccount)>, &str); 5] = [
+            (
+                "a stranger owns it",
+                Box::new(|account: &mut RpcAccount| account.owner = Pubkey::new_unique()),
+                "Realm token program",
+            ),
+            (
+                "it is executable",
+                Box::new(|account: &mut RpcAccount| account.executable = true),
+                "executable",
+            ),
+            (
+                "it is the wrong length",
+                Box::new(|account: &mut RpcAccount| account.data.truncate(ACCOUNT_BYTES - 1)),
+                "bytes rather than the",
+            ),
+            (
+                "it is frozen rather than initialized",
+                Box::new(|account: &mut RpcAccount| {
+                    account.data[TokenAccountLayoutV1::STATE] = 2;
+                }),
+                "rather than Initialized",
+            ),
+            (
+                "it carries a native reserve",
+                Box::new(|account: &mut RpcAccount| {
+                    account.data[TokenAccountLayoutV1::NATIVE_RESERVE] = 1;
+                }),
+                "native reserve",
+            ),
+        ];
+        for (label, mutate, expected) in cases {
+            let mut hostile = good.clone();
+            mutate(&mut hostile);
+            let (prestate, clauses) =
+                classify_direct_token_destination_v1(Some(&hostile), mint, owner, token_program);
+            assert_eq!(prestate, None, "{label} was admitted");
+            assert!(
+                clauses.iter().any(|clause| clause.contains(expected)),
+                "{label} refused without naming {expected}: {clauses:?}"
+            );
+        }
+
+        // The Mint and the token owner are the two identities that make this
+        // THIS trade's destination rather than some other market's.
+        let other = key_v1("6wLYToyGCRNa39Hjph9L4zgCPE4mjr2wKiHLQSyBDKaK");
+        let (prestate, clauses) =
+            classify_direct_token_destination_v1(Some(&good), other, owner, token_program);
+        assert_eq!(prestate, None);
+        assert!(
+            clauses.iter().any(|clause| clause.contains("collateral Mint")),
+            "{clauses:?}"
+        );
+        let (prestate, clauses) = classify_direct_token_destination_v1(
+            Some(&good),
+            mint,
+            Pubkey::new_unique(),
+            token_program,
+        );
+        assert_eq!(prestate, None);
+        assert!(
+            clauses.iter().any(|clause| clause.contains("token owner")),
+            "{clauses:?}"
+        );
+
+        // ALL failing clauses, not the first: an operator who fixes one and
+        // re-runs has learned almost nothing.
+        let mut doubly = good.clone();
+        doubly.executable = true;
+        doubly.data[TokenAccountLayoutV1::STATE] = 2;
+        let (_, clauses) =
+            classify_direct_token_destination_v1(Some(&doubly), mint, owner, token_program);
+        assert!(clauses.len() >= 2, "only one clause reported: {clauses:?}");
     }
 }

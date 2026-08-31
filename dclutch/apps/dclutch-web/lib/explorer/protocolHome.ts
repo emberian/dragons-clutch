@@ -135,10 +135,10 @@ export async function inspectProtocolHomeV1(client: ProtocolHomeRpc, deployment:
     .map((entry) => Object.freeze({ ...entry.row, roles: Object.freeze([...entry.roles]) }));
 
   const activityNote = refusedHistories.length > 0
-    ? `This node refused the signature history for ${refusedHistories.join(', ')} — the list below covers only the programs it answered for. A node's history is its own, never a protocol index.`
+    ? `This node refused the signature history for ${refusedHistories.join(', ')}; only the programs it answered for appear here.`
     : activity.length === 0
-      ? 'This node lists no signature history for any of the seven programs. That is this node’s answer, not a protocol fact: a node without transaction history answers empty for every address.'
-      : `Newest first, from this node’s own per-address signature history over the seven programs — a node’s history, never a protocol index.`;
+      ? 'This node lists no signature history for any of the seven programs. Another node may answer differently.'
+      : `Newest first, from this node’s own per-address signature history over the seven programs.`;
 
   return Object.freeze({
     facts,
@@ -175,6 +175,6 @@ export function classifySearchV1(text: string): SearchClassificationV1 {
   }
   return Object.freeze({
     kind: 'refused',
-    reason: 'That is neither one canonical base58 address nor one base58 transaction signature. Those are the two things a chain can be asked for by name.',
+    reason: 'That is neither one canonical base58 address nor one base58 transaction signature.',
   });
 }

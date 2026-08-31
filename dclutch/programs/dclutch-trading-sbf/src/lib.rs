@@ -63,6 +63,12 @@ pub mod direct;
 /// Permissionless, release-authenticated Direct Open-to-Retiring transition.
 #[cfg(feature = "families")]
 pub mod direct_begin_retiring_v1;
+/// Permissionless, release-authenticated close of one drained maker replay.
+#[cfg(feature = "families")]
+pub mod direct_close_maker_v1;
+/// Permissionless settlement of one Direct fee, in a transaction of its own.
+#[cfg(feature = "families")]
+pub mod direct_fee_settlement_v1;
 /// Permissionless first-use Direct Custody replay setup.
 #[cfg(feature = "families")]
 pub mod direct_replay_setup_v1;
@@ -185,12 +191,12 @@ pub enum TradingSbfError {
     /// Instructions-sysvar or native-signature evidence was not exact.
     NativeSignature = 0x4006,
     /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
     ///
     /// Decision 0012. Not a corrupted account and not an attack: the exact
     /// upgrade authority the release names shipped new bytes, so the cached
-    /// authentication no longer describes what is deployed. Every open market
-    /// on the superseded release generation refuses until a re-release
-    /// re-authenticates the new deployment and re-pins its slot.
+    /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x4007,
     /// This route needs the extended heap and the transaction did not grant it.
     ///
@@ -205,20 +211,208 @@ pub enum TradingSbfError {
     /// `ComputeBudgetInstruction::request_heap_frame` to the transaction and
     /// keep the instructions sysvar in the account frame.
     HeapFrame = 0x4008,
+    /// The account offered to `CloseSeal` is not a live canonical seal.
+    ///
+    /// Omission `P-006`. It is absent, System-owned, the wrong width, not
+    /// writable, not rent-exempt, carries a body that is not a canonical
+    /// artifact-profile-1 seal, or sits at an address its own body does not
+    /// reproduce. The ordinary reading is the first one: `CloseSeal` is
+    /// permissionless and racing is expected, so **a second close of the same
+    /// seal refuses here, by absence**, and that is the whole of the
+    /// double-close story.
+    CloseSealAccount = 0x4009,
+    /// `CloseSeal` was aimed at a seal the live Trading release still addresses.
+    ///
+    /// Omission `P-006`, and the conjunct the whole route rests on. A seal's
+    /// fourth PDA seed is the Trading semantic release that wrote it, so a
+    /// release stops addressing a seal rather than invalidating it (decision
+    /// 0005). The close is allowed only once the seal has fallen out of the
+    /// live release's address space: the closer exhibits a Registry-owned
+    /// activation cache that still authenticates its Trading role against this
+    /// deployed Program and its ProgramData — which a superseded generation
+    /// cannot do, because the Loader moved its pinned slot (decision 0012) —
+    /// and the semantic release that cache names must differ from the seal's.
+    ///
+    /// Refusing here is also what keeps the seal write-once: the writer derives
+    /// the seal address from that same live semantic release, so an address
+    /// this code protects is an address the live executable could rewrite.
+    CloseSealLiveRelease = 0x400A,
+    /// The `CloseSeal` frame was not the exact permissionless closing shape.
+    ///
+    /// Omission `P-006`. The beneficiary did not sign, is not a writable empty
+    /// System wallet, or aliases the seal; the Registry account is not the one
+    /// the seal's own key names; the Trading program account is not this
+    /// executable; or the Rent sysvar is not the Rent sysvar. Distinct from
+    /// [`TradingSbfError::CloseSealAccount`] because it says the *caller's*
+    /// frame is wrong rather than that there is nothing here to close.
+    CloseSealFrame = 0x400B,
+    /// The maker replay this fee settlement names records no obligation.
+    ///
+    /// `FEE_SECOND_TRANSACTION_V1` section 2.4 invariant 3: tx1 sets
+    /// `fee_owed := combined_fee` and tx2 sets it to zero. Zero is therefore
+    /// both "never owed" and "already settled", and the route cannot and need
+    /// not distinguish them -- in both states there is nothing to move and the
+    /// maker is not blocked. A replay at the pre-`fee_owed` width reads zero
+    /// and refuses here too.
+    FeeNotOwed = 0x400C,
+    /// The fee destination is not a token account of the configured recipient.
+    ///
+    /// Pinned by OWNER and mint, never by address: a recipient token account
+    /// closed between the fill and its settlement must not strand the fee, so
+    /// any account of that owner will do (design section 3). "Any account of
+    /// that owner" is not "any account", and this is where the difference is
+    /// refused.
+    FeeDestination = 0x400D,
+    /// The fee source is not a token account of the debtor.
+    ///
+    /// Custody checks `source.key == request.source` and the source's mint, and
+    /// never `semantic.source_owner` -- so without this pin one maker could
+    /// settle their own obligation out of another maker's standing delegation,
+    /// clearing themselves for free and stranding the account they spent. The
+    /// design's section 1.4 refusal table does not enumerate this row; it is
+    /// added here rather than left to the reader.
+    FeeSource = 0x400E,
+    /// The `CloseMakerReplay` frame was not the exact permissionless shape.
+    ///
+    /// Wall 22. The account count, a privilege, or a duplicate address is
+    /// wrong; the Trading program account is not this executable; the Rent
+    /// sysvar is not the Rent sysvar; or the rent destination is not the plain
+    /// System wallet the replay's own `rent_owner` field records. The remedy
+    /// is the caller's: rebuild the 22-account frame from the replay's own
+    /// recorded facts.
+    CloseMakerFrame = 0x400F,
+    /// The account offered as the maker replay is not the canonical one.
+    ///
+    /// Wall 22. It is absent, System-owned, carries a body that is not a
+    /// canonical replay for the request's market/generation/maker coordinate,
+    /// or sits at an address its own persisted bump does not reproduce.
+    /// `CloseMakerReplay` is permissionless and racing is expected, so **a
+    /// second close of the same replay refuses here, by absence** -- the same
+    /// double-close story as [`TradingSbfError::CloseSealAccount`].
+    CloseMakerReplayAccount = 0x4010,
+    /// The maker replay still owes its recorded Direct fee.
+    ///
+    /// Cohort-9 review item 1, amendment 2. This account is the SOLE record of
+    /// the FEE-TX2 receivable -- `fee_settlement_v1` reads the amount off it
+    /// and nothing else -- so a close that ignored `fee_owed` would erase a
+    /// debt with no residue. The remedy is always available: fee settlement is
+    /// deliberately phase-free, so settle (permissionlessly), then close.
+    CloseMakerFeeOutstanding = 0x4011,
+    /// The maker replay still has registered live intents.
+    ///
+    /// Wall 22. `live_count` is nonzero: registered records under this replay
+    /// have not all closed. Close them first -- older ones are permissionlessly
+    /// closable once `cancel-through` passes them -- then close the replay.
+    CloseMakerLiveIntents = 0x4012,
+}
+
+impl TradingSbfError {
+    /// Every refusal this boundary can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
+    /// to the enum does not compile until its author writes an arm there, and
+    /// the only arm that satisfies the assertions is its own index here.
+    pub const ALL: [Self; 19] = [
+        Self::UnsupportedContent,
+        Self::Release,
+        Self::Root,
+        Self::Content,
+        Self::Transition,
+        Self::Commit,
+        Self::NativeSignature,
+        Self::ReleaseSuperseded,
+        Self::HeapFrame,
+        Self::CloseSealAccount,
+        Self::CloseSealLiveRelease,
+        Self::CloseSealFrame,
+        Self::FeeNotOwed,
+        Self::FeeDestination,
+        Self::FeeSource,
+        Self::CloseMakerFrame,
+        Self::CloseMakerReplayAccount,
+        Self::CloseMakerFeeOutstanding,
+        Self::CloseMakerLiveIntents,
+    ];
+
+    /// This refusal's position in [`TradingSbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a
+    /// sixteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::UnsupportedContent => 0,
+            Self::Release => 1,
+            Self::Root => 2,
+            Self::Content => 3,
+            Self::Transition => 4,
+            Self::Commit => 5,
+            Self::NativeSignature => 6,
+            Self::ReleaseSuperseded => 7,
+            Self::HeapFrame => 8,
+            Self::CloseSealAccount => 9,
+            Self::CloseSealLiveRelease => 10,
+            Self::CloseSealFrame => 11,
+            Self::FeeNotOwed => 12,
+            Self::FeeDestination => 13,
+            Self::FeeSource => 14,
+            Self::CloseMakerFrame => 15,
+            Self::CloseMakerReplayAccount => 16,
+            Self::CloseMakerFeeOutstanding => 17,
+            Self::CloseMakerLiveIntents => 18,
+        }
+    }
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    TradingSbfError::UnsupportedContent as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE,
-    "TradingSbfError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (TradingSbfError::HeapFrame as u32)
-        < dclutch_refusal_registry::TRADING_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "TradingSbfError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one", and it stopped bounding the enum the
+// moment a variant was appended past the one it named. That happened TWICE in
+// one week -- `CloseSeal`'s three arrived after `HeapFrame` on main, and the
+// fee lane's three arrived after those -- and neither went red.
+//
+// A variant COUNT was the first repair, and it was a real improvement: bumping
+// the count without moving the named variant refused. But the count was still a
+// number a human typed, and the case it could not see is the one that keeps
+// happening -- a sixteenth variant appended while the count and the named
+// ceiling are both left alone. `FeeSource` is still the fourteenth index, the
+// count still reads 15, both assertions still pass, and the new refusal is
+// checked by nothing. The count did not close the hole; it moved it.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here. The hand-typed count retires into
+// `ALL.len()`, which is the same number with nobody left to mistype it.
+const _: () = {
+    assert!(
+        TradingSbfError::ALL[0] as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE,
+        "TradingSbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < TradingSbfError::ALL.len() {
+        let variant = TradingSbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "TradingSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::TRADING_REFUSAL_BASE + index as u32,
+            "TradingSbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::TRADING_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "TradingSbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<TradingSbfError> for ProgramError {
     fn from(value: TradingSbfError) -> Self {
@@ -372,6 +566,14 @@ pub fn process_instruction(
         );
     }
     #[cfg(feature = "families")]
+    if dclutch_direct_codec::close_maker_v1::is_direct_close_maker_v1(instruction_data) {
+        return direct_close_maker_v1::process_direct_close_maker_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    #[cfg(feature = "families")]
     if dclutch_direct_codec::replay_setup_v1::is_direct_replay_setup_v1(instruction_data) {
         return direct_replay_setup_v1::process_direct_replay_setup_v1(
             program_id,
@@ -382,6 +584,16 @@ pub fn process_instruction(
     #[cfg(feature = "families")]
     if dclutch_direct_codec::token_setup_v1::is_direct_token_setup_v1(instruction_data) {
         return direct_token_setup_v1::process_direct_token_setup_v1(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
+    // The fee leg, in the transaction of its own that
+    // `docs/design/FEE_SECOND_TRANSACTION_V1.md` moved it into.
+    #[cfg(feature = "families")]
+    if dclutch_direct_codec::fee_settlement_v1::is_direct_fee_settlement_v1(instruction_data) {
+        return direct_fee_settlement_v1::process_direct_fee_settlement_v1(
             program_id,
             accounts,
             instruction_data,
@@ -494,6 +706,15 @@ pub fn process_instruction(
     // ever persist this executable's own verdict about immutable public bytes.
     if dclutch_capability_seal_contract::is_capability_seal_request_v1(instruction_data) {
         return hot_v3::process_capability_seal_v1(program_id, accounts, instruction_data);
+    }
+    // Omission P-006. The other end of the seal's life: a seal the live release
+    // no longer addresses is 968 bytes of rent nobody can reach, and the class
+    // grows once per Trading release rather than once per Market. The closer
+    // signs, keeps exactly the rent the close liberates, and races nobody --
+    // the second attempt refuses by absence. It creates nothing, signs for
+    // nothing, and touches exactly one account this Program owns.
+    if dclutch_capability_seal_contract::is_capability_seal_close_request_v1(instruction_data) {
+        return hot_v3::process_capability_seal_close_v1(program_id, accounts, instruction_data);
     }
     if hot_v3::is_hot_execution_v3(instruction_data) {
         hot_v3::process_hot_execution_v3(program_id, accounts, instruction_data)

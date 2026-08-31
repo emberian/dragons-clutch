@@ -47,21 +47,28 @@ function handle(state: WalletConnectionStateV1): WalletDirectoryHandleV1 {
 
 function render(discovery: WalletDiscoveryV1, intent = WALLET_CONNECTION_IDLE_V1): string {
   const state = projectWalletConnectionV1(discovery, intent);
-  return renderToStaticMarkup(<WalletDirectory directory={handle(state)} purpose="payer identity" onConnected={() => undefined} />);
+  return renderToStaticMarkup(<WalletDirectory directory={handle(state)} onConnected={() => undefined} />);
 }
 
 describe('browser wallet directory panel', () => {
-  it('states honestly that no registry exists under SSR or a wallet-less browser', () => {
+  /**
+   * Renegotiated 2026-08-31. This panel used to carry two standing paragraphs
+   * -- what connecting does and does not do, and why an injection-only wallet
+   * is not listed or probed -- plus a Wallet-Standard-flavoured status line
+   * under every state. The panel is now a heading, the buttons, and one state
+   * line. What is still pinned is that each state says the right SHORT thing
+   * and never implies the app is at fault for a missing extension.
+   */
+  it('says there is no wallet, without blaming the app or naming the registry', () => {
     const html = render(discoverWalletsV1(null));
-    expect(html).toContain('No Wallet Standard registry exists in this runtime');
-    expect(html).toContain('Connecting reads a public address only.');
+    expect(html).toContain('No browser wallet found.');
     expect(html).not.toContain('wallet-choice');
+    expect(html).not.toContain('Wallet Standard');
   });
 
-  it('says a registry is present but empty rather than implying a wallet is missing from the app', () => {
+  it('tells an empty registry apart from a missing one, and says what to do', () => {
     const html = render(discoverWalletsV1(registry([])));
-    expect(html).toContain('no browser wallet has registered');
-    expect(html).toContain('Install a conforming Solana wallet extension');
+    expect(html).toContain('No wallet extension found. Install a Solana wallet to connect.');
   });
 
   it('lists every conforming wallet and discloses each refused registration', () => {
@@ -77,15 +84,18 @@ describe('browser wallet directory panel', () => {
     expect(html).toContain('Phantom');
     expect(html).toContain('Solflare');
     expect(html).toContain('Talisman');
-    expect(html).toContain('1 announced registration refused');
+    // A wallet that could not be listed is still disclosed, in an expander,
+    // with its exact reason -- but the count no longer narrates the mechanism.
+    expect(html).toContain('1 wallet could not be listed');
     expect(html).toContain('no solana: chain; it is not a Solana Wallet Standard wallet');
-    expect(html).not.toContain('Forget identity');
+    expect(html).not.toContain('Disconnect');
   });
 
-  it('says plainly that a legacy injection-only wallet is not discoverable here', () => {
+  it('carries no standing explanation of what connecting does', () => {
     const html = render(discoverWalletsV1(registry([])));
-    expect(html).toContain('Only wallets that register through the Wallet Standard are listed');
-    expect(html).toContain('is not silently probed for');
+    for (const sermon of ['Connecting reads a public address only', 'is not silently probed for', 'Only wallets that register']) {
+      expect(html).not.toContain(sermon);
+    }
   });
 
   it('shows one connected identity as identity only, with a way to forget it', () => {
@@ -93,24 +103,23 @@ describe('browser wallet directory panel', () => {
     const connecting = walletConnectionTransitionV1(WALLET_CONNECTION_IDLE_V1, { kind: 'connect-requested', walletId: 'Phantom 1.0.0' });
     const html = render(discovery, walletConnectionTransitionV1(connecting, { kind: 'connect-succeeded', walletId: 'Phantom 1.0.0', address: ADDRESS, label: null }));
     expect(html).toContain('wallet-choice connected');
-    expect(html).toContain('identity only; no signature requested');
-    expect(html).toContain('Forget identity');
+    expect(html).toContain(`Connected · ${ADDRESS}`);
+    expect(html).toContain('Disconnect');
   });
 });
 
 describe('workspace wallet boundaries', () => {
   it('keeps the Wallet Standard directory on the release-gated Rational open route', () => {
     const html = renderToStaticMarkup(<RationalOpenPanel />);
-    expect(html).toContain('Browser wallet · Wallet Standard');
-    expect(html).toContain('No Wallet Standard registry exists in this runtime');
+    expect(html).toContain('No browser wallet found.');
     expect(html).not.toContain('Connect identity');
     expect(html).not.toContain('Connect payer');
   });
 
   it('keeps the read-only Direct preview free of wallet and transaction controls', () => {
     const html = renderToStaticMarkup(<DirectTradeWorkspace />);
-    expect(html).not.toContain('Browser wallet · Wallet Standard');
-    expect(html).toContain('This page has no wallet connection, signature request, packet download, or submission control.');
+    expect(html).not.toContain('wallet-directory');
+    expect(html).toContain('No wallet connection, signature request, packet download, or submission control.');
     expect(html).toContain('No wallet request · no packet builder · no submission path');
   });
 

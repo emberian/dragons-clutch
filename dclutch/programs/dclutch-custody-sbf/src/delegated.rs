@@ -13,7 +13,7 @@ pub(super) fn process(
     program_id: &Pubkey,
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
-    caller_authority_bump: Option<u8>,
+    relay: CustodyBumpRelayV1,
 ) -> ProgramResult {
     let request = DelegatedCustodyRequestV2::decode(instruction_data)
         .map_err(|_| CustodySbfError::Instruction)?;
@@ -23,16 +23,10 @@ pub(super) fn process(
     // already split off by `split_caller_authority_bump_v1`, so this digest is
     // still taken over exactly the request the parent hashed.
     let request_digest = hash(instruction_data).to_bytes();
-    let market = authenticate_common_frame(
-        program_id,
-        accounts,
-        custody,
-        request_digest,
-        None,
-        caller_authority_bump,
-    )?;
+    let market =
+        authenticate_common_frame(program_id, accounts, custody, request_digest, None, relay)?;
     let realm = authenticate_realm(program_id, accounts, custody, market)?;
-    execute_transfer(program_id, accounts, request, request_digest, realm)
+    execute_transfer(program_id, accounts, request, request_digest, realm, relay)
 }
 
 /// Execute one positive external debit and refuse any unexpected residual authority.
@@ -43,8 +37,9 @@ pub(super) fn execute_transfer(
     request: DelegatedCustodyRequestV2,
     request_digest: [u8; 32],
     realm: RealmFacts,
+    relay: CustodyBumpRelayV1,
 ) -> ProgramResult {
-    let outcome = execute_token_effect(program_id, accounts, &request, realm)?;
+    let outcome = execute_token_effect(program_id, accounts, &request, realm, relay)?;
     commit_delegated(accounts, request, request_digest, outcome)
 }
 
@@ -64,6 +59,7 @@ fn execute_token_effect(
     accounts: &[AccountInfo<'_>],
     request: &DelegatedCustodyRequestV2,
     realm: RealmFacts,
+    relay: CustodyBumpRelayV1,
 ) -> Result<TransferOutcome, ProgramError> {
     let custody = request.custody;
     let mint = account(accounts, 9)?;
@@ -72,7 +68,8 @@ fn execute_token_effect(
     let authority = account(accounts, 12)?;
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, custody, realm)?;
-    let authority_bump = validate_custody_authority(program_id, authority, custody)?;
+    let authority_bump =
+        validate_custody_authority(program_id, authority, custody, relay.transfer_authority)?;
     if request.delegate_before != authority.key.to_bytes()
         || source.key.to_bytes() != custody.source
         || destination.key.to_bytes() != custody.destination

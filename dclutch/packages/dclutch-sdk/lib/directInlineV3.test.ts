@@ -19,8 +19,14 @@ import {
   DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3,
   DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3,
   DIRECT_INLINE_CURRENT_WIRE_BYTES_V3,
+  decodeHotBumpHintsV1,
   encodeCompactIntentSigningMessageV2,
   encodeDirectInlineOrdinaryRequestV3,
+  encodeHotBumpHintsV1,
+  HOT_BUMP_HINTS_ABSENT_V1,
+  HOT_BUMP_HINTS_OFFSET_V1,
+  HOT_BUMP_HINT_COUNT_V1,
+  type HotBumpHintsV1,
   previewDirectInlineV3,
   projectDirectInlineSealedExecutionRouteV3,
   validateDirectInlineInstructionSequenceV3,
@@ -51,6 +57,23 @@ import {
 } from './generated/directInlineV3';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
+
+/**
+ * Eight distinct nonzero bumps, standing in for a mined block.
+ *
+ * The MINING is proven elsewhere and against the other language:
+ * `directHotBumpHintsV1.test.ts` reproduces the Rust vector's block byte for
+ * byte. What this file owns is the WIRE -- that the block lands at its offset,
+ * that filling it moves nothing else, and that the packet does not grow -- so
+ * these are inputs rather than answers, and distinct so a swapped slot shows.
+ */
+const MINED: HotBumpHintsV1 = Object.freeze({
+  market: 254,
+  root: 253,
+  lifecycle: Object.freeze([252, 251] as const),
+  childCaller: Object.freeze([250, 249] as const),
+  childRelay: Object.freeze([248, 247] as const),
+});
 
 function key(seed: number): string {
   return new PublicKey(new Uint8Array(32).fill(seed)).toBase58();
@@ -204,6 +227,128 @@ describe('Direct V3 inline transaction construction', () => {
       totalFeeTransfer: 4n,
     });
     expect(() => previewDirectInlineV3(candidate, seller, buyer, 2_000n, 500_001n, 1_000n)).toThrow(/not exactly representable/);
+  });
+
+  it('the wallet wire carries the caller-mined hint block and does not grow by a byte', () => {
+    const candidate = route(true, true);
+    const { seller, buyer } = participants(candidate.market, 0);
+    const plan = compileDirectInlineTransactionV3({
+      route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n,
+      bumpHints: MINED,
+    });
+    expect([...plan.hotInstructionBytes.slice(HOT_BUMP_HINTS_OFFSET_V1, HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1)])
+      .toEqual([...encodeHotBumpHintsV1(MINED)]);
+    expect(plan.bumpHints).toEqual(MINED);
+    expect(plan.minedBumpHintSlots).toBe(8);
+    // The block is inside the envelope, before the family request, which is why
+    // filling it moves no digest and no signed message -- and why the packet is
+    // still the exact 1,167 bytes the devnet driver and the release preflight
+    // both pin. Every geometry pin below is the unhinted one, unchanged.
+    expect(HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1).toBe(HOT_EXECUTION_ENVELOPE_BYTES_V3);
+    expect(plan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
+    expect(plan.wireBytes.length).toBeLessThanOrEqual(1_232);
+    expect(plan.transaction.message.staticAccountKeys).toHaveLength(4);
+    expect(plan.loadedAddresses).toBe(DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3);
+    expect(plan.transaction.message.compiledInstructions[plan.tradingInstructionIndex]?.accountKeyIndexes).toHaveLength(78);
+  });
+
+  it('an omitted hint block is the absent wire, which searches exactly as it used to', () => {
+    // Backward compatibility, executed. Every caller written before this block
+    // existed emits eight zeros, and eight zeros is ABSENT rather than a value:
+    // Trading falls back to find_program_address for every address the block
+    // could have named. No account, no market and no caller needs migrating.
+    const candidate = route(true, true);
+    const { seller, buyer } = participants(candidate.market, 0);
+    const plan = compileDirectInlineTransactionV3({ route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n });
+    expect([...plan.hotInstructionBytes.slice(HOT_BUMP_HINTS_OFFSET_V1, HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(plan.bumpHints).toEqual(HOT_BUMP_HINTS_ABSENT_V1);
+    expect(plan.minedBumpHintSlots).toBe(0);
+    expect(plan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
+  });
+
+  it('a hint moves the eight envelope bytes and nothing else the wire signs', () => {
+    // The safety argument for taking eight bytes from a stranger, executed
+    // rather than argued. If a hint could reach the family request it would
+    // move the parent request digest, every child caller authority derived from
+    // it, and the two maker Ed25519 windows -- so a hinted trade would not be
+    // the same trade. Both wires are compiled from the same inputs here, and
+    // the ONLY difference is the block itself.
+    const candidate = route(true, true);
+    const { seller, buyer } = participants(candidate.market, 0);
+    const common = { route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n } as const;
+    const bare = compileDirectInlineTransactionV3(common);
+    const hinted = compileDirectInlineTransactionV3({ ...common, bumpHints: MINED });
+    expect(hinted.hotInstructionBytes).toHaveLength(bare.hotInstructionBytes.length);
+    const moved = [...bare.hotInstructionBytes].flatMap((value, offset) => value === hinted.hotInstructionBytes[offset] ? [] : [offset]);
+    expect(moved.every((offset) => offset >= HOT_BUMP_HINTS_OFFSET_V1 && offset < HOT_EXECUTION_ENVELOPE_BYTES_V3)).toBe(true);
+    expect(moved.length).toBe(HOT_BUMP_HINT_COUNT_V1);
+    expect([...hinted.requestBytes]).toEqual([...bare.requestBytes]);
+    // The native evidence is byte-identical: its maker and message coordinates
+    // are ABSOLUTE offsets at or past HOT_FAMILY_REQUEST_OFFSET_V3, which the
+    // block sits before and therefore cannot move.
+    expect([...hinted.nativeEvidenceBytes]).toEqual([...bare.nativeEvidenceBytes]);
+    expect(hinted.nativeMessageOffsets).toEqual(bare.nativeMessageOffsets);
+    expect(hinted.wireBytes).toHaveLength(bare.wireBytes.length);
+    expect(hinted.preview).toEqual(bare.preview);
+  });
+
+  it('a hinted Trading instruction still passes its own evidence and sequence validators', () => {
+    // This row exists because the check it replaces was the bug. The builder
+    // used to require the eight bytes to be ZERO before it would encode
+    // evidence for a wire, which meant a mined wire could not pass the encoder
+    // that was supposed to authenticate it. The Rust codec never had that
+    // check: `split_instruction` reads magic, version, profile and request
+    // width, and treats the hint span as data.
+    const candidate = route();
+    const { seller, buyer } = participants(candidate.market);
+    const plan = compileDirectInlineTransactionV3({
+      route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n,
+      bumpHints: MINED,
+    });
+    const trading = new TransactionInstruction({
+      programId: new PublicKey(candidate.tradingProgram), keys: [], data: plan.hotInstructionBytes as Buffer,
+    });
+    const evidence = new TransactionInstruction({
+      programId: Ed25519Program.programId, keys: [], data: plan.nativeEvidenceBytes as Buffer,
+    });
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      evidence, trading, plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).not.toThrow();
+    expect(() => validateDirectInlineInstructionSequenceV3([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 65_536 }),
+      evidence, trading,
+    ], new PublicKey(candidate.tradingProgram))).not.toThrow();
+    // And the container check the relaxation must NOT have weakened: Hot bytes
+    // behind a 128-byte header are still not an authenticated container.
+    const headered = new Uint8Array(128 + plan.hotInstructionBytes.length);
+    headered.set(plan.hotInstructionBytes, 128);
+    expect(() => validateDirectNativeEvidenceInstructionV3(
+      evidence,
+      new TransactionInstruction({ programId: new PublicKey(candidate.tradingProgram), keys: [], data: headered as Buffer }),
+      plan.tradingInstructionIndex, new PublicKey(candidate.tradingProgram),
+    )).toThrow(/canonical direct-bias-zero Hot envelope/);
+  });
+
+  it('refuses a hint block that is not exactly eight one-byte slots', () => {
+    const candidate = route(true, true);
+    const { seller, buyer } = participants(candidate.market, 0);
+    const common = { route: candidate, seller, buyer, fill: 2_000n, executionPrice: 500_000n, clockSlot: 1_000n } as const;
+    // A slot outside a byte is the wrong-sized block a hand-built caller
+    // actually produces: the block is fixed-width, so an over-wide slot has
+    // nowhere to go and must refuse before it truncates into its neighbour.
+    for (const hostile of [
+      { ...MINED, market: 256 },
+      { ...MINED, root: -1 },
+      { ...MINED, lifecycle: [1.5, 2] as const },
+      { ...MINED, childRelay: [1, 0x1_00] as const },
+    ]) {
+      expect(() => compileDirectInlineTransactionV3({ ...common, bumpHints: hostile })).toThrow(/not one byte/);
+    }
+    // A short or long TUPLE is a type error in TypeScript and a decode refusal
+    // on the wire, so the decoder owns that half.
+    expect(() => decodeHotBumpHintsV1(new Uint8Array(HOT_BUMP_HINT_COUNT_V1 - 1))).toThrow(/not the exact 8/);
+    expect(() => decodeHotBumpHintsV1(new Uint8Array(HOT_BUMP_HINT_COUNT_V1 + 1))).toThrow(/not the exact 8/);
   });
 
   it('compiles the exact adjacent Ed25519 + Trading v0 batch and fails closed without a checked outer', () => {

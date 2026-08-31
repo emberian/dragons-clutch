@@ -5,7 +5,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
-work="${DCLUTCH_POSTJOIN_WORK:-$(mktemp -d /private/tmp/dclutch-postjoin.XXXXXX)}"
+# TMPDIR, not a literal /private/tmp: that path is macOS-specific and does not
+# exist on the ubuntu-24.04 runner, so `mktemp -d` failed before the first ELF
+# was built. Pin an exact directory with DCLUTCH_POSTJOIN_WORK when you want
+# the hostile evidence kept somewhere specific.
+work="${DCLUTCH_POSTJOIN_WORK:-$(mktemp -d "${TMPDIR:-/tmp}/dclutch-postjoin.XXXXXX")}"
 real_out="$work/real"
 hostile_out="$work/hostile"
 target="$work/target"

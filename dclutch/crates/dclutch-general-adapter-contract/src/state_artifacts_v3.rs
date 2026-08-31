@@ -26,11 +26,16 @@ use dclutch_custody_contract::CUSTODY_REPLAY_BYTES_V1;
 use dclutch_general_codec::Action;
 
 use crate::{
+    collection_v1::{
+        GENERAL_BATCH_BYTES_V1, GENERAL_ORDER_ROW_BASE_V1, GENERAL_ORDER_ROW_STRIDE_V1,
+        GeneralBatchLayoutV1, GeneralOrderLayoutV1,
+    },
     hot_candidate_v3::{identity, scalar},
     local_state_v3::{GENERAL_LOCAL_STATE_HEADER_BYTES_V3, GeneralLocalStateLayoutV3},
     runtime_selection::{RUNTIME_SELECTION_CURSOR_BYTES_V2, RuntimeSelectionLayoutV2},
     runtime_width::{SETTLEMENT_CURSOR_HEADER_BYTES_V2, SettlementCursorLayoutV2},
     state_seeds_v3::{
+        GENERAL_CANCEL_ORDER_SEED_START_V3, GENERAL_CANCEL_STATE_SEED_TABLE_V3,
         GENERAL_CLOSE_STATE_SEED_TABLE_V3, GENERAL_CLOSE_TERMINAL_SEED_START_V3,
         GeneralStateRecipeV3,
     },
@@ -52,6 +57,13 @@ pub const GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3: u16 = 8;
 /// Semantic owner of one readonly General evaluator input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralReadonlyEvidenceKindV3 {
+    /// Signed order terms: the exact identity-covered image of the record a
+    /// PlaceOrder admission writes -- the 160-byte fixed header then the
+    /// interleaved per-outcome rows, with no mutable window. The maker's
+    /// transaction signature is what endorses these bytes; every register the
+    /// admission consumes is projected from them, and the record the effect
+    /// writes is therefore exactly what the maker signed.
+    OrderTerms,
     /// Immutable interpreted best-valid-submitted-candidate policy.
     SelectionPolicy,
     /// Newly submitted complete verified-candidate record.
@@ -174,6 +186,14 @@ fn general_state_lifecycle_bytes(action: Action, current_rent_v5: bool) -> Resul
 pub const fn general_readonly_evidence_count_v3(action: Action) -> u16 {
     match action {
         unauthored_actions!() => 0,
+        // The batch pair's evaluator inputs are the Hot prefix itself: the
+        // root tail and the config record, both projected by the
+        // AccountProfile rather than read as evidence accounts. ReleaseOrder
+        // is the same shape one state further in: its whole input is the
+        // order record it refunds.
+        Action::OpenBatch | Action::CloseBatch | Action::CancelOrder | Action::ReleaseOrder => 0,
+        // The signed terms the admission projects everything from.
+        Action::PlaceOrder => 1,
         Action::Consider => 2,
         Action::Freeze => 0,
         Action::InitializeSettlement => 3,
@@ -200,6 +220,7 @@ pub fn general_readonly_evidence_v3(
         (Action::Collect | Action::Distribute, 1) => {
             GeneralReadonlyEvidenceKindV3::SettlementManifest
         }
+        (Action::PlaceOrder, 0) => GeneralReadonlyEvidenceKindV3::OrderTerms,
         _ => return Err(GeneralStateArtifactErrorV3::Geometry),
     };
     Ok(GeneralReadonlyEvidenceV3 {
@@ -214,7 +235,8 @@ pub fn general_readonly_evidence_v3(
 #[must_use]
 pub const fn general_readonly_evidence_start_v3(action: Action) -> u16 {
     match action {
-        Action::Close => 9,
+        // Two states, a payer and a rent credit before the children.
+        Action::Close | Action::PlaceOrder | Action::CancelOrder => 9,
         // An unauthored action has no evidence and no child frame, so this is
         // not a shape it has -- but the value stays at the common prefix so that
         // `general_child_account_start_v3`'s addition cannot be read as a
@@ -223,7 +245,10 @@ pub const fn general_readonly_evidence_start_v3(action: Action) -> u16 {
         // used; the arm exists so the next action forces a decision rather than
         // inheriting the settlement prefix from a catch-all.
         unauthored_actions!() => 8,
-        Action::Consider
+        Action::OpenBatch
+        | Action::CloseBatch
+        | Action::ReleaseOrder
+        | Action::Consider
         | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
@@ -249,6 +274,8 @@ pub fn encode_general_state_lifecycle_v3_atomic(
     }
     if action == Action::Close {
         encode_close(action, None, scratch, output)
+    } else if matches!(action, Action::PlaceOrder | Action::CancelOrder) {
+        encode_batch_and_order(action, None, scratch, output)
     } else {
         encode_primary(action, None, scratch, output)
     }
@@ -273,6 +300,8 @@ pub fn encode_general_state_lifecycle_v5_atomic(
     let selected = quotes.as_slice(action);
     if action == Action::Close {
         encode_close(action, Some(selected), scratch, output)
+    } else if matches!(action, Action::PlaceOrder | Action::CancelOrder) {
+        encode_batch_and_order(action, Some(selected), scratch, output)
     } else {
         encode_primary(action, Some(selected), scratch, output)
     }
@@ -285,22 +314,24 @@ fn encode_primary(
     output: &mut [u8],
 ) -> Result<()> {
     let state_recipe = GeneralStateRecipeV3::primary_for_action(action);
-    let selection = matches!(state_recipe, GeneralStateRecipeV3::Selection);
-    let data_base = if selection {
-        u32::try_from(
-            GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-                .checked_add(RUNTIME_SELECTION_CURSOR_BYTES_V2)
-                .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
-        )
-        .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?
-    } else {
-        u32::try_from(
-            GENERAL_LOCAL_STATE_HEADER_BYTES_V3
-                .checked_add(SETTLEMENT_CURSOR_HEADER_BYTES_V2)
-                .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
-        )
-        .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?
+    // `data_base` is the account's fixed byte width; the stride is the
+    // per-outcome tail past it. A fixed-width state carries a zero stride.
+    let semantic_bytes = match state_recipe {
+        GeneralStateRecipeV3::Selection => RUNTIME_SELECTION_CURSOR_BYTES_V2,
+        GeneralStateRecipeV3::Settlement | GeneralStateRecipeV3::Terminal => {
+            SETTLEMENT_CURSOR_HEADER_BYTES_V2
+        }
+        GeneralStateRecipeV3::Batch => GENERAL_BATCH_BYTES_V1,
+        // The order record's fixed span: header and mutable window; the
+        // per-outcome rows are the stride past it.
+        GeneralStateRecipeV3::Order => GENERAL_ORDER_ROW_BASE_V1,
     };
+    let data_base = u32::try_from(
+        GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+            .checked_add(semantic_bytes)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )
+    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
     // The count and the bump ordinal are READ OFF the recipe's own seed table
     // rather than written down beside it, so a seed added to that table cannot
     // leave this policy declaring a truncated seed program.
@@ -310,10 +341,12 @@ fn encode_primary(
         seed_count: state_recipe.seed_count(),
         bump_offset: state_recipe.bump_offset(),
         data_base,
-        data_stride: if selection {
-            0
-        } else {
-            SettlementCursorLayoutV2::inventory_stride()
+        data_stride: match state_recipe {
+            GeneralStateRecipeV3::Selection | GeneralStateRecipeV3::Batch => 0,
+            GeneralStateRecipeV3::Order => order_row_stride()?,
+            GeneralStateRecipeV3::Settlement | GeneralStateRecipeV3::Terminal => {
+                SettlementCursorLayoutV2::inventory_stride()
+            }
         },
     }];
     let plan = [LifecyclePlanInputV3 {
@@ -465,13 +498,129 @@ fn encode_close(
     Ok(())
 }
 
+/// CancelOrder's two-recipe policy: the batch window and the order record.
+///
+/// The shape is `encode_close` with both plans authenticating rather than one
+/// closing: recipe zero is the batch at the primary coordinate, recipe one the
+/// order at the secondary, over one combined ten-entry seed table so neither
+/// window's order can be restated.
+fn encode_batch_and_order(
+    action: Action,
+    current_rent_quotes: Option<&[LifecycleCurrentRentQuoteInputV5]>,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<()> {
+    let batch_recipe = GeneralStateRecipeV3::Batch;
+    let order_recipe = GeneralStateRecipeV3::Order;
+    let batch_base = u32::try_from(
+        GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+            .checked_add(GENERAL_BATCH_BYTES_V1)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )
+    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
+    let order_base = u32::try_from(
+        GENERAL_LOCAL_STATE_HEADER_BYTES_V3
+            .checked_add(GENERAL_ORDER_ROW_BASE_V1)
+            .ok_or(GeneralStateArtifactErrorV3::Geometry)?,
+    )
+    .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?;
+    let recipes = [
+        LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(GENERAL_PRIMARY_STATE_ACCOUNT_V3),
+            seed_start: 0,
+            seed_count: batch_recipe.seed_count(),
+            bump_offset: batch_recipe.bump_offset(),
+            data_base: batch_base,
+            data_stride: 0,
+        },
+        LifecycleRecipeInputV3 {
+            state: LifecycleAccountCoordinateV3::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3),
+            seed_start: GENERAL_CANCEL_ORDER_SEED_START_V3,
+            seed_count: order_recipe.seed_count(),
+            bump_offset: order_recipe.bump_offset(),
+            data_base: order_base,
+            data_stride: order_row_stride()?,
+        },
+    ];
+    let plans = [
+        LifecyclePlanInputV3 {
+            action: action as u32,
+            operation: LifecycleOperationInputV3::AuthenticateOrCreate,
+            recipe: 0,
+            payer: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_CLOSE_PAYER_ACCOUNT_V3,
+            )),
+            rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
+            )),
+            principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+                scalar::PRIMARY_PRINCIPAL_OBSERVATION,
+            )?)),
+            beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+                identity::PRIMARY_BENEFICIARY_OBSERVATION,
+            )?)),
+            guard: LifecycleGuardInputV3::Always,
+        },
+        LifecyclePlanInputV3 {
+            action: action as u32,
+            operation: LifecycleOperationInputV3::AuthenticateOrCreate,
+            recipe: 1,
+            payer: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_CLOSE_PAYER_ACCOUNT_V3,
+            )),
+            rent_credit: Some(LifecycleAccountCoordinateV3::fixed(
+                GENERAL_CLOSE_RENT_CREDIT_ACCOUNT_V3,
+            )),
+            principal: Some(LifecycleRegisterCoordinateV3::common(scalar_u16(
+                scalar::TERMINAL_PRINCIPAL_OBSERVATION,
+            )?)),
+            beneficiary: Some(LifecycleRegisterCoordinateV3::common(identity_u16(
+                identity::TERMINAL_BENEFICIARY_OBSERVATION,
+            )?)),
+            guard: LifecycleGuardInputV3::Always,
+        },
+    ];
+    let protected = [Some(primary_protected()?), Some(terminal_protected()?)];
+    let bindings = selection_or_settlement_bindings(action)?;
+    let seeds = GENERAL_CANCEL_STATE_SEED_TABLE_V3;
+    if let Some(quotes) = current_rent_quotes {
+        encode_lifecycle_policy_v5_atomic(
+            &recipes,
+            &seeds,
+            &plans,
+            &protected,
+            bindings.as_slice(),
+            quotes,
+            scratch,
+            output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    } else {
+        encode_lifecycle_policy_v4_atomic(
+            &recipes,
+            &seeds,
+            &plans,
+            &protected,
+            bindings.as_slice(),
+            scratch,
+            output,
+        )
+        .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+        StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], output)
+            .map_err(GeneralStateArtifactErrorV3::Lifecycle)?;
+    }
+    Ok(())
+}
+
 struct CurrentRentQuoteBufferV5 {
     values: [LifecycleCurrentRentQuoteInputV5; 4],
 }
 
 impl CurrentRentQuoteBufferV5 {
     fn as_slice(&self, action: Action) -> &[LifecycleCurrentRentQuoteInputV5] {
-        if action == Action::InitializeSettlement {
+        if matches!(action, Action::InitializeSettlement | Action::PlaceOrder) {
             &self.values
         } else {
             &[]
@@ -484,12 +633,12 @@ fn general_current_rent_quotes_v5(
     child_widths: Option<GeneralChildRentWidthsV5>,
 ) -> Result<CurrentRentQuoteBufferV5> {
     let child_widths = match (action, child_widths) {
-        (Action::InitializeSettlement, Some(widths))
+        (Action::InitializeSettlement | Action::PlaceOrder, Some(widths))
             if widths.position != 0 && widths.custody_vault != 0 =>
         {
             widths
         }
-        (Action::InitializeSettlement, _) | (_, Some(_)) => {
+        (Action::InitializeSettlement | Action::PlaceOrder, _) | (_, Some(_)) => {
             return Err(GeneralStateArtifactErrorV3::Geometry);
         }
         (_, None) => GeneralChildRentWidthsV5 {
@@ -526,16 +675,24 @@ fn general_current_rent_quotes_v5(
 const fn lifecycle_current_rent_quote_count(action: Action) -> usize {
     match action {
         Action::InitializeSettlement => 4,
-        // Written out rather than defaulted, for the same reason the seven new
+        // Written out rather than defaulted, for the same reason the new
         // actions are written out at every other dispatcher: the next action
         // added must force a decision here instead of inheriting one.
         unauthored_actions!() => 0,
-        Action::Consider
+        Action::OpenBatch
+        | Action::CloseBatch
+        | Action::CancelOrder
+        | Action::ReleaseOrder
+        | Action::Consider
         | Action::Freeze
         | Action::Collect
         | Action::Materialize
         | Action::Distribute
         | Action::Close => 0,
+        // The admission creates the same four rent-bearing children the
+        // settlement initialization does: the escrow Position, its admission
+        // record, the Custody replay, and the vault.
+        Action::PlaceOrder => 4,
     }
 }
 
@@ -584,6 +741,91 @@ fn selection_or_settlement_bindings(action: Action) -> Result<BindingBufferV4> {
         values: [empty; 5],
         len: lifecycle_binding_count(action),
     };
+    if matches!(action, Action::OpenBatch | Action::CloseBatch) {
+        // The batch record's three immutable identities, bound to the
+        // canonical registers the AccountProfile projects from the root, the
+        // Product record, and the root's config selection. A live batch whose
+        // bytes disagree with any of the three is a substituted window.
+        for (slot, (offset, canonical)) in [
+            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (
+                GeneralBatchLayoutV1::PRODUCT_ID,
+                identity::SELECTION_PRODUCT,
+            ),
+            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            output.values[slot] = binding(
+                0,
+                u32::try_from(offset).map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+                canonical,
+            )?;
+        }
+        return Ok(output);
+    }
+    if action == Action::ReleaseOrder {
+        output.values[0] = binding(
+            0,
+            u32::try_from(GeneralOrderLayoutV1::MARKET)
+                .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+            identity::MARKET,
+        )?;
+        return Ok(output);
+    }
+    if action == Action::PlaceOrder {
+        for (slot, (offset, canonical)) in [
+            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (
+                GeneralBatchLayoutV1::PRODUCT_ID,
+                identity::SELECTION_PRODUCT,
+            ),
+            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            output.values[slot] = binding(
+                0,
+                u32::try_from(offset).map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+                canonical,
+            )?;
+        }
+        return Ok(output);
+    }
+    if action == Action::CancelOrder {
+        // The batch record's three independently-sourced identities on the
+        // batch plan, exactly as the batch pair binds them, and the order
+        // record's Market on the order plan. The order's batch bytes need no
+        // binding: the batch address itself is DERIVED from the register the
+        // profile projects out of those bytes, so a substituted window cannot
+        // even be presented.
+        for (slot, (offset, canonical)) in [
+            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (
+                GeneralBatchLayoutV1::PRODUCT_ID,
+                identity::SELECTION_PRODUCT,
+            ),
+            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            output.values[slot] = binding(
+                0,
+                u32::try_from(offset).map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+                canonical,
+            )?;
+        }
+        output.values[3] = binding(
+            1,
+            u32::try_from(GeneralOrderLayoutV1::MARKET)
+                .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
+            identity::MARKET,
+        )?;
+        return Ok(output);
+    }
     if matches!(action, Action::Consider | Action::Freeze) {
         for (slot, (body_offset, canonical)) in [
             (
@@ -630,6 +872,10 @@ fn close_bindings() -> Result<[LifecycleImmutableIdentityBindingInputV4; 1]> {
     )?])
 }
 
+fn order_row_stride() -> Result<u32> {
+    u32::try_from(GENERAL_ORDER_ROW_STRIDE_V1).map_err(|_| GeneralStateArtifactErrorV3::Geometry)
+}
+
 fn binding(
     plan: u16,
     body_offset: u32,
@@ -656,6 +902,10 @@ const fn require_authored(action: Action) -> Result<()> {
 const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
     match action {
         unauthored_actions!() => (0, 0, 0),
+        Action::OpenBatch | Action::CloseBatch | Action::ReleaseOrder => (1, 5, 1),
+        // Two recipes over one ten-entry table: the batch window and the
+        // order record.
+        Action::PlaceOrder | Action::CancelOrder => (2, 10, 2),
         Action::Consider | Action::Freeze => (1, 4, 1),
         Action::InitializeSettlement
         | Action::Collect
@@ -668,6 +918,19 @@ const fn lifecycle_counts(action: Action) -> (usize, usize, usize) {
 const fn lifecycle_binding_count(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
+        Action::OpenBatch | Action::CloseBatch => 3,
+        // The order record's Market alone: it is the sole coordinate with an
+        // INDEPENDENT frame source (the root tail). The owner and batch bytes
+        // have no second authority in this frame -- the record itself is what
+        // fills their registers -- so binding them would compare a value to
+        // itself.
+        Action::ReleaseOrder => 1,
+        // The batch record's three independent identities on plan zero, and
+        // the order record's Market on plan one.
+        Action::CancelOrder => 4,
+        // The batch trio alone: the order record is VACANT at admission, so a
+        // byte binding against it would refuse the create it guards.
+        Action::PlaceOrder => 3,
         Action::Consider | Action::Freeze => 5,
         Action::InitializeSettlement
         | Action::Collect
@@ -693,7 +956,7 @@ mod tests {
 
     use super::*;
 
-    const ACTIONS: [Action; 7] = [
+    const ACTIONS: [Action; 12] = [
         Action::Consider,
         Action::Freeze,
         Action::InitializeSettlement,
@@ -701,6 +964,11 @@ mod tests {
         Action::Materialize,
         Action::Distribute,
         Action::Close,
+        Action::OpenBatch,
+        Action::PlaceOrder,
+        Action::CancelOrder,
+        Action::CloseBatch,
+        Action::ReleaseOrder,
     ];
 
     #[test]
@@ -713,13 +981,17 @@ mod tests {
                 .expect("lifecycle artifact");
             let policy =
                 StateLifecyclePolicyV4::decode_selected([1; 32], [1; 32], &output).expect("decode");
+            let two_state = matches!(
+                action,
+                Action::Close | Action::PlaceOrder | Action::CancelOrder
+            );
             assert_eq!(
                 policy.action_plan_count(action as u32),
-                Ok(if action == Action::Close { 2 } else { 1 })
+                Ok(if two_state { 2 } else { 1 })
             );
             assert_eq!(
                 policy
-                    .action_plan(action as u32, if action == Action::Close { 1 } else { 0 })
+                    .action_plan(action as u32, u16::from(two_state))
                     .expect("selected")
                     .uses_canonical_bump(),
                 Ok(true)
@@ -736,22 +1008,19 @@ mod tests {
                 let width = general_state_lifecycle_bytes_v5(action).expect("V5 width");
                 let mut scratch = vec![0_u8; width];
                 let mut output = vec![0x55_u8; width];
+                let quoted = matches!(action, Action::InitializeSettlement | Action::PlaceOrder);
                 encode_general_state_lifecycle_v5_atomic(
                     action,
-                    (action == Action::InitializeSettlement).then_some(widths),
+                    quoted.then_some(widths),
                     &mut scratch,
                     &mut output,
                 )
                 .expect("V5 lifecycle artifact");
                 let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &output)
                     .expect("V5 decode");
-                let expected_count = if action == Action::InitializeSettlement {
-                    4
-                } else {
-                    0
-                };
+                let expected_count = if quoted { 4 } else { 0 };
                 assert_eq!(policy.current_rent_quote_count(), expected_count);
-                if action == Action::InitializeSettlement {
+                if quoted {
                     for (ordinal, (data_len, destination)) in [
                         (widths.position, scalar::POSITION_RENT_PRINCIPAL),
                         (

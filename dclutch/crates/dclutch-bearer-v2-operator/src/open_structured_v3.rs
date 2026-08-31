@@ -53,8 +53,8 @@ use dclutch_rational_representation_v2_contract::{
 use dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2;
 use dclutch_rational_representation_v2_request_contract::generated as wire;
 use dclutch_request_profile_contract::{
-    HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES, OPERATION_BYTES as REQUEST_OPERATION_BYTES,
-    RequestProfileV1,
+    HEADER_BYTES as REQUEST_PROFILE_HEADER_BYTES, MAX_BYTES as REQUEST_PROFILE_MAX_BYTES,
+    OPERATION_BYTES as REQUEST_OPERATION_BYTES, RequestProfileV1,
     encode::{
         IdentityRegisterV1, RequestCoordinateV1, RequestGeometryV1, RequestInstructionV1,
         ScalarRegisterV1, encode_request_profile_v1_atomic,
@@ -90,11 +90,56 @@ pub const RATIONAL_OPEN_STRUCTURED_COMMON_SCALARS_V3: usize = 9;
 pub const RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3: usize = 4;
 /// Largest descriptor K admitted by the current exact RequestProfile V1 artifact.
 ///
-/// The Profile13 account ceiling would permit more rows, but the canonical
-/// fixed projection has 29 prefix operations plus eight operations per row.
-/// V1's 1,312-byte bound therefore makes `K = 3` the largest executable
-/// geometry. This bound is independent of Product result width `N`.
-pub const RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3: u32 = 3;
+/// **Derived, not chosen.** A profile is
+/// `REQUEST_PROFILE_HEADER_BYTES + operations * REQUEST_OPERATION_BYTES` bytes,
+/// and the canonical fixed projection costs
+/// `RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3 +
+/// RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3 * K`, so K is exactly
+/// what the artifact bound leaves room for. It evaluates to 3 against today's
+/// `REQUEST_PROFILE_MAX_BYTES_V1 = 1312` and moves by itself if any of the four
+/// inputs moves. It was a hand-written `3` with the arithmetic living only in
+/// this comment until 2026-08-31; a restated bound is a bound that drifts.
+///
+/// This ceiling is independent of Product result width `N` — see
+/// `structured_actions_keep_descriptor_k_independent_from_product_n`, which
+/// builds K = 3 against a 258-outcome Product.
+///
+/// **It is also not the binding wall, and raising it would not help.** A
+/// transaction carrying `IssueStructured` or `UnwrapStructured` at K = 3 is
+/// 1,357 bytes as a v0 message with the Address Lookup Table already applied,
+/// against a 1,232-byte packet limit; the packet caps full-width issuance at
+/// K = 2, one coordinate BELOW this artifact ceiling
+/// (`the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`, which
+/// derives the 2 rather than asserting it). Widening the RequestProfile bound
+/// therefore admits descriptors that can be published and denominated but never
+/// issued. The lift this cliff wants is commit-don't-inline or staged issuance,
+/// not a wider record. See `CapabilityProgramAbi.finalizedRecordMaxBytes`.
+pub const RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3: u32 =
+    rational_open_structured_maximum_coordinates_v3();
+
+/// Solve `BASE + ROW * K` operations against the RequestProfile byte bound.
+///
+/// The result is a `u32` because every consumer compares it against a `u32`
+/// outcome or coordinate count. Truncation is asserted impossible rather than
+/// assumed: the row count is at most the profile's whole operation budget,
+/// `(MAX_BYTES - HEADER_BYTES) / OPERATION_BYTES`, which is a compile-time
+/// constant far inside `u32`. A violation is a build failure, never a silent
+/// runtime ceiling.
+#[allow(clippy::cast_possible_truncation)]
+const fn rational_open_structured_maximum_coordinates_v3() -> u32 {
+    let operations =
+        (REQUEST_PROFILE_MAX_BYTES - REQUEST_PROFILE_HEADER_BYTES) / REQUEST_OPERATION_BYTES;
+    let rows = operations.saturating_sub(RATIONAL_OPEN_STRUCTURED_REQUEST_BASE_OPERATIONS_V3)
+        / RATIONAL_OPEN_STRUCTURED_REQUEST_ROW_OPERATIONS_V3;
+    assert!(
+        rows <= u32::MAX as usize,
+        "the RequestProfile coordinate ceiling must survive narrowing to the wire width"
+    );
+    rows as u32
+}
+
+/// A RequestProfile too narrow for one coordinate would make the wire unusable.
+const _: () = assert!(RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3 >= 1);
 
 const ID_PARENT: usize = 0;
 const ID_RELEASE: usize = 1;

@@ -134,19 +134,90 @@ pub enum ProtocolPositionSbfErrorV2 {
     Receipt = 0x514A,
 }
 
+impl ProtocolPositionSbfErrorV2 {
+    /// Every refusal this request family can raise, in discriminant order.
+    ///
+    /// This is what the sub-band assertions below read. It is kept honest by
+    /// [`ProtocolPositionSbfErrorV2::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only arm that satisfies
+    /// the assertions is its own index in this array.
+    pub const ALL: [Self; 11] = [
+        Self::Instruction,
+        Self::Accounts,
+        Self::Release,
+        Self::Market,
+        Self::ProductBasis,
+        Self::Position,
+        Self::Rent,
+        Self::Allocation,
+        Self::Admission,
+        Self::Commit,
+        Self::Receipt,
+    ];
+
+    /// This refusal's position in [`ProtocolPositionSbfErrorV2::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a twelfth variant is a
+    /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::Accounts => 1,
+            Self::Release => 2,
+            Self::Market => 3,
+            Self::ProductBasis => 4,
+            Self::Position => 5,
+            Self::Rent => 6,
+            Self::Allocation => 7,
+            Self::Admission => 8,
+            Self::Commit => 9,
+            Self::Receipt => 10,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    ProtocolPositionSbfErrorV2::Instruction as u32
-        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x140,
-    "ProtocolPositionSbfErrorV2 must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (ProtocolPositionSbfErrorV2::Receipt as u32)
-        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "ProtocolPositionSbfErrorV2 must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing about
+// the variants after it and goes stale silently every single time the family
+// grows -- the failure is not that the name is wrong, it is that nothing can
+// notice. Claims' own top-level band proved it the expensive way: its bound went
+// on naming `ReleaseSuperseded` after a later variant landed, so for as long as
+// that stood, the newest refusal in the program was checked by nothing.
+//
+// So the sub-band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x140;
+    assert!(
+        ProtocolPositionSbfErrorV2::ALL[0] as u32 == SUB_BAND,
+        "ProtocolPositionSbfErrorV2 must start at its registered sub-band offset"
+    );
+    let mut index = 0;
+    while index < ProtocolPositionSbfErrorV2::ALL.len() {
+        let variant = ProtocolPositionSbfErrorV2::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "ProtocolPositionSbfErrorV2::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == SUB_BAND + index as u32,
+            "ProtocolPositionSbfErrorV2 discriminants are not the contiguous run from the sub-band offset that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "ProtocolPositionSbfErrorV2 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<ProtocolPositionSbfErrorV2> for ProgramError {
     fn from(value: ProtocolPositionSbfErrorV2) -> Self {
@@ -375,7 +446,17 @@ fn process_admit(
         accounts.claims_program,
         request,
     )?;
-    authenticate_rent_credit(accounts.rent_credit, accounts.rent_program, request)?;
+    authenticate_rent_credit(
+        accounts.rent_credit,
+        accounts.rent_program,
+        LifecycleRentCreditIdentityV2 {
+            rent_credit: request.rent_credit,
+            rent_program: request.rent_program,
+            market: request.market,
+            release_set: request.release_set,
+            generation: request.generation,
+        },
+    )?;
 
     let product_digest = account_digest(accounts.product_record)?;
     let linked_digest = account_digest(accounts.basis_record)?;
@@ -552,8 +633,17 @@ fn execute_close_authenticated(
         request,
     )?;
     authenticate_owner_readonly_view(accounts, request)?;
-    let rent_credit_data =
-        authenticate_rent_credit(accounts.rent_credit, accounts.rent_program, request)?;
+    let rent_credit_data = authenticate_rent_credit(
+        accounts.rent_credit,
+        accounts.rent_program,
+        LifecycleRentCreditIdentityV2 {
+            rent_credit: request.rent_credit,
+            rent_program: request.rent_program,
+            market: request.market,
+            release_set: request.release_set,
+            generation: request.generation,
+        },
+    )?;
 
     let admission_data = accounts
         .common
@@ -982,13 +1072,29 @@ fn authenticate_owner_readonly_view(
     )
 }
 
-fn authenticate_rent_credit(
+/// The exact identity a lifecycle RentCredit must carry to receive rent.
+///
+/// Named as its own admission because two unrelated routes now depend on it:
+/// the Position close, whose request states these four values, and the
+/// Fractional ordered retirement's finish, whose cursor does. Both are asking
+/// the same question -- is this the Market's own rent beneficiary -- and the
+/// answer should have one author rather than one per caller.
+#[derive(Clone, Copy)]
+pub(crate) struct LifecycleRentCreditIdentityV2 {
+    pub(crate) rent_credit: [u8; 32],
+    pub(crate) rent_program: [u8; 32],
+    pub(crate) market: [u8; 32],
+    pub(crate) release_set: [u8; 32],
+    pub(crate) generation: u64,
+}
+
+pub(crate) fn authenticate_rent_credit(
     rent_credit: &AccountInfo<'_>,
     rent_program: &AccountInfo<'_>,
-    request: ProtocolPositionRequestV2,
+    expected: LifecycleRentCreditIdentityV2,
 ) -> Result<Vec<u8>, ProgramError> {
-    if rent_credit.key.to_bytes() != request.rent_credit
-        || rent_program.key.to_bytes() != request.rent_program
+    if rent_credit.key.to_bytes() != expected.rent_credit
+        || rent_program.key.to_bytes() != expected.rent_program
         || rent_credit.owner != rent_program.key
         || rent_credit.executable
         || !rent_program.executable
@@ -1000,9 +1106,9 @@ fn authenticate_rent_credit(
         .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
     let credit =
         LifecycleRentCreditV2::decode(&data).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
-    if credit.market().to_bytes() != request.market
-        || credit.release_set().to_bytes() != request.release_set
-        || credit.generation() != request.generation
+    if credit.market().to_bytes() != expected.market
+        || credit.release_set().to_bytes() != expected.release_set
+        || credit.generation() != expected.generation
     {
         return Err(ProtocolPositionSbfErrorV2::Rent.into());
     }

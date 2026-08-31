@@ -97,6 +97,10 @@ pub enum Error {
     InvalidAction,
     /// A terminal Realm, winner, Custody replay, Vault, or recipient differed.
     InvalidTerminal,
+    /// The basis names the degree-2-to-3 spline family and no evaluator
+    /// exists. The off-chain counterpart of
+    /// `ClaimsSbfError::BasisEvaluatorAbsent` (`0x500C`).
+    SplineEvaluatorAbsent,
     /// Request construction or its round-trip decode refused.
     InvalidRequest,
     /// A checked allocation or revision arithmetic overflowed.
@@ -1464,6 +1468,11 @@ fn authenticate_terminal_scenario(
             BasisKindV3::CategoricalQ1 | BasisKindV3::GradedExactComplement,
             ResolutionCertificateKindV2::RecoveryAdvanced | ResolutionCertificateKindV2::Exhausted,
         ) => Err(Error::InvalidTerminal),
+        // The twin of `terminal_certificate_v3.rs`'s spline arm in
+        // `programs/dclutch-claims-sbf`. These two matches are the second
+        // author of the settlement rule and they must move together or the
+        // operator and the program disagree about what the chain accepts.
+        (BasisKindV3::SplineDegree2To3 { .. }, _) => Err(Error::SplineEvaluatorAbsent),
     }
 }
 

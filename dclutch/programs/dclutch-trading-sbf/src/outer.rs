@@ -61,8 +61,12 @@ use dclutch_market_core_codec::{
     MarketCoreStateSeedsV2, Role, STATE_BYTES,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
+    require_cache_account,
+};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_rent_contract::lifecycle_v2::{LIFECYCLE_RENT_CREDIT_BYTES_V2, LifecycleRentCreditV2};
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
@@ -70,8 +74,7 @@ use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, invoke_signed, set_return_data},
+    program::{invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
@@ -112,10 +115,17 @@ const SET_DESCRIPTOR_RAW: usize = 16;
 /// Its staging cursor.
 const SET_DESCRIPTOR_STAGING: usize = 17;
 
-const MAX_RUNTIME_SCALARS_V2: usize = 96;
-const MAX_RUNTIME_IDENTITIES_V2: usize = 32;
+// The three the artifact author also needs are published beside the register
+// coordinates they bound, so an off-chain activation builder can refuse an
+// oversized profile at authoring time against this seam's own numbers rather
+// than a second copy of them.
+use dclutch_capability_program_contract::activation_registers_v2::{
+    ACTIVATION_MAX_ROLE_REQUEST_BYTES_V2 as MAX_ROLE_REQUEST_BYTES_V2,
+    ACTIVATION_MAX_RUNTIME_IDENTITIES_V2 as MAX_RUNTIME_IDENTITIES_V2,
+    ACTIVATION_MAX_RUNTIME_SCALARS_V2 as MAX_RUNTIME_SCALARS_V2,
+};
+
 const MAX_RUNTIME_ACCOUNTS_V2: usize = 64;
-const MAX_ROLE_REQUEST_BYTES_V2: usize = 2_048;
 
 /// Close-only runtime suffix index of the current Rent Program.
 const CLOSE_RENT_PROGRAM: usize = 0;
@@ -348,21 +358,8 @@ pub fn process_activation(
     .map_err(|_| TradingSbfError::Root)?;
     authenticate_vacant_root(program_id, framed.child_root(), root_header, root_bytes)?;
 
-    let core_receipt = reauthenticate_role(
+    let trading_receipt = reauthenticate_roles(
         &suffix,
-        ExecutionRoleV1::Core,
-        suffix.core_program,
-        suffix.core_programdata,
-        market_state.identity.selected_release_set.to_bytes(),
-    )?;
-    if core_receipt.program().to_bytes() != suffix.core_program.key.to_bytes() {
-        return Err(TradingSbfError::Release.into());
-    }
-    let trading_receipt = reauthenticate_role(
-        &suffix,
-        ExecutionRoleV1::Trading,
-        suffix.trading_program,
-        suffix.trading_programdata,
         market_state.identity.selected_release_set.to_bytes(),
     )?;
     let context = TradingFamilyContextV1::authenticate_activation(
@@ -606,21 +603,8 @@ pub fn process_close(
     let descriptor = CapabilityProgramV1::decode(set_descriptor_data.as_ref())
         .map_err(|_| TradingSbfError::Content)?;
 
-    let core_receipt = reauthenticate_role(
+    let trading_receipt = reauthenticate_roles(
         &suffix,
-        ExecutionRoleV1::Core,
-        suffix.core_program,
-        suffix.core_programdata,
-        market_state.identity.selected_release_set.to_bytes(),
-    )?;
-    if core_receipt.program().to_bytes() != suffix.core_program.key.to_bytes() {
-        return Err(TradingSbfError::Release.into());
-    }
-    let trading_receipt = reauthenticate_role(
-        &suffix,
-        ExecutionRoleV1::Trading,
-        suffix.trading_program,
-        suffix.trading_programdata,
         market_state.identity.selected_release_set.to_bytes(),
     )?;
     let root_data = framed
@@ -1051,62 +1035,105 @@ fn require_close_selection(
     Ok(())
 }
 
-fn reauthenticate_role<'info>(
+/// Authenticate Core and Trading for this Market's selected release set, from
+/// ONE read of the Registry-owned activation cache.
+///
+/// # What this replaced, and what it cost
+///
+/// Two `RegistryInstructionV1::Reauthenticate` CPIs, one per role, each building
+/// an `Instruction` with its own account and data vectors, invoking the Registry,
+/// and decoding a returned receipt -- while the Registry, at the far end,
+/// searched for and decoded the very account this frame was already holding.
+/// SEALWIDE measured the pair at **52,592 CU** (26,296 each), invariant across
+/// 32 key draws and two builds, and it is code cost rather than a bump-search
+/// draw. Decision 0017's option B is the ruling that spent it.
+///
+/// # The conjunction, unchanged or stronger, conjunct by conjunct
+///
+/// The Registry's `process_reauthenticate` ran: the three-account read-only
+/// frame; a hostile `decode` of the cache; `authenticate_cache_identity`, being
+/// Registry ownership, non-executability, the one exact width and the address
+/// reproduced from the body's carried bump; and then
+/// `authenticate_activated_role_in_cache_v1` for the role. The last of those is
+/// the function called below -- the same code object, which is the property
+/// decision 0017 §3 names as strictly better than the CPI had, since the two
+/// readers cannot drift.
+///
+/// The identity check is STRICTER here. The Registry derived the cache address
+/// from the release set the CACHE names, so a valid cache belonging to another
+/// Market passed it, and what refused it was the caller's after-the-fact
+/// `receipt.execution_release_set_id() == release_set` comparison. This derives
+/// the address from the release set THIS Market selected, so the
+/// wrong-generation cache refuses at its own address before a role is decoded.
+///
+/// Three caller-side checks became vacuous rather than dropped: `producer ==
+/// registry.key` had no meaning without a CPI; `receipt.role() == role` and
+/// `receipt.program() == role_program.key` are now CONSTRUCTIONS of the local
+/// receipt rather than assertions about a returned one -- and the second is
+/// required in any case by `cached_role_deployment_observation_v1` before it
+/// observes a deployment at all.
+///
+/// # `inline(never)` here is prophylactic, and the prophylaxis was earned
+///
+/// This one has TWO call sites -- `process_activation` and `process_close` --
+/// so LLVM keeps it out of line today, and both callers measure unchanged at
+/// 3,840 and 3,968 of the 4,096-byte SBPF v0 frame. Its sibling in
+/// `direct_begin_retiring_v1` had two call sites too, until this same conversion
+/// left it with one; LLVM then inlined it and put its caller at exactly 4,096
+/// with 43 frame-overwrite diagnostics.
+///
+/// `process_close` has 128 bytes of headroom. A future edit that drops one of
+/// these two call sites -- or an inliner that simply decides differently --
+/// would reproduce that defect on a route with a third of the slack the last one
+/// had. The attribute costs a call and makes the separation structural instead
+/// of a property of a heuristic nobody is watching. Measured with
+/// `tools/sbf-frame-sizes.py`: both callers are byte-identical with it.
+#[inline(never)]
+fn reauthenticate_roles<'info>(
     suffix: &AuthenticatedSuffixV2<'_, 'info>,
-    role: ExecutionRoleV1,
-    role_program: &AccountInfo<'info>,
-    role_programdata: &AccountInfo<'info>,
     release_set: [u8; 32],
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    let expected_cache = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
-        suffix.registry.key,
+    // Owner, non-executability and the exact width before a byte is read: the
+    // ordering `dclutch-registry-activation-auth-v1` documents, and the reason a
+    // stranger's account can never contribute the bump seed the identity check
+    // reproduces the address from.
+    require_cache_account(suffix.registry.key, suffix.cache).map_err(TradingSbfError::from)?;
+    let data = suffix
+        .cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    authenticate_activation_cache_identity_v1(
+        suffix.registry,
+        suffix.cache,
+        &release_set,
+        activated,
     )
-    .0;
-    if suffix.cache.key != &expected_cache || suffix.cache.owner != suffix.registry.key {
-        return Err(TradingSbfError::Release.into());
-    }
-    let instruction = Instruction {
-        program_id: *suffix.registry.key,
-        accounts: vec![
-            AccountMeta::new_readonly(*suffix.cache.key, false),
-            AccountMeta::new_readonly(*role_program.key, false),
-            AccountMeta::new_readonly(*role_programdata.key, false),
-        ],
-        data: RegistryInstructionV1::Reauthenticate(role)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            suffix.cache.clone(),
-            role_program.clone(),
-            role_programdata.clone(),
-            suffix.registry.clone(),
-        ],
+    .map_err(TradingSbfError::from)?;
+    let core_receipt = authenticate_activated_role_in_frame_v1(
+        suffix.cache,
+        activated,
+        ExecutionRoleV1::Core,
+        suffix.core_program,
+        suffix.core_programdata,
     )
-    .map_err(|_| TradingSbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(TradingSbfError::Release)?;
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| TradingSbfError::Release)?;
-    if producer != *suffix.registry.key {
-        solana_program::msg!("Trading activation: Registry return producer mismatch");
+    .map_err(TradingSbfError::from)?;
+    if core_receipt.program().to_bytes() != suffix.core_program.key.to_bytes() {
+        solana_program::msg!("Trading activation: Core receipt Program mismatch");
         return Err(TradingSbfError::Release.into());
     }
-    if receipt.role() != role {
-        solana_program::msg!("Trading activation: Registry receipt role mismatch");
-        return Err(TradingSbfError::Release.into());
-    }
-    if receipt.execution_release_set_id().to_bytes() != release_set {
-        solana_program::msg!("Trading activation: Registry receipt release-set mismatch");
-        return Err(TradingSbfError::Release.into());
-    }
-    if receipt.program().to_bytes() != role_program.key.to_bytes() {
-        solana_program::msg!("Trading activation: Registry receipt Program mismatch");
-        return Err(TradingSbfError::Release.into());
-    }
-    Ok(receipt)
+    authenticate_activated_role_in_frame_v1(
+        suffix.cache,
+        activated,
+        ExecutionRoleV1::Trading,
+        suffix.trading_program,
+        suffix.trading_programdata,
+    )
+    .map_err(|error| {
+        solana_program::msg!("Trading activation: Trading role activation-cache read refused");
+        TradingSbfError::from(error).into()
+    })
 }
 
 #[derive(Clone, Copy)]

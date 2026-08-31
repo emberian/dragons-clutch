@@ -94,7 +94,7 @@ const MAX_RENT_QUOTE_COUNT: usize = BUY_RENT_QUOTE_COUNT;
 const MAKER_SEED_COUNT_U8: u8 = 5;
 const RECORD_SEED_COUNT_U8: u8 = 6;
 const RECORD_SEED_START: u16 = 5;
-const MAKER_BYTES_U32: u32 = 152;
+const MAKER_BYTES_U32: u32 = 160;
 const RECORD_BYTES_U32: u32 = 268;
 const _: () = assert!(DIRECT_MAKER_REPLAY_BYTES_V1 == MAKER_BYTES_U32 as usize);
 const _: () = assert!(DIRECT_REGISTERED_RECORD_BYTES_V2 == RECORD_BYTES_U32 as usize);

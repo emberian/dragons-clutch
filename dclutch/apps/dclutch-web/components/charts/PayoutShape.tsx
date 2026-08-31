@@ -5,6 +5,7 @@ import { useState, type PointerEvent } from 'react';
 import { evaluateProductV2, type CompiledProductV2 } from '@/lib/productV2';
 
 import { atomShareV1, maxAtomsV1, planRationalPositionsV1 } from './atomGeometry';
+import { FIGURE_AXIS_PX, useFigureScale } from './useFigureScale';
 
 /**
  * The payout shape: what one payoff pays at every point of its result domain.
@@ -53,7 +54,11 @@ const PLOT_WIDTH = 460;
 const PLOT_HEIGHT = 130;
 const TAIL = 34;
 const TOP_PAD = 8;
-const AXIS_BAND = 16;
+/* The band under the baseline holds the two coordinate labels, and text is
+   sized in real pixels now (see useFigureScale), so the room it needs depends
+   on what the slot made one unit worth. This is the floor, kept so a full-width
+   figure lays out exactly as it did before. */
+const MIN_AXIS_BAND = 16;
 
 function shortRational(numerator: string, denominator: string): string {
   const trim = (value: string) => (value.length > 12 ? `${value.slice(0, 7)}…${value.slice(-4)}` : value);
@@ -69,17 +74,22 @@ export default function PayoutShape({
   emptyReason,
 }: PayoutShapePropsV1) {
   const [active, setActive] = useState<number | null>(null);
+  // The viewBox width is fixed by the plot and its two clamped tails, so it is
+  // known before the empty check — which the measurement hook needs it to be.
+  const width = TAIL + PLOT_WIDTH + TAIL;
+  const { figureRef, units } = useFigureScale(width);
 
   if (knots.length < 2) {
     return <figure className="viz-figure">
-      <p className="viz-caption">{emptyReason ?? 'This payoff names fewer than two knots, so it has no interpolated shape to draw.'}</p>
+      <p className="viz-caption">{emptyReason ?? 'Not enough points to draw a shape.'}</p>
     </figure>;
   }
 
   const ceiling = knots.reduce((most, knot) => maxAtomsV1(most, knot.payoutAtoms), payoutScale);
   const xs = planRationalPositionsV1(knots.map((knot) => knot.numerator));
-  const width = TAIL + PLOT_WIDTH + TAIL;
-  const height = TOP_PAD + PLOT_HEIGHT + AXIS_BAND;
+  const axisSize = units(FIGURE_AXIS_PX);
+  const axisBand = Math.max(MIN_AXIS_BAND, axisSize + units(5));
+  const height = TOP_PAD + PLOT_HEIGHT + axisBand;
   const baselineY = TOP_PAD + PLOT_HEIGHT;
   const points = knots.map((knot, index) => Object.freeze({
     knot,
@@ -110,6 +120,7 @@ export default function PayoutShape({
 
   return <figure className="viz-figure">
     <svg
+      ref={figureRef}
       viewBox={`0 0 ${width} ${height}`}
       style={{ maxWidth: `${width}px` }}
       role="group"
@@ -152,8 +163,8 @@ export default function PayoutShape({
         ><title>{label}</title></circle>;
       })}
       <line x1={0} x2={width} y1={baselineY} y2={baselineY} stroke="var(--viz-baseline)" strokeWidth={1} />
-      <text x={first.x} y={baselineY + 11} textAnchor="start" fontSize={7} fill="var(--viz-muted)">{shortRational(knots[0].numerator, knotDenominator)}</text>
-      <text x={last.x} y={baselineY + 11} textAnchor="end" fontSize={7} fill="var(--viz-muted)">{shortRational(knots[knots.length - 1].numerator, knotDenominator)}</text>
+      <text x={first.x} y={height - units(5)} textAnchor="start" fontSize={axisSize} fill="var(--viz-muted)">{shortRational(knots[0].numerator, knotDenominator)}</text>
+      <text x={last.x} y={height - units(5)} textAnchor="end" fontSize={axisSize} fill="var(--viz-muted)">{shortRational(knots[knots.length - 1].numerator, knotDenominator)}</text>
     </svg>
     <p className="viz-readout" aria-live="polite">
       <span className="viz-key" style={{ background: 'var(--viz-mark)' }} />
@@ -166,7 +177,7 @@ export default function PayoutShape({
     </p>
     <figcaption className="viz-caption">{caption}</figcaption>
     <details className="viz-table">
-      <summary>Exact payout at every knot</summary>
+      <summary>Exact numbers</summary>
       <div className="viz-table-scroll">
         <table>
           <thead><tr><th>Coordinate</th><th>Pays · scaled payout atoms</th></tr></thead>

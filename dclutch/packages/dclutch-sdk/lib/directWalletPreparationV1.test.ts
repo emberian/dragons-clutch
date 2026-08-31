@@ -6,9 +6,15 @@ import {
 } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import bumpHintVector from '../fixtures/direct-hot-bump-hints.json';
+import { activationCacheFixtureV1 } from '../fixtures/hotBumpHintSource';
 import { type DirectHotRouteInspectionV3 } from './directHotChain';
+import { type DirectHotBumpHintSourceV3 } from './directHotBumpHintsV1';
 import {
   canonicalDirectInlineLookupAddressesV3,
+  encodeHotBumpHintsV1,
+  HOT_BUMP_HINTS_OFFSET_V1,
+  HOT_BUMP_HINT_COUNT_V1,
   DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3,
   DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3,
   DIRECT_INLINE_CURRENT_WIRE_BYTES_V3,
@@ -21,7 +27,11 @@ import {
   deriveDirectMakerReplayAddressV1,
   inspectDirectMakerNoncePairV1,
 } from './directMakerReplay';
-import { type DirectParticipantReadinessV1 } from './directParticipant';
+import {
+  deriveDirectSellerTokenAddressV1,
+  type DirectParticipantReadinessV1,
+  type DirectSellerReadinessV1,
+} from './directParticipant';
 import { planDirectCrossingV1 } from './directTicket';
 import {
   prepareDirectWalletTransactionV1,
@@ -45,12 +55,23 @@ function key(seed: number): string {
 }
 
 const SELLER = key(2);
-const SELLER_COLLATERAL = key(3);
 const WALLET = key(4);
 const TAKER_COLLATERAL = key(5);
 const AGGREGATE = key(60);
 const SELLER_POSITION = key(61);
 const TAKER_POSITION = key(62);
+const MARKET = key(10);
+const TRADING = key(12);
+const GENERATION = 19n;
+/**
+ * The seller's collateral is DERIVED here, not invented, because that is what
+ * it is on chain: the role-separated PDA `direct_token_setup_v1` derives under
+ * Trading and creates. A fixture that named an arbitrary key would still pass
+ * every join in this file while agreeing with nothing the chain does.
+ */
+const SELLER_COLLATERAL = deriveDirectSellerTokenAddressV1(TRADING, MARKET, GENERATION, SELLER);
+/** The address the participant `create_with_seed` derivation produces instead. */
+const PARTICIPANT_SHAPED_SELLER_COLLATERAL = key(3);
 
 function account(address: string, isWritable = false, executable = false, isSigner = false): DirectHotAccountMetaV3 {
   return Object.freeze({ address, isSigner, isWritable, executable });
@@ -82,11 +103,11 @@ function runtimeProfile(): Uint8Array {
 }
 
 function route(payer: string): DirectInlineHotRouteV3 {
-  const market = key(10);
+  const market = MARKET;
   const fixed = Array.from({ length: HOT_FIXED_ACCOUNT_COUNT_V3 }, (_, index) => account(key(20 + index)));
   fixed[HOT_MARKET_ACCOUNT_V3] = account(market);
   fixed[HOT_ROOT_ACCOUNT_V3] = account(key(11), true);
-  fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3] = account(key(12), false, true);
+  fixed[HOT_TRADING_PROGRAM_ACCOUNT_V3] = account(TRADING, false, true);
   fixed[HOT_RENT_SYSVAR_ACCOUNT_V3] = account(SYSVAR_RENT_PUBKEY.toBase58());
   fixed[HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3] = account(SYSVAR_INSTRUCTIONS_PUBKEY.toBase58());
   const runtimeFixed = new Map([
@@ -99,8 +120,8 @@ function route(payer: string): DirectInlineHotRouteV3 {
     { length: DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3 },
     (_, index) => {
       const joined = new Map<number, string>([
-        [0, deriveDirectMakerReplayAddressV1(key(12), market, 19n, SELLER).address],
-        [3, deriveDirectMakerReplayAddressV1(key(12), market, 19n, WALLET).address],
+        [0, deriveDirectMakerReplayAddressV1(TRADING, market, GENERATION, SELLER).address],
+        [3, deriveDirectMakerReplayAddressV1(TRADING, market, GENERATION, WALLET).address],
         [7, AGGREGATE],
         [23, SELLER_POSITION],
         [24, TAKER_POSITION],
@@ -115,10 +136,10 @@ function route(payer: string): DirectInlineHotRouteV3 {
   ));
   const projected = projectDirectInlineSealedExecutionRouteV3(Object.freeze({
     payer,
-    tradingProgram: key(12),
+    tradingProgram: TRADING,
     market,
     releaseSet: new Uint8Array(32).fill(31),
-    generation: 19n,
+    generation: GENERATION,
     rootPrestateDigest: new Uint8Array(32).fill(32),
     outcomeCount: 51,
     priceScale: 1_000_000n,
@@ -167,7 +188,34 @@ function routeInspection(candidate: DirectInlineHotRouteV3): DirectHotRouteInspe
     transitionDigest: '26'.repeat(32),
     capabilitySealDigest: '27'.repeat(32),
     checkedOuter: candidate.outerEvidence,
+    bumpHintSource: bumpHintSource(candidate),
   });
+}
+
+/**
+ * The three finalized bodies a real inspection keeps so the wallet path can
+ * mine its hint block.
+ *
+ * The Market state and root header are the canonical encodings emitted by
+ * `crates/dclutch-operator/tests/browser_bump_hint_vector.rs`; nothing in this
+ * file depends on WHICH identities they carry, because the two slots they feed
+ * are derived from their own bytes rather than from the route. What this file
+ * does depend on is that mining runs at all on a route this builder accepts,
+ * and that the two lifecycle slots agree with the replay accounts the runtime
+ * frame already carries -- which is the join `mineDirectInlineHotBumpHintsV3`
+ * refuses on.
+ */
+function bumpHintSource(candidate: DirectInlineHotRouteV3): DirectHotBumpHintSourceV3 {
+  return Object.freeze({
+    coreProgram: bumpHintVector.coreProgram,
+    marketCoreState: fromHex(bumpHintVector.marketCoreStateHex),
+    capabilityRootHeader: fromHex(bumpHintVector.capabilityRootHeaderHex),
+    activationCache: activationCacheFixtureV1(new Uint8Array(candidate.releaseSet), { custody: key(70) }),
+  });
+}
+
+function fromHex(value: string): Uint8Array {
+  return Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
 }
 
 async function noncePair(candidate: DirectInlineHotRouteV3, seller = SELLER, taker = WALLET) {
@@ -183,13 +231,15 @@ async function noncePair(candidate: DirectInlineHotRouteV3, seller = SELLER, tak
   ]);
 }
 
+function positionBalancesFor(candidate: DirectInlineHotRouteV3): ReadonlyArray<bigint> {
+  return Object.freeze(Array.from({ length: candidate.outcomeCount }, (_, index) => index === 0 ? 2_000n : 0n));
+}
+
 function participant(
   candidate: DirectInlineHotRouteV3,
   owner: string,
   collateral: string,
-  side: 'seller' | 'taker',
 ): DirectParticipantReadinessV1 {
-  const positionBalances = Array.from({ length: candidate.outcomeCount }, (_, index) => index === 0 ? 2_000n : 0n);
   return Object.freeze({
     status: 'ready' as const,
     observedSlot: '1002',
@@ -198,19 +248,51 @@ function participant(
     owner,
     coordinates: Object.freeze({
       aggregate: AGGREGATE,
-      position: side === 'seller' ? SELLER_POSITION : TAKER_POSITION,
-      admission: key(side === 'seller' ? 63 : 64),
+      position: TAKER_POSITION,
+      admission: key(64),
       collateral,
       custodyAuthority: key(65),
     }),
     collateralMint: key(66),
     tokenProgram: key(67),
     positionRevision: 4n,
-    positionBalances: Object.freeze(positionBalances),
+    positionBalances: positionBalancesFor(candidate),
     collateralAtoms: 10_000n,
     delegatedCollateralAtoms: 10_000n,
     spendableCollateralAtoms: 10_000n,
     reason: 'authenticated test participant',
+  });
+}
+
+/**
+ * The seller half as the chain models it: an aggregate, a Position, a Direct
+ * token account, a Custody authority -- and NO admission coordinate, because
+ * `direct_token_setup_v1` names no admission account at any of its
+ * twenty-three indices and the founder of a Market has none.
+ */
+function sellerReadiness(
+  candidate: DirectInlineHotRouteV3,
+  collateral: string = SELLER_COLLATERAL,
+  collateralPrestate: 'vacant' | 'initialized' = 'initialized',
+): DirectSellerReadinessV1 {
+  return Object.freeze({
+    status: 'ready' as const,
+    observedSlot: '1002',
+    market: candidate.market,
+    generation: candidate.generation,
+    owner: SELLER,
+    coordinates: Object.freeze({
+      aggregate: AGGREGATE,
+      position: SELLER_POSITION,
+      collateral,
+      custodyAuthority: key(65),
+    }),
+    collateralMint: key(66),
+    tokenProgram: key(67),
+    positionRevision: 4n,
+    positionBalances: positionBalancesFor(candidate),
+    collateralPrestate,
+    reason: 'authenticated test seller',
   });
 }
 
@@ -261,8 +343,8 @@ async function fixture(payer: 'wallet' | 'operator' = 'wallet'): Promise<DirectW
     routeInspection: routeInspection(candidate),
     ticketInspection: signedSeller,
     crossingPlan,
-    sellerParticipant: participant(candidate, seller, SELLER_COLLATERAL, 'seller'),
-    takerParticipant: participant(candidate, wallet, TAKER_COLLATERAL, 'taker'),
+    sellerParticipant: sellerReadiness(candidate),
+    takerParticipant: participant(candidate, wallet, TAKER_COLLATERAL),
     noncePair: replayPair,
     signedSeller,
     signedTaker,
@@ -298,6 +380,40 @@ describe('Direct wallet preparation V1', () => {
     expect(prepared.transactionPlan.requiredSigners).toEqual([input.context.current.connectedWallet]);
     expect(prepared.transactionPlan.loadedAddresses).toBe(DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3);
     expect(prepared.transactionPlan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
+  });
+
+  it('compiles a MINED wallet wire, at the same 1,167 bytes as the unmined one', async () => {
+    // The lane's lead claim: a browser-built trade carries hints. Six of the
+    // eight slots are filled from the finalized bodies the route inspection
+    // already read; the two child caller-authority slots stay zero because
+    // their seeds end in a digest over a PROJECTED child request, which is the
+    // same gap `build_direct_inline_hot_v4` has and takes as a parameter.
+    const input = await fixture();
+    const prepared = prepareDirectWalletTransactionV1(input);
+    if (prepared.status !== 'wallet-preparable') throw new Error('unreachable test branch');
+    const plan = prepared.transactionPlan;
+    expect(plan.minedBumpHintSlots).toBe(6);
+    expect(plan.bumpHints.childCaller).toEqual([0, 0]);
+    for (const [field, bump] of [
+      ['market', plan.bumpHints.market],
+      ['root', plan.bumpHints.root],
+      ['seller replay', plan.bumpHints.lifecycle[0]],
+      ['buyer replay', plan.bumpHints.lifecycle[1]],
+      ['Custody replay', plan.bumpHints.childRelay[0]],
+      ['Custody authority', plan.bumpHints.childRelay[1]],
+    ] as const) {
+      expect(bump, `${field} slot mined to absent`).not.toBe(0);
+    }
+    const block = plan.hotInstructionBytes.slice(HOT_BUMP_HINTS_OFFSET_V1, HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1);
+    expect([...block]).toEqual([...encodeHotBumpHintsV1(plan.bumpHints)]);
+    // The two lifecycle slots are the replay accounts the runtime frame already
+    // carries: mining derived them a second time, from seeds, and the miner
+    // refuses if the two derivations disagree.
+    expect(plan.bumpHints.lifecycle[0]).toBe(deriveDirectMakerReplayAddressV1(
+      input.routeInspection.route.tradingProgram, input.routeInspection.route.market,
+      input.routeInspection.route.generation, input.signedSeller.maker,
+    ).bump);
+    expect(plan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
   });
 
   it('returns an honest operator handoff naming the exact route payer and does not compile', async () => {
@@ -382,5 +498,84 @@ describe('Direct wallet preparation V1', () => {
         route: Object.freeze({ ...input.routeInspection.route, runtimeAccounts: Object.freeze(substitutedRuntime) }),
       }),
     })).toThrow(/substitutes the seller Position coordinate/);
+  });
+
+  /**
+   * The fourth wall, from both sides.
+   *
+   * market19's seller is the founder: it holds every claim through the founding
+   * campaign, so it has a Claims Position and NO admission record, and no
+   * participant collateral account was ever created for it. The panel used to
+   * derive the seller's collateral as `deriveParticipantCollateralV1` and demand
+   * that owner be a READY participant, which is the buyer's shape -- so it
+   * refused this route before reading a single economic fact.
+   *
+   * The chain's own seller preconditions are `direct_token_setup_v1`'s: own the
+   * canonical Claims Position, and let Trading derive and create the Direct
+   * token PDA. Both are met here, so preparation must reach the compiled wire.
+   */
+  it('prepares market19’s seller half: a Position, no admission record, and a Direct token account still vacant', async () => {
+    const input = await fixture();
+    const founder = sellerReadiness(input.routeInspection.route, SELLER_COLLATERAL, 'vacant');
+    if (founder.status !== 'ready') throw new Error('unreachable test branch');
+    expect(Object.keys(founder.coordinates)).not.toContain('admission');
+    const prepared = prepareDirectWalletTransactionV1({ ...input, sellerParticipant: founder });
+    expect(prepared.status).toBe('wallet-preparable');
+    expect(prepared.binding.seller.collateralPrestate).toBe('vacant');
+    expect(prepared.binding.seller.coordinates.collateral).toBe(SELLER_COLLATERAL);
+    expect(prepared.binding.seller.coordinates).not.toHaveProperty('admission');
+    if (prepared.status !== 'wallet-preparable') throw new Error('unreachable test branch');
+    expect(prepared.transactionPlan.requiredSigners).toEqual([WALLET]);
+  });
+
+  it('still refuses a seller whose Claims Position or claim balance the chain would refuse', async () => {
+    const input = await fixture();
+    // No Position: `authenticate_seller_position` cannot decode one, so Trading
+    // will not derive a Direct token account and there is nothing to sell.
+    expect(() => prepareDirectWalletTransactionV1({
+      ...input,
+      sellerParticipant: Object.freeze({
+        status: 'incomplete' as const,
+        observedSlot: '1002',
+        market: input.routeInspection.route.market,
+        generation: input.routeInspection.route.generation,
+        owner: SELLER,
+        coordinates: Object.freeze({
+          aggregate: AGGREGATE, position: SELLER_POSITION,
+          collateral: SELLER_COLLATERAL, custodyAuthority: key(65),
+        }),
+        missing: Object.freeze(['Claims Position'] as const),
+        reason: 'this seller holds no Claims Position for this Market',
+      }),
+    })).toThrow(/seller Direct state is incomplete, not ready/);
+
+    const ready = sellerReadiness(input.routeInspection.route);
+    if (ready.status !== 'ready') throw new Error('unreachable test branch');
+    expect(() => prepareDirectWalletTransactionV1({
+      ...input,
+      sellerParticipant: Object.freeze({
+        ...ready,
+        positionBalances: Object.freeze(ready.positionBalances.map(() => 0n)),
+      }),
+    })).toThrow(/seller finalized Position does not cover the exact planned claim fill/);
+  });
+
+  it('refuses a seller ticket authored with the BUYER’s create_with_seed collateral derivation', async () => {
+    // The exact ticket the 2026-08-31 session authored and the producer refused:
+    // the participant address, which nothing on chain ever creates for a seller.
+    // The panel now re-derives Trading's own seeds and names the disagreement,
+    // rather than believing whichever address the readiness reported.
+    const input = await fixture();
+    const substitutedSeller = Object.freeze({
+      ...input.signedSeller,
+      intent: Object.freeze({ ...input.signedSeller.intent, collateralAccount: PARTICIPANT_SHAPED_SELLER_COLLATERAL }),
+    });
+    expect(() => prepareDirectWalletTransactionV1({
+      ...input,
+      ticketInspection: substitutedSeller,
+      signedSeller: substitutedSeller,
+      crossingPlan: Object.freeze({ ...input.crossingPlan, ticket: substitutedSeller }),
+      sellerParticipant: sellerReadiness(input.routeInspection.route, PARTICIPANT_SHAPED_SELLER_COLLATERAL),
+    })).toThrow(/not the Direct token account Trading derives/);
   });
 });

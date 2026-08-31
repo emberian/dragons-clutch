@@ -100,11 +100,11 @@ describe('Wallet Standard discovery', () => {
     const absent = discoverWalletsV1(null);
     expect(absent.registryPresent).toBe(false);
     expect(absent.wallets).toEqual([]);
-    expect(absent.reason).toMatch(/No Wallet Standard registry/);
+    expect(absent.reason).toMatch(/No browser wallet found/);
 
     const empty = discoverWalletsV1(registry([]));
     expect(empty.registryPresent).toBe(true);
-    expect(empty.reason).toMatch(/no browser wallet has registered/);
+    expect(empty.reason).toMatch(/No wallet extension found/);
 
     // Talisman registers a real Solana Wallet Standard wallet (v3.0.0, 2025-09-03)
     // and injects no window.solana, so it is discovered exactly like Phantom.
@@ -116,7 +116,12 @@ describe('Wallet Standard discovery', () => {
     expect(mixed.wallets[0].name).toBe('Talisman');
     expect(mixed.refusals).toHaveLength(1);
     expect(mixed.refusals[0].name).toBe('Substrate Only');
-    expect(mixed.reason).toMatch(/1 conforming Solana wallet announced; 1 registration refused/);
+// Renegotiated 2026-08-31: when wallets ARE listed the buttons are the
+    // message, so the status line is empty rather than counting registrations
+    // at the reader. The refusals themselves are still carried, and still
+    // exact -- the panel discloses them in its own expander.
+    expect(mixed.reason).toBe('');
+    expect(mixed.refusals).toHaveLength(1);
   });
 
   it('names a wallet by printable name and version, and finds it again in the live registry', () => {
@@ -155,10 +160,10 @@ describe('Wallet Standard connect state machine', () => {
   it('reaches connected only through an explicit request for that exact wallet', () => {
     const connecting = walletConnectionTransitionV1(idle, { kind: 'connect-requested', walletId });
     expect(connecting.kind).toBe('connecting');
-    expect(projectWalletConnectionV1(discovery, connecting).message).toMatch(/no signature is requested/);
+    expect(projectWalletConnectionV1(discovery, connecting).message).toMatch(/^Connecting to /);
     const connected = walletConnectionTransitionV1(connecting, { kind: 'connect-succeeded', walletId, address: key(11), label: null });
     expect(connected).toMatchObject({ kind: 'connected', address: key(11), switched: false });
-    expect(projectWalletConnectionV1(discovery, connected).message).toMatch(/identity only; no signature requested/);
+    expect(projectWalletConnectionV1(discovery, connected).message).toMatch(/^Connected · /);
   });
 
   it('refuses an answer this surface did not request and an unlisted wallet', () => {
@@ -176,7 +181,7 @@ describe('Wallet Standard connect state machine', () => {
     const connected = connectedIntent();
     const gone = projectWalletConnectionV1(discoverWalletsV1(registry([])), connected);
     expect(gone).toMatchObject({ kind: 'refused' });
-    expect(gone.message).toMatch(/unregistered itself/);
+    expect(gone.message).toMatch(/disconnected/);
     expect(projectWalletConnectionV1(discovery, walletConnectionTransitionV1(connected, { kind: 'forgotten' })).kind).toBe('discovered');
   });
 });

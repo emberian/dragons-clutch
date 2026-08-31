@@ -69,6 +69,10 @@ pub const GENERAL_SELECTION_STATE_SEED_V3: &[u8] = b"selection";
 pub const GENERAL_SETTLEMENT_STATE_SEED_V3: &[u8] = b"settlement";
 /// Close-only terminal-record discriminator.
 pub const GENERAL_TERMINAL_STATE_SEED_V3: &[u8] = b"terminal";
+/// Batch-window state discriminator.
+pub const GENERAL_BATCH_STATE_SEED_V3: &[u8] = b"batch";
+/// Order-record state discriminator.
+pub const GENERAL_ORDER_STATE_SEED_V3: &[u8] = b"order";
 
 // A seed longer than 32 bytes makes `find_program_address` refuse every bump,
 // so the state it names would have no derivable address at all -- the module
@@ -94,6 +98,16 @@ const _: () = assert!(
 const _: () = assert!(
     !GENERAL_TERMINAL_STATE_SEED_V3.is_empty()
         && GENERAL_TERMINAL_STATE_SEED_V3.len() <= MAX_PDA_SEED_BYTES,
+    "a PDA seed must be nonempty and at most 32 bytes to derive an address"
+);
+const _: () = assert!(
+    !GENERAL_BATCH_STATE_SEED_V3.is_empty()
+        && GENERAL_BATCH_STATE_SEED_V3.len() <= MAX_PDA_SEED_BYTES,
+    "a PDA seed must be nonempty and at most 32 bytes to derive an address"
+);
+const _: () = assert!(
+    !GENERAL_ORDER_STATE_SEED_V3.is_empty()
+        && GENERAL_ORDER_STATE_SEED_V3.len() <= MAX_PDA_SEED_BYTES,
     "a PDA seed must be nonempty and at most 32 bytes to derive an address"
 );
 
@@ -139,6 +153,22 @@ pub const GENERAL_CANDIDATE_IDENTITY_REGISTER_V3: u16 = narrow_register(identity
 /// Common scalar register naming the settlement cursor's terminal coordinate.
 pub const GENERAL_TERMINAL_COORDINATE_SCALAR_REGISTER_V3: u16 =
     narrow_register(scalar::CURSOR_TERMINAL_COORDINATE);
+/// Common identity register naming one batch's content identity.
+///
+/// The batch pair's RequestProfile projects the request subject here, so the
+/// address the lifecycle adapter derives is keyed by the identity the caller
+/// named and authenticated content joins against -- exactly the replay shape
+/// ADR-0009 SS4 chose: a second admission of the same content hits an occupied
+/// address.
+pub const GENERAL_BATCH_IDENTITY_REGISTER_V3: u16 = narrow_register(identity::SELECTION_BATCH);
+/// Common identity register naming one order's content identity.
+///
+/// The order actions' RequestProfile projects the request subject here, so the
+/// address the lifecycle adapter derives is keyed by the identity the maker
+/// signed -- a second admission of the same signed order hits an occupied
+/// address, and the tombstone a cancellation or release leaves keeps it
+/// occupied forever.
+pub const GENERAL_ORDER_IDENTITY_REGISTER_V3: u16 = narrow_register(identity::ORDER);
 
 // Two identity coordinates that narrowed to the same register would make the
 // address walk below resolve both to whichever arm it matched first, so the
@@ -146,6 +176,17 @@ pub const GENERAL_TERMINAL_COORDINATE_SCALAR_REGISTER_V3: u16 =
 const _: () = assert!(
     GENERAL_ROOT_IDENTITY_REGISTER_V3 != GENERAL_CANDIDATE_IDENTITY_REGISTER_V3,
     "the General root and candidate must be distinct seed registers"
+);
+const _: () = assert!(
+    GENERAL_BATCH_IDENTITY_REGISTER_V3 != GENERAL_ROOT_IDENTITY_REGISTER_V3
+        && GENERAL_BATCH_IDENTITY_REGISTER_V3 != GENERAL_CANDIDATE_IDENTITY_REGISTER_V3,
+    "the General batch must be a distinct seed register"
+);
+const _: () = assert!(
+    GENERAL_ORDER_IDENTITY_REGISTER_V3 != GENERAL_ROOT_IDENTITY_REGISTER_V3
+        && GENERAL_ORDER_IDENTITY_REGISTER_V3 != GENERAL_CANDIDATE_IDENTITY_REGISTER_V3
+        && GENERAL_ORDER_IDENTITY_REGISTER_V3 != GENERAL_BATCH_IDENTITY_REGISTER_V3,
+    "the General order must be a distinct seed register"
 );
 
 /// Greatest number of non-bump seeds any General recipe declares.
@@ -191,6 +232,31 @@ pub const GENERAL_TERMINAL_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 6] =
     LifecycleSeedInputV3::CanonicalBump,
 ];
 
+/// Sole seed order for one batch-window General state.
+///
+/// Keyed by the batch's own content identity under the root, so one signed
+/// opening derives one address and a replayed open finds it occupied.
+pub const GENERAL_BATCH_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 5] = [
+    LifecycleSeedInputV3::Literal(GENERAL_STATE_SEED_DOMAIN_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_BATCH_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::Literal(GENERAL_BATCH_STATE_SEED_V3),
+    LifecycleSeedInputV3::CanonicalBump,
+];
+
+/// Sole seed order for one order-record General state.
+///
+/// Keyed by the order's own content identity under the root -- the masked
+/// split digest of exactly the bytes the maker signed -- so one signed order
+/// derives one address, exactly the replay shape ADR-0009 SS4 chose.
+pub const GENERAL_ORDER_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 5] = [
+    LifecycleSeedInputV3::Literal(GENERAL_STATE_SEED_DOMAIN_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::CommonIdentity(GENERAL_ORDER_IDENTITY_REGISTER_V3),
+    LifecycleSeedInputV3::Literal(GENERAL_ORDER_STATE_SEED_V3),
+    LifecycleSeedInputV3::CanonicalBump,
+];
+
 /// Locate the sole canonical bump in one recipe, refusing every other shape.
 ///
 /// The lifecycle adapter derives the bump itself and appends it last. A recipe
@@ -198,7 +264,10 @@ pub const GENERAL_TERMINAL_STATE_RECIPE_V3: [LifecycleSeedInputV3<'static>; 6] =
 /// the adapter cannot perform, so it is refused at COMPILE time by the
 /// assertions below rather than discovered against a vacant account on chain.
 const fn canonical_bump_offset(seeds: &[LifecycleSeedInputV3<'static>]) -> usize {
-    assert!(!seeds.is_empty(), "a General recipe declares at least one seed");
+    assert!(
+        !seeds.is_empty(),
+        "a General recipe declares at least one seed"
+    );
     let mut index = 0;
     let mut found = usize::MAX;
     while index < seeds.len() {
@@ -222,6 +291,8 @@ const _: () = {
     canonical_bump_offset(&GENERAL_SELECTION_STATE_RECIPE_V3);
     canonical_bump_offset(&GENERAL_SETTLEMENT_STATE_RECIPE_V3);
     canonical_bump_offset(&GENERAL_TERMINAL_STATE_RECIPE_V3);
+    canonical_bump_offset(&GENERAL_BATCH_STATE_RECIPE_V3);
+    canonical_bump_offset(&GENERAL_ORDER_STATE_RECIPE_V3);
 };
 
 // Every recipe's non-bump seed count must fit the buffer the address projection
@@ -229,7 +300,9 @@ const _: () = {
 const _: () = assert!(
     GENERAL_SELECTION_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
         && GENERAL_SETTLEMENT_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
-        && GENERAL_TERMINAL_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3,
+        && GENERAL_TERMINAL_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
+        && GENERAL_BATCH_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3
+        && GENERAL_ORDER_STATE_RECIPE_V3.len() - 1 <= GENERAL_MAX_STATE_SEEDS_V3,
     "a General recipe declares more seeds than the address projection can hold"
 );
 
@@ -238,7 +311,9 @@ const _: () = assert!(
 const _: () = assert!(
     GENERAL_SELECTION_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
         && GENERAL_SETTLEMENT_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
-        && GENERAL_TERMINAL_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize,
+        && GENERAL_TERMINAL_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
+        && GENERAL_BATCH_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize
+        && GENERAL_ORDER_STATE_RECIPE_V3.len() <= MAX_SEEDS as usize,
     "a General recipe declares more seeds than a program-derived address admits"
 );
 
@@ -287,7 +362,34 @@ const fn close_seed_table() -> [LifecycleSeedInputV3<'static>; GENERAL_CLOSE_SEE
 pub const GENERAL_CLOSE_STATE_SEED_TABLE_V3: [LifecycleSeedInputV3<'static>;
     GENERAL_CLOSE_SEED_COUNT_V3] = close_seed_table();
 
-/// One of the three General state derivations, and there are only three.
+/// Exact combined seed count for the CancelOrder policy.
+pub const GENERAL_CANCEL_SEED_COUNT_V3: usize =
+    GENERAL_BATCH_STATE_RECIPE_V3.len() + GENERAL_ORDER_STATE_RECIPE_V3.len();
+
+/// Seed-table offset where the CancelOrder policy's order window begins.
+pub const GENERAL_CANCEL_ORDER_SEED_START_V3: u16 =
+    narrow_seed_start(GENERAL_BATCH_STATE_RECIPE_V3.len());
+
+const fn cancel_seed_table() -> [LifecycleSeedInputV3<'static>; GENERAL_CANCEL_SEED_COUNT_V3] {
+    let mut table = [LifecycleSeedInputV3::CanonicalBump; GENERAL_CANCEL_SEED_COUNT_V3];
+    let mut index = 0;
+    while index < GENERAL_BATCH_STATE_RECIPE_V3.len() {
+        table[index] = GENERAL_BATCH_STATE_RECIPE_V3[index];
+        index += 1;
+    }
+    let mut offset = 0;
+    while offset < GENERAL_ORDER_STATE_RECIPE_V3.len() {
+        table[GENERAL_BATCH_STATE_RECIPE_V3.len() + offset] = GENERAL_ORDER_STATE_RECIPE_V3[offset];
+        offset += 1;
+    }
+    table
+}
+
+/// Sole seed table for the CancelOrder action, batch window then order window.
+pub const GENERAL_CANCEL_STATE_SEED_TABLE_V3: [LifecycleSeedInputV3<'static>;
+    GENERAL_CANCEL_SEED_COUNT_V3] = cancel_seed_table();
+
+/// One of the five General state derivations, and there are only five.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralStateRecipeV3 {
     /// Selection cursor, one per General root.
@@ -296,6 +398,10 @@ pub enum GeneralStateRecipeV3 {
     Settlement,
     /// Close-only terminal record, one per (root, candidate, coordinate).
     Terminal,
+    /// Batch-window state, one per (root, batch identity).
+    Batch,
+    /// Order-record state, one per (root, order identity).
+    Order,
 }
 
 impl GeneralStateRecipeV3 {
@@ -306,6 +412,8 @@ impl GeneralStateRecipeV3 {
             Self::Selection => &GENERAL_SELECTION_STATE_RECIPE_V3,
             Self::Settlement => &GENERAL_SETTLEMENT_STATE_RECIPE_V3,
             Self::Terminal => &GENERAL_TERMINAL_STATE_RECIPE_V3,
+            Self::Batch => &GENERAL_BATCH_STATE_RECIPE_V3,
+            Self::Order => &GENERAL_ORDER_STATE_RECIPE_V3,
         }
     }
 
@@ -339,6 +447,15 @@ impl GeneralStateRecipeV3 {
     pub const fn primary_for_action(action: Action) -> Self {
         match action {
             Action::Consider | Action::Freeze => Self::Selection,
+            // The batch four share the Batch envelope: `PlaceOrder` and
+            // `CancelOrder` authenticate the window as their primary state and
+            // touch their order as a secondary one.
+            Action::OpenBatch | Action::PlaceOrder | Action::CancelOrder | Action::CloseBatch => {
+                Self::Batch
+            }
+            // `ReleaseOrder` is batch-free: its window gate is a constant of
+            // the record the maker signed, so the order IS the primary state.
+            Action::ReleaseOrder => Self::Order,
             _ => Self::Settlement,
         }
     }
@@ -422,6 +539,42 @@ impl GeneralStateAddressSeedsV3 {
         })
     }
 
+    /// Coordinates for the batch-window state of one (root, batch identity).
+    pub fn batch(
+        general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+        batch: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+    ) -> Result<Self> {
+        let general_root = require_nonzero(general_root)?;
+        let batch = require_nonzero(batch)?;
+        if general_root == batch {
+            return Err(GeneralStateSeedErrorV3::AccountAlias);
+        }
+        Ok(Self {
+            recipe: GeneralStateRecipeV3::Batch,
+            general_root,
+            candidate: Some(batch),
+            terminal_coordinate: None,
+        })
+    }
+
+    /// Coordinates for the order-record state of one (root, order identity).
+    pub fn order(
+        general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+        order: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
+    ) -> Result<Self> {
+        let general_root = require_nonzero(general_root)?;
+        let order = require_nonzero(order)?;
+        if general_root == order {
+            return Err(GeneralStateSeedErrorV3::AccountAlias);
+        }
+        Ok(Self {
+            recipe: GeneralStateRecipeV3::Order,
+            general_root,
+            candidate: Some(order),
+            terminal_coordinate: None,
+        })
+    }
+
     /// Coordinates for the settlement state of one (root, candidate).
     pub fn settlement(
         general_root: [u8; GENERAL_IDENTITY_SEED_BYTES_V3],
@@ -481,7 +634,9 @@ impl GeneralStateAddressSeedsV3 {
                 LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3) => {
                     &self.general_root
                 }
-                LifecycleSeedInputV3::CommonIdentity(GENERAL_CANDIDATE_IDENTITY_REGISTER_V3) => self
+                LifecycleSeedInputV3::CommonIdentity(GENERAL_CANDIDATE_IDENTITY_REGISTER_V3)
+                | LifecycleSeedInputV3::CommonIdentity(GENERAL_BATCH_IDENTITY_REGISTER_V3)
+                | LifecycleSeedInputV3::CommonIdentity(GENERAL_ORDER_IDENTITY_REGISTER_V3) => self
                     .candidate
                     .as_ref()
                     .ok_or(GeneralStateSeedErrorV3::MissingCoordinate)?,

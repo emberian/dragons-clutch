@@ -223,6 +223,13 @@ fn basis_bytes(
             BasisKindV3::GradedExactComplement => {
                 (2, 100, 1, &knots[..], &terms[..], &failure_payouts[..])
             }
+            // No fixture, because no encoder: `compile_basis_v3` refuses this
+            // kind, so any tuple returned here would produce a record the
+            // codec will not build. A fixture that cannot be compiled is worth
+            // less than a panic naming why.
+            BasisKindV3::SplineDegree2To3 { .. } => {
+                panic!("no runtime basis fixture exists for the spline kind: it has no encoder")
+            }
         };
     let categorical_width = if changed_semantics && kind == BasisKindV3::CategoricalQ1 {
         5

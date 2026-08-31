@@ -1,6 +1,14 @@
 # Decision 0016: a checked release describes source, artifact and account — three facts, three authors
 
-Status: **OPEN — recording requested, not re-litigation.** Ledger M-25. The
+Status: **ADOPTED 2026-08-30 — option A, plus the 0012 residual.** A checked
+release describes the source by `semantic_release_id`, the artifact by the ELF
+digest, and the account by a policy the live observation must satisfy: three
+facts, three authors, no self-reference. `dclutch-release-tool` **stays
+strict** — an iteration substrate is named, never defaulted into
+(`DECISION_PACKET_2026_08_30.md` §2, orchestrator ruling with ember's veto
+window open; `27f7944b`). M-25 closes with this record.
+
+Ledger M-25, as originally posed: **recording requested, not re-litigation.** The
 question was flagged 2026-08-27 and *"disowned with no recipient"*; the work of
 08-27 → 08-30 answered it in practice. This record proposes writing the answer
 down and ruling the one residual it leaves.

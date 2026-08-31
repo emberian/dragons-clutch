@@ -92,27 +92,111 @@ pub enum ClaimCheckCompactionSbfErrorV1 {
     Scope = 0x560A,
 }
 
+impl ClaimCheckCompactionSbfErrorV1 {
+    /// Every refusal this request family can raise, in discriminant order.
+    ///
+    /// This is what the sub-band assertions below read. It is kept honest by
+    /// [`ClaimCheckCompactionSbfErrorV1::ordinal`], whose match is exhaustive: a variant added to
+    /// the enum does not compile until its author writes an arm here, and the only arm that
+    /// satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 11] = [
+        Self::Accounts,
+        Self::Authority,
+        Self::Identity,
+        Self::Deadline,
+        Self::Phase,
+        Self::AlreadyCompacted,
+        Self::Conservation,
+        Self::Economic,
+        Self::Receipt,
+        Self::Escrow,
+        Self::Scope,
+    ];
+
+    /// This refusal's position in [`ClaimCheckCompactionSbfErrorV1::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a twelfth variant is a
+    /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Accounts => 0,
+            Self::Authority => 1,
+            Self::Identity => 2,
+            Self::Deadline => 3,
+            Self::Phase => 4,
+            Self::AlreadyCompacted => 5,
+            Self::Conservation => 6,
+            Self::Economic => 7,
+            Self::Receipt => 8,
+            Self::Escrow => 9,
+            Self::Scope => 10,
+        }
+    }
+}
+
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    ClaimCheckCompactionSbfErrorV1::Accounts as u32
-        == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x600,
-    "ClaimCheckCompactionSbfErrorV1 must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (ClaimCheckCompactionSbfErrorV1::Scope as u32)
-        < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "ClaimCheckCompactionSbfErrorV1 must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing about
+// the variants after it and goes stale silently every single time the family
+// grows -- the failure is not that the name is wrong, it is that nothing can
+// notice. Claims' own top-level band proved it the expensive way: its bound went
+// on naming `ReleaseSuperseded` after a later variant landed, so for as long as
+// that stood, the newest refusal in the program was checked by nothing.
+//
+// So the sub-band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x600;
+    assert!(
+        ClaimCheckCompactionSbfErrorV1::ALL[0] as u32 == SUB_BAND,
+        "ClaimCheckCompactionSbfErrorV1 must start at its registered sub-band offset"
+    );
+    let mut index = 0;
+    while index < ClaimCheckCompactionSbfErrorV1::ALL.len() {
+        let variant = ClaimCheckCompactionSbfErrorV1::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "ClaimCheckCompactionSbfErrorV1::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == SUB_BAND + index as u32,
+            "ClaimCheckCompactionSbfErrorV1 discriminants are not the contiguous run from the sub-band offset that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "ClaimCheckCompactionSbfErrorV1 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 // Compaction and claim-check redemption are independently versioned request
 // families and hold separate round sub-bands. This assertion is what keeps the
-// two from ever being interleaved by a later addition to either table.
-const _: () = assert!(
-    (ClaimCheckCompactionSbfErrorV1::Scope as u32)
-        < crate::claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1::Accounts as u32,
-    "the compaction sub-band must not run into the claim-check redemption sub-band"
-);
+// two from ever being interleaved by a later addition to either table, and it
+// stays necessary after the weld above: the exhaustive loop proves this family
+// is a contiguous run from ITS OWN offset and says nothing about whether that
+// run has reached the next family's.
+//
+// Both endpoints are read off `ALL` rather than named. A separation assertion
+// that names the variants by hand is the same defect it is here to prevent --
+// it would go on comparing the old top against the old base while either family
+// grew past them.
+const _: () = {
+    const COMPACTION_TOP: u32 =
+        ClaimCheckCompactionSbfErrorV1::ALL[ClaimCheckCompactionSbfErrorV1::ALL.len() - 1] as u32;
+    const REDEMPTION_BASE: u32 =
+        crate::claim_check_redemption_v1::ClaimCheckRedemptionSbfErrorV1::ALL[0] as u32;
+    assert!(
+        COMPACTION_TOP < REDEMPTION_BASE,
+        "the compaction sub-band must not run into the claim-check redemption sub-band"
+    );
+};
 
 impl From<ClaimCheckCompactionSbfErrorV1> for ProgramError {
     fn from(value: ClaimCheckCompactionSbfErrorV1) -> Self {
@@ -736,17 +820,14 @@ fn authenticate_compaction(
     }
 
     // The proof the relaxed signature was silently also carrying, restored
-    // explicitly. A Claims capability position's claimants are the holders of a
-    // mint, plural and unknown to the position, and a one-owner claim-check
-    // cannot represent them. Out of scope for V1, and refused rather than
-    // mis-served.
+    // explicitly, for every owner kind rather than for one of them.
     let admission = ProtocolPositionAdmissionV2::decode(
         &admission_account
             .try_borrow_data()
             .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?,
     )
     .map_err(|_| ClaimCheckCompactionSbfErrorV1::Scope)?;
-    if admission.owner_kind() == ProtocolPositionOwnerKindV2::ClaimsCapability {
+    if !owner_kind_can_open_a_claim_check(admission.owner_kind()) {
         return Err(ClaimCheckCompactionSbfErrorV1::Scope.into());
     }
 
@@ -758,6 +839,48 @@ fn authenticate_compaction(
         record_seeds,
         record_bump,
     }))
+}
+
+/// Whether a position's owner can ever produce the signature redemption asks
+/// for.
+///
+/// A claim-check pays exactly one address and asks that address to sign
+/// (`0x5621`, and the holder is a signer in the redemption frame spec). A
+/// program-derived address has no private key and cannot sign a top-level
+/// instruction, so a claim-check minted for one is collateral written to an
+/// address that can never open it. That is strictly worse than the delay this
+/// feature exists to end: a delay ends when the holder comes back, and this
+/// does not end at all.
+///
+/// The relaxed crank authority is what makes the question live. While
+/// redemption required the owner's own signature, a PDA-owned position simply
+/// could not reach the route; `ClaimCheckCrank` removed that signature on
+/// purpose, so the property has to be asserted rather than inherited.
+///
+/// **`TradingRecord` is not the abstract case it looks like.** It is the
+/// Fractional reserve Position: `fractional_retirement_v3.rs` requires
+/// `admission.owner_kind() == TradingRecord` with `position_owner` equal to the
+/// Trading-owned Fractional root PDA, and that Position holds the collateral
+/// backing every outstanding shard. Compacting it would resolve the shard
+/// holders' collateral into a record none of them owns, keyed to a PDA that
+/// cannot sign, while closing the Position their own redemption reads. Every
+/// shard holder would lose everything, permissionlessly, to a caller with no
+/// stake in the market.
+///
+/// The match is exhaustive on purpose. A fourth owner kind must answer this
+/// question rather than inherit an answer from whichever arm it was written
+/// next to.
+pub(crate) const fn owner_kind_can_open_a_claim_check(kind: ProtocolPositionOwnerKindV2) -> bool {
+    match kind {
+        // A wallet. It signs, so it can be paid.
+        ProtocolPositionOwnerKindV2::User => true,
+        // Trading-owned resting inventory, and the Fractional reserve. A
+        // Trading PDA; it has its own parent-authenticated close route.
+        ProtocolPositionOwnerKindV2::TradingRecord => false,
+        // A Claims capability PDA. Its claimants are the holders of a mint,
+        // plural and unknown to the Position.
+        ProtocolPositionOwnerKindV2::ClaimsCapability => false,
+    }
 }
 
 #[inline(never)]
@@ -986,27 +1109,18 @@ fn close_and_split<'info>(
 mod tests {
     use super::*;
 
-    const TABLE: [ClaimCheckCompactionSbfErrorV1; 11] = [
-        ClaimCheckCompactionSbfErrorV1::Accounts,
-        ClaimCheckCompactionSbfErrorV1::Authority,
-        ClaimCheckCompactionSbfErrorV1::Identity,
-        ClaimCheckCompactionSbfErrorV1::Deadline,
-        ClaimCheckCompactionSbfErrorV1::Phase,
-        ClaimCheckCompactionSbfErrorV1::AlreadyCompacted,
-        ClaimCheckCompactionSbfErrorV1::Conservation,
-        ClaimCheckCompactionSbfErrorV1::Economic,
-        ClaimCheckCompactionSbfErrorV1::Receipt,
-        ClaimCheckCompactionSbfErrorV1::Escrow,
-        ClaimCheckCompactionSbfErrorV1::Scope,
-    ];
-
     #[test]
     fn every_code_is_contiguous_and_unique_within_the_sub_band() {
-        for (index, code) in TABLE.iter().enumerate() {
+        for (index, code) in ClaimCheckCompactionSbfErrorV1::ALL.iter().enumerate() {
             let expected = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x600 + index as u32;
             assert_eq!(*code as u32, expected);
             let rest = index + 1;
-            assert!(!TABLE.iter().skip(rest).any(|other| other == code));
+            assert!(
+                !ClaimCheckCompactionSbfErrorV1::ALL
+                    .iter()
+                    .skip(rest)
+                    .any(|other| other == code)
+            );
         }
     }
 
@@ -1020,7 +1134,7 @@ mod tests {
             0x000_u32, 0x100, 0x140, 0x160, 0x180, 0x200, 0x210, 0x260, 0x500,
         ] {
             let base = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + occupied;
-            for code in TABLE {
+            for code in ClaimCheckCompactionSbfErrorV1::ALL {
                 assert_ne!(code as u32, base);
                 assert!(code as u32 > base);
             }
@@ -1037,5 +1151,40 @@ mod tests {
             ProgramError::from(ClaimCheckCompactionSbfErrorV1::Scope),
             ProgramError::Custom(0x560A)
         );
+    }
+
+    #[test]
+    fn only_an_owner_that_can_sign_may_be_promised_a_claim_check() {
+        // Stated over the whole enum rather than over the kinds this route
+        // happens to have met, so a kind added later is a compile error here
+        // and not a silent third `true`.
+        for (kind, admissible) in [
+            (ProtocolPositionOwnerKindV2::User, true),
+            (ProtocolPositionOwnerKindV2::TradingRecord, false),
+            (ProtocolPositionOwnerKindV2::ClaimsCapability, false),
+        ] {
+            assert_eq!(
+                owner_kind_can_open_a_claim_check(kind),
+                admissible,
+                "{kind:?} must answer whether it can sign for its own payout"
+            );
+        }
+    }
+
+    #[test]
+    fn exactly_one_owner_kind_is_a_wallet_and_the_other_two_are_program_derived() {
+        // The reason the gate reads the way it does, kept as an assertion so a
+        // future edit that flips an arm has to argue with this sentence: a
+        // claim-check is redeemable only by a signature, and only one of the
+        // three owner kinds is an identity that has one.
+        let admitted = [
+            ProtocolPositionOwnerKindV2::TradingRecord,
+            ProtocolPositionOwnerKindV2::User,
+            ProtocolPositionOwnerKindV2::ClaimsCapability,
+        ]
+        .into_iter()
+        .filter(|kind| owner_kind_can_open_a_claim_check(*kind))
+        .count();
+        assert_eq!(admitted, 1);
     }
 }

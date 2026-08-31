@@ -22,6 +22,13 @@ open DClutch.AbiSchema
 def magic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x41, 0x50, 0x30, 0x31]
 def schemaVersion : Nat := 1
 def artifactProfile : Nat := 1
+
+/-- Maximum bytes in one finalized AccountProfile V1 record.
+
+**This is a replica** of the same `1312` written independently in four Lean
+files; see `RequestProfileAbi.finalizedRecordMaxBytes` for the roster and
+`CapabilityProgramAbi.finalizedRecordMaxBytes` for the one full derivation.
+They are not linked, so a lift must move all four together. -/
 def finalizedRecordMaxBytes : Nat := 1312
 def schemaReleasePreimage : List UInt8 :=
   "dclutch/schema/account-profile-v1".toUTF8.toList

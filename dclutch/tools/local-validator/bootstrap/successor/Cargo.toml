@@ -13,13 +13,19 @@ publish = false
 [dependencies]
 base64 = "=0.22.1"
 bincode = "=1.3.3"
+dclutch-capability-activation-codec = { path = "../../../../crates/dclutch-capability-activation-codec" }
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-capability-contract = { path = "../../../../crates/dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capability-program-contract" }
 dclutch-capability-seal-contract = { path = "../../../../crates/dclutch-capability-seal-contract" }
+dclutch-claims-sbf = { path = "../../../../programs/dclutch-claims-sbf", features = ["no-entrypoint"] }
 dclutch-claims-svm = { path = "../../../../crates/dclutch-claims-svm" }
 dclutch-custody-contract = { path = "../../../../crates/dclutch-custody-contract" }
 dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
+# The Direct intent ticket author, which used to be `pub(crate)` in THIS crate
+# and is now shared with the released `dclutch` CLI. `direct_ticket.rs` is the
+# adapter that keeps this binary's subcommand and error type over it.
+dclutch-direct-ticket = { path = "../../../../crates/dclutch-direct-ticket" }
 dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
 dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractional-claim-operator" }
@@ -55,7 +61,7 @@ dclutch-token-svm = { path = "../../../../crates/dclutch-token-svm" }
 dclutch-versioned-message-operator = { path = "../../../../crates/dclutch-versioned-message-operator" }
 reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "=1.0.228", features = ["derive"] }
-serde_json = "=1.0.149"
+serde_json = "=1.0.151"
 sha2 = "=0.10.9"
 solana-hash = "=4.6.0"
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }

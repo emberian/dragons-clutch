@@ -715,14 +715,26 @@ fn validate_checked_upgrade_set(
                 && pin.artifact_release_id.is_some()
                 && pin.carried_programdata_base64.is_some()
         } else {
-            pin.disposition == CheckedDeploymentDispositionV1::Upgrade
-                && pin.baseline_path.is_some()
-                && pin.baseline_sha256.is_some()
-                && pin.receipt_path.is_some()
-                && pin.receipt_sha256.is_some()
-                && pin.artifact_release_body_hex.is_none()
-                && pin.artifact_release_id.is_none()
-                && pin.carried_programdata_base64.is_none()
+            // Two shapes are admitted for a cut's own roles. An Upgrade carries a
+            // baseline AND a receipt. An AlreadyCurrent role carries the baseline
+            // -- it fixes the width the equality was judged at -- and NO receipt,
+            // because no Upgrade exists or can exist for a payload that is already
+            // the candidate. Neither may carry the carry-forward transport fields.
+            match pin.disposition {
+                CheckedDeploymentDispositionV1::Upgrade => {
+                    pin.baseline_path.is_some()
+                        && pin.baseline_sha256.is_some()
+                        && pin.carries_no_transport_fields()
+                        && pin.receipt_path.is_some()
+                        && pin.receipt_sha256.is_some()
+                }
+                // The baseline and the absent receipt are the shared rule; the
+                // transport fields are this row kind's own conjunct.
+                CheckedDeploymentDispositionV1::AlreadyCurrent => {
+                    pin.already_current_closure().holds() && pin.carries_no_transport_fields()
+                }
+                CheckedDeploymentDispositionV1::CarryForward => false,
+            }
         };
         if !exact_tag {
             return Err(Error::new(format!(

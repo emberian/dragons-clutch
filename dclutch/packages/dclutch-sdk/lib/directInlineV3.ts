@@ -90,7 +90,28 @@ import {
   HOT_TRADING_PROGRAM_ACCOUNT_V3,
   RULE_BYTES,
 } from './generated/directInlineV3';
+import {
+  HOT_BUMP_HINTS_ABSENT_V1,
+  HOT_BUMP_HINTS_OFFSET_V1,
+  HOT_BUMP_HINT_COUNT_V1,
+  encodeHotBumpHintsV1,
+  hotBumpHintsAreAbsentV1,
+  type HotBumpHintsV1,
+} from './directHotBumpHintsV1';
 import { SOLANA_PACKET_BYTES_V1 } from './solanaLimits';
+
+export {
+  HOT_BUMP_HINTS_ABSENT_V1,
+  HOT_BUMP_HINTS_OFFSET_V1,
+  HOT_BUMP_HINT_COUNT_V1,
+  HOT_BUMP_HINT_SLOT_NAMES_V1,
+  decodeHotBumpHintsV1,
+  encodeHotBumpHintsV1,
+  hotBumpHintsAreAbsentV1,
+  mineDirectInlineHotBumpHintsV3,
+  type DirectHotBumpHintSourceV3,
+  type HotBumpHintsV1,
+} from './directHotBumpHintsV1';
 
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const MAX_U16 = 0xffff;
@@ -216,6 +237,10 @@ export type DirectInlineTransactionPlanV3 = Readonly<{
   requiredSigners: ReadonlyArray<string>;
   preview: DirectInlineEconomicPreviewV3;
   loadedAddresses: number;
+  /** The eight bumps this wire carries, so a caller can see what it searched. */
+  bumpHints: HotBumpHintsV1;
+  /** How many hint slots are filled. Zero is the absent wire, which searches. */
+  minedBumpHintSlots: number;
 }>;
 
 /** The sole first-semantic-use, duplicate-free LUT sequence accepted by Rust. */
@@ -409,10 +434,19 @@ function directNativeParticipantsV3(
       || !same(bytes.slice(0, 8), HOT_EXECUTION_MAGIC_V3)
       || readU16(bytes, 8) !== HOT_EXECUTION_VERSION_V3
       || readU16(bytes, 10) !== HOT_EXECUTION_PROFILE_V3
-      || readU32(bytes, 12) !== DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3
-      || bytes.slice(120, HOT_EXECUTION_ENVELOPE_BYTES_V3).some((value) => value !== 0)) {
+      || readU32(bytes, 12) !== DIRECT_INLINE_ORDINARY_REQUEST_BYTES_V3) {
     throw new Error('native evidence current instruction is not one canonical direct-bias-zero Hot envelope');
   }
+  // The eight bytes at HOT_BUMP_HINTS_OFFSET_V1 are DELIBERATELY unconstrained
+  // here. They were checked for zero while this builder emitted nothing else,
+  // and that check was the whole reason a mined wire could not pass its own
+  // evidence encoder. The Rust codec never had it: `split_instruction` decodes
+  // magic, version, profile and request width and reads the hint block as data.
+  // Leaving them free is safe for exactly the reason the block sits before the
+  // family request -- every signed window this function names is an ABSOLUTE
+  // offset at or past HOT_FAMILY_REQUEST_OFFSET_V3, so no hint value can move a
+  // maker key, a signed preimage, or the parent request digest. The pinning
+  // test asserts that: hinted and unhinted evidence bytes are identical.
   const request = HOT_EXECUTION_ENVELOPE_BYTES_V3;
   if (!same(bytes.slice(request, request + 8), DIRECT_EXECUTION_REQUEST_MAGIC_V3)
       || readU16(bytes, request + 8) !== DIRECT_EXECUTION_REQUEST_VERSION_V3
@@ -732,6 +766,13 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
   fill: bigint;
   executionPrice: bigint;
   clockSlot: bigint;
+  /**
+   * The bumps the caller mined off chain, from
+   * `mineDirectInlineHotBumpHintsV3`. Omitted is the ABSENT block, which is the
+   * wire every caller emitted before this existed: Trading searches for every
+   * address exactly as it used to, correctly and more expensively.
+   */
+  bumpHints?: HotBumpHintsV1;
 }>): DirectInlineTransactionPlanV3 {
   if (input.route.outerEvidence.status !== 'checked') throw new Error(`Direct V3 hot execution unavailable: ${input.route.outerEvidence.reason}`);
   exactIdentity(input.route.releaseSet, 'execution release set');
@@ -766,6 +807,21 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
   hotInstructionBytes.set(exactKey(input.route.market, 'Market').toBytes(), 48);
   putU64(hotInstructionBytes, 80, input.route.generation);
   hotInstructionBytes.set(input.route.rootPrestateDigest, 88);
+  // The hint block rides in the envelope, BEFORE the family request, at the
+  // eight bytes the V3 wire already reserved. Three consequences, all of them
+  // the point: `hash(family_request)` cannot see it, so no parent request
+  // digest, child caller authority or acknowledgment moves; the maker Ed25519
+  // windows are absolute offsets rebased on HOT_FAMILY_REQUEST_OFFSET_V3, which
+  // does not move, so no signed message moves either; and the packet does not
+  // grow by one byte, which the 1,167-byte geometry check below re-proves on
+  // every compile whether the block is mined or absent.
+  const bumpHints = input.bumpHints ?? HOT_BUMP_HINTS_ABSENT_V1;
+  const hintBlock = encodeHotBumpHintsV1(bumpHints);
+  if (hintBlock.length !== HOT_BUMP_HINT_COUNT_V1
+      || HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1 !== HOT_EXECUTION_ENVELOPE_BYTES_V3) {
+    throw new Error('hot bump hint block does not exactly fill the envelope tail it rides in');
+  }
+  hotInstructionBytes.set(hintBlock, HOT_BUMP_HINTS_OFFSET_V1);
   hotInstructionBytes.set(requestBytes, HOT_EXECUTION_ENVELOPE_BYTES_V3);
 
   const toMeta = (account: DirectHotAccountMetaV3) => ({ pubkey: exactKey(account.address, 'hot route account'), isSigner: account.isSigner, isWritable: account.isWritable });
@@ -836,5 +892,7 @@ export function compileDirectInlineTransactionV3(input: Readonly<{
     requiredSigners,
     preview,
     loadedAddresses,
+    bumpHints,
+    minedBumpHintSlots: hotBumpHintsAreAbsentV1(bumpHints) ? 0 : hintBlock.filter((value) => value !== 0).length,
   });
 }

@@ -53,9 +53,9 @@
     {
       "id": "every-stage-executed",
       "kind": "plan-jq",
-      "query": "[.stages[] | select(.outcome != \"executed\" and .outcome != \"running\")] | length | tostring",
+      "query": "[.stages[] | select(.outcome != \"executed\" and .outcome != \"running\" and .outcome != \"authenticated\")] | length | tostring",
       "expect": "0",
-      "provenance": "The vertical is one journey-shaped chain; a stage that reports anything but executed (or, for the twin, running) means the chain broke and the transcript must not read as a completed walk."
+      "provenance": "The vertical is one journey-shaped chain; a stage that reports anything but executed (or, for the twin, running, or, for the Resolution funding ladder, authenticated) means the chain broke and the transcript must not read as a completed walk. Exactly one stage is authenticated rather than executed: tier 1's founding suffix drives CreateFund, ActivateFund and VerifyFundReady, so this campaign reads the readiness planner instead of driving them a second time — and it refuses, before any transcript exists, on any plan but consumed-by-founding."
     }
   ]
 }

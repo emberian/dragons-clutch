@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 
+import { FIGURE_AXIS_PX, FIGURE_LABEL_PX, useFigureScale } from './useFigureScale';
+
 /**
  * The time axis this app did not have.
  *
@@ -48,11 +50,14 @@ export type SparklinePropsV1 = Readonly<{
 }>;
 
 const WIDTH = 1000;
-const LABEL_BAND = 11;
 const PLOT_BAND = 28;
 const ROW_GAP = 9;
-const AXIS_BAND = 14;
-const ROW_HEIGHT = LABEL_BAND + PLOT_BAND;
+/* The bands that hold text are no longer constants: text is sized in real
+   pixels (see useFigureScale), so the room it needs depends on how wide the
+   slot made one unit worth. These are the floors, kept so a full-width figure
+   lays out exactly as it did before. */
+const MIN_LABEL_BAND = 11;
+const MIN_AXIS_BAND = 14;
 
 /** Exact comparison over decimal strings of any width. */
 function extremes(values: ReadonlyArray<string>): Readonly<{ low: bigint; high: bigint }> {
@@ -68,6 +73,7 @@ function extremes(values: ReadonlyArray<string>): Readonly<{ low: bigint; high: 
 
 export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNote, unit }: SparklinePropsV1) {
   const [active, setActive] = useState<number | null>(null);
+  const { figureRef, units } = useFigureScale(WIDTH);
 
   const points = lines.length === 0 ? 0 : lines[0].values.length;
   const drawable = lines.length > 0
@@ -76,7 +82,7 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
     && xLabels.length === points;
   if (!drawable) {
     return <figure className="viz-figure">
-      <p className="viz-caption">{emptyReason ?? 'No run has been recorded for this market, so there is no line to draw.'}</p>
+      <p className="viz-caption">{emptyReason ?? 'No run recorded.'}</p>
     </figure>;
   }
 
@@ -93,7 +99,13 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
   const fraction = (value: string) => (flat ? 0.5 : Number(BigInt(value) - low) / Number(span));
   const xAt = (index: number) => (points === 1 ? WIDTH / 2 : (index * WIDTH) / (points - 1));
 
-  const height = lines.length * ROW_HEIGHT + (lines.length - 1) * ROW_GAP + AXIS_BAND;
+  const labelSize = units(FIGURE_LABEL_PX);
+  const axisSize = units(FIGURE_AXIS_PX);
+  const labelBand = Math.max(MIN_LABEL_BAND, labelSize + units(3));
+  const axisBand = Math.max(MIN_AXIS_BAND, axisSize + units(5));
+  const rowHeight = labelBand + PLOT_BAND;
+
+  const height = lines.length * rowHeight + (lines.length - 1) * ROW_GAP + axisBand;
   const shown = active ?? points - 1;
   const readoutValues = lines
     .map((line) => `${line.label} ${line.values[shown]}`)
@@ -103,22 +115,23 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
 
   return <figure className="viz-figure">
     <div className="viz-scroll"><svg
+      ref={figureRef}
       viewBox={`0 0 ${WIDTH} ${height}`}
       role="group"
       aria-label={caption}
       style={{ width: '100%' }}
     >
       {lines.map((line, row) => {
-        const top = row * (ROW_HEIGHT + ROW_GAP);
-        const plotTop = top + LABEL_BAND;
+        const top = row * (rowHeight + ROW_GAP);
+        const plotTop = top + labelBand;
         const plotBottom = plotTop + PLOT_BAND;
         const yAt = (value: string) => plotBottom - fraction(value) * PLOT_BAND;
         const path = line.values.map((value, index) => `${xAt(index)},${yAt(value)}`).join(' ');
         const lastX = xAt(points - 1);
         const lastY = yAt(line.values[points - 1]);
         return <g key={line.label}>
-          <text x={0} y={top + 8} fontSize={8} fill="var(--viz-muted)">{line.label}</text>
-          <text x={WIDTH} y={top + 8} fontSize={8} textAnchor="end" fill="var(--viz-ink)">{line.values[shown]}</text>
+          <text x={0} y={top + labelSize} fontSize={labelSize} fill="var(--viz-muted)">{line.label}</text>
+          <text x={WIDTH} y={top + labelSize} fontSize={labelSize} textAnchor="end" fill="var(--viz-ink)">{line.values[shown]}</text>
           <line x1={0} y1={plotBottom} x2={WIDTH} y2={plotBottom} stroke="var(--viz-baseline)" strokeWidth={0.5} />
           <polygon
             points={`0,${plotBottom} ${path} ${lastX},${plotBottom}`}
@@ -142,7 +155,7 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
         x1={xAt(active)}
         y1={0}
         x2={xAt(active)}
-        y2={height - AXIS_BAND}
+        y2={height - axisBand}
         stroke="var(--viz-grid)"
         strokeWidth={1}
       />}
@@ -157,7 +170,7 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
           x={Math.max(xAt(index) - columnWidth / 2, 0)}
           y={0}
           width={columnWidth}
-          height={height - AXIS_BAND}
+          height={height - axisBand}
           tabIndex={0}
           aria-label={columnLabel(index)}
           onPointerEnter={() => setActive(index)}
@@ -167,8 +180,8 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
         ><title>{columnLabel(index)}</title></rect>;
       })}
 
-      <text x={0} y={height - 3} fontSize={7} textAnchor="start" fill="var(--viz-muted)">{xLabels[0]}</text>
-      {points > 1 && <text x={WIDTH} y={height - 3} fontSize={7} textAnchor="end" fill="var(--viz-muted)">{xLabels[points - 1]}</text>}
+      <text x={0} y={height - units(3)} fontSize={axisSize} textAnchor="start" fill="var(--viz-muted)">{xLabels[0]}</text>
+      {points > 1 && <text x={WIDTH} y={height - units(3)} fontSize={axisSize} textAnchor="end" fill="var(--viz-muted)">{xLabels[points - 1]}</text>}
     </svg></div>
 
     <p className="viz-readout" aria-live="polite">
@@ -178,7 +191,7 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
     </p>
 
     <details className="viz-table">
-      <summary>Exact ends and extremes of every line drawn</summary>
+      <summary>Exact numbers</summary>
       <div className="viz-table-scroll">
         <table>
           <thead><tr><th>Line</th><th>Oldest{unit === undefined ? '' : ` · ${unit}`}</th><th>Newest</th><th>Lowest</th><th>Highest</th></tr></thead>

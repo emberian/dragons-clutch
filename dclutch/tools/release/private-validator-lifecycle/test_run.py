@@ -2094,5 +2094,110 @@ class PrivateValidatorLifecycleTests(unittest.TestCase):
             self.assertTrue((run / "stages" / "01-hostile" / "stderr.bin").is_file())
 
 
+class FrozenRoutingTableTests(unittest.TestCase):
+    """The table `--through participant` could not complete without.
+
+    The admission message does not fit a legacy transaction: without a routing
+    table it refuses `admission message compilation: PacketTooLarge` AFTER the
+    prefund transfer has landed, which is exactly where the participant probe
+    stopped on 2026-08-31.
+    """
+
+    @staticmethod
+    def table(addresses, *, frozen: bool) -> str:
+        import base64
+
+        raw = bytearray(MODULE.ALT_HEADER_BYTES_V1)
+        raw[0:4] = (1).to_bytes(4, "little")
+        raw[MODULE.ALT_AUTHORITY_FLAG_OFFSET_V1] = 0 if frozen else 1
+        if not frozen:
+            raw[22:54] = bytes(range(32))
+        for entry in addresses:
+            raw += entry
+        return base64.b64encode(bytes(raw)).decode()
+
+    def accounts(self, rows):
+        return [
+            {"pubkey": pubkey, "account": {"data": [body, "base64"]}}
+            for pubkey, body in rows
+        ]
+
+    def test_the_frozen_table_containing_the_market_is_the_one_chosen(self):
+        market = bytes([9]) * 32
+        other = bytes([8]) * 32
+        rows = self.accounts([
+            # Still extendable, and it does contain the market: an authority
+            # that can still add an address is not the table the founding
+            # committed to.
+            (PUBKEY_A, self.table([market, other], frozen=False)),
+            # Frozen, but about another market entirely.
+            (PUBKEY_B, self.table([other], frozen=True)),
+            (PUBKEY_C, self.table([other, market], frozen=True)),
+        ])
+        with mock.patch.object(MODULE, "rpc", return_value=rows):
+            self.assertEqual(
+                MODULE.frozen_founding_routing_table("http://127.0.0.1:1/", base58(market)),
+                PUBKEY_C,
+            )
+
+    def test_no_frozen_table_refuses_rather_than_compiling_a_packet_that_cannot_fit(self):
+        market = bytes([9]) * 32
+        rows = self.accounts([(PUBKEY_A, self.table([market], frozen=False))])
+        with mock.patch.object(MODULE, "rpc", return_value=rows):
+            with self.assertRaises(MODULE.Refusal) as caught:
+                MODULE.frozen_founding_routing_table("http://127.0.0.1:1/", base58(market))
+        self.assertIn("does not fit a legacy transaction", str(caught.exception))
+
+    def test_two_candidate_tables_refuse_rather_than_pick_one(self):
+        """Passing all five founding tables refuses `DuplicateAddress`, so the
+        contract is exactly one table and an ambiguity is not a coin toss."""
+        market = bytes([9]) * 32
+        rows = self.accounts([
+            (PUBKEY_A, self.table([market], frozen=True)),
+            (PUBKEY_B, self.table([market], frozen=True)),
+        ])
+        with mock.patch.object(MODULE, "rpc", return_value=rows):
+            with self.assertRaises(MODULE.Refusal) as caught:
+                MODULE.frozen_founding_routing_table("http://127.0.0.1:1/", base58(market))
+        self.assertIn("2 frozen lookup tables", str(caught.exception))
+
+    def test_a_short_or_undecodable_account_is_skipped_rather_than_crashing(self):
+        market = bytes([9]) * 32
+        rows = [
+            {"pubkey": PUBKEY_A, "account": {"data": ["", "base64"]}},
+            {"pubkey": PUBKEY_B, "account": {}},
+        ] + self.accounts([(PUBKEY_C, self.table([market], frozen=True))])
+        with mock.patch.object(MODULE, "rpc", return_value=rows):
+            self.assertEqual(
+                MODULE.frozen_founding_routing_table("http://127.0.0.1:1/", base58(market)),
+                PUBKEY_C,
+            )
+
+
+class ValidatorLaunchTests(unittest.TestCase):
+    def test_the_session_keeps_its_transaction_history(self):
+        """A purge between two stages strands a journal permanently.
+
+        Every driver here re-verifies its earlier stages from transaction
+        history, and the Direct trade and the flagship resolution advance one
+        durable action per invocation with minutes between them. Under the
+        validator's own default those roots are purged in multi-thousand-slot
+        chunks and the later stage can no longer authenticate the earlier one --
+        a failure no retry recovers, because the history is gone rather than
+        late.
+        """
+        argv = MODULE.validator_argv(
+            Path("/bin/true"), Path("/tmp/ledger"), "/tmp/accounts", PUBKEY_A, 31432,
+        )
+        self.assertIn("--limit-ledger-size", argv)
+        cap = argv[argv.index("--limit-ledger-size") + 1]
+        self.assertEqual(cap, str(MODULE.VALIDATOR_LEDGER_SHRED_CAP_V1))
+        self.assertGreater(int(cap), 1_000_000)
+        # The port block is still derived from one base, which is what makes a
+        # ledger addressable by path alone.
+        self.assertEqual(argv[argv.index("--rpc-port") + 1], "31432")
+        self.assertEqual(argv[argv.index("--faucet-port") + 1], "31434")
+
+
 if __name__ == "__main__":
     unittest.main()

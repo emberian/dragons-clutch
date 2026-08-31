@@ -27,6 +27,7 @@ export * from './lib/marketDiscovery';
 export * from './lib/marketDetail';
 export * from './lib/marketCoreV2';
 export * from './lib/portfolio';
+export * from './lib/bundleExposure';
 export * from './lib/activity';
 export * from './lib/deployments';
 export * from './lib/operatorSurface';

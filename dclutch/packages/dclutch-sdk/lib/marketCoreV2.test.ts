@@ -27,6 +27,8 @@ import {
   CORE_VERSION,
 } from './generated/coreFound';
 import {
+  SUPERSEDED_CORE_STATE_WIDTHS,
+  coreStateWidthGuardIsCoherent,
   decodeClaimsAggregateV2,
   decodeClaimsPositionV2,
   decodeMarketCoreStateV2,
@@ -131,6 +133,32 @@ describe('the Market a live dClutch chain actually holds', () => {
     expect(market.data).toHaveLength(352);
     expect(() => decodeMarketCoreStateV2(market.address, market.data))
       .toThrow('This older devnet Market generation is incompatible');
+  });
+
+  it('names every superseded generation, not only the oldest one', () => {
+    // The devnet Markets stranded by the cut are 360 bytes, and this help was
+    // written when 360 was current and 352 was the legacy case. A width bump
+    // left the sentence pointing at a generation nothing on the cluster held.
+    for (const width of SUPERSEDED_CORE_STATE_WIDTHS) {
+      const superseded = new Uint8Array(width);
+      superseded.set(new TextEncoder().encode('DCLTCOR3'));
+      expect(() => decodeMarketCoreStateV2('11111111111111111111111111111111', superseded))
+        .toThrow('This older devnet Market generation is incompatible');
+    }
+  });
+
+  it('keeps the superseded-width list below the current width', () => {
+    // The guard that stops this list going stale the way the literal did: a
+    // width bump that leaves an entry at or above the current width fails here
+    // rather than silently orphaning the explanatory sentence again.
+    expect(coreStateWidthGuardIsCoherent()).toBe(true);
+    expect(SUPERSEDED_CORE_STATE_WIDTHS).not.toContain(CORE_STATE_BYTES);
+  });
+
+  it('still refuses an unrecognised width, without pretending to explain it', () => {
+    const nonsense = new Uint8Array(CORE_STATE_BYTES + 8);
+    expect(() => decodeMarketCoreStateV2('11111111111111111111111111111111', nonsense))
+      .toThrow(/is 376 bytes; the exact current width is 368\.$/);
   });
 
   it('does not derive a current Market address from superseded bytes', () => {

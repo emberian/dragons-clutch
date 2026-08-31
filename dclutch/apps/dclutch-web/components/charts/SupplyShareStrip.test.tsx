@@ -18,9 +18,13 @@ describe('SupplyShareStrip', () => {
       caption={CAPTION}
     />);
     expect(html).toContain('25.00%');
-    expect(html).toContain('evenly split: issuance has not leaned toward any outcome yet');
+    // Renegotiated 2026-08-31: the readout used to append "evenly split:
+    // issuance has not leaned toward any outcome yet" to an already-labelled
+    // set of equal bars, and the table behind it was called "Exact issued
+    // supply behind every share". Both deleted; the percentages say it.
+    expect(html).not.toContain('has not leaned');
     expect(html).toContain('Below the range');
-    expect(html).toContain('Exact issued supply behind every share');
+    expect(html).toContain('Exact numbers');
     expect(html).toContain('<td>total</td><td>100.00%</td><td>2000000000</td>');
     expect(html).toContain(CAPTION);
   });
@@ -51,7 +55,7 @@ describe('SupplyShareStrip', () => {
 
   it('names cells by index alone when no editorial outcomes are supplied', () => {
     const html = renderToStaticMarkup(<SupplyShareStrip supplies={['1', '3']} caption={CAPTION} />);
-    expect(html).toContain('claim 1');
+    expect(html).toContain('outcome 1');
     expect(html).toContain('75.00%');
     expect(html).not.toContain('· undefined');
   });

@@ -19,6 +19,45 @@ def u64Limit : Nat := 18446744073709551616
 /-- Basis-point denominator. -/
 def feeDenominator : Nat := 10000
 
+/-- The admissible venue fee band (decision 0014 D2), in basis points.
+
+Until this constant existed the band was a `test` in one shell script, so a
+founding that did not go through that script was unbounded. It is the protocol
+bound now: the immutable execution config refuses a rate above it at
+construction, and `DirectOrdinaryV3`'s prelude refuses a fill whose policy rate
+exceeds it. -/
+def maxFeeBasisPoints : Nat := 500
+
+theorem maxFeeBasisPoints_le_denominator : maxFeeBasisPoints ≤ feeDenominator := by
+  decide
+
+/-- **The `FeeSole` retirement, as arithmetic.**
+
+`CUSTODY_ROUTES_V3` slot 3 is enabled by `sellerNet = 0 ∧ combinedFee ≠ 0`, and
+`sellerNet = gross - fee` with `fee = gross * basisPoints / feeDenominator`. A
+one-sided floor fee at a rate inside the band can never take the whole gross:
+the fee is at most a twentieth of it. So a nonzero fee always leaves the seller
+something, the route is unreachable under the band, and this lane retires it
+rather than leaving a declared route no admissible config can enable. -/
+theorem banded_fee_leaves_a_positive_seller_net
+    (gross basisPoints : Nat)
+    (banded : basisPoints ≤ maxFeeBasisPoints)
+    (nonzeroFee : gross * basisPoints / feeDenominator ≠ 0) :
+    gross - gross * basisPoints / feeDenominator ≠ 0 := by
+  simp only [maxFeeBasisPoints] at banded
+  simp only [feeDenominator] at nonzeroFee ⊢
+  have hpos : 0 < gross := by
+    rcases Nat.eq_zero_or_pos gross with hzero | hpos
+    · simp [hzero] at nonzeroFee
+    · exact hpos
+  have hle : gross * basisPoints / 10000 ≤ gross * 500 / 10000 :=
+    Nat.div_le_div_right (Nat.mul_le_mul (Nat.le_refl gross) banded)
+  have hproduct : gross * 500 < 10000 * gross := by
+    have hslack : 0 < gross * 9500 := Nat.mul_pos hpos (by decide)
+    omega
+  have hstrict : gross * 500 / 10000 < gross := Nat.div_lt_of_lt_mul hproduct
+  omega
+
 /-- Canonical Market phase relevant to the Direct slice. -/
 inductive Phase where
   | founding

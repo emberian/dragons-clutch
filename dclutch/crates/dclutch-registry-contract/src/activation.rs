@@ -376,6 +376,10 @@ impl ActivationCacheProgressV1 {
 /// the expected slot — an unwritten slot is exactly all zero and anything else
 /// is a different release set masquerading as progress. This never admits
 /// anything: it reports what a Registry-owned account already contains.
+///
+/// The cache's own PDA bump is deliberately outside this comparison; the
+/// selection span below says why, and the reader holding the address is the one
+/// that can check it.
 pub fn activation_cache_progress_v1(
     observed: &[u8],
     expected: ActivatedExecutionReleaseSetV1,
@@ -385,7 +389,21 @@ pub fn activation_cache_progress_v1(
     }
     validate_activation_header(observed)?;
     let complete = expected.to_bytes();
-    if subslice(observed, 0, ROLES_OFFSET)? != subslice(&complete, 0, ROLES_OFFSET)? {
+    // Everything the projection AUTHORS, and nothing else. The one byte skipped
+    // is [`ACTIVATION_CACHE_BUMP_OFFSET_V1`], which is a carrier rather than a
+    // canonicality field: it is a fact about the account's own ADDRESS, and
+    // `ActivatedExecutionReleaseSetV1` — which is a projection of the release
+    // set, not of any account — has no field for it and leaves it zero, while
+    // `put_activation_cache_bump_v1` refuses to write zero. Comparing it here
+    // therefore refused every Registry-written cache against its own expected
+    // projection, which is what a byte-exact compare against a value with no
+    // author always does. The reader that HOLDS the address checks the bump;
+    // see `ActivatedExecutionReleaseSetViewV1::cache_bump`.
+    if subslice(observed, 0, ACTIVATION_CACHE_BUMP_OFFSET_V1)?
+        != subslice(&complete, 0, ACTIVATION_CACHE_BUMP_OFFSET_V1)?
+        || subslice(observed, RESERVED_OFFSET, ROLES_OFFSET - RESERVED_OFFSET)?
+            != subslice(&complete, RESERVED_OFFSET, ROLES_OFFSET - RESERVED_OFFSET)?
+    {
         return Err(Error::ReleaseSetSelectionMismatch);
     }
     let mut written = [false; 5];

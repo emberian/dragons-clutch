@@ -42,7 +42,7 @@ describe('Registry release presentation', () => {
     expect(html).not.toContain('Registry / Core program');
     // Activation admits one role per transaction; five separately signed
     // packets, never one 26-account instruction the chain refuses outright.
-    expect(html).toContain('one exact ten-account action per role');
+    expect(html).toContain('one ten-account action');
     expect(html).toContain('five separate packets, not one');
     expect(html).not.toContain('26-account');
     expect(html).not.toContain('illustrative');

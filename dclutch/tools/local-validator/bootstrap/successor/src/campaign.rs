@@ -217,8 +217,27 @@ fn authenticate_local_participant_fixture_evidence_v1(
         .founding_collateral_atoms
         .checked_add(receipt.quantity_atoms)
         .ok_or_else(|| Error::new("fixture receipt supply overflow"))?;
+    // THE FIXTURE LIQUIDITY IS PINNED; THE MARKET'S OWN COLLATERAL IS NOT.
+    //
+    // `quantity_atoms` is the lab fixture's, and one exact amount is the whole
+    // point of it: a caller-chosen fixture supply would be a hidden multiplier,
+    // and `validate_market_input` refuses one for the same reason.
+    //
+    // `founding_collateral_atoms` was pinned to the same literal
+    // `demo_market_input_base` used to hard-code, and that made the collateral
+    // knob FOUNDABLE BUT NOT CONSUMABLE: a market opened at any other stake
+    // stood on the chain perfectly well and then every driver that
+    // authenticates its campaign report -- the Direct trade producer, the
+    // wallet terminal payout -- refused it here, at a constant, with a sentence
+    // about a "changed supply" that was really about a changed market. Measured
+    // by founding four markets at four stakes and being refused by all of them.
+    //
+    // What is left is the arithmetic that actually binds: the total supply is
+    // the founding collateral plus the fixture liquidity and nothing else, so a
+    // receipt cannot claim a stake its own mint does not carry. A zero stake is
+    // still refused, exactly as `validate_market_input` refuses one.
     if receipt.quantity_atoms != crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1
-        || receipt.founding_collateral_atoms != 1_000_000_000
+        || receipt.founding_collateral_atoms == 0
         || receipt.total_supply_atoms != expected_total
         || !receipt.mint_authority_removed
         || receipt.finalized_slot == 0
@@ -3991,7 +4010,7 @@ mod tests {
             .is_err(),
             "public devnet must reject even a structurally exact local receipt"
         );
-        let mut retained = receipt;
+        let mut retained = receipt.clone();
         retained.mint_authority_removed = false;
         assert!(
             authenticate_local_participant_fixture_evidence_v1(
@@ -4003,6 +4022,68 @@ mod tests {
             .is_err(),
             "a receipt cannot bless retained mint authority"
         );
+
+        // A MARKET FOUNDED AT ANOTHER STAKE IS STILL THIS MARKET. The founding
+        // collateral used to be pinned to the literal the compiler hard-coded,
+        // which made the stake knob foundable but not consumable: the market
+        // opened and then every driver reading its campaign report refused it
+        // here. What still binds is the arithmetic -- total supply is the
+        // founding collateral plus the fixture liquidity and nothing else.
+        let mut widened = receipt.clone();
+        widened.founding_collateral_atoms = 5_073_807_456;
+        widened.total_supply_atoms = 5_073_807_456 + crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1;
+        authenticate_local_participant_fixture_evidence_v1(
+            crate::cluster::ExpectedClusterV1::OwnedLoopback,
+            Some(&widened),
+            &[transaction_for(&receipt)],
+            &market,
+        )
+        .expect("a market founded at another stake is still authenticated");
+
+        let mut lying = widened.clone();
+        lying.total_supply_atoms += 1;
+        assert!(
+            authenticate_local_participant_fixture_evidence_v1(
+                crate::cluster::ExpectedClusterV1::OwnedLoopback,
+                Some(&lying),
+                &[],
+                &market,
+            )
+            .is_err(),
+            "a receipt cannot claim a supply its own arithmetic does not carry"
+        );
+
+        let mut stakeless = widened;
+        stakeless.founding_collateral_atoms = 0;
+        stakeless.total_supply_atoms = crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1;
+        assert!(
+            authenticate_local_participant_fixture_evidence_v1(
+                crate::cluster::ExpectedClusterV1::OwnedLoopback,
+                Some(&stakeless),
+                &[],
+                &market,
+            )
+            .is_err(),
+            "a market with no stake at all is still refused"
+        );
+    }
+
+    /// The transaction evidence the fixture receipt binds, rebuilt for a second
+    /// authentication in the same test.
+    fn transaction_for(
+        receipt: &crate::market::LocalParticipantFixtureLiquidityEvidenceV1,
+    ) -> TerminalTransactionEvidenceV1 {
+        TerminalTransactionEvidenceV1 {
+            label: "create local fixture".into(),
+            signature: receipt.transaction_signature.clone(),
+            slot: receipt.finalized_slot,
+            transaction_metadata_available: true,
+            fee_lamports: NullableV1(Some(5_000)),
+            fee_only_balance_change: NullableV1(Some(false)),
+            compute_units_consumed: NullableV1(Some(receipt.compute_units_consumed)),
+            error: Value::Null,
+            logs: Vec::new(),
+        }
     }
 
     #[test]

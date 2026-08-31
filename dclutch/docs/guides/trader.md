@@ -3,10 +3,12 @@
 What you hold when you hold a dClutch claim, what it can and cannot do to
 you, and how to read what the protocol tells you.
 
-Nothing is tradeable yet. Seven protocol programs are deployed on Solana
-devnet, but no devnet market is open for trading. This guide describes the
-trading path exercised on local test chains and in test harnesses while the
-first public test market is being prepared.
+Seven protocol programs are deployed on Solana devnet, and one devnet market is
+open for trading — the first one on any dClutch deployment whose trading was
+switched on before its deadline. Its collateral is a devnet test token, so
+nothing here is bought with money. This guide describes the trading path that
+market runs, which is the same path exercised on local test chains and in test
+harnesses. No trade has been made on it yet.
 
 ## What a claim is
 

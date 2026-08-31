@@ -291,19 +291,68 @@ fn require_binding(
     expected: &DeliveryExpectation,
     view: RelayedObservationRecordViewV1<'_>,
 ) -> Result<()> {
-    let exact = view.market().map_err(record_wire)? == expected.market
-        && view.generation().map_err(record_wire)? == expected.generation
-        && view.source_material_id().map_err(record_wire)? == expected.source_material_id
-        && view.account_set_id().map_err(record_wire)? == expected.account_set_id
-        && view.provider_release_id().map_err(record_wire)? == expected.provider_release_id
-        && view.relayer_key_set_id().map_err(record_wire)? == expected.relayer_key_set_id
-        && view.observed_cluster_id().map_err(record_wire)? == expected.observed_cluster_id
-        && view.observed_slot().map_err(record_wire)? == expected.observed_slot;
-    if !exact {
-        return Err(RelayerError::config(
-            "forged or stale record acknowledgement: immutable market/generation/source/set/\
-             release/key-set/cluster/slot binding differs from the accepted delivery",
-        ));
+    // Eight facts, and a conjunction cannot say which one moved. An operator
+    // holding a refused delivery needs the field and both values, or the only
+    // way to find them is to decode the record account by hand.
+    for (field, accepted, signed) in [
+        (
+            "market",
+            view.market().map_err(record_wire)?,
+            expected.market,
+        ),
+        (
+            "source_material_id",
+            view.source_material_id().map_err(record_wire)?,
+            expected.source_material_id,
+        ),
+        (
+            "account_set_id",
+            view.account_set_id().map_err(record_wire)?,
+            expected.account_set_id,
+        ),
+        (
+            "provider_release_id",
+            view.provider_release_id().map_err(record_wire)?,
+            expected.provider_release_id,
+        ),
+        (
+            "relayer_key_set_id",
+            view.relayer_key_set_id().map_err(record_wire)?,
+            expected.relayer_key_set_id,
+        ),
+        (
+            "observed_cluster_id",
+            view.observed_cluster_id().map_err(record_wire)?,
+            expected.observed_cluster_id,
+        ),
+    ] {
+        if accepted != signed {
+            return Err(RelayerError::config(format!(
+                "forged or stale record acknowledgement: the finalized record's {field} is {} \
+                 while the accepted delivery signed {}",
+                base58(&accepted),
+                base58(&signed)
+            )));
+        }
+    }
+    for (field, accepted, signed) in [
+        (
+            "generation",
+            view.generation().map_err(record_wire)?,
+            expected.generation,
+        ),
+        (
+            "observed_slot",
+            view.observed_slot().map_err(record_wire)?,
+            expected.observed_slot,
+        ),
+    ] {
+        if accepted != signed {
+            return Err(RelayerError::config(format!(
+                "forged or stale record acknowledgement: the finalized record's {field} is \
+                 {accepted} while the accepted delivery signed {signed}"
+            )));
+        }
     }
     Ok(())
 }
@@ -658,7 +707,55 @@ mod tests {
         expected.provider_release_id = [0x77; ID_BYTES];
         let error = reconcile_finalized_record(&expected, Some(PROGRAM), Some(&record))
             .expect_err("wrong release must refuse");
-        assert!(error.to_string().contains("immutable market/generation"));
+        // The refusal must NAME the field that moved and print both values. A
+        // conjunction over eight identities that reports as one sentence costs
+        // whoever holds it a hand decode of the record account.
+        let message = error.to_string();
+        assert!(message.contains("provider_release_id"), "{message}");
+        assert!(message.contains(&base58(&[0x77; ID_BYTES])), "{message}");
+        assert!(!message.contains("relayer_key_set_id"), "{message}");
+    }
+
+    #[test]
+    fn each_immutable_binding_field_refuses_under_its_own_name() {
+        // Every field of the binding, one at a time, so no future field can be
+        // added to the conjunction without a refusal that says its name.
+        let record = collecting_record(1);
+        for (field, mutate) in [
+            (
+                "market",
+                (|e: &mut DeliveryExpectation| e.market = [0x71; ID_BYTES])
+                    as fn(&mut DeliveryExpectation),
+            ),
+            ("source_material_id", |e: &mut DeliveryExpectation| {
+                e.source_material_id = [0x72; ID_BYTES]
+            }),
+            ("account_set_id", |e: &mut DeliveryExpectation| {
+                e.account_set_id = [0x73; ID_BYTES]
+            }),
+            ("provider_release_id", |e: &mut DeliveryExpectation| {
+                e.provider_release_id = [0x74; ID_BYTES]
+            }),
+            ("relayer_key_set_id", |e: &mut DeliveryExpectation| {
+                e.relayer_key_set_id = [0x75; ID_BYTES]
+            }),
+            ("observed_cluster_id", |e: &mut DeliveryExpectation| {
+                e.observed_cluster_id = [0x76; ID_BYTES]
+            }),
+            ("generation", |e: &mut DeliveryExpectation| {
+                e.generation = 0xdead
+            }),
+            ("observed_slot", |e: &mut DeliveryExpectation| {
+                e.observed_slot = 0xbeef
+            }),
+        ] {
+            let mut expected = expectation();
+            mutate(&mut expected);
+            let message = reconcile_finalized_record(&expected, Some(PROGRAM), Some(&record))
+                .expect_err("a moved binding field must refuse")
+                .to_string();
+            assert!(message.contains(field), "{field} was not named: {message}");
+        }
     }
 
     #[test]

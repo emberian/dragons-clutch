@@ -29,6 +29,17 @@
 //! converting it saves 7,500. A lane that converts these without reading their
 //! depths first is guessing at its own result, so the depths are the deliverable
 //! here, not a diagnostic.
+//!
+//! # Erratum, 2026-08-30: the realm row was reported at double its value
+//!
+//! This file multiplied the realm pair by TWO Custody invocations from
+//! `a0cba859` until 2026-08-30, so it reported the realm carry as worth 18,000
+//! CU per transaction. It is worth **9,000**. The route makes ONE Custody CPI on
+//! this fixture -- 192 invocations over 32 swept seeds, 6 per transaction --
+//! because the fixture's fee floors to zero and only one of the four declared
+//! Custody routes is enabled. `a0cba859`'s commit message states the same wrong
+//! figure and cannot be corrected in place; this is the correction of record.
+//! See [`CUSTODY_INVOCATIONS_PER_TRADE_V1`].
 
 use solana_program::{hash::hash, pubkey::Pubkey};
 
@@ -43,7 +54,7 @@ use dclutch_product_runtime_v2_admission::{
     PORTFOLIO_SCHEMA_ID_V2, PRODUCT_RECORD_SCHEMA_ID_V2, RESULT_DOMAIN_SCHEMA_ID_V2,
 };
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 
 /// Attempts `find_program_address` makes to land on `bump`, at 1,500 CU each.
 const fn attempts(bump: u8) -> u32 {
@@ -84,10 +95,29 @@ const SEARCHED_RECORD_SCHEMAS: [(&str, [u8; 32]); 6] = [
 ///
 /// The realm pair left the searching class when `CoreState` began recording the
 /// two bumps its founding derived: Custody's `authenticate_realm` reproduces
-/// both instead of walking down from 255, once per Custody invocation and so
-/// twice per canonical trade. It is the largest single row in this table and it
-/// is the one that is already banked.
+/// both instead of walking down from 255, once per Custody invocation. It is the
+/// largest single row in this table and it is the one that is already banked.
 const CARRIED_TODAY: [&str; 1] = ["realm"];
+
+/// Custody CPIs one canonical Direct trade makes on THIS fixture: exactly one.
+///
+/// This was `2` from `a0cba859` until 2026-08-30, and the realm row was reported
+/// at double its real value because of it -- 18,000 CU of saving where the route
+/// banks 9,000. `a0cba859`'s own commit message carries the same error.
+///
+/// The correction is a count, not an argument. The variance census swept 32
+/// seeds and observed **192 Custody program invocations, 6 per transaction**,
+/// which one Custody route produces and two cannot. The reason is the fixture's
+/// economics: `gross = 10 * 50 / 100 = 5` and `fee = 5 * 50bps` floors to ZERO,
+/// so of the four declared `CUSTODY_ROUTES_V3` only slot 0, the seller-terminal
+/// register, is enabled.
+///
+/// So this constant is a fact about the ZERO-FEE fixture and not about the
+/// protocol. A fee-bearing Direct trade enables a second Custody route, and
+/// every per-transaction figure in this file would double for the realm row. No
+/// gate in this tree has ever executed that shape; the variance census records
+/// it as the open question it is.
+const CUSTODY_INVOCATIONS_PER_TRADE_V1: u32 = 1;
 
 /// One record's canonical coordinate, as the route would have to search for it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,24 +153,55 @@ fn locate(accounts: &[(Pubkey, Vec<u8>, Pubkey)], schema: [u8; 32]) -> Option<Re
         if owner != &REGISTRY_PROGRAM_ID || data.is_empty() {
             continue;
         }
-        let digest = hash(data).to_bytes();
-        let (raw, raw_bump) = Pubkey::find_program_address(
-            &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
-            &REGISTRY_PROGRAM_ID,
-        );
+        let Some(record) = record_key_v1(schema, hash(data).to_bytes()) else {
+            continue;
+        };
+        let (raw, raw_bump) = record_address_v1(record.raw_record_pda_seeds());
         if &raw != key {
             continue;
         }
-        let (_, staging_bump) = Pubkey::find_program_address(
-            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
-            &REGISTRY_PROGRAM_ID,
-        );
+        let (_, staging_bump) = record_address_v1(record.staging_cursor_pda_seeds());
         return Some(RecordDepth {
             raw_bump,
             staging_bump,
         });
     }
     None
+}
+
+/// Bind one schema/digest pair, or refuse a zero component.
+///
+/// `None` is "not a record", which is exactly how the caller already treats an
+/// account whose address it cannot reproduce. `SchemaReleaseId` and
+/// `ContentDigest` both refuse zero, and this census hashes arbitrary
+/// Registry-owned account data, so the refusal is reachable in principle even
+/// though no planted account has ever produced it.
+fn record_key_v1(schema: [u8; 32], digest: [u8; 32]) -> Option<RecordKeyV1> {
+    Some(RecordKeyV1::new(
+        SchemaReleaseId::new(schema).ok()?,
+        ContentDigest::new(digest).ok()?,
+    ))
+}
+
+/// One finalized record's address and bump, under this fixture's Registry.
+///
+/// The seed tuple is NOT restated here, and that is the seam-audit rule this
+/// file used to break (`DOMAIN_RAW_RESTATEMENT`). `dclutch-record-contract`
+/// owns `RAW_RECORD_PDA_SEED_V1` and `STAGING_CURSOR_PDA_SEED_V1`; it also
+/// exports the constructors that place them, so a crate that merely READS these
+/// addresses takes the domain from `seeds.domain()` rather than naming it. A
+/// second spelling is a second source of truth, and the seam audit exists
+/// because the first time two spellings drifted apart nobody found out until an
+/// address stopped resolving.
+fn record_address_v1(seeds: RecordPdaSeedsV1) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            seeds.domain(),
+            seeds.schema_release_id().as_bytes(),
+            seeds.expected_digest().as_bytes(),
+        ],
+        &REGISTRY_PROGRAM_ID,
+    )
 }
 
 #[test]
@@ -226,10 +287,13 @@ fn the_searched_record_depths_are_constants_of_the_protocol_not_of_the_keys() {
         );
     }
     for (name, depth) in first {
-        // The realm record is authenticated once inside EACH of the two Custody
-        // CPIs, so its pair is paid twice per transaction. Every other record
-        // here is read once.
-        let invocations = if *name == "realm" { 2 } else { 1 };
+        // The realm record is authenticated once inside EACH Custody CPI, and
+        // this route makes one. Every other record here is read once.
+        let invocations = if *name == "realm" {
+            CUSTODY_INVOCATIONS_PER_TRADE_V1
+        } else {
+            1
+        };
         let search = search_cost_cu(*depth) * invocations;
         let carry = carried_cost_cu() * invocations;
         searched += search;

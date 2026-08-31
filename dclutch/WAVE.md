@@ -464,9 +464,16 @@ pool prices, majors). Cross-cluster truth transport:
   swapping trust roots never moves semantics.
 - Majors' prices need no relayer at all: Pyth's devnet deployment already
   carries mainnet-derived prices under the existing adapter.
-- Candidate permissionless upgrade to verify: Wormhole Queries (guardian-signed
+- ~~Candidate permissionless upgrade to verify: Wormhole Queries (guardian-signed
   Solana account reads, verifiable against the devnet core bridge) — MR lane
-  owns pinning whether this actually supports what we need.
+  owns pinning whether this actually supports what we need.~~ **ANSWERED: NOT
+  AVAILABLE.** `docs/design/MAINNET_STATE_RELAY.md` §3 concluded Wormhole
+  Queries is *"not a candidate for v1 and not a near-term upgrade path"* —
+  §3.2 gives the reason (on devnet the guardian set is a single test key, so a
+  guardian signature there proves nothing a relayer signature does not), and
+  `:64` marks the row **"not available."** Flagged as a stale line by
+  `docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §3.9 and left for whoever
+  next edited this file.
 - Later hardening path: multi-relayer quorum, TEE-attested signer.
 
 ## Close-out doctrine (ember, 2026-08-27)
@@ -854,13 +861,46 @@ QUEUED with owners:
   unconstructed variants beyond the 5 deleted (SN6's flag, named in its
   yield) — verdict each (dead vs awaiting-constructor) and act.
 
-- κ ENFORCEMENT (trigger: the LBV2 layout slice / RECORDS-MIGRATE cluster):
-  the predicate exists and is proven (KAPPA), but no on-chain route calls it —
-  Found sees the Source not the principal; FoundingV5 the reverse; and a
-  founding-only check is not a cap since principal grows per complete-set
-  split. Real shape: the cap on the Market root, checked at founding AND at
-  split. Interacts with the founding-root ADR; design queued at
-  MAINNET_STATE_RELAY §11.2.
+- κ ENFORCEMENT — **CLOSED, and it closed earlier than this file said**
+  (KAPPA-CAP, 2026-08-31, correcting a row that read "no on-chain route calls
+  it" for four days after routes did). The ruled shape landed whole in
+  `ff008fea`/`e5933c4d`: `CoreState.principal_cap_sets` at offset 288 INSIDE
+  the existing 368 bytes (so κ never moved `STATE_BYTES` — the widening this
+  file kept queueing was already spent); the Found frame carrying the three
+  `(raw, staging)` pairs at indices 16-21 that let `Found` authenticate the
+  profile and the named floor and derive the cap; and the check at founding
+  AND at all three growth sites — `founding_v5`, `signed_delta_v3`,
+  `affine_batch_v2`, plus the legacy complete-set mint. A zero cap refuses at
+  `Found` outright.
+  RECORDS-MIGRATE row (b), `SourceCapacityProfileV1.floor_content_id`, is
+  **superseded, not owed**: the hole it was ruled to close — two floors with
+  identical bindings both validating, caller picks the biggest — is closed at
+  a better site by `SourceMaterialV3.principal_policy =
+  BoundedByFloor(selected_floor_id)`, which `derive_principal_cap_sets`
+  refuses to run against any other floor id, and which requires `None` under
+  `ExplicitlyUnbounded` so no floor can be smuggled into that policy. It also
+  could not be built as ruled: the profile's free tail is 16 bytes at offset
+  96 and a `ContentId` is 32.
+  What KAPPA-CAP itself added is the missing half — the refusal had no NAME.
+  All four sites flattened the kernel's named refusals into a neighbouring
+  generic variant, so a capacity refusal read like a malformed record. Four
+  appended `PrincipalCapacity` variants (`0x500D`, `0x5168`, `0x518A`,
+  `0x5208`) now say it, proved red before green.
+  The vacuity that hid all this is also closed at one site: every program-test
+  fixture founded at `u64::MAX`, so the refusing arm had never executed on a
+  real ELF. `affine_batch_v2`'s program test now founds at an exact cap — with
+  supply 7 and cap 10, a credit of 3 commits and 4 refuses as
+  `PrincipalCapacity`, refused bytes unchanged — and was proved red twice
+  (unbound the cap and the excess commits; the code is matched structurally).
+  **Still owed, and named as debt:** the other three enforcement sites —
+  `founding_v5`, `signed_delta_v3`, and the legacy complete-set mint — are
+  enforced but still have no on-chain test that founds a BOUNDED market; their
+  fixtures remain at `u64::MAX`. The affine-batch test is the pattern to copy
+  (bind the cap into `core_state`, credit past it, assert the named code).
+  Also standing: κ = 1/4 is still **Provisional** and its lifting plan —
+  measure the realisable fraction per venue, then state a `Measured` envelope
+  — is unstarted, so AGENTS.md:125 is satisfied only in the sense that the
+  plan is written down.
 
 - Next small batch: series-shadow-sbf + the fractional crates still carry
   production sha2 — convert to dclutch-sha256-adapter (the landed backend;
@@ -1194,3 +1234,219 @@ sccache/workspace consolidation (waits for cold gates).
   allowlisted as stock Apache-2.0) — the 69-row SBOM queue closes
   mechanically. CFTC 1388: deliberately unfiled ("nothing unique to say
   about perps") — never re-raise.
+
+## Rulings — ember, 2026-08-30 (afternoon)
+
+- **ALL KEYS MUST TRANSACT.** "It's completely unacceptable that ANY numerator
+  of keys fails to transact. That's a bomb waiting to go off for whoever's key
+  fails to fit. We MUST ALWAYS ALLOW ALL KEYS." A key-dependent refusal is a
+  product defect, not a tail statistic. Target: zero `find_program_address` on
+  the public hot path — every bump stored at creation or caller-supplied and
+  verified by `create_program_address` (the derivation is the check). The
+  0.032% tail goes to exactly zero.
+- **Trust should ratchet forward as state mutates.** Per-transaction
+  re-verification of write-once, program-owned records is the part of the
+  "trust nothing" posture that overreaches; caller-supplied data stays
+  untrusted (O-016 stands). Extend the seal/verify-once pattern.
+- **Multi-transaction lifecycles are acceptable** where one transaction cannot
+  hold the work (e.g. fee-bearing trades). "I don't care about multi-tx
+  lifecycles; if that's what we need to do."
+
+## Rulings — ember, 2026-08-30 (evening, on the decision packet)
+
+- **E1 protocol revenue: DEFERRED, build nothing.** "While it is on devnet it
+  doesn't matter. Mainnet is a loooong way away." The as-built shape (per-
+  venue fee_recipient, no protocol take) stands by default, not by
+  ratification; revisit pre-mainnet. 0014 D1 closes as deferred-as-built.
+- **E2 dead markets: option B — resolve, redeem, retire.** "Delete that shut
+  and get rid of it; it burdens the reader with a detail that only matters to
+  us." The honest-bucket work (C) is mooted by B. Execution is a devnet
+  write → TRADE-2's queue.
+- **E3 seal rent: leaning collector-keeps ("garbage collect it and keep it
+  seems somehow fine"), burn as fallback; final call deferred** until the
+  consequences are laid out. No CloseSeal implementation yet.
+- **E4 unpaid-fee receivable: accepted, no deadline.** Noted discomfort about
+  protocol semantics — addressed in the packet discussion.
+- **E5 maker lockout: accepted CONDITIONAL on guaranteed self-cure** — "as
+  long as they are always free to unblock themselves." The implementation
+  must prove the debtor can always settle unilaterally, including when the
+  fee recipient's token account has vanished (create-idempotent or
+  equivalent). That condition is a charter requirement, not a suggestion.
+
+- **E2 final (ember): the founder keys are gone from all wallets — the
+  write-off stands.** "It's just devnet sol it isn't a big deal." The two
+  dead markets remain standing as unretireable; no pre-cut retirement
+  contingency; the reader-burden concern is solved editorially (0015 option
+  C — the honest bucket), not by deletion.
+
+## Rulings — 2026-08-31, ember's full-autonomy directive
+
+- **Ember (verbatim): "You need to feel empowered to work autonomously and to
+  just DO anything yourself including operating any CLI etc. Do NOT leave
+  anything to me. Feel free to tear down and redeploy the markets, make new
+  releases, CHANGE EVERYTHING AND ANYTHING ABOUT THE PROTOCOL."** The
+  orchestrator-invented reservations (the browser-click ceremony, ember-held
+  rulings that had a sound recommendation) are void. Coordination rules
+  (single devnet steward per window, preserved substrates, lane.sh, named
+  refusals) remain — they are anti-collision engineering, not permission.
+- **E3 RULED (orchestrator, under the directive): seal rent goes to the
+  closer, capped** — the funded-crank pattern; reward carved only from rent
+  the close liberates; no Market's funding may receive it (SEALWIDE's
+  constraint); burn rejected because it preserves the stranding. CloseSeal
+  is chartered.
+
+## Rulings — 2026-08-31 night, orchestrator under the directive
+
+- **BASIS EVALUATOR AUTHORITY RULED: adopt BASIS_ABI_UNIFICATION_V1 option D
+  verbatim (§5).** The live `ProductBasisV3` evaluator is and remains the
+  sole authority for the basis wire; its ABI moves to a Lean owner with an
+  emitted byte-guarded conformance corpus; degrees 2–3 arrive by porting the
+  kernel's de Boor INTO it at the live wire's widths and rounding rule;
+  `dclutch-liability-basis-v2-kernel` retained as a non-authoritative
+  differential reference (O-005), its `product_claims.rs` (retired DCLTLNK2)
+  deleted. Grounds: the assurance inversion resolves toward the code that
+  runs; the 221 theorems become the spec of the live path; BASIS-ENUM's
+  landed fail-closed variant already conforms. The wire-free front (commits
+  1–3 + the §1.6.1 kind-tag byte-guard) is chartered NOW as lane BASIS-D;
+  the wire change (accepting kind 3 + the DCLTPGT1 slot + the schema-id
+  bump §1.6.2 demands) waits until the corpus and port are green AND no
+  founding lane is mid-flight on the old wire.
+- **RECOVERY RULED (ORPHAN_DESIGNS_TRIAGE §3.2): v1 does NOT ship
+  one-attempt markets forever.** A market whose single source attempt can
+  strand holder principal on a transient (~1 in 3 foundings hit one
+  tonight) fails the E5 standard — the lockout there was accepted only
+  because self-cure is guaranteed; a welded-shut recovery ladder has no
+  self-cure. Disposition: funded FailNext over RecoveryPolicyV2
+  (MAINNET_STATE_RELAY §13's shape) is CHARTERED as the LIVENESS successor,
+  post-cohort-8, pre-mainnet-mandatory; devnet's one-attempt state is
+  tolerable and stays honestly documented. Not built tonight — weeks-class.
+
+### Consequences recorded — 2026-08-31 night (LEDGER-TRUE)
+
+Not rulings. Facts a future lane must price in, verified against the tree
+rather than taken from a lane's report.
+
+- **A General register-bank widening re-digests General's whole settlement
+  substrate, so GEN-SEVEN-class work re-publishes it at the next cohort cut.**
+  The mechanism is real and was already written down independently at
+  `decisions/0006-family-neutral-hot-dispatch.md:211-213`: *"a root-lifecycle
+  scalar changes `GENERAL_HOT_COMMON_SCALARS_V3`, which moves the bank width,
+  the page count, and every artifact digest in the family."* Verified at HEAD:
+  the width constant is `crates/dclutch-general-adapter-contract/src/hot_candidate_v3.rs:26`
+  (`= 90`), and it is read off the wire at **byte 12** as a `u16` —
+  `crates/dclutch-transition-vm/src/v3.rs:146`, `common_scalars: read_u16(bytes, 12)?`
+  — so the byte the report names is the right byte. Because every artifact's
+  identity is the digest of bytes containing that field, widening is not an
+  edit to one artifact; it is a new identity for all of them, and identities are
+  what the publication pins.
+- **Three corrections to how that consequence was reported, each of which would
+  mis-size the work.** (1) **The seven are ACTIONS, not artifacts** —
+  `GENERAL_ACTION_PROGRAM_COUNT_V3 = 7`
+  (`crates/dclutch-general-adapter-contract/src/release_v3.rs:49`). Each action
+  carries **nine** artifacts (`GeneralSelectedBundleV1`: descriptor, account
+  profile, lifecycle policy, request profile, strategy, certificate, admission,
+  transition, effect), and the publication is pinned at **68 records** —
+  `assert_eq!(records.len(), 2 + 9 * GENERAL_SELECTED_ACTION_COUNT_V1 + 3)`
+  (`crates/dclutch-operator/src/general_selected_release_v1/tests.rs:380`). The
+  blast radius is an order of magnitude larger than "seven". (2) **Nothing is
+  DEPLOYED.** GENPUB published and finalized the records, but *"No root created:
+  the founding refuses first"* — `0x5182 ClaimsFoundingSbfErrorV5::Release` at
+  the DCLTGMF3 Open leg, family-independent (`SESSION_STATE.md:792`). So this is
+  a re-publication cost, not a migration of live state, and **it is cheapest
+  now**, before anything is activated against those digests. (3) **The widening
+  has not happened.** `GENERAL_HOT_COMMON_SCALARS_V3` is still `90`, and a
+  pickaxe over all refs returns exactly one commit ever touching it (`3aaa20fe`,
+  the original binding). This is a forecast, not a report of an event.
+- **What to do with it:** whoever widens the bank owns the re-publication of all
+  68 records in the same change, and should land it before General's founding
+  wall (FOUND-5182) clears — not after, when the substrate has live dependents.
+
+- **SPLINE APPORTIONMENT RULED (orchestrator, on BASIS-D's measurement):
+  cumulative-floor is the spline rounding rule.** The option-D directive
+  "adopt the live rounding rule" was under-determined for splines: the live
+  floor-plus-complement rule is well-defined only because the graded family
+  structurally reserves its last claim; a spline reserves nothing, and a
+  literal transliteration pays rounding residue to a claim whose de Boor
+  weight is exactly zero. Measured (11 cases, both degrees): cumulative-floor
+  keeps every claim within one atom of its exact share and preserves
+  zero-outside-support; floor-plus-complement does neither (2/11 diverge,
+  worst 2 atoms). Binding on the commit that first accepts a kind-3 body;
+  both implementations ship measured in `aac98afd` — the wire commit blesses
+  cumulative-floor and deletes the other.
+
+- **GEN-SEVEN-2 choices recorded (landed 1efac500/42c0a631/3250af18):**
+  (1) CloseBatch's artifact requires an Active root — stricter than the
+  pure fn (which admits Retiring); discipline: begin_retiring only at zero
+  open batches. (2) batch.max_orders := config.max_orders_per_candidate.
+  (3) Batch windows derive from config + trusted CurrentSlot — never
+  caller-supplied. (4) V3 admission requests ride the V2 carrier with
+  result-bump required zero; widening the carrier is VerifyCandidateRow's
+  named prerequisite. (5) Root data-effect grant is action-selected to
+  exactly the two root-writers. Re-digest inventory: all 9x7 settlement
+  records + descriptors + ProgramSet + seal re-publish at the cut that
+  ships fourteen actions (publication 68→131 then, not before); config
+  record alone survives. Nothing deployed strands.
+
+- **GEN-SEVEN-3 choices recorded (landed 001dc90c/03e70826/62181cd5/
+  08a73840; General at 12/14 actions):** (6) PlaceOrder pins valid_until
+  == batch settlement_close_slot exactly (the one coordinate that could
+  strand escrow past every window; makes ReleaseOrder batch-free). (7) No
+  optimistic revision in order grammars — replay is address occupancy.
+  (8) Claims-refund row count unpinned — an omitted row fails closed at
+  the zero-vector Position close. (9) Subject honesty unproven in Hot by
+  design: a wrong subject yields an unfillable order, escrow maker-
+  recoverable. (10) Per-outcome terms rows ride the runtime bank channel
+  (profile grammar refuses item ops in dynamic-span profiles); the future
+  invocation path owns terms-to-bank fidelity. OPEN for the fourteen-cut:
+  ControllerActionV3::CloseCandidate (tag 14) ships with them or not —
+  ruling needed at that cut. Critical path to EXECUTION: the runtime-
+  dispatch unit (invocation_v1 V3 topology + accelerator bank paths).
+
+## Consequences recorded — 2026-08-31 morning (the complete-life drive)
+
+- **WALL 22, the night's biggest protocol finding (LIFECYCLE-REDEEM):
+  `CloseMakerReplay` is ENCODER-ONLY** — the Direct dispatch refuses it in
+  two lines, the selector table has no entry 11, and both counter-writing
+  transitions are add-only (the released one structurally incapable of
+  decrementing). The zero-open-maker-roots retirement gate is enforced in
+  FIVE independent places with no override, and selected_release_set has
+  no setter — so EVERY market filled under a release set without the
+  action is PERMANENTLY UNRETIRABLE, rent unreclaimable; building it
+  helps only markets founded after the cut. The Lean model already
+  specifies the decrement and proves the invariant: spec-vs-
+  implementation divergence, 9-11 pieces, a RELEASE-SET change.
+  **COHORT-9 CHARTER (in order): (1) CloseMakerReplay end to end;
+  (2) ZeroBump seal recovery (the cohort-6 stranded seal); (3) General's
+  14-artifact re-publication when the runtime-dispatch unit lands.**
+  Devnet's stranded state is acceptable per standing ruling; pre-mainnet
+  this is mandatory.
+- The first complete redemption: collateral round-tripped 550,250,000
+  atoms to the atom; the first market ever to satisfy CoreBeginRetiring's
+  zero-claims gate. Life table: 82 acts, residual +0, drift +0.
+
+- **HELIUS KEY RULED (ember, 2026-08-31 morning): not compromised; rotate
+  on an appropriate schedule as mitigation.** On-disk keys are fine and
+  local printing is fine here — the file already lives on the filesystem
+  and the key carries strict spending limits. No lane re-raises this.
+- **COHORT-9 AUTHORITY (ember): any bumps and any/all breaks needed to
+  make things live are authorized.** Plan review chartered to a Fable
+  lane before the design-sensitive items build.
+
+- **FRAC-RULE §17.8 SIGNED OFF (orchestrator, veto window exercised):**
+  ruling 2's removal of TradingCallerAuthority from the compaction frame
+  is APPROVED — the root's signature (ruling 1's extended gate) is the
+  strictly stronger Trading anchor, the native sibling requires nothing
+  from Trading, the close is owner-signed and deadline-entitled, and
+  witness w8 pins that a no-Trading entry still refuses at the burn
+  hand-off. "Trading-composed" for this route = composed for SIGNATURE,
+  not authority. Witnesses w1-w8 are binding on the builder.
+
+- **CLOSEMAKER's RETIRING AMENDMENT BLESSED (orchestrator, veto window
+  exercised):** the four begin-retiring count gates relax (incl. the
+  fourth site the review missed — the transition bytecode in release
+  content); the invariant stands unmoved and Lean-proved
+  (retired_requires_zero_open_makers; begin_retiring_admits_open_maker_
+  roots; close_conserves_fee_receivable — a close is never the event
+  that ends a nonzero obligation). Donation slice provisionally 0 (all
+  principal to rent_owner) pending ember's ruling 1 — the refusal
+  alternative rejected as a 1-lamport permanent-stranding grief.

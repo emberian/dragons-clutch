@@ -87,7 +87,7 @@ export default function CoreFoundWorkspace() {
 
   async function construct(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    setState({ kind: 'loading', message: 'Reacquiring immutable releases, Product semantics, and all 37 accounts at finalized commitment…' });
+    setState({ kind: 'loading', message: 'Reading finalized state…' });
     try {
       const plan = await prepareCoreFoundV2(new SolanaRpcClient(endpoint), {
         ...effective,
@@ -103,7 +103,7 @@ export default function CoreFoundWorkspace() {
   return <main className="product-shell direct-workspace found-workspace">
     <ConsoleHeader path="/found" title="Legacy founding inspector" purpose="Inspect the older partial Found37 packet pair. It cannot open a current devnet market." />
 
-    <section className="market-heading found-heading"><div><h1>Inspect legacy<br />founding.</h1></div><p>This page authenticates and displays an older, partial packet pair. Those two packets do not include the finalized prestates and compact atomic opening required by the current source, so they cannot open a current devnet market. Use the complete operator campaign for current founding.</p></section>
+    <section className="market-heading found-heading"><div><h1>Inspect legacy<br />founding.</h1></div><p>An older, partial packet pair. It carries none of the finalized prestates or the compact atomic opening the current source requires, so it cannot open a current devnet market. Use the operator campaign for current founding.</p></section>
 
     <section className="found-boundaries" aria-label="Construction boundaries">
       <article><span>01</span><strong>Select execution</strong><p>The activation cache must select immutable Core, Registry, and Rent artifacts whose Loader observations still match.</p></article>
@@ -112,17 +112,17 @@ export default function CoreFoundWorkspace() {
     </section>
 
     <form className="direct-card found-form" onSubmit={construct}>
-      <header className="direct-card-heading"><span>01</span><div><h2>Chain authority and record coordinates</h2><p>No program, balance, Product, or release identity is supplied by the application. Every address below is treated as untrusted input and reauthenticated.</p></div></header>
+      <header className="direct-card-heading"><span>01</span><div><h2>Chain authority and record coordinates</h2><p>No program, balance, Product, or release identity is supplied here. Every address is reauthenticated against the chain.</p></div></header>
       <div className="direct-form-grid found-control-grid"><label><span>Finalized RPC endpoint</span><input required value={endpoint} onChange={(event) => setEndpoint(event.target.value.trim())} /></label><label><span>Market generation</span><input required inputMode="numeric" value={generation} onChange={(event) => setGeneration(event.target.value.trim())} /></label></div>
       <div className="direct-form-grid found-record-grid">{ADDRESS_FIELDS.map(({ field, label }) => <label key={field}><span>{label}</span><input required spellCheck={false} value={effective[field]} onChange={(event) => update(field, event.target.value)} /></label>)}</div>
       <button type="submit" disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reacquiring Found37 authority…' : 'Construct unsigned lifecycle + Found transactions'}</button>
       <p className="direct-status" aria-live="polite">{state.kind === 'ready' ? `Accepted at finalized slot ${state.plan.observedSlot}. Both transactions remain unsigned and unsubmitted.` : state.message}</p>
     </form>
 
-    {ready === null ? <section className="direct-card found-empty"><div className="radar"><span /></div><div><p className="eyebrow">No inferred authority</p><h2>Construction stops at the first broken join.</h2><p>Missing records, stale ELF bytes, mutable infrastructure, same-width Product substitution, account aliases, insufficient rent, and packet overflow are refusals—not warnings. No signing or submission occurs in this UI.</p></div></section> : <>
+    {ready === null ? <section className="direct-card found-empty"><div className="radar"><span /></div><div><p className="eyebrow">No inferred authority</p><h2>Construction stops at the first broken join.</h2><p>Missing records, stale ELF bytes, mutable infrastructure, same-width Product substitution, account aliases, insufficient rent, and packet overflow are refusals, not warnings. No signing or submission here.</p></div></section> : <>
       <section className="direct-card found-result">
-        <header className="direct-card-heading"><span>02</span><div><h2>Two legacy unsigned packets inspected</h2><p>Neither has been signed, funded, simulated, or submitted. This pair is incomplete for current devnet opening and must not be treated as a complete campaign.</p></div></header>
-        <div className="found-verdict"><span>{ready.plan.infrastructureRecognition.kind}</span><strong>{ready.plan.outcomeCount.toLocaleString()} outcomes · Rent {ready.plan.rentCreateWireBytes === null ? 'already created' : `${ready.plan.rentCreateWireBytes.length} bytes`} / Found {ready.plan.wireBytes === null ? 'unroutable' : `${ready.plan.wireBytes.length} bytes`}</strong><p>An internally consistent release is not an official dClutch release unless it matches a separately supplied checked manifest.</p></div>
+        <header className="direct-card-heading"><span>02</span><div><h2>Two legacy unsigned packets inspected</h2><p>Neither has been signed, funded, simulated, or submitted. The pair is incomplete for current devnet opening.</p></div></header>
+        <div className="found-verdict"><span>{ready.plan.infrastructureRecognition.kind}</span><strong>{ready.plan.outcomeCount.toLocaleString()} outcomes · Rent {ready.plan.rentCreateWireBytes === null ? 'already created' : `${ready.plan.rentCreateWireBytes.length} bytes`} / Found {ready.plan.wireBytes === null ? 'unroutable' : `${ready.plan.wireBytes.length} bytes`}</strong><p>An internally consistent release is an official dClutch release only when it matches a separately supplied checked manifest.</p></div>
         <dl className="found-facts"><div><dt>Derived Market</dt><dd>{ready.plan.market}</dd></div><div><dt>Lifecycle RentCredit</dt><dd>{ready.plan.rentCredit}</dd></div><div><dt>Product identity</dt><dd>{ready.plan.productId}</dd></div><div><dt>Product record digest</dt><dd>{ready.plan.productRecordDigest}</dd></div><div><dt>Execution release set</dt><dd>{ready.plan.executionReleaseSetId}</dd></div><div><dt>Infrastructure profile</dt><dd>{ready.plan.infrastructureProfile}</dd></div><div><dt>Core / Registry / Rent</dt><dd>{compact(ready.plan.coreProgram)} · {compact(ready.plan.registryProgram)} · {compact(ready.plan.rentProgram)}</dd></div><div><dt>Rent debit</dt><dd>{ready.plan.rentCreditRentDebit} credit + {ready.plan.marketRentTopUp} Market lamports</dd></div><div><dt>Blockhash validity</dt><dd>through block height {ready.plan.lastValidBlockHeight}</dd></div></dl>
         {ready.rentBase64 === null
           ? <p className="direct-refusal">The Market-scoped lifecycle RentCredit already exists at {ready.plan.rentCredit} for this generation, so there is nothing to create. Found37 names it as a precondition.</p>
@@ -133,18 +133,17 @@ export default function CoreFoundWorkspace() {
         {ready.foundBase64 === null
           ? <div className="direct-refusal">
               <strong>Found37 is not downloadable from this route.</strong> {ready.plan.foundRefusal} Its {ready.plan.routableAddresses.length} routable
-              addresses are derived and available; building the table and submitting through a wallet is what the
-              <Anchor href="/create"> read-only design preview</Anchor> does. This route emits unsigned packets only, and an unsigned
-              packet that cannot be assembled is better said than silently truncated.
+              addresses are derived and available. Building the lookup table and submitting through a wallet is what the
+              <Anchor href="/create"> read-only design preview</Anchor> does.
             </div>
           : <>
               <label><span>2 · unsigned Core Found · base64</span><textarea className="found-packet" readOnly value={ready.foundBase64} /></label>
-              <div className="found-export"><a download={`dclutch-found-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.foundBase64}`}>Download Found packet</a><span>No signing or submission occurs in this UI.</span></div>
+              <div className="found-export"><a download={`dclutch-found-${ready.plan.market}.tx`} href={`data:application/octet-stream;base64,${ready.foundBase64}`}>Download Found packet</a><span>No signing or submission here.</span></div>
             </>}
       </section>
 
       <section className="direct-card found-accounts">
-        <header className="direct-card-heading"><span>03</span><div><h2>Exact account projection</h2><p>The order below is the instruction ABI. Only payer and the new Market are writable; only payer signs.</p></div></header>
+        <header className="direct-card-heading"><span>03</span><div><h2>Exact account projection</h2><p>This order is the instruction ABI. Only payer and the new Market are writable; only payer signs.</p></div></header>
         <ol>{ready.plan.accountAddresses.map((address, index) => <li key={address}><span>{index.toString().padStart(2, '0')}</span><strong>{CORE_FOUND_ACCOUNT_LABELS_V3[index]}</strong><code>{address}</code><small>{accountRole(index)}</small></li>)}</ol>
       </section>
     </>}

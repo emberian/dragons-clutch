@@ -1,6 +1,6 @@
 [package]
 name = "dclutch-cli"
-version = "0.1.0-devnet.2"
+version = "0.1.0-devnet.3"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.89"
@@ -44,6 +44,12 @@ lto = "thin"
 dclutch-market-core-codec = { path = "../../crates/dclutch-market-core-codec" }
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
 dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
+# The one Rust author of a Direct intent ticket, shared with the operator
+# binary that settles a pair of them. This crate contributes no byte of a
+# ticket and no argument check of its own; `src/ticket.rs` names the invocation
+# and hands over. Adding it is what turned `dclutch ticket` from a refusal into
+# a command, and it is the ONLY dependency here that can touch key material.
+dclutch-direct-ticket = { path = "../../crates/dclutch-direct-ticket" }
 
 base64 = "=0.22.1"
 reqwest = { version = "=0.12.28", default-features = false, features = [

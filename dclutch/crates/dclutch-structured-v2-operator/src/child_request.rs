@@ -57,11 +57,30 @@ use crate::{Error, Result};
 /// operations; the canonical projection of a `RepresentationRequestV2` costs
 /// `29 + 8K`.  `K = 3` is therefore 53 operations and 1,304 bytes -- eight
 /// bytes of slack, which is not a fourth operation -- and `K = 4` is 61
-/// operations and 1,496 bytes, refused at encode.
+/// operations and 1,496 bytes.
+///
+/// **This constant is a MIRROR, not the author.** The one derived author is
+/// `dclutch_bearer_v2_operator::open_structured_v3::RATIONAL_OPEN_STRUCTURED_MAXIMUM_COORDINATES_V3`,
+/// which computes this value from the profile bound and the `29`/`8` operation
+/// counts instead of restating it. This crate cannot derive it too: the
+/// operation counts live in `dclutch-bearer-v2-operator`, which links
+/// `solana-program`, and this crate's root deliberately promises no Solana SDK
+/// types (see its `Cargo.toml`, where bearer is a DEV dependency for exactly
+/// that reason). The two are pinned equal by
+/// `the_two_ceilings_are_one_number_and_neither_crate_restates_it`. Lifting the
+/// counts into a Solana-free contract crate so both sides derive is the
+/// outstanding fix; until then this literal is guarded by that test alone.
 ///
 /// Because the wire additionally requires `asset_count == outcome_count` for
 /// the two Structured actions, this is a bound on the **Product outcome
 /// width**, not on how many coordinates carry a nonzero coefficient.
+///
+/// **Raising the RequestProfile bound would not raise this.** The packet, not
+/// the artifact, is the binding wall on the two full-width actions:
+/// `IssueStructured`/`UnwrapStructured` at `K = 3` measure 1,357 bytes as a v0
+/// message with the ALT already applied, against a 1,232-byte limit, so a
+/// cluster caps full-width issuance at `K = 2` -- BELOW this ceiling. See
+/// `the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`.
 ///
 /// `STRUCTURED_HOT_MAX_TOKEN_EFFECTS_V2 = 257` is a capacity-profile
 /// measurement and has no executable meaning; do not size against it.

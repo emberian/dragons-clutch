@@ -51,12 +51,12 @@ Regenerate with: npm run abi:direct-v3
 | `EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2` | 32 | -- | `87 34 45 0e 4f 09 c9 b2 a0 74 d4 cc 30 58 92 d9 d1 1f c1 1a 69 ad 6b 92 4c 6c e9 2e bc 17 e2 c2` |
 | `EXECUTION_STRATEGY_PROGRAM_MAGIC_V2` | 8 | `DCLTSTG2` | `44 43 4c 54 53 54 47 32` |
 | `SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5` | 32 | -- | `10 fb ed 6c 13 26 12 7c f7 e5 47 83 b1 a5 97 d7 7c a3 e7 6b 53 de 97 c0 8f 27 3f 5e 67 e3 98 3b` |
-| `DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3` | 32 | -- | `60 15 ce da 5a bf 1d 01 49 c3 08 76 8e ae 56 da c4 b7 66 c4 ca 42 4e fc b5 a5 c5 67 7c 5e 94 c9` |
-| `DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3` | 32 | -- | `b8 bb a5 93 6e 61 4a d5 f9 bb 1e d3 2e 6c 8a cc 84 5e c1 73 2d a3 9a ca a9 53 54 de 50 18 00 bf` |
-| `DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3` | 32 | -- | `bb de ab cf 02 8a a4 c2 3d 20 e7 00 8a 9e 77 11 f9 b5 4d 8f a7 44 0b 7f 9e 3e 73 2b 72 28 48 d5` |
-| `DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3` | 32 | -- | `89 33 50 73 38 30 2f fc 75 bd da e6 5a 8a fc 4f df f1 61 ca 63 4c ef b3 03 be c0 5e 39 5b 49 58` |
-| `DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5` | 32 | -- | `19 3b e6 e3 b1 1e 70 88 31 c4 e0 a8 41 df e9 8c 0b d7 09 a9 07 23 d1 f1 93 5d f2 b3 3d c5 85 bc` |
-| `DIRECT_INLINE_ORDINARY_EFFECT_ID_V4` | 32 | -- | `ea b2 81 96 91 c7 d7 a5 17 ab 95 8a d3 94 ce 6a 38 ad 9b 0d 8f 76 d5 03 44 6c ec f0 8b ba f7 7a` |
+| `DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3` | 32 | -- | `5f 2c 3c 0f 72 87 ae e8 18 59 75 83 dc 17 63 89 af d0 4a 6f f6 32 89 44 96 7e 2b 55 e6 78 c1 e9` |
+| `DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3` | 32 | -- | `57 84 ff 32 20 71 2c 56 7d ae 81 96 15 ea 1d 7c c4 52 eb 49 1e 3d c1 c2 8b dc 20 e0 01 af 41 15` |
+| `DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3` | 32 | -- | `77 d5 8a 4e 41 53 18 fe 06 65 d4 a3 4e 05 f9 d4 33 cb 1b 9c 84 2a ec ac 09 44 26 0f ec a5 30 fb` |
+| `DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3` | 32 | -- | `57 c4 4d 0f c4 ab 76 25 f4 86 23 c2 1e 12 77 2f 96 ea f0 5f 7d 21 87 2a ec 4b 42 dc ee 20 f7 c2` |
+| `DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5` | 32 | -- | `e5 df b5 be 57 d5 c0 54 27 c9 ec 83 bd e0 e8 5a 31 4f 14 47 d7 3f 2d 92 5d 73 aa b9 db 85 7e 5c` |
+| `DIRECT_INLINE_ORDINARY_EFFECT_ID_V4` | 32 | -- | `e6 a1 00 b7 c9 f8 5c d5 03 33 48 1d d9 27 38 76 9f 7f 24 b1 be 13 f1 e2 42 6e a9 e1 7f 31 3c bc` |
 
 ## String constants
 
@@ -246,7 +246,7 @@ Regenerate with: npm run abi:direct-v3
 | `COMPACT_INTENT_LIMIT_PRICE_OFFSET_V2` | 92 |
 | `COMPACT_INTENT_FEE_BASIS_POINTS_OFFSET_V2` | 100 |
 | `COMPACT_INTENT_COLLATERAL_ACCOUNT_OFFSET_V2` | 108 |
-| `DIRECT_ORDINARY_COMMON_SCALARS_V3` | 66 |
+| `DIRECT_ORDINARY_COMMON_SCALARS_V3` | 68 |
 | `DIRECT_ORDINARY_COMMON_IDENTITIES_V3` | 32 |
 | `IDENTITY_SELLER_NATIVE_SIGNER_V3` | 4 |
 | `IDENTITY_BUYER_NATIVE_SIGNER_V3` | 5 |

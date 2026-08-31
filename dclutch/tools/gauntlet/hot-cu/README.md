@@ -1,5 +1,21 @@
 # tools/gauntlet/hot-cu — the Hot tail's compute, measured twenty times
 
+> **THIS TIER DRIVES A HARNESS-ONLY ROUTE. Every CU figure below, and every one
+> this tier has ever printed, is 35,127 CU higher than the public route's**
+> — the same integer on all 13 comparable seeds, so it is route plumbing and
+> not a draw (`docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md`,
+> `8bf6ad40`). Its witness `hot_heap_frame_is_inert` runs the **Registry Hot
+> continuation**, which the 2026-08-30 packet demoted: *top-level is the
+> production route; the Hot continuation is harness-only*
+> (`docs/decisions/DECISION_PACKET_2026_08_30.md` §4). Nothing outside this
+> harness can even construct that frame, and the Registry outer buys nothing
+> top-level lacks. **For a claim about what a public trade costs, use
+> `direct_hot_top_level_margin_gate.rs`, not this tier.** What this tier is
+> still for: the heap statement at the protocol-default 32 KiB, re-barred on
+> the +35,127 delta. The carve-out below is not affected — the *founding*
+> continuation (Core `OpenMarket`, required since `2dc53776`) is load-bearing
+> and is not what this tier drives.
+
 ```sh
 tools/gauntlet/hot-cu/run-hot-cu.sh \
   --checked-gate /absolute/candidate/CHECKED_UPGRADE_GATE.json \

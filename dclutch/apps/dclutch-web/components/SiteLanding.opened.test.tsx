@@ -38,9 +38,11 @@ describe('the front door, once a market is open', () => {
     // The aside was not the only dated sentence on this page. "Anything that
     // still needs an open market will tell you plainly that there is not one
     // yet" was written before there was one, and would have gone on saying it.
-    expect(html).toContain('The seven programs are deployed');
+    // Renegotiated 2026-08-31 with the sibling test: both arms of the old
+    // conditional blurb are deleted, so neither can go stale. What this file
+    // still pins is the OTHER dated sentence -- the hero aside -- switching.
+    expect(html).toContain('Seven programs, deployed on devnet');
     expect(html).not.toContain('will tell you plainly that there is not one yet');
-    expect(html).toContain('what it could and could not read off the chain');
   });
 
   it('keeps the part that is still true on devnet', () => {

@@ -855,10 +855,7 @@ fn require_writable_system_wallet(account: &AccountInfo<'_>) -> Result<(), Progr
     Ok(())
 }
 
-fn close_pda_to_zero(
-    program_id: &Pubkey,
-    source: &AccountInfo<'_>,
-) -> Result<(), ProgramError> {
+fn close_pda_to_zero(program_id: &Pubkey, source: &AccountInfo<'_>) -> Result<(), ProgramError> {
     if source.owner != program_id {
         return Err(record_error());
     }
@@ -1677,6 +1674,103 @@ mod tests {
                 AbortRecordV1,
             ),
             Err(record_error())
+        );
+    }
+
+    /// **S-3 TRIPWIRE. Read this before you write a record-reclamation route.**
+    ///
+    /// `docs/design/TRUST_RATCHET_V1.md` §7 names the one staleness class the
+    /// capability seal cannot address by re-deriving something: the account
+    /// whose properties were sealed is not in the sealed frame at all. The
+    /// shipped seal carries exactly one such proposition —
+    ///
+    /// > at seal time, the canonical staging cursor for this
+    /// > `(schema, digest)` was vacant and System-owned
+    ///
+    /// — because `borrow_sealed_record` aliases the raw account into the
+    /// staging slot and never looks at the real cursor. That proposition is
+    /// sound only while **finalization is the point of no return**: a finalized
+    /// record's bytes must never again be mutable, and the way that is enforced
+    /// is that its raw account can never be re-`Begin`-ed.
+    ///
+    /// This test pins WHICH refusal does that, because §7.1's claim is precise
+    /// and easy to get backwards. `Finalize` destroys the cursor, so after
+    /// finalization the *cursor*'s `require_prefunded_vacant` is satisfied and
+    /// refuses nothing. The load-bearing check is the *raw* account's, at
+    /// `authenticate_begin`: a finalized raw record is Registry-owned with
+    /// `exact_length` bytes, and `is_prefunded_vacant` demands System-owned,
+    /// non-executable and empty.
+    ///
+    /// The two halves below are a one-variable control. Same fixture, same
+    /// request, same frame, same vacant cursor; the raw account is finalized in
+    /// one and vacant in the other, and only that moves the answer. So this is
+    /// not a restatement of `is_prefunded_vacant` — it is the assertion that
+    /// removing the raw conjunct would ADMIT, which is what a reclamation route
+    /// would have to do to hand a finalized record back to `Begin`.
+    ///
+    /// **If you are here because this went red**: you have made a finalized raw
+    /// record vacant again, or removed the check that refuses one. Either way
+    /// the seal's finality window is now open, and the seal will not notice —
+    /// the cursor is not in its frame, and its digest re-pin cannot tell a
+    /// complete-but-unfinalized record from a finalized one. Re-argue §7 before
+    /// you re-run this, and take
+    /// `programs/dclutch-trading-sbf/src/hot_v3/seal.rs::borrow_sealed_record`
+    /// with you.
+    #[test]
+    fn finalization_is_the_point_of_no_return_and_the_raw_account_is_what_enforces_it() {
+        let registry = Pubkey::new_unique();
+        let sponsor = Pubkey::new_unique();
+        let content = b"a record that has been finalized";
+
+        // Control: the ordinary prestate, both PDAs prefunded-vacant. `Begin`
+        // authenticates. Everything below differs from this in one account.
+        let (request, accounts) = begin_fixture(registry, sponsor, content);
+        let frame = BeginFrame::parse(&accounts).expect("Begin frame");
+        authenticate_begin(&registry, &frame, request)
+            .expect("a vacant raw record admits Begin: this is the control");
+
+        // The seal's proposition, as a reachable state: the record is
+        // finalized. Registry-owned, exactly `exact_length` bytes, rent-exempt
+        // -- and its cursor is gone, which is what finalization means.
+        let (request, mut finalized) = begin_fixture(registry, sponsor, content);
+        let raw_key = *finalized.get(1).expect("raw role").key;
+        *finalized.get_mut(1).expect("raw role") = account(
+            raw_key,
+            false,
+            true,
+            Rent::default().minimum_balance(content.len()),
+            vec![0; content.len()],
+            registry,
+            false,
+        );
+        let frame = BeginFrame::parse(&finalized).expect("finalized-raw frame shape");
+        // The cursor half of the conjunction is SATISFIED here and refuses
+        // nothing: `Finalize` closed it, so it is System-owned and empty.
+        assert!(
+            is_prefunded_vacant(frame.cursor),
+            "a finalized record's cursor is vacant, so the cursor check cannot be the one that refuses"
+        );
+        assert!(
+            !is_prefunded_vacant(frame.raw),
+            "a finalized raw record must not read as prefunded-vacant"
+        );
+        assert_eq!(
+            authenticate_begin(&registry, &frame, request).err(),
+            Some(record_error()),
+            "a finalized record was re-Begun: the seal's finality window is open"
+        );
+
+        // And the same thing one step weaker, because a reclamation route that
+        // closed a finalized record without zeroing it would leave this shape:
+        // Registry-owned but empty. Still not vacant, still refused.
+        let (request, mut reclaimed) = begin_fixture(registry, sponsor, content);
+        *reclaimed.get_mut(1).expect("raw role") =
+            account(raw_key, false, true, 0, Vec::new(), registry, false);
+        let frame = BeginFrame::parse(&reclaimed).expect("reclaimed-raw frame shape");
+        assert_eq!(
+            authenticate_begin(&registry, &frame, request).err(),
+            Some(record_error()),
+            "a Registry-owned empty raw record admitted Begin"
         );
     }
 }

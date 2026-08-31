@@ -201,12 +201,16 @@ describe('a watch over one socket', () => {
 describe('what the reader is told', () => {
   it('never presents an unavailable watch as a fact about the market', () => {
     const sentence = watchSentenceV1('unavailable', 'devnet');
-    expect(sentence).toContain('Live updates are not running');
-    expect(sentence).toContain('the re-read button always works');
+    // Renegotiated 2026-08-31: this sentence used to reassure the reader that
+    // "everything on the page is still the read it says it is". Deleted. It
+    // still says what is off and what to do instead, and still never blames
+    // the market.
+    expect(sentence).toContain('Live updates are off');
+    expect(sentence).toContain('re-read button');
     expect(sentence).not.toContain('error');
   });
 
   it('says what a live watch will actually do', () => {
-    expect(watchSentenceV1('live', 'devnet')).toContain('this page re-reads it by itself');
+    expect(watchSentenceV1('live', 'devnet')).toContain('re-reads itself when the market changes');
   });
 });

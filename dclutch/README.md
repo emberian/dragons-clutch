@@ -11,11 +11,14 @@ Every claim is backed by collateral locked in the market's vault (its
 liquidation, no margin call, and no way for a market to owe more than it
 holds. The most you can ever lose is what you paid.
 
-The seven programs are live on Solana devnet, but there is no current open
-Market, nothing to buy, and no value at risk. Devnet is a public test network
-whose tokens have no real value. The programs were updated in place this week,
-keeping the same addresses; opening the first market is what is happening now.
-The original deployment is recorded byte-for-byte in
+The seven programs are live on Solana devnet, and there is an open Market on
+them:
+[`6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4`](https://clutch.dregg.pro/market?address=6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4),
+zero-fee on both sides, with its trading capability activated. Nothing on it
+is worth money: devnet is a public test network whose tokens have no real
+value, and that Market's collateral is a devnet test token. The programs were
+updated in place, keeping the same addresses; the original deployment is
+recorded byte-for-byte in
 [the deployment record](docs/evidence/DEPLOY_1.md). Everything below also runs
 on a local test chain you can run yourself.
 
@@ -177,8 +180,10 @@ repository runs on.
 
 ## Where this is going
 
-The next milestone is the first open market on devnet, asking a question
-about the state of Solana mainnet and resolving it in public. Pyth's devnet feeds carry the
+The first Market is open on devnet and its trading capability is activated.
+The next milestone is the first trade made on it, and after that a Market
+asking a question about the state of Solana mainnet and resolving it in
+public. Pyth's devnet feeds carry the
 major prices directly, and a disclosed relayer carries everything else.
 dClutch grew out of Dragon's Clutch; the first generation lives in the
 neighboring `dragons-clutch` repository as an archive.

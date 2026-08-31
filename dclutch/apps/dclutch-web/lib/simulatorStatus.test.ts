@@ -140,7 +140,7 @@ describe('a run that stamps its own liveness deadline', () => {
     expect(sixMinutesOn - Date.parse(status.updatedAt)).toBeLessThan(STALE_AFTER_MS_V1);
     const beat = simulatorBeatV1(status, sixMinutesOn);
     expect(beat.state).toBe('stale');
-    expect(beat.sentence).toContain('said it would have written again');
+    expect(beat.sentence).toContain('overdue for its next write');
   });
 
   it('still says halted first: a stated deadline never buries a conservation halt', () => {
@@ -199,6 +199,6 @@ describe('the guarded reader', () => {
   });
 
   it('keeps the honest-empty sentence explicit about zeros', () => {
-    expect(NO_SIMULATOR_SENTENCE_V1).toContain('nothing below is a zero');
+    expect(NO_SIMULATOR_SENTENCE_V1).toBe('No simulator running.');
   });
 });

@@ -4,6 +4,8 @@ import { useState } from 'react';
 
 import { formatBasisPointsV1, issuedSupplySharesV1 } from '@/lib/supplyShares';
 
+import { FIGURE_LABEL_PX, useFigureScale } from './useFigureScale';
+
 /**
  * The issuance split: one horizontal parts-of-a-whole strip showing what
  * share of a Market's issued claims sits on each outcome cell.
@@ -26,7 +28,7 @@ export type SupplyShareStripPropsV1 = Readonly<{
   supplies: ReadonlyArray<string>;
   /** Editorial outcome names, index-aligned; the caller states their provenance. */
   outcomes?: ReadonlyArray<string> | null;
-  /** One plain sentence naming what the split is and is not. */
+  /** Short label for the strip. */
   caption: string;
   /** Shown instead of a plot when nothing has been issued. */
   emptyReason?: string;
@@ -35,20 +37,32 @@ export type SupplyShareStripPropsV1 = Readonly<{
 const WIDTH = 1000;
 const TOP_PAD = 4;
 const BAND = 22;
-const LABEL_BAND = 14;
+/* The band under the bar holds text, and text is sized in real pixels now (see
+   useFigureScale), so the room it needs depends on what the slot made one unit
+   worth. This is the floor, kept so a full-width figure lays out exactly as it
+   did before. */
+const MIN_LABEL_BAND = 14;
 const GAP = 2;
+/* A cell narrower than this drops its label rather than colliding with its
+   neighbour's. The threshold is room-per-unit-of-text-height, not a fixed
+   width: it was 70 units for 8-unit text, and the text is no longer 8 units. */
+const LABEL_ROOM_PER_UNIT = 70 / 8;
 
 export default function SupplyShareStrip({ supplies, outcomes, caption, emptyReason }: SupplyShareStripPropsV1) {
   const [active, setActive] = useState<number | null>(null);
+  const { figureRef, units } = useFigureScale(WIDTH);
   const split = issuedSupplySharesV1(supplies);
 
   if (split === null) {
     return <figure className="viz-figure">
-      <p className="viz-caption">{emptyReason ?? 'Nothing has been issued on this aggregate, so no split exists to draw.'}</p>
+      <p className="viz-caption">{emptyReason ?? 'No claims issued yet.'}</p>
     </figure>;
   }
 
-  const height = TOP_PAD + BAND + LABEL_BAND;
+  const labelSize = units(FIGURE_LABEL_PX);
+  const labelBand = Math.max(MIN_LABEL_BAND, labelSize + units(3));
+  const labelGate = Math.max(70, labelSize * LABEL_ROOM_PER_UNIT);
+  const height = TOP_PAD + BAND + labelBand;
   const cells = split.shares.map((share) => ({
     ...share,
     name: outcomes?.[share.index] ?? null,
@@ -66,10 +80,11 @@ export default function SupplyShareStrip({ supplies, outcomes, caption, emptyRea
   const shownIndex = active ?? placed.reduce((widest, cell) => (cell.basisPoints > widest.basisPoints ? cell : widest), placed[0]).index;
   const shown = placed[shownIndex] ?? placed[0];
   const label = (cell: typeof placed[number]) =>
-    `claim ${cell.index}${cell.name === null ? '' : ` · ${cell.name}`} · ${cell.percent} of issued claims · ${cell.atoms} atoms`;
+    `${cell.name ?? `outcome ${cell.index}`} · ${cell.percent} · ${cell.atoms} claims`;
 
   return <figure className="viz-figure">
     <div className="viz-scroll"><svg
+      ref={figureRef}
       viewBox={`0 0 ${WIDTH} ${height}`}
       role="group"
       aria-label={caption}
@@ -103,11 +118,11 @@ export default function SupplyShareStrip({ supplies, outcomes, caption, emptyRea
             rx={2}
             fill="var(--viz-mark)"
           />
-          {cell.width >= 70 && <text
+          {cell.width >= labelGate && <text
             x={cell.x + cell.width / 2}
-            y={TOP_PAD + BAND + 11}
+            y={height - units(3)}
             textAnchor="middle"
-            fontSize={8}
+            fontSize={labelSize}
             fill="var(--viz-muted)"
           >{cell.index} · {cell.percent}</text>}
         </g>;
@@ -116,13 +131,12 @@ export default function SupplyShareStrip({ supplies, outcomes, caption, emptyRea
     <p className="viz-readout" aria-live="polite">
       <span className="viz-key" style={{ background: 'var(--viz-mark)' }} />
       <strong>{label(shown)}</strong>
-      {split.even && <> — evenly split: issuance has not leaned toward any outcome yet</>}
     </p>
     <details className="viz-table">
-      <summary>Exact issued supply behind every share</summary>
+      <summary>Exact numbers</summary>
       <div className="viz-table-scroll">
         <table>
-          <thead><tr><th>Claim</th><th>Share of issued claims</th><th>Issued atoms · raw u64</th></tr></thead>
+          <thead><tr><th>Outcome</th><th>Share</th><th>Claims issued</th></tr></thead>
           <tbody>
             {cells.map((cell) => <tr key={cell.index}>
               <td>{cell.index}{cell.name === null ? '' : ` · ${cell.name}`}</td>

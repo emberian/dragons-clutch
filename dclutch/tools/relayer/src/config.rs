@@ -122,6 +122,7 @@ struct RawLaunchCapability {
     market_owner: String,
     source_material_id: String,
     provider_release_id: String,
+    relayer_key_set_id: String,
     accepted_caller_receipt_path: String,
     accepted_caller_receipt_sha256: String,
 }
@@ -297,6 +298,15 @@ pub struct LaunchCapabilityConfig {
     pub source_material_id: [u8; ID_BYTES],
     /// Provider release bound into every record the daemon may acknowledge.
     pub provider_release_id: [u8; ID_BYTES],
+    /// Content-addressed relayer key set bound into every record the daemon
+    /// may acknowledge.
+    ///
+    /// This is the key set's IDENTITY, which is what the record carries, and
+    /// not `submit.relayer_key_set`, which is the record account's ADDRESS the
+    /// frame passes. The two are different 32-byte values -- the address is
+    /// derived FROM the identity -- and the record reconciliation compares the
+    /// identity.
+    pub relayer_key_set_id: [u8; ID_BYTES],
     /// Exact accepted-caller receipt named by the caller lane.
     pub accepted_caller_receipt_path: PathBuf,
     /// SHA-256 of that receipt's complete bytes.
@@ -761,6 +771,10 @@ fn resolve_submit(raw: RawSubmit, observed_endpoints: &[String]) -> Result<Submi
                 "submit.launch_capability.provider_release_id",
                 &capability.provider_release_id,
             )?;
+            let relayer_key_set_id = parse_id32(
+                "submit.launch_capability.relayer_key_set_id",
+                &capability.relayer_key_set_id,
+            )?;
             let accepted_caller_receipt_sha256 = parse_id32(
                 "submit.launch_capability.accepted_caller_receipt_sha256",
                 &capability.accepted_caller_receipt_sha256,
@@ -772,6 +786,7 @@ fn resolve_submit(raw: RawSubmit, observed_endpoints: &[String]) -> Result<Submi
                     market_owner,
                     source_material_id,
                     provider_release_id,
+                    relayer_key_set_id,
                     accepted_caller_receipt_sha256,
                 ]
                 .iter()
@@ -789,6 +804,7 @@ fn resolve_submit(raw: RawSubmit, observed_endpoints: &[String]) -> Result<Submi
                 market_owner,
                 source_material_id,
                 provider_release_id,
+                relayer_key_set_id,
                 accepted_caller_receipt_path: PathBuf::from(
                     capability.accepted_caller_receipt_path,
                 ),

@@ -367,7 +367,30 @@ const READ_METHODS: &[&str] = &[
     "getSlot",
     "getTransaction",
     "getVersion",
+    // A simulation commits nothing: it is executed against a snapshot and is
+    // never a block entry, which is exactly why it belongs on a connection that
+    // *cannot* write. Admitting it here is what lets a preflight answer "would
+    // this frame be accepted" without first opening a key to sign with.
+    "simulateTransaction",
 ];
+
+/// What the cluster reported about a frame it executed but did not commit.
+#[derive(Clone, Debug)]
+pub(crate) struct SimulationOutcomeV1 {
+    /// The runtime's refusal, verbatim, or `None` when the frame was accepted.
+    pub(crate) error: Option<Value>,
+    /// Program logs, in order.
+    pub(crate) logs: Vec<String>,
+    /// Compute units the frame actually consumed, when the cluster reports it.
+    pub(crate) units_consumed: Option<u64>,
+}
+
+impl SimulationOutcomeV1 {
+    /// Whether the runtime accepted the frame.
+    pub(crate) const fn accepted(&self) -> bool {
+        self.error.is_none()
+    }
+}
 
 pub(crate) struct Rpc {
     url: Url,
@@ -731,12 +754,9 @@ impl Rpc {
                         "{label} return data encoding was not canonical base64"
                     )));
                 }
-                let encoded = pair
-                    .first()
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        Error::new(format!("{label} return data payload was not a string"))
-                    })?;
+                let encoded = pair.first().and_then(Value::as_str).ok_or_else(|| {
+                    Error::new(format!("{label} return data payload was not a string"))
+                })?;
                 let data = BASE64
                     .decode(encoded)
                     .map_err(|error| Error::new(format!("{label} return data base64: {error}")))?;
@@ -1508,6 +1528,78 @@ impl Rpc {
             true,
             Some(FOUNDING_HEAP_FRAME_BYTES),
         )
+    }
+
+    /// Execute one v0 frame against the cluster without a key, a signature, or
+    /// a send.
+    ///
+    /// The signature vector is zeros and `sigVerify` is false, which is the
+    /// whole point: this is callable before any signing key has been fetched.
+    /// A route whose frame demands a signature it does not yet have still
+    /// executes here, and the runtime answers the question the caller actually
+    /// has — *would every other conjunct admit this?* — leaving the signature
+    /// as the one remaining unknown instead of the first blocker.
+    /// `replaceRecentBlockhash` lets the cluster supply its own, so a
+    /// simulation cannot fail for staleness on the way to that answer.
+    ///
+    /// What it proves is what a simulator thinks, and that is deliberately not
+    /// the same claim as landing. This tool's rule that *a hostile is only
+    /// evidence if it reaches consensus* is unchanged and lives at
+    /// [`Rpc::submit_signed_v0_packet_expecting_failure`]; a simulation is a
+    /// decision aid before a write, never the evidence that one happened.
+    pub(crate) fn simulate_v0(
+        &mut self,
+        label: &str,
+        instructions: &[Instruction],
+        fee_payer: Pubkey,
+        observation: Observation,
+        tables: &[ObservedAccount],
+    ) -> Result<SimulationOutcomeV1> {
+        let bounded = bounded_instructions(instructions, None)
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let (blockhash, _) = self.latest_blockhash_with_height()?;
+        let plan = dclutch_versioned_message_operator::compile_v0_message(
+            fee_payer,
+            &bounded,
+            solana_hash::Hash::new_from_array(blockhash.to_bytes()),
+            observation,
+            tables,
+        )
+        .map_err(|error| Error::new(format!("{label}: v0 message compilation: {error:?}")))?;
+        let signatures = vec![Signature::default(); usize::from(plan.required_signatures.max(1))];
+        let transaction = VersionedTransaction {
+            signatures,
+            message: plan.message,
+        };
+        let encoded = BASE64.encode(
+            bincode::serialize(&transaction)
+                .map_err(|error| Error::new(format!("serialize transaction: {error}")))?,
+        );
+        let result = self
+            .call(
+                "simulateTransaction",
+                &json!([encoded, {
+                    "encoding": "base64",
+                    "sigVerify": false,
+                    "replaceRecentBlockhash": true,
+                    "commitment": "confirmed",
+                }]),
+            )
+            .map_err(|error| Error::new(format!("{label}: {error}")))?;
+        let value = result.get("value").unwrap_or(&result);
+        Ok(SimulationOutcomeV1 {
+            error: value.get("err").filter(|err| !err.is_null()).cloned(),
+            logs: value
+                .get("logs")
+                .and_then(Value::as_array)
+                .map(|logs| {
+                    logs.iter()
+                        .filter_map(|entry| entry.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            units_consumed: value.get("unitsConsumed").and_then(Value::as_u64),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

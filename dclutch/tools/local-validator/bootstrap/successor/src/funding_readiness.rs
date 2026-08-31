@@ -105,11 +105,17 @@ pub(crate) enum FundingReadinessPlanV1 {
     /// Founding/Ready is durably visible on chain. The embedded idempotent
     /// report reauthenticates all completion facts without inventing a second DTO.
     Complete(FundingReadinessInstructionPlanV1<ResolutionVerifyFundReadyReportV3>),
-    /// Open/Consumed is durably visible on chain: the atomic founding consumed
-    /// the readiness it was staged from and committed the Market Open. Every
-    /// adjacent builder rightly refuses (the fund exists, nothing tops up, and
-    /// verify-ready demands the Founding phase the Market has left), so the
-    /// only honest plan is the terminal one - there is nothing left to drive.
+    /// Open/Consumed is durably visible on chain AND the Source resolution
+    /// state is live: the readiness this Market was staged from is consumed and
+    /// the Market is Open. Every adjacent builder rightly refuses (the fund
+    /// exists, nothing tops up, and verify-ready demands the Founding phase the
+    /// Market has left), so the only honest plan is the terminal one - there is
+    /// nothing left to drive.
+    ///
+    /// The live Source state is load-bearing and is checked, not assumed:
+    /// `(Open, Consumed)` with no buildable route is ALSO the prestate of an
+    /// atomically founded Market that has not created its fund yet. See
+    /// `authenticate_consumed_by_founding_v1`.
     ConsumedByFounding,
 }
 
@@ -411,14 +417,15 @@ fn plan_funding_readiness_from_observation_v1(
         system_program: snapshot.account(system_program::ID)?,
     });
     let accept = build_resolution_verify_fund_ready_v3(&verify_snapshot);
-    if create.is_err() && activate.is_err() && accept.is_err() {
-        eprintln!(
-            "funding-readiness builders all refused: create={:?} activate={:?} accept={:?}",
-            create.as_ref().err(),
-            activate.as_ref().err(),
-            accept.as_ref().err()
-        );
-    }
+    // Kept beside the selection rather than printed past it. A stderr line
+    // that a terminal route then overrode is how the post-Open suffix reported
+    // "nothing left to drive" over three builders that had all refused.
+    let builder_refusals = format!(
+        "create={:?} activate={:?} accept={:?}",
+        create.as_ref().err(),
+        activate.as_ref().err(),
+        accept.as_ref().err()
+    );
     let selection = select_authenticated_route_v1(
         market.phase,
         market.readiness,
@@ -480,6 +487,11 @@ fn plan_funding_readiness_from_observation_v1(
             )))
         }
         AuthenticatedRouteV1::ConsumedByFounding => {
+            authenticate_consumed_by_founding_v1(
+                &verify_snapshot.source_state,
+                frame.resolution_program,
+                &builder_refusals,
+            )?;
             return Ok(FundingReadinessPlanV1::ConsumedByFounding);
         }
         AuthenticatedRouteV1::Complete => {
@@ -495,6 +507,44 @@ fn plan_funding_readiness_from_observation_v1(
             )))
         }
     }
+}
+
+/// Require the fact `ConsumedByFounding` asserts, instead of inferring it.
+///
+/// `(Open, Consumed)` with no adjacent route buildable is reached two ways and
+/// only one of them is terminal:
+///
+///  - the readiness walk ran and finished, leaving a live
+///    `SourceResolutionStateV2` in `Primary` and an Active ledger — nothing
+///    adjacent remains, which is the honest terminal; and
+///  - the atomic founding committed `Founding + Prepaid -> Open + Consumed` in
+///    one step and the fund was never created at all, which Core admits on
+///    purpose (`resolution_fund_prestate_admissible`: `Open + Consumed` is
+///    where an atomically founded Market still has to create its Resolution
+///    Fund). Here everything downstream of `CreateFund` refuses for the same
+///    reason — the Source destination is vacant — and calling that terminal
+///    reports a founding as complete while its Market has no resolution route.
+///
+/// The whole difference is the Source state, so this reads it. The refusal
+/// carries all three builder errors because the head one is the diagnosis:
+/// `RecoveryWalkUnavailable` says the material bought an ordered recovery walk
+/// and Core's Q2 weld will not mint a fund over it, ever, at any later slot.
+fn authenticate_consumed_by_founding_v1(
+    source_state: &ObservedAccount,
+    resolution_program: Pubkey,
+    builder_refusals: &str,
+) -> Result<()> {
+    if source_state.owner == resolution_program && !source_state.data.is_empty() {
+        return Ok(());
+    }
+    Err(refusal(format!(
+        "funding-readiness is not terminal: the Market is Open with readiness Consumed, but its \
+         Source resolution state {} is vacant ({} bytes, owner {}), so the atomic founding \
+         consumed no staged readiness and every readiness route refused: {builder_refusals}",
+        source_state.key,
+        source_state.data.len(),
+        source_state.owner,
+    )))
 }
 
 fn completion_accounts_v1(coordinates: FundingReadinessCoordinatesV1) -> Vec<Pubkey> {
@@ -792,6 +842,72 @@ mod tests {
                 .is_err(),
             "an unchanged atomic Market cannot prove a no-write Accept finalized",
         );
+    }
+
+    /// The terminal that must be read off chain state, not inferred from the
+    /// absence of a buildable route.
+    ///
+    /// `(Open, Consumed)` with all three builders refusing is exactly what an
+    /// atomically founded Market looks like BEFORE its fund exists, and it is
+    /// also what it looks like after the walk finished. Selecting the terminal
+    /// on the tuple alone reported the first as the second: the campaign
+    /// printed `Open Market ... (20 steps)` over
+    /// `create=RecoveryWalkUnavailable activate=Funding accept=Funding`, and
+    /// only run.py's six-mutation order check downstream noticed.
+    #[test]
+    fn consumed_by_founding_requires_a_live_source_state_not_a_vacant_one() {
+        let resolution = key();
+        let live = ObservedAccount {
+            observation: Observation {
+                slot: 9,
+                unix_timestamp: 1,
+                finality: Finality::Finalized,
+            },
+            key: key(),
+            owner: resolution,
+            lamports: 1_000_000,
+            executable: false,
+            data: vec![7; 32],
+        };
+        assert!(
+            authenticate_consumed_by_founding_v1(&live, resolution, "create=None").is_ok(),
+            "a Source state the Resolution program owns is the terminal's evidence",
+        );
+
+        let vacant = ObservedAccount {
+            owner: system_program::ID,
+            lamports: 0,
+            data: Vec::new(),
+            ..live.clone()
+        };
+        let refusal = authenticate_consumed_by_founding_v1(
+            &vacant,
+            resolution,
+            "create=Some(RecoveryWalkUnavailable) activate=Some(Funding) accept=Some(Funding)",
+        )
+        .expect_err("a vacant Source state is not a consumed readiness");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("RecoveryWalkUnavailable"),
+            "the refusal must carry the head builder error, not just its own summary: {message}",
+        );
+        assert!(
+            message.contains("is vacant"),
+            "the refusal must name the fact it read: {message}",
+        );
+
+        // Owned by Resolution but still empty, and the right owner over the
+        // wrong program: both are absence, not a consumed readiness.
+        let empty = ObservedAccount {
+            data: Vec::new(),
+            ..live.clone()
+        };
+        assert!(authenticate_consumed_by_founding_v1(&empty, resolution, "").is_err());
+        let foreign = ObservedAccount {
+            owner: key(),
+            ..live.clone()
+        };
+        assert!(authenticate_consumed_by_founding_v1(&foreign, resolution, "").is_err());
     }
 
     #[test]

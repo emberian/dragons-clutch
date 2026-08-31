@@ -189,6 +189,13 @@ pub enum Error {
     /// Trading upgrade moves every seal to a new address it can only be reached
     /// by a reader looking at an account its own release never wrote.
     ZeroBump,
+    /// The body is a well-formed seal, and the defunct arm is not for those.
+    ///
+    /// [`SealedDescriptorClosureV1::decode_defunct`] reads exactly the bodies
+    /// the pre-bump layout left behind, whose bump byte is the unwritten zero.
+    /// A nonzero byte there is a bump some derivation actually produced, so the
+    /// body is an ordinary seal and belongs to [`SealedDescriptorClosureV1::decode`].
+    NotDefunct,
     /// The persisted row count is not the artifact profile's exact count.
     InvalidRowCount,
     /// The persisted verdict set is not the artifact profile's exact set.
@@ -447,6 +454,31 @@ impl CapabilitySealSeedsV1 {
     }
 }
 
+/// Which of the two disjoint bump populations a decode is willing to read.
+///
+/// The populations partition the byte at [`CAPABILITY_SEAL_BUMP_OFFSET_V1`]
+/// between them, so the two public decoders that select them can never both
+/// accept one body. Every other conjunct is shared verbatim, which is the point
+/// of stating the difference as a value rather than as a second decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BumpPopulationV1 {
+    /// A bump some derivation actually produced: 255 down to 1.
+    Derived,
+    /// The unwritten zero the pre-bump layout left at that offset.
+    Unwritten,
+}
+
+impl BumpPopulationV1 {
+    /// Refuse unless the persisted byte belongs to this population.
+    const fn require(self, bump: u8) -> Result<()> {
+        match self {
+            Self::Derived if bump == 0 => Err(Error::ZeroBump),
+            Self::Unwritten if bump != 0 => Err(Error::NotDefunct),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Borrowed exact view of one persisted seal account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SealedDescriptorClosureV1<'a> {
@@ -462,6 +494,57 @@ impl<'a> SealedDescriptorClosureV1<'a> {
     /// [`SealedDescriptorClosureV1::require_artifact`], and the caller must
     /// have derived the account's address from the same key.
     pub fn decode(bytes: &'a [u8]) -> Result<Self> {
+        Self::decode_under(bytes, BumpPopulationV1::Derived)
+    }
+
+    /// Hostile-decode one exact persisted seal body whose bump was never written.
+    ///
+    /// Every conjunct of [`Self::decode`] holds here — the exact width, the
+    /// magic, the schema version, the artifact profile, the three reserved
+    /// bytes, the row count, the verdict set, all four key coordinates and all
+    /// six canonical rows including the descriptor row's agreement with the key
+    /// — with exactly one inverted: the bump byte must be **zero**. A body
+    /// carrying anything else is refused with [`Error::NotDefunct`].
+    ///
+    /// # The class this reads, and why it has one member
+    ///
+    /// [`CAPABILITY_SEAL_BUMP_OFFSET_V1`] was one of four reserved bytes before
+    /// the bump was persisted there, so a seal written under the earlier layout
+    /// carries a zero at an offset every reader now interprets. Such a body is
+    /// canonical in every other respect and its account is a real seal at a real
+    /// canonical address — it simply cannot state the bump that reproduces that
+    /// address, so [`Self::decode`] refuses it and the account's rent is
+    /// stranded. This arm is how a caller that supplies the bump out of band
+    /// reads such a body at all.
+    ///
+    /// # Disjointness from every well-formed seal, three independent ways
+    ///
+    /// 1. **The byte itself.** [`Self::decode`] refuses a zero bump and this
+    ///    refuses a nonzero one, so no byte string is accepted by both, now or
+    ///    under any future body. This is a partition of the whole 968-byte
+    ///    space and needs no assumption about writers.
+    /// 2. **No deployed writer can produce one.** `find_program_address` walks
+    ///    255 down to 1, and [`Self::encode`] refuses `bump == 0` outright, so
+    ///    the zero is an *unwritten* byte rather than a derivation's answer. The
+    ///    class cannot grow.
+    /// 3. **A future seal class rides a different profile.** A body asserting
+    ///    different propositions is a different artifact profile at offset
+    ///    [`CAPABILITY_SEAL_PROFILE_OFFSET_V1`], and both decoders pin that word
+    ///    to [`CAPABILITY_SEAL_PROFILE_V1`], so neither arm can ever be aimed at
+    ///    it.
+    ///
+    /// # What the caller still owes
+    ///
+    /// [`Self::bump`] on a view from this arm returns the zero it just required,
+    /// which is not a seed any address derives under. The caller must reproduce
+    /// the account's address from a bump it supplies itself and refuse on
+    /// mismatch; at most one candidate can satisfy that equality, which is what
+    /// keeps a supplied bump a memo rather than an authority.
+    pub fn decode_defunct(bytes: &'a [u8]) -> Result<Self> {
+        Self::decode_under(bytes, BumpPopulationV1::Unwritten)
+    }
+
+    fn decode_under(bytes: &'a [u8], population: BumpPopulationV1) -> Result<Self> {
         if bytes.len() != CAPABILITY_SEAL_BYTES_V1 {
             return Err(Error::InvalidLength);
         }
@@ -481,13 +564,11 @@ impl<'a> SealedDescriptorClosureV1<'a> {
         if read_u16(bytes, CAPABILITY_SEAL_PROFILE_OFFSET_V1)? != CAPABILITY_SEAL_PROFILE_V1 {
             return Err(Error::UnsupportedArtifactProfile);
         }
-        if *bytes
-            .get(CAPABILITY_SEAL_BUMP_OFFSET_V1)
-            .ok_or(Error::InvalidLength)?
-            == 0
-        {
-            return Err(Error::ZeroBump);
-        }
+        population.require(
+            *bytes
+                .get(CAPABILITY_SEAL_BUMP_OFFSET_V1)
+                .ok_or(Error::InvalidLength)?,
+        )?;
         require_zero(
             bytes,
             CAPABILITY_SEAL_RESERVED_OFFSET_V1,
@@ -636,8 +717,11 @@ impl<'a> SealedDescriptorClosureV1<'a> {
 
     /// The seal address's own canonical PDA bump, as its writer derived it.
     ///
-    /// Nonzero by [`Self::decode`], which refuses a zero here rather than
-    /// letting an unwritten byte become an unexplainable address mismatch.
+    /// Nonzero on a view from [`Self::decode`], which refuses a zero here rather
+    /// than letting an unwritten byte become an unexplainable address mismatch.
+    /// On a view from [`Self::decode_defunct`] it is exactly zero, because that
+    /// is what that arm required — such a body states no bump at all, and its
+    /// caller must reproduce the address from a bump it supplies itself.
     pub fn bump(self) -> Result<u8> {
         self.bytes
             .get(CAPABILITY_SEAL_BUMP_OFFSET_V1)
@@ -983,6 +1067,135 @@ pub fn is_capability_seal_request_v1(instruction_data: &[u8]) -> bool {
     instruction_data.len() == CAPABILITY_SEAL_REQUEST_BYTES_V1
         && instruction_data.get(..8) == Some(CAPABILITY_SEAL_REQUEST_MAGIC_V1.as_slice())
 }
+
+/// Canonical magic of one seal close request.
+pub const CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1: [u8; 8] = *b"DCLTCSX1";
+/// Exact seal-close-request width.
+pub const CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1: usize = 16;
+
+/// Offset of the request's bump candidate.
+///
+/// The first of what used to be four required-zero bytes, so the request width
+/// and the canonical all-zero wire are both unchanged.
+pub const CAPABILITY_SEAL_CLOSE_BUMP_CANDIDATE_OFFSET_V1: usize = 12;
+/// Offset of the close request's three canonical reserved bytes.
+pub const CAPABILITY_SEAL_CLOSE_RESERVED_OFFSET_V1: usize = 13;
+/// Exact count of the close request's canonical reserved bytes.
+pub const CAPABILITY_SEAL_CLOSE_RESERVED_BYTES_V1: usize = 3;
+/// The bump candidate that selects the ordinary close, where the body has one.
+pub const CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1: u8 = 0;
+
+/// The complete instruction request for closing one stranded seal.
+///
+/// It names one thing, and only for the one body shape that cannot say it
+/// itself. A seal is a write-once account whose body carries its own key and
+/// its own canonical PDA bump, so an ordinary seal describes itself completely:
+/// the closing program reproduces the address from the body and refuses if the
+/// two disagree. There is no coordinate such a caller could get wrong and none
+/// it could lie about, and the canonical request for that case is the all-zero
+/// wire this type has always encoded.
+///
+/// # The bump candidate, and why it is not an authority
+///
+/// A seal written before the bump was persisted carries an unwritten zero at
+/// [`CAPABILITY_SEAL_BUMP_OFFSET_V1`] (see
+/// [`SealedDescriptorClosureV1::decode_defunct`]). Its account is a real seal at
+/// a real canonical address, but the body cannot state the bump that reproduces
+/// that address, so the closing program has nothing to reproduce it from and the
+/// rent stays stranded. A nonzero candidate here is the caller supplying that
+/// one missing byte, which anyone can recover offline by walking 255 down to 1
+/// against the account's own address.
+///
+/// It is a memo, exactly as the persisted byte is: the closing program
+/// reproduces the address with `create_program_address` over the body's own
+/// seeds plus this candidate and refuses unless the result *is* the account
+/// being closed, so at most one value can pass and a wrong one buys nothing. And
+/// the two arms partition rather than overlap — candidate
+/// [`CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1`] selects the ordinary decode,
+/// which requires a nonzero persisted bump and ignores this field entirely,
+/// while any other candidate selects the defunct decode, which requires the
+/// persisted bump to be zero. A well-formed seal offered under a nonzero
+/// candidate is refused rather than closed by a byte its caller chose.
+///
+/// The beneficiary is not named here. It is account 1 and it must sign, because
+/// a request field naming a refund destination is a field a griefer fills in
+/// with someone else's address.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CapabilitySealCloseRequestV1 {
+    bump_candidate: u8,
+}
+
+impl CapabilitySealCloseRequestV1 {
+    /// Construct one canonical seal close request.
+    ///
+    /// [`CAPABILITY_SEAL_CLOSE_NO_BUMP_CANDIDATE_V1`] is the ordinary close, and
+    /// encodes the byte-identical all-zero wire this request has always had.
+    pub const fn new(bump_candidate: u8) -> Self {
+        Self { bump_candidate }
+    }
+
+    /// The bump the caller offers for a body that cannot state its own.
+    pub const fn bump_candidate(self) -> u8 {
+        self.bump_candidate
+    }
+
+    /// Hostile-decode one exact seal close request.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        if slice(bytes, 0, 8)? != CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1 {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(bytes, 8)? != CAPABILITY_SEAL_SCHEMA_VERSION_V1 {
+            return Err(Error::UnsupportedSchema);
+        }
+        // The profile the close is willing to act on is the profile the seal
+        // body must also carry. `SealedDescriptorClosureV1::decode` enforces
+        // the second half; this is the caller stating which one it meant, so a
+        // profile-2 seal cannot be closed by a profile-1 client that has never
+        // heard of whatever lamports profile 2 carries.
+        if read_u16(bytes, 10)? != CAPABILITY_SEAL_PROFILE_V1 {
+            return Err(Error::UnsupportedArtifactProfile);
+        }
+        require_zero(
+            bytes,
+            CAPABILITY_SEAL_CLOSE_RESERVED_OFFSET_V1,
+            CAPABILITY_SEAL_CLOSE_RESERVED_BYTES_V1,
+        )?;
+        Ok(Self::new(
+            *bytes
+                .get(CAPABILITY_SEAL_CLOSE_BUMP_CANDIDATE_OFFSET_V1)
+                .ok_or(Error::InvalidLength)?,
+        ))
+    }
+
+    /// Encode one exact canonical seal close request.
+    pub fn to_bytes(self) -> [u8; CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1] {
+        let mut output = [0_u8; CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1];
+        let _ = copy(&mut output, 0, &CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1);
+        let _ = put_u16(&mut output, 8, CAPABILITY_SEAL_SCHEMA_VERSION_V1);
+        let _ = put_u16(&mut output, 10, CAPABILITY_SEAL_PROFILE_V1);
+        if let Some(byte) = output.get_mut(CAPABILITY_SEAL_CLOSE_BUMP_CANDIDATE_OFFSET_V1) {
+            *byte = self.bump_candidate;
+        }
+        output
+    }
+}
+
+/// Whether instruction data selects the seal close outer.
+pub fn is_capability_seal_close_request_v1(instruction_data: &[u8]) -> bool {
+    instruction_data.len() == CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1
+        && instruction_data.get(..8) == Some(CAPABILITY_SEAL_CLOSE_REQUEST_MAGIC_V1.as_slice())
+}
+
+// The two seal outers must never be confused for one another by the dispatch
+// predicates above, which key on magic and width. Distinct magics are the
+// primary separation; the widths differing is the belt.
+const _: () = assert!(
+    CAPABILITY_SEAL_REQUEST_BYTES_V1 != CAPABILITY_SEAL_CLOSE_REQUEST_BYTES_V1,
+    "the seal write and seal close requests must not share a width"
+);
 
 #[cfg(test)]
 mod tests;

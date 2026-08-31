@@ -75,3 +75,56 @@ pub fn child_caller_authority_v4(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use dclutch_core_contract::ContentId;
+    use dclutch_release_set_contract::ExecutionRoleV1;
+
+    /// A hint that is not this authority's canonical bump names a DIFFERENT
+    /// address, which is what every composition's coordinate-0 equality
+    /// refuses.
+    ///
+    /// The module already argued this for the bump the PREFLIGHT walk carries
+    /// to the execution walk. The argument does not weaken when the byte comes
+    /// from the caller instead: it is the same reproduction, checked the same
+    /// way, and the caller mined it off chain from seeds it had to compute to
+    /// build the request at all. See `HotBumpHintsV1`.
+    #[test]
+    fn a_wrong_caller_authority_bump_hint_names_another_address() {
+        let program_id = Pubkey::new_from_array([0x21; 32]);
+        let seeds = CallerAuthoritySeedsV1::new(
+            ContentId::new([0x31; 32]).expect("release set"),
+            [0x41; 32],
+            ExecutionRoleV1::Trading,
+            [0x51; 32],
+            [0x61; 32],
+        )
+        .expect("caller authority seeds");
+
+        let (canonical_address, canonical) =
+            child_caller_authority_v4(&seeds, &program_id, None).expect("searched");
+        assert_eq!(
+            child_caller_authority_v4(&seeds, &program_id, Some(canonical)).expect("reproduced"),
+            (canonical_address, canonical),
+        );
+
+        let mut refused = 0_u32;
+        for hint in 0..=u8::MAX {
+            if hint == canonical {
+                continue;
+            }
+            match child_caller_authority_v4(&seeds, &program_id, Some(hint)) {
+                Ok((address, bump)) => {
+                    assert_ne!(address, canonical_address, "hint {hint}");
+                    assert_eq!(bump, hint);
+                }
+                Err(_) => {}
+            }
+            refused = refused.saturating_add(1);
+        }
+        assert_eq!(refused, 255);
+    }
+}

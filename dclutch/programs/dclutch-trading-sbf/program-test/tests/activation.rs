@@ -1,6 +1,6 @@
 //! ProgramTest evidence for the common data-defined Trading lifecycle outer.
 
-use std::vec::Vec;
+use std::{path::PathBuf, vec::Vec};
 
 use dclutch_account_profile_contract::{
     ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1,
@@ -95,7 +95,7 @@ use solana_program::{
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::TransactionError;
-use solana_sdk_ids::system_program;
+use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 use solana_system_interface::instruction::transfer;
 use solana_transaction::Transaction;
 
@@ -799,15 +799,104 @@ fn descriptor_with_transition(
     output
 }
 
+/// The ProgramData address Loader V3 derives for `program`.
+fn programdata_address(program: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+/// The deployment slot every release in this fixture is pinned to.
+///
+/// One value, used by the release and by the ProgramData account staged for it,
+/// because a slot pin is exactly an equality between those two and a fixture
+/// that let them drift would stage a superseded deployment by accident.
+const FIXTURE_DEPLOYMENT_SLOT: u64 = 0;
+
+/// Loader V3's Program account body: the variant tag, then the ProgramData link.
+fn loader_program_bytes(program: Pubkey) -> Vec<u8> {
+    let mut output = vec![0_u8; 36];
+    output
+        .get_mut(..4)
+        .expect("variant")
+        .copy_from_slice(&2_u32.to_le_bytes());
+    output
+        .get_mut(4..36)
+        .expect("link")
+        .copy_from_slice(programdata_address(program).as_ref());
+    output
+}
+
+/// Loader V3's ProgramData body: the 45-byte metadata span, then the ELF.
+///
+/// `Immutable` with no upgrade authority, matching what [`release`] binds, so
+/// `slot_pinned_release_elf_digest_v1` takes the activation-bound digest and
+/// never hashes this tail. The tail still has to BE there -- the runtime
+/// executes the program out of it.
+fn loader_programdata_bytes(elf: &[u8]) -> Vec<u8> {
+    let mut output = vec![0_u8; 45 + elf.len()];
+    output
+        .get_mut(..4)
+        .expect("variant")
+        .copy_from_slice(&3_u32.to_le_bytes());
+    output
+        .get_mut(4..12)
+        .expect("slot")
+        .copy_from_slice(&FIXTURE_DEPLOYMENT_SLOT.to_le_bytes());
+    output.get_mut(45..).expect("ELF tail").copy_from_slice(elf);
+    output
+}
+
+/// One test program's ELF, from the directory that built it.
+fn test_program_elf(name: &str) -> Vec<u8> {
+    let directory = PathBuf::from(std::env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
+    std::fs::read(directory.join(format!("{name}.so"))).expect("required test-program ELF")
+}
+
+/// Stage one role as a real Loader V3 upgradeable deployment.
+///
+/// # Why this fixture stopped staging a fake one
+///
+/// It used to name a loader of `[0x91; 32]`, a ProgramData address of
+/// `[seed + 1; 32]`, and it staged that ProgramData as a system-program-owned
+/// account holding one byte. None of that is a deployment, and the fixture got
+/// away with it because the seam under test asked a MOCK Registry
+/// (`test-programs/registry`) to reauthenticate the roles, and that mock reads
+/// the cache, compares one program id and returns a receipt -- it authenticates
+/// no Loader account, no ProgramData link, no deployment slot and no ELF digest.
+///
+/// Decision 0017's option B removed the CPI, so `outer.rs` now runs the same
+/// deployment authentication the real Registry runs, and the fake substrate
+/// refuses. That is the fixture being wrong, not the change: `process_activation`
+/// had never once been executed against a deployment anything authenticated.
+fn add_upgradeable_role(test: &mut ProgramTest, name: &'static str, program: Pubkey) {
+    test.add_upgradeable_program_to_genesis(name, &program);
+    let elf = test_program_elf(name);
+    add_account(
+        test,
+        programdata_address(program),
+        bpf_loader_upgradeable::ID,
+        Rent::default().minimum_balance(45 + elf.len()),
+        loader_programdata_bytes(&elf),
+    );
+    test.add_account(
+        program,
+        Account {
+            lamports: Rent::default().minimum_balance(36),
+            data: loader_program_bytes(program),
+            owner: bpf_loader_upgradeable::ID,
+            executable: true,
+            rent_epoch: 0,
+        },
+    );
+}
+
 fn release(program: Pubkey, seed: u8) -> ArtifactReleaseV1 {
-    let programdata = Pubkey::new_from_array([seed.wrapping_add(1); 32]);
     ArtifactReleaseV1::new(
         program_identity(program),
-        program_identity(Pubkey::new_from_array([0x91; 32])),
-        programdata.to_bytes(),
+        program_identity(bpf_loader_upgradeable::ID),
+        programdata_address(program).to_bytes(),
         id(seed.wrapping_add(2)),
         [seed.wrapping_add(3); 32],
-        0,
+        FIXTURE_DEPLOYMENT_SLOT,
         ArtifactUpgradePolicyV1::Immutable,
         None,
     )
@@ -906,15 +995,21 @@ fn add_record(test: &mut ProgramTest, schema: [u8; 32], bytes: Vec<u8>) -> (Pubk
 }
 
 fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
-    let mut test = ProgramTest::new(
+    let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
+    // Trading and Core are the two roles `process_activation` authenticates out
+    // of the activation cache, so they are the two that must be REAL Loader V3
+    // deployments rather than plain executables. Everything else in this frame
+    // is a mock this seam only calls, never authenticates.
+    add_upgradeable_role(
+        &mut test,
         "dclutch_trading_outer_test_program",
         TRADING_PROGRAM_ID,
-        None,
     );
-    test.add_program(
+    add_upgradeable_role(
+        &mut test,
         "dclutch_trading_core_caller_test_program",
         CORE_PROGRAM_ID,
-        None,
     );
     test.add_program(
         "dclutch_trading_registry_test_program",
@@ -1069,16 +1164,9 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         rent.minimum_balance(cache_bytes.len()),
         cache_bytes,
     );
-    let core_programdata = Pubkey::new_from_array([0x32; 32]);
-    let trading_programdata = Pubkey::new_from_array([0x42; 32]);
-    add_account(&mut test, core_programdata, system_program::ID, 1, vec![1]);
-    add_account(
-        &mut test,
-        trading_programdata,
-        system_program::ID,
-        1,
-        vec![1],
-    );
+    // The Loader's own addresses, already staged by `add_upgradeable_role`.
+    let core_programdata = programdata_address(CORE_PROGRAM_ID);
+    let trading_programdata = programdata_address(TRADING_PROGRAM_ID);
 
     let mut state = CoreState {
         phase: Phase::Founding,
@@ -1897,5 +1985,112 @@ fn the_public_encoders_reproduce_the_canonical_v2_artifact_bytes() {
     assert_eq!(
         effect_program(Campaign::Success).as_slice(),
         EFFECT.as_slice()
+    );
+}
+
+/// The shippable General activation artifacts ARE the ones this file proves.
+///
+/// `general_activation_artifacts_create_a_real_general_root` runs the real
+/// Trading ELF over the fixture's hand-built General triple and decodes the
+/// account it creates as a real `GeneralRootV2`. That is the strongest evidence
+/// in the tree that a data-defined activation works -- and until now it was
+/// evidence about fixture bytes, because the only General activation artifacts
+/// that existed were the ones a few hundred lines up this file.
+///
+/// `dclutch-general-adapter-contract::activation_bundle_v1` now builds them for
+/// a release to publish. This test is the join: the profile, the transition and
+/// the effect are BYTE-IDENTICAL, so the ELF result above is a result about the
+/// shippable records, not about their look-alikes. The descriptor differs at
+/// exactly one 32-byte field -- the request schema, which the fixture invented
+/// as `id(0x23)` before General published one -- and this asserts that it
+/// differs THERE AND NOWHERE ELSE, because "nearly the same descriptor" is not a
+/// claim anyone should have to take on trust.
+///
+/// The activation seam never reads a descriptor's request schema
+/// (`CapabilityProgramV1::validate_selection` joins kind, capacity, root schema
+/// and derivation policy against the manifest entry, and no more), so the
+/// difference cannot change what the ELF did.
+#[test]
+fn the_shippable_general_bundle_is_the_triple_this_file_runs_on_the_real_elf() {
+    use dclutch_capability_program_contract::v4::{
+        ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
+        SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
+    };
+    use dclutch_general_adapter_contract::activation_bundle_v1::{
+        GENERAL_ACTIVATION_REQUEST_SCHEMA_ID_V1, GeneralActivationBundleInputV1,
+        build_general_activation_bundle_v1,
+    };
+
+    // The same manifest-selected coordinates `build_fixture` gives its General
+    // campaign, carried on a General action descriptor the way a release does.
+    let action = CapabilityProgramV4::new(
+        ContentId::new(GENERAL_CAPABILITY_KIND_ID_V1).expect("General kind"),
+        id(0x15),
+        id(0x23),
+        ContentId::new(GENERAL_ROOT_SCHEMA_ID_V2).expect("General root schema"),
+        id(0x14),
+        id(0x12),
+        CapabilityArtifactsV4 {
+            account_profile: ArtifactReferenceV4::new(id(0x61), id(0x71)),
+            request_profile: ArtifactReferenceV4::new(id(0x62), id(0x72)),
+            lifecycle: ArtifactReferenceV4::new(
+                ContentId::new(SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5).expect("lifecycle schema"),
+                id(0x73),
+            ),
+            strategy: ArtifactReferenceV4::new(id(0x64), id(0x74)),
+            transition: ArtifactReferenceV4::new(id(0x65), id(0x75)),
+            effect: ArtifactReferenceV4::new(id(0x66), id(0x76)),
+        },
+        u32::try_from(GENERAL_ROOT_BYTES_V2).expect("General root width"),
+    )
+    .expect("General action descriptor")
+    .encode()
+    .to_vec();
+    let bundle = build_general_activation_bundle_v1(GeneralActivationBundleInputV1 {
+        action_descriptor: &action,
+        funding_ledger_slot_count: 1,
+    })
+    .expect("shippable General activation bundle");
+
+    assert_eq!(bundle.account_profile, account_profile(Family::General));
+    assert_eq!(bundle.transition, transition_program(Family::General));
+    assert_eq!(bundle.effect, effect_program(Campaign::General));
+
+    let fixture_descriptor = descriptor(
+        Family::General,
+        hash(&bundle.account_profile).to_bytes(),
+        hash(&bundle.effect).to_bytes(),
+        ContentId::new(GENERAL_CAPABILITY_KIND_ID_V1).expect("General kind"),
+        id(0x12),
+        ContentId::new(GENERAL_ROOT_SCHEMA_ID_V2).expect("General root schema"),
+        id(0x14),
+        id(0x15),
+    );
+    assert_eq!(bundle.descriptor.len(), fixture_descriptor.len());
+    let request_schema =
+        CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET..CAPABILITY_PROGRAM_REQUEST_SCHEMA_OFFSET + 32;
+    for (offset, (mine, fixture)) in bundle
+        .descriptor
+        .iter()
+        .zip(fixture_descriptor.iter())
+        .enumerate()
+    {
+        if request_schema.contains(&offset) {
+            continue;
+        }
+        assert_eq!(mine, fixture, "descriptor byte {offset}");
+    }
+    assert_eq!(
+        bundle
+            .descriptor
+            .get(request_schema.clone())
+            .expect("request schema field"),
+        GENERAL_ACTIVATION_REQUEST_SCHEMA_ID_V1.as_slice()
+    );
+    assert_eq!(
+        fixture_descriptor
+            .get(request_schema)
+            .expect("fixture request schema field"),
+        id(0x23).to_bytes().as_slice()
     );
 }

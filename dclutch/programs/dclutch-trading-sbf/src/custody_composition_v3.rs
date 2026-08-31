@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
+    CUSTODY_BUMP_RELAY_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyReceiptV1, CustodyRequestV1,
     DELEGATED_CUSTODY_REQUEST_MAGIC_V2, DelegatedCustodyReceiptV2, DelegatedCustodyRequestV2,
     delegated_custody_child_execution_digest_v3,
 };
@@ -41,6 +41,16 @@ pub struct CustodyCompositionParentV3 {
     pub parent_request_digest: [u8; 32],
     /// Current Registry-selected Trading program.
     pub trading_program: [u8; 32],
+    /// The two bumps Custody derives for ITSELF and can carry from nowhere.
+    ///
+    /// Its replay PDA and its transfer authority, in that order, mined by the
+    /// caller and relayed after the request. Custody cannot store either one:
+    /// `CUSTODY_REPLAY_BYTES_V1` is exactly packed and Lean-emitted, so the
+    /// obvious carrier would orphan every replay on chain, and the replay's own
+    /// bump would have to be written before the account exists. `[0, 0]` means
+    /// nothing was mined and Custody searches for both, exactly as it used to.
+    /// See `HotBumpHintsV1` and `CustodyBumpRelayV1`.
+    pub child_relay: [u8; 2],
 }
 
 /// Preflight one exact active Custody invocation without external mutation.
@@ -55,6 +65,11 @@ pub fn preflight_custody_route_v3<'info>(
     frame: &mut Vec<AccountInfo<'info>>,
     custody_program: &AccountInfo<'_>,
     parent: CustodyCompositionParentV3,
+    // The caller's mined bump for this invocation's Trading caller authority.
+    // `None` searches, exactly as this walk always did; `Some` reproduces and
+    // refuses at the coordinate-0 equality `prepare` already runs. See
+    // `HotBumpHintsV1`.
+    hint: PreflightedCallerBumpV4,
 ) -> Result<u8, ProgramError> {
     let prepared = prepare(
         program_id,
@@ -66,7 +81,7 @@ pub fn preflight_custody_route_v3<'info>(
         frame,
         custody_program,
         parent,
-        None,
+        hint,
     )?;
     Ok(prepared.bump)
 }
@@ -119,18 +134,25 @@ pub fn execute_custody_route_v3<'info>(
         prior_receipt,
         ReceiptDeliveryV3::VerifiedOnly,
     )?;
-    // The caller authority Trading just derived, carried to the child so it
-    // reproduces the address instead of searching for it again. It goes AFTER
-    // the request because the digest those seeds end in covers the request
-    // only -- a bump inside it would change its own address. Custody's
-    // `split_caller_authority_bump_v1` reads it back, and its
-    // `the_caller_authority_digest_covers_the_request_prefix_only` pins the
-    // property this depends on.
+    // The three bumps Custody would otherwise search for: the caller authority
+    // Trading just derived, then its own replay and transfer authority, which
+    // the caller mined off chain. They go AFTER the request because the digest
+    // the caller-authority seeds end in covers the request only -- a bump
+    // inside it would change its own address. Custody's
+    // `split_caller_authority_bump_v1` reads them back at the width it finds,
+    // and its `the_caller_authority_digest_covers_the_request_prefix_only`
+    // pins the property all three depend on.
+    //
+    // The width is unconditional: three bytes always, so the wire Custody
+    // dispatches on has ONE shape per route rather than one per what the
+    // caller happened to know. An unmined slot is a zero, which Custody reads
+    // as absent and searches for.
     buffers
         .data
-        .try_reserve(1)
+        .try_reserve(CUSTODY_BUMP_RELAY_BYTES_V1)
         .map_err(|_| TradingSbfError::Content)?;
     buffers.data.push(prepared.bump);
+    buffers.data.extend_from_slice(&parent.child_relay);
     buffers.push_callee(custody_program)?;
     let bump_seed = [prepared.bump];
     let [domain, release, market, role, context, digest] = prepared.authority_seeds.as_slices();
@@ -586,8 +608,23 @@ mod tests {
             generation: 3,
             parent_request_digest: [4; 32],
             trading_program: [5; 32],
+            child_relay: [0xfd, 0xfc],
         };
         assert_eq!(validate_parent(&program, canonical), Ok(()));
+        // The relay is a hint, not a parent BINDING: Custody reproduces two of
+        // its own addresses from it and refuses at their equalities, so nothing
+        // here has to agree about it and the two walks may not disagree about
+        // anything that does.
+        assert_eq!(
+            validate_parent(
+                &program,
+                CustodyCompositionParentV3 {
+                    child_relay: [0, 0],
+                    ..canonical
+                }
+            ),
+            Ok(())
+        );
 
         for hostile in [
             CustodyCompositionParentV3 {

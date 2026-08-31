@@ -7,6 +7,9 @@
 //! index enters the artifact.  Generic Trading remains the sole request
 //! projector, account writer, CPI authority, and atomic committer.
 
+use dclutch_capability_program_contract::{
+    CAPABILITY_ROOT_HEADER_BYTES_V1, hot_v3::HOT_RUNTIME_ROOT_COORDINATE_V3,
+};
 use dclutch_claims_svm::{
     CallerRole as ClaimsCallerRole,
     affine_batch_v2::{
@@ -50,6 +53,10 @@ use dclutch_effect_kernel::{
     },
 };
 use dclutch_general_codec::{Action, CONTROLLER_REQUEST_BYTES};
+use dclutch_general_config_contract::{
+    GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2, GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2,
+    GENERAL_ROOT_REVISION_OFFSET_V2,
+};
 
 use crate::hot_candidate_v3::{
     GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
@@ -57,6 +64,11 @@ use crate::hot_candidate_v3::{
     scalar,
 };
 use crate::{
+    collection_v1::{
+        GENERAL_ORDER_ROW_BASE_V1, GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
+        GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1, GENERAL_ORDER_ROW_STRIDE_V1, GeneralBatchLayoutV1,
+        GeneralOrderLayoutV1,
+    },
     local_state_v3::GeneralLocalStateLayoutV3,
     runtime_selection::RuntimeSelectionLayoutV2,
     runtime_width::SettlementCursorLayoutV2,
@@ -118,10 +130,21 @@ pub const fn general_effect_route_count_v3(action: Action) -> u16 {
         // them by name first -- see `general_effect_program_bytes_v3` -- so a
         // zero here can never reach an encoder and be mistaken for a shape.
         unauthored_actions!() => 0,
+        // The root-writing pair moves no Claims Position and no Custody vault:
+        // its writes are the root tail and the batch record, both local.
+        Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => 3,
         Action::Collect | Action::Materialize | Action::Distribute => 2,
         Action::Close => 4,
+        // The refund and the whole escrow teardown: claims leg, quote leg,
+        // Position close, vault close, replay close. Cancel refunds the exact
+        // reserve while the batch still collects; Release the observed
+        // residual after the window.
+        Action::CancelOrder | Action::ReleaseOrder => 5,
+        // The admission and the whole escrow construction: replay create,
+        // vault open, Position admit, claims escrow-in, quote deposit.
+        Action::PlaceOrder => 5,
     }
 }
 
@@ -185,6 +208,82 @@ pub fn general_effect_route_frame_v3(
             )?,
             GeneralChildFrameV3::Custody(OperationV1::CloseReplay),
         ),
+        (Action::PlaceOrder, 0) => (
+            start,
+            GeneralChildFrameV3::Custody(OperationV1::InitializeReplay),
+        ),
+        (Action::PlaceOrder, 1) => (
+            add_accounts(start, CUSTODY_INITIALIZE_ACCOUNTS)?,
+            GeneralChildFrameV3::Custody(OperationV1::OpenVault),
+        ),
+        (Action::PlaceOrder, 2) => (
+            add_accounts(
+                add_accounts(start, CUSTODY_INITIALIZE_ACCOUNTS)?,
+                CUSTODY_OPEN_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::ClaimsProtocolPosition(ProtocolPositionActionV2::Admit),
+        ),
+        (Action::PlaceOrder, 3) => (
+            add_accounts(
+                add_accounts(
+                    add_accounts(start, CUSTODY_INITIALIZE_ACCOUNTS)?,
+                    CUSTODY_OPEN_ACCOUNTS,
+                )?,
+                POSITION_ADMIT_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::ClaimsAffine { position_count: 2 },
+        ),
+        (Action::PlaceOrder, 4) => (
+            add_accounts(
+                add_accounts(
+                    add_accounts(
+                        add_accounts(start, CUSTODY_INITIALIZE_ACCOUNTS)?,
+                        CUSTODY_OPEN_ACCOUNTS,
+                    )?,
+                    POSITION_ADMIT_ACCOUNTS,
+                )?,
+                add_accounts(AFFINE_FIXED_ACCOUNTS, 2)?,
+            )?,
+            GeneralChildFrameV3::Custody(OperationV1::Transfer),
+        ),
+        (Action::CancelOrder | Action::ReleaseOrder, 0) => (
+            start,
+            GeneralChildFrameV3::ClaimsAffine { position_count: 2 },
+        ),
+        (Action::CancelOrder | Action::ReleaseOrder, 1) => (
+            add_accounts(start, AFFINE_FIXED_ACCOUNTS + 2)?,
+            GeneralChildFrameV3::Custody(OperationV1::Transfer),
+        ),
+        (Action::CancelOrder | Action::ReleaseOrder, 2) => (
+            add_accounts(
+                add_accounts(start, AFFINE_FIXED_ACCOUNTS + 2)?,
+                CUSTODY_TRANSFER_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::ClaimsProtocolPosition(ProtocolPositionActionV2::Close),
+        ),
+        (Action::CancelOrder | Action::ReleaseOrder, 3) => (
+            add_accounts(
+                add_accounts(
+                    add_accounts(start, AFFINE_FIXED_ACCOUNTS + 2)?,
+                    CUSTODY_TRANSFER_ACCOUNTS,
+                )?,
+                POSITION_CLOSE_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::Custody(OperationV1::CloseVault),
+        ),
+        (Action::CancelOrder | Action::ReleaseOrder, 4) => (
+            add_accounts(
+                add_accounts(
+                    add_accounts(
+                        add_accounts(start, AFFINE_FIXED_ACCOUNTS + 2)?,
+                        CUSTODY_TRANSFER_ACCOUNTS,
+                    )?,
+                    POSITION_CLOSE_ACCOUNTS,
+                )?,
+                CUSTODY_CLOSE_VAULT_ACCOUNTS,
+            )?,
+            GeneralChildFrameV3::Custody(OperationV1::CloseReplay),
+        ),
         _ => return Err(GeneralEffectArtifactErrorV3::Geometry),
     };
     let selected = GeneralEffectRouteFrameV3 {
@@ -209,7 +308,7 @@ const CUSTODY_OPEN_ACCOUNTS: u16 = CUSTODY_OPEN_VAULT_ACCOUNT_COUNT_V1;
 const CUSTODY_TRANSFER_ACCOUNTS: u16 = CUSTODY_TRANSFER_ACCOUNT_COUNT_V1;
 const CUSTODY_CLOSE_VAULT_ACCOUNTS: u16 = CUSTODY_CLOSE_VAULT_ACCOUNT_COUNT_V1;
 const CUSTODY_CLOSE_REPLAY_ACCOUNTS: u16 = CUSTODY_CLOSE_REPLAY_ACCOUNT_COUNT_V1;
-const MAX_ROUTE_COUNT: usize = 4;
+const MAX_ROUTE_COUNT: usize = 5;
 
 /// Stable refusal from General artifact generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,23 +327,26 @@ pub enum GeneralEffectArtifactErrorV3 {
     UnauthoredAction,
 }
 
-/// The seven actions whose artifact triple has not been authored.
+/// The two actions whose artifact quadruple has not been authored.
 ///
 /// Their tags are Lean-owned and their `CapabilityProgramSetV2` coordinates are
 /// reserved, because a selector is a protocol fact before it is an artifact.
-/// What does not exist yet is a TransitionVM program, an EffectProgram and an
-/// AccountProfile for each. Naming them in one place -- and refusing them by
-/// name at every fallible entry point -- is what stops a release being
-/// assembled that claims artifacts nobody wrote.
+/// What does not exist yet is a TransitionVM program, a RequestProfile, an
+/// EffectProgram and an AccountProfile for each. Naming them in one place --
+/// and refusing them by name at every fallible entry point -- is what stops a
+/// release being assembled that claims artifacts nobody wrote.
+///
+/// `OpenBatch` and `CloseBatch` left this list with GEN-SEVEN-2 (the
+/// root-writing pair), and `CancelOrder` and `ReleaseOrder` with GEN-SEVEN-3
+/// (the refund half of the order trio: both flip the fixed mutable window the
+/// order-wire repair created and tear the escrow down through the same
+/// five-route suite). Release admission still joins the seven
+/// settlement bundles alone -- there is no partial-count profile, by ADR-0010
+/// SS4's own argument -- so every GEN-SEVEN action is exercised at the
+/// artifact level until all fourteen exist.
 macro_rules! unauthored_actions {
     () => {
-        Action::OpenBatch
-            | Action::PlaceOrder
-            | Action::CancelOrder
-            | Action::CloseBatch
-            | Action::SubmitCandidate
-            | Action::VerifyCandidateRow
-            | Action::ReleaseOrder
+        Action::SubmitCandidate | Action::VerifyCandidateRow
     };
 }
 pub(crate) use unauthored_actions;
@@ -283,6 +385,11 @@ pub const GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3: EffectInstructionV3 =
 pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usize) {
     match action {
         unauthored_actions!() => (0, 0),
+        Action::OpenBatch => (24, 0),
+        Action::CloseBatch => (4, 0),
+        Action::PlaceOrder => (96, 13),
+        Action::CancelOrder => (92, 11),
+        Action::ReleaseOrder => (90, 11),
         Action::Consider => (22, 0),
         Action::Freeze => (16, 0),
         Action::InitializeSettlement => (54, 1),
@@ -295,6 +402,7 @@ pub const fn general_effect_instruction_count_v3(action: Action) -> (usize, usiz
 pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
+        Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
             PROTOCOL_POSITION_REQUEST_BYTES_V2 + 2 * CUSTODY_REQUEST_BYTES_V1
@@ -312,6 +420,13 @@ pub const fn general_effect_template_bytes_v3(action: Action) -> usize {
                 + CUSTODY_REQUEST_BYTES_V1
         }
         Action::Close => PROTOCOL_POSITION_REQUEST_BYTES_V2 + 3 * CUSTODY_REQUEST_BYTES_V1,
+        Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder => {
+            AFFINE_BATCH_PLAN_HEADER_BYTES_V2
+                + 2 * AFFINE_BATCH_POSITION_BYTES_V2
+                + AFFINE_BATCH_ROW_BYTES_V2
+                + PROTOCOL_POSITION_REQUEST_BYTES_V2
+                + 3 * CUSTODY_REQUEST_BYTES_V1
+        }
     }
 }
 
@@ -416,8 +531,14 @@ pub fn general_effect_program_bytes_v3(action: Action) -> Result<usize> {
 const fn receipt_dependency_count(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
-        Action::InitializeSettlement | Action::Close => 1,
-        Action::Consider
+        Action::InitializeSettlement
+        | Action::Close
+        | Action::PlaceOrder
+        | Action::CancelOrder
+        | Action::ReleaseOrder => 1,
+        Action::OpenBatch
+        | Action::CloseBatch
+        | Action::Consider
         | Action::Freeze
         | Action::Collect
         | Action::Materialize
@@ -443,12 +564,15 @@ const fn receipt_dependency_count(action: Action) -> usize {
 pub const fn general_custody_callee_account_count_v3(action: Action) -> u16 {
     match action {
         unauthored_actions!() => 0,
-        Action::Consider | Action::Freeze => 0,
+        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
         | Action::Distribute
-        | Action::Close => 1,
+        | Action::Close
+        | Action::PlaceOrder
+        | Action::CancelOrder
+        | Action::ReleaseOrder => 1,
     }
 }
 
@@ -470,7 +594,7 @@ pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
     require_authored_action_v3(action)?;
     let suffix = match action {
         unauthored_actions!() => return Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
-        Action::Consider | Action::Freeze => 0,
+        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => {
             POSITION_ADMIT_ACCOUNTS + CUSTODY_INITIALIZE_ACCOUNTS + CUSTODY_OPEN_ACCOUNTS
         }
@@ -483,6 +607,22 @@ pub fn general_effect_account_count_v3(action: Action) -> Result<u16> {
                 + POSITION_CLOSE_ACCOUNTS
                 + CUSTODY_CLOSE_VAULT_ACCOUNTS
                 + CUSTODY_CLOSE_REPLAY_ACCOUNTS
+        }
+        Action::CancelOrder | Action::ReleaseOrder => {
+            AFFINE_FIXED_ACCOUNTS
+                + 2
+                + CUSTODY_TRANSFER_ACCOUNTS
+                + POSITION_CLOSE_ACCOUNTS
+                + CUSTODY_CLOSE_VAULT_ACCOUNTS
+                + CUSTODY_CLOSE_REPLAY_ACCOUNTS
+        }
+        Action::PlaceOrder => {
+            CUSTODY_INITIALIZE_ACCOUNTS
+                + CUSTODY_OPEN_ACCOUNTS
+                + POSITION_ADMIT_ACCOUNTS
+                + AFFINE_FIXED_ACCOUNTS
+                + 2
+                + CUSTODY_TRANSFER_ACCOUNTS
         }
     };
     general_child_account_start_v3(action)
@@ -577,7 +717,7 @@ fn build_action<'a>(
 ) -> Result<usize> {
     match action {
         unauthored_actions!() => Err(GeneralEffectArtifactErrorV3::UnauthoredAction),
-        Action::Consider | Action::Freeze => Ok(0),
+        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => Ok(0),
         Action::InitializeSettlement => build_initialize(instructions, fixed, templates, routes),
         // The two compartment bytes are NOT restated here. They come from
         // `escrow_v1`, which is also what the packet builder and the artifact
@@ -593,9 +733,14 @@ fn build_action<'a>(
             build_settlement(action, 2, instructions, fixed, item, templates, routes)
         }
         Action::Close => build_close(instructions, fixed, templates, routes),
+        Action::CancelOrder | Action::ReleaseOrder => {
+            build_order_refund(action, instructions, fixed, item, templates, routes)
+        }
+        Action::PlaceOrder => build_place(instructions, fixed, item, templates, routes),
     }
 }
 
+#[inline(never)]
 fn build_initialize<'a>(
     instructions: &mut [EffectInstructionV3],
     fixed: &mut usize,
@@ -656,13 +801,14 @@ fn build_initialize<'a>(
         open_bytes,
         &[],
     );
-    append_position_patches(instructions, fixed, 0)?;
+    append_position_patches(instructions, fixed, 0, scalar::CLAIMS_MARKET_REVISION)?;
     append_custody_initialize_patches(instructions, fixed, 1, false)?;
     append_custody_initialize_patches(instructions, fixed, 2, true)?;
     Ok(3)
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn build_settlement<'a>(
     action: Action,
     position_count: u32,
@@ -732,6 +878,7 @@ fn build_settlement<'a>(
     Ok(2)
 }
 
+#[inline(never)]
 fn build_close<'a>(
     instructions: &mut [EffectInstructionV3],
     fixed: &mut usize,
@@ -811,18 +958,468 @@ fn build_close<'a>(
         &[],
     );
     append_custody_transfer_patches(instructions, fixed, 0, false)?;
-    append_position_patches(instructions, fixed, 1)?;
+    append_position_patches(instructions, fixed, 1, scalar::CLAIMS_MARKET_REVISION)?;
     append_custody_close_patches(instructions, fixed, 2, false)?;
     append_custody_close_patches(instructions, fixed, 3, true)?;
     Ok(4)
 }
 
+/// CancelOrder and ReleaseOrder: the refund and the whole escrow teardown.
+///
+/// Route order is the money order: the claims leg empties the escrow
+/// Position, the quote leg empties the vault, and only then do the
+/// Position, the vault, and the replay close -- the Claims Position close
+/// refuses a nonzero vector and the vault close a nonzero balance, so an
+/// omitted or short refund row fails closed rather than stranding an atom.
+/// The compartments come from `escrow_v1`'s one table
+/// (`ReleaseCollateral`: `Settlement(order) -> External(owner)`), and the
+/// per-route request patches are the same generic appenders every settlement
+/// route reads. The two actions differ only in their frame start and their
+/// state writes; the teardown is one shape.
+#[inline(never)]
+fn build_order_refund<'a>(
+    action: Action,
+    instructions: &mut [EffectInstructionV3],
+    fixed: &mut usize,
+    item: &mut usize,
+    templates: &'a mut [u8],
+    routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
+) -> Result<usize> {
+    let (source, destination) = action_template_compartments(action)?;
+    let (affine_bytes, affine_len) = affine_template(2)?;
+    let transfer = custody_template(OperationV1::Transfer, source, destination)?;
+    let position = position_template(ProtocolPositionActionV2::Close)?;
+    let close_vault = custody_template(
+        OperationV1::CloseVault,
+        CompartmentV1::Settlement,
+        CompartmentV1::None,
+    )?;
+    let close_replay = custody_template(
+        OperationV1::CloseReplay,
+        CompartmentV1::None,
+        CompartmentV1::None,
+    )?;
+    let affine_offset = 0;
+    let transfer_offset = affine_len;
+    let position_offset = transfer_offset + CUSTODY_REQUEST_BYTES_V1;
+    let close_vault_offset = position_offset + PROTOCOL_POSITION_REQUEST_BYTES_V2;
+    let close_replay_offset = close_vault_offset + CUSTODY_REQUEST_BYTES_V1;
+    copy_at(
+        templates,
+        affine_offset,
+        affine_bytes
+            .get(..affine_len)
+            .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
+    )?;
+    copy_at(templates, transfer_offset, &transfer)?;
+    copy_at(templates, position_offset, &position)?;
+    copy_at(templates, close_vault_offset, &close_vault)?;
+    copy_at(templates, close_replay_offset, &close_replay)?;
+    let affine_start = general_child_account_start_v3(action);
+    let affine_accounts = add_accounts(AFFINE_FIXED_ACCOUNTS, 2)?;
+    let transfer_start = add_accounts(affine_start, affine_accounts)?;
+    let position_start = add_accounts(transfer_start, CUSTODY_TRANSFER_ACCOUNTS)?;
+    let vault_start = add_accounts(position_start, POSITION_CLOSE_ACCOUNTS)?;
+    let replay_start = add_accounts(vault_start, CUSTODY_CLOSE_VAULT_ACCOUNTS)?;
+    let affine_fixed_len = AFFINE_BATCH_PLAN_HEADER_BYTES_V2 + 2 * AFFINE_BATCH_POSITION_BYTES_V2;
+    routes[0] = route(
+        FixedRole::Claims,
+        RouteKindV3::AffineOnce,
+        Some(scalar_u16(scalar::CLAIMS_AFFINE_ACTIVE)?),
+        None,
+        affine_start,
+        affine_accounts,
+        slice_at(templates, affine_offset, affine_fixed_len)?,
+        slice_at(
+            templates,
+            affine_offset + affine_fixed_len,
+            AFFINE_BATCH_ROW_BYTES_V2,
+        )?,
+    );
+    routes[1] = route(
+        FixedRole::Custody,
+        RouteKindV3::Once,
+        Some(scalar_u16(scalar::CUSTODY_ACTIVE)?),
+        None,
+        transfer_start,
+        CUSTODY_TRANSFER_ACCOUNTS,
+        slice_at(templates, transfer_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        &[],
+    );
+    routes[2] = route(
+        FixedRole::Claims,
+        RouteKindV3::Once,
+        None,
+        None,
+        position_start,
+        POSITION_CLOSE_ACCOUNTS,
+        slice_at(
+            templates,
+            position_offset,
+            PROTOCOL_POSITION_REQUEST_BYTES_V2,
+        )?,
+        &[],
+    );
+    routes[3] = route(
+        FixedRole::Custody,
+        RouteKindV3::Once,
+        None,
+        None,
+        vault_start,
+        CUSTODY_CLOSE_VAULT_ACCOUNTS,
+        slice_at(templates, close_vault_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        &[],
+    );
+    routes[4] = route(
+        FixedRole::Custody,
+        RouteKindV3::Once,
+        None,
+        Some(RouteReceiptDependencyV3::new(
+            FixedRole::Custody,
+            3,
+            u16::try_from(CUSTODY_RECEIPT_BYTES_V1)
+                .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
+        )),
+        replay_start,
+        CUSTODY_CLOSE_REPLAY_ACCOUNTS,
+        slice_at(templates, close_replay_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        &[],
+    );
+    append_affine_patches(instructions, fixed, item, 0, 2)?;
+    append_custody_transfer_patches(instructions, fixed, 1, false)?;
+    // The Position close FOLLOWS the affine refund, so it expects the
+    // post-affine market successor -- the observation would be stale by one.
+    append_position_patches(instructions, fixed, 2, scalar::CLAIMS_POST_MARKET_REVISION)?;
+    append_custody_close_patches(instructions, fixed, 3, false)?;
+    append_custody_close_patches(instructions, fixed, 4, true)?;
+    Ok(5)
+}
+
+/// PlaceOrder: the admission and the whole escrow construction.
+///
+/// Route order is the money order: the replay and the vault exist before
+/// anything can arrive, the escrow Position is admitted before claims can
+/// move into it, the claims escrow-in draws on the maker's Position, and the
+/// quote deposit lands last -- guarded by a register the TRANSITION pins to
+/// exactly nonzero-reserve, so a runtime bank can neither skip a deposit the
+/// batch committed nor attempt a zero transfer for a pure-claims order. The
+/// compartments come from `escrow_v1`'s one table (`EscrowCollateral`:
+/// `External(owner) -> Settlement(order)`).
+#[inline(never)]
+fn build_place<'a>(
+    instructions: &mut [EffectInstructionV3],
+    fixed: &mut usize,
+    item: &mut usize,
+    templates: &'a mut [u8],
+    routes: &mut [RouteInputV3<'a>; MAX_ROUTE_COUNT],
+) -> Result<usize> {
+    let (source, destination) = action_template_compartments(Action::PlaceOrder)?;
+    let (affine_bytes, affine_len) = affine_template(2)?;
+    let initialize = custody_template(
+        OperationV1::InitializeReplay,
+        CompartmentV1::None,
+        CompartmentV1::None,
+    )?;
+    let open = custody_template(
+        OperationV1::OpenVault,
+        CompartmentV1::None,
+        CompartmentV1::Settlement,
+    )?;
+    let transfer = custody_template(OperationV1::Transfer, source, destination)?;
+    let position = position_template(ProtocolPositionActionV2::Admit)?;
+    let initialize_offset = 0;
+    let open_offset = CUSTODY_REQUEST_BYTES_V1;
+    let position_offset = open_offset + CUSTODY_REQUEST_BYTES_V1;
+    let affine_offset = position_offset + PROTOCOL_POSITION_REQUEST_BYTES_V2;
+    let transfer_offset = affine_offset + affine_len;
+    copy_at(templates, initialize_offset, &initialize)?;
+    copy_at(templates, open_offset, &open)?;
+    copy_at(templates, position_offset, &position)?;
+    copy_at(
+        templates,
+        affine_offset,
+        affine_bytes
+            .get(..affine_len)
+            .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
+    )?;
+    copy_at(templates, transfer_offset, &transfer)?;
+    let initialize_start = general_child_account_start_v3(Action::PlaceOrder);
+    let open_start = add_accounts(initialize_start, CUSTODY_INITIALIZE_ACCOUNTS)?;
+    let position_start = add_accounts(open_start, CUSTODY_OPEN_ACCOUNTS)?;
+    let affine_start = add_accounts(position_start, POSITION_ADMIT_ACCOUNTS)?;
+    let affine_accounts = add_accounts(AFFINE_FIXED_ACCOUNTS, 2)?;
+    let transfer_start = add_accounts(affine_start, affine_accounts)?;
+    let affine_fixed_len = AFFINE_BATCH_PLAN_HEADER_BYTES_V2 + 2 * AFFINE_BATCH_POSITION_BYTES_V2;
+    routes[0] = route(
+        FixedRole::Custody,
+        RouteKindV3::Once,
+        None,
+        None,
+        initialize_start,
+        CUSTODY_INITIALIZE_ACCOUNTS,
+        slice_at(templates, initialize_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        &[],
+    );
+    routes[1] = route(
+        FixedRole::Custody,
+        RouteKindV3::Once,
+        None,
+        Some(RouteReceiptDependencyV3::new(
+            FixedRole::Custody,
+            0,
+            u16::try_from(CUSTODY_RECEIPT_BYTES_V1)
+                .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
+        )),
+        open_start,
+        CUSTODY_OPEN_ACCOUNTS,
+        slice_at(templates, open_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        &[],
+    );
+    routes[2] = route(
+        FixedRole::Claims,
+        RouteKindV3::Once,
+        None,
+        None,
+        position_start,
+        POSITION_ADMIT_ACCOUNTS,
+        slice_at(
+            templates,
+            position_offset,
+            PROTOCOL_POSITION_REQUEST_BYTES_V2,
+        )?,
+        &[],
+    );
+    routes[3] = route(
+        FixedRole::Claims,
+        RouteKindV3::AffineOnce,
+        None,
+        None,
+        affine_start,
+        affine_accounts,
+        slice_at(templates, affine_offset, affine_fixed_len)?,
+        slice_at(
+            templates,
+            affine_offset + affine_fixed_len,
+            AFFINE_BATCH_ROW_BYTES_V2,
+        )?,
+    );
+    routes[4] = route(
+        FixedRole::Custody,
+        RouteKindV3::Once,
+        Some(scalar_u16(scalar::CUSTODY_ACTIVE)?),
+        None,
+        transfer_start,
+        CUSTODY_TRANSFER_ACCOUNTS,
+        slice_at(templates, transfer_offset, CUSTODY_REQUEST_BYTES_V1)?,
+        &[],
+    );
+    append_custody_initialize_patches(instructions, fixed, 0, false)?;
+    append_custody_initialize_patches(instructions, fixed, 1, true)?;
+    // A Position admit advances no market revision, so both the admit and the
+    // affine that follows it expect the same observation.
+    append_position_patches(instructions, fixed, 2, scalar::CLAIMS_MARKET_REVISION)?;
+    append_affine_patches(instructions, fixed, item, 3, 2)?;
+    append_custody_transfer_patches(instructions, fixed, 4, false)?;
+    Ok(5)
+}
+
+#[inline(never)]
 fn append_general_state_patches(
     action: Action,
     instructions: &mut [EffectInstructionV3],
     fixed: &mut usize,
     item: &mut usize,
 ) -> Result<()> {
+    if matches!(action, Action::OpenBatch | Action::CloseBatch) {
+        return append_batch_action_patches(action, instructions, fixed);
+    }
+    if action == Action::PlaceOrder {
+        // The whole order record, written into the vacant secondary account
+        // from registers the profile filled out of the SIGNED TERMS and the
+        // authenticated environment -- the record is canonical by
+        // construction, and the fixed mutable window plus interleaved rows
+        // are exactly what the order-wire repair bought.
+        let order = AccountCoordinateV3::fixed(GENERAL_TERMINAL_STATE_ACCOUNT_V3);
+        append_local_state_header(instructions, fixed, order, true)?;
+        for (offset, coordinate) in [
+            (GeneralOrderLayoutV1::MAGIC, scalar::SCRATCH_A),
+            (GeneralOrderLayoutV1::NONCE, scalar::ORDER_NONCE),
+            (GeneralOrderLayoutV1::GENERATION, scalar::GENERATION),
+            (GeneralOrderLayoutV1::MAX_LOTS, scalar::ORDER_MAX_LOTS),
+            (
+                GeneralOrderLayoutV1::MAX_QUOTE_DEBIT_PER_LOT,
+                scalar::ORDER_MAX_QUOTE_DEBIT_PER_LOT,
+            ),
+            (
+                GeneralOrderLayoutV1::VALID_UNTIL_SLOT,
+                scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
+            ),
+            (
+                GeneralOrderLayoutV1::STATE_ADMITTED_SLOT,
+                scalar::CURRENT_SLOT,
+            ),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u64(
+                    order,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u16(
+                order,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::VERSION)?)?,
+                scalar_common(scalar::ONE)?,
+            ),
+        )?;
+        for (offset, coordinate) in [
+            (GeneralOrderLayoutV1::PHASE, scalar::SCRATCH_B),
+            (GeneralOrderLayoutV1::STATE_PHASE, scalar::ORDER_POST_PHASE),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u8(
+                    order,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u32(
+                order,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::OUTCOME_COUNT)?)?,
+                scalar_common(scalar::OUTCOME_COUNT)?,
+            ),
+        )?;
+        for (offset, coordinate) in [
+            (GeneralOrderLayoutV1::OWNER_ID, identity::OWNER),
+            (GeneralOrderLayoutV1::MARKET, identity::MARKET),
+            (GeneralOrderLayoutV1::BATCH_ID, identity::SELECTION_BATCH),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_identity(
+                    order,
+                    state_body_offset(offset_u32(offset)?)?,
+                    identity_common(coordinate)?,
+                ),
+            )?;
+        }
+        // The per-outcome rows, one affine write per interleaved field: the
+        // receive and deliver quantities the profile projected out of the
+        // signed terms image.
+        push_item(
+            instructions,
+            item,
+            EffectInstructionV3::write_u64_affine(
+                order,
+                state_body_offset(offset_u32(
+                    GENERAL_ORDER_ROW_BASE_V1 + GENERAL_ORDER_ROW_RECEIVE_OFFSET_V1,
+                )?)?,
+                offset_u32(GENERAL_ORDER_ROW_STRIDE_V1)?,
+                ScalarCoordinateV3::item(scalar_u16(item_scalar::CURSOR_INVENTORY)?),
+            ),
+        )?;
+        push_item(
+            instructions,
+            item,
+            EffectInstructionV3::write_u64_affine(
+                order,
+                state_body_offset(offset_u32(
+                    GENERAL_ORDER_ROW_BASE_V1 + GENERAL_ORDER_ROW_DELIVER_OFFSET_V1,
+                )?)?,
+                offset_u32(GENERAL_ORDER_ROW_STRIDE_V1)?,
+                ScalarCoordinateV3::item(scalar_u16(item_scalar::QUANTITY)?),
+            ),
+        )?;
+        // The batch surrenders nothing and commits everything: one more
+        // admission, and exactly the worst case this order escrowed.
+        let batch = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u32(
+                batch,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::ORDER_COUNT)?)?,
+                scalar_common(scalar::BATCH_POST_ORDER_COUNT)?,
+            ),
+        )?;
+        return push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64(
+                batch,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE)?)?,
+                scalar_common(scalar::BATCH_POST_QUOTE_RESERVE)?,
+            ),
+        );
+    }
+    if matches!(action, Action::CancelOrder | Action::ReleaseOrder) {
+        // The order record's whole successor: the phase byte and the released
+        // slot, both inside the fixed mutable window the order-wire repair
+        // created. Every other byte of the record persists physically -- the
+        // tombstone is the replay guard, and its identity bytes never move.
+        // For Cancel the order is the SECONDARY state; for Release, the
+        // primary.
+        let order = AccountCoordinateV3::fixed(if action == Action::CancelOrder {
+            GENERAL_TERMINAL_STATE_ACCOUNT_V3
+        } else {
+            GENERAL_STATE_ACCOUNT_COORDINATE_V3
+        });
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u8(
+                order,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::STATE_PHASE)?)?,
+                scalar_common(scalar::ORDER_POST_PHASE)?,
+            ),
+        )?;
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64(
+                order,
+                state_body_offset(offset_u32(GeneralOrderLayoutV1::STATE_RELEASED_SLOT)?)?,
+                scalar_common(scalar::ORDER_POST_RELEASED_SLOT)?,
+            ),
+        )?;
+        if action == Action::ReleaseOrder {
+            return Ok(());
+        }
+        // Cancel alone moves the batch counters: one more cancellation, and
+        // the committed reserve surrenders exactly what admission committed.
+        let batch = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u32(
+                batch,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::CANCELLED_COUNT)?)?,
+                scalar_common(scalar::BATCH_POST_CANCELLED_COUNT)?,
+            ),
+        )?;
+        return push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64(
+                batch,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::COMMITTED_QUOTE_RESERVE)?)?,
+                scalar_common(scalar::BATCH_POST_QUOTE_RESERVE)?,
+            ),
+        );
+    }
     let terminal = action == Action::Close;
     let state = AccountCoordinateV3::fixed(if terminal {
         GENERAL_TERMINAL_STATE_ACCOUNT_V3
@@ -1038,6 +1635,178 @@ fn append_general_state_patches(
     )
 }
 
+/// The root-writing pair's complete state writes: the exact `GeneralRootV2`
+/// tail successor behind the immutable capability header, and the batch
+/// record.
+///
+/// The root offsets are past `CAPABILITY_ROOT_HEADER_BYTES_V1`, which is
+/// precisely the boundary Trading's `require_root_write_is_state_only` guards
+/// writes by; the AccountProfile grants coordinate 0 the data-effect
+/// permission for exactly these two actions and no others.
+#[inline(never)]
+fn append_batch_action_patches(
+    action: Action,
+    instructions: &mut [EffectInstructionV3],
+    fixed: &mut usize,
+) -> Result<()> {
+    let root = AccountCoordinateV3::fixed(
+        u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3)
+            .map_err(|_| GeneralEffectArtifactErrorV3::Geometry)?,
+    );
+    let state = AccountCoordinateV3::fixed(GENERAL_STATE_ACCOUNT_COORDINATE_V3);
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            root,
+            root_tail_offset(GENERAL_ROOT_REVISION_OFFSET_V2)?,
+            scalar_common(scalar::ROOT_POST_REVISION)?,
+        ),
+    )?;
+    if action == Action::OpenBatch {
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u64(
+                root,
+                root_tail_offset(GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2)?,
+                scalar_common(scalar::ROOT_POST_BATCH_SEQUENCE)?,
+            ),
+        )?;
+    }
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            root,
+            root_tail_offset(GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2)?,
+            scalar_common(scalar::ROOT_POST_OPEN_BATCHES)?,
+        ),
+    )?;
+    if action == Action::OpenBatch {
+        append_local_state_header(instructions, fixed, state, false)?;
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::MAGIC, scalar::SCRATCH_A),
+            (
+                GeneralBatchLayoutV1::SEQUENCE,
+                scalar::ROOT_NEXT_BATCH_SEQUENCE_OBSERVATION,
+            ),
+            (GeneralBatchLayoutV1::GENERATION, scalar::GENERATION),
+            (
+                GeneralBatchLayoutV1::PRICE_SCALE,
+                scalar::SELECTION_PRICE_SCALE,
+            ),
+            (
+                GeneralBatchLayoutV1::COLLECTION_CLOSE_SLOT,
+                scalar::BATCH_COLLECTION_CLOSE_SLOT,
+            ),
+            (
+                GeneralBatchLayoutV1::SETTLEMENT_CLOSE_SLOT,
+                scalar::BATCH_SETTLEMENT_CLOSE_SLOT,
+            ),
+            (
+                GeneralBatchLayoutV1::OPENED_ROOT_REVISION,
+                scalar::ROOT_REVISION_OBSERVATION,
+            ),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u64(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        push_fixed(
+            instructions,
+            fixed,
+            EffectInstructionV3::write_u16(
+                state,
+                state_body_offset(offset_u32(GeneralBatchLayoutV1::VERSION)?)?,
+                scalar_common(scalar::ONE)?,
+            ),
+        )?;
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::PHASE, scalar::SCRATCH_B),
+            (GeneralBatchLayoutV1::STATUS, scalar::BATCH_POST_STATUS),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u8(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::OUTCOME_COUNT, scalar::OUTCOME_COUNT),
+            (GeneralBatchLayoutV1::MAX_ORDERS, scalar::CONFIG_MAX_ORDERS),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_u32(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    scalar_common(coordinate)?,
+                ),
+            )?;
+        }
+        for (offset, coordinate) in [
+            (GeneralBatchLayoutV1::MARKET, identity::MARKET),
+            (
+                GeneralBatchLayoutV1::PRODUCT_ID,
+                identity::SELECTION_PRODUCT,
+            ),
+            (GeneralBatchLayoutV1::CONFIG_ID, identity::GENERAL_CONFIG_ID),
+        ] {
+            push_fixed(
+                instructions,
+                fixed,
+                EffectInstructionV3::write_identity(
+                    state,
+                    state_body_offset(offset_u32(offset)?)?,
+                    identity_common(coordinate)?,
+                ),
+            )?;
+        }
+        return Ok(());
+    }
+    // CloseBatch: the record already exists; only its status and the root
+    // revision that closed it move. Every other byte persists physically.
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u8(
+            state,
+            state_body_offset(offset_u32(GeneralBatchLayoutV1::STATUS)?)?,
+            scalar_common(scalar::BATCH_POST_STATUS)?,
+        ),
+    )?;
+    push_fixed(
+        instructions,
+        fixed,
+        EffectInstructionV3::write_u64(
+            state,
+            state_body_offset(offset_u32(GeneralBatchLayoutV1::CLOSED_ROOT_REVISION)?)?,
+            scalar_common(scalar::ROOT_POST_REVISION)?,
+        ),
+    )
+}
+
+/// One `GeneralRootV2` tail offset behind the immutable capability header.
+fn root_tail_offset(offset: usize) -> Result<u32> {
+    offset_u32(
+        CAPABILITY_ROOT_HEADER_BYTES_V1
+            .checked_add(offset)
+            .ok_or(GeneralEffectArtifactErrorV3::Geometry)?,
+    )
+}
+
 fn append_local_state_header(
     instructions: &mut [EffectInstructionV3],
     fixed: &mut usize,
@@ -1118,10 +1887,17 @@ fn state_body_offset(offset: u32) -> Result<u32> {
         .ok_or(GeneralEffectArtifactErrorV3::Geometry)
 }
 
+/// `market_revision` is the register carrying the Claims market revision this
+/// Position operation EXPECTS. An affine transfer advances the market by one,
+/// so a Position close that FOLLOWS an affine (CancelOrder, ReleaseOrder)
+/// expects the post-affine successor, while an operation with no affine before
+/// it (Initialize's admit, Close's close, PlaceOrder's admit -- an admit
+/// itself advances nothing) expects the observation.
 fn append_position_patches(
     output: &mut [EffectInstructionV3],
     cursor: &mut usize,
     route: u16,
+    market_revision: u32,
 ) -> Result<()> {
     for (offset, coordinate) in [
         (
@@ -1164,7 +1940,7 @@ fn append_position_patches(
         ),
         (
             ProtocolPositionRequestLayoutV2::EXPECTED_MARKET_REVISION,
-            scalar::CLAIMS_MARKET_REVISION,
+            market_revision,
         ),
         (
             ProtocolPositionRequestLayoutV2::EXPECTED_POSITION_REVISION,
@@ -2049,10 +2825,12 @@ fn action_template_compartments(action: Action) -> Result<(CompartmentV1, Compar
 const fn route_count(action: Action) -> usize {
     match action {
         unauthored_actions!() => 0,
+        Action::OpenBatch | Action::CloseBatch => 0,
         Action::Consider | Action::Freeze => 0,
         Action::InitializeSettlement => 3,
         Action::Collect | Action::Materialize | Action::Distribute => 2,
         Action::Close => 4,
+        Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder => 5,
     }
 }
 
@@ -2087,7 +2865,7 @@ mod tests {
     }
 
     #[test]
-    fn all_seven_actions_generate_exact_hot38_relative_artifacts() {
+    fn every_authored_action_generates_exact_hot38_relative_artifacts() {
         for action in [
             Action::Consider,
             Action::Freeze,
@@ -2096,6 +2874,11 @@ mod tests {
             Action::Materialize,
             Action::Distribute,
             Action::Close,
+            Action::OpenBatch,
+            Action::CloseBatch,
+            Action::PlaceOrder,
+            Action::CancelOrder,
+            Action::ReleaseOrder,
         ] {
             let bytes = artifact(action);
             let program = ProgramV3::decode(&bytes).expect("decoded artifact");

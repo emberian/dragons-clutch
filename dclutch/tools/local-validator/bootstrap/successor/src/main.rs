@@ -8,23 +8,29 @@ use solana_sdk::pubkey::Pubkey;
 mod aggregate_retirement_exterior;
 mod aggregate_retirement_journal;
 mod campaign;
+mod claims_custody_replay;
 mod cluster;
 mod direct_capability_activation;
+mod direct_fee_settlement;
 mod direct_hot_route_manifest;
 mod direct_market;
+mod direct_ticket;
 mod direct_trade;
 mod direct_trade_producer;
 mod direct_trade_setup;
 mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
+mod evidence_refresh;
 mod family_hot_campaign;
+mod flagship_resolution;
 mod fractional_market;
+mod funding_readiness;
+mod general_capability_activation;
 mod general_market;
 mod general_settlement_fixture;
-mod series_consume_campaign;
-mod flagship_resolution;
-mod funding_readiness;
 mod local_mutable;
+mod release_lineage;
+mod series_consume_campaign;
 // The journey campaign's conservation engine, shared textually the same way
 // the journey shares this tree's modules back. Its unused-in-this-binary
 // helpers stay allowed the way every #[path] include here is.
@@ -34,11 +40,10 @@ mod ledger;
 mod market;
 mod model;
 mod plan;
-mod rational_market;
-mod structured_market;
 mod private_activity;
 mod private_lifecycle;
 mod pyth_vaa_provisioning;
+mod rational_market;
 mod relayed;
 mod release_capture;
 mod release_identity;
@@ -48,6 +53,7 @@ mod seed;
 mod selected_capability;
 mod source_abort_exterior;
 mod sponsored_push;
+mod structured_market;
 mod terminal_exterior_pyth;
 mod terminal_lifecycle;
 mod terminal_sequence;
@@ -155,6 +161,12 @@ fn run() -> Result<()> {
         Some(command) if command == aggregate_retirement_exterior::COMMAND_V1 => {
             aggregate_retirement_exterior::run(arguments.collect())
         }
+        Some(command) if command == evidence_refresh::REFRESH_EVIDENCE_COMMAND_V1 => {
+            evidence_refresh::run_devnet(arguments.collect())
+        }
+        Some(command) if command == evidence_refresh::LOCAL_REFRESH_EVIDENCE_COMMAND_V1 => {
+            evidence_refresh::run_owned_loopback(arguments.collect())
+        }
         Some("devnet-direct-trade-v1") => direct_trade::run_devnet(arguments.collect()),
         Some(command) if command == family_hot_campaign::GENERAL_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::General)
@@ -164,6 +176,21 @@ fn run() -> Result<()> {
         }
         Some(command) if command == family_hot_campaign::SERIES_COMMAND_V1 => {
             family_hot_campaign::run(arguments.collect(), family_hot_campaign::FamilyV1::Series)
+        }
+        Some(command) if command == claims_custody_replay::COMMAND_V1 => {
+            claims_custody_replay::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == direct_fee_settlement::COMMAND_V1 => {
+            direct_fee_settlement::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
+            direct_fee_settlement::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == release_lineage::COMMAND_V1 => {
+            release_lineage::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == release_lineage::COMMAND_DEVNET_V1 => {
+            release_lineage::run_devnet_v1(arguments.collect())
         }
         Some("local-private-validator-direct-trade-v1") => {
             direct_trade::run_owned_loopback(arguments.collect())
@@ -177,6 +204,9 @@ fn run() -> Result<()> {
         Some(command) if command == direct_trade_producer::DEVNET_DIRECT_PRODUCER_COMMAND_V1 => {
             direct_trade_producer::run_devnet_direct(arguments.collect())
         }
+        Some(command) if command == direct_ticket::DIRECT_TICKET_AUTHOR_COMMAND_V1 => {
+            direct_ticket::run(arguments.collect())
+        }
         Some(command)
             if command == direct_hot_route_manifest::CHECKED_EXECUTION_RELEASE_COMMAND_V1 =>
         {
@@ -188,7 +218,19 @@ fn run() -> Result<()> {
         Some(command)
             if command == direct_capability_activation::DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1 =>
         {
-            direct_capability_activation::run(arguments.collect())
+            direct_capability_activation::run_devnet(arguments.collect())
+        }
+        Some(command)
+            if command
+                == direct_capability_activation::LOCAL_DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1 =>
+        {
+            direct_capability_activation::run_owned_loopback(arguments.collect())
+        }
+        Some(command)
+            if command
+                == general_capability_activation::GENERAL_CAPABILITY_ACTIVATION_COMMAND_V1 =>
+        {
+            general_capability_activation::run(arguments.collect())
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
@@ -1354,10 +1396,15 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
                             ))
                         })?);
                 }
-                model::CheckedDeploymentDispositionV1::Upgrade => {
+                // An AlreadyCurrent role's live bytes ARE the candidate, so the
+                // plan projection wants exactly what it wants for an Upgrade: the
+                // freshly observed ProgramData, never the carry-forward snapshot.
+                // The only difference is upstream, in how the role was satisfied.
+                model::CheckedDeploymentDispositionV1::Upgrade
+                | model::CheckedDeploymentDispositionV1::AlreadyCurrent => {
                     if input.observed_programdata.is_none() {
                         return Err(Error::new(format!(
-                            "--deployment-set-journal requires --{flag_role}-observed-programdata for receipt-backed Upgrade"
+                            "--deployment-set-journal requires --{flag_role}-observed-programdata for a receipt-backed Upgrade or an AlreadyCurrent role"
                         )));
                     }
                 }
@@ -1593,6 +1640,9 @@ fn usage() {
     println!("{}", private_activity::usage());
     println!("{}", private_lifecycle::usage());
     println!("{}", private_lifecycle::direct_payout_schedule_usage());
+    println!("{}", claims_custody_replay::usage());
+    println!("{}", direct_fee_settlement::usage());
+    println!("{}", release_lineage::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", sponsored_push::usage());
@@ -1603,9 +1653,15 @@ fn usage() {
     println!("{}", direct_trade_producer::usage());
     println!("{}", direct_trade_producer::devnet_session_usage());
     println!("{}", direct_trade_producer::devnet_direct_usage());
-    println!("{}", direct_hot_route_manifest::checked_execution_release_usage());
+    println!("{}", direct_ticket::usage());
+    println!(
+        "{}",
+        direct_hot_route_manifest::checked_execution_release_usage()
+    );
     println!("{}", direct_hot_route_manifest::hot_route_manifest_usage());
     println!("{}", direct_capability_activation::usage());
+    println!("{}", direct_capability_activation::owned_loopback_usage());
+    println!("{}", general_capability_activation::usage());
     println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \

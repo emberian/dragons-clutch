@@ -11,11 +11,11 @@ use core::convert::TryFrom;
 
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1, CUSTODY_REQUEST_BYTES_V1, CallerRoleV1,
-    CompartmentV1, CustodyAuthoritySeedsV1, CustodyFrameSpecV1, CustodyReceiptV1,
-    CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1, CustodyVaultSeedsV1,
-    DELEGATED_CUSTODY_REQUEST_BYTES_V2, DELEGATED_CUSTODY_REQUEST_MAGIC_V2, OperationV1,
-    PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
+    CUSTODY_BUMP_RELAY_BYTES_V1, CUSTODY_RECEIPT_BYTES_V1, CUSTODY_REPLAY_BYTES_V1,
+    CUSTODY_REQUEST_BYTES_V1, CallerRoleV1, CompartmentV1, CustodyAuthoritySeedsV1,
+    CustodyFrameSpecV1, CustodyReceiptV1, CustodyReplaySeedsV1, CustodyReplayV1, CustodyRequestV1,
+    CustodyVaultSeedsV1, DELEGATED_CUSTODY_REQUEST_BYTES_V2, DELEGATED_CUSTODY_REQUEST_MAGIC_V2,
+    OperationV1, PROJECTED_CUSTODY_REQUEST_BYTES_V1, PROJECTED_CUSTODY_REQUEST_MAGIC_V1,
     ProjectedCustodyRequestV1, ReceiptEvidenceV1,
 };
 
@@ -121,27 +121,103 @@ pub enum CustodySbfError {
     /// founding is still satisfiable, the refusal has to be able to say so.
     Expiry = 0x600B,
     /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
     ///
     /// Decision 0012. Not a corrupted account and not an attack: the exact
     /// upgrade authority the release names shipped new bytes, so the cached
-    /// authentication no longer describes what is deployed. Every open market
-    /// on the superseded release generation refuses until a re-release
-    /// re-authenticates the new deployment and re-pins its slot.
+    /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x600C,
+}
+
+impl CustodySbfError {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`CustodySbfError::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only
+    /// arm that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 13] = [
+        Self::Instruction,
+        Self::AccountFrame,
+        Self::Release,
+        Self::CallerAuthority,
+        Self::Realm,
+        Self::Replay,
+        Self::TokenState,
+        Self::Create,
+        Self::TokenCpi,
+        Self::Postcondition,
+        Self::Commit,
+        Self::Expiry,
+        Self::ReleaseSuperseded,
+    ];
+
+    /// This refusal's position in [`CustodySbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism:
+    /// a fourteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::AccountFrame => 1,
+            Self::Release => 2,
+            Self::CallerAuthority => 3,
+            Self::Realm => 4,
+            Self::Replay => 5,
+            Self::TokenState => 6,
+            Self::Create => 7,
+            Self::TokenCpi => 8,
+            Self::Postcondition => 9,
+            Self::Commit => 10,
+            Self::Expiry => 11,
+            Self::ReleaseSuperseded => 12,
+        }
+    }
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    CustodySbfError::Instruction as u32 == dclutch_refusal_registry::CUSTODY_REFUSAL_BASE,
-    "CustodySbfError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (CustodySbfError::ReleaseSuperseded as u32)
-        < dclutch_refusal_registry::CUSTODY_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "CustodySbfError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        CustodySbfError::ALL[0] as u32 == dclutch_refusal_registry::CUSTODY_REFUSAL_BASE,
+        "CustodySbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < CustodySbfError::ALL.len() {
+        let variant = CustodySbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "CustodySbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::CUSTODY_REFUSAL_BASE + index as u32,
+            "CustodySbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CUSTODY_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "CustodySbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<CustodySbfError> for ProgramError {
     fn from(value: CustodySbfError) -> Self {
@@ -178,8 +254,7 @@ pub fn process_instruction(
     if dealer_reservation_v1::is_instruction(instruction_data) {
         return dealer_reservation_v1::process(program_id, accounts, instruction_data);
     }
-    let (instruction_data, caller_authority_bump) =
-        split_caller_authority_bump_v1(instruction_data);
+    let (instruction_data, relay) = split_caller_authority_bump_v1(instruction_data);
     if instruction_data.len()
         == dclutch_custody_contract::RETIREMENT_REPLAY_HANDOFF_REQUEST_BYTES_V1
         && instruction_data
@@ -200,12 +275,7 @@ pub fn process_instruction(
         && instruction_data.get(..DELEGATED_CUSTODY_REQUEST_MAGIC_V2.len())
             == Some(DELEGATED_CUSTODY_REQUEST_MAGIC_V2.as_slice())
     {
-        return delegated::process(
-            program_id,
-            accounts,
-            instruction_data,
-            caller_authority_bump,
-        );
+        return delegated::process(program_id, accounts, instruction_data, relay);
     }
     if instruction_data.len() == PROJECTED_CUSTODY_REQUEST_BYTES_V1
         && instruction_data.get(..PROJECTED_CUSTODY_REQUEST_MAGIC_V1.len())
@@ -226,7 +296,7 @@ pub fn process_instruction(
         request,
         request_digest,
         continuation,
-        caller_authority_bump,
+        relay,
     )?;
     let realm = authenticate_realm(program_id, accounts, request, market)?;
     match request.operation {
@@ -235,7 +305,7 @@ pub fn process_instruction(
         }
         OperationV1::OpenVault => open_vault(program_id, accounts, request, request_digest, realm),
         OperationV1::Transfer => {
-            execute_transfer(program_id, accounts, request, request_digest, realm)
+            execute_transfer(program_id, accounts, request, request_digest, realm, relay)
         }
         OperationV1::CloseVault => {
             close_vault(program_id, accounts, request, request_digest, realm)
@@ -271,7 +341,7 @@ pub fn process_instruction(
 /// address from it and compares against the account at coordinate 0, so a wrong
 /// byte reproduces a different address and refuses. A caller that sends no
 /// suffix gets the search this always used to do.
-fn split_caller_authority_bump_v1(instruction_data: &[u8]) -> (&[u8], Option<u8>) {
+fn split_caller_authority_bump_v1(instruction_data: &[u8]) -> (&[u8], CustodyBumpRelayV1) {
     const V1: usize = dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1;
     const CONTINUED: usize = V1 + REGISTRY_CONTINUATION_REQUEST_BYTES_V1;
     const DELEGATED: usize = DELEGATED_CUSTODY_REQUEST_BYTES_V2;
@@ -285,38 +355,112 @@ fn split_caller_authority_bump_v1(instruction_data: &[u8]) -> (&[u8], Option<u8>
     const CARRIED: [usize; 3] = [V1, CONTINUED, DELEGATED];
     /// Every exact length this program dispatches on, carried or not.
     const KNOWN: [usize; 5] = [V1, CONTINUED, DELEGATED, PROJECTED, HANDOFF];
+    /// The suffix widths a carried wire may have, narrowest first.
+    ///
+    /// One byte is the original carrier and still means exactly what it meant:
+    /// the caller authority only. Three is that byte plus the two addresses
+    /// THIS program derives for itself and can carry from nowhere else -- the
+    /// replay and the transfer authority. Both are searched once per
+    /// transaction on a depth drawn from the participant keys, and neither can
+    /// be stored: `CUSTODY_REPLAY_BYTES_V1` is exactly packed and Lean-emitted,
+    /// so growing it by a byte would orphan every replay on chain. A relayed
+    /// hint needs no migration at all.
+    const WIDTHS: [usize; 2] = [1, CUSTODY_BUMP_RELAY_BYTES_V1];
 
-    // No carried length may BE another route's exact length, or a wire would
-    // dispatch as a different route with its last byte eaten.
+    // No carried length at any accepted width may BE another route's exact
+    // length -- a wire would dispatch as a different route with its tail eaten
+    // -- and no two (route, width) pairs may land on the same total, or one
+    // route's carried wire would be read at the other's width.
     const _: () = {
         let mut outer = 0;
         while outer < CARRIED.len() {
-            let mut inner = 0;
-            while inner < KNOWN.len() {
-                assert!(
-                    CARRIED[outer] + 1 != KNOWN[inner],
-                    "a carried Custody wire would collide with another route's exact length"
-                );
-                inner += 1;
+            let mut width = 0;
+            while width < WIDTHS.len() {
+                let total = CARRIED[outer] + WIDTHS[width];
+                let mut inner = 0;
+                while inner < KNOWN.len() {
+                    assert!(
+                        total != KNOWN[inner],
+                        "a carried Custody wire would collide with another route's exact length"
+                    );
+                    inner += 1;
+                }
+                let mut other = 0;
+                while other < CARRIED.len() {
+                    let mut other_width = 0;
+                    while other_width < WIDTHS.len() {
+                        assert!(
+                            (other == outer && other_width == width)
+                                || total != CARRIED[other] + WIDTHS[other_width],
+                            "two carried Custody wires would share one total length"
+                        );
+                        other_width += 1;
+                    }
+                    other += 1;
+                }
+                width += 1;
             }
             outer += 1;
         }
     };
 
-    let Some(carried) = instruction_data.len().checked_sub(1) else {
-        return (instruction_data, None);
-    };
-    let mut index = 0;
-    while index < CARRIED.len() {
-        if CARRIED[index] == carried {
-            let (request, suffix) = instruction_data.split_at(carried);
-            // Zero is not a bump any derivation produces, so it reads as absent
-            // rather than as a value that is certain to fail to reproduce.
-            return (request, suffix.first().copied().filter(|bump| *bump != 0));
+    let mut width = 0;
+    while width < WIDTHS.len() {
+        let Some(carried) = instruction_data.len().checked_sub(WIDTHS[width]) else {
+            width += 1;
+            continue;
+        };
+        let mut index = 0;
+        while index < CARRIED.len() {
+            if CARRIED[index] == carried {
+                let (request, suffix) = instruction_data.split_at(carried);
+                return (request, CustodyBumpRelayV1::read(suffix));
+            }
+            index += 1;
         }
-        index += 1;
+        width += 1;
     }
-    (instruction_data, None)
+    (instruction_data, CustodyBumpRelayV1::ABSENT)
+}
+
+/// The bumps the parent mined so this program reproduces instead of searching.
+///
+/// Every field is a HINT and none is an authority. Each one is fed to a
+/// `create_program_address` whose result is compared against the account this
+/// frame was handed, so a wrong byte reproduces a different address and
+/// refuses at the comparison that was always there. Zero is absent and the
+/// reader searches exactly as it used to, which is what an unrelayed wire --
+/// every wire emitted before this widened -- decodes to.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CustodyBumpRelayV1 {
+    /// Trading's caller-authority PDA. The original one-byte carrier.
+    caller_authority: Option<u8>,
+    /// This program's own replay PDA for the calling role and context.
+    replay: Option<u8>,
+    /// This program's own transfer authority for the Market and release set.
+    transfer_authority: Option<u8>,
+}
+
+impl CustodyBumpRelayV1 {
+    /// Nothing relayed: every reader searches, exactly as it used to.
+    const ABSENT: Self = Self {
+        caller_authority: None,
+        replay: None,
+        transfer_authority: None,
+    };
+
+    /// Read a one- or three-byte suffix in canonical order.
+    ///
+    /// Zero is not a bump any derivation produces, so it reads as absent rather
+    /// than as a value that is certain to fail to reproduce.
+    fn read(suffix: &[u8]) -> Self {
+        let at = |index: usize| suffix.get(index).copied().filter(|bump| *bump != 0);
+        Self {
+            caller_authority: at(0),
+            replay: at(1),
+            transfer_authority: at(2),
+        }
+    }
 }
 
 fn split_registry_continuation(
@@ -344,7 +488,7 @@ fn authenticate_common_frame(
     request: CustodyRequestV1,
     request_digest: [u8; 32],
     continuation: Option<RegistryContinuationRequestV1>,
-    carried_bump: Option<u8>,
+    relay: CustodyBumpRelayV1,
 ) -> Result<CoreState, ProgramError> {
     let caller_authority = account(accounts, CALLER_AUTHORITY)?;
     let caller_program = account(accounts, CALLER_PROGRAM)?;
@@ -365,7 +509,7 @@ fn authenticate_common_frame(
     // Reproduced from the bump the parent carried after the request, not
     // searched for; see `split_caller_authority_bump_v1`. A wrong bump
     // reproduces a different address and refuses at the equality below.
-    let expected_caller = match carried_bump {
+    let expected_caller = match relay.caller_authority {
         Some(bump) => {
             let bump_seed = [bump];
             let [domain, release, market, role, context, digest] = caller_seeds.as_slices();
@@ -387,7 +531,7 @@ fn authenticate_common_frame(
         continuation,
         market.cache_bump,
     )?;
-    authenticate_replay_identity(program_id, replay, request)?;
+    authenticate_replay_identity(program_id, replay, request, relay.replay)?;
     Ok(market.state)
 }
 
@@ -778,13 +922,34 @@ fn collateral_profile(realm: RealmV1) -> Result<ExactTransferProfileV1, ProgramE
     Err(CustodySbfError::Realm.into())
 }
 
+/// Reproduce this program's own replay coordinate at the parent's mined bump.
+///
+/// The seeds run through the Market, which moves with the participant keys, so
+/// this search is one of the ten VARIANCE censused. It cannot be stored:
+/// `CUSTODY_REPLAY_BYTES_V1` is exactly packed and Lean-emitted, and the record
+/// whose bump it would carry is the replay itself, so a byte for it would have
+/// to be written before the account exists. The parent mines it instead and
+/// relays it after the request. A wrong byte reproduces a different address and
+/// refuses at the equality below, unchanged.
 fn authenticate_replay_identity(
     program_id: &Pubkey,
     replay: &AccountInfo<'_>,
     request: CustodyRequestV1,
+    hint: Option<u8>,
 ) -> ProgramResult {
     let replay_seeds = CustodyReplaySeedsV1::from_request(request);
-    let expected = Pubkey::find_program_address(&replay_seeds.as_slices(), program_id).0;
+    let expected = match hint {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let [domain, market, release, role, context] = replay_seeds.as_slices();
+            Pubkey::create_program_address(
+                &[domain, market, release, role, context, &bump_seed],
+                program_id,
+            )
+            .map_err(|_| CustodySbfError::Replay)?
+        }
+        None => Pubkey::find_program_address(&replay_seeds.as_slices(), program_id).0,
+    };
     if replay.key != &expected {
         return Err(CustodySbfError::Replay.into());
     }
@@ -944,7 +1109,7 @@ fn open_vault(
     let system = account(accounts, 14)?;
     let rent_account = account(accounts, 15)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    let _authority_bump = validate_custody_authority(program_id, authority, request)?;
+    let _authority_bump = validate_custody_authority(program_id, authority, request, None)?;
     validate_vault_key(program_id, vault, request, false)?;
     if vault.owner != &system_program::ID
         || vault.lamports() != 0
@@ -1004,6 +1169,7 @@ fn execute_transfer(
     request: CustodyRequestV1,
     request_digest: [u8; 32],
     realm: RealmFacts,
+    relay: CustodyBumpRelayV1,
 ) -> ProgramResult {
     // External debits must use the distinct V2 wire so an apparently correct
     // balance delta cannot retain hidden delegated spending authority.
@@ -1016,7 +1182,8 @@ fn execute_transfer(
     let authority = account(accounts, 12)?;
     let token_program = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    let authority_bump = validate_custody_authority(program_id, authority, request)?;
+    let authority_bump =
+        validate_custody_authority(program_id, authority, request, relay.transfer_authority)?;
     if source.key.to_bytes() != request.source
         || destination.key.to_bytes() != request.destination
         || source.owner != token_program.key
@@ -1097,7 +1264,7 @@ fn close_vault(
     let token_program = account(accounts, 12)?;
     let rent_refund = account(accounts, 13)?;
     validate_token_program_and_mint(mint, token_program, request, realm)?;
-    let authority_bump = validate_custody_authority(program_id, authority, request)?;
+    let authority_bump = validate_custody_authority(program_id, authority, request, None)?;
     validate_vault_key(program_id, vault, request, true)?;
     if rent_refund.key.to_bytes() != request.rent_refund {
         return Err(CustodySbfError::AccountFrame.into());
@@ -1327,13 +1494,33 @@ fn account<'a, 'info>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AuthenticatedCustodyAuthorityBumpV1(u8);
 
+/// Reproduce the transfer authority at the parent's mined bump, or search.
+///
+/// Its seeds are `[domain, market, release_set]` and the Market moves with the
+/// participant keys, so this is another of the ten. The bump it returns is the
+/// one this program then SIGNS the token transfer with, which is exactly why a
+/// hint here is safe: a non-canonical byte produces an address that is not the
+/// authority account the frame supplied, the equality below refuses, and no
+/// signature is ever attempted with it.
 fn validate_custody_authority(
     program_id: &Pubkey,
     authority: &AccountInfo<'_>,
     request: CustodyRequestV1,
+    hint: Option<u8>,
 ) -> Result<AuthenticatedCustodyAuthorityBumpV1, ProgramError> {
     let authority_seeds = CustodyAuthoritySeedsV1::from_request(request);
-    let (expected, bump) = Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+    let (expected, bump) = match hint {
+        Some(bump) => {
+            let bump_seed = [bump];
+            let [domain, market, release] = authority_seeds.as_slices();
+            (
+                Pubkey::create_program_address(&[domain, market, release, &bump_seed], program_id)
+                    .map_err(|_| CustodySbfError::TokenState)?,
+                bump,
+            )
+        }
+        None => Pubkey::find_program_address(&authority_seeds.as_slices(), program_id),
+    };
     if authority.key != &expected {
         return Err(CustodySbfError::TokenState.into());
     }
@@ -1750,8 +1937,8 @@ mod tests {
 
         let mut carried = request.clone();
         carried.push(0xfd);
-        let (stripped, bump) = split_caller_authority_bump_v1(&carried);
-        assert_eq!(bump, Some(0xfd));
+        let (stripped, relay) = split_caller_authority_bump_v1(&carried);
+        assert_eq!(relay.caller_authority, Some(0xfd));
         assert_eq!(stripped, &request[..]);
         let (digest_input, continuation) =
             split_registry_continuation(stripped).expect("a bare V1 request");
@@ -1785,40 +1972,101 @@ mod tests {
             // An exact width is handed on untouched -- no route loses its last
             // byte to a carrier that is not there.
             let bare = alloc::vec![0x11_u8; width];
-            assert_eq!(split_caller_authority_bump_v1(&bare), (&bare[..], None));
+            assert_eq!(
+                split_caller_authority_bump_v1(&bare),
+                (&bare[..], CustodyBumpRelayV1::ABSENT)
+            );
 
-            // One more is a carried wire for that route, and one less is
-            // neither and must not be silently reinterpreted as one.
+            // One more is the ORIGINAL one-byte carrier, which still means the
+            // caller authority and nothing else -- a wire emitted before the
+            // relay widened keeps decoding to exactly what it always did.
             let mut carried = bare.clone();
             carried.push(0x22);
-            let (stripped, bump) = split_caller_authority_bump_v1(&carried);
+            let (stripped, relay) = split_caller_authority_bump_v1(&carried);
             assert_eq!(stripped.len(), width);
-            assert_eq!(bump, Some(0x22));
+            assert_eq!(
+                relay,
+                CustodyBumpRelayV1 {
+                    caller_authority: Some(0x22),
+                    ..CustodyBumpRelayV1::ABSENT
+                }
+            );
+
+            // Three more is the full relay, read in canonical order.
+            let mut relayed = bare.clone();
+            relayed.extend_from_slice(&[0x22, 0x33, 0x44]);
+            let (stripped, relay) = split_caller_authority_bump_v1(&relayed);
+            assert_eq!(stripped.len(), width);
+            assert_eq!(
+                relay,
+                CustodyBumpRelayV1 {
+                    caller_authority: Some(0x22),
+                    replay: Some(0x33),
+                    transfer_authority: Some(0x44),
+                }
+            );
+
+            // Two more is neither width and must not be reinterpreted as one.
+            let mut between = bare.clone();
+            between.extend_from_slice(&[0x22, 0x33]);
+            assert_eq!(
+                split_caller_authority_bump_v1(&between),
+                (&between[..], CustodyBumpRelayV1::ABSENT)
+            );
 
             let short = alloc::vec![0x11_u8; width - 1];
-            assert_eq!(split_caller_authority_bump_v1(&short), (&short[..], None));
+            assert_eq!(
+                split_caller_authority_bump_v1(&short),
+                (&short[..], CustodyBumpRelayV1::ABSENT)
+            );
         }
         for width in uncarried_widths {
-            for length in [width, width + 1] {
+            for length in [width, width + 1, width + CUSTODY_BUMP_RELAY_BYTES_V1] {
                 let bytes = alloc::vec![0x11_u8; length];
                 assert_eq!(
                     split_caller_authority_bump_v1(&bytes),
-                    (&bytes[..], None),
+                    (&bytes[..], CustodyBumpRelayV1::ABSENT),
                     "a {length}-byte wire is not a carried shape and must reach dispatch whole"
                 );
             }
         }
-        // And no carried wire can be mistaken for another route's exact length.
+        // And no carried wire at either width can be mistaken for another
+        // route's exact length, or for another carried wire's total.
         for width in carried_widths {
-            for other in carried_widths.into_iter().chain(uncarried_widths) {
-                assert_ne!(width + 1, other);
+            for suffix in [1, CUSTODY_BUMP_RELAY_BYTES_V1] {
+                for other in carried_widths.into_iter().chain(uncarried_widths) {
+                    assert_ne!(width + suffix, other);
+                    for other_suffix in [1, CUSTODY_BUMP_RELAY_BYTES_V1] {
+                        assert!(
+                            (other == width && other_suffix == suffix)
+                                || width + suffix != other + other_suffix,
+                            "two carried Custody wires share the total {}",
+                            width + suffix
+                        );
+                    }
+                }
             }
         }
         // A zero suffix byte is not a bump any derivation produces, so it reads
-        // as absent rather than as a value certain to fail to reproduce.
+        // as absent rather than as a value certain to fail to reproduce -- in
+        // every slot, so a partially mined caller relays what it has and the
+        // rest searches.
         let mut zeroed = alloc::vec![0x11_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
-        zeroed.push(0);
-        assert_eq!(split_caller_authority_bump_v1(&zeroed).1, None);
+        zeroed.extend_from_slice(&[0, 0, 0]);
+        assert_eq!(
+            split_caller_authority_bump_v1(&zeroed).1,
+            CustodyBumpRelayV1::ABSENT
+        );
+        let mut partial = alloc::vec![0x11_u8; dclutch_custody_contract::CUSTODY_REQUEST_BYTES_V1];
+        partial.extend_from_slice(&[0xfd, 0, 0xfb]);
+        assert_eq!(
+            split_caller_authority_bump_v1(&partial).1,
+            CustodyBumpRelayV1 {
+                caller_authority: Some(0xfd),
+                replay: None,
+                transfer_authority: Some(0xfb),
+            }
+        );
     }
 
     #[test]
@@ -2030,6 +2278,75 @@ mod tests {
                 Ok(release)
             );
         }
+    }
+
+    /// The relayed replay bump reproduces this program's own coordinate, and a
+    /// wrong one names an account this transaction was not handed.
+    ///
+    /// `authenticate_replay_identity` compares what it derives against the
+    /// account at the replay coordinate, so a hint that is not the canonical
+    /// bump can only produce an address that comparison refuses. That is the
+    /// entire safety argument for taking the byte off the wire, and it does not
+    /// weaken because the byte crossed a CPI boundary to get here.
+    #[test]
+    fn a_wrong_relayed_replay_bump_reproduces_another_address_and_refuses() {
+        let program = Pubkey::new_from_array([0x61; 32]);
+        let seeds =
+            CustodyReplaySeedsV1::new([0x62; 32], [0x63; 32], CallerRoleV1::Trading, [0x64; 32]);
+        let (canonical_address, canonical) =
+            Pubkey::find_program_address(&seeds.as_slices(), &program);
+        let at = |bump: u8| {
+            let bump_seed = [bump];
+            let [domain, market, release, role, context] = seeds.as_slices();
+            Pubkey::create_program_address(
+                &[domain, market, release, role, context, &bump_seed],
+                &program,
+            )
+        };
+        assert_eq!(at(canonical), Ok(canonical_address));
+        let mut refused = 0_u32;
+        for bump in 0..=u8::MAX {
+            if bump == canonical {
+                continue;
+            }
+            if let Ok(address) = at(bump) {
+                assert_ne!(address, canonical_address, "bump {bump}");
+            }
+            refused = refused.saturating_add(1);
+        }
+        assert_eq!(refused, 255);
+    }
+
+    /// The relayed transfer-authority bump is the byte this program SIGNS with,
+    /// and that is exactly why a wrong one is harmless.
+    ///
+    /// `validate_custody_authority` derives the address before it returns the
+    /// bump and refuses unless it is the authority account the frame supplied.
+    /// A non-canonical byte therefore never reaches `invoke_signed`: the route
+    /// has already refused. Nothing signs with a caller-named seed.
+    #[test]
+    fn a_wrong_relayed_transfer_authority_bump_never_reaches_a_signature() {
+        let program = Pubkey::new_from_array([0x71; 32]);
+        let seeds = CustodyAuthoritySeedsV1::new([0x72; 32], [0x73; 32]);
+        let (canonical_address, canonical) =
+            Pubkey::find_program_address(&seeds.as_slices(), &program);
+        let at = |bump: u8| {
+            let bump_seed = [bump];
+            let [domain, market, release] = seeds.as_slices();
+            Pubkey::create_program_address(&[domain, market, release, &bump_seed], &program)
+        };
+        assert_eq!(at(canonical), Ok(canonical_address));
+        let mut refused = 0_u32;
+        for bump in 0..=u8::MAX {
+            if bump == canonical {
+                continue;
+            }
+            if let Ok(address) = at(bump) {
+                assert_ne!(address, canonical_address, "bump {bump}");
+            }
+            refused = refused.saturating_add(1);
+        }
+        assert_eq!(refused, 255);
     }
 
     #[test]

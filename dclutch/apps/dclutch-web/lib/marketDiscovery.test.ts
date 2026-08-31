@@ -12,13 +12,16 @@ import {
   isCoreMarketHeaderV2,
   isCurrentCoreMarketAccountV1,
   isIncompatibleCoreMarketAccountV1,
+  marketActivationOutlookV1,
   parseMarketAddressListV1,
   provenanceChipV1,
   shortAddressV1,
   MARKET_DISCOVERY_MAX_ADDRESSES,
   type DecodedMarketDiscoveryCardV1,
+  type MarketCapabilityBadgeV1,
   type MarketDiscoveryCardV1,
 } from './marketDiscovery';
+import { type CapabilityFundingQuoteV1 } from './capabilityManifest';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
@@ -720,6 +723,227 @@ describe('collateral subtotals', () => {
   });
 });
 
+/**
+ * Whether a Market that reads `Open` can ever have trading switched on.
+ *
+ * The chain has five phases and none of them is "permanently untradeable", so a
+ * Market whose activation window shut is byte-identical, in phase, to one whose
+ * trading has simply not started. The difference is decidable anyway -- Core
+ * refuses activation once `current_slot > deadline`, and the manifest is sealed
+ * into the Market's own address -- and these pin that it is decided from those
+ * two facts and from nothing softer. The failure that matters is a false
+ * POSITIVE: telling a reader a Market is dead on a read that did not happen.
+ */
+const NO_FUNDING: CapabilityFundingQuoteV1 = Object.freeze({
+  compartments: Object.freeze([]),
+  nativeLamportsTotal: BigInt(0),
+  realmCollateralTotal: BigInt(0),
+  realmCollateral: null,
+});
+
+function capabilityBadge(index: number, activation: 'immediate' | 'deadline', deadline: string | null): MarketCapabilityBadgeV1 {
+  return Object.freeze({
+    index,
+    kindId: 'ab'.repeat(32),
+    label: 'Direct successor',
+    recognized: true,
+    programSetId: 'cd'.repeat(32),
+    configId: 'ef'.repeat(32),
+    activation,
+    deadline,
+    dependencies: Object.freeze([]),
+    funding: NO_FUNDING,
+  });
+}
+
+/** One `Open` card carrying exactly the badges and outstanding count given. */
+async function activationCard(
+  address: string,
+  badges: ReadonlyArray<MarketCapabilityBadgeV1>,
+  outstandingCapabilities = '0',
+): Promise<DecodedMarketDiscoveryCardV1> {
+  const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+  return Object.freeze({
+    ...card,
+    address,
+    phase: 'Open',
+    outstandingCapabilities,
+    capabilities: Object.freeze({
+      status: 'authenticated',
+      manifestId: 'ab'.repeat(32),
+      recordAddress: LIVE.market.address,
+      observedSlot: card.observedSlot,
+      badges: Object.freeze([...badges]),
+    }),
+  });
+}
+
+const UNTRADEABLE = 'shut1111111111111111111111111111111111111111';
+
+describe('whether an open Market can ever trade', () => {
+  it('calls the window shut only once the deadline is strictly below a finalized slot', async () => {
+    const card = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '98')]);
+    expect(card.observedSlot).toBe('99');
+    const shut = marketActivationOutlookV1(card);
+    if (shut.status !== 'never') throw new Error(`expected never, got ${shut.status}: ${shut.reason}`);
+    expect(shut.lastActivationSlot).toBe('98');
+    expect(shut.observedSlot).toBe('99');
+    expect(shut.reason).toMatch(/had to be activated by slot 98/);
+
+    // Core refuses at `current_slot > deadline`, so the deadline slot itself is
+    // still live. Rounding that the other way would bury a Market a slot early.
+    const onTheDeadline = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '99')]);
+    expect(marketActivationOutlookV1(onTheDeadline).status).toBe('reachable');
+  });
+
+  it('takes the last deadline of several, and needs every one of them elapsed', async () => {
+    const allShut = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '50'), capabilityBadge(1, 'deadline', '90')]);
+    const verdict = marketActivationOutlookV1(allShut);
+    if (verdict.status !== 'never') throw new Error('expected never');
+    expect(verdict.lastActivationSlot).toBe('90');
+
+    // One entry still live is the whole Market still live.
+    const oneLive = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '50'), capabilityBadge(1, 'deadline', '400')]);
+    expect(marketActivationOutlookV1(oneLive)).toMatchObject({ status: 'reachable' });
+  });
+
+  it('treats an on-demand capability as reachable however old the Market is', async () => {
+    const immediate = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '10'), capabilityBadge(1, 'immediate', null)]);
+    expect(marketActivationOutlookV1(immediate).status).toBe('reachable');
+  });
+
+  it('never calls a Market untradeable while it already holds an activated capability', async () => {
+    const activated = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '10')], '1');
+    expect(marketActivationOutlookV1(activated).status).toBe('reachable');
+  });
+
+  it('leaves a manifest it could not authenticate UNKNOWN rather than shut', async () => {
+    // The base fixture publishes no manifest record, so its manifest refuses by
+    // address. A refused read is not a closed window and never becomes one.
+    const unread = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    expect(unread.capabilities.status).toBe('refused');
+    const verdict = marketActivationOutlookV1(unread);
+    expect(verdict.status).toBe('unknown');
+    expect(verdict.reason).toMatch(/capability manifest record/);
+
+    const refusedAccount: MarketDiscoveryCardV1 = Object.freeze({
+      status: 'refused',
+      address: 'refuse11111111111111111111111111111111111111',
+      provenance: Object.freeze({ kind: 'refused' as const, reason: 'undecodable' }),
+      observedSlot: SLOT,
+      refusal: 'undecodable',
+    });
+    expect(marketActivationOutlookV1(refusedAccount).status).toBe('unknown');
+  });
+
+  it('will not read an entryless manifest as a closed window', async () => {
+    const empty = await activationCard(UNTRADEABLE, []);
+    expect(marketActivationOutlookV1(empty).status).toBe('unknown');
+  });
+});
+
+/**
+ * The 360-byte generation, from the program scan through to the bucket.
+ *
+ * `(DCLTCOR3, version 3, 360 bytes)` is the pre-bump-tail Core state: CURRENT
+ * magic, CURRENT schema version, superseded width, told apart by width alone.
+ * Every Market live on this cluster is one of these, and when the reader and
+ * the deployed cohort next disagree it is not an edge case at all -- it is
+ * every card on the page.
+ *
+ * The predicate pair is already pinned on it directly. What was not pinned is
+ * what it does to a LISTING: the only end-to-end scan case was `DCLTCOR2 at
+ * 352`, so the scan note, the card refusal, and the group it lands in had never
+ * been run for the width that is about to be universal.
+ *
+ * The load-bearing case is the last one. An account this reader cannot decode
+ * must never be reported as a market that can never trade. That verdict is
+ * spoken only from an authenticated manifest, and a read that failed is not
+ * evidence of a shut window -- it is the absence of evidence about one.
+ */
+describe('the 360-byte Core generation, from scan to bucket', () => {
+  // The Markets actually standing on devnet, at the width the deployed cohort
+  // wrote and this reader no longer decodes.
+  const FLAGSHIP = '7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC';
+  const ORPHAN = 'CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM';
+  const preTail = CURRENT_MARKET_DATA.slice(0, 360);
+
+  async function refusedPreTailCard(): Promise<MarketDiscoveryCardV1> {
+    const discovery = await inspectMarketDiscoveryV1(
+      client(new Map([[FLAGSHIP, Object.freeze({ data: preTail, executable: false, lamports: '1', owner: CORE, space: 360 })]])),
+      { coreProgramId: CORE, addresses: [FLAGSHIP] },
+    );
+    return discovery.cards[0];
+  }
+
+  it('is separated from the current generation by width alone, not by magic or version', () => {
+    const view = new DataView(preTail.buffer, preTail.byteOffset, preTail.byteLength);
+    expect(new TextDecoder().decode(preTail.slice(0, CORE_STATE_MAGIC.length))).toBe('DCLTCOR3');
+    expect(view.getUint16(CORE_STATE_VERSION_OFFSET, true)).toBe(CORE_VERSION);
+    expect(isCoreMarketHeaderV2(preTail)).toBe(true);
+    // Everything a magic-only or version-only check could look at agrees with
+    // the current generation. Only the width disagrees, and it is decisive.
+    expect(preTail.length).toBe(360);
+    expect(CORE_STATE_BYTES).toBe(368);
+    expect(isCurrentCoreMarketAccountV1({ data: preTail, space: 360 })).toBe(false);
+    expect(isIncompatibleCoreMarketAccountV1({ data: preTail, space: 360 })).toBe(true);
+  });
+
+  it('is enumerated as historical and never offered as an address to read', async () => {
+    const enumeration = await enumerateCoreMarketAddressesV1(client(new Map(), {
+      headers: [[FLAGSHIP, preTail], [ORPHAN, preTail], [LIVE.market.address, CURRENT_MARKET_DATA]],
+    }), CORE);
+    if (enumeration.mode !== 'program-scan') throw new Error('expected a program scan');
+    expect(enumeration.addresses).toEqual([LIVE.market.address]);
+    expect(enumeration.incompatibleMarketAccounts).toEqual([
+      { address: FLAGSHIP, magic: 'DCLTCOR3', accountBytes: 360 },
+      { address: ORPHAN, magic: 'DCLTCOR3', accountBytes: 360 },
+    ]);
+    // The note names the generation by its own width, so a reader is never
+    // told "DCLTCOR3" and left to assume it was one this build can read.
+    expect(enumeration.note).toMatch(/2 historical Market accounts \(2 DCLTCOR3 at 360 bytes\); they are not listed as current/);
+    expect(enumeration.note).toMatch(/1 carry the current DCLTCOR3 Market header/);
+  });
+
+  it('refuses the card with its exact reason instead of decoding a width it does not know', async () => {
+    const card = await refusedPreTailCard();
+    if (card.status !== 'refused') throw new Error('a width this reader does not know is never decoded');
+    expect(card.address).toBe(FLAGSHIP);
+    // A different refusal from the 352-byte generation's, which is exactly why
+    // this needed its own case: that one is caught by magic, this one only by
+    // the width, and the message a reader gets says so.
+    expect(card.refusal).toBe(
+      // The card now says WHICH kind of wrong the width is. A stranded
+      // devnet Market reading as a bare byte count looks like corruption;
+      // reading as an older generation is the fact and the repair hint.
+      'Core Market state is 360 bytes; the exact current width is 368. This older devnet Market generation is incompatible.',
+    );
+    expect(provenanceChipV1(card.provenance)).toBe('REFUSED');
+  });
+
+  it('lands in the unreadable group, and in neither open nor untradeable', async () => {
+    const card = await refusedPreTailCard();
+    const live = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
+    const listing = curateMarketListingV1([card, live]);
+    expect(listing.unreadable.map((entry) => entry.address)).toEqual([FLAGSHIP]);
+    expect(listing.open.map((entry) => entry.address)).toEqual([live.address]);
+    expect(listing.untradeable).toEqual([]);
+    // Even named as the deployment's headline it is not promoted, because a
+    // featured address only ever reorders what the chain already said.
+    expect(curateMarketListingV1([card, live], FLAGSHIP).open.map((entry) => entry.address)).toEqual([live.address]);
+  });
+
+  it('is never reported as a market that can never trade', async () => {
+    const card = await refusedPreTailCard();
+    const verdict = marketActivationOutlookV1(card);
+    expect(verdict.status).toBe('unknown');
+    expect(verdict.reason).toMatch(/did not decode/);
+    // Stated as the thing that must not happen, not only as the thing that
+    // does: a failed decode may never be spoken as a verdict about trading.
+    expect(verdict.status).not.toBe('never');
+  });
+});
+
 describe('listing curation', () => {
   async function phasedCard(address: string, phase: 'Founding' | 'Open' | 'Terminal' | 'Retiring' | 'Retired'): Promise<MarketDiscoveryCardV1> {
     const card = await derivedHoardCard((_, tokenProgram) => mintAccount(tokenProgram, 6));
@@ -770,8 +994,33 @@ describe('listing curation', () => {
     expect(absent.open.map((card) => card.address)).toEqual([first.address, featured.address]);
   });
 
-  it('returns four empty groups for an empty listing rather than inventing one', () => {
-    expect(curateMarketListingV1([])).toEqual({ open: [], settled: [], founding: [], unreadable: [] });
+  it('files an open Market whose activation window shut apart from the open ones', async () => {
+    const live = await phasedCard('open1111111111111111111111111111111111111111', 'Open');
+    const shut = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '98')]);
+    const founding = await phasedCard('found111111111111111111111111111111111111111', 'Founding');
+
+    const listing = curateMarketListingV1([live, shut, founding]);
+    expect(listing.open.map((card) => card.address)).toEqual([live.address]);
+    expect(listing.untradeable.map((card) => card.address)).toEqual([shut.address]);
+    // It is separated, never dropped: the five groups still partition exactly.
+    const grouped = [...listing.open, ...listing.untradeable, ...listing.settled, ...listing.founding, ...listing.unreadable];
+    expect(grouped).toHaveLength(3);
+    expect(new Set(grouped.map((card) => card.address)).size).toBe(3);
+    // And the phase it prints is still the chain's: the separation is the
+    // page's arrangement, not a restatement of what the account says.
+    expect(listing.untradeable[0].phase).toBe('Open');
+  });
+
+  it('does not promote a featured Market that can never trade into the open group', async () => {
+    const live = await phasedCard('open1111111111111111111111111111111111111111', 'Open');
+    const shut = await activationCard(UNTRADEABLE, [capabilityBadge(0, 'deadline', '98')]);
+    const listing = curateMarketListingV1([live, shut], shut.address);
+    expect(listing.open.map((card) => card.address)).toEqual([live.address]);
+    expect(listing.untradeable.map((card) => card.address)).toEqual([shut.address]);
+  });
+
+  it('returns five empty groups for an empty listing rather than inventing one', () => {
+    expect(curateMarketListingV1([])).toEqual({ open: [], untradeable: [], settled: [], founding: [], unreadable: [] });
   });
 });
 

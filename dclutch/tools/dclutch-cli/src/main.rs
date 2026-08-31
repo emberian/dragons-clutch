@@ -9,9 +9,15 @@
 //! and hands them to the same decoders the on-chain programs use, so that a
 //! stranger can check a market for themselves without trusting our website.
 //!
-//! WHAT IT IS NOT. It never signs, never submits a transaction, never reads a
-//! keypair, and never writes to a cluster. It takes no credential of any kind.
-//! Every subcommand here is a read.
+//! WHAT IT IS NOT. It never submits a transaction and never writes to a
+//! cluster. Every command that touches the network here is a read, and takes no
+//! credential of any kind.
+//!
+//! THE ONE EXCEPTION, stated where it cannot be missed: `dclutch ticket author`
+//! opens ONE key file — named by an environment variable, never by a flag — to
+//! sign one Direct intent into a portable ticket on local disk. That is a local
+//! authoring act with no network in it at all. Authoring and submitting are
+//! separate, and this binary only does the first.
 //!
 //! SINGLE AUTHORSHIP, which is why this file is short. Three crates own every
 //! byte interpreted here:
@@ -116,8 +122,10 @@ pub fn usage() -> String {
     format!(
         "dclutch {version} — read dClutch markets off a Solana cluster.\n\
          \n\
-         This tool only reads. It never signs, never submits, and never opens a\n\
-         key file. dClutch runs on Solana DEVNET, where the money is not money.\n\
+         This tool never submits a transaction. Reading takes no credential at\n\
+         all; `ticket author` opens one key file, named by an environment\n\
+         variable, and signs one intent onto local disk — nothing else here\n\
+         touches a key. dClutch runs on Solana DEVNET, where money is not money.\n\
          \n\
          COMMANDS\n\
          \n\
@@ -137,8 +145,15 @@ pub fn usage() -> String {
          \x20 dclutch capability decode (--base64 <DATA> | --file <PATH> | -)\n\
          \x20     The same rendering, from bytes you already have. No network.\n\
          \n\
-         \x20 dclutch ticket ...\n\
-         \x20     {ticket_line}\n\
+         \x20 dclutch ticket author --keypair-env VAR ...\n\
+         \x20     {ticket_line} Signs with a local key file named by an\n\
+         \x20     environment variable, and writes bytes identical to the ones\n\
+         \x20     the browser trade panel signs. Submits nothing: run\n\
+         \x20     `dclutch ticket` for the arguments and for where it goes next.\n\
+         \n\
+         \x20 dclutch ticket verify <PATH>\n\
+         \x20     Check a ticket's signature and print every field it binds.\n\
+         \x20     No key, no network.\n\
          \n\
          OPTIONS (on the `show` commands)\n\
          \n\

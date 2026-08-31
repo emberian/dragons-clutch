@@ -102,6 +102,7 @@ end RootField
 inductive MakerField where
   | magic | version | bump | reserved | market | generation | maker
   | nextNonce | liveCount | minimumLiveNonce | rentOwner | rentPrincipal
+  | feeOwed
   deriving DecidableEq, Repr
 
 def makerSchema : List (FieldSpec MakerField) := [
@@ -116,7 +117,8 @@ def makerSchema : List (FieldSpec MakerField) := [
   ⟨.liveCount, .u64⟩,
   ⟨.minimumLiveNonce, .u64⟩,
   ⟨.rentOwner, .bytes 32⟩,
-  ⟨.rentPrincipal, .u64⟩
+  ⟨.rentPrincipal, .u64⟩,
+  ⟨.feeOwed, .u64⟩
 ]
 
 def makerLayout : List (PlacedField MakerField) := specialize makerSchema
@@ -126,7 +128,8 @@ namespace MakerField
 
 def all : List MakerField := [
   .magic, .version, .bump, .reserved, .market, .generation, .maker,
-  .nextNonce, .liveCount, .minimumLiveNonce, .rentOwner, .rentPrincipal
+  .nextNonce, .liveCount, .minimumLiveNonce, .rentOwner, .rentPrincipal,
+  .feeOwed
 ]
 
 def coordinate (field : MakerField) : Nat × Nat :=
@@ -148,6 +151,7 @@ def rustName : MakerField → String
   | .minimumLiveNonce => "DIRECT_MAKER_MINIMUM_LIVE_NONCE_OFFSET_V1"
   | .rentOwner => "DIRECT_MAKER_RENT_OWNER_OFFSET_V1"
   | .rentPrincipal => "DIRECT_MAKER_RENT_PRINCIPAL_OFFSET_V1"
+  | .feeOwed => "DIRECT_MAKER_FEE_OWED_OFFSET_V1"
 
 end MakerField
 
@@ -202,7 +206,7 @@ end RecordField
 
 theorem config_width : configBytes = 64 := by native_decide
 theorem root_width : rootBytes = 24 := by native_decide
-theorem maker_width : makerBytes = 152 := by native_decide
+theorem maker_width : makerBytes = 160 := by native_decide
 theorem record_width : recordBytes = 268 := by native_decide
 
 theorem config_names_unique : (configSchema.map fun field => field.name).Nodup := by
@@ -237,7 +241,7 @@ theorem maker_coordinates : coordinates makerLayout = [
     (.market, 16, 32), (.generation, 48, 8), (.maker, 56, 32),
     (.nextNonce, 88, 8), (.liveCount, 96, 8),
     (.minimumLiveNonce, 104, 8), (.rentOwner, 112, 32),
-    (.rentPrincipal, 144, 8)] := by native_decide
+    (.rentPrincipal, 144, 8), (.feeOwed, 152, 8)] := by native_decide
 
 theorem record_coordinates : coordinates recordLayout = [
     (.magic, 0, 8), (.version, 8, 2), (.bump, 10, 1), (.reserved, 11, 5),
@@ -297,6 +301,7 @@ structure MakerRootStateV1 where
   minimumLiveNonce : Nat
   rentOwner : Bytes32
   rentPrincipal : Nat
+  feeOwed : Nat
 
 def encodeMakerRootStateV1 (root : MakerRootStateV1) : List UInt8 :=
   makerMagic ++
@@ -310,7 +315,8 @@ def encodeMakerRootStateV1 (root : MakerRootStateV1) : List UInt8 :=
   Codec.encodeLE 8 root.liveCount ++
   Codec.encodeLE 8 root.minimumLiveNonce ++
   encodeBytes32 root.rentOwner ++
-  Codec.encodeLE 8 root.rentPrincipal
+  Codec.encodeLE 8 root.rentPrincipal ++
+  Codec.encodeLE 8 root.feeOwed
 
 theorem encode_maker_length (root : MakerRootStateV1) :
     (encodeMakerRootStateV1 root).length = makerBytes := by
@@ -373,6 +379,7 @@ def maker : MakerRootStateV1 := {
   minimumLiveNonce := 5
   rentOwner := bytes32 3
   rentPrincipal := 2_000_000
+  feeOwed := 0
 }
 
 def record : RegisteredRecordStateV2 := {
@@ -391,7 +398,7 @@ def record : RegisteredRecordStateV2 := {
 theorem exact_example_widths :
     (encodeExecutionConfigV1 config).length = 64 ∧
     (encodeRootStateV1 root).length = 24 ∧
-    (encodeMakerRootStateV1 maker).length = 152 ∧
+    (encodeMakerRootStateV1 maker).length = 160 ∧
     (encodeRegisteredRecordStateV2 record).length = 268 := by native_decide
 
 theorem zero_recipient_is_not_valid : bytesNonzero zeroBytes32 = false := by native_decide

@@ -17,7 +17,7 @@ describe('the refused market story', () => {
   });
 
   it('refuses to invent structure and offers real ways onward', () => {
-    expect(html).toContain('does not pretend to a structure it could not read');
+    expect(html).toContain('Nothing could be read from this address');
     expect(html).toContain('Browse the current markets');
     expect(html).toContain('See the raw account in the explorer');
     expect(html).toContain('/explorer?view=market');

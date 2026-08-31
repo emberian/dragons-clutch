@@ -243,11 +243,11 @@ export class AccountWatchV1 {
 export function watchSentenceV1(state: WatchStateV1, endpointLabel: string): string {
   switch (state) {
     case 'live':
-      return `Watching ${endpointLabel} for changes to this market. If it changes, this page re-reads it by itself.`;
+      return `Watching ${endpointLabel}. This page re-reads itself when the market changes.`;
     case 'connecting':
-      return `Opening a connection to ${endpointLabel} to watch this market for changes…`;
+      return `Connecting to ${endpointLabel}…`;
     case 'unavailable':
-      return `Live updates are not running — this endpoint did not accept a subscription. Everything on the page is still the read it says it is, and the re-read button always works.`;
+      return `Live updates are off — this endpoint did not accept a subscription. Use the re-read button.`;
     default:
       return 'Not watching for changes.';
   }

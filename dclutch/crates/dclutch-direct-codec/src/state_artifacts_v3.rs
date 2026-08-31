@@ -69,8 +69,8 @@ const SEED_COUNT: usize = RECIPE_COUNT * SEEDS_PER_RECIPE;
 const PLAN_COUNT: usize = 2;
 const BINDING_COUNT: usize = 4;
 const RENT_QUOTE_COUNT: usize = 1;
-const _: () = assert!(DIRECT_MAKER_REPLAY_BYTES_V1 == 152);
-const DIRECT_MAKER_REPLAY_BYTES_U32_V1: u32 = 152;
+const _: () = assert!(DIRECT_MAKER_REPLAY_BYTES_V1 == 160);
+const DIRECT_MAKER_REPLAY_BYTES_U32_V1: u32 = 160;
 
 /// Exact Lifecycle V5 width for inline ordinary maker first-use.
 pub const DIRECT_INLINE_ORDINARY_LIFECYCLE_BYTES_V5: usize = HEADER_BYTES

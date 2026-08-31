@@ -19,11 +19,13 @@ use solana_program::pubkey::Pubkey;
 mod capability_execution;
 mod infrastructure;
 mod multiprogram;
+mod seal_probe;
 mod translation;
 
 pub use capability_execution::*;
 pub use infrastructure::*;
 pub use multiprogram::*;
+pub use seal_probe::*;
 pub use translation::*;
 
 /// Canonical checked-release magic.

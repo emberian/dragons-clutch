@@ -26,6 +26,7 @@ const SENTINEL_IDENTITY: [u8; 32] = [0x55; 32];
 const FOREIGN: [u8; 32] = [9; 32];
 /// Exact fee denominator the emitted program loads as a constant.
 const FEE_DENOMINATOR: u64 = dclutch_direct_codec::successor::DIRECT_FEE_DENOMINATOR_V1 as u64;
+const MAX_FEE_BPS: u64 = dclutch_direct_codec::successor::DIRECT_MAX_FEE_BASIS_POINTS_V1 as u64;
 /// Canonical coordinate register of the last Product item in this corpus width.
 #[allow(clippy::cast_possible_truncation)]
 const LAST_ITEM_COORDINATE: usize = DIRECT_ORDINARY_COMMON_SCALARS_V3
@@ -356,9 +357,21 @@ const HOSTILE_CORPUS: &[Case] = &[
     ("inexact_gross_division", |s, _i| {
         s[SCALAR_EXECUTION_PRICE_V3] = 51;
     }),
-    // One basis point above the denominator. Without the prelude's bound the
-    // floor fee reaches the gross, so the buyer is debited twice the quote while
-    // the seller nets nothing.
+    // One basis point above the band (decision 0014 D2), the old denominator
+    // bound that used to be admitted, and one above that. All three refuse at
+    // the same prelude relation now.
+    ("fee_bps_one_above_the_band", |s, _i| {
+        s[SCALAR_POLICY_FEE_BPS_V3] = MAX_FEE_BPS + 1;
+        s[SCALAR_SELLER_FEE_BPS_V3] = MAX_FEE_BPS + 1;
+        s[SCALAR_BUYER_FEE_BPS_V3] = MAX_FEE_BPS + 1;
+    }),
+    // The take-everything market. It was the only rate that could enable
+    // `CUSTODY_ROUTES_V3` slot 3, and refusing it is what retires that route.
+    ("fee_bps_equals_denominator", |s, _i| {
+        s[SCALAR_POLICY_FEE_BPS_V3] = FEE_DENOMINATOR;
+        s[SCALAR_SELLER_FEE_BPS_V3] = FEE_DENOMINATOR;
+        s[SCALAR_BUYER_FEE_BPS_V3] = FEE_DENOMINATOR;
+    }),
     ("fee_bps_above_denominator", |s, _i| {
         s[SCALAR_POLICY_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
         s[SCALAR_SELLER_FEE_BPS_V3] = FEE_DENOMINATOR + 1;
@@ -465,16 +478,21 @@ const BOUNDARY_CORPUS: &[Case] = &[
         s[SCALAR_SELLER_FEE_BPS_V3] = 0;
         s[SCALAR_BUYER_FEE_BPS_V3] = 0;
     }),
-    ("fee_bps_selects_intermediate_route", |s, _i| {
-        s[SCALAR_POLICY_FEE_BPS_V3] = 2_000;
-        s[SCALAR_SELLER_FEE_BPS_V3] = 2_000;
-        s[SCALAR_BUYER_FEE_BPS_V3] = 2_000;
-    }),
-    ("fee_bps_equals_denominator", |s, _i| {
-        s[SCALAR_POLICY_FEE_BPS_V3] = FEE_DENOMINATOR;
-        s[SCALAR_SELLER_FEE_BPS_V3] = FEE_DENOMINATOR;
-        s[SCALAR_BUYER_FEE_BPS_V3] = FEE_DENOMINATOR;
-    }),
+    // The band's own edge, on a gross large enough that a five percent floor
+    // fee is nonzero: the non-terminal seller route is enabled and no fee route
+    // is. The baseline's gross of five floors its fee away, so the fill has to
+    // move with the rate or the case tests the zero-fee route twice.
+    (
+        "fee_bps_at_the_band_selects_the_intermediate_route",
+        |s, _i| {
+            s[SCALAR_POLICY_FEE_BPS_V3] = MAX_FEE_BPS;
+            s[SCALAR_SELLER_FEE_BPS_V3] = MAX_FEE_BPS;
+            s[SCALAR_BUYER_FEE_BPS_V3] = MAX_FEE_BPS;
+            s[SCALAR_FILL_V3] = 40;
+            s[SCALAR_SELLER_MAXIMUM_V3] = 40;
+            s[SCALAR_BUYER_MAXIMUM_V3] = 40;
+        },
+    ),
     ("both_participants_created", |s, _i| {
         s[SCALAR_SELLER_CREATED_V3] = 1;
         s[SCALAR_BUYER_CREATED_V3] = 1;

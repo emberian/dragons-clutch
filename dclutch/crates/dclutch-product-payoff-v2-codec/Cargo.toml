@@ -12,5 +12,12 @@ path = "src/lib.rs"
 dclutch-product-runtime-v2 = { path = "../dclutch-product-runtime-v2" }
 dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 
+# Differential reference only, and a dev-dependency so it stays one: the kernel
+# is an independent handwritten implementation of the same mathematics, which
+# `O-005` explicitly permits alongside one live writer. It is linked into the
+# test binary and into no ELF.
+[dev-dependencies]
+dclutch-liability-basis-v2-kernel = { path = "../dclutch-liability-basis-v2-kernel" }
+
 [lints]
 workspace = true

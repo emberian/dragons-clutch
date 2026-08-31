@@ -55,7 +55,13 @@ instance (root : Root) : Decidable root.Valid := by
   unfold Root.Valid
   infer_instance
 
-/-- One replay high-water owner for an exact Market/generation/maker tuple. -/
+/-- One replay high-water owner for an exact Market/generation/maker tuple.
+
+`feeOwed` is the sole record of one unsettled Direct fee receivable (the
+FEE-TX2 obligation): nonzero exactly between the fill that owed it and the
+settlement that pays it.  It rides the maker root because no other account
+remembers the debt -- which is why `closeMaker` below must refuse while it is
+nonzero: closing the account would erase a receivable with no residue. -/
 structure MakerRoot where
   market : Nat
   generation : Nat
@@ -65,6 +71,7 @@ structure MakerRoot where
   minimumLiveNonce : Nat
   rentOwner : Nat
   rentPrincipal : Nat
+  feeOwed : Nat
   deriving DecidableEq, Inhabited, Repr
 
 def MakerRoot.Valid (root : MakerRoot) : Prop :=
@@ -173,6 +180,7 @@ def consumeNonce
           minimumLiveNonce := 0
           rentOwner := first.rentOwner
           rentPrincipal := first.rentPrincipal
+          feeOwed := 0
         }
         some {
           root := { root with openMakerRootCount := root.openMakerRootCount + 1 }
@@ -184,7 +192,8 @@ def consumeNonce
       if existing.Valid ∧ sameCoordinate existing intent ∧
           intent.nonce = existing.nextNonce ∧
           existing.nextNonce + 1 < u64Limit ∧
-          (consumption = .register → existing.liveCount + 1 < u64Limit) then
+          (consumption = .register → existing.liveCount + 1 < u64Limit) ∧
+          existing.feeOwed = 0 then
         some {
           root
           makerRoot := advanceMaker existing consumption
@@ -247,6 +256,41 @@ theorem exact_replay_refuses
 def closeLive (makerRoot : MakerRoot) : Option MakerRoot :=
   if ¬makerRoot.Valid ∨ makerRoot.liveCount = 0 then none
   else some { makerRoot with liveCount := makerRoot.liveCount - 1 }
+
+/-- Record the obligation one fee-bearing fill leaves behind.
+
+At most one unsettled fee exists per maker per market: recording onto a root
+that already owes refuses rather than accumulates, exactly as the chain's
+`record_fee_owed` does. -/
+def recordFeeOwed (makerRoot : MakerRoot) (amount : Nat) : Option MakerRoot :=
+  if ¬makerRoot.Valid ∨ amount = 0 ∨ makerRoot.feeOwed ≠ 0 then none
+  else some { makerRoot with feeOwed := amount }
+
+/-- Clear the obligation, for exactly the amount recorded -- never "whatever
+was delegated", so a short settlement can never clear the flag. -/
+def settleFeeOwed (makerRoot : MakerRoot) (amount : Nat) : Option MakerRoot :=
+  if ¬makerRoot.Valid ∨ amount = 0 ∨ makerRoot.feeOwed ≠ amount then none
+  else some { makerRoot with feeOwed := 0 }
+
+/-- The E5 lockout: an outstanding fee refuses every further nonce consumption
+by that maker until settled.  Without this, close-and-recreate in Open would
+mint a fresh `feeOwed = 0` root and launder the debt. -/
+theorem outstanding_fee_locks_consumption
+    (root : Root) (makerRoot : MakerRoot) (intent : IntentCoordinate)
+    (consumption : Consumption)
+    (owing : makerRoot.feeOwed ≠ 0) :
+    consumeNonce root (some makerRoot) intent consumption none = none := by
+  simp [consumeNonce, owing]
+
+/-- A settlement clears exactly the recorded amount and changes nothing else. -/
+theorem settle_is_exact
+    (makerRoot settled : MakerRoot) (amount : Nat)
+    (success : settleFeeOwed makerRoot amount = some settled) :
+    makerRoot.feeOwed = amount ∧ 0 < amount ∧
+      settled = { makerRoot with feeOwed := 0 } := by
+  simp [settleFeeOwed] at success
+  rcases success with ⟨⟨_, nonzero, exact⟩, rfl⟩
+  exact ⟨exact, Nat.pos_of_ne_zero nonzero, rfl⟩
 
 /-- Sole persisted economic state for one registered signed intent.  The
 physical record also carries exact signed bytes, PDA bump, and rent facts; this
@@ -427,12 +471,18 @@ structure MakerCloseResult where
   plan : MakerClosePlan
   deriving DecidableEq, Inhabited, Repr
 
-/-- Close a zero-live maker root only after global Direct retirement begins. -/
+/-- Close a zero-live, zero-debt maker root only after global Direct
+retirement begins.
+
+The `feeOwed ≠ 0` refusal is the FEE-TX2 amendment (cohort-9 review item 1,
+amendment 2): the maker root is the sole record of the receivable, so a close
+that ignored it would erase a debt with no residue.  Settlement is phase-free,
+so settle-then-close is always available in Retiring; nothing strands. -/
 def closeMaker
     (root : Root) (makerRoot : MakerRoot) (observedLamports : Nat) :
     Option MakerCloseResult := do
   if ¬root.Valid ∨ root.phase ≠ .retiring ∨ root.openMakerRootCount = 0 ∨
-      ¬makerRoot.Valid ∨ makerRoot.liveCount ≠ 0 ∨
+      ¬makerRoot.Valid ∨ makerRoot.liveCount ≠ 0 ∨ makerRoot.feeOwed ≠ 0 ∨
       observedLamports < makerRoot.rentPrincipal then none
   else
     some {
@@ -451,7 +501,7 @@ theorem maker_close_count_conserved
     (success : closeMaker root makerRoot lamports = some result) :
     result.root.openMakerRootCount + 1 = root.openMakerRootCount := by
   simp [closeMaker] at success
-  rcases success with ⟨_, _, count, _, _, _, rfl⟩
+  rcases success with ⟨_, _, count, _, _, _, _, rfl⟩
   change root.openMakerRootCount - 1 + 1 = root.openMakerRootCount
   omega
 
@@ -462,9 +512,38 @@ theorem maker_close_refund_conserved
     result.plan.rentPrincipal + result.plan.unclassifiedDonation =
       result.plan.totalCredit := by
   simp [closeMaker] at success
-  rcases success with ⟨_, _, _, _, _, funded, rfl⟩
+  rcases success with ⟨_, _, _, _, _, _, funded, rfl⟩
   change makerRoot.rentPrincipal + (lamports - makerRoot.rentPrincipal) = lamports
   omega
+
+/-- Fee conservation at close: a close is never the event that ends a nonzero
+obligation.  The only transition that zeroes `feeOwed` is `settleFeeOwed`,
+which demands the exact recorded amount -- so the receivable either stands on
+the replay or was paid in full, never erased. -/
+theorem close_conserves_fee_receivable
+    (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
+    (result : MakerCloseResult)
+    (success : closeMaker root makerRoot lamports = some result) :
+    makerRoot.feeOwed = 0 := by
+  simp [closeMaker] at success
+  exact success.1.2.2.2.2.2.1
+
+/-- The debtor's close refuses by name: `feeOwed ≠ 0` alone forces refusal. -/
+theorem debtor_close_refuses
+    (root : Root) (makerRoot : MakerRoot) (lamports : Nat)
+    (owing : makerRoot.feeOwed ≠ 0) :
+    closeMaker root makerRoot lamports = none := by
+  simp [closeMaker, owing]
+
+/-- The reachability amendment (cohort-9 review item 1, amendment 1): global
+retirement begins regardless of how many maker roots stand open.  Makers wind
+down INSIDE Retiring -- `consumeNonce` already refuses every non-Open phase,
+so Retiring stops new consumption while `closeMaker` drains the count. -/
+theorem begin_retiring_admits_open_maker_roots
+    (root : Root) (valid : root.Valid) (opened : root.phase = .open) :
+    beginRetiring root =
+      some { root with phase := .retiring } := by
+  simp [beginRetiring, valid, opened]
 
 /-- A composite Direct root may physically close only after retirement and the
 last maker root has returned its rent. -/
@@ -474,6 +553,16 @@ def rootClosable (root : Root) : Bool :=
 theorem open_root_not_closable (count : Nat) :
     rootClosable { phase := .open, openMakerRootCount := count } = false := by
   simp [rootClosable]
+
+/-- The invariant the moved gates still protect: the step to Retired -- the
+physical root close -- is legal only inside Retiring with zero open maker
+roots.  Amendment 1 moved the count gate off `beginRetiring`; the invariant
+itself never moved. -/
+theorem retired_requires_zero_open_makers
+    (root : Root) (closable : rootClosable root = true) :
+    root.phase = .retiring ∧ root.openMakerRootCount = 0 := by
+  simp [rootClosable] at closable
+  exact ⟨closable.2.1, closable.2.2⟩
 
 namespace Examples
 
@@ -487,7 +576,7 @@ theorem inline_first_use :
       makerRoot := {
         market := 1, generation := 7, maker := 2, nextNonce := 1,
         liveCount := 0, minimumLiveNonce := 0, rentOwner := 9,
-        rentPrincipal := 100
+        rentPrincipal := 100, feeOwed := 0
       }
       creation := some { topUpLamports := 97, postLamports := 100 }
     } := by native_decide
@@ -505,6 +594,30 @@ theorem closure_path :
       closed.plan.unclassifiedDonation = 11 ∧
       closed.root.openMakerRootCount = 0 ∧
       rootClosable closed.root = true := by
+  native_decide
+
+/-- The debtor's whole story, decided: an outstanding fee refuses the close
+and every further consumption; a short settlement refuses; the exact
+settlement unlocks the close. -/
+theorem debtor_settles_before_closing :
+    let created := (consumeNonce openRoot none intent .inline (some funding)).get!
+    let owing := (recordFeeOwed created.makerRoot 4).get!
+    let retiring := (beginRetiring created.root).get!
+    closeMaker retiring owing 111 = none ∧
+      consumeNonce created.root (some owing)
+        { intent with nonce := 1 } .inline none = none ∧
+      settleFeeOwed owing 3 = none ∧
+      (closeMaker retiring ((settleFeeOwed owing 4).get!) 111).isSome = true := by
+  native_decide
+
+/-- Retirement begins over a standing maker root -- the count is drained
+INSIDE Retiring, which is what makes the close reachable for a filled market. -/
+theorem retiring_starts_with_open_makers :
+    let created := (consumeNonce openRoot none intent .inline (some funding)).get!
+    let retiring := (beginRetiring created.root).get!
+    created.root.openMakerRootCount = 1 ∧
+      retiring.phase = RootPhase.retiring ∧
+      rootClosable retiring = false := by
   native_decide
 
 end Examples

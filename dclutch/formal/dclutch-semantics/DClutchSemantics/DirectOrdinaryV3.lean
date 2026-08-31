@@ -14,7 +14,16 @@ Register schema notes that are semantic, not incidental:
 * `makerMagic` deliberately reuses the fee-denominator coordinate. The
   denominator is a prelude constant consumed by the floor-fee division; the
   maker replay magic word is written into the same coordinate after the last
-  read of it, so the bank carries both facts without a 66th common register.
+  read of it, so the bank carries both facts without a further common register.
+* `maxFeeBps` is the decision-0014-D2 venue band, and the prelude compares the
+  immutable config's rate against it rather than against the denominator. The
+  band is what retires the `feeSole` route: `feeSoleRouteEnabled` is still
+  derived, and then required zero, because `Direct.banded_fee_leaves_a_positive_
+  seller_net` proves no admissible rate can enable it.
+* `feeContinuationRouteEnabled` is pinned to zero. The fee leg settles in a
+  second transaction (`docs/design/FEE_SECOND_TRANSACTION_V1.md`), so tx1's
+  seller leg is the only Custody route this transition ever enables, and it
+  stays NON-terminal whenever a fee is owed.
 * the Product-owned tail carries one canonical coordinate and one Claims
   quantity per item; nothing else in the bank is Product-width.
 -/
@@ -47,7 +56,8 @@ inductive ScalarSlot where
   | sellerIntermediateRouteEnabled | feeNonzero | custodyAfterSeller | custodyAfterFee
   | sellerBump | sellerRentPrincipalObservation | sellerRentPrincipal | buyerCreated
   | buyerBumpObservation | buyerBump | claimTransfer | feeSoleRouteEnabled
-  | makerCurrentRentMinimum | claimTailTotal
+  | makerCurrentRentMinimum | claimTailTotal | maxFeeBps
+  | feeContinuationRouteEnabled
   deriving DecidableEq, Repr
 
 namespace ScalarSlot
@@ -69,7 +79,8 @@ def all : List ScalarSlot := [
   .sellerIntermediateRouteEnabled, .feeNonzero, .custodyAfterSeller, .custodyAfterFee,
   .sellerBump, .sellerRentPrincipalObservation, .sellerRentPrincipal, .buyerCreated,
   .buyerBumpObservation, .buyerBump, .claimTransfer, .feeSoleRouteEnabled,
-  .makerCurrentRentMinimum, .claimTailTotal
+  .makerCurrentRentMinimum, .claimTailTotal, .maxFeeBps,
+  .feeContinuationRouteEnabled
 ]
 
 @[simp] def index : ScalarSlot → Nat
@@ -139,6 +150,8 @@ def all : List ScalarSlot := [
   | .feeSoleRouteEnabled => 63
   | .makerCurrentRentMinimum => 64
   | .claimTailTotal => 65
+  | .maxFeeBps => 66
+  | .feeContinuationRouteEnabled => 67
 
 def rustName : ScalarSlot → String
   | .rootPhase => "SCALAR_ROOT_PHASE_V3"
@@ -207,6 +220,8 @@ def rustName : ScalarSlot → String
   | .feeSoleRouteEnabled => "SCALAR_FEE_SOLE_ROUTE_ENABLED_V3"
   | .makerCurrentRentMinimum => "SCALAR_MAKER_CURRENT_RENT_MINIMUM_V5"
   | .claimTailTotal => "SCALAR_CLAIM_TAIL_TOTAL_V3"
+  | .maxFeeBps => "SCALAR_MAX_FEE_BPS_V3"
+  | .feeContinuationRouteEnabled => "SCALAR_FEE_CONTINUATION_ROUTE_ENABLED_V3"
 
 /-- Emitted Rust documentation for this coordinate. -/
 def doc : ScalarSlot → String
@@ -262,7 +277,7 @@ def doc : ScalarSlot → String
   | .buyerRentPrincipalObservation => "Buyer persisted historical-rent-principal observation."
   | .buyerRentPrincipal => "Lifecycle-owned buyer historical rent principal."
   | .makerVersion => "Program-owned maker replay ABI version after Transition."
-  | .sellerIntermediateRouteEnabled => "Derived seller-intermediate plus fee-continuation route enable bit."
+  | .sellerIntermediateRouteEnabled => "Derived non-terminal seller-net Custody route enable bit."
   | .feeNonzero => "Derived nonzero combined-fee bit."
   | .custodyAfterSeller => "Reserved for the replay revision after seller-net."
   | .custodyAfterFee => "Reserved for the replay revision after combined fee."
@@ -276,6 +291,8 @@ def doc : ScalarSlot → String
   | .feeSoleRouteEnabled => "Derived terminal fee-only Custody route enable bit."
   | .makerCurrentRentMinimum => "Lifecycle V5 adapter-authenticated current Rent minimum for a 152-byte maker root."
   | .claimTailTotal => "Program-owned total of the Claims quantities written across the Product tail."
+  | .maxFeeBps => "Program-owned venue fee band (decision 0014 D2), in basis points."
+  | .feeContinuationRouteEnabled => "Fee-continuation Custody route enable bit, program-pinned to zero: the fee leg settles in a second transaction."
 
 /-- The maker replay magic word is written into the fee-denominator coordinate
 after the floor-fee division has consumed it. The reuse is deliberate and the
@@ -475,6 +492,7 @@ def preludeOps : List Op := [
   .loadConst (s .zero) 0,
   .loadConst (s .one) 1,
   .loadConst (s .feeDenominator) DClutch.Direct.feeDenominator,
+  .loadConst (s .maxFeeBps) DClutch.Direct.maxFeeBasisPoints,
   .scalarEq (s .rootPhase) (s .zero),
   .nonzero (s .fill),
   .scalarLe (s .sellerValidFrom) (s .slot),
@@ -506,7 +524,7 @@ def preludeOps : List Op := [
   .scalarLe (s .executionPrice) (s .priceScale),
   .scalarEq (s .sellerFeeBps) (s .policyFeeBps),
   .scalarEq (s .buyerFeeBps) (s .policyFeeBps),
-  .scalarLe (s .policyFeeBps) (s .feeDenominator),
+  .scalarLe (s .policyFeeBps) (s .maxFeeBps),
   .mulDivExact (s .fill) (s .executionPrice) (s .priceScale) (s .gross),
   .mulDivFloor (s .gross) (s .policyFeeBps) (s .feeDenominator) (s .fee),
   .subInto (s .gross) (s .fee) (s .sellerNet),
@@ -530,9 +548,11 @@ def preludeOps : List Op := [
   .selectZero (s .sellerNet) (s .zero) (s .sellerIntermediateRouteEnabled),
   .loadConst (s .feeSoleRouteEnabled) 0,
   .selectZero (s .sellerNet) (s .feeNonzero) (s .feeSoleRouteEnabled),
+  .scalarEq (s .feeSoleRouteEnabled) (s .zero),
+  .loadConst (s .feeContinuationRouteEnabled) 0,
   .checkedAddInto (s .sellerTerminalRouteEnabled) (s .sellerIntermediateRouteEnabled) (s .custodyAfterSeller),
   .checkedAddInto (s .custodyRevision) (s .custodyAfterSeller) (s .custodyAfterSeller),
-  .checkedAddInto (s .custodyAfterSeller) (s .sellerIntermediateRouteEnabled) (s .custodyAfterFee),
+  .checkedAddInto (s .custodyAfterSeller) (s .feeContinuationRouteEnabled) (s .custodyAfterFee),
   .checkedAddInto (s .custodyAfterFee) (s .feeSoleRouteEnabled) (s .custodyAfterFee),
   .checkedAddInto (s .fill) (s .zero) (s .claimTransfer),
   .loadConst (s .claimTailTotal) 0,
@@ -571,17 +591,17 @@ def program : Program := {
 
 theorem well_formed : program.wellFormed = true := by native_decide
 
-theorem prelude_count : program.prelude.length = 66 := by native_decide
+theorem prelude_count : program.prelude.length = 69 := by native_decide
 
 theorem item_count : program.itemBody.length = 3 := by native_decide
 
 theorem epilogue_count : program.epilogue.length = 1 := by native_decide
 
-theorem common_scalar_count : program.commonScalars = 66 := by native_decide
+theorem common_scalar_count : program.commonScalars = 68 := by native_decide
 
 theorem common_identity_count : program.commonIdentities = 32 := by native_decide
 
-theorem encoded_width : (Codec.encodeProgram program).length = 1712 := by native_decide
+theorem encoded_width : (Codec.encodeProgram program).length = 1784 := by native_decide
 
 /-! ## Witnesses
 
@@ -640,6 +660,29 @@ def identities : Array Nat :=
       bank.setIfInBounds assignment.1.index assignment.2)
     (Array.replicate program.commonIdentities 1)
 
+/-- The smallest overrides of the canonical frame that carry a nonzero floor
+fee inside the band: forty at fifty of a hundred is a gross of twenty, and five
+percent of twenty is exactly one per side. -/
+def feeBearing : List (ScalarSlot × Nat) :=
+  [(.fill, 40), (.sellerMaximum, 40), (.buyerMaximum, 40),
+    (.sellerFeeBps, 500), (.buyerFeeBps, 500), (.policyFeeBps, 500)]
+
+/-- Read every Custody route enable bit out of an admitted result, with the
+replay revision those routes advance it to. -/
+def routes (result : Option TransitionVMV3.State) : Option (Nat × Nat × Nat × Nat) :=
+  result.map fun state =>
+    (state.scalars[ScalarSlot.index .sellerIntermediateRouteEnabled]!,
+      state.scalars[ScalarSlot.index .feeContinuationRouteEnabled]!,
+      state.scalars[ScalarSlot.index .feeSoleRouteEnabled]!,
+      state.scalars[ScalarSlot.index .custodyAfterFee]!)
+
+/-- Read the fee arithmetic out of an admitted result. -/
+def ledger (result : Option TransitionVMV3.State) : Option (Nat × Nat × Nat) :=
+  result.map fun state =>
+    (state.scalars[ScalarSlot.index .fee]!,
+      state.scalars[ScalarSlot.index .sellerNet]!,
+      state.scalars[ScalarSlot.index .combinedFee]!)
+
 /-- Read three derived coordinates out of an admitted result. -/
 def quote (result : Option TransitionVMV3.State) : Option (Nat × Nat × Nat) :=
   result.map fun state =>
@@ -674,24 +717,54 @@ theorem an_empty_product_tail_refuses :
     program.execute 0 ⟨scalars 0, identities⟩ = none := by native_decide
 
 open Witness in
-/-- A venue rate exactly at the denominator is admitted: the fee equals the
-gross and the seller nets nothing, which is a policy the makers may sign. -/
-theorem a_venue_rate_at_the_denominator_admits :
+/-- The band's own edge is admitted. Five percent on a gross of five floors to
+a fee of zero at this witness's scale, which is exactly the arithmetic the
+band leaves reachable. -/
+theorem a_venue_rate_at_the_band_admits :
     quote (program.execute 3
         ⟨scalars 3
-            [(.sellerFeeBps, 10000), (.buyerFeeBps, 10000), (.policyFeeBps, 10000)],
-          identities⟩) = some (5, 5, 10) := by
+            [(.sellerFeeBps, 500), (.buyerFeeBps, 500), (.policyFeeBps, 500)],
+          identities⟩) = some (5, 0, 10) := by
   native_decide
 
 open Witness in
-/-- One basis point above the denominator is refused. Without this clause the
-floor fee can equal or exceed the gross, so the buyer is debited twice the
-quote while the seller nets nothing. -/
-theorem a_venue_rate_above_the_denominator_refuses :
+/-- One basis point above the band is refused. This is decision 0014 D2 as a
+protocol relation; before this clause the band was a `test` in one shell script
+and a founding that avoided that script was unbounded. -/
+theorem a_venue_rate_above_the_band_refuses :
     program.execute 3
         ⟨scalars 3
-            [(.sellerFeeBps, 10001), (.buyerFeeBps, 10001), (.policyFeeBps, 10001)],
+            [(.sellerFeeBps, 501), (.buyerFeeBps, 501), (.policyFeeBps, 501)],
           identities⟩ = none := by
+  native_decide
+
+open Witness in
+/-- The take-everything market: a rate at the denominator used to be admitted,
+and it was the ONLY rate that could enable `CUSTODY_ROUTES_V3` slot 3. The band
+refuses it, which is what retires that route. -/
+theorem a_venue_rate_at_the_denominator_refuses :
+    program.execute 3
+        ⟨scalars 3
+            [(.sellerFeeBps, 10000), (.buyerFeeBps, 10000), (.policyFeeBps, 10000)],
+          identities⟩ = none := by
+  native_decide
+
+open Witness in
+/-- The fee leg is not routed in tx1. On an admitted fee-bearing frame the
+seller route's enable bit is set, the fee-continuation and fee-sole bits are
+zero, and the Custody replay advances by exactly one. -/
+theorem a_fee_bearing_frame_routes_the_seller_leg_alone :
+    ledger (program.execute 3 ⟨scalars 3 feeBearing, identities⟩) = some (1, 19, 2)
+      ∧ routes (program.execute 3 ⟨scalars 3 feeBearing, identities⟩) = some (1, 0, 0, 4) := by
+  native_decide
+
+open Witness in
+/-- And the zero-fee frame keeps its shipped single terminal route: the
+Custody replay still advances by exactly one, so nothing about the zero-fee
+path's Custody arithmetic moves. -/
+theorem a_zero_fee_frame_keeps_its_terminal_seller_route :
+    ledger (program.execute 3 ⟨scalars 3, identities⟩) = some (0, 5, 0)
+      ∧ routes (program.execute 3 ⟨scalars 3, identities⟩) = some (0, 0, 0, 4) := by
   native_decide
 
 /-! ## Geometry
@@ -711,7 +784,7 @@ against it. -/
 /-- The scalar bank is affine in the tail count at the emitted stride, so the
 tail count is a runtime width and never a compile-time one. -/
 theorem the_scalar_bank_is_affine_in_the_tail_count (tailCount : Nat) :
-    program.scalarWidth tailCount = 66 + tailCount * 2 := rfl
+    program.scalarWidth tailCount = 68 + tailCount * 2 := rfl
 
 /-- The identity bank does not grow with the geometry at all: ordinary Direct
 has no per-Product-item identity. -/

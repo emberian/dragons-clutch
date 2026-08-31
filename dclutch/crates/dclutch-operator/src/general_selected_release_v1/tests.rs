@@ -138,10 +138,18 @@ fn the_publication_satisfies_the_market_selection_hook() {
         GENERAL_ACTIONS_V3.len()
     );
     let set = CapabilityProgramSetV2::decode(&release.program_set).expect("set");
-    assert_eq!(usize::from(set.entry_count()), GENERAL_ACTIONS_V3.len());
+    assert_eq!(
+        usize::from(set.entry_count()),
+        GENERAL_ACTIONS_V3.len() + 1,
+        "seven actions and the activation coordinate"
+    );
     assert_eq!(
         general_selected_release_profile_v1(),
-        GeneralReleaseProfileV1::SettlementOnly
+        GeneralReleaseProfileV1::SettlementWithActivation
+    );
+    assert_eq!(
+        usize::from(set.entry_count()),
+        GENERAL_SELECTED_ENTRY_COUNT_V1
     );
 
     // (4) the executor role is Trading.
@@ -367,8 +375,9 @@ fn the_publication_record_list_names_every_record_under_a_derived_schema() {
     let release = general_selected_release_v1(input()).expect("release");
     let records = release.publication_records().expect("records");
 
-    // program-set + config, then nine artifacts per action.
-    assert_eq!(records.len(), 2 + 9 * GENERAL_SELECTED_ACTION_COUNT_V1);
+    // program-set + config, nine artifacts per action, then the activation
+    // triple: the profile, the effect and the descriptor the seam authenticates.
+    assert_eq!(records.len(), 2 + 9 * GENERAL_SELECTED_ACTION_COUNT_V1 + 3);
     assert_eq!(records[0].label, "program-set");
     assert_eq!(records[0].body, release.program_set.as_slice());
     assert_eq!(records[1].label, "config");
@@ -410,5 +419,203 @@ fn the_publication_record_list_names_every_record_under_a_derived_schema() {
     assert_eq!(
         lifecycle.schema,
         first.artifacts().lifecycle.schema().to_bytes()
+    );
+}
+
+/// The publication closure: the three records a Trading activation frame reads.
+///
+/// This is the whole of what "General's publication closure is not wired" meant.
+/// The activation route borrows exactly three finalized records beyond the set
+/// and the config -- `PROFILE_RAW`, `EFFECT_RAW` and `SET_DESCRIPTOR_RAW` -- and
+/// authenticates each against an identity the DESCRIPTOR carries. So this does
+/// not check that three records exist; it checks that the identities the
+/// published descriptor names are the digests of the other two published
+/// bodies, and that the set entry names the digest of the descriptor body. A
+/// release whose three records do not close that triangle publishes a capability
+/// no Market can activate, and the failure would be a live refusal rather than a
+/// compile error.
+#[test]
+fn the_three_activation_records_close_the_triangle_the_seam_authenticates() {
+    use dclutch_capability_activation_codec::{
+        activation_account_profile_schema_v1, activation_effect_schema_v1,
+    };
+    use dclutch_capability_program_contract::CapabilityProgramV1;
+
+    let release = general_selected_release_v1(input()).expect("release");
+    let records = release.publication_records().expect("records");
+    let named = |label: &str| {
+        records
+            .iter()
+            .find(|record| record.label == label)
+            .unwrap_or_else(|| panic!("{label} record"))
+    };
+
+    let profile = named("activation-account-profile");
+    let effect = named("activation-effect");
+    let descriptor = named("activation-descriptor");
+
+    assert_eq!(profile.body, release.activation.account_profile.as_slice());
+    assert_eq!(effect.body, release.activation.effect.as_slice());
+    assert_eq!(descriptor.body, release.activation.descriptor.as_slice());
+
+    // The three schemas are the codec's, which is the seam's own authority for
+    // them: `process_activation` authenticates the profile under
+    // `ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1`, the effect under the effect
+    // kernel's V2 schema, and admits the selected descriptor only under
+    // `CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1`.
+    assert_eq!(profile.schema, activation_account_profile_schema_v1());
+    assert_eq!(effect.schema, activation_effect_schema_v1());
+    assert_eq!(descriptor.schema, general_activation_descriptor_schema_v1());
+    assert_ne!(
+        descriptor.schema, CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
+        "the activation descriptor must NOT carry the schema every action carries"
+    );
+
+    // The triangle. `authenticate_finalized_record` is handed each body and the
+    // identity the descriptor names; these are those identities.
+    let decoded = CapabilityProgramV1::decode(descriptor.body).expect("activation descriptor");
+    assert_eq!(decoded.account_profile().to_bytes(), profile.content_id());
+    assert_eq!(decoded.effect_schema().to_bytes(), effect.content_id());
+    assert_eq!(
+        release.activation.descriptor_id,
+        descriptor.content_id(),
+        "the set entry names the digest of the published descriptor body"
+    );
+    assert_eq!(
+        release.publication.activation_descriptor,
+        descriptor.content_id()
+    );
+
+    // And the four manifest-joined coordinates are the ones the seven actions
+    // publish, because `validate_selection` joins the descriptor to the manifest
+    // entry the release's own action descriptors authored.
+    let action = CapabilityProgramV4::decode(&release.bundles[0].descriptor).expect("action");
+    assert_eq!(decoded.kind().to_bytes(), action.kind().to_bytes());
+    assert_eq!(
+        decoded.capacity_profile().to_bytes(),
+        action.capacity_profile().to_bytes()
+    );
+    assert_eq!(
+        decoded.root_schema().to_bytes(),
+        action.root_schema().to_bytes()
+    );
+    assert_eq!(
+        decoded.derivation_policy().to_bytes(),
+        action.derivation_policy().to_bytes()
+    );
+    assert_eq!(decoded.root_state_bytes(), action.root_state_bytes());
+}
+
+/// The published set activates, and no action request can reach that entry.
+#[test]
+fn the_published_set_selects_the_activation_descriptor_and_no_action_does() {
+    let release = general_selected_release_v1(input()).expect("release");
+    let set = CapabilityProgramSetV2::decode(&release.program_set).expect("set");
+
+    let request = general_activation_request_v1().expect("activation request");
+    let selected = set.select_descriptor(&request).expect("activation entry");
+    assert_eq!(
+        selected.program().to_bytes(),
+        release.activation.descriptor_id
+    );
+    assert_eq!(
+        selected.schema().to_bytes(),
+        general_activation_descriptor_schema_v1()
+    );
+
+    for action in GENERAL_ACTIONS_V3 {
+        let probe = action_selector_probe(action).expect("probe");
+        let action_selected = set.select_descriptor(&probe).expect("action entry");
+        assert_ne!(
+            action_selected.program().to_bytes(),
+            release.activation.descriptor_id,
+            "an ordinary controller request must not reach the activation entry"
+        );
+        assert_eq!(
+            action_selected.schema().to_bytes(),
+            CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID
+        );
+    }
+}
+
+/// What the published activation actually WRITES, read with General's decoder.
+///
+/// The review standard the template sets: a data-defined activation is judged by
+/// running the real effect kernel over the artifacts a release publishes and
+/// decoding the answer with the family's own type -- never by reading the
+/// effect's instruction list. So this projects the PUBLISHED bundle for the
+/// PUBLISHED config identity and requires `GeneralRootV2::decode` to accept it
+/// and to equal `GeneralRootV2::active`.
+#[test]
+fn the_published_activation_composes_a_real_general_root() {
+    use dclutch_general_adapter_contract::activation_bundle_v1::project_general_root_tail_v1;
+    use dclutch_general_config_contract::GeneralRootV2;
+
+    let release = general_selected_release_v1(input()).expect("release");
+    let config_id = release.publication.config_id;
+    let generation = release.publication.generation;
+    for market in [[0x2a; 32], [0xd7; 32]] {
+        let tail = project_general_root_tail_v1(
+            &release.activation,
+            market,
+            config_id,
+            generation,
+            2_672_640,
+        )
+        .expect("projected General root tail");
+        let root = GeneralRootV2::decode(&tail).expect("the projection decodes as a General root");
+        assert_eq!(
+            root,
+            GeneralRootV2::active(market, config_id, generation).expect("canonical active root")
+        );
+    }
+}
+
+/// A substituted activation record refuses, because validation rebuilds it.
+#[test]
+fn a_substituted_activation_record_refuses() {
+    let canonical = general_selected_release_v1(input()).expect("release");
+
+    for mutate in [
+        (|release: &mut GeneralSelectedReleaseV1| {
+            release.activation.account_profile = release.bundles[0].account_profile.clone();
+        }) as fn(&mut GeneralSelectedReleaseV1),
+        |release| release.activation.effect = release.bundles[0].effect.clone(),
+        |release| release.activation.descriptor = release.bundles[0].descriptor.clone(),
+        |release| release.activation.descriptor_id = [0x5c; 32],
+        |release| release.activation.account_profile_id = [0x5c; 32],
+        |release| release.activation.effect_id = [0x5c; 32],
+    ] {
+        let mut hostile = canonical.clone();
+        mutate(&mut hostile);
+        assert_eq!(
+            validate_general_selected_release_v1(&hostile, input()).err(),
+            Some(GeneralSelectedReleaseErrorV1::Activation),
+            "the activation triple is rebuilt, not inspected"
+        );
+    }
+
+    // A publication naming another activation descriptor is a publication fault,
+    // not an activation one: the bundle is the canonical one and only the
+    // summary disagrees.
+    let mut relabelled = canonical.clone();
+    relabelled.publication.activation_descriptor = [0x77; 32];
+    assert_eq!(
+        validate_general_selected_release_v1(&relabelled, input()).err(),
+        Some(GeneralSelectedReleaseErrorV1::Publication)
+    );
+
+    // And a seven-entry set -- the profile this release used to publish -- no
+    // longer validates, because the eighth coordinate is now part of the
+    // release's identity rather than an optional extra.
+    let mut narrowed = canonical.clone();
+    narrowed.program_set = build_general_activation_capable_program_set_v1(
+        &canonical.publication.descriptors,
+        [0x61; 32],
+    )
+    .expect("a set naming a foreign activation descriptor");
+    assert_eq!(
+        validate_general_selected_release_v1(&narrowed, input()).err(),
+        Some(GeneralSelectedReleaseErrorV1::ProgramSet)
     );
 }

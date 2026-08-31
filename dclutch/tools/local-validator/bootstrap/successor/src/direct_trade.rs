@@ -1063,6 +1063,105 @@ fn decode_signed_intent(
     })
 }
 
+/// THE ONLY FEE RATE THIS RELEASE CAN TRADE, said where an operator reads it.
+///
+/// The binding clause is on chain, not here. `direct_token_setup_v1` -- the
+/// sole creator of the seller's and the venue's Direct token accounts, and so
+/// an unavoidable predecessor of every Hot fill -- reads the Market's finalized
+/// Direct config and refuses unless its rate is exactly
+/// `DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1`
+/// (`programs/dclutch-trading-sbf/src/direct_token_setup_v1.rs`, the
+/// `config.fee_basis_points()` comparison, whose own constant is documented
+/// "the one Direct fee rate admitted by this setup release"). A Market at any
+/// other rate can be founded, opened, activated, and admitted to, and its setup
+/// transaction still cannot land.
+///
+/// This host gate is a SHADOW of that one, and it used to be spelled as a bare
+/// `!= 50` inside a twelve-way disjunction reporting only "Direct public
+/// request facts are not canonical". Devnet market19 is zero-fee and
+/// irreversibly so; three lanes in a row were told their request was not
+/// canonical with no clause named, no observed value, and no hint that the
+/// binding constraint belonged to a deployed program rather than to the input
+/// they kept re-authoring. The refusal now says which program refuses and why,
+/// against the same constant that program uses.
+fn refusing_admitted_fee_rate_clause_v1(fee_basis_points: u16) -> Option<String> {
+    let admitted = dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
+    if fee_basis_points == admitted {
+        return None;
+    }
+    Some(format!(
+        "Market fee is {fee_basis_points} basis points per side, but the deployed Direct token \
+         setup admits only {admitted}; direct_token_setup_v1 refuses to create the seller and \
+         venue token accounts at any other rate, so no fill on this Market can be set up"
+    ))
+}
+
+/// Every canonicality clause of the public request that fails, each naming the
+/// fact it read and the fact it wanted.
+fn refusing_public_request_clauses_v1(
+    public: &DirectTradePublicManifestV1,
+    market: Pubkey,
+    payer: Pubkey,
+    fee_recipient: Pubkey,
+    seller: SignedDirectIntentV3,
+    buyer: SignedDirectIntentV3,
+) -> Vec<String> {
+    let mut refusing = Vec::new();
+    for (label, key) in [
+        ("Market", market),
+        ("payer", payer),
+        ("fee recipient", fee_recipient),
+    ] {
+        if key == Pubkey::default() {
+            refusing.push(format!("Direct {label} is the default identity"));
+        }
+    }
+    if public.route.fixed.market != public.market {
+        refusing.push(format!(
+            "route Market {} is not the request Market {}",
+            public.route.fixed.market, public.market
+        ));
+    }
+    if public.route.payer != public.payer {
+        refusing.push(format!(
+            "route payer {} is not the request payer {}",
+            public.route.payer, public.payer
+        ));
+    }
+    if public.fill == 0 {
+        refusing.push("requested fill is zero".to_owned());
+    }
+    if public.execution_price == 0 {
+        refusing.push("requested execution price is zero".to_owned());
+    }
+    refusing.extend(refusing_admitted_fee_rate_clause_v1(
+        public.fee_basis_points,
+    ));
+    for (label, maximum) in [
+        ("seller", seller.intent.maximum_fill),
+        ("buyer", buyer.intent.maximum_fill),
+    ] {
+        if public.fill > maximum {
+            refusing.push(format!(
+                "requested fill {} exceeds the {label} ticket maximum {maximum}",
+                public.fill
+            ));
+        }
+    }
+    for (label, lifecycle) in [
+        ("seller", seller.intent.lifecycle),
+        ("buyer", buyer.intent.lifecycle),
+    ] {
+        if lifecycle > 1 {
+            refusing.push(format!(
+                "{label} ticket lifecycle {lifecycle} is neither fill-or-kill nor \
+                 immediate-or-cancel"
+            ));
+        }
+    }
+    refusing
+}
+
 fn validate_public_facts(
     public: &DirectTradePublicManifestV1,
     seller: SignedDirectIntentV3,
@@ -1071,20 +1170,13 @@ fn validate_public_facts(
     let market = parse_key(&public.market, "Direct Market")?;
     let payer = parse_key(&public.payer, "Direct payer")?;
     let fee_recipient = parse_key(&public.fee_recipient, "Direct fee recipient")?;
-    if market == Pubkey::default()
-        || payer == Pubkey::default()
-        || fee_recipient == Pubkey::default()
-        || public.route.fixed.market != public.market
-        || public.route.payer != public.payer
-        || public.fill == 0
-        || public.execution_price == 0
-        || public.fee_basis_points != 50
-        || public.fill > seller.intent.maximum_fill
-        || public.fill > buyer.intent.maximum_fill
-        || seller.intent.lifecycle > 1
-        || buyer.intent.lifecycle > 1
-    {
-        return Err(refusal("Direct public request facts are not canonical"));
+    let refusing =
+        refusing_public_request_clauses_v1(public, market, payer, fee_recipient, seller, buyer);
+    if !refusing.is_empty() {
+        return Err(refusal(format!(
+            "Direct public request facts are not canonical: {}",
+            refusing.join("; ")
+        )));
     }
     compile_direct_inline_request_v3(seller, buyer, public.fill, public.execution_price)
         .map_err(|error| Error::new(format!("Direct request: {error:?}")))?;
@@ -1762,6 +1854,18 @@ fn collect_direct_trade_planning_from_snapshot_v1(
         validated.buyer,
         validated.public.fill,
         validated.public.execution_price,
+        // Claims then Custody: the order the child walk reaches them, which is
+        // the order the hint slots are assigned in. These two bumps were mined
+        // by the route projection that produced `route`, from the same child
+        // requests Trading will rebuild; a wrong one reproduces a different
+        // address and the trade refuses rather than executing wrongly.
+        //
+        // The Custody bump is taken from the projection's ENABLED slot, never
+        // by indexing the fixed four-slot array here. This line used to read
+        // `custody_authority_bumps[0]`, which is the terminal ZERO-FEE route;
+        // a fee-bearing fill runs slot 1, and reproducing the wrong slot's
+        // bump refused `Release` at `child_authority_v4.rs:73`.
+        route.child_authorities.child_caller_bumps,
     )
     .map_err(|error| Error::new(format!("Direct Hot report: {error:?}")))?;
     if hot_report.trading_artifact_release != route.chain.trading_artifact_release
@@ -1778,7 +1882,11 @@ fn collect_direct_trade_planning_from_snapshot_v1(
         authentication,
         &hot_report,
     )
-    .map_err(|error| Error::new(format!("Direct Hot finalization: {error:?}")))?;
+    // Display, not Debug: the route error now names its refusing clause in a
+    // sentence with what it observed against what it required. Debug would
+    // print the same facts as a struct literal and lose the observed-vs-expected
+    // reading that makes it actionable without opening the crate.
+    .map_err(|error| Error::new(format!("Direct Hot finalization: {error}")))?;
     let hot_prestates = direct_hot_prestates_v1(&named_route);
     let lookup_table = journal_root
         .map(|_| snapshot.account(provision.lookup_table).cloned())
@@ -2312,20 +2420,34 @@ fn write_direct_setup_journal_v1(
     Ok(())
 }
 
+/// The two setup transactions, each carrying this campaign's ComputeBudget
+/// declarations ahead of its one Trading instruction.
+///
+/// THE PREFIX IS NOT DECORATION. Without it a transaction gets the runtime's
+/// DEFAULT 200,000 compute units, and `direct_replay_setup_v1` does not fit:
+/// its Custody CPI alone consumes 131,391 and the outer frame runs the meter to
+/// 200,000 of 200,000 before it finishes, so the transaction dies with
+/// `ProgramFailedToComplete` -- a runtime abort with no protocol refusal
+/// anywhere, which is the least legible failure this driver can produce. It was
+/// invisible for as long as it was, because nothing had ever reached this stage:
+/// every Direct trade before this one refused at the finalization wall in front
+/// of it. Both other Direct transactions on this route already declare their
+/// budget; these two were the omission.
 fn direct_setup_message_v1(
     planning: &DirectTradeSetupPlanningV1,
     stage: DirectSetupStageV1,
     blockhash: SolanaHash,
-) -> VersionedMessage {
+) -> Result<VersionedMessage> {
     let instruction = match stage {
         DirectSetupStageV1::ReplaySetup => &planning.replay.instruction,
         DirectSetupStageV1::TokenSetup => &planning.tokens.instruction,
     };
-    VersionedMessage::Legacy(Message::new_with_blockhash(
-        core::slice::from_ref(instruction),
+    let bounded = crate::rpc::bounded_instructions(core::slice::from_ref(instruction), None)?;
+    Ok(VersionedMessage::Legacy(Message::new_with_blockhash(
+        &bounded,
         Some(&planning.replay.coordinates.payer),
         &blockhash,
-    ))
+    )))
 }
 
 fn direct_setup_expected_poststates_v1(
@@ -2425,7 +2547,7 @@ fn direct_setup_planned_journal_v1(
         }
         None => {
             let (blockhash, last_valid_block_height) = latest_direct_blockhash_v1(rpc)?;
-            let message = direct_setup_message_v1(planning, stage, blockhash);
+            let message = direct_setup_message_v1(planning, stage, blockhash)?;
             let encoded = BASE64.encode(message.serialize());
             let fee =
                 direct_fee_for_message_v1(rpc, &encoded, expected_direct_cluster_v1(validated)?)?;
@@ -2435,7 +2557,7 @@ fn direct_setup_planned_journal_v1(
     let (expected_return_data, expected_poststates) =
         direct_setup_expected_poststates_v1(planning, stage)?;
     let plan = DirectSetupJournalPlanV1 {
-        message: direct_setup_message_v1(planning, stage, blockhash),
+        message: direct_setup_message_v1(planning, stage, blockhash)?,
         last_valid_block_height,
         exact_fee_lamports,
         expected_signer: planning.replay.coordinates.payer,
@@ -5440,11 +5562,29 @@ fn authenticate_embedded_setup_mutation_v1(
     let VersionedMessage::Legacy(message) = message else {
         return Err(refusal("embedded Direct setup message was not legacy"));
     };
-    let instruction = message
-        .instructions
-        .first()
-        .filter(|_| message.instructions.len() == 1)
-        .ok_or_else(|| refusal("embedded Direct setup message did not own one instruction"))?;
+    // Two ComputeBudget declarations, then the one Trading instruction. The
+    // prefix is pinned by program AND by discriminant -- 2 is
+    // SetComputeUnitLimit and 3 is SetComputeUnitPrice -- rather than merely
+    // skipped, because "ignore the instructions before the interesting one" is
+    // how a substituted prefix gets past a verifier that reads the interesting
+    // one correctly.
+    let compute_budget = solana_sdk_ids::compute_budget::ID;
+    let program_of = |index: u8| message.account_keys.get(usize::from(index)).copied();
+    let [limit, price, trading] = message.instructions.as_slice() else {
+        return Err(refusal(
+            "embedded Direct setup message did not own two ComputeBudget declarations and one instruction",
+        ));
+    };
+    if program_of(limit.program_id_index) != Some(compute_budget)
+        || program_of(price.program_id_index) != Some(compute_budget)
+        || limit.data.first() != Some(&2)
+        || price.data.first() != Some(&3)
+    {
+        return Err(refusal(
+            "embedded Direct setup message changed its two exact ComputeBudget prefixes",
+        ));
+    }
+    let instruction = trading;
     let payer = message
         .account_keys
         .first()
@@ -6325,7 +6465,9 @@ fn journal_entries_v1(validated: &ValidatedManifestV1) -> Result<Vec<std::fs::Di
 /// Load only the immutable creation root needed to rederive a request-specific
 /// table on a later finalized observation. Full journal authentication occurs
 /// again after the named route and exact table address have been rederived.
-pub(crate) fn journal_root_v1(validated: &ValidatedManifestV1) -> Result<Option<DirectTradeJournalV1>> {
+pub(crate) fn journal_root_v1(
+    validated: &ValidatedManifestV1,
+) -> Result<Option<DirectTradeJournalV1>> {
     let entries = journal_entries_v1(validated)?;
     let Some(first) = entries.first() else {
         return Ok(None);
@@ -6502,11 +6644,56 @@ mod tests {
         authenticate_lookup_activation_slot_order_v1, direct_evidence_digest_v1,
         direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
         direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
-        journal_state_sha256, refresh_direct_journal_digest_v1, require_unique_json_v1, usage,
-        parse_direct_return_data_v1, verify_expected_direct_poststates_v1, write_direct_journal_v1,
+        journal_state_sha256, parse_direct_return_data_v1, refresh_direct_journal_digest_v1,
+        refusing_admitted_fee_rate_clause_v1, require_unique_json_v1, usage,
+        verify_expected_direct_poststates_v1, write_direct_journal_v1,
     };
     use crate::cluster::ExpectedClusterV1;
     use dclutch_operator::{Finality, Observation, ObservedAccount};
+
+    /// The rate the deployed setup admits passes, and it is READ FROM THE
+    /// CONSTANT the on-chain program uses rather than restated as a literal
+    /// here -- restating it as a literal is the whole defect this closes.
+    #[test]
+    fn the_admitted_direct_fee_rate_is_the_one_the_deployed_setup_takes() {
+        let admitted = dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
+        assert_eq!(
+            refusing_admitted_fee_rate_clause_v1(admitted),
+            None,
+            "the rate direct_token_setup_v1 admits must pass the host shadow of its gate"
+        );
+    }
+
+    /// devnet market19, the Market this refusal was written for: zero-fee,
+    /// irreversibly, and so unfillable under this Direct setup release. The
+    /// clause has to say the rate it read, the rate that is admitted, and the
+    /// PROGRAM that refuses -- an operator who reads only "not canonical" goes
+    /// looking in the input they can change, and market19's rate is not one.
+    #[test]
+    fn a_zero_fee_market_is_refused_by_a_clause_that_names_the_program_and_both_rates() {
+        let clause = refusing_admitted_fee_rate_clause_v1(0)
+            .expect("a zero-fee Market cannot be set up by this release");
+        assert!(clause.contains('0'), "{clause}");
+        assert!(
+            clause.contains(
+                &dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1
+                    .to_string()
+            ),
+            "{clause}"
+        );
+        assert!(clause.contains("direct_token_setup_v1"), "{clause}");
+    }
+
+    /// Every other rate is refused too, including one that is a legal
+    /// basis-points value and differs only from the admitted one.
+    #[test]
+    fn a_merely_different_fee_rate_is_refused_the_same_way() {
+        let admitted = dclutch_direct_codec::token_setup_v1::DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1;
+        let other = admitted.checked_add(1).expect("a neighbouring rate exists");
+        let clause =
+            refusing_admitted_fee_rate_clause_v1(other).expect("only one rate is admitted");
+        assert!(clause.contains(&other.to_string()), "{clause}");
+    }
 
     /// An omitted `returnData` and an explicit null carry the same fact, and
     /// devnet sends the omission. Everything past that stays exact.

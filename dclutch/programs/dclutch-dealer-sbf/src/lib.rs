@@ -126,27 +126,99 @@ pub enum DealerSbfError {
     /// State data could not be borrowed or commit width changed.
     Commit = 0x7009,
     /// The release's pinned deployment slot moved: the substrate was upgraded.
+    /// Every open market on the superseded release generation refuses until a
+    /// re-release re-authenticates the new deployment and re-pins its slot.
     ///
     /// Decision 0012. Not a corrupted account and not an attack: the exact
     /// upgrade authority the release names shipped new bytes, so the cached
-    /// authentication no longer describes what is deployed. Every open market
-    /// on the superseded release generation refuses until a re-release
-    /// re-authenticates the new deployment and re-pins its slot.
+    /// authentication no longer describes what is deployed.
     ReleaseSuperseded = 0x700A,
+}
+
+impl DealerSbfError {
+    /// Every refusal this program can raise, in discriminant order.
+    ///
+    /// This is what the band assertions below read. It is kept honest by
+    /// [`DealerSbfError::ordinal`], whose match is exhaustive: a variant added to the
+    /// enum does not compile until its author writes an arm here, and the only
+    /// arm that satisfies the assertions is its own index in this array.
+    pub const ALL: [Self; 11] = [
+        Self::Instruction,
+        Self::AccountFrame,
+        Self::AccountIdentity,
+        Self::Signature,
+        Self::Clock,
+        Self::Release,
+        Self::Semantic,
+        Self::Claims,
+        Self::Custody,
+        Self::Commit,
+        Self::ReleaseSuperseded,
+    ];
+
+    /// This refusal's position in [`DealerSbfError::ALL`].
+    ///
+    /// The match is exhaustive on purpose, and that is the whole mechanism:
+    /// a twelfth variant is a COMPILE ERROR here rather than a discriminant no
+    /// assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Instruction => 0,
+            Self::AccountFrame => 1,
+            Self::AccountIdentity => 2,
+            Self::Signature => 3,
+            Self::Clock => 4,
+            Self::Release => 5,
+            Self::Semantic => 6,
+            Self::Claims => 7,
+            Self::Custody => 8,
+            Self::Commit => 9,
+            Self::ReleaseSuperseded => 10,
+        }
+    }
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
 // The discriminants stay literal so a code seen in a validator log is greppable;
 // these assertions are what stops them drifting out of the allocated band.
-const _: () = assert!(
-    DealerSbfError::Instruction as u32 == dclutch_refusal_registry::DEALER_REFUSAL_BASE,
-    "DealerSbfError must start at its registered refusal band base"
-);
-const _: () = assert!(
-    (DealerSbfError::ReleaseSuperseded as u32)
-        < dclutch_refusal_registry::DEALER_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
-    "DealerSbfError must not run past its registered refusal band"
-);
+//
+// WHY THIS IS A LIST AND NOT TWO ENDPOINTS. The ceiling assertion used to name
+// one variant BY HAND as "the last one". A hand-named ceiling says nothing
+// about the variants after it and goes stale silently every single time the
+// enum grows -- the failure is not that the name is wrong, it is that nothing
+// can notice. Claims proved it the expensive way: its bound went on naming
+// `ReleaseSuperseded` after a later variant landed, so for as long as that
+// stood, the newest refusal in the program was checked by nothing.
+//
+// So the band is now checked over `ALL`, element by element, and `ALL` is
+// welded to the enum by the exhaustive `ordinal` match. A new variant cannot
+// join quietly: it does not compile until its author answers for it, and the
+// answer they must give is its index here.
+const _: () = {
+    assert!(
+        DealerSbfError::ALL[0] as u32 == dclutch_refusal_registry::DEALER_REFUSAL_BASE,
+        "DealerSbfError must start at its registered refusal band base"
+    );
+    let mut index = 0;
+    while index < DealerSbfError::ALL.len() {
+        let variant = DealerSbfError::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "DealerSbfError::ALL repeats a variant, skips one, or is out of discriminant order"
+        );
+        assert!(
+            variant as u32 == dclutch_refusal_registry::DEALER_REFUSAL_BASE + index as u32,
+            "DealerSbfError discriminants are not the contiguous run from the band base that ALL claims"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::DEALER_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "DealerSbfError must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
 
 impl From<DealerSbfError> for ProgramError {
     fn from(value: DealerSbfError) -> Self {

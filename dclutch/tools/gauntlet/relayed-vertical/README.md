@@ -57,8 +57,10 @@ tools/gauntlet/relayed-vertical/run-relayed-vertical.sh --walk both
 
 ## The success walk
 
-found → CreateFund/VerifyFundReady over the **short no-recovery frame** (the
-`e5b6923` admission's first live execution) → daemon observes the twin →
+found — the founding's own post-Open readiness suffix drives CreateFund,
+ActivateFund and VerifyFundReady over the **short no-recovery frame** (the
+`e5b6923` admission's first live execution), and this campaign authenticates
+that result rather than driving it a second time → daemon observes the twin →
 keeper creates the record for the observed slot → daemon appends ×4 and seals
 (the full-body VirtualPool append rides the Market's address lookup table —
 one of the family's two known over-packet wires) → the 28-account consumption

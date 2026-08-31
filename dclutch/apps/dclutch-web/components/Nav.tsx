@@ -36,6 +36,7 @@ const PRODUCT_ITEMS = [
 
 /** Every operator-console route. Any of these lights the Console entry. */
 export const CONSOLE_PATHS: readonly string[] = [
+  '/campaign',
   '/console',
   '/direct',
   '/found',
@@ -43,6 +44,7 @@ export const CONSOLE_PATHS: readonly string[] = [
   '/liquidity',
   '/local',
   '/operate',
+  '/population',
   '/product-v2',
   '/redeem',
   '/release',

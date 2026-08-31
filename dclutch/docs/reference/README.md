@@ -23,13 +23,14 @@ these pages always match the source they describe. Regenerate with
 - [abi/](abi/README.md) -- byte layouts: magics, PDA seed domains, record
   widths and offsets, account tables.
 
-Current totals: **13 programs**, **141 routes**
-(67 exercised by the test campaigns), **212 refusal
+Current totals: **13 programs**, **152 routes**
+(67 exercised by the test campaigns), **271 refusal
 codes**.
 
 If you'd rather start with prose, the [guides](../guides/README.md)
 explain the protocol in plain terms and link back into these tables.
 
-The seven dClutch programs are deployed on Solana devnet. These tables describe
-the checked-in protocol and its devnet and local tooling; they are not a
-mainnet release manifest, and there is no open market or value at risk today.
+The seven dClutch programs are deployed on Solana devnet, where one market is
+now open for trading. These tables describe the checked-in protocol and its
+devnet and local tooling; they are not a mainnet release manifest, and that
+market's collateral is a devnet test token, so there is no value at risk.

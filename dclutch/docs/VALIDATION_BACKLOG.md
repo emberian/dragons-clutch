@@ -31,9 +31,37 @@ The checkpoint must include:
    64-key/refused 65-key boundary.
 2. One fresh owned-loopback run through Founding and collateralized participant
    admission before Direct starts. Require the explicit partition of
-   1,000,000,000 founding atoms plus 100,000,000 participant atoms, removed mint
-   authority, the `direct-buyer` source account owned by `participant`, and both
-   participant transactions finalized. Require admission to join the exact
+   1,000,000,000 founding atoms plus 100,000,000 participant BANKROLL atoms,
+   removed mint authority, the `direct-buyer` source account owned by
+   `participant`, and both participant transactions finalized. Require the
+   ADMITTED quantity to be the derived debit, which is a different number from
+   the bankroll and is 50,250,000 at the currently pinned terms.
+
+   **CLOSED 2026-08-31 by lane FILL-2.** The requirement this row used to state
+   -- 100,000,000 admitted atoms -- was itself the defect, and it is fixed at
+   its author. `validate_collateral` in `dclutch-direct-codec` tests the buyer's
+   `delegated_amount` against the trade's debit as an EQUALITY, not a floor: the
+   delegation is a single-use authorization spent to zero by the Custody effect,
+   so an allowance larger than the debit is a different trade's authorization.
+   The probe passed one number to two different jobs -- the bankroll minted into
+   the participant's source account, and the allowance granted over the buyer's
+   collateral -- and against the producer's pinned terms the debit is
+   `FILL_ATOMS_V1 x EXECUTION_PRICE_V1 / EXPECTED_PRICE_SCALE_V1` plus the
+   50-bps floor, which is 50,250,000. The probe therefore admitted exactly twice
+   what its own trade debits and no Direct fill could ever land from it.
+
+   `run.py` now derives the debit in `direct_buyer_collateral_debit_v1()` from
+   the same four constants the Rust producer pins, passes THAT to
+   `--collateral-quantity-atoms` while leaving
+   `PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS` to its actual job of sizing the
+   bankroll, and asserts the produced public manifest's `fill`,
+   `executionPrice` and `feeBasisPoints` against its own prediction -- so a
+   Rust-side drift breaks the probe loudly at the first moment both numbers
+   exist, instead of producing a session the validator will always refuse.
+   Measured 2026-08-31 by lane FINALIZATION against a live loopback root; see
+   `docs/evidence/DIRECT_FILL_WALLS_2026_08_31.md`.
+
+   Require admission to join the exact
    `founding_lifecycle_rent_credit` owned by the DCLTGMF3/Open-market generation;
    the earlier Found37 `lifecycle_rent_credit`, an aliased coordinate, or a
    missing founding label must refuse before any signer access. For the
@@ -216,6 +244,25 @@ The checkpoint must include:
 
 ## Broad release measurements
 
+Which route M-61 must measure, corrected 2026-08-30. M-61 names a procedure —
+20 named seeds, pass count, exact arithmetic mean — and the procedure is not in
+question. What was wrong is the route it was run against. `tools/gauntlet/hot-cu`
+drives the Hot *continuation*, whose witness is `hot_heap_frame_is_inert`, and
+HEAPRED measured that route at +35,127 CU above the top-level route the public
+actually uses — identical on all thirteen seeds where both routes complete. Every
+"Hot CU" figure that tier has ever printed is therefore 35,127 high, and a margin
+read off it is not the margin this protocol ships against. The release compute
+gate is `direct_hot_top_level`, witnessed by
+`programs/dclutch-trading-sbf/program-test/tests/direct_hot_top_level_margin_gate.rs`.
+That file owns its own constant and already runs on every push via the `programs`
+tier, so do not restate its number here — a value duplicated instead of read is
+this project's signature defect. Evidence, including the matched-pair control
+table where the continuation fails seed 0 outright and the top-level route passes
+it at 1,373,063 CU: `docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md`.
+The ruling that demoted the continuation to harness-only is
+`docs/decisions/DECISION_PACKET_2026_08_30.md` §4. This correction governs every
+M-61 reference in this document, including the recorded sweeps below.
+
 - After the one-seed lifecycle is fully green, run exactly 20 named seeds from
   the same checked source and fresh local ledgers.
 - Report pass count and exact arithmetic mean for every named compute metric as
@@ -305,7 +352,9 @@ Run these rows at the same combined freeze as the private-validator checkpoint:
    five-Upgrade/two-CarryForward set to DEVNET-EXEC.
 
 The final M-61 sweep must use the Trading ELF after Direct `InitializeReplay`
-and its caller freeze. Report pass count and the 20-seed mean beside the exact
+and its caller freeze, and must measure the `direct_hot_top_level` route rather
+than the demoted Hot continuation — see the route correction under "Broad
+release measurements". Report pass count and the 20-seed mean beside the exact
 ELF SHA-256; do not report one draw or an observed minimum as a margin.
 
 ## Current integrated build evidence
@@ -328,6 +377,13 @@ ELF SHA-256; do not report one draw or an observed minimum as a margin.
   (SHA-256
   `af21319eb4a06af7371ae9b9b0eccc0ac013979da436145407c234ab1746dc70`).
   This is compute evidence, not a private-validator lifecycle acceptance.
+  ROUTE CAVEAT, added 2026-08-30: that sweep ran through `tools/gauntlet/hot-cu`,
+  so it measured the Hot continuation and not the top-level route. The figure
+  stands as an accurate record of what was run — it is not restated or corrected
+  here, because the run happened — but per the correction under "Broad release
+  measurements" it sits about 35,127 CU above the route the public uses. Do not
+  carry 1,359,277 forward as a top-level margin; re-measure under
+  `direct_hot_top_level`.
 - The exact one-seed participant-through runtime rejected this candidate during
   honest founding: three Custody calls consumed 355,209, 98,172, and 113,313
   CU, Core consumed 258,805 CU, Resolution exhausted at 623,608 of 623,664 CU,

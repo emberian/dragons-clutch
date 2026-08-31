@@ -1,0 +1,23 @@
+{
+  "format": "dclutch/direct-intent-ticket-vector/v1",
+  "note": "Two-sided vector for the portable Direct intent ticket. Emitted by directTicket.test.ts through the SAME encodeDirectIntentTicketV1 the browser trade panel calls, and reproduced byte-for-byte by the Rust author in crates/dclutch-direct-ticket, which both `dclutch ticket author` (the released CLI) and direct-intent-ticket-author-v1 (the operator binary) call — one author, two invocations. TypeScript is the incumbent producer and therefore the authority for the JSON envelope; the 172-byte signing message underneath is owned by neither language but by formal/dclutch-semantics/EmitDirectIntentV2Rust.lean, whose emitted Rust constants lib/generated/directInlineV3.ts mirrors. The three seed fills are 32-byte Ed25519 seeds supplied as INPUTS; maker, market, collateralAccount, signatureHex, ticketText and ticketSha256 are what the encoders produced from them. ticketText carries no trailing newline because JSON.stringify(value, null, 2) emits none.",
+  "makerSeedFill": 61,
+  "marketSeedFill": 63,
+  "collateralSeedFill": 64,
+  "side": 0,
+  "lifecycle": 1,
+  "outcome": 3,
+  "generation": 7,
+  "nonce": 9,
+  "validFrom": 11,
+  "validThrough": 4294967295,
+  "maximumFill": 100000000,
+  "limitPrice": 500000,
+  "feeBasisPoints": 50,
+  "maker": "8bcRzB3v6PxbbtkVCiX9ceW2whwakA6gX7qvSYbeMHLq",
+  "market": "5F8wMRFMdYGMkjWQUye6WfbgRVWEo9yyKo9aFPk2TLaD",
+  "collateralAccount": "7xwJ3uceuBV7KyCsdJsBs9Ljfh1bL3WB7NbGpwUNeJ2o",
+  "signatureHex": "608556f5b1dd549cdb7e971ee049dd06fdcd40a97b105af83572dc7fedce2f9f1f6c9d48357b2355e19f65f7a1ed0860550114b0a83263da04f1f467c587c60a",
+  "ticketText": "{\n  \"kind\": \"dclutch/direct-intent-ticket/v1\",\n  \"maker\": \"8bcRzB3v6PxbbtkVCiX9ceW2whwakA6gX7qvSYbeMHLq\",\n  \"signature\": \"608556f5b1dd549cdb7e971ee049dd06fdcd40a97b105af83572dc7fedce2f9f1f6c9d48357b2355e19f65f7a1ed0860550114b0a83263da04f1f467c587c60a\",\n  \"intent\": {\n    \"side\": 0,\n    \"lifecycle\": 1,\n    \"outcome\": 3,\n    \"market\": \"5F8wMRFMdYGMkjWQUye6WfbgRVWEo9yyKo9aFPk2TLaD\",\n    \"generation\": \"7\",\n    \"nonce\": \"9\",\n    \"validFrom\": \"11\",\n    \"validThrough\": \"4294967295\",\n    \"maximumFill\": \"100000000\",\n    \"limitPrice\": \"500000\",\n    \"feeBasisPoints\": 50,\n    \"collateralAccount\": \"7xwJ3uceuBV7KyCsdJsBs9Ljfh1bL3WB7NbGpwUNeJ2o\"\n  }\n}",
+  "ticketSha256": "9fcc6267ca1536e3570fc5c7fee8b6ad3e83d2e6fef086a06b082d15ccbd5e98"
+}

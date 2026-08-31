@@ -192,6 +192,7 @@ pub fn compile_v0_message(
         observation,
         table_accounts,
         true,
+        true,
     )
 }
 
@@ -216,7 +217,36 @@ pub fn compile_v0_message_with_optional_tables(
         observation,
         table_accounts,
         false,
+        true,
     )
+}
+
+/// The compiled wire size of the identical message, reported without the packet
+/// cap.
+///
+/// `Error::PacketTooLarge` carries no payload, so a caller that hits it learns
+/// that its route does not fit and nothing about by how much — which is the
+/// difference between a refusal that can be acted on and one that can only be
+/// reported. This compiles exactly what `compile_v0_message` would have
+/// compiled, applying every other check, and returns the size instead of
+/// refusing on it. It is a diagnostic: it never yields a sendable message.
+pub fn measure_v0_wire_bytes(
+    payer: Pubkey,
+    instructions: &[Instruction],
+    recent_blockhash: Hash,
+    observation: Observation,
+    table_accounts: &[ObservedAccount],
+) -> Result<usize, Error> {
+    compile_v0_message_inner(
+        payer,
+        instructions,
+        recent_blockhash,
+        observation,
+        table_accounts,
+        true,
+        false,
+    )
+    .map(|plan| plan.wire_bytes)
 }
 
 fn compile_v0_message_inner(
@@ -226,6 +256,7 @@ fn compile_v0_message_inner(
     observation: Observation,
     table_accounts: &[ObservedAccount],
     require_lookup: bool,
+    enforce_packet_cap: bool,
 ) -> Result<VersionedMessagePlanV0, Error> {
     let mut tables = Vec::with_capacity(table_accounts.len());
     let mut table_keys = Vec::with_capacity(table_accounts.len());
@@ -282,7 +313,7 @@ fn compile_v0_message_inner(
         .checked_add(signature_count.checked_mul(64).ok_or(Error::Arithmetic)?)
         .and_then(|value| value.checked_add(message_bytes))
         .ok_or(Error::Arithmetic)?;
-    if wire_bytes > PACKET_DATA_BYTES {
+    if enforce_packet_cap && wire_bytes > PACKET_DATA_BYTES {
         return Err(Error::PacketTooLarge);
     }
     let lookup_tables = message

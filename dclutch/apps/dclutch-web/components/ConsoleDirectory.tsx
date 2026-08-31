@@ -82,6 +82,18 @@ const ENTRIES: readonly ConsoleEntry[] = [
     blurb:
       'For developers: read the checkpointed local validator and confirm its finalized state matches the published evidence, byte for byte.',
   },
+  {
+    href: '/campaign',
+    name: 'Campaign record',
+    blurb:
+      'One market founded, resolved and retired on a private rehearsal validator, drawn from the campaign’s own transcript: per-outcome odds, the vault, the work each stage cost, and the terminal answer.',
+  },
+  {
+    href: '/population',
+    name: 'Population record',
+    blurb:
+      'A whole world of markets drawn from one seed and driven on a private validator: every market’s odds path on a shared clock, the run’s own event timeline, and the strip saying what executed against what the chain refused, never attempted, or blocked.',
+  },
 ];
 
 export default function ConsoleDirectory() {
@@ -90,20 +102,17 @@ export default function ConsoleDirectory() {
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">The toolbox behind the product</p>
+        <p className="eyebrow">Tools for running and building on dClutch</p>
         <h1>Operator<br /><em>consoles.</em></h1>
-        <p>These are tools for people running or building on the protocol, not
-        product pages. Each one says plainly what it can and cannot do, and when
-        the chain disagrees with what a page was asked to do, it says so by name
-        rather than failing quietly. A page being listed here does not mean it can
-        send a transaction. If you are here to look around or trade, start at{' '}
-        <Anchor href="/markets">Markets</Anchor> instead.</p>
-        <p>Every file a console asks for has exactly one producer, and the
-        console says which, right on the input. The answer key is the
-        README&apos;s table <a href={docsHrefV1('readme.html', 'README.md')}>“The
-        artifacts, and where they come from”</a> — if a console asks you to
-        paste something and you can&apos;t tell where it comes from, that is a
-        bug in the console.</p>
+        <p>If you came here to look around or to trade, start at{' '}
+        <Anchor href="/markets">Markets</Anchor> instead. These are working
+        tools, not product pages.</p>
+        <p>Being listed here does not mean a page can send a transaction —
+        several deliberately cannot.</p>
+        <p>Where a console asks you to paste a file, it names the tool that
+        produces it, right on the input. The full list is in the README&apos;s
+        table <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts,
+        and where they come from”</a>.</p>
       </div>
     </section>
 

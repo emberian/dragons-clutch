@@ -25,17 +25,17 @@ import { type SolanaRpcClient } from './rpc';
  * canonical Market and kernel transitions rather than from product language.
  */
 export const MARKET_PHASE_MEANING_V1: Readonly<Record<MarketCorePhaseV2, string>> = Object.freeze({
-  Founding: 'The Market root and its immutable identities exist. No claim has been issued, no collateral is held, and no terminal receipt can be written yet.',
-  Open: 'The Market admits complete-set split and merge against its Hoard. No terminal receipt is written, so no claim can be redeemed.',
-  Terminal: 'A terminal Product receipt has been accepted and exactly one claim is frozen as winning. Split and merge are closed; redemption is open at one collateral atom per winning claim atom.',
-  Retiring: 'The Market is winding down. It admits no new issuance; a settled Market still admits redemption, and an unsettled one holds no economic state at all.',
-  Retired: 'No outstanding capability and no economic state remain. The Market admits no further action.',
+  Founding: 'Not running yet. Nobody holds a claim and it holds no collateral.',
+  Open: 'Trading. Put collateral in and you get one claim on every outcome \u2014 a complete set; hand a complete set back and take the collateral out again. No answer yet, so nothing can be cashed in.',
+  Terminal: 'The answer is in and one outcome won. Claims can no longer be created or unwound; the winning claim cashes in at one unit of collateral per claim.',
+  Retiring: 'Closing down. No new claims. If it got an answer, winning claims can still be cashed in; if not, it is holding nothing.',
+  Retired: 'Finished. Nothing is left in it.',
 });
 
 /** What the exact required backing is measured against at this phase. */
 export const REQUIRED_BACKING_MEANING_V1: Readonly<Record<RequiredBackingBasisV2, string>> = Object.freeze({
-  'maximum-claim-supply': 'largest claim supply in the Market\u2019s Claims aggregate \u2014 while no claim is settled, every claim could still be the one that pays',
-  'winning-claim-supply': 'winning claim supply \u2014 the terminal receipt is written, so only winning claims can still be paid',
+  'maximum-claim-supply': 'Measured against the biggest claim count on any one outcome.',
+  'winning-claim-supply': 'Measured against the claim count on the outcome that won.',
 });
 
 export function marketPhaseMeaningV1(phase: MarketCorePhaseV2): string {
@@ -127,13 +127,13 @@ export async function inspectMarketDetailV1(
     phaseMeaning: card.status === 'decoded' ? marketPhaseMeaningV1(card.phase) : null,
     realmProvenance: card.status === 'decoded'
       ? realmProvenanceV1(card.collateral)
-      : refusedSection('The Market itself did not decode, so its Realm was never reacquired.'),
+      : refusedSection('The market account did not read.'),
     liabilityProvenance: card.status === 'decoded'
       ? liabilityProvenanceV1(card.liability)
-      : refusedSection('The Market itself did not decode, so no Claims aggregate address could be derived.'),
+      : refusedSection('The market account did not read.'),
     capabilityProvenance: card.status === 'decoded'
       ? capabilityProvenanceV1(card.capabilities)
-      : refusedSection('The Market itself did not decode, so no capability manifest identity exists to authenticate.'),
+      : refusedSection('The market account did not read.'),
     reason: card.status === 'decoded'
       ? `Market ${card.address} decoded at finalized floor ${discovery.floorSlot}.`
       : `Market ${card.address} refused at finalized floor ${discovery.floorSlot}: ${card.refusal}`,

@@ -54,7 +54,7 @@ Regenerate with: npm run abi:found
 | --- | ---: |
 | `CORE_VERSION` | 3 |
 | `CORE_REQUEST_BYTES` | 72 |
-| `CORE_STATE_BYTES` | 360 |
+| `CORE_STATE_BYTES` | 368 |
 | `CORE_ACTION_FOUND_TAG` | 0 |
 | `LIFECYCLE_RENT_CREDIT_BYTES_V2` | 128 |
 | `CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2` | 128 |

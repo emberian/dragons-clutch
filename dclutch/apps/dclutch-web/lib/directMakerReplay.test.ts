@@ -5,6 +5,7 @@ import { SYSTEM_PROGRAM_ID } from './releaseRegistry';
 import { type RpcAccount } from './rpc';
 import {
   DIRECT_MAKER_REPLAY_BYTES_V1,
+  DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1,
   deriveDirectMakerReplayAddressV1,
   inspectDirectMakerNonceV1,
   requireAuthenticatedDirectMakerNonceV1,
@@ -31,6 +32,7 @@ function replayAccount(overrides?: Readonly<{
   executable?: boolean;
   space?: number;
   lamports?: string;
+  legacyWidth?: boolean;
   bytes?: (bytes: Uint8Array) => void;
 }>): RpcAccount {
   const { bump } = deriveDirectMakerReplayAddressV1(TRADING, MARKET, GENERATION, MAKER);
@@ -46,13 +48,17 @@ function replayAccount(overrides?: Readonly<{
   putU64(data, 104, 5n);
   data.set(new PublicKey(RENT_OWNER).toBytes(), 112);
   putU64(data, 144, 2_000_000n);
+  putU64(data, 152, 4n);
   overrides?.bytes?.(data);
+  const body = overrides?.legacyWidth === true
+    ? data.slice(0, DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1)
+    : data;
   return Object.freeze({
-    data,
+    data: body,
     executable: overrides?.executable ?? false,
     lamports: overrides?.lamports ?? '2000000',
     owner: overrides?.owner ?? TRADING,
-    space: overrides?.space ?? data.length,
+    space: overrides?.space ?? body.length,
   });
 }
 
@@ -93,6 +99,19 @@ describe('the Direct maker replay nonce reader', () => {
       tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER,
     });
     expect(observed).toMatchObject({ state: 'existing', nextNonce: 9n, market: MARKET, generation: GENERATION, maker: MAKER });
+    expect(observed.feeOwed).toBe(4n);
+  });
+
+  it('reads both declared widths, and a legacy record owes nothing', async () => {
+    const legacy = await inspectDirectMakerNonceV1(client(replayAccount({ legacyWidth: true })), {
+      tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER,
+    });
+    expect(legacy).toMatchObject({ state: 'existing', nextNonce: 9n });
+    expect(legacy.feeOwed).toBe(0n);
+    await expect(inspectDirectMakerNonceV1(
+      client(replayAccount({ space: DIRECT_MAKER_REPLAY_LEGACY_BYTES_V1 - 1 })),
+      { tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER },
+    )).rejects.toThrow('160 or 152 bytes');
   });
 
   it('refuses saturation and a finalized context regression', async () => {
@@ -108,7 +127,7 @@ describe('the Direct maker replay nonce reader', () => {
     const request = { tradingProgram: TRADING, market: MARKET, generation: GENERATION, maker: MAKER } as const;
     await expect(inspectDirectMakerNonceV1(client(replayAccount({ owner: FOREIGN })), request)).rejects.toThrow('not owned');
     await expect(inspectDirectMakerNonceV1(client(replayAccount({ executable: true })), request)).rejects.toThrow('executable');
-    await expect(inspectDirectMakerNonceV1(client(replayAccount({ space: DIRECT_MAKER_REPLAY_BYTES_V1 + 1 })), request)).rejects.toThrow('exactly 152');
+    await expect(inspectDirectMakerNonceV1(client(replayAccount({ space: DIRECT_MAKER_REPLAY_BYTES_V1 + 1 })), request)).rejects.toThrow('160 or 152 bytes');
     await expect(inspectDirectMakerNonceV1(client(replayAccount({ bytes: (bytes) => { bytes[0] ^= 1; } })), request)).rejects.toThrow('magic or version');
     await expect(inspectDirectMakerNonceV1(client(replayAccount({ bytes: (bytes) => putU16(bytes, 8, 2) })), request)).rejects.toThrow('magic or version');
     await expect(inspectDirectMakerNonceV1(client(replayAccount({ bytes: (bytes) => { bytes[10] ^= 1; } })), request)).rejects.toThrow('PDA bump');

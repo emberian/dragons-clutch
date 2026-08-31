@@ -4,6 +4,7 @@ use dclutch_capability_contract::{CapabilityEntryV1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_ACCOUNT_MAX_BYTES_V1, CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
     CapabilityRootHeaderV1, Error as CapabilityProgramError, SelectedRecordBumpsV1,
+    hot_v3::hot_bump_hint_v1,
 };
 use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::{CAPABILITY_FUNDING_HEADER_BYTES_V2, CapabilityFundingHeaderV2};
@@ -278,6 +279,38 @@ impl TradingFamilyContextV1 {
         root_account_data: &[u8],
         trading_receipt: AuthenticatedRoleReceiptV1,
     ) -> Result<Self, TradingSbfError> {
+        Self::authenticate_at(
+            program_id,
+            child_root_key,
+            child_root_owner,
+            root_account_data,
+            trading_receipt,
+            0,
+        )
+    }
+
+    /// Authenticate one existing root, reproducing its address from a hint.
+    ///
+    /// This is [`Self::authenticate`] with the `find_program_address` replaced
+    /// by the `create_program_address` it would have ended on. Nothing about
+    /// the conjunction is weakened: the derivation still has to reproduce the
+    /// account the caller supplied, still from the seeds this root's own header
+    /// spells, still under this Program. A wrong hint reproduces a different
+    /// address and refuses at the same equality -- the derivation IS the check.
+    ///
+    /// The root is the ONE address on the hot path with no upstream carrier:
+    /// its own account is what is being authenticated, and nothing above it
+    /// records the bump. That is why the byte is mined by the caller instead of
+    /// stored, and why it may be a hint and never an authority. See
+    /// `HotBumpHintsV1`. Zero means the caller mined nothing and this searches.
+    pub fn authenticate_at(
+        program_id: &Pubkey,
+        child_root_key: &Pubkey,
+        child_root_owner: &Pubkey,
+        root_account_data: &[u8],
+        trading_receipt: AuthenticatedRoleReceiptV1,
+        root_bump_hint: u8,
+    ) -> Result<Self, TradingSbfError> {
         if child_root_owner != program_id {
             return Err(TradingSbfError::Root);
         }
@@ -287,12 +320,13 @@ impl TradingFamilyContextV1 {
                 .ok_or(TradingSbfError::Root)?,
         )
         .map_err(|_| TradingSbfError::Root)?;
-        Self::authenticate_header(
+        Self::authenticate_header_at(
             program_id,
             child_root_key,
             root_account_data.len(),
             root,
             trading_receipt,
+            root_bump_hint,
         )
     }
 
@@ -302,6 +336,24 @@ impl TradingFamilyContextV1 {
         root_account_bytes: usize,
         root: CapabilityRootHeaderV1,
         trading_receipt: AuthenticatedRoleReceiptV1,
+    ) -> Result<Self, TradingSbfError> {
+        Self::authenticate_header_at(
+            program_id,
+            child_root_key,
+            root_account_bytes,
+            root,
+            trading_receipt,
+            0,
+        )
+    }
+
+    fn authenticate_header_at(
+        program_id: &Pubkey,
+        child_root_key: &Pubkey,
+        root_account_bytes: usize,
+        root: CapabilityRootHeaderV1,
+        trading_receipt: AuthenticatedRoleReceiptV1,
+        root_bump_hint: u8,
     ) -> Result<Self, TradingSbfError> {
         if root_account_bytes <= CAPABILITY_ROOT_HEADER_BYTES_V1
             || root_account_bytes > CAPABILITY_ROOT_ACCOUNT_MAX_BYTES_V1
@@ -315,7 +367,30 @@ impl TradingFamilyContextV1 {
             return Err(TradingSbfError::Release);
         }
         let seeds = root.seeds();
-        let expected_root = Pubkey::find_program_address(&seeds.as_slices(), program_id).0;
+        let expected_root = match hot_bump_hint_v1(root_bump_hint) {
+            Some(bump) => {
+                let bump_seed = [bump];
+                let [
+                    domain,
+                    market,
+                    generation,
+                    manifest,
+                    entry,
+                    kind,
+                    release,
+                    config,
+                ] = seeds.as_slices();
+                Pubkey::create_program_address(
+                    &[
+                        domain, market, generation, manifest, entry, kind, release, config,
+                        &bump_seed,
+                    ],
+                    program_id,
+                )
+                .map_err(|_| TradingSbfError::Root)?
+            }
+            None => Pubkey::find_program_address(&seeds.as_slices(), program_id).0,
+        };
         if expected_root != *child_root_key {
             return Err(TradingSbfError::Root);
         }
@@ -618,8 +693,10 @@ mod tests {
         )
     }
 
-    fn canonical_dispatch_fixture() -> (
-        TradingFamilyContextV1,
+    /// The canonical root header, and the three artifacts it selects.
+    fn canonical_root_header() -> (
+        ContentId,
+        CapabilityRootHeaderV1,
         vec::Vec<u8>,
         vec::Vec<u8>,
         vec::Vec<u8>,
@@ -657,6 +734,22 @@ mod tests {
             SelectedRecordBumpsV1::default(),
         )
         .expect("root");
+        (release_set, root, descriptor, manifest, config)
+    }
+
+    /// The root account bytes, its program, its canonical address and bump, and
+    /// the Trading receipt that authenticates it.
+    fn canonical_root_account() -> (
+        vec::Vec<u8>,
+        Pubkey,
+        Pubkey,
+        u8,
+        AuthenticatedRoleReceiptV1,
+        vec::Vec<u8>,
+        vec::Vec<u8>,
+        vec::Vec<u8>,
+    ) {
+        let (release_set, root, descriptor, manifest, config) = canonical_root_header();
         let decoded_descriptor = CapabilityProgramV1::decode(&descriptor).expect("descriptor");
         let mut root_account = vec![
             0_u8;
@@ -668,7 +761,7 @@ mod tests {
             .expect("root account");
         let program_id = Pubkey::new_from_array([15; 32]);
         let seeds = root.seeds();
-        let child_root = Pubkey::find_program_address(&seeds.as_slices(), &program_id).0;
+        let (child_root, canonical) = Pubkey::find_program_address(&seeds.as_slices(), &program_id);
         let receipt = AuthenticatedRoleReceiptV1::new(
             ExecutionRoleV1::Trading,
             release_set,
@@ -676,6 +769,26 @@ mod tests {
             ArtifactReleaseIdV1::new([16; 32]).expect("artifact"),
             id(17),
         );
+        (
+            root_account,
+            program_id,
+            child_root,
+            canonical,
+            receipt,
+            manifest,
+            descriptor,
+            config,
+        )
+    }
+
+    fn canonical_dispatch_fixture() -> (
+        TradingFamilyContextV1,
+        vec::Vec<u8>,
+        vec::Vec<u8>,
+        vec::Vec<u8>,
+    ) {
+        let (root_account, program_id, child_root, _, receipt, manifest, descriptor, config) =
+            canonical_root_account();
         let context = TradingFamilyContextV1::authenticate(
             &program_id,
             &child_root,
@@ -685,6 +798,40 @@ mod tests {
         )
         .expect("context");
         (context, manifest, descriptor, config)
+    }
+
+    /// A hint that is not this root's canonical bump reproduces a DIFFERENT
+    /// address, which is what makes the caller-mined byte safe to accept.
+    #[test]
+    fn a_wrong_root_bump_hint_reproduces_another_address_and_refuses() {
+        let (root_account, program_id, child_root, canonical, receipt, _, _, _) =
+            canonical_root_account();
+        let at = |hint: u8| {
+            TradingFamilyContextV1::authenticate_at(
+                &program_id,
+                &child_root,
+                &program_id,
+                &root_account,
+                receipt,
+                hint,
+            )
+        };
+        // The canonical bump reproduces the root, and does it without a search.
+        assert!(at(canonical).is_ok());
+        // Zero is absent and falls back to the search this always did.
+        assert!(at(0).is_ok());
+        // Every other byte either fails to be a program address at all or names
+        // an address that is not this root. Neither is admitted, and the reason
+        // is the same equality the searching form always ran.
+        let mut refused = 0_u32;
+        for hint in 1..=u8::MAX {
+            if hint == canonical {
+                continue;
+            }
+            assert_eq!(at(hint).err(), Some(TradingSbfError::Root), "hint {hint}");
+            refused = refused.saturating_add(1);
+        }
+        assert_eq!(refused, 254);
     }
 
     #[test]

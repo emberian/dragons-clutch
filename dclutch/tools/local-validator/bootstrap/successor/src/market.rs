@@ -8415,11 +8415,17 @@ fn derive_founding_outer_v1(
     claim_count: u32,
 ) -> Result<FoundingOuterV1> {
     let core = pubkey(&plan.core.program_id)?;
+    let registry = pubkey(&plan.registry.program_id)?;
     let claims_program = pubkey(&plan.claims.program_id)?;
     let trading = pubkey(&plan.trading.program_id)?;
     let rent_program = pubkey(&plan.rent_credit.program_id)?;
     let release_set = hex32(&plan.release_set_id)?;
     let principal = coordinates.lock.amount;
+    // The bump derivation below reaches for the Market and Realm record
+    // addresses on its way to their bumps. Requiring it to land on the ones
+    // this founding already holds is what stops a right-looking bump derived
+    // from the wrong coordinates.
+    require_predicted_bump_coordinates_v1(core, registry, coordinates, records)?;
 
     // The prestate is read back from the chain rather than modelled. These are
     // the exact bytes DCLTPCB2 left, and the kernel transitions below are the
@@ -8484,6 +8490,15 @@ fn derive_founding_outer_v1(
     // from, and the rent beneficiary is the founding generation's credit. It is
     // cross-checked against the chain in `authenticate_core_state_encoding_v1`
     // before anything commits to its digest.
+    //
+    // The bump tail is part of that encoding, not a decoration on it.
+    // `programs/dclutch-core-sbf/src/found.rs` fills `StateBumpsV1` from the
+    // Market-address search it has already performed and from the Realm record
+    // pair's own bumps, and the Found stage hashes THAT candidate into the
+    // projected Realize receipt whose digest reaches the permit through
+    // `FoundingIntentV5`. A bump byte this side leaves zero moves the permit's
+    // Claims request digest and the founding refuses at
+    // `ClaimsFoundingSbfErrorV5::Release` three legs later, naming nothing.
     let market_state = CoreState {
         phase: Phase::Founding,
         readiness: Readiness::Prepaid,
@@ -8493,7 +8508,7 @@ fn derive_founding_outer_v1(
         principal_cap_sets: coordinates.principal_cap_sets,
         rent_beneficiary: identity_of(coordinates.credit.to_bytes())?,
         terminal_receipt: None,
-        bumps: StateBumpsV1::UNRECORDED,
+        bumps: predicted_state_bumps_v1(core, registry, coordinates.identity)?,
     };
     let market_state_bytes = market_state
         .encode()
@@ -8694,15 +8709,139 @@ fn derive_founding_outer_v1(
     })
 }
 
+/// Predict the PDA bump tail Core's `found` kernel records in a Market state.
+///
+/// `programs/dclutch-core-sbf/src/found.rs` fills `StateBumpsV1` from the
+/// Market-address search it already performs and from the Realm record pair's
+/// bumps, and every one of those seeds is a function of the Market identity —
+/// `identity.realm_id` IS the Realm record's content digest, which with
+/// `REALM_SCHEMA_RELEASE_ID_V1` is the whole of that pair's derivation. So this
+/// projection can be computed for a Market that does not exist yet, which is
+/// what the founding needs: it commits to `sha256(CoreState)` two stages before
+/// Core writes one.
+///
+/// A zero bump is `StateBumpsV1`'s unrecorded encoding and cannot be carried, so
+/// a search that lands on bump zero is a refusal here rather than a silently
+/// unrecorded tail that would disagree with Core's.
+fn predicted_state_bumps_v1(
+    core: Pubkey,
+    registry: Pubkey,
+    identity: MarketIdentity,
+) -> Result<StateBumpsV1> {
+    let market_bump =
+        Pubkey::find_program_address(&MarketCoreStateSeedsV2::new(identity).as_slices(), &core).1;
+    let realm_digest = identity.realm_id.to_bytes();
+    let raw_bump = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm_digest,
+        ],
+        &registry,
+    )
+    .1;
+    let staging_bump = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm_digest,
+        ],
+        &registry,
+    )
+    .1;
+    let bumps = StateBumpsV1 {
+        market: StateBumpsV1::record(market_bump),
+        realm_raw_record: StateBumpsV1::record(raw_bump),
+        realm_staging_record: StateBumpsV1::record(staging_bump),
+    };
+    if bumps.market.is_none()
+        || bumps.realm_raw_record.is_none()
+        || bumps.realm_staging_record.is_none()
+    {
+        return Err(Error::new(
+            "a Market or Realm record PDA searched down to bump zero, which StateBumpsV1 cannot carry",
+        ));
+    }
+    Ok(bumps)
+}
+
+/// Require the bump derivation to land on the founding's own coordinates.
+///
+/// [`predicted_state_bumps_v1`] reaches for the Market and Realm record
+/// addresses on its way to their bumps and then discards them. Comparing them
+/// against the addresses this founding already holds is what stops a
+/// right-looking bump tail derived from the wrong Market identity: the bumps
+/// themselves are single bytes and would collide often enough to be useless as
+/// their own evidence.
+fn require_predicted_bump_coordinates_v1(
+    core: Pubkey,
+    registry: Pubkey,
+    coordinates: &FoundingCoordinates,
+    records: &MarketRecords,
+) -> Result<()> {
+    let market = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(coordinates.identity).as_slices(),
+        &core,
+    )
+    .0;
+    if market != coordinates.market {
+        return Err(Error::new(
+            "recorded-bump derivation reached a Market other than the founding's",
+        ));
+    }
+    if coordinates.identity.realm_id.to_bytes() != records.realm.digest {
+        return Err(Error::new(
+            "the founding Market identity names a Realm digest the published record does not have",
+        ));
+    }
+    let realm_digest = records.realm.digest;
+    let raw = Pubkey::find_program_address(
+        &[
+            RAW_RECORD_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm_digest,
+        ],
+        &registry,
+    )
+    .0;
+    let staging = Pubkey::find_program_address(
+        &[
+            STAGING_CURSOR_PDA_SEED_V1,
+            &REALM_SCHEMA_RELEASE_ID_V1,
+            &realm_digest,
+        ],
+        &registry,
+    )
+    .0;
+    if raw != records.realm.raw || staging != records.realm.staging {
+        return Err(Error::new(
+            "recorded-bump derivation reached a Realm record pair other than the published one",
+        ));
+    }
+    Ok(())
+}
+
 /// Prove the candidate Core state is encoded exactly the way the chain writes.
 ///
 /// The founding commits to `sha256(CoreState)` two stages before that state
 /// exists, so an encoding that differed from Core's by one byte would produce a
-/// permit the Claims stage refuses and a failure with no visible cause. This
-/// re-encodes the Found37 Market's own decoded state and requires the result to
-/// be the bytes the chain is holding: one independent derivation of a value the
-/// validator produced, not a read-back.
-fn authenticate_core_state_encoding_v1(rpc: &mut Rpc, market: Pubkey) -> Result<()> {
+/// permit the Claims stage refuses and a failure with no visible cause. Two
+/// things are required of the Market the chain is already holding:
+///
+/// * re-encoding its own decoded state reproduces its bytes, and
+/// * the PDA bump tail it carries is the one [`predicted_state_bumps_v1`]
+///   predicts for it.
+///
+/// The second is the load-bearing half. Round-tripping alone passes on any
+/// state the codec can decode, INCLUDING one whose tail this driver would have
+/// left zero — which is exactly the drift that opened when Core started
+/// recording those bumps, and which cost a whole campaign to find by hand.
+fn authenticate_core_state_encoding_v1(
+    rpc: &mut Rpc,
+    market: Pubkey,
+    core: Pubkey,
+    registry: Pubkey,
+) -> Result<()> {
     let account = rpc.required_account(market, "Found37 Market")?;
     let state = CoreState::decode(&account.data)
         .map_err(|error| Error::new(format!("Found37 Market state: {error:?}")))?;
@@ -8713,6 +8852,15 @@ fn authenticate_core_state_encoding_v1(rpc: &mut Rpc, market: Pubkey) -> Result<
         return Err(Error::new(
             "CoreState re-encoding did not reproduce the Market bytes the chain holds",
         ));
+    }
+    let predicted = predicted_state_bumps_v1(core, registry, state.identity)?;
+    if predicted != state.bumps {
+        return Err(Error::new(format!(
+            "the Market the chain holds carries bump tail {:?}, and this driver predicts \
+             {predicted:?}; a founding projected from this driver's CoreState would commit to a \
+             digest Core never writes",
+            state.bumps
+        )));
     }
     Ok(())
 }
@@ -10298,7 +10446,7 @@ fn execute_generic_market_founding(
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
-    authenticate_core_state_encoding_v1(rpc, found31_market)?;
+    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry)?;
     let outer = derive_founding_outer_v1(
         rpc,
         plan,
@@ -10688,7 +10836,7 @@ fn execute_split_market_founding(
     let custody = pubkey(&plan.custody.program_id)?;
     let token_program = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 
-    authenticate_core_state_encoding_v1(rpc, found31_market)?;
+    authenticate_core_state_encoding_v1(rpc, found31_market, core, registry)?;
     let outer = derive_founding_outer_v1(
         rpc,
         plan,
@@ -11470,6 +11618,10 @@ pub(crate) struct PythMarketParamsV1<'a> {
     pub(crate) cuts: Vec<i128>,
     pub(crate) coefficients: Vec<u64>,
     pub(crate) generation: u64,
+    /// Raw collateral atoms the founding commits. Was a constant inside the
+    /// shared core, which meant a local caller could vary the band and not the
+    /// stake -- and a load simulator's markets differ in both.
+    pub(crate) initial_collateral_atoms: u64,
     pub(crate) local_participant_fixture_liquidity_atoms: u64,
 }
 
@@ -11489,11 +11641,130 @@ pub(crate) struct PythMarketParamsV1<'a> {
 /// projection documented in `docs/evidence/PYTH_SYNTHETIC_RELEASE_V1.md`; it is
 /// not a production provider release, and this Market is not a mainnet or
 /// devnet product.
+/// The dimensions of the local demo market a CALLER may choose, with the
+/// values this fixture has always emitted as its defaults.
+///
+/// Everything else about the local market -- the feed, the release row, the
+/// captured publication, the semantic identities, the fixture liquidity -- is
+/// a fact about the lab and not a parameter, and stays a constant below.
+///
+/// WHY THIS EXISTS. Until now `demo_market_input_base` hard-coded the band and
+/// the collateral, so every market this repository could found on a local
+/// validator was the SAME market: four outcomes, one claim unit, 1,000,000,000
+/// atoms, a 300-second terminal window. A load simulator that draws twelve
+/// markets of five widths then founds twelve identical ones, and the
+/// heterogeneity it drew is a plan nothing on a chain ever expresses
+/// (`docs/evidence/SIMULATOR_MARKET_LIFE_2026_08_30.md`, "THE SHAPE THE
+/// COMPILER CANNOT VARY"). These are the knobs already in `MarketRunInput`;
+/// exposing them is a lab fixture growing a parameter list, not new protocol.
+///
+/// NOT HERE, and deliberately: the claim unit. It is not a `MarketRunInput`
+/// field at all -- `compile_linked_basis_v3` hard-wires `payout_scale: 1`
+/// alongside the categorical basis kind, so varying it is the same edit as
+/// emitting a graded basis and belongs to whoever does that one.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalMarketShapeV1 {
+    /// Denominator under every cut. The band's scale.
+    pub(crate) cut_denominator: u64,
+    /// Interior cuts, strictly increasing. The market's WIDTH is
+    /// `cuts.len() + 2`: the two tails plus the explicit failure outcome.
+    pub(crate) cuts: Vec<i128>,
+    /// One payout coefficient per outcome, so exactly `cuts.len() + 2` of them.
+    pub(crate) coefficients: Vec<u64>,
+    /// Raw collateral atoms the founding commits.
+    pub(crate) initial_collateral_atoms: u64,
+    /// How long the terminal window is, in seconds. The window still ENDS at
+    /// the captured fixture publication -- that instant is the one the local
+    /// Pyth release can be resolved against and is not a free parameter -- so
+    /// this moves the window's start, which is the deadline a market is
+    /// measured against.
+    pub(crate) terminal_window_width_seconds: i64,
+    /// Product generation. Two markets drawn from one seed with the same band
+    /// would otherwise collide on every derived identity.
+    pub(crate) generation: u64,
+}
+
+impl Default for LocalMarketShapeV1 {
+    /// EXACTLY the values `demo_market_input_base` emitted before it took a
+    /// shape, so every existing caller compiles the same market it always did.
+    fn default() -> Self {
+        Self {
+            cut_denominator: 100,
+            cuts: vec![12_000, 18_000],
+            coefficients: vec![1, 0, 1, 0],
+            initial_collateral_atoms: 1_000_000_000,
+            terminal_window_width_seconds: TERMINAL_WINDOW_WIDTH_SECONDS,
+            generation: 1,
+        }
+    }
+}
+
+impl LocalMarketShapeV1 {
+    /// The market's outcome width: one region per cut boundary plus the two
+    /// open tails, and the explicit failure outcome.
+    ///
+    /// NO CUTS is legal and is the narrowest market this compiler can emit:
+    /// the whole coordinate domain as one region plus the failure outcome, two
+    /// cells. It is the only way to reach a two-cell market here, and it was
+    /// checked by compiling and founding one rather than reasoned about.
+    pub(crate) fn outcome_count(&self) -> usize {
+        self.cuts.len() + 2
+    }
+
+    /// Refuse a shape at the point it is CHOSEN rather than at a validator.
+    ///
+    /// `validate_market_input` re-checks the coefficient width and the
+    /// denominators over the compiled input, and would catch most of this --
+    /// but it speaks about a 40-KB document, and an operator who typed three
+    /// cuts and four coefficients deserves to be told that, in those words,
+    /// before a single record is compiled.
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.cut_denominator == 0 {
+            return Err(Error::new("--cut-denominator must be positive"));
+        }
+        if self.initial_collateral_atoms == 0 {
+            return Err(Error::new("--initial-collateral-atoms must be positive"));
+        }
+        if self.terminal_window_width_seconds <= 0 {
+            return Err(Error::new(
+                "--terminal-window-width-seconds must be positive: a window forced to one instant \
+                 is a market nobody can resolve",
+            ));
+        }
+        if self.coefficients.len() != self.outcome_count() {
+            return Err(Error::new(format!(
+                "{} cuts describe a {}-outcome market (two tails plus the explicit failure \
+                 outcome), so it needs {} coefficients and {} were given",
+                self.cuts.len(),
+                self.outcome_count(),
+                self.outcome_count(),
+                self.coefficients.len()
+            )));
+        }
+        if self.cuts.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(Error::new(
+                "cuts must be STRICTLY increasing: equal or descending cuts describe a region of \
+                 zero or negative width, which is an outcome no coordinate can land in",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn demo_market_input(
     registry: Pubkey,
     direct: DirectMarketCompilerInputV1<'_>,
 ) -> Result<MarketRunInput> {
-    let mut input = demo_market_input_base(registry, direct.resolution_release)?;
+    demo_market_input_shaped(registry, direct, &LocalMarketShapeV1::default())
+}
+
+/// `demo_market_input` at a caller-chosen shape.
+pub(crate) fn demo_market_input_shaped(
+    registry: Pubkey,
+    direct: DirectMarketCompilerInputV1<'_>,
+    shape: &LocalMarketShapeV1,
+) -> Result<MarketRunInput> {
+    let mut input = demo_market_input_base_shaped(registry, direct.resolution_release, shape)?;
     attach_direct_market_capability_v1(&mut input, direct)?;
     validate_market_input(&input)?;
     Ok(input)
@@ -11506,7 +11777,20 @@ pub(crate) fn demo_market_input_base(
     registry: Pubkey,
     resolution_release: [u8; 32],
 ) -> Result<MarketRunInput> {
+    demo_market_input_base_shaped(registry, resolution_release, &LocalMarketShapeV1::default())
+}
+
+/// `demo_market_input_base` at a caller-chosen shape. See
+/// [`LocalMarketShapeV1`] for which dimensions are a caller's and which are the
+/// lab's.
+pub(crate) fn demo_market_input_base_shaped(
+    registry: Pubkey,
+    resolution_release: [u8; 32],
+    shape: &LocalMarketShapeV1,
+) -> Result<MarketRunInput> {
     use dclutch_pyth_svm::{FullPriceUpdateV2, synthetic_fixture::local_validator_release_v1};
+
+    shape.validate()?;
 
     // The release this Market resolves against is the LOCAL-VALIDATOR
     // projection, not the captured one. They differ in exactly two facts --
@@ -11535,7 +11819,7 @@ pub(crate) fn demo_market_input_base(
             price_update: FIXTURE_PRICE_UPDATE,
             window_start: update
                 .publish_time()
-                .checked_sub(TERMINAL_WINDOW_WIDTH_SECONDS)
+                .checked_sub(shape.terminal_window_width_seconds)
                 .ok_or_else(|| Error::new("terminal window start underflowed"))?,
             window_end: update.publish_time(),
             max_age_seconds: FIXTURE_SHELF_LIFE_SECONDS,
@@ -11545,10 +11829,11 @@ pub(crate) fn demo_market_input_base(
             // refusing it on confidence would be refusing the fixture rather than
             // testing the adapter. The devnet flagship states a real bound.
             max_confidence_bps: 10_000,
-            cut_denominator: 100,
-            cuts: vec![12_000, 18_000],
-            coefficients: vec![1, 0, 1, 0],
-            generation: 1,
+            cut_denominator: shape.cut_denominator,
+            cuts: shape.cuts.clone(),
+            coefficients: shape.coefficients.clone(),
+            generation: shape.generation,
+            initial_collateral_atoms: shape.initial_collateral_atoms,
             local_participant_fixture_liquidity_atoms: LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1,
         },
         resolution_release,
@@ -11612,6 +11897,9 @@ pub(crate) fn devnet_market_input(
             cuts: spec.cuts,
             coefficients: spec.coefficients,
             generation: spec.generation,
+            // The devnet flagships state the collateral the lab always used;
+            // widening it is a local-fixture affordance and not a devnet one.
+            initial_collateral_atoms: 1_000_000_000,
             local_participant_fixture_liquidity_atoms: 0,
         },
         direct,
@@ -11647,6 +11935,9 @@ pub(crate) fn devnet_sponsored_market_input(
             cuts: spec.cuts,
             coefficients: spec.coefficients,
             generation: spec.generation,
+            // The devnet flagships state the collateral the lab always used;
+            // widening it is a local-fixture affordance and not a devnet one.
+            initial_collateral_atoms: 1_000_000_000,
             local_participant_fixture_liquidity_atoms: 0,
         },
         direct,
@@ -11695,10 +11986,9 @@ fn pyth_market_input_base(
     };
     use dclutch_pyth_svm::FullPriceUpdateV2;
     use dclutch_source_contract::{
-        CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RECOVERY_POLICY_MAX_ATTEMPTS_V2,
-        RecoveryAttemptV2, RoundingBoundary, SOURCE_FAILURE_POLICY_RELEASE_ID_V2,
-        SourceCapacityProfileV1, SourceSpecV1, StatisticKind, StatisticSpecV1, WindowKind,
-        WindowSpecV1,
+        CapacityEnvelope, ProviderReleaseV1, PythAdapterConfigV1, RoundingBoundary,
+        SOURCE_FAILURE_POLICY_RELEASE_ID_V2, SourceCapacityProfileV1, SourceSpecV1, StatisticKind,
+        StatisticSpecV1, WindowKind, WindowSpecV1,
     };
 
     let local_label = params.label;
@@ -11857,10 +12147,6 @@ fn pyth_market_input_base(
     // to name. It was a demo digest for the same reason the three above were,
     // and it had the same consequence.
     let failure_policy = SOURCE_FAILURE_POLICY_RELEASE_ID_V2;
-    let recovery_allocation = demo_id("recovery/funding-allocation", &[&local_label]);
-    let recovery_source = demo_id("recovery/secondary-source-spec", &[&adapter, feed]);
-    let recovery_authority = demo_id("recovery/attempt-authority", &[&local_label]);
-    let recovery_root = demo_id("recovery/policy-root", &[&local_label]);
 
     let cut_denominator = params.cut_denominator;
     let cuts: Vec<i128> = params.cuts.clone();
@@ -11938,27 +12224,31 @@ fn pyth_market_input_base(
         ));
     }
 
-    let attempt = RecoveryAttemptV2::new(
-        SourceContentId::new(recovery_source)
-            .map_err(|error| Error::new(format!("demo recovery source: {error:?}")))?,
-        SourceContentId::new(recovery_authority)
-            .map_err(|error| Error::new(format!("demo recovery authority: {error:?}")))?,
-        2_000_000_000,
-        SourceContentId::new(recovery_allocation)
-            .map_err(|error| Error::new(format!("demo recovery allocation: {error:?}")))?,
-    )
-    .map_err(|error| Error::new(format!("demo recovery attempt: {error:?}")))?;
-    let mut attempts = [None; RECOVERY_POLICY_MAX_ATTEMPTS_V2];
-    attempts[0] = Some(attempt);
-    let recovery = RecoveryPolicyV2::new(
-        SourceContentId::new(recovery_root)
-            .map_err(|error| Error::new(format!("demo recovery root: {error:?}")))?,
-        attempts,
-        1,
-    )
-    .map_err(|error| Error::new(format!("demo recovery policy: {error:?}")))?;
-    let recovery_bytes = recovery.to_bytes();
-    let recovery_digest: [u8; 32] = Sha256::digest(recovery_bytes).into();
+    // NO ORDERED RECOVERY WALK. A material that buys one has no terminal at
+    // all: `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses
+    // `recovery_policy().is_some()` outright, and the ladder meant to consume
+    // the paid-for legs (`funded::process_funded_transition`) has one call
+    // site, under `#[cfg(any())]`. Core welded that shut on creation
+    // (`recovery_walk_has_a_live_route`, `CoreSbfError::RecoveryWalkUnavailable`
+    // 0x3011, commit 12d0deb5) and the off-chain builder mirrors it, so a
+    // recovery market's `CreateFund` refuses OFFLINE, in
+    // `build_resolution_create_fund_v3`, before any transaction -- which is
+    // exactly where every founding this driver produced stopped, three of six
+    // mutations in, once the founding itself went green.
+    //
+    // So this market is the section-12.7/12.8 no-recovery shape the weld leaves
+    // live: the funded `Primary -> Exhausted -> FailureCommitted` walk to the
+    // Product's own pre-disclosed failure outcome. Its record set is two
+    // accounts narrower (no recovery-policy pair) and its funding entries are
+    // selected structurally rather than by allocation identity --
+    // `authenticate_no_recovery_entries` in Core and
+    // `select_resolution_funding_entries` in the operator. The relayed family
+    // already founds and funds this shape in execution (2026-08-27: CreateFund
+    // 1,200,587 CU, VerifyFundReady 1,185,248 CU).
+    //
+    // Restoring the recovery shape here means restoring Q2's build half first
+    // (give `RecoveryAdvanced`/`Exhausted` real routes, then delete
+    // `recovery_walk_has_a_live_route`) -- not re-adding these bytes.
     let material = SourceMaterialV3::explicitly_unbounded(
         SourceContentId::new(product_digest)
             .map_err(|error| Error::new(format!("demo Product digest: {error:?}")))?,
@@ -11968,10 +12258,7 @@ fn pyth_market_input_base(
             .map_err(|error| Error::new(format!("demo window: {error:?}")))?,
         SourceContentId::new(statistic)
             .map_err(|error| Error::new(format!("demo statistic: {error:?}")))?,
-        Some(
-            SourceContentId::new(recovery_digest)
-                .map_err(|error| Error::new(format!("demo recovery digest: {error:?}")))?,
-        ),
+        None,
         SourceContentId::new(failure_policy)
             .map_err(|error| Error::new(format!("demo failure policy: {error:?}")))?,
     );
@@ -11990,14 +12277,22 @@ fn pyth_market_input_base(
     // only after collateral, records, RentCredit, ALT, and Found37 existed.
     let release = CapabilityContentId::new(resolution_release)
         .map_err(|error| Error::new(format!("demo Resolution release: {error:?}")))?;
+    // The three Resolution-controller compartments of a no-recovery material.
+    // With no policy record there is no allocation identity and no policy
+    // digest to pin the first two to, so the selection both Core and the
+    // operator perform is STRUCTURAL: exactly one entry configured by this
+    // market's own Source material -- the failure compartment the funded
+    // deadline walk admits -- and exactly two other Resolution-controller
+    // entries, pairwise distinct and neither equal to the material. The two
+    // companions stay prepaid until `CloseFund` refunds them.
     let mut entries_input: Vec<([u8; 32], [u8; 32])> = vec![
         (
-            demo_id("capability/resolve-primary", &[&local_label]),
-            attempt.funding_allocation_id().to_bytes(),
+            demo_id("capability/recovery-companion", &[&local_label]),
+            demo_id("companion-config/recovery", &[&local_label]),
         ),
         (
-            demo_id("capability/recovery-policy", &[&local_label]),
-            recovery_digest,
+            demo_id("capability/exhaustion-companion", &[&local_label]),
+            demo_id("companion-config/exhaustion", &[&local_label]),
         ),
         (
             demo_id("capability/source-material", &[&local_label]),
@@ -12042,7 +12337,7 @@ fn pyth_market_input_base(
         generation: params.generation,
         collateral_display_decimals: 6,
         local_participant_fixture_liquidity_atoms: params.local_participant_fixture_liquidity_atoms,
-        initial_collateral_atoms: 1_000_000_000,
+        initial_collateral_atoms: params.initial_collateral_atoms,
         product_id: hex(&product_identity),
         coordinate_domain_id: hex(&coordinate_domain),
         result_unit_id: hex(&result_unit),
@@ -12066,7 +12361,10 @@ fn pyth_market_input_base(
         provider_release_hex: hex(&provider_release_bytes),
         pyth_adapter_config_hex: hex(&adapter_config_bytes),
         pyth_sponsored_push_release_hex: params.release.sponsored_release_hex(),
-        recovery_policy_hex: hex(&recovery_bytes),
+        // Empty IS the statement that this material bought no ordered recovery
+        // walk: the compiler derives the same `None` link the material above
+        // carries, and no recovery-policy record is published or observed.
+        recovery_policy_hex: String::new(),
         capability_manifest_hex: hex(&manifest),
         direct_capability: None,
         selected_capability: None,

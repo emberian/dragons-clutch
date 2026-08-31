@@ -55,6 +55,7 @@ use dclutch_execution_strategy_contract::v2::{
 use dclutch_general_codec::{
     Action,
     successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
+    successor_request_v3::ControllerRequestV3,
 };
 use dclutch_general_config_contract::{
     GENERAL_CAPABILITY_KIND_ID_V1, GENERAL_ROOT_BYTES_V2, GENERAL_ROOT_SCHEMA_ID_V2,
@@ -218,8 +219,7 @@ pub fn authenticate_general_artifacts_v3<'a>(
     {
         return Err(GeneralArtifactErrorV3::ProgramSet);
     }
-    let request =
-        ControllerRequestV2::decode(family_request).map_err(|_| GeneralArtifactErrorV3::Request)?;
+    let request = decode_admission_request(family_request)?;
     let selected_descriptor = set
         .select_descriptor(family_request)
         .map_err(|_| GeneralArtifactErrorV3::ProgramSet)?;
@@ -383,6 +383,47 @@ pub fn authenticate_general_artifacts_v3<'a>(
         transition,
         effect,
         tail_count,
+    })
+}
+
+/// Hostile-decode one admission request under the grammar its action speaks.
+///
+/// The settlement seven carry the V2 request; the GEN-SEVEN actions carry the
+/// width-preserving V3 request, which V2 has no legal encoding for. The V3
+/// value is carried onward in the V2 in-memory shape -- same width, same
+/// selector, subject in the candidate slot, primary and secondary bumps in the
+/// two bump slots -- so every settlement-only consumer keeps its type. The V3
+/// result bump has no V2 slot; it is zero for every action authored so far,
+/// and `VerifyCandidateRow`'s authoring must widen this carrier before it can
+/// land.
+fn decode_admission_request(family_request: &[u8]) -> Result<ControllerRequestV2> {
+    let selector = usize::try_from(GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3)
+        .map_err(|_| GeneralArtifactErrorV3::Request)?;
+    let tag = *family_request
+        .get(selector)
+        .ok_or(GeneralArtifactErrorV3::Request)?;
+    if tag <= Action::Close as u8 {
+        return ControllerRequestV2::decode(family_request)
+            .map_err(|_| GeneralArtifactErrorV3::Request);
+    }
+    let request =
+        ControllerRequestV3::decode(family_request).map_err(|_| GeneralArtifactErrorV3::Request)?;
+    let action = request
+        .action
+        .legacy()
+        .ok_or(GeneralArtifactErrorV3::Request)?;
+    if request.result_state_bump != 0 {
+        return Err(GeneralArtifactErrorV3::Request);
+    }
+    Ok(ControllerRequestV2 {
+        action,
+        expected_revision: request.expected_revision,
+        candidate_id: request.subject_id,
+        page_index: request.page_index,
+        execution_index: request.execution_index,
+        manifest_order_index: request.manifest_order_index,
+        state_bump: request.primary_state_bump,
+        terminal_record_bump: request.secondary_state_bump,
     })
 }
 
@@ -616,7 +657,9 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
         // No artifact was authored for these, so no route table can be correct
         // for them and none is accepted.
         unauthored_actions!() => Err(GeneralArtifactErrorV3::Effect),
-        Action::Consider | Action::Freeze => require_route_count(effect, 0),
+        Action::OpenBatch | Action::CloseBatch | Action::Consider | Action::Freeze => {
+            require_route_count(effect, 0)
+        }
         Action::InitializeSettlement => {
             require_route_count(effect, 3)?;
             require_position_route(effect, 0, ProtocolPositionActionV2::Admit)?;
@@ -682,6 +725,60 @@ fn validate_routes(action: Action, effect: EffectProgramV3<'_>) -> Result<()> {
                 CompartmentV1::None,
                 CompartmentV1::None,
                 Some((FixedRole::Custody, 2)),
+            )
+        }
+        // The admission and the escrow construction, in the money order:
+        // replay create, vault open (receipt-dependent on the create),
+        // Position admit, claims escrow-in, quote deposit. The transfer
+        // compartments come from the same escrow_v1 table the builder reads
+        // (EscrowCollateral: External -> Settlement).
+        Action::PlaceOrder => {
+            require_route_count(effect, 5)?;
+            require_custody_route(
+                effect,
+                0,
+                OperationV1::InitializeReplay,
+                CompartmentV1::None,
+                CompartmentV1::None,
+                None,
+            )?;
+            require_custody_route(
+                effect,
+                1,
+                OperationV1::OpenVault,
+                CompartmentV1::None,
+                CompartmentV1::Settlement,
+                Some((FixedRole::Custody, 0)),
+            )?;
+            require_position_route(effect, 2, ProtocolPositionActionV2::Admit)?;
+            require_affine_route(effect, 3, 2)?;
+            require_named_custody_transfer_route(effect, 4, action)
+        }
+        // The residual refund and the escrow teardown, in the money order:
+        // the claims residual empties the Position, the quote residual empties
+        // the vault, then Position, vault, and replay close. The transfer
+        // compartments come from the same `escrow_v1` table the builder reads
+        // (`ReleaseCollateral`: Settlement -> External).
+        Action::CancelOrder | Action::ReleaseOrder => {
+            require_route_count(effect, 5)?;
+            require_affine_route(effect, 0, 2)?;
+            require_named_custody_transfer_route(effect, 1, action)?;
+            require_position_route(effect, 2, ProtocolPositionActionV2::Close)?;
+            require_custody_route(
+                effect,
+                3,
+                OperationV1::CloseVault,
+                CompartmentV1::Settlement,
+                CompartmentV1::None,
+                None,
+            )?;
+            require_custody_route(
+                effect,
+                4,
+                OperationV1::CloseReplay,
+                CompartmentV1::None,
+                CompartmentV1::None,
+                Some((FixedRole::Custody, 3)),
             )
         }
     }

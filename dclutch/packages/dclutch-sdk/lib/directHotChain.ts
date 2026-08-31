@@ -101,6 +101,7 @@ import {
   projectDirectInlineSealedExecutionRouteV3,
   validateRuntimeAccountProfileV2,
 } from './directInlineV3';
+import { type DirectHotBumpHintSourceV3 } from './directHotBumpHintsV1';
 import {
   ARTIFACT_RELEASE_BYTES,
   SYSTEM_PROGRAM_ID,
@@ -148,6 +149,18 @@ export type DirectHotRouteInspectionV3 = Readonly<{
   transitionDigest: string;
   capabilitySealDigest: string;
   checkedOuter: CheckedHotOuterEvidenceV3;
+  /**
+   * The three finalized bodies a caller needs to mine this route's bump hints,
+   * kept rather than discarded.
+   *
+   * This inspection already reads the Core Market state, the Trading
+   * capability-root header and the Registry activation cache, and already
+   * authenticates every join between them; before this field it threw all three
+   * away and returned addresses, which is the only reason a browser-built trade
+   * could not fill the eight hint bytes the wire reserves. Nothing here is an
+   * authority -- see `mineDirectInlineHotBumpHintsV3`.
+   */
+  bumpHintSource: DirectHotBumpHintSourceV3;
 }>;
 
 export type DirectHotDeploymentObservationV3 = Readonly<{
@@ -1091,5 +1104,11 @@ export async function inspectDirectHotRouteV3(
     transitionDigest: hex(await sha256(transitionRaw.data)),
     capabilitySealDigest,
     checkedOuter,
+    bumpHintSource: Object.freeze({
+      coreProgram,
+      marketCoreState: market.data,
+      capabilityRootHeader: root.data,
+      activationCache: required(observation.accounts, fixed[HOT_ACTIVATION_CACHE_ACCOUNT_V3].address, 'activation cache').data,
+    }),
   });
 }

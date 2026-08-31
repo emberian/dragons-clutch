@@ -27,6 +27,11 @@ pub const fn general_request_profile_bytes_v1(action: Action) -> &'static [u8] {
         // `RequestProfileV1::decode` refuses an empty record, so an unauthored
         // action cannot be admitted with any profile at all.
         unauthored_actions!() => &[],
+        Action::OpenBatch => &GENERAL_OPEN_BATCH_REQUEST_PROFILE_V1,
+        Action::CloseBatch => &GENERAL_CLOSE_BATCH_REQUEST_PROFILE_V1,
+        Action::PlaceOrder => &GENERAL_PLACE_ORDER_REQUEST_PROFILE_V1,
+        Action::CancelOrder => &GENERAL_CANCEL_ORDER_REQUEST_PROFILE_V1,
+        Action::ReleaseOrder => &GENERAL_RELEASE_ORDER_REQUEST_PROFILE_V1,
         Action::Consider => &GENERAL_CONSIDER_REQUEST_PROFILE_V1,
         Action::Freeze => &GENERAL_FREEZE_REQUEST_PROFILE_V1,
         Action::InitializeSettlement => &GENERAL_INITIALIZE_REQUEST_PROFILE_V1,
@@ -44,8 +49,9 @@ pub fn general_request_profile_v1(action: Action) -> Result<RequestProfileV1<'st
 
 #[cfg(test)]
 mod tests {
-    use dclutch_general_codec::successor_request_v2::{
-        CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2,
+    use dclutch_general_codec::{
+        successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
+        successor_request_v3::{ControllerActionV3, ControllerRequestV3},
     };
     use dclutch_request_profile_contract::{ProjectionRegistersV1, project_atomic};
 
@@ -65,9 +71,55 @@ mod tests {
         Action::Materialize,
         Action::Distribute,
         Action::Close,
+        Action::OpenBatch,
+        Action::CloseBatch,
+        Action::PlaceOrder,
+        Action::CancelOrder,
+        Action::ReleaseOrder,
     ];
 
+    const fn speaks_v3(action: Action) -> bool {
+        matches!(
+            action,
+            Action::OpenBatch
+                | Action::CloseBatch
+                | Action::PlaceOrder
+                | Action::CancelOrder
+                | Action::ReleaseOrder
+        )
+    }
+
     fn request(action: Action) -> [u8; CONTROLLER_REQUEST_BYTES_V2] {
+        if speaks_v3(action) {
+            return ControllerRequestV3 {
+                action: ControllerActionV3::from(action),
+                // ReleaseOrder carries no optimistic revision at all: an order
+                // state has no revision counter, and its grammar requires the
+                // coordinate zero.
+                expected_revision: if matches!(
+                    action,
+                    Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder
+                ) {
+                    0
+                } else {
+                    7
+                },
+                subject_id: Some([0x31; 32]),
+                page_index: 0,
+                execution_index: 0,
+                manifest_order_index: 0,
+                primary_state_bump: 42,
+                secondary_state_bump: if matches!(action, Action::PlaceOrder | Action::CancelOrder)
+                {
+                    43
+                } else {
+                    0
+                },
+                result_state_bump: 0,
+            }
+            .to_bytes()
+            .expect("canonical V3 request");
+        }
         let candidate_id = if action == Action::Freeze {
             None
         } else {
@@ -131,18 +183,46 @@ mod tests {
                 },
             )
             .expect("selected profile accepts");
-            assert_eq!(output_scalars.first(), Some(&7));
+            if matches!(
+                action,
+                Action::PlaceOrder | Action::CancelOrder | Action::ReleaseOrder
+            ) {
+                // The order grammars name their subject in the ORDER register
+                // the state PDA is keyed by, and project NO revision: the
+                // replay-guard register passes through untouched.
+                assert_eq!(output_scalars.first(), Some(&99));
+                assert_eq!(output_scalars.get(94), Some(&99));
+                assert_eq!(output_identities.get(3), Some(&[0x31; 32]));
+                assert_eq!(output_identities.get(29), Some(&[0x99; 32]));
+            } else if speaks_v3(action) {
+                // The V3 grammar lands the optimistic root revision in the
+                // replay-guard register and the subject in the batch identity
+                // register; the settlement coordinates pass through untouched.
+                assert_eq!(output_scalars.first(), Some(&99));
+                assert_eq!(output_scalars.get(94), Some(&7));
+                assert_eq!(output_identities.first(), Some(&[0x99; 32]));
+                assert_eq!(output_identities.get(29), Some(&[0x31; 32]));
+            } else {
+                assert_eq!(output_scalars.first(), Some(&7));
+                if action == Action::Freeze {
+                    assert_eq!(identity_count, TEST_IDENTITIES);
+                    assert_eq!(output_identities.first(), Some(&[0x99; 32]));
+                } else {
+                    assert_eq!(output_identities.first(), Some(&[0x31; 32]));
+                }
+            }
             assert_eq!(output_scalars.get(69), Some(&42));
             assert_eq!(
                 output_scalars.get(70),
-                Some(&if action == Action::Close { 43 } else { 99 })
+                Some(&if matches!(
+                    action,
+                    Action::Close | Action::PlaceOrder | Action::CancelOrder
+                ) {
+                    43
+                } else {
+                    99
+                })
             );
-            if action == Action::Freeze {
-                assert_eq!(identity_count, TEST_IDENTITIES);
-                assert_eq!(output_identities.first(), Some(&[0x99; 32]));
-            } else {
-                assert_eq!(output_identities.first(), Some(&[0x31; 32]));
-            }
         }
     }
 

@@ -450,8 +450,9 @@ function page({ title, body, depth, crumbs, style }) {
 ${crumbHtml}
 ${body}
 </main>
-<footer>dClutch has seven programs on Solana devnet. There is no open market,
-no value at risk, and nothing to buy. This is not a mainnet release.
+<footer>dClutch has seven programs on Solana devnet, where one market is now
+open. Its collateral is a devnet test token, so there is nothing here to buy
+with money and no value at risk. This is not a mainnet release.
 <a href="${repoUrl.replace(/\/blob\/.*$/, "")}">Repository</a>.</footer>
 </body>
 </html>
@@ -462,17 +463,18 @@ no value at risk, and nothing to buy. This is not a mainnet release.
 // own front door and states the deployed devnet boundary without turning it
 // into a mainnet or open-market claim.
 const DOCS_BODY = `<h1>dClutch documentation</h1>
-<p>Everything below is generated from, or lives beside, the code it
-describes. dClutch is a Solana protocol for markets on real-world numbers:
-you buy claims on the outcome you believe in, and every claim is fully
-backed by collateral locked up before the claim exists.</p>
+<p>dClutch is a prediction market on Solana. You buy claims on the outcome
+you believe in; if you are right, each claim pays one unit of collateral. Every
+claim is backed by collateral locked up before the claim exists. Everything
+below is generated from, or lives beside, the code it describes.</p>
 <div class="unreleased"><strong>Devnet preview.</strong> The seven programs
-are deployed on Solana devnet. There is no open market, no value at risk, and
-nothing to buy today. Devnet and local test-chain runs are not mainnet
+are deployed on Solana devnet, and one market there is open for trading. Its
+collateral is a devnet test token, so there is no value at risk and nothing to
+buy with money. Devnet and local test-chain runs are not mainnet
 evidence.</div>
 <ul class="cards">
 <li><strong><a href="guides/README.html">Guides</a></strong>
-Start here: what a claim is, how protection works, how to run a market,
+Start here: what a claim is, what protection costs, how to run a market,
 how to build your own client -- and how to try the whole thing
 yourself.</li>
 <li><strong><a href="readme.html">The README</a></strong>
@@ -686,9 +688,15 @@ for (const relative of instructionPages) {
 
 // The posture the whole site is written to, pinned where a reader meets it
 // first. These are not style preferences -- each one replaced a live overclaim.
+//
+// The posture MOVED on 2026-08-30: a market opened that can actually take a
+// trade, which made "there is no open market" false in letter rather than
+// merely narrow, so the pins move with it. Each needle is worded so the page
+// FOOTER cannot satisfy it -- the footer states the same fact in its own
+// words, and a pin a footer satisfies is a pin that checks nothing.
 const requiredPosture = [
-  [`${DOCS}/guides/README.html`, "There is no open market"],
-  [`${DOCS}/guides/trader.html`, "no devnet market is open for trading"],
+  [`${DOCS}/guides/README.html`, "one market on it is open for trading"],
+  [`${DOCS}/guides/trader.html`, "one devnet market is open for trading"],
   // Joining is one third of the chain that works today, and for a long time no
   // guide mentioned it at all.
   [`${DOCS}/guides/trader.html`, "dclutch join"],

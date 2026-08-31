@@ -1,7 +1,6 @@
 'use client';
 
 import {
-  MARKET_SEARCH_MEANING_V1,
   MARKET_SORT_CHOICES_V1,
   type MarketSortOrderV1,
 } from '@/lib/marketFiltering';
@@ -47,7 +46,6 @@ export type MarketFilterBarPropsV1 = Readonly<{
 }>;
 
 export default function MarketFilterBar({ query, onQuery, order, onOrder, shown, total }: MarketFilterBarPropsV1) {
-  const chosen = MARKET_SORT_CHOICES_V1.find((choice) => choice.order === order) ?? MARKET_SORT_CHOICES_V1[0];
   return <div className="market-filter-bar">
     <label className="market-filter-search">
       <span>Search these markets</span>
@@ -70,9 +68,8 @@ export default function MarketFilterBar({ query, onQuery, order, onOrder, shown,
     </label>
     <p className="market-filter-note">
       {query.trim().length === 0
-        ? `${total} market${total === 1 ? '' : 's'} on this deployment.`
-        : `${shown} of ${total} market${total === 1 ? '' : 's'} match. Searching hides cards; it never changes what exists.`}
-      {' '}{MARKET_SEARCH_MEANING_V1} {chosen.meaning}
+        ? `${total} market${total === 1 ? '' : 's'}`
+        : `${shown} of ${total} match`}
     </p>
   </div>;
 }

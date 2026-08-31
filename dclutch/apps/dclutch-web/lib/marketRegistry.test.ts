@@ -25,20 +25,47 @@ describe('the shipped devnet market registry', () => {
   it('names the two markets that finished founding on public devnet', () => {
     const flagship = MARKET_REGISTRY_V1.markets['7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC'];
     expect(flagship).toBeDefined();
-    expect(flagship.title).toBe('SOL/USD range — the first public market');
+    expect(flagship.title).toBe('SOL/USD range — first public market');
     expect(flagship.question).toContain('SOL/USD');
     expect(flagship.outcomes).toHaveLength(4);
     // How it settles, in words: the design, not an operational promise.
     expect(flagship.resolution).toContain('Pyth');
     expect(flagship.resolution).toContain('source-failure outcome');
-    // The story is the permanent disposition: history, not breakage. It has
-    // to say what never happened AND what remains, in that order of kindness.
+    // Renegotiated 2026-08-31. Every story in this file was a paragraph of
+    // our own build history -- which driver refused its own success, which
+    // session switched trading on, what the cohort widened. They are now one
+    // to three sentences about the MARKET. What is still pinned is the fact a
+    // reader acts on: what never happened, and what is still there.
     expect(flagship.story).toContain('never switched on');
-    expect(flagship.story).toContain('readable forever');
+    expect(flagship.story).toContain('stay on devnet');
+    for (const entry of Object.values(MARKET_REGISTRY_V1.markets)) {
+      expect(entry.story ?? '').not.toMatch(/session|cohort|driver|lane|build-out|tooling/i);
+      expect((entry.story ?? '').length).toBeLessThan(220);
+    }
 
     const orphan = MARKET_REGISTRY_V1.markets['CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM'];
     expect(orphan).toBeDefined();
-    expect(orphan.story).toContain('refused its own success');
+    expect(orphan.story).toContain('Trading was never switched on');
+  });
+
+  /**
+   * The market the front door headlines. Its entry is the one place a reader
+   * meets a tradeable market in this site's own words, so it has to promise
+   * exactly what happened and nothing that has not: a trade is possible, and
+   * no trade has been made.
+   */
+  it('names the market the public cut headlines, and does not pretend it has traded', () => {
+    const open = MARKET_REGISTRY_V1.markets['6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4'];
+    expect(open).toBeDefined();
+    expect(open.title).toContain('open for trading');
+    expect(open.outcomes).toHaveLength(4);
+    expect(open.resolution).toContain('Pyth');
+    // Renegotiated 2026-08-31: "No trade has been made on it yet" is a chain
+    // fact the card already prints, and one that rots. The story now carries
+    // the two things the chain does NOT say: the fee and what the collateral
+    // is worth.
+    expect(open.story).toContain('No fee');
+    expect(open.story).toContain('devnet test token');
   });
 
   it('keeps every entry inside the editorial charter: no numbers-in-words drift', () => {
@@ -53,14 +80,14 @@ describe('the shipped devnet market registry', () => {
 
   it('looks up by address, and a market the file does not know reads as null', () => {
     expect(marketEditorialV1('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC')?.title).toContain('first public market');
-    expect(marketEditorialV1('CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM')?.title).toContain('orphan');
+    expect(marketEditorialV1('CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM')?.title).toContain('never activated');
     expect(marketEditorialV1('pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB')).toBeNull();
   });
 
   it('generates phase-aware fallback labels that invent nothing', () => {
-    expect(fallbackMarketTitleV1('Founding', 'pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB')).toBe('Build-out founding · pSVp…GETB');
-    expect(fallbackMarketTitleV1('Open', 'pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB')).toBe('Unnamed market · pSVp…GETB');
-    expect(fallbackMarketTitleV1(null, 'pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB')).toBe('Unnamed market · pSVp…GETB');
+    expect(fallbackMarketTitleV1('Founding', 'pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB')).toBe('Unfinished · pSVp…GETB');
+    expect(fallbackMarketTitleV1('Open', 'pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB')).toBe('Unnamed · pSVp…GETB');
+    expect(fallbackMarketTitleV1(null, 'pSVpRyDGYVp9Lv5TeyuTH5eMp7bh9myr7JPdr71GETB')).toBe('Unnamed · pSVp…GETB');
   });
 
   it('states whose words the editorial fields are, for the surfaces to render', () => {

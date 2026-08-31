@@ -68,6 +68,15 @@ mod release_identity;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
+// `local_mutable.rs` grew a fourth capability branch and calls
+// `crate::structured_market` from it. This tier compiles the producer's files
+// verbatim rather than forking them, so a call site the subset does not link
+// is a build break -- the intended tripwire, and it went off silently because
+// nothing in CI builds this tier. Linking the module is the fix; guarding the
+// call site would fork a file whose whole point is that it is not forked.
+#[path = "../../../local-validator/bootstrap/successor/src/structured_market.rs"]
+#[allow(dead_code)]
+mod structured_market;
 #[path = "../../../local-validator/bootstrap/successor/src/selected_capability.rs"]
 #[allow(dead_code)]
 mod selected_capability;

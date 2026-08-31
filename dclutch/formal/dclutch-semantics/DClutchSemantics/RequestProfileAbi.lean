@@ -21,6 +21,25 @@ open DClutch.AbiSchema
 def magic : List UInt8 := [0x44, 0x43, 0x4c, 0x54, 0x52, 0x50, 0x30, 0x31]
 def schemaVersion : Nat := 1
 def artifactProfile : Nat := 1
+
+/-- Maximum bytes in one finalized RequestProfile V1 record.
+
+**This is a replica.** The same `1312` is written independently in four Lean
+files — here, `AccountProfileAbi.finalizedRecordMaxBytes`,
+`CapabilityProgramAbi.finalizedRecordMaxBytes` and
+`CapabilityProgramSetV1.maxBytes` — with `RequestProfileV4Abi` aliasing this
+one. They are not linked, so any lift must move all four together or they
+drift. `CapabilityProgramSetV2` already chose its own width (2336) without
+reference to any of them, so the class has been abandoned once already.
+
+The full derivation — what constrains a finalized record, what its floor is,
+and why raising it does not move the Structured `K = 3` cliff (the packet caps
+full-width issuance at `K = 2`, one coordinate lower) — is documented once on
+`CapabilityProgramAbi.finalizedRecordMaxBytes`. Read it before changing this.
+
+This copy is the one the cliff runs through: a profile is
+`32 + operations * 24` bytes, so this bound admits `(1312-32)/24 = 53`
+operations, and the canonical structured projection costs `29 + 8K`. -/
 def finalizedRecordMaxBytes : Nat := 1312
 def schemaReleasePreimage : List UInt8 :=
   "dclutch/schema/request-profile-v1".toUTF8.toList

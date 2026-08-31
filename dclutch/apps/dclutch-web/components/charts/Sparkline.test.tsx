@@ -34,7 +34,7 @@ describe('Sparkline', () => {
   });
 
   it('carries every drawn value exactly, in a table, never rounded', () => {
-    expect(html).toContain('Exact ends and extremes of every line drawn');
+    expect(html).toContain('Exact numbers');
     for (const value of ['10', '12', '11', '90', '88', '89']) {
       expect(html).toContain(`<td>${value}</td>`);
     }

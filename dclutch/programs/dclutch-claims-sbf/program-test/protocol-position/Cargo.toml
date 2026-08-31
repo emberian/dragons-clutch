@@ -14,6 +14,7 @@ dclutch-capability-program-contract = { path = "../../../../crates/dclutch-capab
 dclutch-core-contract = { path = "../../../../crates/dclutch-core-contract" }
 dclutch-fractional-claim-contract = { path = "../../../../crates/dclutch-fractional-claim-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
+dclutch-market-core-codec = { path = "../../../../crates/dclutch-market-core-codec" }
 dclutch-rent-contract = { path = "../../../../crates/dclutch-rent-contract" }
 dclutch-registry-contract = { path = "../../../../crates/dclutch-registry-contract" }
 dclutch-release-set-contract = { path = "../../../../crates/dclutch-release-set-contract" }

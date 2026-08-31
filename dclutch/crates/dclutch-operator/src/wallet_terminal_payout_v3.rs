@@ -42,6 +42,7 @@ use dclutch_token_svm::{AccountState, TokenAccount, TokenProgram};
 use solana_address_lookup_table_interface::{
     program as lookup_table_program, state::AddressLookupTable,
 };
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
 use solana_program::{
     hash::{hash, hashv},
@@ -418,6 +419,12 @@ pub fn canonical_wallet_terminal_payout_lookup_addresses_v3(
     Ok(addresses)
 }
 
+/// The compute-unit ceiling one terminal payout declares.
+///
+/// Solana's per-transaction maximum. See `compile_wallet_terminal_payout_v0`
+/// for why this is a ceiling and not a tuned number.
+pub const WALLET_TERMINAL_PAYOUT_COMPUTE_UNITS_V3: u32 = 1_400_000;
+
 /// Compile one payout through exactly one finalized canonical lookup table.
 pub fn compile_wallet_terminal_payout_v0(
     report: WalletTerminalPayoutReportV3,
@@ -438,9 +445,30 @@ pub fn compile_wallet_terminal_payout_v0(
     if table.addresses.as_ref() != expected.as_slice() {
         return Err(WalletTerminalPayoutErrorV3::LookupTable);
     }
+    // A terminal payout does not fit the runtime's 200,000-CU default. Measured
+    // on a driven substrate: the Claims program consumed the whole default and
+    // was still running -- `exceeded CUs meter at BPF instruction` -- so every
+    // payout ever attempted through this compiler would have died there. It had
+    // never been attempted, because the Claims-role replay the route decodes had
+    // no creation caller until one existed.
+    //
+    // The declaration is the transaction ceiling rather than a tuned figure.
+    // This route's cost is a function of the Market's claim count and its
+    // terminal composition graph, which are per-market facts this compiler does
+    // not see, and there is no priority fee on this transaction for a tight
+    // limit to save. A wrong-but-tight limit would be a liveness failure on some
+    // future market's shape; the ceiling cannot be. The cost that actually
+    // matters is recorded per payout in its receipt, read back from chain.
+    //
+    // The ComputeBudget program id compiles as a static key, so the canonical
+    // lookup-table census is unchanged and an already-frozen table stays valid.
+    let instructions = [
+        ComputeBudgetInstruction::set_compute_unit_limit(WALLET_TERMINAL_PAYOUT_COMPUTE_UNITS_V3),
+        report.instruction.clone(),
+    ];
     let message = compile_v0_message(
         payer,
-        core::slice::from_ref(&report.instruction),
+        &instructions,
         recent_blockhash,
         report.observation,
         core::slice::from_ref(lookup_table),
@@ -1479,9 +1507,18 @@ mod tests {
         .expect("packet-safe payout");
         assert_eq!(plan.required_signers, vec![payer, key(17)]);
         assert_eq!(plan.message.loaded_addresses, 32);
-        assert_eq!(plan.message.message.static_account_keys().len(), 3);
-        assert_eq!(plan.message.loaded_addresses + 3, 35);
+        // Four static keys: the payer, the owner, the Claims program, and the
+        // ComputeBudget program whose limit declaration this route cannot land
+        // without. A program id compiles static, so the ComputeBudget prefix
+        // costs a static key and NOT a lookup entry -- the canonical table is
+        // still exactly the payout instruction's own coordinates, and a table
+        // frozen before the prefix existed stays valid.
+        assert_eq!(plan.message.message.static_account_keys().len(), 4);
+        assert_eq!(plan.message.loaded_addresses + 4, 36);
         assert!(plan.message.wire_bytes <= crate::versioned::PACKET_DATA_BYTES);
+        // The prefix is the whole difference: same single payout instruction,
+        // now behind one compute-unit declaration.
+        assert_eq!(plan.message.message.instructions().len(), 2);
 
         let mut reordered = table.clone();
         let decoded = AddressLookupTable::deserialize(&reordered.data).expect("table");

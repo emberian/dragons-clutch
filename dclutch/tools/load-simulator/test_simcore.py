@@ -480,5 +480,73 @@ class CommandRedactionTest(unittest.TestCase):
             self.assertNotIn(self.KEY, path.read_text())
 
 
+class SpendLedgerTests(unittest.TestCase):
+    """The fourth kill condition, and the one that was missing.
+
+    HALT.json catches a broken law, EXIT.json catches an ending, the heartbeat
+    deadline catches a SIGKILL -- and nothing caught a run that was merely
+    expensive. A long unattended world with no ceiling is bounded only by
+    cadence times fee, which is a number you compute rather than read.
+    """
+
+    def test_spend_is_cumulative_outflow_and_a_refill_does_not_forgive_it(self) -> None:
+        ledger = simcore.SpendLedger(max_lamports=1_000)
+        ledger.observe("P", 10_000)
+        ledger.observe("P", 9_400)          # spent 600
+        ledger.observe("P", 100_000)        # airdropped: credited, never subtracted
+        ledger.observe("P", 99_700)         # spent another 300
+        self.assertEqual(ledger.spent_lamports, 900)
+        self.assertEqual(ledger.credited_lamports, 90_600)
+        self.assertIsNone(ledger.exceeded(), "900 is under the 1000 ceiling")
+        ledger.observe("P", 99_500)         # 200 more, now 1100
+        self.assertEqual(ledger.spent_lamports, 1_100)
+        reason = ledger.exceeded()
+        self.assertIsNotNone(reason)
+        self.assertIn("1100", reason)
+        self.assertIn("1000", reason)
+        # A first-observation delta would read 10000 -> 99500 as a CREDIT of
+        # 89500 and never fire at all. That is the bug this shape avoids and
+        # the assertion that says so.
+        self.assertGreater(ledger.latest["P"], 10_000)
+
+    def test_a_run_with_no_ceiling_says_so_rather_than_leaving_a_null(self) -> None:
+        ledger = simcore.SpendLedger()
+        ledger.observe("P", 10)
+        ledger.observe("P", 1)
+        self.assertEqual(ledger.spent_lamports, 9)
+        self.assertIsNone(ledger.exceeded())
+        self.assertFalse(ledger.describe()["bounded"])
+
+    def test_several_payers_are_summed_and_each_is_reported(self) -> None:
+        ledger = simcore.SpendLedger(max_lamports=100)
+        for payer, balances in (("A", (500, 460)), ("B", (700, 630))):
+            for balance in balances:
+                ledger.observe(payer, balance)
+        self.assertEqual(ledger.spent_lamports, 110)
+        self.assertIsNotNone(ledger.exceeded())
+        self.assertEqual(ledger.describe()["payers"], {"A": 460, "B": 630})
+
+    def test_a_census_that_could_not_read_the_payer_is_a_gap_not_a_spend(self) -> None:
+        ledger = simcore.SpendLedger(max_lamports=10)
+        ledger.observe("P", 100)
+        for unreadable in (None, "600", -1, True, 3.5):
+            ledger.observe("P", unreadable)
+        ledger.observe("P", 95)
+        self.assertEqual(ledger.spent_lamports, 5)
+        self.assertEqual(ledger.observations, 2)
+        ledger.observe("", 1)
+        self.assertEqual(ledger.observations, 2, "a nameless payer is not an observation")
+
+    def test_a_budget_that_is_not_a_positive_whole_number_refuses(self) -> None:
+        self.assertIsNone(simcore.SpendLedger.from_config({}).max_lamports)
+        self.assertIsNone(simcore.SpendLedger.from_config({"budget": {}}).max_lamports)
+        self.assertEqual(
+            simcore.SpendLedger.from_config({"budget": {"max_lamports_spent": 5}}).max_lamports, 5
+        )
+        for bad in (0, -1, True, "1000", 1.5):
+            with self.assertRaises(ValueError):
+                simcore.SpendLedger.from_config({"budget": {"max_lamports_spent": bad}})
+
+
 if __name__ == "__main__":
     unittest.main()

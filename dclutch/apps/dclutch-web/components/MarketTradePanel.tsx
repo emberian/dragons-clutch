@@ -12,6 +12,7 @@ import { decodeDirectIntentTicketV1, encodeDirectIntentTicketV1 } from '@/lib/di
 import {
   admitDirectParticipantCrossingV1,
   inspectDirectParticipantReadinessV1,
+  inspectDirectSellerReadinessV1,
   type DirectParticipantCrossingAdmissionV1,
   type DirectParticipantReadinessV1,
 } from '@/lib/directParticipant';
@@ -383,7 +384,10 @@ export default function MarketTradePanel({
       if (initialRoute.route.market !== marketAddress || initialRoute.route.tradingProgram !== tradingProgramId) {
         throw new Error('route manifest authenticates another Market or Trading program');
       }
-      const initialSeller = await inspectDirectParticipantReadinessV1(client, participantRequest(ticketState.ticket.maker));
+      // The seller is read as a SELLER, not as a second buyer: its collateral is
+      // the Direct token account Trading derives and creates, and it has no
+      // admission record to be missing. See `inspectDirectSellerReadinessV1`.
+      const initialSeller = await inspectDirectSellerReadinessV1(client, participantRequest(ticketState.ticket.maker));
       const initialTaker = await inspectDirectParticipantReadinessV1(client, participantRequest(connectedWallet));
       if (initialSeller.status !== 'ready' || initialTaker.status !== 'ready') {
         throw new Error(`both participants must be ready before signing: seller is ${initialSeller.status}; you are ${initialTaker.status}`);
@@ -436,7 +440,7 @@ export default function MarketTradePanel({
       sameChain(routeBefore, routeAfter);
       sameChain(planningAdmission, routeAfter);
       const sellerContextAdmission = await client.assertMutationCluster();
-      const sellerParticipant = await inspectDirectParticipantReadinessV1(client, participantRequest(ticketState.ticket.maker));
+      const sellerParticipant = await inspectDirectSellerReadinessV1(client, participantRequest(ticketState.ticket.maker));
       const takerContextAdmission = await client.assertMutationCluster();
       const takerParticipant = await inspectDirectParticipantReadinessV1(client, participantRequest(connectedWallet));
       const nonceContextAdmission = await client.assertMutationCluster();
@@ -667,14 +671,14 @@ export default function MarketTradePanel({
   const supplies = liability !== null && liability.status === 'bound' ? liability.supplyAtoms : null;
 
   return <section className="trade-v3-card">
-    <header><span>06</span><div><h2>Trade this Market</h2><p>Pick an outcome, size it, and cross one signed offer at the price its maker signed. Every number you see is read off the chain or computed by the exact code the chain runs. When something cannot happen yet, this panel tells you exactly why in one sentence — never a greyed-out button with no reason.</p></div></header>
+    <header><span>06</span><div><h2>Trade this market</h2><p>Pick an outcome, choose how much, and take one signed offer at the price its maker set.</p></div></header>
 
     <div className="direct-actions">
       <button type="button" onClick={() => void inspect()}>Ask the chain about trading here</button>
       <Anchor className="secondary-action" href="/trade">Advanced: full route workbench →</Anchor>
     </div>
     <p className="direct-status" aria-live="polite">{spineStatus}</p>
-    <p className="direct-status">Before anything is signed, this page re-reads both sides of the trade from the chain: who you would be trading with, the route itself, and the counters that stop the same trade being played twice. If your wallet is paying, it prepares the exact transaction and asks you to sign it; if an operator is paying, it names them instead. Signing sends nothing. Sending is a separate step you take, it happens once, and if you reload mid-flight this page picks up the transaction you already sent rather than sending a second one. Nothing is called a trade until the chain reports it finalized. The account that holds your claims is never your collateral account, and everything on this page is a copy — the programs on chain are what is true.</p>
+    <p className="direct-status">Signing sends nothing. Sending is a separate step you take, and it happens once — reload part-way through and this page picks up the transaction you already sent rather than sending a second one.</p>
     <p className="direct-status" aria-live="polite">{participantStatus}</p>
 
     {spine !== null && spine.status === 'refused' && <p className="market-refusal">Refused: {spine.reason}</p>}
@@ -709,12 +713,12 @@ export default function MarketTradePanel({
       </>}
 
       <h3 className="detail-subhead">The other side&apos;s ticket</h3>
-      <p className="direct-status">A trade here is two signed halves: yours and someone else&apos;s. There is no order book to take from — the other half arrives as a small ticket (dclutch/direct-intent-ticket/v1) you can be handed any way you like. Pasting it is safe: nothing in it is believed until the chain itself checks the signature.</p>
+      <p className="direct-status">A trade here is two signed halves: yours and someone else&apos;s. There is no order book — the other half reaches you as a small ticket (dclutch/direct-intent-ticket/v1), passed along any way you like.</p>
       <label><span>Ticket JSON</span><textarea rows={5} spellCheck={false} value={ticketText} onChange={(event) => { setTicketText(event.target.value); invalidatePreview(); }} /></label>
       <div className="direct-form-grid">
         <label><span>My size · claim atoms (blank = take the ticket in full)</span><input inputMode="numeric" value={desired} onChange={(event) => { setDesired(event.target.value.trim()); invalidatePreview(); }} /></label>
       </div>
-      <WalletDirectory directory={wallets} purpose="taker identity, intent and payer signatures" onConnected={invalidateWalletState} />
+      <WalletDirectory directory={wallets} onConnected={invalidateWalletState} />
 
       {ticketState.kind === 'refused' && <p className="market-refusal">Ticket refused: {ticketState.reason}</p>}
       {ticketState.kind === 'ready' && <div className="direct-actions">
@@ -727,7 +731,7 @@ export default function MarketTradePanel({
         <article><span>Your fee</span><strong>{(execution.plan.takerSide === 'buy' ? execution.plan.preview.buyerFee : execution.plan.preview.sellerFee).toString()}</strong><small>{inspected.feeBasisPoints} bps, rounded at the protocol boundary</small></article>
         <article><span>Asset check</span><strong>{execution.admission.requiredAtoms.toString()} / {execution.admission.availableAtoms.toString()}</strong><small>{execution.admission.resource}, finalized through slot {execution.replaySlot}</small></article>
       </div>}
-      {execution.kind === 'ready' && <p className="direct-status">This is an unsigned preview, not a submitted trade. Your wallet has not signed this intent unless you explicitly continue below.</p>}
+      {execution.kind === 'ready' && <p className="direct-status">Unsigned preview. Nothing is signed until you continue below.</p>}
 
       <h3 className="detail-subhead">What stands between this preview and a real trade</h3>
       {inspected.walls.length === 0
@@ -738,8 +742,8 @@ export default function MarketTradePanel({
 
       <details className="trade-v3-bytes">
         <summary>Prepare the exact wallet handoff</summary>
-        <p className="direct-status">Paste the route file the operator published for this market (a <code>dclutch-direct-hot-route-manifest-v3</code>). Nothing in it is taken on trust: this page reads every account it names back off the chain, checks the programs it points at are the ones this deployment runs, and re-checks both traders and both replay counters after you sign your intent.</p>
-        {publishedRoute !== null && routeText === publishedRoute && <p className="direct-status">This build already carries the operator&apos;s published route for this market, so the field below is pre-filled. You can replace it with your own; either way the route is re-authenticated before anything is signed.</p>}
+        <p className="direct-status">Paste the route file the operator published for this market (a <code>dclutch-direct-hot-route-manifest-v3</code>).</p>
+        {publishedRoute !== null && routeText === publishedRoute && <p className="direct-status">Pre-filled with the operator&apos;s published route for this market. You can replace it.</p>}
         <label><span>Checked Direct Hot route manifest · JSON</span><textarea rows={7} spellCheck={false} value={routeText} onChange={(event) => { setRouteText(event.target.value); setWalletPreparation({ kind: 'idle' }); }} /></label>
         <div className="direct-actions">
           <button
@@ -789,7 +793,7 @@ export default function MarketTradePanel({
           </ul>
           {walletPreparation.changes !== null && <p>Spendable collateral: {walletPreparation.changes.spendableBefore.toString()} → {walletPreparation.changes.spendableAfter.toString()} atoms.{walletPreparation.changes.moved ? '' : ' Nothing moved — the finalized crossing changed no balance, and that is reported as exactly that.'}</p>}
         </div>}
-        <p className="direct-status">Submission here is journaled: the exact signed packet is saved in this browser before its one send, the returned signature must match the saved one, and completion is only ever claimed from a finalized read-back of your own Position.</p>
+        <p className="direct-status">The signed packet is saved in this browser before its one send, so a reload picks it up rather than sending twice.</p>
       </details>
     </>}
   </section>;

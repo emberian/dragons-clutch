@@ -36,6 +36,23 @@ use generated::*;
 /// The caller role is the canonical release-set role type, not a Custody DTO.
 pub use dclutch_release_set_contract::ExecutionRoleV1 as CallerRoleV1;
 
+/// Width of the bump relay a parent appends after a Custody child request.
+///
+/// ONE author for a cross-program width, pinned from both sides: the Trading
+/// composition that PUSHES it and the Custody dispatch that SPLITS it read this
+/// same constant, so the two cannot drift into a wire only one of them can
+/// parse. WAVE.md's Dealer lesson -- "two programs agreeing on a PDA by
+/// coincidence is not agreement" -- applies to a wire width exactly as it
+/// applies to a seed count.
+///
+/// Three bytes, in order: the Trading caller authority, then the Custody replay
+/// and Custody transfer authority the parent mined so Custody reproduces those
+/// addresses instead of searching for them. They ride AFTER the request because
+/// the caller-authority seeds end in a digest over the request, so a bump
+/// inside it would change its own address. Zero in any slot is absent and that
+/// reader searches, which is what the older one-byte carrier decodes to.
+pub const CUSTODY_BUMP_RELAY_BYTES_V1: usize = 3;
+
 /// Exact Custody transfer-authority PDA seed domain.
 pub const CUSTODY_AUTHORITY_PDA_DOMAIN_V1: &[u8] = b"dclutch:custody-authority:v1";
 /// Exact per-context Custody replay PDA seed domain.

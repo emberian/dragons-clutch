@@ -60,6 +60,11 @@ pub const GENERAL_ROOT_CONFIG_ID_OFFSET_V2: usize = crate::generated::ROOT_CONFI
 pub const GENERAL_ROOT_GENERATION_OFFSET_V2: usize = crate::generated::ROOT_GENERATION_OFFSET;
 /// Tail offset of the root revision.
 pub const GENERAL_ROOT_REVISION_OFFSET_V2: usize = crate::generated::ROOT_REVISION_OFFSET;
+/// Tail offset of the mutable next-batch sequence.
+pub const GENERAL_ROOT_NEXT_BATCH_SEQUENCE_OFFSET_V2: usize =
+    crate::generated::ROOT_NEXT_BATCH_SEQUENCE_OFFSET;
+/// Tail offset of the mutable open-batch count.
+pub const GENERAL_ROOT_OPEN_BATCHES_OFFSET_V2: usize = crate::generated::ROOT_OPEN_BATCHES_OFFSET;
 /// Revision [`GeneralRootV2::active`] starts at.
 pub const GENERAL_ROOT_INITIAL_REVISION_V2: u64 = 1;
 
