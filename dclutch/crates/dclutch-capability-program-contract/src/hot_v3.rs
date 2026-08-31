@@ -160,7 +160,6 @@ const ENVELOPE_RELEASE_SET_OFFSET: usize = 16;
 const ENVELOPE_MARKET_OFFSET: usize = 48;
 const ENVELOPE_GENERATION_OFFSET: usize = 80;
 const ENVELOPE_ROOT_PRESTATE_DIGEST_OFFSET: usize = 88;
-const ENVELOPE_RESERVED_OFFSET: usize = 120;
 
 const ACK_RELEASE_SET_OFFSET: usize = 16;
 const ACK_MARKET_OFFSET: usize = 48;
@@ -188,6 +187,144 @@ pub enum HotExecutionErrorV3 {
 /// Result alias for the common hot ABI.
 pub type HotExecutionResultV3<T> = core::result::Result<T, HotExecutionErrorV3>;
 
+/// Number of caller-mined bump hints the hot envelope carries.
+pub const HOT_BUMP_HINT_COUNT_V1: usize = 8;
+/// Offset of the caller-mined bump hints. Formerly the reserved block.
+pub const HOT_BUMP_HINTS_OFFSET_V1: usize = 120;
+
+/// The eight bump hints a caller mines off chain so the route never searches.
+///
+/// # Why a hot route may not search at all
+///
+/// A PDA bump is `Geometric(1/2)` in the participant key, and
+/// `find_program_address` costs 1,500 CU per rejected candidate. A route with
+/// surviving searches therefore has no compute ceiling: its cost is a property
+/// of whose key is trading, and some fraction of strangers draw deep enough to
+/// exceed the transaction limit and are refused for no reason they can see or
+/// fix. That fraction is a product defect, not a tail statistic. These eight
+/// bytes exist so the number of searches on the public hot path is zero and
+/// per-key cost is a property of the code.
+///
+/// # Why a hint is not the wire naming an address
+///
+/// `dispatch.rs` refuses a caller-supplied `SelectedRecordBumpsV1` outright --
+/// "a selection arriving on the wire asserts identities, never addresses" --
+/// and that refusal stands unchanged. It is about a bump written into an
+/// account that later readers must TRUST, where a non-canonical value names a
+/// different valid address and nothing re-checks it.
+///
+/// A hint is the opposite shape, and it is the shape
+/// `dclutch_custody_sbf::split_caller_authority_bump_v1` and
+/// `dclutch_claims_sbf::sparse_native_transfer_v1::split_instruction` already
+/// ship: the program rebuilds the seeds ITSELF, reproduces the address with
+/// `create_program_address`, and compares the result against the account the
+/// frame supplied. A wrong hint reproduces a different address and refuses. The
+/// derivation IS the check, so the hint is a memo about a search the caller
+/// already paid for and can never be an authority.
+///
+/// # Why the envelope and not a suffix
+///
+/// The seeds of several of these addresses end in a digest over the family
+/// request, so a hint written INSIDE the request has no fixed point: it changes
+/// the digest, which changes the address, which changes the bump. The two
+/// shipped precedents put their byte after the request for exactly that reason.
+///
+/// This block goes one better and rides in the envelope, BEFORE the request, at
+/// the eight bytes the V3 wire already reserved. Three consequences, all of
+/// them the point:
+///
+/// * `hash(family_request)` cannot see it, so no parent request digest, child
+///   caller authority or acknowledgment moves -- pinned by
+///   `the_hot_request_digest_covers_the_family_request_only`;
+/// * the maker Ed25519 windows are absolute offsets rebased on
+///   `HOT_FAMILY_REQUEST_OFFSET_V3`, which does not move, so no signed message
+///   moves either;
+/// * and the packet does not grow by one byte. That is not an aesthetic
+///   preference. A Registry continuation submission has four spare bytes of the
+///   v0 packet ceiling, so a trailing suffix wide enough to carry eight hints
+///   would not fit on that route at all.
+///
+/// # Zero means absent
+///
+/// An unset hint is zero and the reader searches exactly as it used to, so the
+/// all-zero wire every current caller emits keeps working unchanged and no
+/// account and no market needs migrating. Zero is not a value any derivation
+/// hands back in practice, which is the same reading `split_caller_authority_bump_v1`
+/// already gives it.
+///
+/// # The slots are roles, not addresses
+///
+/// This envelope is family-neutral, so the slots name the ROLE a bump plays in
+/// any hot execution -- never a Direct account. `lifecycle` is indexed in the
+/// order the StateLifecyclePolicy materializes created accounts; `child_caller`
+/// and `child_relay` in child-route order. A family that creates more than two
+/// accounts or drives more than two child routes gets the search back for the
+/// ones past the end, and says so, rather than silently reusing a neighbour's
+/// slot.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HotBumpHintsV1 {
+    /// Core Market state PDA bump. Relayed to every child that reads the Market.
+    pub market: u8,
+    /// Trading capability root PDA bump.
+    pub root: u8,
+    /// Lifecycle-created account bumps, in lifecycle materialization order.
+    pub lifecycle: [u8; 2],
+    /// Trading caller-authority bumps, in child-route order.
+    pub child_caller: [u8; 2],
+    /// Bumps a child derives internally, relayed in its request, in route order.
+    pub child_relay: [u8; 2],
+}
+
+impl HotBumpHintsV1 {
+    /// The all-zero block: every reader searches, exactly as it used to.
+    pub const ABSENT: Self = Self {
+        market: 0,
+        root: 0,
+        lifecycle: [0; 2],
+        child_caller: [0; 2],
+        child_relay: [0; 2],
+    };
+
+    /// Read the block in canonical slot order.
+    const fn from_bytes(bytes: [u8; HOT_BUMP_HINT_COUNT_V1]) -> Self {
+        Self {
+            market: bytes[0],
+            root: bytes[1],
+            lifecycle: [bytes[2], bytes[3]],
+            child_caller: [bytes[4], bytes[5]],
+            child_relay: [bytes[6], bytes[7]],
+        }
+    }
+
+    /// Write the block in canonical slot order.
+    pub const fn to_bytes(self) -> [u8; HOT_BUMP_HINT_COUNT_V1] {
+        [
+            self.market,
+            self.root,
+            self.lifecycle[0],
+            self.lifecycle[1],
+            self.child_caller[0],
+            self.child_caller[1],
+            self.child_relay[0],
+            self.child_relay[1],
+        ]
+    }
+
+    /// Whether no hint is set, so every reader on this execution searches.
+    pub fn is_absent(self) -> bool {
+        self == Self::ABSENT
+    }
+}
+
+/// Read one hint as the `Option<u8>` every reproducing reader takes.
+///
+/// Zero is absent. Every consumer in the tree already spells its two arms as
+/// `Some(bump) => create_program_address(..)` and `None => find_program_address(..)`,
+/// so a hint reaches them in the shape they already have.
+pub const fn hot_bump_hint_v1(hint: u8) -> Option<u8> {
+    if hint == 0 { None } else { Some(hint) }
+}
+
 /// Exact immutable envelope preceding one family request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HotExecutionEnvelopeV3 {
@@ -196,6 +333,7 @@ pub struct HotExecutionEnvelopeV3 {
     market: [u8; 32],
     generation: u64,
     root_prestate_digest: [u8; 32],
+    bump_hints: HotBumpHintsV1,
 }
 
 impl HotExecutionEnvelopeV3 {
@@ -219,7 +357,19 @@ impl HotExecutionEnvelopeV3 {
             market,
             generation,
             root_prestate_digest,
+            bump_hints: HotBumpHintsV1::ABSENT,
         })
+    }
+
+    /// Carry the eight bumps the caller mined off chain.
+    ///
+    /// Separate from [`Self::new`] because a hint is not part of the envelope's
+    /// identity: it names no fact, and an envelope carrying none is the same
+    /// execution, more expensively. See [`HotBumpHintsV1`].
+    #[must_use]
+    pub const fn with_bump_hints(mut self, hints: HotBumpHintsV1) -> Self {
+        self.bump_hints = hints;
+        self
     }
 
     /// Hostile-decode the exact fixed envelope without accepting request bytes.
@@ -232,17 +382,21 @@ impl HotExecutionEnvelopeV3 {
         }
         if read_u16(bytes, 8)? != HOT_EXECUTION_VERSION_V3
             || read_u16(bytes, 10)? != HOT_EXECUTION_PROFILE_V3
-            || !all_zero(slice(bytes, ENVELOPE_RESERVED_OFFSET, 8)?)
         {
             return Err(HotExecutionErrorV3::UnsupportedProfile);
         }
-        Self::new(
+        Ok(Self::new(
             read_u32(bytes, ENVELOPE_REQUEST_BYTES_OFFSET)?,
             read_array(bytes, ENVELOPE_RELEASE_SET_OFFSET)?,
             read_array(bytes, ENVELOPE_MARKET_OFFSET)?,
             read_u64(bytes, ENVELOPE_GENERATION_OFFSET)?,
             read_array(bytes, ENVELOPE_ROOT_PRESTATE_DIGEST_OFFSET)?,
-        )
+        )?
+        .with_bump_hints(HotBumpHintsV1::from_bytes(
+            slice(bytes, HOT_BUMP_HINTS_OFFSET_V1, HOT_BUMP_HINT_COUNT_V1)?
+                .try_into()
+                .map_err(|_| HotExecutionErrorV3::InvalidLength)?,
+        )))
     }
 
     /// Split a complete instruction into its exact envelope and family request.
@@ -293,6 +447,15 @@ impl HotExecutionEnvelopeV3 {
         self.root_prestate_digest
     }
 
+    /// The eight caller-mined bumps this execution may reproduce addresses from.
+    ///
+    /// Never an authority. Every consumer rebuilds the seeds itself and refuses
+    /// unless the hint reproduces the account it was handed. See
+    /// [`HotBumpHintsV1`].
+    pub const fn bump_hints(self) -> HotBumpHintsV1 {
+        self.bump_hints
+    }
+
     /// Encode the exact canonical fixed envelope.
     pub fn to_bytes(self) -> [u8; HOT_EXECUTION_ENVELOPE_BYTES_V3] {
         let mut output = [0_u8; HOT_EXECUTION_ENVELOPE_BYTES_V3];
@@ -315,6 +478,11 @@ impl HotExecutionEnvelopeV3 {
             &mut output,
             ENVELOPE_ROOT_PRESTATE_DIGEST_OFFSET,
             &self.root_prestate_digest,
+        );
+        put(
+            &mut output,
+            HOT_BUMP_HINTS_OFFSET_V1,
+            &self.bump_hints.to_bytes(),
         );
         output
     }
@@ -506,7 +674,7 @@ mod tests {
     fn reserved_zero_identities_and_width_substitution_refuse() {
         let envelope = HotExecutionEnvelopeV3::new(1, id(1), id(2), 0, id(3)).expect("envelope");
         let bytes = envelope.to_bytes();
-        for offset in [0, 8, 10, ENVELOPE_RESERVED_OFFSET] {
+        for offset in [0, 8, 10] {
             let mut hostile = bytes;
             *hostile.get_mut(offset).expect("hostile offset") ^= 1;
             assert!(HotExecutionEnvelopeV3::decode(&hostile).is_err());
@@ -523,6 +691,91 @@ mod tests {
             ),
             Err(HotExecutionErrorV3::InvalidLength)
         );
+    }
+
+    fn hints() -> HotBumpHintsV1 {
+        HotBumpHintsV1 {
+            market: 254,
+            root: 253,
+            lifecycle: [252, 251],
+            child_caller: [250, 249],
+            child_relay: [248, 247],
+        }
+    }
+
+    #[test]
+    fn bump_hints_ride_the_envelope_and_leave_the_family_request_untouched() {
+        let envelope = HotExecutionEnvelopeV3::new(3, id(1), id(2), 7, id(3)).expect("envelope");
+        let hinted = envelope.with_bump_hints(hints());
+        assert!(envelope.bump_hints().is_absent());
+        assert_eq!(hinted.bump_hints(), hints());
+
+        // The whole difference between the two wires is the eight hint bytes,
+        // and every one of them is BEFORE the family request. That is the
+        // property the parent request digest, the child caller authorities and
+        // the maker Ed25519 windows all rest on: a hint cannot reach any of
+        // them, so adding one moves no digest and no signed message.
+        let plain = envelope.to_bytes();
+        let carried = hinted.to_bytes();
+        for (offset, (left, right)) in plain.iter().zip(carried.iter()).enumerate() {
+            assert_eq!(
+                left == right,
+                !(HOT_BUMP_HINTS_OFFSET_V1..HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1)
+                    .contains(&offset),
+                "byte {offset} moved outside the hint block",
+            );
+        }
+        assert_eq!(
+            HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1,
+            HOT_EXECUTION_ENVELOPE_BYTES_V3,
+        );
+        assert_eq!(
+            HOT_FAMILY_REQUEST_OFFSET_V3,
+            HOT_EXECUTION_ENVELOPE_BYTES_V3
+        );
+
+        let mut instruction = Vec::from(carried);
+        instruction.extend_from_slice(b"hot");
+        assert_eq!(
+            HotExecutionEnvelopeV3::split_instruction(&instruction),
+            Ok((hinted, b"hot".as_slice())),
+        );
+    }
+
+    #[test]
+    fn every_hint_slot_round_trips_at_its_own_canonical_offset() {
+        let envelope = HotExecutionEnvelopeV3::new(1, id(1), id(2), 0, id(3)).expect("envelope");
+        let bytes = envelope.with_bump_hints(hints()).to_bytes();
+        assert_eq!(
+            bytes.get(HOT_BUMP_HINTS_OFFSET_V1..).expect("hint block"),
+            &[254, 253, 252, 251, 250, 249, 248, 247],
+        );
+        assert_eq!(
+            HotExecutionEnvelopeV3::decode(&bytes)
+                .expect("hinted envelope")
+                .bump_hints(),
+            hints(),
+        );
+    }
+
+    #[test]
+    fn the_all_zero_hint_block_is_absent_and_still_decodes() {
+        // Every wire emitted before this block existed is all-zero here, and
+        // must keep decoding to an execution that searches exactly as it did.
+        // No market, no account and no caller needs migrating.
+        let envelope = HotExecutionEnvelopeV3::new(1, id(1), id(2), 0, id(3)).expect("envelope");
+        let bytes = envelope.to_bytes();
+        assert!(all_zero(
+            bytes.get(HOT_BUMP_HINTS_OFFSET_V1..).expect("hint block"),
+        ));
+        let decoded = HotExecutionEnvelopeV3::decode(&bytes).expect("absent hints decode");
+        assert_eq!(decoded, envelope);
+        assert!(decoded.bump_hints().is_absent());
+        assert_eq!(decoded.bump_hints(), HotBumpHintsV1::default());
+        for hint in HotBumpHintsV1::ABSENT.to_bytes() {
+            assert_eq!(hot_bump_hint_v1(hint), None);
+        }
+        assert_eq!(hot_bump_hint_v1(255), Some(255));
     }
 
     #[test]

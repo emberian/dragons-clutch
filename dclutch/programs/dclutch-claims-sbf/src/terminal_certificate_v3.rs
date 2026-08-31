@@ -102,5 +102,19 @@ pub(crate) fn authenticate_terminal_certificate_scenario_v3(
             BasisKindV3::CategoricalQ1 | BasisKindV3::GradedExactComplement,
             ResolutionCertificateKindV2::RecoveryAdvanced | ResolutionCertificateKindV2::Exhausted,
         ) => Err(ClaimsSbfError::Identity.into()),
+        // All four certificate kinds, one refusal. A spline basis has no
+        // `TerminalScenarioV3` -- the enum's three variants are categorical
+        // selection, a rational coordinate and failure, and which of them a
+        // curved payoff settles through is the evaluator's question, not this
+        // match's. Answering it with `Rational` because the shape rhymes would
+        // settle a market against a curve nothing computed.
+        //
+        // Its off-chain twin in
+        // `crates/dclutch-rational-representation-v2-operator/src/lib.rs`
+        // refuses the same four pairs; `terminal_pairs_agree_off_chain` in
+        // that crate's tests is what keeps the two from drifting.
+        (BasisKindV3::SplineDegree2To3 { .. }, _) => {
+            Err(ClaimsSbfError::BasisEvaluatorAbsent.into())
+        }
     }
 }

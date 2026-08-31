@@ -42,9 +42,106 @@ export const SIMULATOR_SERIES_SCHEMA_V1 = 'dclutch-simulator-series-v1';
  */
 export const SIMULATOR_SERIES_SCHEMA_V2 = 'dclutch-simulator-series-v2';
 
+/**
+ * v3 is the same series taken at a CAMPAIGN's stage boundaries rather than at
+ * a poller's cycles, and it carries the four things that record has and a
+ * census-only record does not.
+ *
+ * A census watches one market hold still and reports the same quantities every
+ * cycle; that is what v1 and v2 were shaped for, and the honest drawing of it
+ * is a flat line beside a moving heartbeat. A campaign is the other thing: it
+ * founds a market, funds its resolution, drives it to a terminal answer and
+ * retires it, and the boundary between two of its stages is a place where
+ * quantities are SUPPOSED to move. So v3 adds
+ *
+ * - `stage`, the boundary's own name, because "cycle 3" is not what happened
+ *   there and "resolution funding active" is;
+ * - the work each interval cost — transactions, compute units, fee lamports —
+ *   which is the only volume a market with no fills actually has;
+ * - `claim_unit_atoms`, the collateral one claim of one outcome is worth. It
+ *   is the price primitive: without it a claim count is a count of nothing in
+ *   particular, and with it every per-cell figure on the page is in collateral;
+ * - `settlement`, which cell the terminal certificate selected. That is the
+ *   only price move a market without fills ever makes, and it is the whole
+ *   one: the selected cell's claims become worth the claim unit and every
+ *   other cell's become worth nothing.
+ *
+ * Every field is optional and every earlier document still decodes. A v1 or v2
+ * capture is a capture that recorded no stages, no volume and no settlement,
+ * which is a true thing to say about it.
+ */
+export const SIMULATOR_SERIES_SCHEMA_V3 = 'dclutch-simulator-series-v3';
+
+/**
+ * v4 is the same series taken across a POPULATION of markets rather than one.
+ *
+ * v1 through v3 all describe a single market, because until the simlife engine
+ * (`tools/load-simulator/simlife.py`) the simulator only ever watched one. A
+ * simlife run draws many markets from seeded archetypes — different widths,
+ * different bases, different fuses, some resolving and some left alone — and
+ * censuses all of them at the same ticks. That contemporaneity is the only
+ * thing the population has that a single market does not: the lines share an
+ * x-axis, so they can honestly be drawn beside each other.
+ *
+ * NOTHING ABOUT THE OLD SHAPE CHANGES. The top level of a v4 document still
+ * describes exactly one market — the primary, the longest-observed — so every
+ * surface written against v1, v2 or v3 keeps drawing without knowing this
+ * version exists. Two blocks are added beside it:
+ *
+ * - `world`: the seed the population was drawn from, the substrate it was
+ *   driven against, every market that was PLANNED whether or not it was
+ *   observed, and — route by route — what the substrate could not do. That last
+ *   part is the point. A world plans nine kinds of thing and a census-only
+ *   substrate can do one of them; a page that draws such a run without saying so
+ *   reads as a trading record, which it is not.
+ * - `markets`: one sub-series per OBSERVED market, each with its own width,
+ *   laws, holders and points. A planned market that was never observed appears
+ *   in `world.planned` and never here, because a market with no points must not
+ *   be drawn as a market whose line is flat at zero.
+ *
+ * Earlier documents decode unchanged, as a capture of one market that recorded
+ * no world — which is a true thing to say about every capture taken before this.
+ */
+export const SIMULATOR_SERIES_SCHEMA_V4 = 'dclutch-simulator-series-v4';
+
 /** The one URL the surfaces read. Pinned by test: the artifact's link check
  * cannot see a runtime fetch, so the string itself is the contract. */
 export const SIMULATOR_SERIES_URL_V1 = '/simulator-series.json';
+
+/**
+ * The campaign record's own URL, and a SECOND artifact on purpose.
+ *
+ * The simulator's series is a devnet census; a campaign's series is a local
+ * rehearsal validator's whole-life run. They are different clusters, different
+ * x-axes and different claims, and folding them into one file would put a
+ * reader one merge away from believing a local founding happened on devnet.
+ * Two files, two reads, two captions.
+ */
+export const CAMPAIGN_SERIES_URL_V1 = '/campaign-series.json';
+
+/**
+ * Where a POPULATION capture is served from. A third file rather than a third
+ * schema: `/simulator-series.json` is a poller's one market, `/campaign-series.json`
+ * is one campaign's one market, and this is a whole world. All three decode
+ * through the same parser, because a v4 document IS a v3 document with two more
+ * blocks on it.
+ */
+export const SIMLIFE_SERIES_URL_V1 = '/simlife-series.json';
+
+/** One plain sentence for the shipped default state of the campaign artifact. */
+export const NO_CAMPAIGN_SENTENCE_V1 =
+  'No campaign record is published beside this site right now, so there is no market’s life to draw and nothing below is a zero.';
+
+/**
+ * What a reader must be told beside EVERY chart drawn from a campaign record.
+ *
+ * Not once in a footnote. The demo-vs-product rule this project runs on is
+ * that nothing on this site may imply trading that has not happened, and a
+ * chart is exactly the surface that implies it — so the sentence travels with
+ * the chart, and the `cluster` field is what decides whether it is said.
+ */
+export const CAMPAIGN_LOCAL_CAVEAT_V1 =
+  'Produced on a local rehearsal validator — a private chain this project started for the run on 127.0.0.1, with its own genesis. Not the public devnet, not mainnet, and nobody traded against it but the campaign itself.';
 
 /** One plain sentence for the shipped default state. */
 export const NO_SERIES_SENTENCE_V1 =
@@ -79,6 +176,58 @@ export type SimulatorSeriesPointV1 = Readonly<{
    * `lawIds`. Empty under v1 and under any capture that recorded no verdicts.
    */
   lawStatuses: ReadonlyArray<ConservationLawStatusV1>;
+  /**
+   * The campaign stage boundary this census was taken at, in the campaign's
+   * own words. Null for a poller's cycle, which has no name but its number.
+   */
+  stage: string | null;
+  /** Every tracked position's claims summed per outcome. Empty when unrecorded. */
+  positionTotals: ReadonlyArray<string>;
+  /** The Mint's own supply at this boundary, or null when unrecorded. */
+  mintSupply: string | null;
+  /** Transactions the campaign submitted in the interval ending here. */
+  transactions: number | null;
+  /** Compute units those transactions consumed, exact. */
+  computeUnits: string | null;
+  /** Lamports they paid in fees, exact. */
+  feeLamports: string | null;
+  /** The fee payer's lamports at this boundary, exact. */
+  payerLamports: string | null;
+}>;
+
+/**
+ * Which run produced a series, in enough detail to go and re-run it.
+ *
+ * The revision is the load-bearing field: a campaign's numbers are about ONE
+ * build of seven programs, and a figure whose commit is unknown is a figure
+ * that cannot be reproduced or contradicted.
+ */
+export type CampaignRecordV1 = Readonly<{
+  /** The campaign's own name for itself, e.g. `relayed-vertical success walk`. */
+  label: string;
+  /** The exact source revision the programs were built from. */
+  sourceRevision: string;
+  /** Which walk of the campaign this was, when it has more than one. */
+  walk: string | null;
+  /** The loopback origin the validator answered on. Always a 127.0.0.1 URL. */
+  rpcOrigin: string;
+  /** The transcript file this series was read out of. */
+  transcriptFile: string;
+}>;
+
+/**
+ * The terminal answer, once a market has one.
+ *
+ * `selectedCell` is the claim index the certificate selected — the cell that
+ * pays. Everything else on the market pays nothing, which is the whole of a
+ * settlement and the only price move a market with no fills ever makes.
+ */
+export type SettlementV1 = Readonly<{
+  selectedCell: number;
+  /** The cell a failure would have selected, when the market disclosed one. */
+  failureCell: number | null;
+  /** The certificate account, when the campaign recorded its address. */
+  certificate: string | null;
 }>;
 
 /**
@@ -133,8 +282,156 @@ export type SimulatorCollateralHolderV1 = Readonly<{
   atoms: string;
 }>;
 
+/**
+ * One market inside a population, with everything a single-market series has
+ * plus the world's own words for what KIND of market it is.
+ *
+ * `archetype`, `basis`, `destiny` and `personas` are the generator's labels,
+ * not the chain's and not this site's. They say what the run was trying to
+ * make; the points say what the chain did. Keeping them on the same object and
+ * naming them differently is what lets a surface caption a line as "a
+ * short-fuse market, drawn to miss its deadline" without implying the chain
+ * called it that.
+ */
+export type SimulatorMarketSeriesV1 = Readonly<{
+  marketId: string;
+  archetype: string | null;
+  basis: string | null;
+  destiny: string | null;
+  deadlineSlots: number | null;
+  personas: ReadonlyArray<string>;
+  outcomeCount: number;
+  lawIds: ReadonlyArray<string>;
+  laws: ReadonlyArray<ConservationLawV1>;
+  positions: ReadonlyArray<SimulatorPositionV1>;
+  collateralHolders: ReadonlyArray<SimulatorCollateralHolderV1>;
+  claimUnitAtoms: string | null;
+  settlement: SettlementV1 | null;
+  cyclesRecorded: number;
+  pointsOmittedBefore: number;
+  censusFile: string;
+  points: ReadonlyArray<SimulatorSeriesPointV1>;
+}>;
+
+/** One market the world drew, whether or not anything ever observed it. */
+export type SimulatorPlannedMarketV1 = Readonly<{
+  marketId: string;
+  archetype: string;
+  basis: string;
+  destiny: string;
+  outcomeCount: number;
+  deadlineSlots: number;
+  feeBasisPoints: number;
+  foundingCollateralAtoms: string;
+  personas: ReadonlyArray<string>;
+  /** True when a census of this market reached the artifact. */
+  observed: boolean;
+}>;
+
+/**
+ * One thing the run planned and did not execute, with its count and the
+ * substrate's own sentence about why.
+ *
+ * `outcome` is the run's four-word vocabulary and the three that appear here
+ * mean different things: `refused` is the chain saying no, `unattempted` is the
+ * substrate having no such route, `blocked` is a prerequisite that never
+ * happened. Folding them together would turn one wall into a hundred failures.
+ */
+export type SimulatorNotDoneV1 = Readonly<{
+  route: string;
+  outcome: 'refused' | 'unattempted' | 'blocked';
+  reason: string;
+  count: number;
+}>;
+
+/** Where a population was driven, and what that place could and could not do. */
+export type SimulatorSubstrateV1 = Readonly<{
+  name: string | null;
+  label: string | null;
+  cluster: string | null;
+  rpcOrigin: string | null;
+  sourceRevision: string | null;
+  routes: ReadonlyArray<string>;
+  routesAbsent: ReadonlyArray<string>;
+  basisKinds: ReadonlyArray<string>;
+  basisKindsAbsent: ReadonlyArray<string>;
+}>;
+
+/** One route's four counts, exactly as the conductor recorded them. */
+export type SimulatorTallyRowV1 = Readonly<{
+  executed: number;
+  refused: number;
+  unattempted: number;
+  blocked: number;
+}>;
+
+/**
+ * One tick of the run's own history: how many planned events ended each way.
+ *
+ * `notDone` says WHAT a run could not do; this says WHEN it did what it did.
+ * Census events are counted apart from mutations on purpose -- a tick's census
+ * count is just how many markets were alive at it, and adding that to the same
+ * total as the tick's foundings buries four foundings under forty observations.
+ */
+export type SimulatorTimelineTickV1 = Readonly<{
+  tick: number;
+  executed: number;
+  refused: number;
+  unattempted: number;
+  blocked: number;
+  mutationsExecuted: number;
+  mutationsRefused: number;
+  censusExecuted: number;
+  /** `route:outcome` for every mutation that actually reached the chain. */
+  routes: ReadonlyArray<string>;
+}>;
+
+export type SimulatorWorldV1 = Readonly<{
+  /** The sentence the run was seeded from, so it can be re-run by name. */
+  seedPreimage: string;
+  seedSha256: string;
+  /** The digest of the plan every event in this run came out of. */
+  planDigest: string;
+  substrate: SimulatorSubstrateV1;
+  marketsPlanned: number;
+  marketsObserved: number;
+  /** Market ids this run founded itself. Empty when it founded nothing. */
+  marketsFoundedByThisRun: ReadonlyArray<string>;
+  /** Market ids that existed on the chain before this run started. */
+  marketsPreFounded: ReadonlyArray<string>;
+  planned: ReadonlyArray<SimulatorPlannedMarketV1>;
+  notDone: ReadonlyArray<SimulatorNotDoneV1>;
+  /**
+   * The run's own tally, route by route. `executed` is the only count here a
+   * page should read: the other three are also in `notDone`, WITH their
+   * reasons, and a reader who sees a number without its sentence is exactly the
+   * reader this vocabulary was written for.
+   */
+  tally: Readonly<Record<string, SimulatorTallyRowV1>>;
+  /**
+   * The run tick by tick. EMPTY for a capture taken before the timeline
+   * existed, which is a true thing to say about it rather than a defect: the
+   * document is still a complete v4 and every other block still decodes.
+   */
+  timeline: ReadonlyArray<SimulatorTimelineTickV1>;
+}>;
+
 export type SimulatorSeriesV1 = Readonly<{
-  schema: typeof SIMULATOR_SERIES_SCHEMA_V1 | typeof SIMULATOR_SERIES_SCHEMA_V2;
+  schema:
+    | typeof SIMULATOR_SERIES_SCHEMA_V1
+    | typeof SIMULATOR_SERIES_SCHEMA_V2
+    | typeof SIMULATOR_SERIES_SCHEMA_V3
+    | typeof SIMULATOR_SERIES_SCHEMA_V4;
+  /** The population this capture came from, or null for a single-market one. */
+  world: SimulatorWorldV1 | null;
+  /** Every observed market. Empty for a single-market capture. */
+  markets: ReadonlyArray<SimulatorMarketSeriesV1>;
+  /** The campaign that produced this record, or null for a poller's census. */
+  campaign: CampaignRecordV1 | null;
+  /** Collateral atoms one claim of one outcome is worth, or null when unrecorded. */
+  claimUnitAtoms: string | null;
+  /** The terminal answer, or null while the market has not reached one. */
+  settlement: SettlementV1 | null;
   capturedAt: string;
   /**
    * The conservation laws this capture recorded, in the census's own order.
@@ -218,13 +515,40 @@ function lawStatuses(value: unknown, field: string, lawCount: number): ReadonlyA
   }));
 }
 
+/** An exact quantity that a capture is allowed not to have recorded at all. */
+function optionalAtoms(value: unknown, field: string): string | null {
+  return value === null || value === undefined ? null : atoms(value, field);
+}
+
+function optionalCount(value: unknown, field: string): number | null {
+  return value === null || value === undefined ? null : count(value, field);
+}
+
+function optionalText(value: unknown, field: string): string | null {
+  return value === null || value === undefined ? null : text(value, field);
+}
+
 function point(value: unknown, index: number, outcomeCount: number, lawCount: number): SimulatorSeriesPointV1 {
   const body = object(value, `point ${index}`);
   if (!Array.isArray(body.supply)) throw new Error(`point ${index} supply must be one list`);
   if (body.supply.length !== outcomeCount) {
     throw new Error(`point ${index} carries ${body.supply.length} outcomes and the series declares ${outcomeCount}`);
   }
+  // Position totals are per-outcome, so a list of another length would lay one
+  // cell's holdings under another cell's name — the same misattribution the
+  // law-status length check exists to prevent, and refused the same way.
+  const positionTotals = !Array.isArray(body.position_totals) ? [] : body.position_totals;
+  if (positionTotals.length !== 0 && positionTotals.length !== outcomeCount) {
+    throw new Error(`point ${index} carries ${positionTotals.length} position totals and the series declares ${outcomeCount} outcomes`);
+  }
   return Object.freeze({
+    stage: optionalText(body.stage, `point ${index} stage`),
+    positionTotals: Object.freeze(positionTotals.map((entry, cell) => atoms(entry, `point ${index} position_totals ${cell}`))),
+    mintSupply: optionalAtoms(body.mint_supply, `point ${index} mint_supply`),
+    transactions: optionalCount(body.transactions, `point ${index} transactions`),
+    computeUnits: optionalAtoms(body.compute_units, `point ${index} compute_units`),
+    feeLamports: optionalAtoms(body.fee_lamports, `point ${index} fee_lamports`),
+    payerLamports: optionalAtoms(body.payer_lamports, `point ${index} payer_lamports`),
     lawStatuses: lawStatuses(body.law_statuses, `point ${index} law_statuses`, lawCount),
     cycle: count(body.cycle, `point ${index} cycle`),
     slot: atoms(body.slot, `point ${index} slot`),
@@ -240,90 +564,317 @@ function point(value: unknown, index: number, outcomeCount: number, lawCount: nu
   });
 }
 
+/**
+ * The part of a series document that describes ONE market.
+ *
+ * Factored out because a v4 document contains this shape twice over: once at
+ * the top level, for the primary market, and once per entry in `markets`. One
+ * decoder for both is not a tidiness preference — it is what guarantees that a
+ * market inside a population is held to exactly the same length checks,
+ * ordering rule and settlement bound as a market on its own, so no figure
+ * becomes admissible by being nested.
+ */
+function seriesBody(root: Record<string, unknown>, where: string) {
+  if (!Array.isArray(root.points)) throw new Error(`${where} points must be one list`);
+  const outcomeCount = count(root.outcome_count, `${where} outcome_count`);
+  // The law names come first: every point's verdict string is checked against
+  // this list's length, so a series can never draw seven verdicts under six
+  // names.
+  const lawIds = !Array.isArray(root.law_ids)
+    ? Object.freeze([])
+    : Object.freeze(root.law_ids.map((entry, index) => text(entry, `${where} law_ids ${index}`)));
+  const laws = !Array.isArray(root.laws) ? Object.freeze([]) : Object.freeze(root.laws.map((entry, index) => {
+    const body = object(entry, `${where} law ${index}`);
+    const status = body.status;
+    if (status !== 'holds' && status !== 'violated' && status !== 'inapplicable') {
+      throw new Error(`${where} law ${index} status must be holds, violated or inapplicable`);
+    }
+    return Object.freeze({
+      id: text(body.id, `${where} law ${index} id`),
+      status,
+      detail: text(body.detail, `${where} law ${index} detail`),
+    });
+  }));
+  if (laws.length > 0 && laws.length !== lawIds.length) {
+    throw new Error(`${where}: ${laws.length} laws are described and ${lawIds.length} are named`);
+  }
+  for (const [index, law] of laws.entries()) {
+    if (law.id !== lawIds[index]) throw new Error(`${where} law ${index} is ${law.id} and law_ids names ${lawIds[index]}`);
+  }
+  const points = Object.freeze(root.points.map(
+    (entry, index) => point(entry, index, outcomeCount, lawIds.length),
+  ));
+  // A line is only honest if its x-axis is ordered. Two points out of order
+  // would draw a shape that never happened, and no decoder below this one
+  // would catch it.
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index].cycle <= points[index - 1].cycle) {
+      throw new Error(`${where} point ${index} does not come after the point before it`);
+    }
+  }
+  // Holders are optional: a capture taken before this app recorded them is a
+  // capture with none, which is a true thing to say and not a decode failure.
+  const positions = !Array.isArray(root.positions) ? Object.freeze([]) : Object.freeze(root.positions.map((entry, index) => {
+    const body = object(entry, `${where} position ${index}`);
+    if (!Array.isArray(body.claims)) throw new Error(`${where} position ${index} claims must be one list`);
+    return Object.freeze({
+      label: text(body.label, `${where} position ${index} label`),
+      address: body.address === null || body.address === undefined ? null : address(body.address, `${where} position ${index} address`),
+      lamports: body.lamports === null || body.lamports === undefined ? null : atoms(body.lamports, `${where} position ${index} lamports`),
+      claims: Object.freeze(body.claims.map((entry_, cell) => atoms(entry_, `${where} position ${index} claim ${cell}`))),
+      totalClaims: atoms(body.total_claims, `${where} position ${index} total_claims`),
+    });
+  }));
+  const collateralHolders = !Array.isArray(root.collateral_holders) ? Object.freeze([]) : Object.freeze(root.collateral_holders.map((entry, index) => {
+    const body = object(entry, `${where} collateral holder ${index}`);
+    return Object.freeze({
+      label: text(body.label, `${where} collateral holder ${index} label`),
+      address: body.address === null || body.address === undefined ? null : address(body.address, `${where} collateral holder ${index} address`),
+      atoms: atoms(body.atoms, `${where} collateral holder ${index} atoms`),
+    });
+  }));
+
+  // The terminal answer names a CELL, so it is checked against the number of
+  // cells this series declares. A selector past the end would light a column
+  // that is not on the chart, or worse, light the wrong one.
+  const settlementBody = root.settlement === null || root.settlement === undefined
+    ? null
+    : object(root.settlement, `${where} settlement`);
+  const settlement = settlementBody === null ? null : Object.freeze({
+    selectedCell: count(settlementBody.selected_cell, `${where} settlement selected_cell`),
+    failureCell: optionalCount(settlementBody.failure_cell, `${where} settlement failure_cell`),
+    certificate: settlementBody.certificate === null || settlementBody.certificate === undefined
+      ? null
+      : address(settlementBody.certificate, `${where} settlement certificate`),
+  });
+  if (settlement !== null && settlement.selectedCell >= outcomeCount) {
+    throw new Error(`${where} settlement selects cell ${settlement.selectedCell} and the series declares ${outcomeCount} outcomes`);
+  }
+  if (settlement !== null && settlement.failureCell !== null && settlement.failureCell >= outcomeCount) {
+    throw new Error(`${where} settlement names failure cell ${settlement.failureCell} and the series declares ${outcomeCount} outcomes`);
+  }
+
+  return {
+    outcomeCount,
+    lawIds,
+    laws,
+    points,
+    positions,
+    collateralHolders,
+    settlement,
+    claimUnitAtoms: optionalAtoms(root.claim_unit_atoms, `${where} claim_unit_atoms`),
+    cyclesRecorded: count(root.cycles_recorded, `${where} cycles_recorded`),
+    pointsOmittedBefore: count(root.points_omitted_before, `${where} points_omitted_before`),
+    censusFile: text(root.census_file, `${where} census_file`),
+  };
+}
+
+function marketSeries(value: unknown, index: number): SimulatorMarketSeriesV1 {
+  const body = object(value, `market ${index}`);
+  const marketId = text(body.market_id, `market ${index} market_id`);
+  const where = `market ${marketId}`;
+  const personas = !Array.isArray(body.personas)
+    ? Object.freeze([])
+    : Object.freeze(body.personas.map((entry, cell) => text(entry, `${where} persona ${cell}`)));
+  return Object.freeze({
+    marketId,
+    archetype: optionalText(body.archetype, `${where} archetype`),
+    basis: optionalText(body.basis, `${where} basis`),
+    destiny: optionalText(body.destiny, `${where} destiny`),
+    deadlineSlots: optionalCount(body.deadline_slots, `${where} deadline_slots`),
+    personas,
+    ...seriesBody(body, where),
+  });
+}
+
+function plannedMarket(value: unknown, index: number): SimulatorPlannedMarketV1 {
+  const body = object(value, `planned market ${index}`);
+  const where = `planned market ${index}`;
+  return Object.freeze({
+    marketId: text(body.market_id, `${where} market_id`),
+    archetype: text(body.archetype, `${where} archetype`),
+    basis: text(body.basis, `${where} basis`),
+    destiny: text(body.destiny, `${where} destiny`),
+    outcomeCount: count(body.outcome_count, `${where} outcome_count`),
+    deadlineSlots: count(body.deadline_slots, `${where} deadline_slots`),
+    // A world may only draw zero-fee markets, because fee-bearing founding does
+    // not fit in one transaction on today's wire. A capture claiming otherwise
+    // is describing a market this protocol cannot found, so it is refused here
+    // rather than drawn.
+    feeBasisPoints: (() => {
+      const fee = count(body.fee_basis_points, `${where} fee_basis_points`);
+      if (fee !== 0) throw new Error(`${where} carries a ${fee} bp fee and only zero-fee markets found today`);
+      return fee;
+    })(),
+    foundingCollateralAtoms: atoms(body.founding_collateral_atoms, `${where} founding_collateral_atoms`),
+    personas: Object.freeze(
+      (Array.isArray(body.participants) ? body.participants : []).map(
+        (entry, cell) => text(object(entry, `${where} participant ${cell}`).persona, `${where} participant ${cell} persona`),
+      ),
+    ),
+    observed: body.observed === true,
+  });
+}
+
+function parseWorld(value: unknown, observedIds: ReadonlySet<string>): SimulatorWorldV1 {
+  const body = object(value, 'world');
+  const seed = object(body.seed, 'world seed');
+  const substrate = object(body.substrate, 'world substrate');
+  const strings = (raw: unknown, field: string) => (!Array.isArray(raw)
+    ? Object.freeze([])
+    : Object.freeze(raw.map((entry, index) => text(entry, `${field} ${index}`))));
+  const planned = !Array.isArray(body.planned)
+    ? Object.freeze([])
+    : Object.freeze(body.planned.map(plannedMarket));
+  // A planned market that claims to have been observed must actually appear in
+  // `markets`. The two blocks are written by the same script and could drift,
+  // and a page that trusts the flag would draw a caption for a line that is not
+  // there.
+  for (const market of planned) {
+    if (market.observed && !observedIds.has(market.marketId)) {
+      throw new Error(`world says ${market.marketId} was observed and no series carries it`);
+    }
+  }
+  const notDone = !Array.isArray(body.not_done) ? Object.freeze([]) : Object.freeze(body.not_done.map((entry, index) => {
+    const row = object(entry, `world not_done ${index}`);
+    const outcome = row.outcome;
+    if (outcome !== 'refused' && outcome !== 'unattempted' && outcome !== 'blocked') {
+      throw new Error(`world not_done ${index} outcome must be refused, unattempted or blocked`);
+    }
+    return Object.freeze({
+      route: text(row.route, `world not_done ${index} route`),
+      outcome,
+      reason: text(row.reason, `world not_done ${index} reason`),
+      count: count(row.count, `world not_done ${index} count`),
+    });
+  }));
+  // The timeline is OPTIONAL, and its absence is not a defect: every capture
+  // taken before it existed is still a complete v4 document. What is refused is
+  // a timeline that disagrees with itself -- a tick whose four outcome counts
+  // do not add up to its own total is a caption disagreeing with its chart, the
+  // same species as every other refusal in this decoder.
+  const timeline = !Array.isArray(body.timeline) ? Object.freeze([]) : Object.freeze(body.timeline.map((entry, index) => {
+    const row = object(entry, `world timeline ${index}`);
+    const executed = count(row.executed, `world timeline ${index} executed`);
+    const refused = count(row.refused, `world timeline ${index} refused`);
+    const mutationsExecuted = count(row.mutations_executed, `world timeline ${index} mutations_executed`);
+    const censusExecuted = count(row.census_executed, `world timeline ${index} census_executed`);
+    if (mutationsExecuted + censusExecuted !== executed) {
+      throw new Error(
+        `world timeline ${index} says ${executed} executed but splits into ${mutationsExecuted} `
+        + `mutations and ${censusExecuted} censuses`,
+      );
+    }
+    return Object.freeze({
+      tick: count(row.tick, `world timeline ${index} tick`),
+      executed,
+      refused,
+      unattempted: count(row.unattempted, `world timeline ${index} unattempted`),
+      blocked: count(row.blocked, `world timeline ${index} blocked`),
+      mutationsExecuted,
+      mutationsRefused: count(row.mutations_refused, `world timeline ${index} mutations_refused`),
+      censusExecuted,
+      routes: strings(row.routes, `world timeline ${index} routes`),
+    });
+  }));
+  const tallyBody = body.tally === undefined || body.tally === null
+    ? {}
+    : object(body.tally, 'world tally');
+  const tally: Record<string, SimulatorTallyRowV1> = {};
+  for (const [route, counts] of Object.entries(tallyBody)) {
+    const cell = object(counts, `world tally ${route}`);
+    tally[route] = Object.freeze({
+      executed: count(cell.executed, `world tally ${route} executed`),
+      refused: count(cell.refused, `world tally ${route} refused`),
+      unattempted: count(cell.unattempted, `world tally ${route} unattempted`),
+      blocked: count(cell.blocked, `world tally ${route} blocked`),
+    });
+  }
+  return Object.freeze({
+    timeline,
+    tally: Object.freeze(tally),
+    seedPreimage: text(seed.preimage, 'world seed preimage'),
+    seedSha256: text(seed.sha256, 'world seed sha256'),
+    planDigest: text(body.plan_digest, 'world plan_digest'),
+    substrate: Object.freeze({
+      name: optionalText(substrate.name, 'world substrate name'),
+      label: optionalText(substrate.label, 'world substrate label'),
+      cluster: optionalText(substrate.cluster, 'world substrate cluster'),
+      rpcOrigin: optionalText(substrate.rpc_origin, 'world substrate rpc_origin'),
+      sourceRevision: optionalText(substrate.source_revision, 'world substrate source_revision'),
+      routes: strings(substrate.routes, 'world substrate routes'),
+      routesAbsent: strings(substrate.routes_absent, 'world substrate routes_absent'),
+      basisKinds: strings(substrate.basis_kinds, 'world substrate basis_kinds'),
+      basisKindsAbsent: strings(substrate.basis_kinds_absent, 'world substrate basis_kinds_absent'),
+    }),
+    marketsPlanned: count(body.markets_planned, 'world markets_planned'),
+    marketsObserved: count(body.markets_observed, 'world markets_observed'),
+    marketsFoundedByThisRun: strings(body.markets_founded_by_this_run, 'world markets_founded_by_this_run'),
+    marketsPreFounded: strings(body.markets_pre_founded, 'world markets_pre_founded'),
+    planned,
+    notDone,
+  });
+}
+
 /** Decode one series document. Throws with the field named; never returns a
  * half-series, and never a series whose cycles run backwards. */
 export function parseSimulatorSeriesV1(value: unknown): SimulatorSeriesV1 {
   const root = object(value, 'simulator series');
   const schema = root.schema;
-  if (schema !== SIMULATOR_SERIES_SCHEMA_V1 && schema !== SIMULATOR_SERIES_SCHEMA_V2) {
+  if (
+    schema !== SIMULATOR_SERIES_SCHEMA_V1
+    && schema !== SIMULATOR_SERIES_SCHEMA_V2
+    && schema !== SIMULATOR_SERIES_SCHEMA_V3
+    && schema !== SIMULATOR_SERIES_SCHEMA_V4
+  ) {
     throw new Error('simulator series has another schema');
   }
   const cluster = root.cluster;
   if (cluster !== 'local' && cluster !== 'devnet') throw new Error('cluster must be local or devnet');
   const mode = root.mode;
   if (mode !== 'finite' && mode !== 'sustain') throw new Error('mode must be finite or sustain');
-  if (!Array.isArray(root.points)) throw new Error('points must be one list');
-  const outcomeCount = count(root.outcome_count, 'outcome_count');
-  // The law names come first: every point's verdict string is checked against
-  // this list's length, so a series can never draw seven verdicts under six
-  // names.
-  const lawIds = !Array.isArray(root.law_ids)
+  const body = seriesBody(root, 'series');
+
+  // Which run this was. A campaign block that names no revision is refused
+  // rather than carried: a per-cell figure whose build is unknown cannot be
+  // reproduced, and this is the field a reader goes back to the chain with.
+  const campaignBody = root.campaign === null || root.campaign === undefined
+    ? null
+    : object(root.campaign, 'campaign');
+  const campaign = campaignBody === null ? null : Object.freeze({
+    label: text(campaignBody.label, 'campaign label'),
+    sourceRevision: text(campaignBody.source_revision, 'campaign source_revision'),
+    walk: optionalText(campaignBody.walk, 'campaign walk'),
+    rpcOrigin: text(campaignBody.rpc_origin, 'campaign rpc_origin'),
+    transcriptFile: text(campaignBody.transcript_file, 'campaign transcript_file'),
+  });
+
+  const markets = !Array.isArray(root.markets)
     ? Object.freeze([])
-    : Object.freeze(root.law_ids.map((entry, index) => text(entry, `law_ids ${index}`)));
-  const laws = !Array.isArray(root.laws) ? Object.freeze([]) : Object.freeze(root.laws.map((entry, index) => {
-    const body = object(entry, `law ${index}`);
-    const status = body.status;
-    if (status !== 'holds' && status !== 'violated' && status !== 'inapplicable') {
-      throw new Error(`law ${index} status must be holds, violated or inapplicable`);
-    }
-    return Object.freeze({
-      id: text(body.id, `law ${index} id`),
-      status,
-      detail: text(body.detail, `law ${index} detail`),
-    });
-  }));
-  if (laws.length > 0 && laws.length !== lawIds.length) {
-    throw new Error(`${laws.length} laws are described and ${lawIds.length} are named`);
+    : Object.freeze(root.markets.map(marketSeries));
+  const observedIds = new Set(markets.map((market) => market.marketId));
+  if (observedIds.size !== markets.length) {
+    throw new Error('two markets in this capture carry the same id');
   }
-  for (const [index, law] of laws.entries()) {
-    if (law.id !== lawIds[index]) throw new Error(`law ${index} is ${law.id} and law_ids names ${lawIds[index]}`);
+  const world = root.world === null || root.world === undefined
+    ? null
+    : parseWorld(root.world, observedIds);
+  // A world that counts more observed markets than it carries is a world whose
+  // caption disagrees with its own charts.
+  if (world !== null && world.marketsObserved !== markets.length) {
+    throw new Error(`world claims ${world.marketsObserved} observed markets and carries ${markets.length}`);
   }
-  const points = Object.freeze(root.points.map((entry, index) => point(entry, index, outcomeCount, lawIds.length)));
-  // A line is only honest if its x-axis is ordered. Two points out of order
-  // would draw a shape that never happened, and no decoder below this one
-  // would catch it.
-  for (let index = 1; index < points.length; index += 1) {
-    if (points[index].cycle <= points[index - 1].cycle) {
-      throw new Error(`point ${index} does not come after the point before it`);
-    }
-  }
-  // Holders are optional: a capture taken before this app recorded them is a
-  // capture with none, which is a true thing to say and not a decode failure.
-  const positions = !Array.isArray(root.positions) ? Object.freeze([]) : Object.freeze(root.positions.map((entry, index) => {
-    const body = object(entry, `position ${index}`);
-    if (!Array.isArray(body.claims)) throw new Error(`position ${index} claims must be one list`);
-    return Object.freeze({
-      label: text(body.label, `position ${index} label`),
-      address: body.address === null || body.address === undefined ? null : address(body.address, `position ${index} address`),
-      lamports: body.lamports === null || body.lamports === undefined ? null : atoms(body.lamports, `position ${index} lamports`),
-      claims: Object.freeze(body.claims.map((entry_, cell) => atoms(entry_, `position ${index} claim ${cell}`))),
-      totalClaims: atoms(body.total_claims, `position ${index} total_claims`),
-    });
-  }));
-  const collateralHolders = !Array.isArray(root.collateral_holders) ? Object.freeze([]) : Object.freeze(root.collateral_holders.map((entry, index) => {
-    const body = object(entry, `collateral holder ${index}`);
-    return Object.freeze({
-      label: text(body.label, `collateral holder ${index} label`),
-      address: body.address === null || body.address === undefined ? null : address(body.address, `collateral holder ${index} address`),
-      atoms: atoms(body.atoms, `collateral holder ${index} atoms`),
-    });
-  }));
 
   return Object.freeze({
     schema,
+    world,
+    markets,
+    campaign,
     capturedAt: instant(root.captured_at, 'captured_at'),
-    lawIds,
-    laws,
-    positions,
-    collateralHolders,
     cluster,
     market: root.market === null || root.market === undefined ? null : address(root.market, 'market'),
     mode,
-    outcomeCount,
-    cyclesRecorded: count(root.cycles_recorded, 'cycles_recorded'),
-    pointsOmittedBefore: count(root.points_omitted_before, 'points_omitted_before'),
-    censusFile: text(root.census_file, 'census_file'),
-    points,
+    ...body,
   });
 }
 
@@ -341,10 +892,11 @@ export type SimulatorSeriesReadV1 =
  */
 export async function readSimulatorSeriesV1(
   fetchLike: (url: string) => Promise<{ ok: boolean; text(): Promise<string> }>,
+  url: string = SIMULATOR_SERIES_URL_V1,
 ): Promise<SimulatorSeriesReadV1> {
   let body: string;
   try {
-    const response = await fetchLike(SIMULATOR_SERIES_URL_V1);
+    const response = await fetchLike(url);
     if (!response.ok) return Object.freeze({ kind: 'absent' as const });
     body = await response.text();
   } catch {
@@ -383,6 +935,216 @@ export function issuedSupplyLinesV1(
 /** True when every value on every line is the same value. */
 export function everyLineFlatV1(lines: ReadonlyArray<SimulatorSeriesLineV1>): boolean {
   return lines.every((line) => line.values.every((value) => value === line.values[0]));
+}
+
+/**
+ * The x-axis of a campaign: the boundaries, in the campaign's own words.
+ *
+ * A campaign's points are not evenly spaced instants and calling them "cycle
+ * 1..N" would suggest they are. Where a point recorded its stage, that name is
+ * the label; where it did not, the cycle number is, because inventing a name
+ * for a boundary nobody named is worse than showing the number.
+ */
+export function campaignStageLabelsV1(series: SimulatorSeriesV1): ReadonlyArray<string> {
+  return Object.freeze(series.points.map((entry) => entry.stage ?? `cycle ${entry.cycle}`));
+}
+
+/**
+ * THE ODDS PATH: each cell's share of the issued claim supply, in basis points.
+ *
+ * This is what a prediction market means by odds, computed the only way this
+ * record supports computing it — from the Claims aggregate's own liability
+ * supply, which is what the market says it owes on each outcome. It is not a
+ * price a buyer paid, because in this record nobody has bought anything; it is
+ * the distribution the market is standing at.
+ *
+ * EXACT, AND FLOORED. `supply * 10000 / total` on BigInt, floored, so the
+ * figures are integers a reader can add up and never a float that drifts. The
+ * floor means the cells can sum to slightly under 10,000, which is a true
+ * statement about integer division and is said in the caption rather than
+ * hidden by scaling the last cell to make it come out even.
+ *
+ * A BOUNDARY WITH NOTHING ISSUED HAS NO ODDS. A share of zero supply is not
+ * zero percent, it is undefined, so a series with any such boundary draws no
+ * odds line at all — the same rule the heartbeat's cadence line follows.
+ */
+export function impliedOddsLinesV1(
+  series: SimulatorSeriesV1,
+  outcomes?: ReadonlyArray<string> | null,
+): ReadonlyArray<SimulatorSeriesLineV1> {
+  if (series.points.length === 0 || series.outcomeCount === 0) return Object.freeze([]);
+  const totals = series.points.map((entry) => entry.supply.reduce((sum, value) => sum + BigInt(value), 0n));
+  if (totals.some((total) => total === 0n)) return Object.freeze([]);
+  return Object.freeze(Array.from({ length: series.outcomeCount }, (_unused, cell) => Object.freeze({
+    label: outcomes?.[cell] === undefined ? `claim ${cell}` : `claim ${cell} · ${outcomes[cell]}`,
+    values: Object.freeze(series.points.map((entry, index) => ((BigInt(entry.supply[cell]) * 10_000n) / totals[index]).toString())),
+  })));
+}
+
+/**
+ * THE MONEY: what the market's own vault holds, against everything tracked.
+ *
+ * Two lines and not one number, because the interesting thing is the gap. The
+ * Hoard is the market's collateral; the tracked total is every atom of that
+ * collateral the census could name anywhere. When the two move apart, atoms
+ * left the vault for an account somebody still watches; when the tracked total
+ * itself moves, an atom went somewhere nobody named, and L1 says so first.
+ */
+export function hoardCoverageLinesV1(series: SimulatorSeriesV1): ReadonlyArray<SimulatorSeriesLineV1> {
+  if (series.points.length === 0) return Object.freeze([]);
+  const lines: SimulatorSeriesLineV1[] = [
+    Object.freeze({ label: 'in the market’s own Hoard', values: Object.freeze(series.points.map((entry) => entry.hoardAtoms)) }),
+    Object.freeze({ label: 'tracked across every named account', values: Object.freeze(series.points.map((entry) => entry.trackedCollateral)) }),
+  ];
+  // The Mint's supply is drawn only when every boundary recorded it: a line
+  // with a hole would be redrawn shorter than the axis it sits on.
+  if (series.points.every((entry) => entry.mintSupply !== null)) {
+    lines.push(Object.freeze({
+      label: 'the collateral Mint’s whole supply',
+      values: Object.freeze(series.points.map((entry) => entry.mintSupply as string)),
+    }));
+  }
+  return Object.freeze(lines);
+}
+
+/**
+ * THE VOLUME a market without fills actually has: the work its stages cost.
+ *
+ * There is no traded volume in this record and there must be no chart that
+ * looks like one. What there is, exactly, is how many transactions each
+ * boundary took, what they burned in compute, and what they paid in fees —
+ * three separate dimensions kept on three separate figures for the same reason
+ * the heartbeat keeps slots and seconds apart.
+ *
+ * Each line is drawn only when EVERY boundary recorded it.
+ */
+export type CampaignVolumeV1 = Readonly<{
+  xLabels: ReadonlyArray<string>;
+  transactions: SimulatorSeriesLineV1 | null;
+  computeUnits: SimulatorSeriesLineV1 | null;
+  feeLamports: SimulatorSeriesLineV1 | null;
+  totalTransactions: string | null;
+  totalComputeUnits: string | null;
+  totalFeeLamports: string | null;
+}>;
+
+export function campaignVolumeV1(series: SimulatorSeriesV1): CampaignVolumeV1 | null {
+  const points = series.points;
+  if (points.length === 0) return null;
+  const complete = <T,>(pick: (entry: SimulatorSeriesPointV1) => T | null): ReadonlyArray<T> | null => {
+    const values = points.map(pick);
+    return values.some((value) => value === null) ? null : (values as T[]);
+  };
+  const transactions = complete((entry) => entry.transactions);
+  const computeUnits = complete((entry) => entry.computeUnits);
+  const feeLamports = complete((entry) => entry.feeLamports);
+  if (transactions === null && computeUnits === null && feeLamports === null) return null;
+  const sum = (values: ReadonlyArray<string> | null) =>
+    (values === null ? null : values.reduce((total, value) => total + BigInt(value), 0n).toString());
+  const line = (label: string, values: ReadonlyArray<string> | null) =>
+    (values === null ? null : Object.freeze({ label, values: Object.freeze([...values]) }));
+  const transactionStrings = transactions === null ? null : transactions.map(String);
+  return Object.freeze({
+    xLabels: campaignStageLabelsV1(series),
+    transactions: line('transactions submitted', transactionStrings),
+    computeUnits: line('compute units consumed', computeUnits),
+    feeLamports: line('lamports paid in fees', feeLamports),
+    totalTransactions: sum(transactionStrings),
+    totalComputeUnits: sum(computeUnits),
+    totalFeeLamports: sum(feeLamports),
+  });
+}
+
+/**
+ * WHAT THE RUN HAS SPENT: the fee payer's balance, boundary by boundary.
+ *
+ * This is a level and not an interval, so it is deliberately not folded into
+ * the volume above — adding a balance to a list of per-interval counts would
+ * put two different kinds of number on one axis. It is drawn as the drop from
+ * the first boundary rather than as the raw balance, because a genesis-funded
+ * local payer starts at a number with eighteen digits and the interesting
+ * quantity is the last six of them.
+ *
+ * Exact throughout: BigInt subtraction on the recorded balances, never a
+ * difference of two doubles.
+ */
+export function campaignSpendLineV1(series: SimulatorSeriesV1): SimulatorSeriesLineV1 | null {
+  const points = series.points;
+  if (points.length === 0 || points.some((entry) => entry.payerLamports === null)) return null;
+  const first = BigInt(points[0].payerLamports as string);
+  // A payer whose balance ROSE is not spending; it was topped up, or this is
+  // not the account that pays. Either way "spent so far" would be a negative
+  // number wearing a positive name, so the line is dropped and said to be.
+  if (points.some((entry) => BigInt(entry.payerLamports as string) > first)) return null;
+  return Object.freeze({
+    label: 'lamports the fee payer has spent since the first boundary',
+    values: Object.freeze(points.map((entry) => (first - BigInt(entry.payerLamports as string)).toString())),
+  });
+}
+
+/**
+ * What one claim on each cell turned out to be worth, once the answer landed.
+ *
+ * This is the only price move in a record with no fills, and it is total: the
+ * selected cell's claims are worth the claim unit in collateral and every
+ * other cell's are worth nothing at all. It is stated per cell rather than
+ * drawn as a line, because two points — before the answer and after it — is a
+ * settlement, not a path, and drawing it as a path would invent the shape in
+ * between.
+ */
+export type SettlementCellV1 = Readonly<{
+  cell: number;
+  label: string;
+  selected: boolean;
+  /** Claims the market had issued on this cell at the last boundary. */
+  claimsIssued: string;
+  /** Collateral atoms one claim of this cell is worth now. */
+  realizedAtomsPerClaim: string;
+  /** Those claims at that value: what this cell is owed in total. */
+  realizedAtoms: string;
+}>;
+
+export function settlementCellsV1(
+  series: SimulatorSeriesV1,
+  outcomes?: ReadonlyArray<string> | null,
+): ReadonlyArray<SettlementCellV1> {
+  const settlement = series.settlement;
+  const unit = series.claimUnitAtoms;
+  if (settlement === null || unit === null || series.points.length === 0) return Object.freeze([]);
+  const last = series.points[series.points.length - 1];
+  return Object.freeze(Array.from({ length: series.outcomeCount }, (_unused, cell) => {
+    const selected = cell === settlement.selectedCell;
+    const issued = last.supply[cell];
+    const perClaim = selected ? unit : '0';
+    return Object.freeze({
+      cell,
+      label: outcomes?.[cell] === undefined ? `claim ${cell}` : `claim ${cell} · ${outcomes[cell]}`,
+      selected,
+      claimsIssued: issued,
+      realizedAtomsPerClaim: perClaim,
+      realizedAtoms: (BigInt(issued) * BigInt(perClaim)).toString(),
+    });
+  }));
+}
+
+/**
+ * One plain sentence about what this campaign record is, or null when it is
+ * not a campaign record at all.
+ *
+ * It leads with the cluster, because that is the fact a reader is most likely
+ * to get wrong and the one this project has decided must never be implied.
+ */
+export function campaignReadingV1(series: SimulatorSeriesV1): string | null {
+  const campaign = series.campaign;
+  if (campaign === null) return null;
+  const where = series.cluster === 'local'
+    ? `a local rehearsal validator at ${campaign.rpcOrigin}`
+    : `the ${series.cluster} cluster`;
+  const boundaries = `${series.points.length} stage boundar${series.points.length === 1 ? 'y' : 'ies'}`;
+  const settled = series.settlement === null
+    ? 'The market has not reached a terminal answer in this record.'
+    : `The market reached a terminal answer: cell ${series.settlement.selectedCell} was selected.`;
+  return `${campaign.label}, run against ${where} from source revision ${campaign.sourceRevision.slice(0, 12)}, re-censused at ${boundaries}. ${settled}`;
 }
 
 /** True when a position holds the same number of claims on every outcome. */
@@ -639,4 +1401,308 @@ export function conservationReadingV1(series: SimulatorSeriesV1): string | null 
   // The noun is what disambiguates them, so the noun is always said.
   return `${rows.length} laws, re-checked at every one of ${drawn} cycle boundaries: ${held} checks held and none broke.${
     skipped === 0 ? '' : ` ${skipped} checks did not apply at the boundary they were on, which is neither a pass nor a failure.`}`;
+}
+
+/**
+ * ONE ROW PER OBSERVED MARKET, for the table that has to come before any chart
+ * of a population.
+ *
+ * Twelve lines on one pair of axes is not a picture of twelve markets, it is a
+ * picture of nothing; a reader needs to know which markets exist, what shape
+ * each is, and — the question they are actually asking — whether anything about
+ * it moved. `moved` is computed from the record rather than asserted: a market
+ * whose supply, Hoard and tracked collateral are the same at every boundary did
+ * not move, and saying so is the honest caption for a flat line.
+ */
+export type MarketRowV1 = Readonly<{
+  marketId: string;
+  archetype: string | null;
+  basis: string | null;
+  destiny: string | null;
+  outcomeCount: number;
+  points: number;
+  firstSlot: string | null;
+  lastSlot: string | null;
+  /** Slots the chain advanced between this market's first and last reading. */
+  slotsCovered: string | null;
+  checksHeld: number;
+  checksBroken: number;
+  /** Which recorded quantities took more than one value across the drawn ticks. */
+  moved: ReadonlyArray<string>;
+  /** How many holders the newest reading found, and how many hold everything. */
+  positionCount: number;
+}>;
+
+export function marketRowsV1(series: SimulatorSeriesV1): ReadonlyArray<MarketRowV1> {
+  return Object.freeze(series.markets.map((market) => {
+    const points = market.points;
+    const distinct = (pick: (entry: SimulatorSeriesPointV1) => string) =>
+      new Set(points.map(pick)).size > 1;
+    const moved: string[] = [];
+    if (distinct((entry) => entry.supply.join(','))) moved.push('issued claims');
+    if (distinct((entry) => entry.hoardAtoms)) moved.push('the Hoard');
+    if (distinct((entry) => entry.trackedCollateral)) moved.push('tracked collateral');
+    if (distinct((entry) => entry.positionTotals.join(','))) moved.push('who is holding');
+    return Object.freeze({
+      marketId: market.marketId,
+      archetype: market.archetype,
+      basis: market.basis,
+      destiny: market.destiny,
+      outcomeCount: market.outcomeCount,
+      points: points.length,
+      firstSlot: points.length === 0 ? null : points[0].slot,
+      lastSlot: points.length === 0 ? null : points[points.length - 1].slot,
+      slotsCovered: points.length < 2
+        ? null
+        : (BigInt(points[points.length - 1].slot) - BigInt(points[0].slot)).toString(),
+      checksHeld: points.reduce((sum, entry) => sum + entry.checksHeld, 0),
+      checksBroken: points.reduce((sum, entry) => sum + entry.checksBroken, 0),
+      moved: Object.freeze(moved),
+      positionCount: market.positions.length,
+    });
+  }));
+}
+
+/**
+ * One plain sentence about what this run WAS, or null when it is not a
+ * population capture.
+ *
+ * It leads with the seed, because a population's first claim on a reader is
+ * that it is reproducible, and ends with what the run founded — which for a
+ * census-only run is nothing, and must be said rather than left to be assumed
+ * from the presence of markets on the page.
+ */
+export function populationReadingV1(series: SimulatorSeriesV1): string | null {
+  const world = series.world;
+  if (world === null) return null;
+  const where = world.substrate.label ?? `the ${series.cluster} cluster`;
+  const founded = world.marketsFoundedByThisRun.length;
+  const existing = world.marketsPreFounded.length;
+  const provenance = founded === 0
+    ? `This run founded no market of its own; the ${existing === 1 ? 'one it observed' : `${existing} it observed`} already stood on that chain.`
+    : `This run founded ${founded} of them itself.`;
+  return `${world.marketsPlanned} markets drawn from the seed ${world.seedPreimage}, `
+    + `walked against ${where}. ${world.marketsObserved} of them were observed. ${provenance}`;
+}
+
+/**
+ * One plain sentence about what the run DID NOT DO, or null when it did
+ * everything it planned.
+ *
+ * This exists because the alternative is a page that draws a census-only run
+ * exactly as it would draw a trading one. It leads with `refused`, when there is
+ * one, because a chain saying no is a different and more interesting fact than a
+ * substrate having no route — and it never adds the three states together,
+ * because that would turn one wall into a hundred failures.
+ */
+export function notDoneReadingV1(series: SimulatorSeriesV1): string | null {
+  const world = series.world;
+  if (world === null || world.notDone.length === 0) return null;
+  const total = (wanted: SimulatorNotDoneV1['outcome']) => world.notDone
+    .filter((row) => row.outcome === wanted)
+    .reduce((sum, row) => sum + row.count, 0);
+  const routes = (wanted: SimulatorNotDoneV1['outcome']) => Object.freeze([...new Set(
+    world.notDone.filter((row) => row.outcome === wanted).map((row) => row.route),
+  )]);
+  const refused = total('refused');
+  const clauses: string[] = [];
+  if (refused > 0) {
+    clauses.push(`${refused} planned ${refused === 1 ? 'step was' : 'steps were'} refused by the chain (${routes('refused').join(', ')})`);
+  }
+  const unattempted = total('unattempted');
+  if (unattempted > 0) {
+    clauses.push(`${unattempted} were never attempted, because this substrate has no route for ${routes('unattempted').join(', ')}`);
+  }
+  const blocked = total('blocked');
+  if (blocked > 0) {
+    clauses.push(`${blocked} were blocked behind a step that never happened`);
+  }
+  if (clauses.length === 0) return null;
+  return `${clauses.join('; ')}. Those are three different things and this record keeps them apart.`;
+}
+
+/**
+ * ONE MARKET'S ODDS PATH, inside a population.
+ *
+ * The single-market `impliedOddsLinesV1` reads `series.outcomeCount` and
+ * `series.points`; a market nested in a population has exactly those two fields
+ * and nothing else it needs, so the arithmetic is shared rather than copied.
+ * Copying it would be a second place for the floored-BigInt rule to drift, and
+ * the point of a population page is that its lines are comparable.
+ */
+export function marketOddsLinesV1(
+  market: SimulatorMarketSeriesV1,
+  outcomes?: ReadonlyArray<string> | null,
+): ReadonlyArray<SimulatorSeriesLineV1> {
+  if (market.points.length === 0 || market.outcomeCount === 0) return Object.freeze([]);
+  const totals = market.points.map((entry) => entry.supply.reduce((sum, value) => sum + BigInt(value), 0n));
+  if (totals.some((total) => total === 0n)) return Object.freeze([]);
+  return Object.freeze(Array.from({ length: market.outcomeCount }, (_unused, cell) => Object.freeze({
+    label: outcomes?.[cell] === undefined ? `claim ${cell}` : `claim ${cell} · ${outcomes[cell]}`,
+    values: Object.freeze(market.points.map((entry, index) => ((BigInt(entry.supply[cell]) * 10_000n) / totals[index]).toString())),
+  })));
+}
+
+/** The slots a market was read at, as x-axis labels a reader can hover. */
+export function marketSlotLabelsV1(market: SimulatorMarketSeriesV1): ReadonlyArray<string> {
+  return Object.freeze(market.points.map((entry) => `slot ${entry.slot}`));
+}
+
+/**
+ * THE POPULATION'S EVENT TIMELINE, as lines over one shared tick axis.
+ *
+ * Three lines and not one, because the three things they count are not
+ * interchangeable: mutations that reached the chain, mutations the chain
+ * refused, and observations. A single "events" line would let a run that
+ * founded four markets look identical to a run that failed four foundings and
+ * censused a lot, which is the exact confusion this whole vocabulary exists to
+ * prevent.
+ *
+ * `blocked` and `unattempted` are deliberately NOT lines here. They are
+ * consequences of a shape rather than events in time — every tick after an
+ * unfoundable market is drawn blocks the same way for the same reason — so they
+ * belong in the honesty strip, which counts reasons, not in a chart that
+ * implies they happened at a moment.
+ */
+export function eventTimelineLinesV1(series: SimulatorSeriesV1): ReadonlyArray<SimulatorSeriesLineV1> {
+  const timeline = series.world?.timeline ?? Object.freeze([]);
+  if (timeline.length === 0) return Object.freeze([]);
+  return Object.freeze([
+    Object.freeze({
+      label: 'mutations that landed',
+      values: Object.freeze(timeline.map((row) => String(row.mutationsExecuted))),
+    }),
+    Object.freeze({
+      label: 'mutations the chain refused',
+      values: Object.freeze(timeline.map((row) => String(row.mutationsRefused))),
+    }),
+    Object.freeze({
+      label: 'markets censused',
+      values: Object.freeze(timeline.map((row) => String(row.censusExecuted))),
+    }),
+  ]);
+}
+
+export function eventTimelineLabelsV1(series: SimulatorSeriesV1): ReadonlyArray<string> {
+  const timeline = series.world?.timeline ?? Object.freeze([]);
+  return Object.freeze(timeline.map((row) => `tick ${row.tick}`));
+}
+
+/** One route's four endings, counted over the whole run. */
+export type HonestyRowV1 = Readonly<{
+  route: string;
+  executed: number;
+  refused: number;
+  unattempted: number;
+  blocked: number;
+  planned: number;
+  /** The substrate's own sentence for the commonest thing that was not done. */
+  leadingReason: string | null;
+  leadingOutcome: SimulatorNotDoneV1['outcome'] | null;
+}>;
+
+/**
+ * THE HONESTY STRIP: every route the world planned, and what became of it.
+ *
+ * This is the table a reader should be able to check the rest of the page
+ * against. `executed` comes from the run's own tally; the other three come from
+ * the grouped `not_done` block, which carries the reason as well as the count.
+ * Nothing is summed across the three: a route with one refusal and forty blocks
+ * is not a route with forty-one failures, and a strip that added them would say
+ * it was.
+ */
+export function honestyRowsV1(series: SimulatorSeriesV1): ReadonlyArray<HonestyRowV1> {
+  const world = series.world;
+  if (world === null) return Object.freeze([]);
+  const rows = new Map<string, {
+    route: string; executed: number; refused: number; unattempted: number; blocked: number;
+    leadingReason: string | null; leadingOutcome: SimulatorNotDoneV1['outcome'] | null; leadingCount: number;
+  }>();
+  const row = (route: string) => {
+    const found = rows.get(route) ?? {
+      route, executed: 0, refused: 0, unattempted: 0, blocked: 0,
+      leadingReason: null, leadingOutcome: null, leadingCount: 0,
+    };
+    rows.set(route, found);
+    return found;
+  };
+  for (const [route, counts] of Object.entries(world.tally)) {
+    row(route).executed = counts.executed;
+  }
+  for (const entry of world.notDone) {
+    const target = row(entry.route);
+    target[entry.outcome] += entry.count;
+    if (entry.count > target.leadingCount) {
+      target.leadingCount = entry.count;
+      target.leadingReason = entry.reason;
+      target.leadingOutcome = entry.outcome;
+    }
+  }
+  return Object.freeze([...rows.values()]
+    .map((entry) => Object.freeze({
+      route: entry.route,
+      executed: entry.executed,
+      refused: entry.refused,
+      unattempted: entry.unattempted,
+      blocked: entry.blocked,
+      planned: entry.executed + entry.refused + entry.unattempted + entry.blocked,
+      leadingReason: entry.leadingReason,
+      leadingOutcome: entry.leadingOutcome,
+    }))
+    .sort((left, right) => right.executed - left.executed || left.route.localeCompare(right.route)));
+}
+
+/**
+ * One sentence about what this run DID, which is the half `notDoneReadingV1`
+ * deliberately does not cover.
+ *
+ * It leads with mutations rather than with the total, because a run whose only
+ * executed events are censuses is a watcher and a run that founded its own
+ * markets is a participant, and the number that separates them is the one a
+ * reader wants first.
+ */
+export function executedReadingV1(series: SimulatorSeriesV1): string | null {
+  const world = series.world;
+  if (world === null) return null;
+  const rows = honestyRowsV1(series);
+  const mutations = rows.filter((entry) => entry.route !== 'census');
+  const executed = mutations.reduce((sum, entry) => sum + entry.executed, 0);
+  const census = rows.find((entry) => entry.route === 'census')?.executed ?? 0;
+  if (executed === 0) {
+    return `Nothing was mutated: this run took ${census} censuses and signed nothing else.`;
+  }
+  const named = mutations.filter((entry) => entry.executed > 0)
+    .map((entry) => `${entry.executed} ${entry.route}`)
+    .join(', ');
+  return `${executed} mutations landed on the chain (${named}), and ${census} censuses read the `
+    + 'result back through the same conservation ledger.';
+}
+
+/**
+ * The archetypes a world drew, counted — including the ones nothing observed.
+ *
+ * A population's shape is a fact about the PLAN, and it stays true whether or
+ * not a substrate could drive it. Reporting it from `world.planned` rather than
+ * from `markets` is what lets a page say "this world contains three short-fuse
+ * markets" on a run where none of them could be founded.
+ */
+export function archetypeCensusV1(series: SimulatorSeriesV1): ReadonlyArray<Readonly<{
+  archetype: string;
+  planned: number;
+  observed: number;
+  basis: string;
+}>> {
+  const world = series.world;
+  if (world === null) return Object.freeze([]);
+  const table = new Map<string, { archetype: string; planned: number; observed: number; basis: string }>();
+  for (const market of world.planned) {
+    const row = table.get(market.archetype)
+      ?? { archetype: market.archetype, planned: 0, observed: 0, basis: market.basis };
+    row.planned += 1;
+    if (market.observed) row.observed += 1;
+    table.set(market.archetype, row);
+  }
+  return Object.freeze([...table.values()]
+    .sort((left, right) => right.planned - left.planned || left.archetype.localeCompare(right.archetype))
+    .map((row) => Object.freeze(row)));
 }

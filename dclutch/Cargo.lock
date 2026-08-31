@@ -1558,6 +1558,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-activation-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-sha256-adapter",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
@@ -1668,6 +1681,7 @@ dependencies = [
  "dclutch-custody-contract",
  "dclutch-direct-codec",
  "dclutch-market-core-codec",
+ "dclutch-market-open-v1-operator",
  "dclutch-product-contract",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
@@ -1685,6 +1699,7 @@ dependencies = [
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-resolution-codec",
+ "dclutch-resolution-core-v3-operator",
  "dclutch-series-v3-kernel",
  "dclutch-source-contract",
  "dclutch-token-svm",
@@ -1828,6 +1843,7 @@ name = "dclutch-direct-codec"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
@@ -1967,6 +1983,7 @@ name = "dclutch-general-adapter-contract"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -2067,6 +2084,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-bearer-v2-operator",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",

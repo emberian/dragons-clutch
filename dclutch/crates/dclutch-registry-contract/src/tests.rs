@@ -15,7 +15,8 @@ use crate::{
     ExecutionReleaseActivationInputsV1, RELEASE_LINEAGE_BYTES_V1, RELEASE_LINEAGE_MAGIC_V1,
     RELEASE_LINEAGE_PDA_DOMAIN_V1, RELEASE_LINEAGE_PDA_SEED_COUNT_V1, RELEASE_LINEAGE_PROFILE_V1,
     RELEASE_LINEAGE_SCHEMA_VERSION_V1, ReleaseLineageV1, activate_execution_release_set_v1,
-    activate_execution_role_into_v1, initialize_activation_cache_v1, put_activation_cache_bump_v1,
+    activate_execution_role_into_v1, activation_cache_progress_v1, initialize_activation_cache_v1,
+    put_activation_cache_bump_v1,
 };
 
 const ROLE_CACHE_HEADER_BYTES: usize = 48;
@@ -575,6 +576,92 @@ fn streaming_activation_is_byte_identical_to_the_owned_host_api() {
         .expect("complete borrowed view");
     assert_eq!(view.execution_release_set_id(), Ok(fixture.release_set_id));
     assert_eq!(view.release_set_projection(), Ok(fixture.release_set));
+}
+
+/// A cache the Registry actually wrote reports its own progress.
+///
+/// The regression this pins is one byte wide and it stopped every local
+/// founding in the tree. `ACTIVATION_CACHE_BUMP_OFFSET_V1` sits at 12, the
+/// first of what used to be four reserved bytes, and the selection comparison
+/// spanned `0..48` — so it compared the bump against
+/// `ActivatedExecutionReleaseSetV1::to_bytes`, a projection of the RELEASE SET
+/// that has no field for a fact about an ACCOUNT ADDRESS and leaves that byte
+/// zero. `put_activation_cache_bump_v1` refuses to write zero. The two are
+/// therefore unequal for every cache the Registry has ever signed into
+/// existence, and `ReleaseSetSelectionMismatch` was unreachable-by-success:
+/// role activation succeeded five times and the first read of the resulting
+/// cache refused.
+///
+/// The bump is a carrier, not a canonicality field — this file already says so
+/// where the decoder tolerates both a present and an absent bump. So a cache
+/// carrying ANY bump must report the same progress as one carrying none, and a
+/// real selection difference must still refuse.
+#[test]
+fn a_cache_carrying_its_own_bump_still_reports_its_progress() {
+    let fixture = Fixture::distinct();
+    let expected = fixture.activate();
+    let mut cache = [0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+    initialize_activation_cache_v1(&mut cache, fixture.release_set_id)
+        .expect("initialize exact cache");
+
+    // Nothing written yet, with and without the bump the Registry records.
+    let empty = activation_cache_progress_v1(&cache, expected).expect("vacant progress");
+    assert_eq!(empty.written_count(), 0);
+    put_activation_cache_bump_v1(&mut cache, 254).expect("record the bump");
+    let empty_with_bump =
+        activation_cache_progress_v1(&cache, expected).expect("vacant progress, bump carried");
+    assert_eq!(empty_with_bump.written_count(), 0);
+
+    // Then every role, one transaction at a time, exactly as the Registry does.
+    for (role, index) in [
+        (ExecutionRoleV1::Core, 0),
+        (ExecutionRoleV1::Claims, 1),
+        (ExecutionRoleV1::Trading, 2),
+        (ExecutionRoleV1::Resolution, 3),
+        (ExecutionRoleV1::Custody, 4),
+    ] {
+        activate_execution_role_into_v1(
+            &mut cache,
+            fixture.release_set_id,
+            &fixture.release_set,
+            role,
+            &activation_input(
+                copied(&fixture.artifact_ids, index),
+                copied(&fixture.releases, index),
+            ),
+        )
+        .expect("stream one authenticated role");
+        let progress = activation_cache_progress_v1(&cache, expected)
+            .expect("a Registry-written cache reports its own progress");
+        assert!(progress.is_written(role));
+        assert_eq!(progress.written_count(), index + 1);
+    }
+    assert!(
+        activation_cache_progress_v1(&cache, expected)
+            .expect("complete progress")
+            .is_complete()
+    );
+
+    // Every bump a derivation can produce behaves the same. 0 is not one of
+    // them, and is the "written before this byte existed" body.
+    for bump in [1_u8, 128, 255] {
+        let mut carried = cache;
+        put_activation_cache_bump_v1(&mut carried, bump).expect("record another bump");
+        assert!(
+            activation_cache_progress_v1(&carried, expected)
+                .expect("progress does not depend on which bump the address has")
+                .is_complete()
+        );
+    }
+
+    // And the check the span still owns: a projection naming another release
+    // set refuses against this cache, bump carried or not.
+    let mut foreign = Fixture::distinct();
+    foreign.release_set_id = content(92);
+    assert_eq!(
+        activation_cache_progress_v1(&cache, foreign.activate()),
+        Err(Error::ReleaseSetSelectionMismatch)
+    );
 }
 
 #[test]

@@ -155,6 +155,40 @@ pub enum LiabilityBasisStateErrorV2 {
 /// Result alias for LiabilityBasisV2 state operations.
 pub type Result<T> = core::result::Result<T, LiabilityBasisStateErrorV2>;
 
+/// The sole constructor for the Claims aggregate's PDA seed tuple.
+///
+/// [`LIABILITY_BASIS_MARKET_SEED_V2`] is placed here and nowhere else that
+/// derives. The domain and its arity are one fact, and a caller that spells
+/// the pair itself is a second source of truth for it -- the class
+/// `tools/seam-audit` exists to catch, because both spellings stay green
+/// separately and the composition between them is what breaks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LiabilityBasisMarketSeedsV2 {
+    market: [u8; 32],
+}
+
+impl LiabilityBasisMarketSeedsV2 {
+    /// Bind one logical Core Market, or refuse the zero identity.
+    ///
+    /// The zero refusal is not decoration: `find_program_address` is total and
+    /// would hand back a real address for a market nobody founded, so the
+    /// check has to live where the seeds are made rather than at each reader.
+    pub fn new(market: [u8; 32]) -> Result<Self> {
+        require_nonzero(&[market])?;
+        Ok(Self { market })
+    }
+
+    /// Borrow the exact ordered seed slices, excluding the bump.
+    pub fn as_slices(&self) -> [&[u8]; 2] {
+        [LIABILITY_BASIS_MARKET_SEED_V2, &self.market]
+    }
+
+    /// The logical Core Market this aggregate belongs to.
+    pub const fn market(&self) -> [u8; 32] {
+        self.market
+    }
+}
+
 /// Immutable aggregate construction input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LiabilityBasisMarketInputV2 {
@@ -659,6 +693,35 @@ mod tests {
             custody_context: [7; 32],
             generation: 8,
         }
+    }
+
+    /// The refactor's whole safety claim, as an assertion rather than a note.
+    ///
+    /// Routing a derivation through the owning crate's constructor is only
+    /// behaviour-neutral if the tuple it hands back is the one the callers
+    /// used to spell. This compares the two directly, so a later edit to
+    /// either the domain or the arity has to break this test before it can
+    /// silently move every Claims aggregate address in the tree.
+    #[test]
+    fn the_seeds_constructor_reproduces_the_hand_spelled_tuple_exactly() {
+        let market = [0x2a; 32];
+        let seeds = LiabilityBasisMarketSeedsV2::new(market).expect("seeds");
+        assert_eq!(
+            seeds.as_slices(),
+            [LIABILITY_BASIS_MARKET_SEED_V2, market.as_slice()]
+        );
+        assert_eq!(seeds.market(), market);
+        // Two seeds, and each one under the runtime's per-seed maximum.
+        assert_eq!(seeds.as_slices().len(), 2);
+        for seed in seeds.as_slices() {
+            assert!(seed.len() <= 32);
+        }
+        // The zero identity is refused where the seeds are made, so no reader
+        // has to remember to check it.
+        assert_eq!(
+            LiabilityBasisMarketSeedsV2::new([0; 32]),
+            Err(LiabilityBasisStateErrorV2::ZeroIdentity)
+        );
     }
 
     #[test]

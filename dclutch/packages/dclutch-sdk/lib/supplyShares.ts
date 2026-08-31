@@ -76,4 +76,4 @@ export function formatBasisPointsV1(basisPoints: number): string {
 
 /** The sentence a share surface must carry, stating what the split is not. */
 export const SUPPLY_SHARE_MEANING_V1 =
-  'Shares of issued claims, computed from the Claims aggregate’s own supply vector — where the claims sit, not a traded price and not a forecast. Founding mints every outcome equally, so an even split means issuance has not leaned yet.';
+  'How the claims people bought are split across the outcomes — where the claims sit, not a traded price and not a forecast. A new market starts with the same number of claims on every outcome, so an even split means nobody has leaned either way yet.';

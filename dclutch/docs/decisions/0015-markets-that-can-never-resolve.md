@@ -1,8 +1,46 @@
 # Decision 0015: the two dead devnet markets are untradeable, not unredeemable — so what do we do with them?
 
-Status: **OPEN — ember's ruling required.** Ledger M-22. The premise of the
-question does not survive contact with the tree; §2 and §3 say why, and the
-decision that remains is smaller, cheaper, and genuinely a values call.
+Status: **RULED B, THEN FOUND UNEXECUTABLE.** Ledger M-22. Ember ruled option B
+— resolve, redeem, retire — on 2026-08-30 (`WAVE.md`, evening rulings, E2).
+Executing it that evening established that **B cannot be run at all on the
+deployed cohort**, for a reason the options table below priced at zero and §3
+never looked for: the claims can only be burned by a signer whose key nobody
+holds. **§8 is the execution record and supersedes option B's cost line.** The
+rest of the document stands as written and is confirmed on chain.
+
+**FINAL DISPOSITION (ember, 2026-08-30 evening, `458d47bb`).** The founder keys
+are gone from all wallets and **the write-off stands** — *"It's just devnet sol
+it isn't a big deal."* Consequences, each now decided rather than pending:
+
+- The two markets **remain standing as unretireable**. Option A is what the
+  chain will show, not by choice between A and B but because B is closed.
+- **No pre-cut retirement contingency.** §8.6's ordering constraint — that B
+  must run before the cohort-7 cut, on a cohort-revision client, if the key
+  ever surfaces — is not being held open; the cut proceeds.
+- **Option C is RULED, and EXECUTED the same evening** (BUCKET, `e3600765`) —
+  the reader-burden concern is *"solved editorially … not by deletion."*
+  §8.8's *"there is no honest registry sentence to add until ember rules on
+  C"* is discharged. The separation is made from the two facts that decide it
+  and never by restating the phase: `marketActivationOutlookV1` reads the
+  verdict off the card's own authenticated manifest — every entry
+  deadline-activated and strictly below the card's finalized slot, with no
+  capability outstanding — so every card still prints `Open`, and a manifest
+  that does not authenticate stays UNKNOWN rather than becoming a claim that a
+  market is finished. §5's editorial registry is untouched, as §8.8 required.
+  **What C did not reach**: the generated reference and the public docs
+  landing still say *"there is no open market"*
+  (`tools/genref/generate.mjs:406`, `tools/genref/render-site.mjs:453,470`,
+  `docs/reference/README.md:35`, `README.md:14`) — the same defect one layer
+  up, listed in
+  `docs/evidence/SLIPPED_THROUGH_SWEEP_2026_08_30.md` §3.
+
+§8.7's write-off is therefore final: **167,999,880 lamports of rent and
+1,000,000,000 collateral atoms**, plus market18's further 94,022,640 lamports
+and 500,000,000 atoms under the same lost owner.
+
+The premise of the original question does not survive contact with the tree;
+§2 and §3 say why, and the decision that remained looked smaller, cheaper, and
+genuinely a values call. It was smaller than M-22 asked. It was not cheap.
 
 ## 1. The question, as it should now be asked
 
@@ -256,3 +294,203 @@ the whole of the protocol-side work this record recommends.
   resolution authority is unreachable would strand every lamport it holds, and
   nothing in the protocol prevents founding one.** That is the honest residual,
   and it is not what M-22 asked about.
+
+## 8. Execution record, 2026-08-30 (TRADE-3): option B is not executable
+
+Ember ruled B — *"Delete that shut and get rid of it; it burdens the reader
+with a detail that only matters to us"* — and routed execution to the devnet
+lane. Nothing was written to devnet. Every fact below is a finalized read at
+slot 490640345 or a citation in the deployed cohort's own source.
+
+### 8.1 What §3 got right, confirmed on chain
+
+The retirement gate really is clear, and for exactly the reason §3 gave.
+Decoding both markets' 360-byte `CoreState` (Core `HezRkcMGTZ5EY2LZk3i4uJbrAjUSDcamAw9B5v68z33N`):
+
+| | `7Mcu1ZT9…` | `CasyDFow…` | `9JwhTHyx…` (market18, control) |
+|---|---|---|---|
+| phase / readiness | Open / Consumed | Open / Consumed | Open / Consumed |
+| `outstanding_capabilities` | **0** | **0** | **1** |
+| `terminal_receipt` | none | none | none |
+| `selected_release_set` | `FP4nnEfV…` | `FP4nnEfV…` | `FP4nnEfV…` |
+| generation | 2 | 2 | 2 |
+
+The counter has stood at its founding zero exactly as §3 predicted, and
+market18 — the one market that *did* activate a capability — reads 1, which is
+the control that proves the field is live rather than always zero.
+
+### 8.2 The step nobody priced: the aggregate cannot be emptied
+
+`retire` refuses unless `claims.aggregate_empty`
+(`crates/dclutch-market-core-codec/src/generated.rs`, the `!claims.aggregate_empty`
+conjunct), and Core does not observe that itself — `retire_v1.rs`'s
+`plan_retired_transition` passes the flag as a literal `true` and the real
+proof is the Claims CPI. `authenticate_empty_aggregate`
+(`programs/dclutch-claims-sbf/src/market_closure_v1.rs`) walks **every**
+outcome's supply and returns `ClaimsMarketClosureSbfErrorV1::Liability` unless
+all of them are zero. So retirement requires burning every claim first, which
+is what §5's option B called "redeem".
+
+Enumerating the devnet Claims program's own accounts, every claim of both dead
+markets sits in a single founder Position:
+
+| market | aggregate | founder Position | holding |
+|---|---|---|---|
+| `7Mcu1ZT9…` | `669xTVjB…` | `FqT63Tkx…` | 500,000,000 at each of 4 outcomes |
+| `CasyDFow…` | `35gGqHcC…` | `nvxjVpJy…` | 500,000,000 at each of 4 outcomes |
+| `9JwhTHyx…` | `2SiorXJp…` | `4YSPmPTz…` | 500,000,000 at each of 4 outcomes |
+
+Every other Position on the cluster — the four participant admissions — holds
+`[0, 0, 0, 0]`. **All three founder Positions name the same owner:**
+`6LkyGdwJcCWaGRZPc9DKYqtabvABgXuyPLTHeGJvRdoS`.
+
+### 8.3 Only that owner can burn them, and the route says so in its own words
+
+`programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs` binds the payout
+signer, and the comment above the check is the whole argument:
+
+> Coordinate 0 is a signer in every mode; WHOSE signature is what the role
+> selects. Under `Claims` there is no caller program to derive an authority PDA
+> under, and the entitled party is the Position's owner. … The one exception is
+> the permissionless compaction crank, and it is an exception to WHO signs
+> rather than to whether anyone does.
+
+Three consequences, in the order a reader will reach for them:
+
+- **The Claims role needs the owner's key.** `caller_role == Claims` demands
+  `accounts[0].key == input.owner`.
+- **A role-program caller would skip that check — and is unreachable here.**
+  The non-`Claims` roles authenticate a caller-authority PDA under an
+  *activated* role program. For Direct that is the capability root §3 proves
+  these two markets can never have: the activation deadline (`490330281`)
+  elapsed over 310,000 slots before this reading, and the manifest is sealed
+  into the Market PDA's seeds. **The one fact that makes them untradeable is
+  the same fact that removes the only signature-free way to empty them.** §3's
+  closing line — "the failure that makes them untradeable is the same fact that
+  leaves their retirement path unobstructed" — is half true: it unobstructs the
+  *phase* transition and obstructs the *burn* that has to precede it.
+- **Compaction does not rescue it.** Claim-check compaction shipped on
+  2026-08-30 but is not on the deployed cohort — it rides cohort-7 — and its
+  crank is entitled by an *elapsed* deadline (180 days), not by need.
+
+**The quotation above is from `main`; the deployed program is stricter.** The
+owner binding itself landed in `082f942f` (2026-08-27), before the cohort-6
+deployment and before these markets were founded, so the ELF that actually owns
+them carries the check — and carries it *without* the compaction exception,
+which is newer than the deployment. The conclusion therefore holds a fortiori
+on chain. **What was not done:** no transaction was built or simulated against
+the deployed programs, because §8.6's codec width refuses these markets in every
+client built from `main`. This finding rests on reading the deployed cohort's
+source together with finalized chain state, not on an observed refusal.
+
+### 8.4 The key is gone
+
+The board records it (TRADE, 2026-08-29 20:25): *"seller = founding founder
+6LkyGdwJ … key at `scratchpad/founder-ids/founding-founder.json`"*. That
+directory no longer exists in the orchestrator scratchpad, and TRADE's own
+transcript was lost to an account rotation. What was searched, and found:
+
+- **Index-0 sweep** — every 64-byte keypair JSON under `/private/tmp`,
+  `/Users/ember` and `~/.config/solana`, matched by the public key stored in
+  its own bytes 32..64. The only surviving identity of the 2026-08-29 founding
+  is the **campaign payer** `GZQoAjVB…`. Not found: the founder, the
+  substituted founder, **or either live market's collateral mint** — and those
+  mints had to sign their own creation, so what is missing is the founding key
+  *directory*, not one file out of it.
+- **Derivation sweep** — `seed.rs` makes a persisted role's index *n* > 0
+  reproducible as `SHA-256(DOMAIN ‖ 0 ‖ file-secret ‖ 0 ‖ role ‖ 0 ‖ n)`, so a
+  key can outlive its file if a *sibling* file survives. 445,440 derivations
+  (both domains × all 10 role names × indices 0..255 × 88 candidate keypair
+  files, ed25519 derivation self-checked against a known pair) reproduced
+  neither the founder nor either collateral mint.
+- hbox holds only the loopback campaign's deterministic founder
+  (`2SVqjPNY…`, a `--keypair-seed` key, refused on any non-loopback endpoint).
+
+**Not verified, and the one avenue left:** ember's own machines, wallets and
+backups were not searched. If `6LkyGdwJ`'s secret exists anywhere, option B
+becomes executable again and §8.6's ordering applies.
+
+### 8.5 Why nothing forced anyone to hold it
+
+This is a design gap, not an operator slip. The founder **never signs at
+founding** — it is only the identity the complete set is minted to — so:
+
+- `campaign --founding-only` takes `--founding-founder PUBKEY`, and
+  `role::FOUNDING_FOUNDER` is deliberately excluded from both
+  `FOUNDING_REQUIRED_ROLES` and `KEYPAIR_ROLES`
+  (`tools/local-validator/bootstrap/successor/src/campaign.rs`, asserted by its
+  own tests);
+- `tools/release/stage-devnet-sponsored-market-open.sh` asked for it as *"two
+  distinct public identities"* with no custody obligation at all.
+
+The founder's key is worthless for one transaction and load-bearing for the
+market's entire remaining life. Nothing in the tooling said so.
+**Fixed the same evening** (TRADE-3, `tools/release`): the emitted execute
+wrapper now demands `DCLUTCH_FOUNDING_FOUNDER_KEYPAIR`, derives the identity
+from the file, refuses a disagreeing `DCLUTCH_FOUNDING_FOUNDER`, and refuses a
+substituted founder equal to it — proven red against the prior revision by
+`tools/release/test-stage-devnet-sponsored-market-open.sh`.
+
+### 8.6 A second, separately sufficient blocker
+
+Even with the key, the client would refuse before the chain did.
+`e93fe5e9` widened `CoreState` from 360 to 368 bytes and `decode` refuses
+`input.len() != STATE_BYTES`, so **every operator builder and driver built from
+`main` today refuses all three devnet markets at planning**, and after the
+cohort-7 cut the deployed programs will refuse them too. This is CORESTATE's
+"cohort isolation is FALSE for reading" landing on the retirement path. Any
+future attempt at B must be driven by a client built at the cohort's own
+revision, and must run **before** the cut, not after.
+
+### 8.7 What is stranded, exactly
+
+Directly attributable across the seven protocol programs, at finalized reads:
+
+| | `7Mcu1ZT9…` | `CasyDFow…` |
+|---|---|---|
+| protocol accounts | 15 | 13 |
+| rent held | **88,454,640 lamports** (0.088455 SOL) | **79,545,840 lamports** (0.079546 SOL) |
+| of which its RentCredit | `5uG8Qfeu…` 18,075,120 | `7b1cNBrK…` 18,075,120 |
+| Core state account | 3,396,480 | 3,396,480 |
+| collateral mint | `6odqARs4…` | `7rswmACU…` |
+| Hoard vault | `6aDbBXDY…` | `GvynyL3w…` |
+| **collateral locked** | **500,000,000 atoms** | **500,000,000 atoms** |
+
+Total rent stranded by this finding: **167,999,880 lamports ≈ 0.168 SOL**,
+plus 1,000,000,000 collateral atoms across two devnet mints. The wallet is
+ember's devnet development wallet
+`4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP`; the rent was already spent at
+founding, so this is a **write-off, not a new debit** — the loss is that it can
+never be recovered. Not counted here: registry records shared across markets or
+addressed by content digest rather than by market address, which the
+attribution sweep leaves in a 1.846-SOL unattributed pool.
+
+**Market18 has the same owner and therefore the same exposure**: a further
+94,022,640 lamports and 500,000,000 atoms, plus the live capability root that
+makes it the market the site points at.
+
+### 8.8 What changes
+
+- **B is closed as unexecutable**, not as refused. Its cost line in §5 —
+  "no new protocol code; one keeper run per market" — was wrong by a step that
+  cannot be run at all, and §7's "if B is ruled instead → a keeper run per
+  market, no code" is withdrawn.
+- **Option C is un-mooted.** E2 moots C only if B runs. It did not, so the two
+  markets remain `Phase::Open` and the site still files a permanently
+  untradeable market under "the markets that are open" — the one untrue thing
+  §5 named. C is a web lane's work and it is now the live disposition.
+- **The editorial registry was deliberately left unchanged.** Its stories say
+  these markets stay *"readable forever, exactly as founding left them"*, which
+  is now more true than when it was written. Editing them to a settled history
+  would have been a lie, and there is no honest registry sentence to add until
+  ember rules on C.
+- **A cut parameter follows.** market19 must be founded against a founder whose
+  key is retained; the guard in §8.5 makes that structural rather than
+  remembered.
+- **The omission line §7 already wanted is now sharper.** Alongside *"a market
+  whose resolution authority is unreachable would strand every lamport it
+  holds"*, record: **a market whose founder identity is unheld strands its
+  collateral and can never retire, and the protocol cannot tell the difference
+  from the outside.** The predicate is not decidable from chain state the way
+  §6's is — key custody is not an on-chain fact — which is precisely why it has
+  to be enforced at founding.

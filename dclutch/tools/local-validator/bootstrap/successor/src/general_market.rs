@@ -41,7 +41,9 @@ pub(crate) struct GeneralSelectedRecordV1 {
 /// record publisher consume.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GeneralSelectedClosureBytesV1 {
-    /// Exact seven-entry `CapabilityProgramSetV2` bytes.
+    /// Exact eight-entry `CapabilityProgramSetV2` bytes: the seven settlement
+    /// actions and the activation coordinate that lets the Market create the
+    /// root all seven execute against.
     pub(crate) program_set: Vec<u8>,
     /// The first bundle's descriptor; all seven agree on every entry-authored
     /// coordinate, so any member may stand for the set.
@@ -116,6 +118,7 @@ pub(crate) fn demo_general_market_input(
     rpc_url: &str,
     registry: solana_sdk::pubkey::Pubkey,
     quote_surplus_beneficiary: solana_sdk::pubkey::Pubkey,
+    shape: &crate::market::LocalMarketShapeV1,
 ) -> Result<crate::model::MarketRunInput> {
     use dclutch_operator::general_selected_release_v1::{
         GeneralConfigWindowsV1, GeneralDeploymentFactsV1,
@@ -124,10 +127,13 @@ pub(crate) fn demo_general_market_input(
     let (plan, observation) =
         crate::direct_market::observe_local_market_policy_v1(plan_path, rpc_url, registry)?;
     let resolution_release = crate::direct_market::authenticated_resolution_release_v1(&plan)?;
-    let mut input = crate::market::demo_market_input_base(registry, resolution_release)?;
+    let mut input =
+        crate::market::demo_market_input_base_shaped(registry, resolution_release, shape)?;
 
-    let capacity_profile: [u8; 32] =
-        Sha256::digest(crate::runtime::decode_hex(&input.source_capacity_profile_hex)?).into();
+    let capacity_profile: [u8; 32] = Sha256::digest(crate::runtime::decode_hex(
+        &input.source_capacity_profile_hex,
+    )?)
+    .into();
     let claim_basis = crate::market::semantic_basis_identity_v3(&crate::runtime::decode_hex(
         &input.linked_basis_hex,
     )?)?;
@@ -156,47 +162,49 @@ pub(crate) fn demo_general_market_input(
         hasher.update(label.as_bytes());
         hasher.finalize().into()
     };
-    let release_input = dclutch_operator::general_selected_release_v1::GeneralSelectedReleaseInputV1 {
-        capacity_profile,
-        claim_basis,
-        selection_policy: lab("selection-policy"),
-        quote_surplus_beneficiary: quote_surplus_beneficiary.to_bytes(),
-        generation,
-        price_scale,
-        // The executed accelerator campaign's policy windows.
-        windows: GeneralConfigWindowsV1 {
-            collection_slots: 16,
-            selection_slots: 16,
-            settlement_slots: 64,
-            max_orders_per_candidate: 32,
-            max_pages_per_candidate: 32,
-            continuation_reward_lamports: 1,
-        },
-        outcome_count,
-        // The widths the accelerator campaign really executed against at this
-        // exact outcome width. Reconciling them against the live local
-        // deployment is the General-hot follow-up; founding does not read them.
-        external_widths: dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3 {
-            linked_basis_prefix: 256,
-            result_domain: 192,
-            rent_sysvar: 17,
-            core_market: 320,
-            activation_cache: 160,
-            upgradeable_program: 36,
-            trading_programdata_prefix: 45,
-            claims_programdata_prefix: 45,
-            core_programdata_prefix: 45,
-            realm_record: 112,
-            rent_credit: 48,
-        },
-        token_account_bytes: 165,
-        deployment: GeneralDeploymentFactsV1 {
-            accelerator_artifact_release: lab("accelerator-artifact-release"),
-            compiler_release: lab("compiler-release"),
-            toolchain: lab("toolchain"),
-            translation_validation: lab("translation-validation"),
-        },
-    };
+    let release_input =
+        dclutch_operator::general_selected_release_v1::GeneralSelectedReleaseInputV1 {
+            capacity_profile,
+            claim_basis,
+            selection_policy: lab("selection-policy"),
+            quote_surplus_beneficiary: quote_surplus_beneficiary.to_bytes(),
+            generation,
+            price_scale,
+            // The executed accelerator campaign's policy windows.
+            windows: GeneralConfigWindowsV1 {
+                collection_slots: 16,
+                selection_slots: 16,
+                settlement_slots: 64,
+                max_orders_per_candidate: 32,
+                max_pages_per_candidate: 32,
+                continuation_reward_lamports: 1,
+            },
+            outcome_count,
+            // The widths the accelerator campaign really executed against at this
+            // exact outcome width. Reconciling them against the live local
+            // deployment is the General-hot follow-up; founding does not read them.
+            external_widths:
+                dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3 {
+                    linked_basis_prefix: 256,
+                    result_domain: 192,
+                    rent_sysvar: 17,
+                    core_market: 320,
+                    activation_cache: 160,
+                    upgradeable_program: 36,
+                    trading_programdata_prefix: 45,
+                    claims_programdata_prefix: 45,
+                    core_programdata_prefix: 45,
+                    realm_record: 112,
+                    rent_credit: 48,
+                },
+            token_account_bytes: 165,
+            deployment: GeneralDeploymentFactsV1 {
+                accelerator_artifact_release: lab("accelerator-artifact-release"),
+                compiler_release: lab("compiler-release"),
+                toolchain: lab("toolchain"),
+                translation_validation: lab("translation-validation"),
+            },
+        };
     let closure = general_selected_closure_v1(release_input)?;
     let root_bytes = general_root_bytes_v1(&closure)?;
     let payload = general_selected_payload_v1(
@@ -258,6 +266,55 @@ fn general_selected_payload_v1(
     }
 }
 
+/// The lab release input both this module's controls and the General
+/// activation driver's control compile. One fixture, so the driver's control
+/// cannot drift from the release it is a control for.
+#[cfg(test)]
+pub(crate) fn test_release_input_v1() -> GeneralSelectedReleaseInputV1 {
+    use dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3;
+    use dclutch_operator::general_selected_release_v1::{
+        GeneralConfigWindowsV1, GeneralDeploymentFactsV1,
+    };
+    GeneralSelectedReleaseInputV1 {
+        capacity_profile: [0x41; 32],
+        claim_basis: [0x42; 32],
+        selection_policy: [0x43; 32],
+        quote_surplus_beneficiary: [0x44; 32],
+        generation: 2,
+        price_scale: 1_000_000,
+        windows: GeneralConfigWindowsV1 {
+            collection_slots: 16,
+            selection_slots: 16,
+            settlement_slots: 64,
+            max_orders_per_candidate: 32,
+            max_pages_per_candidate: 32,
+            continuation_reward_lamports: 1,
+        },
+        outcome_count: 4,
+        // The widths the accelerator campaign really executed against.
+        external_widths: GeneralExternalAccountWidthsV3 {
+            linked_basis_prefix: 256,
+            result_domain: 192,
+            rent_sysvar: 17,
+            core_market: 320,
+            activation_cache: 160,
+            upgradeable_program: 36,
+            trading_programdata_prefix: 45,
+            claims_programdata_prefix: 45,
+            core_programdata_prefix: 45,
+            realm_record: 112,
+            rent_credit: 48,
+        },
+        token_account_bytes: 165,
+        deployment: GeneralDeploymentFactsV1 {
+            accelerator_artifact_release: [0x51; 32],
+            compiler_release: [0x52; 32],
+            toolchain: [0x53; 32],
+            translation_validation: [0x54; 32],
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use dclutch_market_core_codec::{Identity, MarketCoreStateSeedsV2, MarketIdentity};
@@ -272,51 +329,9 @@ mod tests {
         validate_selected_manifest_v1,
     };
 
-    fn release_input() -> GeneralSelectedReleaseInputV1 {
-        use dclutch_general_adapter_contract::account_rules_v3::GeneralExternalAccountWidthsV3;
-        GeneralSelectedReleaseInputV1 {
-            capacity_profile: [0x41; 32],
-            claim_basis: [0x42; 32],
-            selection_policy: [0x43; 32],
-            quote_surplus_beneficiary: [0x44; 32],
-            generation: 2,
-            price_scale: 1_000_000,
-            windows: GeneralConfigWindowsV1 {
-                collection_slots: 16,
-                selection_slots: 16,
-                settlement_slots: 64,
-                max_orders_per_candidate: 32,
-                max_pages_per_candidate: 32,
-                continuation_reward_lamports: 1,
-            },
-            outcome_count: 4,
-            // The widths the accelerator campaign really executed against.
-            external_widths: GeneralExternalAccountWidthsV3 {
-                linked_basis_prefix: 256,
-                result_domain: 192,
-                rent_sysvar: 17,
-                core_market: 320,
-                activation_cache: 160,
-                upgradeable_program: 36,
-                trading_programdata_prefix: 45,
-                claims_programdata_prefix: 45,
-                core_programdata_prefix: 45,
-                realm_record: 112,
-                rent_credit: 48,
-            },
-            token_account_bytes: 165,
-            deployment: GeneralDeploymentFactsV1 {
-                accelerator_artifact_release: [0x51; 32],
-                compiler_release: [0x52; 32],
-                toolchain: [0x53; 32],
-                translation_validation: [0x54; 32],
-            },
-        }
-    }
+    use super::test_release_input_v1 as release_input;
 
-    fn seam_closure(
-        closure: &GeneralSelectedClosureBytesV1,
-    ) -> SelectedCapabilityClosureV1<'_> {
+    fn seam_closure(closure: &GeneralSelectedClosureBytesV1) -> SelectedCapabilityClosureV1<'_> {
         SelectedCapabilityClosureV1 {
             program_set: &closure.program_set,
             selected_descriptor: &closure.selected_descriptor,
@@ -420,8 +435,45 @@ mod tests {
         validate_selected_manifest_v1(&manifest, entry, index).expect("validated manifest");
 
         // Every record the Registry must hold is enumerated with its schema
-        // read off the release's own artifacts: 2 shared + 9 per action x 7.
-        assert_eq!(closure.records.len(), 2 + 9 * 7);
+        // read off the release's own artifacts: 2 shared + 9 per action x 7,
+        // then the three the activation route reads (account profile, effect,
+        // and the V1 descriptor that carries the transition inside it).
+        assert_eq!(closure.records.len(), 2 + 9 * 7 + 3);
+        for label in [
+            "activation-account-profile",
+            "activation-effect",
+            "activation-descriptor",
+        ] {
+            assert_eq!(
+                closure
+                    .records
+                    .iter()
+                    .filter(|record| record.label == label)
+                    .count(),
+                1,
+                "exactly one {label} travels to the founding"
+            );
+        }
+
+        // And they survive the payload's positional relabelling, which is what
+        // the founding driver actually publishes.
+        let payload = general_selected_payload_v1(&closure, u64::MAX, 1_000_000);
+        assert_eq!(payload.records.len(), closure.records.len());
+        for suffix in [
+            "_activation_account_profile_record",
+            "_activation_effect_record",
+            "_activation_descriptor_record",
+        ] {
+            assert_eq!(
+                payload
+                    .records
+                    .iter()
+                    .filter(|record| record.label.ends_with(suffix))
+                    .count(),
+                1,
+                "exactly one {suffix} reaches the record publisher"
+            );
+        }
     }
 
     /// The founding driver's own static gate accepts a General-selected

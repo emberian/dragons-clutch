@@ -32,6 +32,9 @@ def main : IO Unit := do
   IO.println s!"pub const TERM_BYTES_V3: usize = {termBytes};"
   IO.println s!"pub const BASIS_CATEGORICAL_KIND_V3: u8 = {categoricalKind};"
   IO.println s!"pub const BASIS_GRADED_COMPLEMENT_KIND_V3: u8 = {gradedExactComplementKind};"
+  IO.println s!"pub const BASIS_SPLINE_DEGREE_2_TO_3_KIND_V3: u8 = {splineDegree2To3Kind};"
+  IO.println s!"pub const BASIS_SPLINE_MINIMUM_DEGREE_V3: u8 = {splineMinimumDegree};"
+  IO.println s!"pub const BASIS_SPLINE_MAXIMUM_DEGREE_V3: u8 = {splineMaximumDegree};"
   IO.println s!"pub const EXACT_CATEGORICAL_BOUNDARY_V3: u8 = {exactCategoricalBoundary};"
   IO.println
     s!"pub const TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3: u8 = {termFloorExactComplementBoundary};"

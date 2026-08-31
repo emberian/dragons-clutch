@@ -14,6 +14,7 @@ import {
   curateMarketListingV1,
   enumerateCoreMarketAddressesV1,
   inspectMarketDiscoveryV1,
+  marketActivationOutlookV1,
   provenanceChipV1,
   shortAddressV1,
   type IncompatibleMarketAccountV1,
@@ -88,30 +89,53 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
   // question, and one it does not gets a generated label that says exactly
   // what it is instead of pretending to a name.
   const editorial = marketEditorialV1(card.address);
-  return <article className="market-discovery-card">
+  // The phase chip keeps saying Open, because that is what the chain says. What
+  // the chain does NOT have is a phase for a market whose trading can no longer
+  // be switched on, so the card says that in its own words beside the phase
+  // rather than editing the phase into something the accounts never claimed.
+  const outlook = marketActivationOutlookV1(card);
+  return <article className={`market-discovery-card${outlook.status === 'never' ? ' never-trades' : ''}`}>
     <div className="market-card-top">
       <span className="provenance-chip">{provenanceChipV1(card.provenance)}</span>
       <span className={`phase-chip phase-${card.phase.toLowerCase()}`}>{card.phase}</span>
+      {outlook.status === 'never' && <span className="phase-chip never-trades">never trades</span>}
     </div>
     <h3><Anchor href={marketDetailHrefV1(card.address)} title={card.address}>{editorial === null ? fallbackMarketTitleV1(card.phase, card.address) : editorial.title}</Anchor></h3>
     {editorial !== null && <p className="market-question">{editorial.question}</p>}
     <p className="market-card-address" title={card.address}>{shortAddressV1(card.address, 10)}</p>
+    {outlook.status === 'never' && <p className="market-never-trades-note">
+      This market can never trade. The window to switch its trading on closed at slot {outlook.lastActivationSlot} and cannot be reopened.
+      Nothing else about it changed: every figure below is read live from the chain, and it stays readable.
+    </p>}
+    {/* Reader-first: the five facts somebody deciding whether to trade this
+        market actually asks for. Everything else the account carries is one
+        click below, in the reader's own words — collapsed, never dropped. */}
     <dl className="market-card-facts">
-      <div><dt>Generation</dt><dd>{card.generation}</dd></div>
-      <div><dt>Founding readiness</dt><dd>{card.readiness}</dd></div>
-      <div><dt>Outstanding capabilities</dt><dd>{card.outstandingCapabilities}</dd></div>
-      <div><dt>Claim count · Claims aggregate</dt><dd>{card.liability.status === 'bound' ? card.liability.claimCount : card.liability.status}</dd></div>
-      <div><dt>Per-claim supply · raw u64</dt><dd>{card.liability.status === 'bound' ? card.liability.supplyAtoms.join(' · ') : card.liability.status}</dd></div>
-      <div><dt>Exact required backing · raw u64</dt><dd>{card.liability.status === 'bound' ? card.liability.requiredBackingAtoms : card.liability.status}</dd></div>
-      <div><dt>Terminal receipt</dt><dd>{card.settlement.status === 'terminal'
-        ? `${card.settlement.label} · winning claim ${card.settlement.winner}`
-        : card.settlement.label}</dd></div>
-      <div><dt>Collateral mint</dt><dd>{card.collateral.status === 'bound'
+      <div><dt>Outcomes</dt><dd>{card.liability.status === 'bound' ? card.liability.claimCount : card.liability.status}</dd></div>
+      <div><dt>Claims bought, per outcome</dt><dd>{card.liability.status === 'bound' ? card.liability.supplyAtoms.join(' · ') : card.liability.status}</dd></div>
+      <div><dt>Most it could be asked to pay</dt><dd>{card.liability.status === 'bound' ? card.liability.requiredBackingAtoms : card.liability.status}</dd></div>
+      <div><dt>Paid in</dt><dd>{card.collateral.status === 'bound'
         ? <span title={card.collateral.collateralMint}>{card.collateral.collateralMintShort}</span>
         : card.collateral.status}</dd></div>
-      <div><dt>Realm content ID</dt><dd title={card.identity.realmId}>{card.identity.realmId.slice(0, 16)}…</dd></div>
-      <div><dt>Finalized observed slot</dt><dd>{card.observedSlot}</dd></div>
+      <div><dt>Answer decided?</dt><dd>{card.settlement.status === 'terminal'
+        ? `yes — ${editorial?.outcomes?.[card.settlement.winner] ?? `outcome ${card.settlement.winner}`} won`
+        : 'not yet'}</dd></div>
     </dl>
+    <details className="listing-group">
+      <summary><span>The rest of what this account says</span><small>read from the chain, in the protocol&apos;s own words</small></summary>
+      <div>
+        <dl className="market-card-facts">
+          <div><dt>Generation</dt><dd>{card.generation}</dd></div>
+          <div><dt>Founding readiness</dt><dd>{card.readiness}</dd></div>
+          <div><dt>Outstanding capabilities</dt><dd>{card.outstandingCapabilities}</dd></div>
+          <div><dt>Terminal receipt</dt><dd>{card.settlement.status === 'terminal'
+            ? `${card.settlement.label} · winning claim ${card.settlement.winner}`
+            : card.settlement.label}</dd></div>
+          <div><dt>Realm content ID</dt><dd title={card.identity.realmId}>{card.identity.realmId.slice(0, 16)}…</dd></div>
+          <div><dt>Finalized observed slot</dt><dd>{card.observedSlot}</dd></div>
+        </dl>
+      </div>
+    </details>
     {/* FE-CHART mount: the issuance split, drawn from the same supply vector
         the facts row above states exactly. */}
     {card.liability.status === 'bound' && <SupplyShareStrip
@@ -124,11 +148,11 @@ function MarketCard({ card, clock, nowMs }: Readonly<{ card: MarketDiscoveryCard
         Every other card renders nothing here — a listing of empty frames
         would report a measurement nobody took. */}
     <MarketIssuanceHistory address={card.address} outcomes={editorial?.outcomes ?? null} />
-    <p className="market-hoard-note">Supplies are the exact claim liabilities the Market&apos;s Claims aggregate records. They are not liquidity, TVL, or a balance available to any participant.</p>
+    <p className="market-hoard-note">Those counts are what the market would owe if each outcome won. They are not liquidity, TVL, or a balance anybody can withdraw.</p>
     {card.hoard.status === 'derived'
-      ? <p className="market-hoard-note">Hoard principal <strong>{card.hoard.principalAtoms}</strong> atoms{card.hoard.mintDisplayDecimals === null ? '' : ` · the mint prints ${card.hoard.mintDisplayDecimals} display decimals, which never scale this figure`}, held by this Market&apos;s Custody transfer authority at <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>, in the Custody namespace the Claims aggregate records.</p>
-      : <p className="market-capability-refusal"><span>Hoard {card.hoard.status}</span>{card.hoard.reason}</p>}
-    <p className="market-observation"><Anchor href={marketDetailHrefV1(card.address)}>Open this Market field by field →</Anchor></p>
+      ? <p className="market-hoard-note">Collateral in the vault: <strong>{card.hoard.principalAtoms}</strong> atoms{card.hoard.mintDisplayDecimals === null ? '' : `, and the ${card.hoard.mintDisplayDecimals} decimals the token displays never scale that figure`}. The vault address is worked out from this market&apos;s own records rather than looked up: <span title={card.hoard.address}>{shortAddressV1(card.hoard.address)}</span>. Only its custody authority can move what is in it.</p>
+      : <p className="market-capability-refusal"><span>Vault {card.hoard.status}</span>{card.hoard.reason}</p>}
+    <p className="market-observation"><Anchor href={marketDetailHrefV1(card.address)}>See every field on this market →</Anchor></p>
     {card.collateral.status !== 'bound' && <p className="market-refusal">{card.collateral.reason}</p>}
     {card.liability.status !== 'bound' && <p className="market-refusal">{card.liability.reason}</p>}
     <CapabilityBadges capabilities={card.capabilities} clock={clock} nowMs={nowMs} />
@@ -170,14 +194,15 @@ export function HistoricalMarketAccounts({
   if (accounts.length === 0) return null;
   const count = accounts.length;
   return <ListingGroup
-    title={`${count} older market${plural(count, '', 's')} this page cannot read`}
+    title={`${count} older market${plural(count, '', 's')} this build cannot read`}
     note="disclosed here but not listed as current"
   >
     <p className="market-empty">
-      {count} historical DCLTCOR2 Market account{plural(count, '', 's')} {plural(count, 'uses', 'use')} the old 352-byte
-      layout. The current 360-byte reader will not guess at the difference, so it declines to decode
-      {plural(count, ' it', ' them')} rather than show you a field it inferred. {plural(count, 'It is', 'They are')} still
-      on the chain, and the explorer will still show you {plural(count, 'its', 'their')} bytes.
+      {count} account{plural(count, '', 's')} here {plural(count, 'was', 'were')} made by an older version of the
+      protocol and {plural(count, 'stores', 'store')} {plural(count, 'its', 'their')} fields differently — 352 bytes where
+      this build expects 360. It will not guess at the difference, so it declines to read
+      {plural(count, ' it', ' them')} rather than show you a field it made up. {plural(count, 'It is', 'They are')} still
+      on the chain, and the explorer will still show you {plural(count, 'its', 'their')} raw bytes.
     </p>
     <ul className="market-bindings">
       {accounts.map((account) => <li key={account.address}>
@@ -206,29 +231,46 @@ export function RestOfTheRecord({
 }> & SlotClockPropsV1) {
   const founding = listing.founding.length;
   const settled = listing.settled.length;
+  const untradeable = listing.untradeable.length;
   const unreadable = listing.unreadable.length;
-  if (founding + settled + unreadable + incompatible.length === 0) return null;
+  if (founding + settled + untradeable + unreadable + incompatible.length === 0) return null;
   return <section className="trade-v3-card">
     <header>
       <span>02</span>
-      <div><h2>The rest of the record</h2><p>Building a protocol on a public network leaves a public trail. These are the accounts this deployment holds that are not open markets, kept where they are and labelled for what they are. Nothing here is hidden; it is just not what you came for.</p></div>
+      <div><h2>Everything else here</h2><p>Building a protocol in public leaves a trail. These are the accounts this deployment holds that are not open markets, labelled for what they are. Nothing is hidden; it is just not what you came for.</p></div>
     </header>
 
+    {untradeable > 0 && <ListingGroup
+      title={`${untradeable} market${plural(untradeable, '', 's')} that can never trade`}
+      note="open and readable for good · trading can no longer be switched on"
+    >
+      <p className="market-empty">
+        Trading has to be switched on within a set window after a market is created, and on
+        {plural(untradeable, ' this one', ' these')} the window closed before that happened. Nothing can turn it on now —
+        not us, not anyone. That is the only thing wrong with {plural(untradeable, 'it', 'them')}.
+        {plural(untradeable, ' Its', ' Their')} claims and {plural(untradeable, 'its', 'their')} collateral are still on the
+        chain, every figure below is read live from it exactly as on any other market, and
+        {plural(untradeable, ' it stays', ' they stay')} readable for good. {plural(untradeable, 'It is', 'They are')} here
+        to be read, not traded.
+      </p>
+      <div className="market-card-grid">{listing.untradeable.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
+    </ListingGroup>}
+
     {settled > 0 && <ListingGroup
-      title={`${settled} market${plural(settled, '', 's')} past ${plural(settled, 'its', 'their')} answer`}
+      title={`${settled} market${plural(settled, '', 's')} that already ${plural(settled, 'has', 'have')} an answer`}
       note="resolved, retiring, or retired"
     >
       <div className="market-card-grid">{listing.settled.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
 
     {founding > 0 && <ListingGroup
-      title={`${founding} founding${plural(founding, '', 's')} that never finished`}
+      title={`${founding} market${plural(founding, '', 's')} that ${plural(founding, 'was', 'were')} never finished`}
       note="started during the build-out · kept because devnet history is public"
     >
       <p className="market-empty">
-        Founding a market takes a run of transactions, and {plural(founding, 'this one', 'these')} stopped part-way
-        through. Each account still says exactly how far it got — its generation, its readiness, and the identities it
-        had already committed to. {plural(founding, 'It sits', 'They sit')} apart from the open markets because there is
+        Setting a market up takes a run of transactions, and {plural(founding, 'this one', 'these')} stopped part-way
+        through. Each account still says exactly how far it got, and what it had already committed to.{' '}
+        {plural(founding, 'It sits', 'They sit')} apart from the open markets because there is
         nothing to trade against {plural(founding, 'it', 'them')}, not because {plural(founding, 'it is', 'they are')} something
         to be quiet about.
       </p>
@@ -236,8 +278,8 @@ export function RestOfTheRecord({
     </ListingGroup>}
 
     {unreadable > 0 && <ListingGroup
-      title={`${unreadable} account${plural(unreadable, '', 's')} that refused to decode`}
-      note="enumerated as current · each carries its exact reason"
+      title={`${unreadable} account${plural(unreadable, '', 's')} we could not read`}
+      note="listed as current · each one says exactly why"
     >
       <div className="market-card-grid">{listing.unreadable.map((card) => <MarketCard key={card.address} card={card} clock={clock} nowMs={nowMs} />)}</div>
     </ListingGroup>}
@@ -277,7 +319,7 @@ export function EmptyMarkets({
 
 export default function MarketDiscoveryWorkspace() {
   const deployment = useDeploymentV1();
-  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading the finalized market list…' });
+  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading the market list from the chain…' });
   const discovery = state.kind === 'ready' ? state.discovery : null;
   // The wall-clock layer: a slot-rate clock measured after each read, and a
   // ticking "now". Both start absent, so the server-rendered document and the
@@ -304,7 +346,7 @@ export default function MarketDiscoveryWorkspace() {
   }, []);
 
   const load = useCallback(async () => {
-    setState({ kind: 'loading', message: `Reading every ${deployment.label} market: one bounded finalized scan of the Core program, then every Market root, its Realm record, its Claims liability aggregate, and its capability manifest behind one finalized floor…` });
+    setState({ kind: 'loading', message: `Reading every ${deployment.label} market: one scan of the Core program, then each market's own records — what it is collateralized in, what claims exist against it, and what it is allowed to do — all at the same finalized point in the chain…` });
     setClock(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
@@ -355,6 +397,7 @@ export default function MarketDiscoveryWorkspace() {
   const listing = narrowed === null ? null : {
     ...narrowed,
     open: sortMarketCardsV1(narrowed.open, order),
+    untradeable: sortMarketCardsV1(narrowed.untradeable, order),
     settled: sortMarketCardsV1(narrowed.settled, order),
     founding: sortMarketCardsV1(narrowed.founding, order),
     unreadable: sortMarketCardsV1(narrowed.unreadable, order),
@@ -363,28 +406,29 @@ export default function MarketDiscoveryWorkspace() {
   const incompatible = discovery !== null && discovery.enumeration.mode === 'program-scan'
     ? discovery.enumeration.incompatibleMarketAccounts
     : Object.freeze([]);
-  const asideCount = wholeListing === null ? 0 : wholeListing.founding.length + wholeListing.settled.length + wholeListing.unreadable.length + incompatible.length;
+  const asideCount = wholeListing === null ? 0 : wholeListing.founding.length + wholeListing.untradeable.length + wholeListing.settled.length + wholeListing.unreadable.length + incompatible.length;
 
   return <main className="product-shell trade-v3-shell">
     <Nav current="/markets" status={`${deployment.label} · finalized reads`} />
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Markets on {deployment.label} · finalized reads only</p>
+        <p className="eyebrow">Markets on {deployment.label} · read live from the chain</p>
         <h1>Every market on devnet.<br /><em>Read live, or not at all.</em></h1>
-        <p>The markets that are open come first, because they are the ones you can do something with. Everything else this deployment holds — foundings that were started and never finished, and markets from an older version of the protocol that this build cannot decode — is counted and named below rather than dropped. Each card shows only what the chain actually says: what phase the market is in and who it commits to, how many claims exist and what is holding them, what it is collateralized in, and what the market is allowed to do. There is no volume, price, odds, probability, or yield here, because the chain does not store any of those. What it does store is how many claims of each outcome have been issued, so each card draws that split for exactly what it is — where the issued claims sit, never a forecast.</p>
+        <p>Markets you can trade come first. Everything else this deployment holds is further down, counted and named rather than dropped: markets whose trading can never be switched on, setups that were started and never finished, and markets from an older version of the protocol that this build cannot read.</p>
+        <p>There is no volume, price, odds, probability, or yield here, because the chain does not store any of those. What it does store is how many claims of each outcome people have bought, and each card draws that — a picture of what has been bought, never a forecast.</p>
       </div>
       <aside>
-        <span>Provenance</span>
+        <span>Where the numbers come from</span>
         <strong>CHAIN · finalized slot</strong>
-        <p>Each surface carries its own provenance chip. A surface that cannot be decoded or bound carries REFUSED and its exact reason instead of a blank or a zero.</p>
+        <p>Every panel says where its own numbers came from. If we could not read something, it says REFUSED and gives the exact reason — never a blank, and never a zero standing in for one.</p>
       </aside>
     </section>
 
     <section className="trade-v3-card">
       <header>
         <span>01</span>
-        <div><h2>The markets that are open</h2><p>One card per market that has finished founding, enumerated from the Core program itself — no index, no curation of which facts you see. A card is either read or refused; it is never partly invented. Claim counts come from the accounts that actually hold the claims, in raw units. The name and question at the top of a card are this site&apos;s editorial — the chain stores no names; everything else on the card is read from the chain.</p></div>
+        <div><h2>Markets you can trade</h2><p>One card per market that is finished and still open. We list them straight from the Core program itself — there is no index in between, and no picking which facts you get to see. A card is either read or refused; it is never partly invented. Claim counts come from the accounts that actually hold the claims, in raw units. Only the name and the question are ours to write — the chain stores no names. Everything else on a card is read from the chain.</p></div>
         <div className="direct-actions"><button type="button" onClick={() => void load()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read the chain'}</button></div>
       </header>
       {state.kind === 'refused'

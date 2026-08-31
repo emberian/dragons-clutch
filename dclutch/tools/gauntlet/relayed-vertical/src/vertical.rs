@@ -26,11 +26,8 @@ use dclutch_relay_contract::{
 };
 use dclutch_resolution_codec::{RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2};
 use dclutch_resolution_core_v3_operator::{
-    ObservedAccount, ResolutionAdmitTerminalSnapshotV3, ResolutionCreateFundSnapshotV3,
-    ResolutionVerifyFundReadySnapshotV3, build_resolution_admit_terminal_v3,
-    build_resolution_create_fund_v3, build_resolution_verify_fund_ready_v3,
-    validate_resolution_admit_terminal_report_v3, validate_resolution_create_fund_report_v3,
-    validate_resolution_verify_fund_ready_report_v3,
+    ObservedAccount, ResolutionAdmitTerminalSnapshotV3, build_resolution_admit_terminal_v3,
+    validate_resolution_admit_terminal_report_v3,
 };
 use dclutch_source_contract::{
     MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, PROVIDER_RELEASE_SCHEMA_ID_V1,
@@ -39,9 +36,12 @@ use dclutch_source_contract::{
     WINDOW_SPEC_SCHEMA_ID_V1,
 };
 use solana_sdk_ids::{system_program, sysvar};
-use solana_system_interface::instruction::transfer;
 
 use crate::daemon;
+use crate::funding_readiness::{
+    FundingReadinessCoordinatesV1, FundingReadinessPlanV1, FundingReadinessRecordCoordinatesV1,
+    plan_funding_readiness_from_rpc_v1,
+};
 use crate::input::{
     self, DISCLOSED_FAILURE_CONFLATION, RelayedMarketFactsV1, WALK_BOUNTY_LAMPORTS,
 };
@@ -566,8 +566,7 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         ));
     }
     match material.principal_policy() {
-        SourcePrincipalPolicyV1::BoundedByFloor(floor)
-            if floor.to_bytes() == published_floor => {}
+        SourcePrincipalPolicyV1::BoundedByFloor(floor) if floor.to_bytes() == published_floor => {}
         _ => {
             return Err(Error::new(
                 "the relayed SourceMaterialV3 does not select the published manipulation floor",
@@ -580,119 +579,83 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
         market_state.identity.capability_manifest.to_bytes(),
     );
 
-    let create_snapshot = fund_snapshot(
-        &mut session.rpc,
-        market,
-        activation,
-        registry_program,
-        core_program,
-        pubkey(&session.plan.core.programdata_id)?,
-        resolution_program,
-        pubkey(&session.plan.resolution.programdata_id)?,
-        material_pair,
-        manifest_pair,
-        source_state,
-        funding,
-    )?;
-    let create = build_resolution_create_fund_v3(&create_snapshot)
-        .map_err(|error| Error::new(format!("chain-derived CreateFund: {error:?}")))?;
-    validate_resolution_create_fund_report_v3(&create)
-        .map_err(|error| Error::new(format!("CreateFund report: {error:?}")))?;
-    let mut prepay = Vec::new();
-    if create.source_top_up_lamports > 0 {
-        prepay.push(transfer(
-            &authority.pubkey(),
-            &source_state,
-            create.source_top_up_lamports,
-        ));
-    }
-    if !prepay.is_empty() {
-        session.transactions.push(session.rpc.send(
-            "relayed vertical: prepay the Source state",
-            &prepay,
-            &authority,
-        )?);
-    }
-    // The Core-driven funding frame carries a 656-byte effect envelope over an
-    // 18-account frame: past the bare legacy packet, so it rides its own
-    // routing table exactly as the journey's recovery-shaped ladder does. The
-    // union address probe adds the two verify-only positions so one table
-    // serves both transitions.
-    let funding_table_probe = solana_program::instruction::Instruction {
-        program_id: core_program,
-        accounts: vec![
-            solana_program::instruction::AccountMeta::new(rent_beneficiary, false),
-            solana_program::instruction::AccountMeta::new_readonly(sysvar::clock::ID, false),
+    // The founding drives this ladder; this campaign authenticates the result.
+    //
+    // `found_through_open` ends with `execute_funding_readiness_suffix_v1`, so
+    // CreateFund, ActivateFund and VerifyFundReady are already executed and
+    // finalized by the time the relay begins. Asking the canonical builders to
+    // construct the same three mutations again is not a second check, it is a
+    // second author: `build_resolution_create_fund_v3` refuses at
+    // `authenticate_vacant_destination` because the Source destination it is
+    // asked to create is the account the founding created, and that arrives
+    // here as a bare `Funding` naming nothing.
+    //
+    // So ask the readiness planner the founding itself drives, and require a
+    // plan the founding's own completion check accepts. Anything else is a
+    // founding defect this campaign reports rather than papers over.
+    let readiness_activation_receipt = Pubkey::find_program_address(
+        &[
+            dclutch_resolution_codec::FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            market.as_ref(),
+            &generation.to_le_bytes(),
         ],
-        data: Vec::new(),
-    };
-    let create = build_resolution_create_fund_v3(&fund_snapshot(
+        &resolution_program,
+    )
+    .0;
+    let readiness = plan_funding_readiness_from_rpc_v1(
         &mut session.rpc,
-        market,
-        activation,
-        registry_program,
-        core_program,
-        pubkey(&session.plan.core.programdata_id)?,
-        resolution_program,
-        pubkey(&session.plan.resolution.programdata_id)?,
-        material_pair,
-        manifest_pair,
-        source_state,
+        &session.plan,
+        FundingReadinessCoordinatesV1 {
+            market,
+            source_material: FundingReadinessRecordCoordinatesV1 {
+                raw: material_pair.raw,
+                staging: material_pair.staging,
+            },
+            capability_manifest: FundingReadinessRecordCoordinatesV1 {
+                raw: manifest_pair.raw,
+                staging: manifest_pair.staging,
+            },
+            // The no-recovery material publishes no policy record.
+            recovery_policy: None,
+            source_state,
+            funding_ledger: funding,
+            beneficiary: rent_beneficiary,
+            activation_receipt: readiness_activation_receipt,
+        },
+        0,
+    )?;
+    // The suffix's own completion assertion is
+    // `authenticate_funding_readiness_route_v1(.., "accept")`: VerifyFundReady
+    // stays buildable after it lands, so `Accept` names the finished ladder.
+    // `ConsumedByFounding` is the other terminal — an atomic founding that
+    // consumed the staged readiness, leaving no adjacent route at all. Neither
+    // plan alone proves the accept was submitted (that is the founding
+    // journal's fact, not the relay's), so the chain facts the relay actually
+    // depends on are authenticated below.
+    if !matches!(
+        readiness,
+        FundingReadinessPlanV1::Accept(_) | FundingReadinessPlanV1::ConsumedByFounding
+    ) {
+        return Err(Error::new(format!(
+            "the founding left Resolution funding readiness at `{}`, not at a terminal route: \
+             this campaign relays a Market whose funding its own founding drives, and it will \
+             not drive it a second time",
+            readiness.route_name(),
+        )));
+    }
+    // ActivateFund's receipt is the account this campaign never creates and
+    // cannot relay without, so its existence is named rather than assumed.
+    session.rpc.required_account(
+        readiness_activation_receipt,
+        "the Resolution funding activation receipt the founding's suffix created",
+    )?;
+    // The ledger address this campaign derives from the PUBLISHED manifest and
+    // the mask it selects must be the very account the founding created; the
+    // planner authenticated its contents, and this names the seam.
+    let funding_account = session.rpc.required_account(
         funding,
-    )?)
-    .map_err(|error| Error::new(format!("chain-derived CreateFund after prepay: {error:?}")))?;
-    let (_funding_table, _funding_routed, funding_observation, funding_tables) =
-        relayworld::publish_routing_table(
-            &mut session.rpc,
-            &authority,
-            "resolution-funding",
-            &[create.instruction.clone(), funding_table_probe],
-            &mut session.transactions,
-        )?;
-    session.transactions.push(session.rpc.send_v0(
-        "relayed vertical: a no-recovery Market creates its Source against initialized Resolution funding",
-        std::slice::from_ref(&create.instruction),
-        &authority,
-        funding_observation,
-        &funding_tables,
-    )?);
-    let verify = build_resolution_verify_fund_ready_v3(&verify_snapshot(
-        &mut session.rpc,
-        market,
-        activation,
-        registry_program,
-        core_program,
-        pubkey(&session.plan.core.programdata_id)?,
-        resolution_program,
-        pubkey(&session.plan.resolution.programdata_id)?,
-        material_pair,
-        manifest_pair,
-        source_state,
-        funding,
-        rent_beneficiary,
-        Pubkey::find_program_address(
-            &[
-                dclutch_resolution_codec::FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
-                market.as_ref(),
-                &generation.to_le_bytes(),
-            ],
-            &resolution_program,
-        )
-        .0,
-    )?)
-    .map_err(|error| Error::new(format!("chain-derived VerifyFundReady: {error:?}")))?;
-    validate_resolution_verify_fund_ready_report_v3(&verify)
-        .map_err(|error| Error::new(format!("VerifyFundReady report: {error:?}")))?;
-    session.transactions.push(session.rpc.send_v0(
-        "relayed vertical: activate the no-recovery Resolution funding",
-        std::slice::from_ref(&verify.instruction),
-        &authority,
-        funding_observation,
-        &funding_tables,
-    )?);
-    let funding_account = session
-        .rpc
-        .required_account(funding, "Resolution funding ledger")?;
+        "the Resolution funding ledger derived from the published manifest",
+    )?;
     let active_funding = FundingLedgerV2::decode(&funding_account.data)
         .and_then(|ledger| ledger.authenticate(manifest_id, manifest_view))
         .map_err(|error| Error::new(format!("Resolution funding ledger: {error:?}")))?;
@@ -718,11 +681,16 @@ pub(crate) fn execute(request: VerticalRequestV1) -> Result<serde_json::Value> {
     )?;
     stages.push(StageV1 {
         stage: "resolution funding (no recovery)".into(),
-        outcome: "executed".into(),
-        note: "CreateFund and VerifyFundReady over the short no-recovery frame (the two \
-               RecoveryPolicyV2 tail positions absent). One Resolution-owned subset ledger \
-               carries the failure compartment configured by the market's Source material and \
-               its two prepaid, refundable companions."
+        outcome: "authenticated".into(),
+        note: "The founding's own post-Open readiness suffix executed CreateFund, ActivateFund \
+               and VerifyFundReady over the short no-recovery frame (the two RecoveryPolicyV2 \
+               tail positions absent); this campaign authenticates that result instead of \
+               driving it a second time. The readiness planner reports consumed-by-founding, \
+               the ledger this campaign derives from the PUBLISHED manifest is the account the \
+               founding created, every selected entry is Active, and the Source state is in its \
+               Primary phase. One Resolution-owned subset ledger carries the failure compartment \
+               configured by the market's Source material and its two prepaid, refundable \
+               companions."
             .into(),
     });
     ledger.watch("resolution_source_state", source_state);
@@ -1078,6 +1046,10 @@ fn success_walk(
             provider_release_id: crate::market::record_identity(&hex_decode(
                 &facts.input.provider_release_hex,
             )),
+            // The record binds the key set by IDENTITY; the config's
+            // `relayer_key_set` is the record ACCOUNT the frame passes, and the
+            // two are different 32-byte values.
+            relayer_key_set_id: crate::market::record_identity(&facts.relayer_key_set_bytes),
             accepted_caller_receipt_path: &accepted_receipt_path,
             accepted_caller_receipt_sha256: accepted_receipt_sha256,
         }),
@@ -1471,132 +1443,6 @@ fn select_no_recovery_entries(
     ])
 }
 
-#[allow(clippy::too_many_arguments)]
-fn fund_snapshot(
-    rpc: &mut Rpc,
-    market: Pubkey,
-    activation: Pubkey,
-    registry_program: Pubkey,
-    core_program: Pubkey,
-    core_programdata: Pubkey,
-    resolution_program: Pubkey,
-    resolution_programdata: Pubkey,
-    material: RecordPairV1,
-    manifest: RecordPairV1,
-    source_state: Pubkey,
-    funding_ledger: Pubkey,
-) -> Result<ResolutionCreateFundSnapshotV3> {
-    let (observation, present) = rpc.finalized_observed_accounts(
-        &[
-            market,
-            activation,
-            registry_program,
-            core_program,
-            core_programdata,
-            resolution_program,
-            resolution_programdata,
-            material.raw,
-            manifest.raw,
-            sysvar::rent::ID,
-            system_program::ID,
-        ],
-        0,
-    )?;
-    let at = |index: usize| -> Result<ObservedAccount> {
-        present
-            .get(index)
-            .cloned()
-            .ok_or_else(|| Error::new("finalized observation lost an account"))
-    };
-    Ok(ResolutionCreateFundSnapshotV3 {
-        market: at(0)?,
-        activation_cache: at(1)?,
-        registry_program: at(2)?,
-        core_program: at(3)?,
-        core_programdata: at(4)?,
-        resolution_program: at(5)?,
-        resolution_programdata: at(6)?,
-        source_material: at(7)?,
-        source_material_staging: vacant(observation, material.staging),
-        capability_manifest: at(8)?,
-        capability_manifest_staging: vacant(observation, manifest.staging),
-        source_destination: observed_or_vacant(rpc, observation, source_state)?,
-        funding_ledger: observed_or_vacant(rpc, observation, funding_ledger)?,
-        rent_sysvar: at(9)?,
-        system_program: at(10)?,
-        // The no-recovery material has no policy record; per the operator's
-        // own None rule the two policy positions re-present the material pair.
-        recovery_policy: at(7)?,
-        recovery_policy_staging: vacant(observation, material.staging),
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn verify_snapshot(
-    rpc: &mut Rpc,
-    market: Pubkey,
-    activation: Pubkey,
-    registry_program: Pubkey,
-    core_program: Pubkey,
-    core_programdata: Pubkey,
-    resolution_program: Pubkey,
-    resolution_programdata: Pubkey,
-    material: RecordPairV1,
-    manifest: RecordPairV1,
-    source_state: Pubkey,
-    funding: Pubkey,
-    rent_beneficiary: Pubkey,
-    activation_receipt: Pubkey,
-) -> Result<ResolutionVerifyFundReadySnapshotV3> {
-    let (observation, present) = rpc.finalized_observed_accounts(
-        &[
-            market,
-            activation,
-            registry_program,
-            core_program,
-            core_programdata,
-            resolution_program,
-            resolution_programdata,
-            material.raw,
-            manifest.raw,
-            source_state,
-            funding,
-            rent_beneficiary,
-            sysvar::rent::ID,
-            sysvar::clock::ID,
-        ],
-        0,
-    )?;
-    let at = |index: usize| -> Result<ObservedAccount> {
-        present
-            .get(index)
-            .cloned()
-            .ok_or_else(|| Error::new("finalized observation lost an account"))
-    };
-    Ok(ResolutionVerifyFundReadySnapshotV3 {
-        market: at(0)?,
-        activation_cache: at(1)?,
-        registry_program: at(2)?,
-        core_program: at(3)?,
-        core_programdata: at(4)?,
-        resolution_program: at(5)?,
-        resolution_programdata: at(6)?,
-        source_material: at(7)?,
-        source_material_staging: vacant(observation, material.staging),
-        capability_manifest: at(8)?,
-        capability_manifest_staging: vacant(observation, manifest.staging),
-        source_state: at(9)?,
-        funding_ledger: at(10)?,
-        beneficiary: at(11)?,
-        rent_sysvar: at(12)?,
-        clock_sysvar: at(13)?,
-        // Verification precedes activation, so the receipt PDA is vacant.
-        activation_receipt: vacant(observation, activation_receipt),
-        recovery_policy: at(7)?,
-        recovery_policy_staging: vacant(observation, material.staging),
-    })
-}
-
 /// Same-finalized snapshot for the terminal admission of a walked market.
 ///
 /// Every address comes off the campaign's own book; the five staging cursors
@@ -1674,24 +1520,6 @@ fn vacant(
         executable: false,
         data: Vec::new(),
     }
-}
-
-fn observed_or_vacant(
-    rpc: &mut Rpc,
-    observation: dclutch_resolution_core_v3_operator::Observation,
-    key: Pubkey,
-) -> Result<ObservedAccount> {
-    Ok(match rpc.account(key)? {
-        None => vacant(observation, key),
-        Some(account) => ObservedAccount {
-            observation,
-            key,
-            lamports: account.lamports,
-            owner: account.owner,
-            executable: account.executable,
-            data: account.data,
-        },
-    })
 }
 
 fn hex(bytes: &[u8]) -> String {

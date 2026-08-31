@@ -1,0 +1,206 @@
+{
+  "schema": "dclutch-simulator-series-v3",
+  "captured_at": "2026-08-30T22:26:22+00:00",
+  "campaign": {
+    "label": "relayed graduation market, success walk — RELAY-3 run 3, hbox, 2026-08-30",
+    "source_revision": "533540056d61c05faabaae07e9b78e8c90214a8e",
+    "walk": "success",
+    "rpc_origin": "http://127.0.0.1:27300/",
+    "transcript_file": "run3-transcript.json"
+  },
+  "claim_unit_atoms": "1",
+  "settlement": {
+    "selected_cell": 0,
+    "failure_cell": 1,
+    "certificate": "FqesjCZjZEfhUAFpSCM5pWYehVn8ms7HM7CkNo7F5mG3"
+  },
+  "law_ids": [
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+    "L6",
+    "L7"
+  ],
+  "laws": [
+    {
+      "id": "L1",
+      "status": "holds",
+      "detail": "tracked 1000000000 atoms across 4 accounts == Mint supply 1000000000"
+    },
+    {
+      "id": "L2",
+      "status": "holds",
+      "detail": "the Hoard moved 0 atoms since `record sealed`, exactly as declared; it holds 500000000"
+    },
+    {
+      "id": "L3",
+      "status": "holds",
+      "detail": "1 Positions sum to the aggregate supply vector [500000000, 500000000]"
+    },
+    {
+      "id": "L4",
+      "status": "holds",
+      "detail": "Hoard 500000000 >= worst outcome 500000000 x unit 1 = 500000000"
+    },
+    {
+      "id": "L5",
+      "status": "holds",
+      "detail": "tracked collateral moved 0 atoms since `record sealed`, exactly as declared"
+    },
+    {
+      "id": "L6",
+      "status": "holds",
+      "detail": "no watched account closed at this boundary"
+    },
+    {
+      "id": "L7",
+      "status": "inapplicable",
+      "detail": "consumption allocates the certificate from its own prepaid rent; no collateral moves"
+    }
+  ],
+  "positions": [
+    {
+      "label": "founder_position",
+      "address": "GrVJ1GvHJA3sL75WW6iyL617Sy7bYAGTrXYzCpwuuwKv",
+      "lamports": "1893120",
+      "claims": [
+        "500000000",
+        "500000000"
+      ],
+      "total_claims": "1000000000"
+    }
+  ],
+  "collateral_holders": [
+    {
+      "label": "founder_wallet",
+      "address": "Eq6xF66CNjWJFR96xsgEmEh9DgzJYqtU46svwkiSGYem",
+      "atoms": "500000000"
+    },
+    {
+      "label": "hoard",
+      "address": "HLignq575zEupcdP6Xg7jp1e6AjvrUTgF2EPHnjitdux",
+      "atoms": "500000000"
+    },
+    {
+      "label": "founding_source_funder",
+      "address": "H2aKoQKxHi2UgT8UqTp8mx8sqvTTroEjWwa3icSHgHTj",
+      "atoms": "0"
+    },
+    {
+      "label": "founding_source_funder_after_dcltpcb2",
+      "address": "H2aKoQKxHi2UgT8UqTp8mx8sqvTTroEjWwa3icSHgHTj",
+      "atoms": "0"
+    }
+  ],
+  "cluster": "local",
+  "market": "JCWoR8BP9tVbj8XUNDXXhCqjgDYgNNfkn9WcGtxj6QNJ",
+  "mode": "finite",
+  "outcome_count": 2,
+  "cycles_recorded": 4,
+  "points_omitted_before": 0,
+  "census_file": "run3-transcript.json",
+  "points": [
+    {
+      "stage": "relayed records published",
+      "cycle": 1,
+      "slot": "7233",
+      "recorded_at": null,
+      "supply": [
+        "500000000",
+        "500000000"
+      ],
+      "position_totals": [
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "500000009955591120",
+      "transactions": 191,
+      "compute_units": "7047284",
+      "fee_lamports": "14285000",
+      "law_statuses": "hihhiii",
+      "checks_held": 3,
+      "checks_broken": 0,
+      "checks_inapplicable": 4
+    },
+    {
+      "stage": "resolution funding active",
+      "cycle": 2,
+      "slot": "7233",
+      "recorded_at": null,
+      "supply": [
+        "500000000",
+        "500000000"
+      ],
+      "position_totals": [
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "500000009955591120",
+      "transactions": 0,
+      "compute_units": "0",
+      "fee_lamports": "0",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "stage": "record sealed",
+      "cycle": 3,
+      "slot": "7635",
+      "recorded_at": null,
+      "supply": [
+        "500000000",
+        "500000000"
+      ],
+      "position_totals": [
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "500000009922178560",
+      "transactions": 7,
+      "compute_units": "109316",
+      "fee_lamports": "450000",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "stage": "market terminalized (success)",
+      "cycle": 4,
+      "slot": "7667",
+      "recorded_at": null,
+      "supply": [
+        "500000000",
+        "500000000"
+      ],
+      "position_totals": [
+        "500000000",
+        "500000000"
+      ],
+      "hoard_atoms": "500000000",
+      "tracked_collateral": "1000000000",
+      "mint_supply": "1000000000",
+      "payer_lamports": "500000009922103560",
+      "transactions": 1,
+      "compute_units": "157869",
+      "fee_lamports": "75000",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    }
+  ]
+}

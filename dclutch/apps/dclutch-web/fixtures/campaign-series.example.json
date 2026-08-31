@@ -1,0 +1,32 @@
+{
+  "schema": "dclutch-simulator-series-v3",
+  "captured_at": "2026-08-30T18:00:00+00:00",
+  "campaign": {
+    "label": "example campaign, for the render tests only",
+    "source_revision": "0123456789abcdef0123456789abcdef01234567",
+    "walk": "success",
+    "rpc_origin": "http://127.0.0.1:31500/",
+    "transcript_file": "example-transcript.json"
+  },
+  "claim_unit_atoms": "1",
+  "settlement": { "selected_cell": 0, "failure_cell": 1, "certificate": "FqesjCZjZEfhUAFpSCM5pWYehVn8ms7HM7CkNo7F5mG3" },
+  "law_ids": ["L1", "L4"],
+  "laws": [
+    { "id": "L1", "status": "holds", "detail": "tracked 1000000000 atoms across 4 accounts == Mint supply 1000000000" },
+    { "id": "L4", "status": "holds", "detail": "Hoard 500000000 >= worst outcome 500000000 x unit 1 = 500000000" }
+  ],
+  "positions": [],
+  "collateral_holders": [],
+  "cluster": "local",
+  "market": "JCWoR8BP9tVbj8XUNDXXhCqjgDYgNNfkn9WcGtxj6QNJ",
+  "mode": "finite",
+  "outcome_count": 2,
+  "cycles_recorded": 3,
+  "points_omitted_before": 0,
+  "census_file": "example-transcript.json",
+  "points": [
+    { "stage": "founding through Open", "cycle": 1, "slot": "7233", "recorded_at": null, "supply": ["500000000", "500000000"], "position_totals": ["500000000", "500000000"], "hoard_atoms": "500000000", "tracked_collateral": "1000000000", "mint_supply": "1000000000", "payer_lamports": "500000009955591120", "transactions": 191, "compute_units": "7047284", "fee_lamports": "14285000", "law_statuses": "hh", "checks_held": 2, "checks_broken": 0, "checks_inapplicable": 0 },
+    { "stage": "record sealed", "cycle": 2, "slot": "7635", "recorded_at": null, "supply": ["500000000", "500000000"], "position_totals": ["500000000", "500000000"], "hoard_atoms": "500000000", "tracked_collateral": "1000000000", "mint_supply": "1000000000", "payer_lamports": "500000009922178560", "transactions": 7, "compute_units": "109316", "fee_lamports": "450000", "law_statuses": "hh", "checks_held": 2, "checks_broken": 0, "checks_inapplicable": 0 },
+    { "stage": "market terminalized (success)", "cycle": 3, "slot": "7667", "recorded_at": null, "supply": ["500000000", "500000000"], "position_totals": ["500000000", "500000000"], "hoard_atoms": "500000000", "tracked_collateral": "1000000000", "mint_supply": "1000000000", "payer_lamports": "500000009922103560", "transactions": 1, "compute_units": "157869", "fee_lamports": "75000", "law_statuses": "hh", "checks_held": 2, "checks_broken": 0, "checks_inapplicable": 0 }
+  ]
+}

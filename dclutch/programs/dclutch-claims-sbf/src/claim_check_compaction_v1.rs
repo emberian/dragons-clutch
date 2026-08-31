@@ -736,17 +736,14 @@ fn authenticate_compaction(
     }
 
     // The proof the relaxed signature was silently also carrying, restored
-    // explicitly. A Claims capability position's claimants are the holders of a
-    // mint, plural and unknown to the position, and a one-owner claim-check
-    // cannot represent them. Out of scope for V1, and refused rather than
-    // mis-served.
+    // explicitly, for every owner kind rather than for one of them.
     let admission = ProtocolPositionAdmissionV2::decode(
         &admission_account
             .try_borrow_data()
             .map_err(|_| ClaimCheckCompactionSbfErrorV1::Accounts)?,
     )
     .map_err(|_| ClaimCheckCompactionSbfErrorV1::Scope)?;
-    if admission.owner_kind() == ProtocolPositionOwnerKindV2::ClaimsCapability {
+    if !owner_kind_can_open_a_claim_check(admission.owner_kind()) {
         return Err(ClaimCheckCompactionSbfErrorV1::Scope.into());
     }
 
@@ -758,6 +755,48 @@ fn authenticate_compaction(
         record_seeds,
         record_bump,
     }))
+}
+
+/// Whether a position's owner can ever produce the signature redemption asks
+/// for.
+///
+/// A claim-check pays exactly one address and asks that address to sign
+/// (`0x5621`, and the holder is a signer in the redemption frame spec). A
+/// program-derived address has no private key and cannot sign a top-level
+/// instruction, so a claim-check minted for one is collateral written to an
+/// address that can never open it. That is strictly worse than the delay this
+/// feature exists to end: a delay ends when the holder comes back, and this
+/// does not end at all.
+///
+/// The relaxed crank authority is what makes the question live. While
+/// redemption required the owner's own signature, a PDA-owned position simply
+/// could not reach the route; `ClaimCheckCrank` removed that signature on
+/// purpose, so the property has to be asserted rather than inherited.
+///
+/// **`TradingRecord` is not the abstract case it looks like.** It is the
+/// Fractional reserve Position: `fractional_retirement_v3.rs` requires
+/// `admission.owner_kind() == TradingRecord` with `position_owner` equal to the
+/// Trading-owned Fractional root PDA, and that Position holds the collateral
+/// backing every outstanding shard. Compacting it would resolve the shard
+/// holders' collateral into a record none of them owns, keyed to a PDA that
+/// cannot sign, while closing the Position their own redemption reads. Every
+/// shard holder would lose everything, permissionlessly, to a caller with no
+/// stake in the market.
+///
+/// The match is exhaustive on purpose. A fourth owner kind must answer this
+/// question rather than inherit an answer from whichever arm it was written
+/// next to.
+pub(crate) const fn owner_kind_can_open_a_claim_check(kind: ProtocolPositionOwnerKindV2) -> bool {
+    match kind {
+        // A wallet. It signs, so it can be paid.
+        ProtocolPositionOwnerKindV2::User => true,
+        // Trading-owned resting inventory, and the Fractional reserve. A
+        // Trading PDA; it has its own parent-authenticated close route.
+        ProtocolPositionOwnerKindV2::TradingRecord => false,
+        // A Claims capability PDA. Its claimants are the holders of a mint,
+        // plural and unknown to the Position.
+        ProtocolPositionOwnerKindV2::ClaimsCapability => false,
+    }
 }
 
 #[inline(never)]
@@ -1037,5 +1076,40 @@ mod tests {
             ProgramError::from(ClaimCheckCompactionSbfErrorV1::Scope),
             ProgramError::Custom(0x560A)
         );
+    }
+
+    #[test]
+    fn only_an_owner_that_can_sign_may_be_promised_a_claim_check() {
+        // Stated over the whole enum rather than over the kinds this route
+        // happens to have met, so a kind added later is a compile error here
+        // and not a silent third `true`.
+        for (kind, admissible) in [
+            (ProtocolPositionOwnerKindV2::User, true),
+            (ProtocolPositionOwnerKindV2::TradingRecord, false),
+            (ProtocolPositionOwnerKindV2::ClaimsCapability, false),
+        ] {
+            assert_eq!(
+                owner_kind_can_open_a_claim_check(kind),
+                admissible,
+                "{kind:?} must answer whether it can sign for its own payout"
+            );
+        }
+    }
+
+    #[test]
+    fn exactly_one_owner_kind_is_a_wallet_and_the_other_two_are_program_derived() {
+        // The reason the gate reads the way it does, kept as an assertion so a
+        // future edit that flips an arm has to argue with this sentence: a
+        // claim-check is redeemable only by a signature, and only one of the
+        // three owner kinds is an identity that has one.
+        let admitted = [
+            ProtocolPositionOwnerKindV2::TradingRecord,
+            ProtocolPositionOwnerKindV2::User,
+            ProtocolPositionOwnerKindV2::ClaimsCapability,
+        ]
+        .into_iter()
+        .filter(|kind| owner_kind_can_open_a_claim_check(*kind))
+        .count();
+        assert_eq!(admitted, 1);
     }
 }

@@ -10,10 +10,16 @@ tools/gauntlet/hot-cu/run-hot-cu.sh      # the Hot tail's compute, swept over 20
 assertion admissible here. `TIERS.md` is the mechanics of adding a tier.
 
 `hot-cu/` is the one entry above that is a MEASUREMENT rather than a campaign:
-it admits no evidence and observes no route, it answers "does the Hot tail fit
-under 1,400,000 CU", and its answer is a pass count plus a mean, never a margin.
-Read `hot-cu/README.md` before quoting a number out of it; ledger item M-61 is
-the reason, and it is not optional advice.
+it admits no evidence and observes no route, and its answer is a pass count
+plus a mean, never a margin. **It does not answer "does the public Hot trade
+fit under 1,400,000 CU."** Its witness drives the Registry Hot continuation,
+which the 2026-08-30 packet demoted to harness-only, and which measures a
+constant +35,127 CU above the production top-level route on every comparable
+seed (`docs/evidence/CONTINUATION_ROUTE_FIX_OR_RETIRE_2026_08_30.md`,
+`8bf6ad40`; `docs/decisions/DECISION_PACKET_2026_08_30.md` §4). The public
+figure comes from `direct_hot_top_level_margin_gate.rs`. Read
+`hot-cu/README.md` before quoting a number out of it; ledger item M-61 is the
+other reason, and neither is optional advice.
 
 ## What it is
 

@@ -156,7 +156,7 @@ export default function JoinPanel({
   }
 
   return <section className="trade-v3-card" id="join">
-    <header><span>05</span><div><h2>Join this market</h2><p>A participant holds a Position: per-claim balances backed by collateral in accounts derived from this Market and your wallet. Connect a wallet to see where you stand.</p></div></header>
+    <header><span>05</span><div><h2>Join this market</h2><p>Trading here means holding claims of your own. They live in an account worked out from this market and your wallet — nothing is looked up. Connect a wallet to see where you stand.</p></div></header>
 
     <WalletDirectory directory={wallets} purpose="join inspection" onConnected={() => setInspection({ kind: 'idle' })} />
 

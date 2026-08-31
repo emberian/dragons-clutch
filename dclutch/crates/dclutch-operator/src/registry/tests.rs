@@ -293,6 +293,62 @@ fn existing_cache_requires_exact_bytes_and_reports_repeat() {
     );
 }
 
+/// A cache the REGISTRY wrote — carrying its own PDA bump — reports Repeat.
+///
+/// `make_cache_existing` stages the body from `expected_cache.to_bytes()`,
+/// which leaves `ACTIVATION_CACHE_BUMP_OFFSET_V1` zero. That is not what a
+/// Registry-written cache looks like: the Registry records the bump it signed
+/// the account into existence with, and `put_activation_cache_bump_v1` refuses
+/// zero. So the full-body compare this function used to perform could not
+/// succeed against any real cache, and the fixture's zero bump is exactly why
+/// nothing caught it — the local founding pipeline refused at
+/// `activation cache progress: ReleaseSetSelectionMismatch` for every family
+/// while this file stayed green.
+///
+/// The bump is now checked rather than compared: zero (an older body) and the
+/// derived bump are admissible, any other value is a body written for a
+/// different address.
+#[test]
+fn a_registry_written_cache_carrying_its_own_bump_reports_repeat() {
+    use dclutch_registry_contract::{
+        ACTIVATION_CACHE_BUMP_OFFSET_V1, ACTIVATION_PDA_DOMAIN_V1, put_activation_cache_bump_v1,
+    };
+
+    let mut fixture = Fixture::new();
+    fixture.make_cache_existing();
+    let report = fixture.activation();
+    let (_, cache_bump) = solana_program::pubkey::Pubkey::find_program_address(
+        &[
+            ACTIVATION_PDA_DOMAIN_V1,
+            report.expected_cache.execution_release_set_id().as_bytes(),
+        ],
+        &fixture.registry,
+    );
+    assert_ne!(cache_bump, 0, "find_program_address never returns zero");
+
+    put_activation_cache_bump_v1(&mut fixture.state.cache.data, cache_bump)
+        .expect("the Registry records the bump it signed with");
+    let carried = build_registry_activation_v1(fixture.registry, &fixture.state)
+        .expect("a Registry-written cache is a Repeat, not a mismatch");
+    assert_eq!(carried.mode, RegistryActivationModeV1::Repeat);
+    assert_eq!(carried.cache_rent_debit_lamports, 0);
+
+    // A bump for some other address is a body written for some other account.
+    let foreign = cache_bump.wrapping_sub(1).max(1);
+    if foreign != cache_bump {
+        let mut wrong = fixture.state.cache.data.clone();
+        *wrong
+            .get_mut(ACTIVATION_CACHE_BUMP_OFFSET_V1)
+            .expect("bump byte") = foreign;
+        let mut hostile = fixture.state.clone();
+        hostile.cache.data = wrong;
+        assert_eq!(
+            build_registry_activation_v1(fixture.registry, &hostile),
+            Err(Error::InvalidActivationCache)
+        );
+    }
+}
+
 #[test]
 fn activation_refuses_stale_loader_substitution_and_record_owner() {
     let mut stale = Fixture::new();

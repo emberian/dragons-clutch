@@ -41,19 +41,17 @@ use dclutch_effect_kernel::v2::{
 };
 use dclutch_market_core_codec::{CoreState, MarketCoreStateSeedsV2, Phase, STATE_BYTES};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
-use dclutch_registry_svm::{AuthenticatedRoleReceiptV1, RegistryInstructionV1};
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
+    require_cache_account,
+};
+use dclutch_registry_contract::ActivatedExecutionReleaseSetViewV1;
+use dclutch_registry_svm::AuthenticatedRoleReceiptV1;
 use dclutch_release_set_contract::ExecutionRoleV1;
 use dclutch_transition_vm::v2::{RegisterInput, RegisterOutput};
 use solana_program::{
-    account_info::AccountInfo,
-    hash::hash,
-    instruction::{AccountMeta, Instruction},
-    program::{get_return_data, invoke, set_return_data},
-    program_error::ProgramError,
-    pubkey::Pubkey,
-    rent::Rent,
-    sysvar::SysvarSerialize,
+    account_info::AccountInfo, hash::hash, program::set_return_data, program_error::ProgramError,
+    pubkey::Pubkey, rent::Rent, sysvar::SysvarSerialize,
 };
 use solana_sdk_ids::{system_program, sysvar};
 
@@ -212,23 +210,7 @@ pub fn process_direct_begin_retiring_v1(
         .map_err(|_| TradingSbfError::Content)?;
     let accounts = Accounts::parse(program_id, account_infos)?;
     let rent = Rent::from_account_info(accounts.rent).map_err(|_| TradingSbfError::Content)?;
-    let core_receipt = reauthenticate_role(
-        &accounts,
-        ExecutionRoleV1::Core,
-        accounts.core_program,
-        accounts.core_programdata,
-        request.release_set,
-    )?;
-    if core_receipt.program().to_bytes() != accounts.core_program.key.to_bytes() {
-        return Err(TradingSbfError::Release.into());
-    }
-    let trading_receipt = reauthenticate_role(
-        &accounts,
-        ExecutionRoleV1::Trading,
-        accounts.trading_program,
-        accounts.trading_programdata,
-        request.release_set,
-    )?;
+    let trading_receipt = reauthenticate_roles(&accounts, request.release_set)?;
     authenticate_market(&accounts, request)?;
 
     let root_data = accounts
@@ -660,53 +642,62 @@ fn authenticate_artifact_transition(
     Ok(())
 }
 
-fn reauthenticate_role<'info>(
+/// Authenticate Core and Trading for the request's release set, from ONE read
+/// of the Registry-owned activation cache.
+///
+/// Decision 0017's option B. This route paid two
+/// `RegistryInstructionV1::Reauthenticate` CPIs -- 26,296 CU each, SEALWIDE's
+/// measurement, invariant across keys and builds -- for two facts written in a
+/// Registry-OWNED account at a Registry-DERIVED address that `Accounts::parse`
+/// already required this frame to carry. `outer.rs::reauthenticate_roles` states
+/// the conjunction and where each half of it comes from; this is the same
+/// function set over a different account frame.
+///
+/// # The release set here is CALLER-NAMED, and that is unchanged
+///
+/// `request.release_set` is instruction data. It always was: the CPI derived the
+/// cache address from it too. What binds it is `authenticate_market_bytes`, which
+/// refuses unless `state.identity.selected_release_set` equals it -- so a caller
+/// who names another Market's generation reaches a cache that is real and then
+/// fails to join it to the Market it is retiring. The call order below is the
+/// order this route already had, and this change does not move it.
+fn reauthenticate_roles<'info>(
     accounts: &Accounts<'_, 'info>,
-    role: ExecutionRoleV1,
-    program: &AccountInfo<'info>,
-    programdata: &AccountInfo<'info>,
     release_set: [u8; 32],
 ) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    let expected_cache = Pubkey::find_program_address(
-        &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
-        accounts.registry.key,
+    require_cache_account(accounts.registry.key, accounts.cache).map_err(TradingSbfError::from)?;
+    let data = accounts
+        .cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    authenticate_activation_cache_identity_v1(
+        accounts.registry,
+        accounts.cache,
+        &release_set,
+        activated,
     )
-    .0;
-    if accounts.cache.key != &expected_cache || accounts.cache.owner != accounts.registry.key {
+    .map_err(TradingSbfError::from)?;
+    let core_receipt = authenticate_activated_role_in_frame_v1(
+        accounts.cache,
+        activated,
+        ExecutionRoleV1::Core,
+        accounts.core_program,
+        accounts.core_programdata,
+    )
+    .map_err(TradingSbfError::from)?;
+    if core_receipt.program().to_bytes() != accounts.core_program.key.to_bytes() {
         return Err(TradingSbfError::Release.into());
     }
-    let instruction = Instruction {
-        program_id: *accounts.registry.key,
-        accounts: vec![
-            AccountMeta::new_readonly(*accounts.cache.key, false),
-            AccountMeta::new_readonly(*program.key, false),
-            AccountMeta::new_readonly(*programdata.key, false),
-        ],
-        data: RegistryInstructionV1::Reauthenticate(role)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            accounts.cache.clone(),
-            program.clone(),
-            programdata.clone(),
-            accounts.registry.clone(),
-        ],
+    authenticate_activated_role_in_frame_v1(
+        accounts.cache,
+        activated,
+        ExecutionRoleV1::Trading,
+        accounts.trading_program,
+        accounts.trading_programdata,
     )
-    .map_err(|_| TradingSbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(TradingSbfError::Release)?;
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| TradingSbfError::Release)?;
-    if producer != *accounts.registry.key
-        || receipt.role() != role
-        || receipt.execution_release_set_id().to_bytes() != release_set
-        || receipt.program().to_bytes() != program.key.to_bytes()
-    {
-        return Err(TradingSbfError::Release.into());
-    }
-    Ok(receipt)
+    .map_err(|error| TradingSbfError::from(error).into())
 }
 
 #[allow(clippy::too_many_arguments)]

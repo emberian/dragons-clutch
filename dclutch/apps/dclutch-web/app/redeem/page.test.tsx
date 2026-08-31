@@ -10,7 +10,7 @@ describe('/redeem public route', () => {
     expect(html).toContain('Your winning claims');
     expect(html).toContain('Payout is not open yet');
     expect(html).toContain('Connect your wallet');
-    expect(html).toContain('Your redeemable Positions');
+    expect(html).toContain('What you can cash in');
   });
 
   it('does not route readers into the unrelated representation transfer console', () => {

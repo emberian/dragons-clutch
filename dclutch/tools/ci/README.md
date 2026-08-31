@@ -21,9 +21,57 @@ tools/ci/run.sh all --require             # the release answer
 | `seam` | ~20s | `ast-grep` | six structural seam defect classes, new findings against a triaged baseline |
 | `web` | ~1 min | node | the web + SDK vitest suites |
 | `emission` | minutes | `lake` | every generated file still byte-matches the emitter that printed it |
-| `programs` | minutes | `cargo-build-sbf` | the programs build, and the public Direct route holds its compute margin across 32 pinned seeds |
+| `journey` | ~2 min | `cargo` | the journey campaign still **compiles** |
+| `programs` | minutes | `cargo-build-sbf` | the programs build with no SBF stack-frame diagnostic, and the public Direct route holds its compute margin across 32 pinned seeds |
+| `suites` | ~15 min | `cargo-build-sbf` | the other SBF program-test suites: custody, core, claims, dealer |
+| `workspaces` | slow | `cargo` | **every** tracked Cargo workspace checks from an archived revision |
 
-`cheap` = census + seam. `all` = everything.
+`cheap` = census + seam. `all` = census seam web emission journey programs suites.
+`workspaces` is deliberately outside `all`: it gives every workspace a fresh
+target directory, which is the cut's price to pay and not a push's.
+
+### Why `journey` is a compile check and not a campaign
+
+On 2026-08-30 the journey campaign had not built on main for about two days.
+
+It is built to break that way **on purpose**: the tier-1 producer's modules are
+compiled into it verbatim by `#[path]`, so the journey cannot drift into a
+stale copy of the founding. Its own `Cargo.toml` calls the resulting fragility
+"the intended tripwire". That is a good design with exactly one requirement —
+*something has to pull the tripwire* — and nothing did, so a deliberate alarm
+rang into an empty room while six upstream modules moved out from under it.
+
+A real campaign needs a `solana-test-validator` and is tens of minutes; that
+belongs to the cut. `cargo check` catches the whole two-day class for the price
+of a type-check. It does **not** tell you the campaign passes. Different claim,
+and this tier only makes the first one.
+
+### Why `suites` rows name runners and never ELF lists
+
+Every suite needs a different set of built programs — core wants registry,
+rent, custody and a series-consume caller; custody wants its own test caller;
+claims wants a resolution-proof link and an audited Token-2022 fixture. Each of
+those sets is already written down, correctly, by the lane that owns the suite,
+inside the runner beside it.
+
+Copying them here would be a value duplicated instead of read: it would agree
+until somebody adds a program to their runner and not to this table. So the
+tier runs the owner's script and reports what it said.
+
+Two things those runners do **not** do, named as inherited debt rather than
+papered over: they build the working tree (so `--commit` cannot reach them, and
+the tier says so), and they do not carry the SBF stack-frame-overwrite refusal
+that `programs` and the accelerator links have.
+
+Known gaps in what the rows cover, found while wiring them:
+`programs/dclutch-core-sbf/tests/` has five targets and its runner drives
+three — `capability_close_alias_program_test` and
+`retirement_replay_handoff_program_test` are run by **nothing**. The `claims`
+row needs a populated cargo registry to build its audited Token-2022 v11
+fixture, and a host without one gets a per-row absence rather than a failure.
+
+If you interrupt this tier, check `/tmp`: each runner cleans up on a normal
+exit but a killed one leaks 3-7 GB, and `/tmp/dclutch-*` filled a volume once.
 
 ## Where each tier actually runs
 
@@ -81,7 +129,32 @@ that somebody eventually gets half-right.
 **Any gate's logic.** Every gate was written by the lane that owns it and lives
 in that lane's directory. This is a dispatcher.
 
-## `--commit`, and why a compute number needs it
+## `--commit`, and why every compiling tier needs it
+
+**The rule, in its corrected form:** on a shared working tree, *any* tier that
+compiles is a tier that needs a revision.
+
+I first wrote this section about compute only, and that framing was too narrow
+and I fell into the gap it left. Running the `journey` tier against the working
+tree, I watched a red, then watched it turn green an hour later, and concluded
+the red had been a neighbour's half-written file. It had not. Measured with
+`--commit` afterwards, the journey was genuinely broken at `d38b01b9` and at
+`e41d0b20`; what had changed in between was that its owner wrote the fix into
+the shared tree *without committing it*.
+
+So the dirty tree had **hidden a real breakage**, not invented a fake one —
+the mirror image of the failure I was guarding against, and the one I did not
+think to guard against. Worse, I used a lesson I had just learned to dismiss a
+true finding and told a colleague to stand down on a live bug.
+
+Two things follow, and they are why `--commit` now reaches `journey` too:
+
+- A red from a working-tree run is not reportable in either direction. It may
+  be someone else's edit; it may also be concealing yours.
+- Scoping a dirtiness check to the paths you *expect* to matter and then
+  treating its silence as proof is the same mistake one level up. I checked
+  `git status -- crates programs` and called the tree clean. The file that
+  mattered was under `tools/`.
 
 `cargo build-sbf` compiles **what is on disk**. This repository's working tree
 is shared by a dozen concurrent lanes, so a default build routinely measures a
@@ -107,11 +180,20 @@ loudly which tree it measured, and counts the uncommitted files if there are any
 
 ## What is not wired, and what it would take
 
-- **The other program-test suites** (claims-sbf, core-sbf, dealer campaign,
-  successor bootstrap) are not in the `programs` tier. Each needs its own ELF
-  set and fixture staging, and several have bespoke runners under
-  `tools/gauntlet/`. Roughly an afternoon to fold in behind one flag, and the
-  work is mechanical rather than uncertain — the runners already exist.
+- **The successor bootstrap campaign.** No runner script exists, it needs a
+  real `solana-test-validator`, and its founding is ~13 minutes with **no
+  resume** — `--work` must be a fresh absolute path, which is why the board
+  shows `run1..run8`. That is a cut-tier campaign, not a push-tier suite. Its
+  *host* tests (`cargo test --manifest-path
+  tools/local-validator/bootstrap/successor/Cargo.toml`, 443 of them) are
+  ordinary and would drop into `suites` as one more row — call it an hour.
+- **`tools/gauntlet/claims-extended` and `tools/gauntlet/dealer`**, which fold
+  their campaigns into census evidence and *do* carry the frame-diagnostic
+  refusal. Both refuse to start until `tools/gauntlet/run.sh --mode census` has
+  run, so wiring them means wiring that ordering too. Half a day, and the payoff
+  is real: the dealer family test was silently red from 2026-08-27 to
+  `33a61576` because a release-path change touched seven programs and zero
+  campaigns.
 - **The gauntlet's validator campaigns** are not here and should not be: they
   need a real `solana-test-validator` and are tens of minutes. They belong to
   the cut, not to a push.

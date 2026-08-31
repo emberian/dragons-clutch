@@ -75,6 +75,18 @@ This is the deferred work the repository already names:
 activated on any cluster; the Core/Trading activation route is itself
 first-execution territory.
 
+> **Both halves of that paragraph are superseded, 2026-08-30.** The eighth
+> `CapabilityProgramSetV2` entry and the exactly-seven relaxation both landed
+> (WALL22, `2f21911e`/`c2cfa4db`/`9012499c`) — `OMISSION_INDEX.md` U-003(b) now
+> records them as done, so the sentence quoted from it above no longer stands
+> there. And **a capability has since been activated on a public cluster**: the
+> first capability root in the protocol's history is live on devnet under
+> market18, with both participants admitted and funded
+> (`SESSION_STATE.md`, "THE ONE THING THAT MATTERS"). What remains
+> first-execution territory is the eighth stage — the trade itself — and, for
+> General, a founding that still refuses at `0x5182` before any root is created
+> (`docs/evidence/GENERAL_PUBLICATION_CLOSURE_2026_08_30.md`).
+
 ## What unblocks the first trade, exactly
 
 1. **Author the Direct activation artifact triple** in
@@ -225,6 +237,18 @@ Two consequences, both the opposite of what was assumed going in:
 
 ### How the first trade handles the band: selected keys, said out loud
 
+> **REVERSED BY EMBER, 2026-08-30. Do not execute this section.** Selecting
+> maker keys for their CU draw and labelling them "selected for CU" rigs the
+> demo and labels the rig; the standing test is *does it make the DEMO work, or
+> the PRODUCT work?* — and a stranger draws their keys once and does not get to
+> draw again (`SESSION_STATE.md`, "THE ORCHESTRATOR'S OWN ERROR, RECORDED").
+> The band this section manages **no longer exists**: ALLKEYS
+> (`308c3dff`..`e7805d62`) carried every key-varying bump, so every key costs
+> the same 1,336,742 CU and the refusal tail is exactly 0. The first trade uses
+> whatever keys the participants actually have. What survives here is the
+> paragraph after next — the stopping rule, and the discipline of recording a
+> choice rather than hiding it.
+
 The band is a property of the maker keys, and for the first trade those keys
 are ours — disposable participants we generate. So they are SELECTED rather
 than rolled: candidate key sets are measured before submission and one landing
@@ -247,3 +271,75 @@ The gate landed in `883a077b` as a deterministic 32-pinned-seed tripwire at
 demonstrated is real and invisible — and it explicitly does not bound what a
 real maker's keys cost. Nothing currently executes it automatically:
 `.github/workflows/checks.yml` builds no SBF, and no pre-push hook is installed.
+
+## Three corrections from the variance census (`b61ffdad`), and what they change at the cut
+
+The section above is a faithful record of what was measured on 2026-08-30 and
+two of its framings did not survive the same day. Both are corrected here rather
+than edited away, because the corrections are more instructive than the numbers.
+
+### The margin was measured on a FEE-FREE trade, and only fits because of it
+
+Every figure above — the 32-seed sweep, the band, the margin — comes from a
+trade whose fee legs never executed. Gross 5 at 50 bps floors to zero, so no fee
+transfer was ever built. A FEE-BEARING trade enables a second Custody route, and
+by arithmetic lands around 1.49–1.52M CU: over the 1,400,000 ceiling, not near
+it.
+
+The operational consequence is a founding parameter, and it is irreversible once
+chosen: **the market carrying the first public trade must be founded with zero
+fees.** Founding it with a fee rate and expecting the trade to fit is a mistake
+that cannot be corrected after the fact. Rate diversity on the demo (ADR 0014
+D3) is blocked behind either a real measurement of the fee-bearing shape or the
+two-transaction lifecycle; that is ember's call, not this lane's, but the
+founding parameter is not.
+
+### "A rebuild redraws the bumps" was wrong, and the two measurements never disagreed
+
+`release_set_id` is a hash over the deployed ELF digests and does seed the
+activation cache and Market identity, so it was reasonable to conclude that any
+rebuild reshuffles every bump depth. It does not. VARIANCE rebuilt the same tree
+twice and reproduced all 32 seeds exactly; only a SOURCE change redraws, and it
+does so violently — one compute unit of moved code shifted the worst seed by
+27,000 CU.
+
+The earlier evidence was never in conflict with this. The two builds that showed
+a cache bump move 254 → 255 are described in their own account as differing by a
+"caller-side source difference" — which is a source change. The mechanism was
+right and the attribution was wrong.
+
+What this changes practically: **rebuilding is not a remedy for a bad draw.** An
+identical rebuild reproduces the bad draw exactly. The remedy is a trivial
+source change, which redraws everything, followed by re-measurement.
+
+### No constant can bound a stranger's key, so the gate stopped pretending to
+
+Bump depth is geometric and unbounded, so a worst-observed-seed pin was always a
+sample wearing the costume of a bound — which is the same error this document
+already records twice, in its final form. The gate now asserts
+`TOP_LEVEL_KEY_INDEPENDENT_CU_V1`, the key-independent floor at 1,324,742,
+stable across builds to a single CU, and states the rest as what it actually is:
+`P(a stranger's key exceeds the ceiling) ≈ 0.032%`, about one public trade in
+3,100.
+
+That is a product statement, not a gate statement, and it is the honest shape of
+the answer. At the cohort cut the cohort's own ELFs are measured with this gate
+and reported as **floor plus tail probability** — never as a worst-seed sample,
+which is the number that cannot mean what it looks like it means.
+
+See `docs/evidence/DIRECT_HOT_CU_VARIANCE_CENSUS_2026-08-30.md` for the
+derivation and the mass decomposition behind it.
+
+**The framing above stands; the tail number does not.** `0.032%` / one trade in
+3,100 was measured on a fixture whose staged bumps were not being re-derived
+per seed — real pre-lane Markets sat at 1 in 34.9 million. FIXBUMPS
+(`30574297`) engaged the CoreState carry and took the surviving key-varying
+sites 10 → 7 and the tail to 1 in 1.10 billion at p=½; ALLKEYS
+(`308c3dff`..`e7805d62`) then took the key-varying searches to **zero** by
+carrying every remaining bump in the V3 envelope's eight already-reserved bytes
+at offset 120 (packet unchanged at 1,167 B, no pin moved). **Every key now
+costs the same 1,336,742 CU, 63,258 under the ceiling, and the refusal tail on
+a real Market is exactly 0** — which is what ember's "ALL KEYS MUST TRANSACT"
+ruling asked for (`WAVE.md`, "Rulings — ember, 2026-08-30 (afternoon)"). The
+floor-plus-tail *reporting* rule below survives the change and is what the
+cohort cut still uses.

@@ -32,5 +32,18 @@ grep -q '^pub const BASIS_HEADER_TAIL_RESERVED_OFFSET_V3: usize = 208;$' "$tempo
 grep -q '^pub const TERM_BYTES_V3: usize = 32;$' "$temporary"
 grep -q '^pub const TERM_AMPLITUDE_OFFSET_V3: usize = 24;$' "$temporary"
 
+# The three kind discriminants, pinned by value. Byte 3 is allocated and
+# refused everywhere -- no decoder accepts it and no encoder emits it into a
+# record -- so pinning it here is what keeps a later family from claiming a tag
+# the tree already reserves. The degree interval is pinned because the Rust
+# admission conjunct demands a price-gate certificate for the whole of it
+# without comparing anything at runtime, and `exempt_degree_below_spline_interval`
+# is the proof that is sound only while the interval starts above 1.
+grep -q '^pub const BASIS_CATEGORICAL_KIND_V3: u8 = 1;$' "$temporary"
+grep -q '^pub const BASIS_GRADED_COMPLEMENT_KIND_V3: u8 = 2;$' "$temporary"
+grep -q '^pub const BASIS_SPLINE_DEGREE_2_TO_3_KIND_V3: u8 = 3;$' "$temporary"
+grep -q '^pub const BASIS_SPLINE_MINIMUM_DEGREE_V3: u8 = 2;$' "$temporary"
+grep -q '^pub const BASIS_SPLINE_MAXIMUM_DEGREE_V3: u8 = 3;$' "$temporary"
+
 rustfmt --edition 2024 "$temporary"
 cmp "$temporary" "$accepted"

@@ -36,4 +36,31 @@ fn generated_product_representation_v3_abi_is_exact() {
     let checked_in = std::fs::read(manifest.join("src/generated_product_v3.rs"))
         .expect("read generated Product Representation V3 ABI");
     assert_eq!(generated.stdout, checked_in);
+
+    // Byte-identity alone catches drift between the Lean and the committed
+    // file, but not a Lean edit that moves a value and regenerates both. These
+    // pin the literals a deployed decoder actually reads, so such an edit
+    // fails here rather than at settlement.
+    //
+    // The kind vocabulary is pinned on both sides of the wire: the codec's
+    // `check-generated-runtime-v3.sh` pins the same three values for
+    // `DCLTPAY3`, and `kind_tags_agree_with_the_basis_record` proves the
+    // equality in Lean. Byte 3 is allocated and refused by
+    // `RepresentationAdmissionV3::decode`; pinning it here is what keeps the
+    // two authors of the byte from drifting apart on what it means.
+    let text = String::from_utf8(checked_in).expect("generated ABI is UTF-8");
+    for pinned in [
+        "pub const PRODUCT_REPRESENTATION_ADMISSION_VERSION_V3: u16 = 3;",
+        "pub const PRODUCT_REPRESENTATION_ADMISSION_BYTES_V3: usize = 528;",
+        "pub const ADMISSION_BASIS_KIND_OFFSET_V3: usize = 10;",
+        "pub const ADMISSION_RESERVED_HEADER_OFFSET_V3: usize = 11;",
+        "pub const PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3: u8 = 1;",
+        "pub const PRODUCT_REPRESENTATION_GRADED_KIND_V3: u8 = 2;",
+        "pub const PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3: u8 = 3;",
+    ] {
+        assert!(
+            text.lines().any(|line| line == pinned),
+            "generated ABI no longer declares `{pinned}`"
+        );
+    }
 }

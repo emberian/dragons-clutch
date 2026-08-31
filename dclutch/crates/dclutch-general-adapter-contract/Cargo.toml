@@ -26,5 +26,11 @@ dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
 dclutch-sha256-adapter = { path = "../dclutch-sha256-adapter" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 
+# Off-chain only, exactly like the `activation_bundle_v1` module it serves: an
+# activation triple is authored by release tooling and never by a program, and
+# the SBF artifact must not be able to reach it even by accident.
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+dclutch-capability-activation-codec = { path = "../dclutch-capability-activation-codec" }
+
 [lints]
 workspace = true

@@ -43,6 +43,7 @@ pub mod claim_check_redemption_v1;
 pub mod custody_replay_v1;
 pub mod founding_v5;
 pub mod fractional_atomic_v3;
+pub mod fractional_claim_check_v1;
 mod fractional_retirement_v3;
 pub mod liability_basis_v2;
 pub mod market_closure_v1;
@@ -203,6 +204,20 @@ pub enum ClaimsSbfError {
     /// that keeps a market-free manifest config honest about the
     /// market-bearing terms it admits.
     SelectionConfig = 0x500B,
+    /// The Market's basis names the degree-2-to-3 spline family, for which
+    /// this deployment carries no evaluator.
+    ///
+    /// Distinct from [`ClaimsSbfError::Representation`] because nothing is
+    /// wrong with the records: the basis is authentic, the certificate is
+    /// authentic, and the join holds. What is missing is a capability. A
+    /// generic refusal here would send whoever hits it looking for a
+    /// substituted account, which is the one thing it is not.
+    ///
+    /// Unreachable while `ProductBasisV3::decode` refuses kind byte 3 -- a
+    /// Market cannot be founded on this basis, so settlement cannot meet one.
+    /// It is allocated now because the alternative is that the first person to
+    /// reach it debugs a settlement failure with no signal at all.
+    BasisEvaluatorAbsent = 0x500C,
 }
 
 // Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`).
@@ -212,8 +227,11 @@ const _: () = assert!(
     ClaimsSbfError::Instruction as u32 == dclutch_refusal_registry::CLAIMS_REFUSAL_BASE,
     "ClaimsSbfError must start at its registered refusal band base"
 );
+// Names the *last* variant, which `ReleaseSuperseded` (0x500A) stopped being
+// when `SelectionConfig` (0x500B) landed. An upper-bound assertion that names
+// a variant in the middle of the enum checks nothing about the ones after it.
 const _: () = assert!(
-    (ClaimsSbfError::ReleaseSuperseded as u32)
+    (ClaimsSbfError::BasisEvaluatorAbsent as u32)
         < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + dclutch_refusal_registry::BAND_SPAN,
     "ClaimsSbfError must not run past its registered refusal band"
 );

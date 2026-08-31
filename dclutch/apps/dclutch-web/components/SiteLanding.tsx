@@ -45,13 +45,13 @@ export default function SiteLanding() {
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Fully collateralized markets on real-world numbers</p>
+        <p className="eyebrow">Prediction markets on Solana, fully backed by collateral</p>
         <h1>Buy the answer<br /><em>you believe in.</em></h1>
-        <p>dClutch is a Solana protocol for markets on real-world numbers — where
-        a price will be at a stated time, for example. You buy claims on the
-        outcome you believe in; if you are right, each claim pays out one
-        collateral unit. Every claim is fully backed by collateral locked up
-        before the claim exists, so there is no leverage, no liquidation, and no
+        <p>Pick an outcome — where the SOL price lands on Friday, say — and buy
+        claims on it. If you are right, each claim pays you one unit of
+        collateral. If you are wrong, it pays nothing.</p>
+        <p>Every claim is backed by collateral locked up before the claim
+        exists. So there is nothing borrowed, nothing to be liquidated, and no
         way to lose more than you paid.</p>
       </div>
       {/* This aside is the one thing on the page that dates, so it reads the
@@ -90,7 +90,7 @@ export default function SiteLanding() {
     </figure>
 
     <section className="trade-v3-card">
-      <header><span>··</span><div><h2>The protocol, by the numbers</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it; a zero means we read a zero. Where a total would have to span two different tokens you get both of them, each in its own units, because one figure covering both would be in no unit at all.</p></div></header>
+      <header><span>··</span><div><h2>What is out there right now</h2><p>Three numbers, read live from the chain every time you open this page — never estimated, never remembered from an earlier visit. A dash means we could not read it. A zero means we read a zero. Where a total would mix two different tokens, you get both, each in its own units.</p></div></header>
       {/* FE-CHART mount: LandingPulse reads the counts from the active
           deployment and feeds the presentational NumberStrip. */}
       <LandingPulse />
@@ -101,19 +101,19 @@ export default function SiteLanding() {
           aside did: it went on saying no market was open after one was. It
           reads the same published cut, so opening a market is still one
           fixture edit and the front door still stops claiming otherwise. */}
-      <header><span>01</span><div><h2>The app</h2><p>It opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed;{' '}
+      <header><span>01</span><div><h2>Try it</h2><p>The app opens on devnet and shows you what the chain actually contains. No sample market, no made-up price. The seven programs are deployed;{' '}
         {PUBLIC_DEVNET_CUT_V1.market === null
           ? <>anything that still needs an open market will tell you plainly that there is not one yet, instead of failing quietly.</>
-          : <>every surface tells you plainly what it could and could not read off the chain, instead of failing quietly.</>}</p></div></header>
+          : <>every page tells you plainly what it could and could not read off the chain, instead of failing quietly.</>}</p></div></header>
       <div className="direct-actions">
-        <Anchor className="secondary-action" href="/live">Launch story →</Anchor>
-        <Anchor className="secondary-action" href="/markets">Discover markets →</Anchor>
-        <Anchor className="secondary-action" href="/create">Preview a Market design →</Anchor>
-        <Anchor className="secondary-action" href="/portfolio">Portfolio →</Anchor>
-        <Anchor className="secondary-action" href="/explorer">Chain explorer →</Anchor>
-        <Anchor className="secondary-action" href="/console">Operator consoles →</Anchor>
+        <Anchor className="secondary-action" href="/markets">Browse the markets →</Anchor>
+        <Anchor className="secondary-action" href="/portfolio">See what a wallet holds →</Anchor>
+        <Anchor className="secondary-action" href="/create">Design a market →</Anchor>
+        <Anchor className="secondary-action" href="/live">Watch a market being built →</Anchor>
+        <Anchor className="secondary-action" href="/explorer">Look up any account →</Anchor>
+        <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>
-      <p className="direct-status">You can open the human-readable deployment record or download the exact seven program addresses, ProgramData addresses, and observed deployment slots in one click.</p>
+      <p className="direct-status">Want to check the deployment yourself? Read the record below, or download every program address and the slot it was deployed at in one click.</p>
       <PublicDeploymentEvidence deployment={DEVNET_DEPLOYMENT_V1} />
     </section>
 
@@ -150,7 +150,7 @@ export default function SiteLanding() {
         no external font, script, or image, so it is served as-is rather than
         rebuilt into this app's chrome. */}
     <section className="trade-v3-card">
-      <header><span>04</span><div><h2>How this was built</h2><p>This protocol was built twice before the version you are reading now, and both earlier builds were retired on purpose. These notes say why that was the plan from the beginning, what each attempt made visible that no amount of planning would have, and what was kept once the code itself was thrown away. They are written for someone who has never opened the repository, and they are honest about what is proved and what is still only tested.</p></div></header>
+      <header><span>04</span><div><h2>How this was built</h2><p>We built this protocol twice before the version you are reading now, and threw both away on purpose. These notes say why that was the plan from the start, and what survived each time the code did not. They are written for someone who has never opened the repository, and they are honest about what is proved and what is still only tested.</p></div></header>
       <div className="direct-actions">
         <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>

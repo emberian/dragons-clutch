@@ -375,7 +375,17 @@ fn process_admit(
         accounts.claims_program,
         request,
     )?;
-    authenticate_rent_credit(accounts.rent_credit, accounts.rent_program, request)?;
+    authenticate_rent_credit(
+        accounts.rent_credit,
+        accounts.rent_program,
+        LifecycleRentCreditIdentityV2 {
+            rent_credit: request.rent_credit,
+            rent_program: request.rent_program,
+            market: request.market,
+            release_set: request.release_set,
+            generation: request.generation,
+        },
+    )?;
 
     let product_digest = account_digest(accounts.product_record)?;
     let linked_digest = account_digest(accounts.basis_record)?;
@@ -552,8 +562,17 @@ fn execute_close_authenticated(
         request,
     )?;
     authenticate_owner_readonly_view(accounts, request)?;
-    let rent_credit_data =
-        authenticate_rent_credit(accounts.rent_credit, accounts.rent_program, request)?;
+    let rent_credit_data = authenticate_rent_credit(
+        accounts.rent_credit,
+        accounts.rent_program,
+        LifecycleRentCreditIdentityV2 {
+            rent_credit: request.rent_credit,
+            rent_program: request.rent_program,
+            market: request.market,
+            release_set: request.release_set,
+            generation: request.generation,
+        },
+    )?;
 
     let admission_data = accounts
         .common
@@ -982,13 +1001,29 @@ fn authenticate_owner_readonly_view(
     )
 }
 
-fn authenticate_rent_credit(
+/// The exact identity a lifecycle RentCredit must carry to receive rent.
+///
+/// Named as its own admission because two unrelated routes now depend on it:
+/// the Position close, whose request states these four values, and the
+/// Fractional ordered retirement's finish, whose cursor does. Both are asking
+/// the same question -- is this the Market's own rent beneficiary -- and the
+/// answer should have one author rather than one per caller.
+#[derive(Clone, Copy)]
+pub(crate) struct LifecycleRentCreditIdentityV2 {
+    pub(crate) rent_credit: [u8; 32],
+    pub(crate) rent_program: [u8; 32],
+    pub(crate) market: [u8; 32],
+    pub(crate) release_set: [u8; 32],
+    pub(crate) generation: u64,
+}
+
+pub(crate) fn authenticate_rent_credit(
     rent_credit: &AccountInfo<'_>,
     rent_program: &AccountInfo<'_>,
-    request: ProtocolPositionRequestV2,
+    expected: LifecycleRentCreditIdentityV2,
 ) -> Result<Vec<u8>, ProgramError> {
-    if rent_credit.key.to_bytes() != request.rent_credit
-        || rent_program.key.to_bytes() != request.rent_program
+    if rent_credit.key.to_bytes() != expected.rent_credit
+        || rent_program.key.to_bytes() != expected.rent_program
         || rent_credit.owner != rent_program.key
         || rent_credit.executable
         || !rent_program.executable
@@ -1000,9 +1035,9 @@ fn authenticate_rent_credit(
         .map_err(|_| ProtocolPositionSbfErrorV2::Accounts)?;
     let credit =
         LifecycleRentCreditV2::decode(&data).map_err(|_| ProtocolPositionSbfErrorV2::Rent)?;
-    if credit.market().to_bytes() != request.market
-        || credit.release_set().to_bytes() != request.release_set
-        || credit.generation() != request.generation
+    if credit.market().to_bytes() != expected.market
+        || credit.release_set().to_bytes() != expected.release_set
+        || credit.generation() != expected.generation
     {
         return Err(ProtocolPositionSbfErrorV2::Rent.into());
     }

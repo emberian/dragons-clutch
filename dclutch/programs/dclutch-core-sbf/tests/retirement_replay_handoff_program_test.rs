@@ -9,7 +9,8 @@ use dclutch_claims_svm::liability_basis_state_v2::{
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_REPLAY_BYTES_V1, CompartmentV1, CustodyAuthoritySeedsV1, CustodyReplaySeedsV1,
-    CustodyReplayV1, CustodyVaultSeedsV1, RetirementReplayHandoffRequestV1,
+    CustodyReplayV1, CustodyVaultSeedsV1, RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1,
+    RetirementReplayHandoffAccountLayoutV1 as Layout, RetirementReplayHandoffRequestV1,
 };
 use dclutch_market_core_codec::{
     CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase, Readiness,
@@ -47,7 +48,11 @@ use solana_program::{
 use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::{
+    instruction::InstructionError,
+    signature::{Keypair, Signer},
+    transaction::TransactionError,
+};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
 use spl_token_interface::state::{Account as SplAccount, AccountState as SplAccountState, Mint};
@@ -61,6 +66,12 @@ const RENT_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd6; 32]);
 const GENERATION: u64 = 9;
 const REVISION: u64 = 7;
 const CONTEXT: [u8; 32] = [0x44; 32];
+
+/// `CoreSbfError::Reference`, `::Release`, `::Market` and `::Creation`.
+const CORE_REFERENCE: u32 = 0x3003;
+const CORE_RELEASE: u32 = 0x3004;
+const CORE_MARKET: u32 = 0x3005;
+const CORE_CREATION: u32 = 0x3007;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Fault {
@@ -635,32 +646,137 @@ fn instruction(fixture: &Fixture, fault: Fault) -> Instruction {
     };
     Instruction {
         program_id: CORE_PROGRAM_ID,
-        accounts: vec![
-            AccountMeta::new(fixture.payer.pubkey(), true),
-            AccountMeta::new_readonly(fixture.market, false),
-            AccountMeta::new_readonly(fixture.cache, false),
-            AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
-            AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.core_programdata, false),
-            AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
-            AccountMeta::new_readonly(trading_programdata, false),
-            AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
-            AccountMeta::new_readonly(fixture.custody_programdata, false),
-            AccountMeta::new_readonly(caller, false),
-            AccountMeta::new_readonly(fixture.claims_aggregate, false),
-            AccountMeta::new_readonly(fixture.realm_raw, false),
-            AccountMeta::new_readonly(fixture.realm_staging, false),
-            AccountMeta::new_readonly(sysvar::rent::ID, false),
-            AccountMeta::new(fixture.rent_credit, false),
-            AccountMeta::new(fixture.trading_replay, false),
-            AccountMeta::new(fixture.core_replay, false),
-            AccountMeta::new_readonly(fixture.hoard, false),
-            AccountMeta::new_readonly(system_program::ID, false),
-            AccountMeta::new_readonly(fixture.mint, false),
-            AccountMeta::new_readonly(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), false),
-            AccountMeta::new_readonly(fixture.authority, false),
-        ],
+        accounts: frame([
+            (
+                Layout::PAYER,
+                AccountMeta::new(fixture.payer.pubkey(), true),
+            ),
+            (
+                Layout::MARKET,
+                AccountMeta::new_readonly(fixture.market, false),
+            ),
+            (
+                Layout::CACHE,
+                AccountMeta::new_readonly(fixture.cache, false),
+            ),
+            (
+                Layout::REGISTRY,
+                AccountMeta::new_readonly(REGISTRY_PROGRAM_ID, false),
+            ),
+            (
+                Layout::CORE_PROGRAM,
+                AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+            ),
+            (
+                Layout::CORE_PROGRAMDATA,
+                AccountMeta::new_readonly(fixture.core_programdata, false),
+            ),
+            (
+                Layout::TRADING_PROGRAM,
+                AccountMeta::new_readonly(TRADING_PROGRAM_ID, false),
+            ),
+            (
+                Layout::TRADING_PROGRAMDATA,
+                AccountMeta::new_readonly(trading_programdata, false),
+            ),
+            (
+                Layout::CUSTODY_PROGRAM,
+                AccountMeta::new_readonly(CUSTODY_PROGRAM_ID, false),
+            ),
+            (
+                Layout::CUSTODY_PROGRAMDATA,
+                AccountMeta::new_readonly(fixture.custody_programdata, false),
+            ),
+            (
+                Layout::CALLER_AUTHORITY,
+                AccountMeta::new_readonly(caller, false),
+            ),
+            (
+                Layout::CLAIMS_AGGREGATE,
+                AccountMeta::new_readonly(fixture.claims_aggregate, false),
+            ),
+            (
+                Layout::REALM,
+                AccountMeta::new_readonly(fixture.realm_raw, false),
+            ),
+            (
+                Layout::REALM_STAGING,
+                AccountMeta::new_readonly(fixture.realm_staging, false),
+            ),
+            (
+                Layout::RENT,
+                AccountMeta::new_readonly(sysvar::rent::ID, false),
+            ),
+            (
+                Layout::RENT_CREDIT,
+                AccountMeta::new(fixture.rent_credit, false),
+            ),
+            (
+                Layout::TRADING_REPLAY,
+                AccountMeta::new(fixture.trading_replay, false),
+            ),
+            (
+                Layout::CORE_REPLAY,
+                AccountMeta::new(fixture.core_replay, false),
+            ),
+            (
+                Layout::HOARD,
+                AccountMeta::new_readonly(fixture.hoard, false),
+            ),
+            (
+                Layout::SYSTEM,
+                AccountMeta::new_readonly(system_program::ID, false),
+            ),
+            (Layout::MINT, AccountMeta::new_readonly(fixture.mint, false)),
+            (
+                Layout::TOKEN_PROGRAM,
+                AccountMeta::new_readonly(Pubkey::new_from_array(LEGACY_TOKEN_PROGRAM_ID), false),
+            ),
+            (
+                Layout::CUSTODY_AUTHORITY,
+                AccountMeta::new_readonly(fixture.authority, false),
+            ),
+        ]),
         data: request_bytes.to_vec(),
+    }
+}
+
+/// Order one frame by the ordinals `RetirementReplayHandoffAccountLayoutV1`
+/// owns, rather than by the order they happen to be written here.
+///
+/// Core parses this route as `&[AccountInfo; 23]` and then indexes it by those
+/// same constants, so a positional list agrees with the program only until
+/// somebody renumbers the layout -- at which point every coordinate is quietly
+/// mislabelled and the test still passes on some other refusal. `67e96e5b` is
+/// the same defect one layer out: a literal frame that had stopped matching
+/// the route it was submitting to.
+fn frame(
+    entries: [(usize, AccountMeta); RETIREMENT_REPLAY_HANDOFF_ACCOUNT_COUNT_V1],
+) -> Vec<AccountMeta> {
+    let mut ordered = entries;
+    ordered.sort_by_key(|(ordinal, _)| *ordinal);
+    for (index, (ordinal, _)) in ordered.iter().enumerate() {
+        assert_eq!(
+            index, *ordinal,
+            "the handoff layout owns no ordinal {index}: this frame is not the frame Core parses"
+        );
+    }
+    ordered.into_iter().map(|(_, meta)| meta).collect()
+}
+
+/// The exact custom refusal a submission produced, or `None` if it succeeded.
+///
+/// All six hostilities below and the honest test's replay asserted only
+/// `is_err()` until 2026-08-30 -- the shape `67e96e5b` caught passing on a
+/// refusal none of its cases was about.
+fn refusal(result: Result<(), BanksClientError>) -> Option<u32> {
+    match result {
+        Ok(()) => None,
+        Err(BanksClientError::TransactionError(TransactionError::InstructionError(
+            _,
+            InstructionError::Custom(code),
+        ))) => Some(code),
+        Err(other) => panic!("expected a program refusal, got {other:?}"),
     }
 }
 
@@ -753,33 +869,50 @@ async fn real_sbf_handoff_preserves_lineage_principal_and_exact_rent_arithmetic(
     );
 
     let accepted = after.clone();
-    assert!(
-        submit(&mut context, &fixture, instruction(&fixture, Fault::None))
-            .await
-            .is_err(),
-        "replay must refuse"
+    // The Trading replay the first pass closed is now a vacant system account,
+    // so `authenticate_prestate` refuses it on owner and width -- the same
+    // conjunct, and the same code, that the digest and partial-creation
+    // hostilities below reach. Naming it is what distinguishes "the route is
+    // idempotent" from "the second submission failed somehow".
+    assert_eq!(
+        refusal(submit(&mut context, &fixture, instruction(&fixture, Fault::None)).await),
+        Some(CORE_REFERENCE),
+        "replay must refuse at the prestate it no longer has"
     );
     assert_eq!(snapshot(&mut context, &fixture).await, accepted);
 }
 
 #[tokio::test]
 async fn hostile_substitution_replay_partial_rent_phase_and_release_refuse_with_rollback() {
-    for fault in [
-        Fault::Context,
-        Fault::ReplayDigest,
-        Fault::PartialCoreReplay,
-        Fault::Rent,
-        Fault::Phase,
-        Fault::Release,
+    // Each code is the conjunct the case is actually about, and three of them
+    // are NOT the ones a reader would guess:
+    //
+    //   Context           the Claims aggregate owns the retirement context, and
+    //                     Core compares it before it ever reaches the replay,
+    //                     so a divergent request context is a Reference.
+    //   ReplayDigest      the Trading replay's own digest conjunct, Reference.
+    //   PartialCoreReplay Reference, not Creation: Core authenticates the
+    //                     vacant Core replay in the PRESTATE (owner, zero
+    //                     lamports, empty data) and never reaches creation.
+    //   Rent              Creation, and the earliest refusal here at 8.4k CU:
+    //                     the request's own rent figure is compared against
+    //                     the Rent sysvar before the Market is read at all.
+    //   Phase             Market. Release  the activation join.
+    for (fault, expected) in [
+        (Fault::Context, CORE_REFERENCE),
+        (Fault::ReplayDigest, CORE_REFERENCE),
+        (Fault::PartialCoreReplay, CORE_REFERENCE),
+        (Fault::Rent, CORE_CREATION),
+        (Fault::Phase, CORE_MARKET),
+        (Fault::Release, CORE_RELEASE),
     ] {
         let (test, fixture) = fixture(fault);
         let mut context = test.start_with_context().await;
         let before = snapshot(&mut context, &fixture).await;
-        assert!(
-            submit(&mut context, &fixture, instruction(&fixture, fault))
-                .await
-                .is_err(),
-            "{fault:?} must refuse"
+        assert_eq!(
+            refusal(submit(&mut context, &fixture, instruction(&fixture, fault)).await),
+            Some(expected),
+            "{fault:?} must refuse with its own code"
         );
         assert_eq!(
             snapshot(&mut context, &fixture).await,

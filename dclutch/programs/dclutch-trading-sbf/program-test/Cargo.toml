@@ -16,9 +16,17 @@ dclutch-capability-seal-contract = { path = "../../../crates/dclutch-capability-
 dclutch-claims-svm = { path = "../../../crates/dclutch-claims-svm" }
 dclutch-core-contract = { path = "../../../crates/dclutch-core-contract" }
 dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
+# `direct_hot_fee_second_transaction` asserts the exact Custody refusal codes
+# two hostile orderings carry, and decision 0007 forbids writing them as bare
+# numbers. Custody ships an rlib beside its cdylib for exactly this, the same
+# way Registry does above.
+dclutch-custody-sbf = { path = "../../dclutch-custody-sbf", features = [
+    "no-entrypoint",
+] }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
 dclutch-direct-hot-program-test-support = { path = "direct-hot" }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
+dclutch-general-adapter-contract = { path = "../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-config-contract = { path = "../../../crates/dclutch-general-config-contract" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }

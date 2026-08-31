@@ -107,9 +107,17 @@ const ROOT_MAGIC_SCALAR: u16 = FUNDING_RENT_SCALAR + 1;
 const ROOT_HEADER_WORD_SCALAR: u16 = ROOT_MAGIC_SCALAR + 1;
 const ACTIVATION_SCALAR_COUNT: u16 = ROOT_HEADER_WORD_SCALAR + 1;
 /// Activation reads only seam-seeded identities; it declares no family ones.
+///
+/// The narrowing is total because of the assertion beside it, not because a
+/// bank of twelve looks small.
+#[allow(clippy::cast_possible_truncation)]
 const ACTIVATION_IDENTITY_COUNT: u16 =
     dclutch_capability_program_contract::activation_registers_v2::ACTIVATION_COMMON_IDENTITIES_V2
         as u16;
+const _: () = assert!(
+    dclutch_capability_program_contract::activation_registers_v2::ACTIVATION_COMMON_IDENTITIES_V2
+        < 0x1_0000
+);
 /// The root being created and the sole selected funding ledger.
 const ACTIVATION_ACCOUNT_COUNT: u16 = 2;
 /// The founding provisions exactly one Rent compartment row in the ledger.
@@ -533,7 +541,10 @@ mod tests {
         let ordinary_descriptor = CapabilityProgramV4::decode(&ordinary.descriptor).expect("V4");
         let descriptor = CapabilityProgramV1::decode(&bundle.descriptor).expect("V1");
         assert_eq!(descriptor.kind(), ordinary_descriptor.kind());
-        assert_eq!(descriptor.config_schema(), ordinary_descriptor.config_schema());
+        assert_eq!(
+            descriptor.config_schema(),
+            ordinary_descriptor.config_schema()
+        );
         assert_eq!(descriptor.root_schema(), ordinary_descriptor.root_schema());
         assert_eq!(
             descriptor.derivation_policy(),
@@ -547,7 +558,10 @@ mod tests {
             descriptor.root_state_bytes(),
             ordinary_descriptor.root_state_bytes()
         );
-        assert_eq!(descriptor.root_state_bytes() as usize, DIRECT_ROOT_STATE_BYTES_V1);
+        assert_eq!(
+            descriptor.root_state_bytes() as usize,
+            DIRECT_ROOT_STATE_BYTES_V1
+        );
         let effect = EffectProgramV2::decode(&bundle.effect).expect("effect");
         assert_eq!(
             usize::from(effect.request_bytes()),
@@ -557,7 +571,10 @@ mod tests {
             direct_activation_account_profile_schema_v1(),
             ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1
         );
-        assert_eq!(direct_activation_effect_schema_v1(), EFFECT_PROGRAM_SCHEMA_ID_V2);
+        assert_eq!(
+            direct_activation_effect_schema_v1(),
+            EFFECT_PROGRAM_SCHEMA_ID_V2
+        );
         assert_eq!(
             direct_activation_descriptor_schema_v1(),
             CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1
@@ -584,14 +601,19 @@ mod tests {
         let mut scalars = vec![0_u64; scalar_count];
         scalars[usize::from(FUNDING_RENT_SCALAR)] = root_rent;
         scalars[usize::from(ROOT_MAGIC_SCALAR)] = DirectRootStateLayoutV1::MAGIC_WORD;
-        scalars[usize::from(ROOT_HEADER_WORD_SCALAR)] =
-            read_u64(&DirectRootStateV1::new().encode(), DirectRootStateLayoutV1::VERSION)
-                .expect("header word");
+        scalars[usize::from(ROOT_HEADER_WORD_SCALAR)] = read_u64(
+            &DirectRootStateV1::new().encode(),
+            DirectRootStateLayoutV1::VERSION,
+        )
+        .expect("header word");
         let identities = vec![[0_u8; 32]; identity_count];
         // SelfRepresentative rules alias each coordinate to itself.
         let aliases = [ROOT_ACCOUNT, FUNDING_LEDGER_ACCOUNT];
         let accounts = [
-            AccountInput { lamports: 0, data_len: 0 },
+            AccountInput {
+                lamports: 0,
+                data_len: 0,
+            },
             AccountInput {
                 lamports: ledger_rent + root_rent,
                 data_len: funding_ledger_bytes_v2(FUNDING_LEDGER_SLOT_COUNT).expect("ledger width"),
@@ -632,7 +654,10 @@ mod tests {
         // The vacant root ends at exactly its rent-exempt minimum; the ledger is
         // drained of exactly the parked quote.
         assert_eq!(output_lamports[usize::from(ROOT_ACCOUNT)], root_rent);
-        assert_eq!(output_lamports[usize::from(FUNDING_LEDGER_ACCOUNT)], ledger_rent);
+        assert_eq!(
+            output_lamports[usize::from(FUNDING_LEDGER_ACCOUNT)],
+            ledger_rent
+        );
     }
 
     /// The transition loads exactly the two constants the effect reads, and
@@ -672,8 +697,11 @@ mod tests {
         );
         assert_eq!(
             output_scalars[usize::from(ROOT_HEADER_WORD_SCALAR)],
-            read_u64(&DirectRootStateV1::new().encode(), DirectRootStateLayoutV1::VERSION)
-                .expect("header word")
+            read_u64(
+                &DirectRootStateV1::new().encode(),
+                DirectRootStateLayoutV1::VERSION
+            )
+            .expect("header word")
         );
         // The seam-projected rent scalar survives the transition unchanged.
         assert_eq!(output_scalars[usize::from(FUNDING_RENT_SCALAR)], 2_672_640);
@@ -792,5 +820,74 @@ mod tests {
             ),
             Err(DirectActivationBundleErrorV1::Ordinary)
         );
+    }
+
+    /// The template evidence gate.
+    ///
+    /// `dclutch-capability-activation-codec` is the family-neutral author of
+    /// this artifact shape, written so that General, and any family after it,
+    /// does not hand-roll a second answer to a question that bricks roots when
+    /// answered wrongly. The only evidence that makes it safe to reuse is that
+    /// it reproduces THIS bundle -- the one that was reviewed, sealed, and
+    /// wired as the Direct release's fourth ProgramSet entry -- byte for byte
+    /// in all three records, from the same inherited coordinates and Direct's
+    /// own canonical initial tail.
+    ///
+    /// If this test ever goes red, the template has drifted from the reviewed
+    /// artifact and no family may use it until it is explained.
+    #[test]
+    fn the_family_neutral_template_reproduces_this_sealed_bundle_byte_for_byte() {
+        use dclutch_capability_activation_codec::{
+            ActivationBundleInputV1, ActivationSeamImageV1, build_activation_bundle_v1,
+            project_activation_root_tail_v1,
+        };
+        use dclutch_capability_program_contract::activation_registers_v2::{
+            ACTIVATION_COMMON_IDENTITIES_V2, ACTIVATION_COMMON_SCALARS_V2,
+        };
+
+        let ordinary = ordinary();
+        let mine = built();
+        let descriptor = CapabilityProgramV4::decode(&ordinary.descriptor).expect("V4");
+        let initial = DirectRootStateV1::new().encode();
+        let template = build_activation_bundle_v1(ActivationBundleInputV1 {
+            kind: descriptor.kind(),
+            config_schema: descriptor.config_schema(),
+            request_schema: content(DIRECT_ACTIVATION_REQUEST_SCHEMA_ID_V1).expect("request"),
+            root_schema: descriptor.root_schema(),
+            derivation_policy: descriptor.derivation_policy(),
+            capacity_profile: descriptor.capacity_profile(),
+            root_state_bytes: descriptor.root_state_bytes(),
+            // Direct's tail is entirely constant; it declares no seam field.
+            constant_root_tail: initial.as_slice(),
+            seam_fields: &[],
+            funding_ledger_slot_count: FUNDING_LEDGER_SLOT_COUNT,
+        })
+        .expect("template bundle");
+
+        assert_eq!(template.account_profile, mine.account_profile);
+        assert_eq!(template.transition, mine.transition);
+        assert_eq!(template.effect, mine.effect);
+        assert_eq!(template.descriptor, mine.descriptor);
+        assert_eq!(template.account_profile_id, mine.account_profile_id);
+        assert_eq!(template.effect_id, mine.effect_id);
+        assert_eq!(template.descriptor_id, mine.descriptor_id);
+
+        // And the template's published projection agrees with this crate's own
+        // decoder about what the created root will contain.
+        let (projected, lamports) = project_activation_root_tail_v1(
+            &template,
+            ActivationSeamImageV1 {
+                scalars: &[0_u64; ACTIVATION_COMMON_SCALARS_V2],
+                identities: &[[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V2],
+                rent_quote: 2_672_640,
+            },
+        )
+        .expect("projection");
+        assert_eq!(projected.as_slice(), initial.as_slice());
+        assert_eq!(
+            DirectRootStateV1::decode(&projected),
+            Ok(DirectRootStateV1::new())
+        );
+        assert_eq!(lamports, [2_672_640, 0]);
     }
 }

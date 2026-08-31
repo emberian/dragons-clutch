@@ -87,6 +87,11 @@ pub fn preflight_resolution_route_v3<'info>(
     wire: &mut Vec<u8>,
     resolution_program: &AccountInfo<'_>,
     parent: ResolutionCompositionParentV3,
+    // The caller's mined bump for this invocation's Trading caller authority.
+    // `None` searches, exactly as this walk always did; `Some` reproduces and
+    // refuses at the coordinate-0 equality `prepare` already runs. See
+    // `HotBumpHintsV1`.
+    hint: PreflightedCallerBumpV4,
 ) -> Result<u8, ProgramError> {
     let prepared = prepare(
         program_id,
@@ -103,7 +108,7 @@ pub fn preflight_resolution_route_v3<'info>(
         wire,
         resolution_program,
         parent,
-        None,
+        hint,
     )?;
     Ok(prepared.bump)
 }

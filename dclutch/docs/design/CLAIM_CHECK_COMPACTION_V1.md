@@ -1,6 +1,7 @@
 # Claim-check compaction — the perpetual claim without the perpetual market
 
-Status: **PARTLY IMPLEMENTED — read §15 before acting on §4.7 or §6.2.** The
+Status: **PARTLY IMPLEMENTED — read §15 before acting on §4.7 or §6.2, and
+§17 before acting on §4.7's owner-kind precondition or §10's sizing.** The
 contract layer has landed and carries six ratified amendments, recorded in §15
 with their arithmetic. Two of them correct passages that are wrong as written:
 §4.7 step 4 mints a claim-check unconditionally when it must not (§15.1), and
@@ -472,6 +473,10 @@ Preconditions:
 - The claim-check PDA is **vacant** — else `AlreadyCompacted`.
 - Owner kind is `ProtocolPositionOwnerKindV2::User` or `TradingRecord`, not
   `ClaimsCapability` (`protocol_position_v2.rs:193-200`) — see §10.
+  **AMENDED — admitting `TradingRecord` here is a value-destruction bug, and
+  `TradingRecord` is the Fractional reserve Position. §17.1 carries the
+  replacement. The line is left unaltered so the correction can be read against
+  what it corrects.**
 
 Effects, **in this order, and the order is forced**:
 
@@ -1512,6 +1517,10 @@ The route replaces that inference with the persisted
 `ProtocolPositionOwnerKindV2` tag, read off the admission record, refusing
 `ClaimsCapability` with `0x560A`.
 
+> **AMENDED — this paragraph names two kinds that cannot sign and the shipped
+> code refused one.** `TradingRecord` was admitted, and `TradingRecord` is the
+> Fractional reserve Position. §17.1 carries the weld and the exposure.
+
 ### 16.5 Debt, named rather than absolved
 
 - **§6.2's dust-tolerant close receipt is not written.** The settlement's own
@@ -1520,7 +1529,8 @@ The route replaces that inference with the persisted
   remains owed.
 - **R3 is narrowed, not closed**, exactly as §10 said it would be. Closed for
   native positions; open for fractional ones, whose claimants are the holders of
-  a mint and cannot be represented by a one-owner claim-check.
+  a mint and cannot be represented by a one-owner claim-check. §17 sizes the
+  fractional half and corrects the gate that made the narrowing unsafe.
 - **C9 does not drive `market_closure_v1`.** That is a property of the campaign's
   fixture, not of the feature: its market carries Claims capability positions, so
   retiring it needs the fractional route. What C9 proves is the R3 claim
@@ -1535,3 +1545,288 @@ The route replaces that inference with the persisted
   missing for whoever closes this is the caller verb, not the ELF.
 - **No web surface.** The operator crate carries the holder's path; the site
   copy belongs to the lane that owns the site's voice.
+
+---
+
+## 17. The gate §4.7 got wrong, and what the fractional half actually costs
+
+Written by FRACR3, 2026-08-30, from the fractional side of §10's named debt. The
+first half is a correction to a shipped route. The second half is the size of
+the work §10 sketched, measured rather than guessed.
+
+### 17.1 §4.7's owner-kind precondition admits a position that cannot be paid
+
+§4.7 lists, among the compaction preconditions:
+
+> Owner kind is `ProtocolPositionOwnerKindV2::User` or `TradingRecord`, not
+> `ClaimsCapability` (`protocol_position_v2.rs:193-200`) — see §10.
+
+That is wrong, and §16.4 says so two sentences before repeating it:
+
+> A Trading record or Claims capability owner is a PDA and cannot sign. The
+> route replaces that inference with the persisted `ProtocolPositionOwnerKindV2`
+> tag, read off the admission record, refusing `ClaimsCapability` with `0x560A`.
+
+The sentence names **two** kinds that cannot sign and the code refused **one**.
+`RedeemClaimCheck` pays the record's `owner` and requires that address to sign
+(`claim_check_redemption_v1.rs`, `0x5621`, plus the holder's signer role in the
+redemption frame spec). A program-derived address cannot sign a top-level
+instruction, and no CPI reaches this route, so a claim-check minted for a PDA is
+collateral written to an address that can never open it.
+
+**`TradingRecord` is not a hypothetical.** It is the Fractional reserve
+Position. `fractional_retirement_v3.rs` joins its admission with
+
+```rust
+if admission.owner_kind() != ProtocolPositionOwnerKindV2::TradingRecord
+    || admission.position_owner() != input.root
+```
+
+where `input.root` is the Trading-owned Fractional capability root PDA — the
+same account `fractional_atomic_v3.rs` requires as the reserve Position's owner
+on both the open and the terminal path. That Position holds the collateral
+backing **every outstanding shard of one coordinate**.
+
+So, before this amendment: past the deadline, any caller could compact the
+Fractional reserve. The collateral moves to the escrow vault, a claim-check is
+minted naming a PDA, and the Position every shard holder's own redemption reads
+is closed in the same transaction. Nobody can redeem the record and nobody can
+redeem the shards. **Compaction converted R3's delay into a total loss, for
+exactly the holders §10 said it was leaving alone.** Same class as §2 — value
+destruction by an arbitrary actor — arrived at by implementing §4.7 faithfully.
+
+**The weld.** The gate becomes an exhaustive function over the owner-kind enum,
+`owner_kind_can_open_a_claim_check`, admitting `User` and refusing both PDA
+kinds. Exhaustive on purpose: a fourth owner kind has to answer the question
+rather than inherit whichever arm it was written beside. This follows C0's own
+lesson (§15.5) — a named admission with one author beats a comparison each site
+maintains separately.
+
+Nothing is stranded by refusing `TradingRecord`. A Trading-owned Position has
+its own parent-authenticated close (`protocol_position_v2.rs:798-830`), and the
+Fractional reserve has `fractional_retirement_v3`'s ordered route. Compaction
+was never the only way to retire either; it was the only way to *destroy* them.
+
+### 17.2 What a fractional claim-check must carry — and why it is a second record
+
+§10 sketches "a claim-check whose claimant is the **mint**, with a pro-rata
+entitlement per shard". The tree's arithmetic is kinder than that. There is no
+pro-rata. `divide_exposure_shards_v2`
+(`crates/dclutch-fractional-claim-kernel/src/exposure_v2.rs:441-473`) is the
+sole quotient/remainder boundary, and the payout below it is a multiplication:
+
+```text
+whole_claims     = shard_atoms / denominator     (floor, the only division)
+consumed         = whole_claims * denominator    (burned)
+change           = shard_atoms - consumed        (stays in the holder's account)
+collateral_atoms = whole_claims * payout_per_claim[coordinate]
+```
+
+`payout_per_claim` is a per-coordinate constant that the terminal evaluator
+produces once (`product_basis_terminal_v3.rs:425-432`, and the kernel mirror at
+`exposure_v2.rs:521-524`). So a fractional claim-check that stores
+`denominator` and `payout_per_claim` pays, to the atom, what on-time redemption
+would have paid — using the same two numbers and the same two operations, with
+no second rounding boundary to get wrong and no last-burner remainder to
+dispose of. Sub-denominator dust is not a claim on collateral before compaction
+(`NoWholeClaim` is a refusal, not a zero payout) and must not become one after.
+
+Beyond the native record that needs: `denominator` (u64), `payout_per_claim`
+(u64), `representation_coordinate` (u32) — 20 bytes — and the shard mint, which
+is the *claimant* and therefore belongs in the seeds
+(`[FRACTIONAL_CLAIM_CHECK_SEED, aggregate, shard_mint]`), so the record's
+address proves which instrument it answers to, exactly as the native record's
+address proves its holder.
+
+Twenty bytes fit `ClaimCheckV1`'s 24 reserved body bytes with four to spare.
+**Take the second record type anyway.** Three reasons, none of them space:
+
+1. `ClaimCheckV1::decode` runs `require_zero` over that reserved run, and the
+   house decode order (`exact_width`, magic, version, kind, every `require_zero`,
+   then fields) is what makes a hostile decode cheap to audit. One width meaning
+   two field layouts turns that into a union whose arms diverge after the kind
+   byte.
+2. `entitlement_atoms` means "the payout, paid once, then the record closes"
+   natively. Fractionally it means "the remaining escrowed balance, paid down
+   across many burns". Same name, different invariant, is how a conservation bug
+   gets written.
+3. The lifetimes differ. A native record is created once and closed on its one
+   redemption; a fractional record survives every partial burn until its
+   coordinate's shards are exhausted.
+
+The escrow, the vault, `COMPACTION_DEADLINE_SLOTS_V1`,
+`COMPACTION_CRANK_REWARD_LAMPORTS_V1`, `CloseClaimCheckEscrow`, the plan-struct
+idiom and `fold_credit` are all reusable unchanged. §10's "a V2 route in the
+same module, not a second design" survives; only "one record" does not.
+
+### 17.3 The size, with the numbers
+
+**Compute is not the blocker.** Measured in this campaign, at the same fixture
+and the same build:
+
+| transaction | CU |
+|---|---|
+| the holder's own wallet payout | 472,599 |
+| compaction of that same position | 503,554 |
+| claim-check redemption | 20,958 |
+
+Compaction costs **30,955 CU** more than the redemption it stands in for — the
+record write, the close, the four-credit split, the plan and the escrow update.
+Fractional terminal settlement's own measured table
+(`program-test/fractional-atomic/tests/fractional_atomic.rs`) is
+
+```text
+width   8    16   32   48   64    96     98     99
+units 463k 519k 593k 731k 897k 1356k  1393k  exhausted
+```
+
+so a fractional compaction at the supported width 64 lands near **928k of
+1,400,000** — about 6.6% over the settlement, inside the 503k headroom that
+already exists there. It would narrow the untested upper range (96 has 44k of
+headroom and would lose most of it), not close the feature. Frame: fractional
+terminal is 44 accounts, plus compaction's 6 is **50**, under devnet's 64-lock
+limit, over the ALT these campaigns already serialise through.
+
+**The blockers are structural.**
+
+1. **Ordered fractional retirement is not reachable on chain at all today.**
+   `fractional_retirement_v3.rs` dispatches only `RetireCoordinate`; it refuses
+   `FractionalRetirementActionV3::Begin` and `::Finish` outright, and nothing in
+   any program calls either. `FractionalRetirementCursorV3::begin` and
+   `::finish` exist in the contract with tests, but no route can create or close
+   the cursor PDA the coordinate walk advances. **A fractional claim-check would
+   make `RetireCoordinate`'s gates satisfiable and the market still would not
+   retire.** Wiring `Begin`/`Finish` is its own lane and is strictly upstream of
+   this one.
+
+   > **CLEARED 2026-08-30.** FRACLIFE shipped `Begin` and `Finish`
+   > (`27d2c28e`..`b17e9bc3`) and drove a fractional market through retirement
+   > end to end against the real Token-2022. This blocker is gone; blockers 2
+   > and 3 stand, and §17.4 adds the one this list missed.
+2. **`RetireCoordinate`'s zero-supply gate has to gain a compacted arm.** It
+   requires the shard mint's supply to be exactly zero — twice, once through
+   `check_mint`'s `expected_base_supply` and once explicitly. A compacted
+   coordinate has a *nonzero* supply by construction: the outstanding shards are
+   the durable claim. So the mint must survive retirement rather than be closed,
+   which adds one perpetual mint account per unredeemed coordinate to §6.4's
+   residue — smaller than the market, larger than nothing, and it must be named
+   as debt rather than absolved.
+3. **Shards cannot be compacted, only their backing.** Shards live in ordinary
+   holder-owned Token accounts. No crank can burn them, and no crank should be
+   able to. This is why the mint has to become the claim record rather than be
+   retired: the claim-check answers to the instrument, and the holder redeems by
+   burning, with their own signature, forever.
+
+   > **AMENDED — the last clause is false, and it was the premise the estimate
+   > below was built on.** A shard holder's own signature can never burn a
+   > shard. It is true that no crank can burn a holder's shards, but the reason
+   > is not that they sit in ordinary Token accounts; it is that the Mint's
+   > burn authority is *another program's PDA*, and that same fact stops the
+   > **holder** too. §17.4 carries the execution and the sound shape.
+   >
+   > What survives intact is the sentence before it: the Mint becomes the claim
+   > record, and the claim-check answers to the instrument. That is the part
+   > that dissolves the unsignable-owner problem, and it needs no correction.
+
+**Estimate: one lane, eight commits, after the `Begin`/`Finish` lane.** Record
+type and seeds; two conservation plans; a refusal sub-band (`0x5640` and
+`0x5660` are free); the compaction route; the burn-and-pay redemption route; the
+`RetireCoordinate` arm; the campaign; the operator surface. The expensive half of
+the native lane — building a terminal fixture — is already paid: `fractional-atomic`
+drives terminal redeem and zero-burn against real ELFs today.
+
+> **AMENDED — eight was short by six, and the shortfall is a whole program.**
+> The estimate costed a burn the holder performs alone. That burn does not
+> exist, so the redemption route it costed does not either, and the correction
+> in §17.4 adds a Trading-composed compaction and a split-controller Mint
+> profile — neither of which is a bigger version of anything in the list above.
+> **Fourteen commits, two programs, two cohorts.** Four have landed; the ten
+> that remain are the Trading half and what depends on it. Everything §17.3
+> says about compute, frames and the already-paid terminal fixture still holds.
+
+---
+
+### 17.4 The burn nobody can perform, executed rather than argued
+
+Written by FRACCHECK, 2026-08-30, from building §17.3's estimate. Evidence:
+`docs/evidence/FRACTIONAL_CLAIM_CHECK_2026_08_30.md`.
+
+**Every shard Mint carries Token-2022's `PermissionedBurn` extension, and it is
+required rather than incidental.** `Token2022BehaviorProfileV2::read_mint`
+refuses any Mint that lacks it, and pins it to the Mint's controller:
+
+```rust
+// crates/dclutch-token-svm/src/behavior_profile_v2.rs
+PERMISSIONED_BURN_EXTENSION if !burn_seen => {
+    require_extension(entry, PERMISSIONED_BURN_EXTENSION, AUTHORITY_EXTENSION_BYTES)?;
+    require_key(entry.value, expected_controller)?;
+    burn_seen = true;
+}
+// ...
+if !close_seen || !burn_seen || pointer_seen != metadata_seen {
+    return Err(Error::InvalidExtensionLayout);
+}
+```
+
+For a Fractional coordinate that `expected_controller` is `root_account.key`
+(`fractional_atomic_v3.rs::process_terminal`) — the capability root, derived
+under the **Trading** program. Claims cannot sign it, and it does not outlive
+the market.
+
+**The consequence, run rather than reasoned about.** Against the audited
+`spl-token-2022` v11 fixture, on a Mint carrying that extension, the account's
+own owner signs a standard `BurnChecked` and the chain answers:
+
+```text
+Program log: Instruction: BurnChecked
+Program log: Error: Invalid instruction
+Program Tokenz…Pxu failed: custom program error: 0xc
+```
+
+`0xc` is `TokenError::InvalidInstruction`. The processor is explicit about why
+— *"Standard burns cannot be used when the permissioned burn extension is
+present"* — and its permissioned variant requires the configured authority as a
+**second signer**, refusing `MissingRequiredSignature` when it is present but
+unsigned and `InvalidAccountData` when a different key signs. All four
+transactions, including the double-signed control that succeeds, are pinned in
+`program-test/fractional-atomic/tests/permissioned_burn_wall.rs`.
+
+So the redemption route §17.3 costed — claims-only, holder-signed, surviving the
+market — cannot be built. A frame containing the Fractional root could not
+answer `survives_retirement()`, which is the frame spec catching this correctly
+rather than a limitation of it.
+
+**The sound shape: compaction hands the burn over.**
+`SetAuthority(AuthorityType::PermissionedBurn)` moves the authority and requires
+the *current* one to sign (`processor.rs:996-1007`). So fractional compaction
+re-points the Mint's burn authority from the Fractional root to the **escrow
+PDA**, while the root is still alive to authorize it. After that one
+instruction a redemption needs exactly two signatures: the holder's, over their
+own shards, and the escrow's, which Claims produces for itself. The hand-off is
+executed in the same campaign — a stranger attempting it is refused
+`OwnerMismatch`, the old authority is powerless afterwards, and the
+holder-signed escrow-approved burn goes through.
+
+Two costs follow, and they are what the estimate was missing:
+
+- **Fractional compaction becomes Trading-composed.** The root's signature
+  exists nowhere else — `protocol_position_v2.rs` requires both the Trading
+  caller-authority PDA and the root to sign the close that `RetireCoordinate`
+  already performs. This costs the permissionless property nothing;
+  `fractional_retirement_v3.rs` is permissionless *and* Trading-composed today.
+  It costs a route in a second ELF.
+- **A re-pointed Mint no longer satisfies `read_mint`.** That function requires
+  one controller to be the mint authority *and* the close authority *and* the
+  burn authority. After the hand-off the burn authority is the escrow and the
+  other two are still the root, so `dclutch-token-svm` needs a split-controller
+  sibling, and blocker 2's compacted arm must read it instead of `check_mint`.
+
+**Impounding was considered and rejected.** Shards could be transferred to a
+Claims-owned sink rather than burned — transfer is not permissioned — which
+needs no Trading route and no new profile. It was rejected because it replaces
+a supply the whole family already reads with a balance in a second account:
+blocker 2's gate, the terminal evaluator's `expected_base_supply`, and the
+record's own escrowed-equals-`floor(supply / denominator) × payout_per_claim`
+invariant would each have to learn about the sink, and the sink is itself a
+perpetual account holding instruments nobody can destroy. Burning keeps one
+number meaning one thing.

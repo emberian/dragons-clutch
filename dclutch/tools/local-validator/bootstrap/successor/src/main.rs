@@ -12,6 +12,7 @@ mod cluster;
 mod direct_capability_activation;
 mod direct_hot_route_manifest;
 mod direct_market;
+mod direct_ticket;
 mod direct_trade;
 mod direct_trade_producer;
 mod direct_trade_setup;
@@ -19,6 +20,7 @@ mod direct_trade_setup_journal;
 mod direct_trade_token_setup;
 mod family_hot_campaign;
 mod fractional_market;
+mod general_capability_activation;
 mod general_market;
 mod general_settlement_fixture;
 mod series_consume_campaign;
@@ -177,6 +179,9 @@ fn run() -> Result<()> {
         Some(command) if command == direct_trade_producer::DEVNET_DIRECT_PRODUCER_COMMAND_V1 => {
             direct_trade_producer::run_devnet_direct(arguments.collect())
         }
+        Some(command) if command == direct_ticket::DIRECT_TICKET_AUTHOR_COMMAND_V1 => {
+            direct_ticket::run(arguments.collect())
+        }
         Some(command)
             if command == direct_hot_route_manifest::CHECKED_EXECUTION_RELEASE_COMMAND_V1 =>
         {
@@ -189,6 +194,12 @@ fn run() -> Result<()> {
             if command == direct_capability_activation::DIRECT_CAPABILITY_ACTIVATION_COMMAND_V1 =>
         {
             direct_capability_activation::run(arguments.collect())
+        }
+        Some(command)
+            if command
+                == general_capability_activation::GENERAL_CAPABILITY_ACTIVATION_COMMAND_V1 =>
+        {
+            general_capability_activation::run(arguments.collect())
         }
         Some("flagship-resolution-v1") => flagship_resolution::run(arguments.collect()),
         Some("devnet-sponsored-push-v1") => sponsored_push::run_devnet(arguments.collect()),
@@ -1603,9 +1614,11 @@ fn usage() {
     println!("{}", direct_trade_producer::usage());
     println!("{}", direct_trade_producer::devnet_session_usage());
     println!("{}", direct_trade_producer::devnet_direct_usage());
+    println!("{}", direct_ticket::usage());
     println!("{}", direct_hot_route_manifest::checked_execution_release_usage());
     println!("{}", direct_hot_route_manifest::hot_route_manifest_usage());
     println!("{}", direct_capability_activation::usage());
+    println!("{}", general_capability_activation::usage());
     println!("{}", campaign_usage_v1());
     println!(
         "\n{direct_market_usage}\n  dclutch-local-successor-bootstrap ledger-census \

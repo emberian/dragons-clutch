@@ -18,11 +18,11 @@ describe('Portfolio route', () => {
     // is all this page needs.
     expect(html).toContain('worked out from that market and your own address');
     expect(html).toContain('nothing is looked up');
-    expect(html).toContain('Derived Positions');
+    expect(html).toContain('Market by market');
   });
 
   it('asks only for an owner identity — every other input comes from the deployment', () => {
-    expect(html).toContain('Whose Positions?');
+    expect(html).toContain('Whose wallet?');
     expect(html).toContain('the active Devnet deployment');
     expect(html).toContain('Or paste any owner address');
     expect(html).not.toContain('Finalized RPC endpoint');
@@ -40,15 +40,24 @@ describe('Portfolio route', () => {
   });
 
   it('keeps the honest empty state instead of showing placeholder holdings', () => {
-    expect(html).toContain('No finalized Position state has been read yet.');
-    expect(html).toContain('this surface stays empty rather than showing placeholder holdings');
+    expect(html).toContain('Until an address arrives and the chain answers');
+    expect(html).toContain('rather than showing made-up holdings');
+    expect(html).toContain('there is nothing to add up');
+    expect(html).toContain('rather than showing a total nobody holds');
+  });
+
+  it('carries the across-Markets bound, and states the sum as the true answer rather than a caution', () => {
+    expect(html).toContain('Across everything you hold');
+    expect(html).toContain('about different things rule nothing out about each other');
+    expect(html).toContain('together they can pay exactly the sum');
+    expect(html).toContain('the true number, not a cautious one');
   });
 
   it('presents raw atoms and never a market-data metric', () => {
     // The product nav links to the pre-existing Dealer surface at /liquidity;
     // that route name is not this surface's vocabulary and is excluded here.
     const remainder = html.replace(/<nav>[\s\S]*?<\/nav>/, '');
-    expect(remainder).toContain('raw u64');
+    expect(remainder).toContain('raw amounts');
     for (const forbidden of ['volume', 'Volume', 'odds', 'probability', 'Probability', 'TVL', 'liquidity', 'Liquidity', '24h', 'APR', 'APY', 'yield', 'Total value locked', '$', 'price', 'Price', 'portfolio value', 'P&L']) {
       expect(remainder).not.toContain(forbidden);
     }

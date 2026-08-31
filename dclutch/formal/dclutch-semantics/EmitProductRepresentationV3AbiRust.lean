@@ -17,5 +17,7 @@ def main : IO Unit := do
   IO.println s!"pub const PRODUCT_REPRESENTATION_ADMISSION_BYTES_V3: usize = {bytes};"
   IO.println s!"pub const PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3: u8 = {categoricalKind};"
   IO.println s!"pub const PRODUCT_REPRESENTATION_GRADED_KIND_V3: u8 = {gradedKind};"
+  IO.println
+    s!"pub const PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3: u8 = {splineDegree2To3Kind};"
   for field in Field.all do
     IO.println s!"pub const {Field.rustName field}: usize = {Field.offset field};"

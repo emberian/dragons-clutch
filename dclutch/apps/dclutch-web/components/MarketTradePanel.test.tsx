@@ -22,7 +22,7 @@ describe('the market-detail trade panel', () => {
   />);
 
   it('treats the named refusal as the product surface, not a disabled button', () => {
-    expect(html).toContain('tells you exactly why in one sentence');
+    expect(html).toContain('says why in one sentence');
     expect(html).toContain('never a greyed-out button with no reason');
   });
 
@@ -63,7 +63,7 @@ describe('the market-detail trade panel', () => {
     expect(html).toContain('Nothing is called a trade until the chain reports it finalized');
     expect(html).toContain('re-reads both sides of the trade from the chain');
     expect(html).toContain('If your wallet is paying');
-    expect(html).toContain('if an operator is paying');
+    expect(html).toContain('If an operator is paying');
     expect(html).toContain('never your collateral account');
     expect(html).toContain('the programs on chain are what is true');
     expect(html).not.toContain('taker collateral account and Position derive under it');

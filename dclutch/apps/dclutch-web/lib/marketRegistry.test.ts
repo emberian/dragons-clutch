@@ -41,6 +41,21 @@ describe('the shipped devnet market registry', () => {
     expect(orphan.story).toContain('refused its own success');
   });
 
+  /**
+   * The market the front door headlines. Its entry is the one place a reader
+   * meets a tradeable market in this site's own words, so it has to promise
+   * exactly what happened and nothing that has not: a trade is possible, and
+   * no trade has been made.
+   */
+  it('names the market the public cut headlines, and does not pretend it has traded', () => {
+    const open = MARKET_REGISTRY_V1.markets['6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4'];
+    expect(open).toBeDefined();
+    expect(open.title).toContain('you can trade');
+    expect(open.outcomes).toHaveLength(4);
+    expect(open.resolution).toContain('Pyth');
+    expect(open.story).toContain('No trade has been made on it yet');
+  });
+
   it('keeps every entry inside the editorial charter: no numbers-in-words drift', () => {
     for (const [address, entry] of Object.entries(MARKET_REGISTRY_V1.markets)) {
       // Titles and questions are prose, not data: they may never carry a raw

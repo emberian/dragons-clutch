@@ -52,7 +52,7 @@ use dclutch_capability_program_contract::{
         HOT_STRATEGY_EXTRA_ACCOUNTS_START_V3, HOT_STRATEGY_RAW_ACCOUNT_V3,
         HOT_STRATEGY_STAGING_ACCOUNT_V3, HOT_TRADING_PROGRAM_ACCOUNT_V3,
         HOT_TRADING_PROGRAMDATA_ACCOUNT_V3, HOT_TRANSITION_RAW_ACCOUNT_V3,
-        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3,
+        HOT_TRANSITION_STAGING_ACCOUNT_V3, HotExecutionEnvelopeV3, hot_bump_hint_v1,
     },
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
     v4::{
@@ -66,7 +66,8 @@ use dclutch_claims_svm::frame_spec_v1::{
 };
 use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
-    CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1, TRANSFER_ACCOUNT_COUNT_V1,
+    CUSTODY_BUMP_RELAY_BYTES_V1, CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1,
+    TRANSFER_ACCOUNT_COUNT_V1,
 };
 use dclutch_direct_codec::{
     direct_finalization_v3::{
@@ -136,12 +137,16 @@ use dclutch_product_runtime_v2_svm_reader::{
     ProductRuntimeFrameV3, authenticate_product_runtime_v3,
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_registry_activation_auth_v1::{
+    authenticate_activated_role_in_frame_v1, authenticate_activation_cache_identity_v1,
+    require_cache_account,
+};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
     ACTIVATION_PDA_DOMAIN_V1, ActivatedExecutionReleaseSetViewV1,
 };
 use dclutch_registry_svm::{
-    AuthenticatedRoleReceiptV1, RegistryInstructionV1,
+    AuthenticatedRoleReceiptV1,
     continuation_v1::{RegistryContinuationAdmissionSeedsV1, RegistryContinuationRequestV1},
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
@@ -167,7 +172,7 @@ use solana_program::{
     account_info::AccountInfo,
     clock::Clock,
     hash::{hash, hashv},
-    instruction::{AccountMeta, Instruction},
+    instruction::AccountMeta,
     program::{get_return_data, invoke, invoke_signed, set_return_data},
     program_error::ProgramError,
     pubkey::Pubkey,
@@ -650,12 +655,13 @@ pub fn authenticate_accelerator_invocation_v4<'request, 'accounts, 'info>(
         .root
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Root)?;
-    let family_context = TradingFamilyContextV1::authenticate(
+    let family_context = TradingFamilyContextV1::authenticate_at(
         frame.trading_program.key,
         frame.root.key,
         frame.root.owner,
         &root_data,
         trading_receipt,
+        envelope.bump_hints().root,
     )?;
     drop(root_data);
     if family_context.market() != envelope.market()
@@ -1358,10 +1364,21 @@ fn authenticate_accelerator_top_level_v4(
 /// and repeating the search repeats that cost exactly.
 ///
 /// The public top-level route used to run it three times: once inside each of
-/// the two [`reauthenticate_role`] calls, and once more inside
-/// [`authenticate_activated_child_programs_v3`]. Three searches, one address,
-/// one answer. This type is how the other two went away without anybody having
-/// to trust that they were redundant.
+/// the two Registry `Reauthenticate` CPIs and once more in its own child-program
+/// decode. Three searches, one address, one answer. This type is how the other
+/// two went away without anybody having to trust that they were redundant.
+///
+/// # This is now the CONTINUATION arm's device only
+///
+/// Decision 0017's option B moved the top-level arm onto
+/// `dclutch-registry-activation-auth-v1`'s
+/// `authenticate_activation_cache_identity_v1`, which is the same conjunction
+/// written once and shared with the Registry's own `Reauthenticate` handler. So
+/// the "no third way" rule still holds for both arms, with two producers rather
+/// than one: the continuation takes the inlined check below, the top level takes
+/// the crate's. [`require_activation_cache_account_v3`] says why the continuation
+/// cannot simply take the crate's too, and it is a measured reason, not a
+/// preference.
 #[derive(Clone, Copy)]
 struct ActivationCacheAuthenticatedV1(());
 
@@ -1379,6 +1396,26 @@ struct ActivationCacheAuthenticatedV1(());
 /// measured, not feared: it took the canonical trade from passing to
 /// `consumed 1399850 of 1399850`. Inlined, the codegen at the original call
 /// site is what it always was, and the checks still have one author.
+///
+/// # Why this is a SECOND spelling of a conjunction the crate owns, and stays
+///
+/// `dclutch_registry_activation_auth_v1::authenticate_activation_cache_identity_v1`
+/// checks exactly this -- Registry ownership, non-executability, the one exact
+/// width, and the address reproduced from the body's carried bump -- and the
+/// top-level arm takes it there since decision 0017's option B. This copy
+/// survives because it is the CONTINUATION's, and the continuation is the route
+/// with no compute to spare: the measurement above is what happens when this
+/// stops being inlined at its one call site, and an out-of-line call into
+/// another crate cannot be inlined at all across the SBF codegen boundary.
+///
+/// That makes this a real drift seam and it should be named as one rather than
+/// left to be discovered. What holds it closed is that both arms authenticate
+/// the SAME account under the same rule and any divergence shows up as a route
+/// that admits a cache the other refuses; the tripwire in
+/// `tests/registry_hot_continuation.rs` and the top-level cases in
+/// `tests/direct_hot_top_level.rs` exercise both. The clean fix is for the
+/// continuation to afford the crate call, and that is a compute problem, not a
+/// design one.
 #[inline(always)]
 fn require_activation_cache_account_v3(
     frame: HotFrameV3<'_, '_>,
@@ -1437,39 +1474,24 @@ fn require_activation_cache_account_v3(
     Ok(ActivationCacheAuthenticatedV1(()))
 }
 
-/// The Claims and Custody programs this execution may CPI, read from the
-/// Registry's activation cache.
+/// The Claims and Custody programs this execution may CPI, read from a cache
+/// view whose identity is already established.
 ///
-/// A continuation gets these from `authenticate_accelerator_activation_v4`,
-/// which reads them out of the same cache in the same decode it uses for Core
-/// and Trading. A TOP-LEVEL submission authenticates Trading against a live
-/// Registry CPI instead, so it never takes that decode -- and still needs the
-/// children, because the Direct crosscheck names them in the ack it commits.
-/// Same account, same PDA and owner checks, same release-set equality: neither
-/// path's children are more authenticated than the other's.
+/// Both arms now read the children out of the SAME decode they authenticate the
+/// root roles from: the continuation in `authenticate_accelerator_activation_v4`,
+/// the top level in [`authenticate_top_level_root_roles_from_cache_v3`]. This
+/// takes the view rather than the account for exactly that reason -- it used to
+/// take the account, and paid a third full `decode` of a 1,288-byte immutable
+/// buffer to learn two program ids that the caller's own decode already held.
 ///
-/// Out of line so its frame and its decode stay off the continuation route,
-/// which does not call it and has no compute to spare.
-#[inline(never)]
-fn authenticate_activated_child_programs_v3(
-    frame: HotFrameV3<'_, '_>,
-    envelope: HotExecutionEnvelopeV3,
-    _cache: ActivationCacheAuthenticatedV1,
+/// The children are not authenticated here and are not meant to be: this reads
+/// the identities the Direct crosscheck names in the ack it commits, out of a
+/// projection the caller has already held to its address, its owner, its width
+/// and this Market's release set. Nothing downstream lends them authority
+/// without a caller-authority derivation of its own.
+fn read_activated_child_programs_v3(
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
 ) -> Result<AuthenticatedChildProgramsV3, ProgramError> {
-    let data = frame
-        .activation_cache
-        .try_borrow_data()
-        .map_err(|_| TradingSbfError::Release)?;
-    let activated =
-        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
-    if activated
-        .execution_release_set_id()
-        .map_err(|_| TradingSbfError::Release)?
-        .to_bytes()
-        != envelope.release_set()
-    {
-        return Err(TradingSbfError::Release.into());
-    }
     let claims = activated
         .role(ExecutionRoleV1::Claims)
         .map_err(|_| TradingSbfError::Release)?
@@ -2692,6 +2714,7 @@ fn execute_authenticated_hot_v3(
         &rent,
         &aliases,
         profile_join,
+        envelope.bump_hints().lifecycle,
         None,
         &mut preplan_scratch,
         preplan_output_scalars,
@@ -2822,6 +2845,7 @@ fn execute_authenticated_hot_v3(
         &rent,
         &aliases,
         profile_join,
+        envelope.bump_hints().lifecycle,
         Some(&preplanned_plans),
         &mut preplan_scratch,
         replan_output_scalars,
@@ -3384,12 +3408,13 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
         .root
         .try_borrow_data()
         .map_err(|_| TradingSbfError::Root)?;
-    let context = TradingFamilyContextV1::authenticate(
+    let context = TradingFamilyContextV1::authenticate_at(
         program_id,
         frame.root.key,
         frame.root.owner,
         &root_data,
         trading_receipt,
+        envelope.bump_hints().root,
     )?;
     let root_header = CapabilityRootHeaderV1::decode(
         root_data
@@ -3412,54 +3437,125 @@ fn authenticate_root_boxed_v3<'accounts, 'info>(
     }))
 }
 
-#[inline(never)]
 /// Authenticate Core and Trading for a caller who invoked Trading DIRECTLY.
 ///
-/// This is the public route: no Registry outer, no continuation, so Trading
-/// asks the Registry by CPI to re-authenticate Core and itself against the
-/// live deployment. Those receipts say nothing about the child roles, and the
-/// Direct crosscheck names Claims and Custody in the ack it commits, so the
-/// children are read from the activation cache -- the same account, under the
-/// same checks, that the continuation's authenticator reads them from.
+/// This is the public route: no Registry outer, no continuation. Trading is at
+/// CPI depth one here, so invoking `RegistryInstructionV1::Reauthenticate` was
+/// LEGAL on this arm -- and it is what this route did until decision 0017's
+/// option B. It stopped, and the reason is a number: SEALWIDE measured the pair
+/// of invocations at **52,592 CU**, 26,296 each, identical on all 32 swept seeds
+/// at two different builds. That is code cost, not a bump-search draw, and it
+/// bought nothing the frame did not already carry.
+///
+/// What the Registry did with those 52,592 CU was decode an account this frame
+/// holds and read two roles out of it. Every child role program already reads
+/// the same account the same way, because under a continuation it must -- the
+/// Registry sits at depth one there and the CPI is reentrancy. So the local read
+/// is not a new trust shape being introduced on this arm; it is the shape the
+/// other four families have run since 2026-08-27, arriving where it was merely
+/// expensive rather than impossible.
+///
+/// The heap check stays first, before anything allocates.
 #[inline(never)]
 fn reauthenticate_top_level_root_roles_v3(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<(AuthenticatedRoleReceiptV1, AuthenticatedChildProgramsV3), ProgramError> {
-    // Before the two CPIs, not after: this route's peak exceeds the protocol
-    // default heap, and the two reauthentication frames are the first thing it
-    // spends that budget on. Refusing here costs a caller who forgot the grant
-    // one comparison instead of a million compute units and an unnamed abort.
+    // Before the reauthentication frames, not after: this route's peak exceeds
+    // the protocol default heap and this is the first thing it spends that
+    // budget on. Refusing here costs a caller who forgot the grant one
+    // comparison instead of a million compute units and an unnamed abort.
     crate::entrypoint_adapter::require_extended_heap_admitted_v1()?;
-    // Once, for all three readers below. This used to happen three times --
-    // inside each `reauthenticate_role` and again inside the child-program
-    // decode -- and all three searched for the same address, because the seeds
-    // are the same seeds. Holding the account here instead refuses a wrong
-    // cache EARLIER than any of them did, and on the stricter of the two check
-    // sets that were in play.
-    let cache = require_activation_cache_account_v3(frame, envelope)?;
-    let core_receipt = reauthenticate_role(
-        frame,
+    // Owner, non-executability and the one exact width BEFORE a byte is read,
+    // which is the ordering `dclutch-registry-activation-auth-v1` documents and
+    // the reason a stranger's account can never contribute the bump seed the
+    // identity check below reproduces the address from.
+    require_cache_account(frame.registry.key, frame.activation_cache)
+        .map_err(TradingSbfError::from)?;
+    authenticate_top_level_root_roles_from_cache_v3(frame, envelope)
+}
+
+/// One borrow, one decode, four roles.
+///
+/// Split out so the borrow's `Ref` and the view that lives inside it have a
+/// scope, and so the continuation arm -- which does not call this -- carries
+/// none of its frame.
+///
+/// # The conjunction, and where each half of it comes from
+///
+/// The two CPIs this replaces ran `process_reauthenticate`
+/// (`programs/dclutch-registry-sbf/src/lib.rs`), which is: the three-account
+/// read-only frame, a hostile `decode` of the cache, `authenticate_cache_identity`
+/// (Registry ownership, non-executability, exact width, address reproduced from
+/// the body's carried bump), and then `authenticate_activated_role_in_cache_v1`
+/// for the role. Everything below the identity check is a function this program
+/// now calls DIRECTLY, and it is the same function object the Registry calls --
+/// so the two readers cannot drift, which is the property decision 0017 §3 named
+/// as better than the CPI had.
+///
+/// The identity check is the crate's too, and it is STRICTER here than in the
+/// CPI. `authenticate_cache_identity` derived the cache address from the
+/// address the CACHE ITSELF names, so a perfectly valid cache belonging to
+/// another Market passed it; what refused that was the caller's after-the-fact
+/// `receipt.execution_release_set_id() == release_set` comparison, which
+/// somebody had to remember to write. `authenticate_activation_cache_identity_v1`
+/// derives it from the release set THIS Market selected, so the wrong-generation
+/// cache refuses at its own address before a role is decoded.
+///
+/// # Why three decodes became one
+///
+/// `ActivatedExecutionReleaseSetViewV1::decode` validates the complete five-role
+/// projection and all ten aliasing pairs -- twenty-five `decode_role` calls --
+/// and this route ran it three times: once in each Registry CPI and once more
+/// for the children. Seventy-five role decodes of one immutable 1,288-byte
+/// account, for one answer. The account cannot change between them: it is
+/// Registry-owned, this frame holds it read-only, and its content is fixed for
+/// the life of its release set.
+#[inline(never)]
+fn authenticate_top_level_root_roles_from_cache_v3(
+    frame: HotFrameV3<'_, '_>,
+    envelope: HotExecutionEnvelopeV3,
+) -> Result<(AuthenticatedRoleReceiptV1, AuthenticatedChildProgramsV3), ProgramError> {
+    let data = frame
+        .activation_cache
+        .try_borrow_data()
+        .map_err(|_| TradingSbfError::Release)?;
+    let activated =
+        ActivatedExecutionReleaseSetViewV1::decode(&data).map_err(|_| TradingSbfError::Release)?;
+    authenticate_activation_cache_identity_v1(
+        frame.registry,
+        frame.activation_cache,
+        &envelope.release_set(),
+        activated,
+    )
+    .map_err(TradingSbfError::from)?;
+    let core_receipt = authenticate_activated_role_in_frame_v1(
+        frame.activation_cache,
+        activated,
         ExecutionRoleV1::Core,
         frame.core_program,
         frame.core_programdata,
-        envelope.release_set(),
-        cache,
-    )?;
+    )
+    .map_err(TradingSbfError::from)?;
+    // Kept although `cached_role_deployment_observation_v1` already required
+    // `program.key == release.program()` before it observed anything: this is
+    // the comparison the CPI arm made on the returned receipt, and dropping it
+    // in the same change that removes the CPI would make the diff say something
+    // it does not mean.
     if core_receipt.program().as_bytes() != &frame.core_program.key.to_bytes() {
         return Err(TradingSbfError::Release.into());
     }
-    let trading_receipt = reauthenticate_role(
-        frame,
+    let trading_receipt = authenticate_activated_role_in_frame_v1(
+        frame.activation_cache,
+        activated,
         ExecutionRoleV1::Trading,
         frame.trading_program,
         frame.trading_programdata,
-        envelope.release_set(),
-        cache,
-    )?;
+    )
+    .map_err(TradingSbfError::from)?;
     Ok((
         trading_receipt,
-        authenticate_activated_child_programs_v3(frame, envelope, cache)?,
+        read_activated_child_programs_v3(activated)?,
     ))
 }
 
@@ -6271,7 +6367,17 @@ impl<'a> LifecycleSeedsV4<'a> {
 
     /// The canonical bump for the seeds pushed so far.
     ///
-    /// The preplan derives it. **The replan does not**, and this is the one
+    /// The preplan REPRODUCES it from the caller's mined hint where there is
+    /// one, and searches only where there is none. A lifecycle-created state is
+    /// the hardest address on this route to carry a stored bump for -- it does
+    /// not exist yet, so no account can have recorded it -- and it is also the
+    /// easiest to mine off chain, because its seeds are materialized from
+    /// registers the caller already computed to build the request at all. A
+    /// wrong hint reproduces a different address, which is compared against the
+    /// state coordinate the frame supplied and refused; see the equality on
+    /// `derived` in `prepare_lifecycle_v4`.
+    ///
+    /// **The replan does not derive at all**, and that remains the one
     /// recomputation the second pass skips outright:
     /// [`Pubkey::try_find_program_address`] is a pure function of the seed
     /// bytes and the program id, every one of those bytes has just been
@@ -6284,13 +6390,24 @@ impl<'a> LifecycleSeedsV4<'a> {
     /// derivation against the state account's key, so the caller reads it off
     /// that account, and the caller has already required the state coordinate
     /// to be the preplan's.
-    fn pending_bump(&self, program_id: &Pubkey) -> Result<LifecycleCanonicalBumpV4, ProgramError> {
+    fn pending_bump(
+        &self,
+        program_id: &Pubkey,
+        hint: u8,
+    ) -> Result<LifecycleCanonicalBumpV4, ProgramError> {
         match self {
             Self::Collect(seeds) => {
-                let seed_slices = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
-                let (address, bump) =
-                    Pubkey::try_find_program_address(seed_slices.as_slice(), program_id)
-                        .ok_or(TradingSbfError::Content)?;
+                let mut seed_slices = seeds.iter().map(Vec::as_slice).collect::<Vec<_>>();
+                let Some(bump) = hot_bump_hint_v1(hint) else {
+                    let (address, bump) =
+                        Pubkey::try_find_program_address(seed_slices.as_slice(), program_id)
+                            .ok_or(TradingSbfError::Content)?;
+                    return Ok(LifecycleCanonicalBumpV4::Derived { address, bump });
+                };
+                let bump_seed = [bump];
+                seed_slices.push(bump_seed.as_slice());
+                let address = Pubkey::create_program_address(seed_slices.as_slice(), program_id)
+                    .map_err(|_| TradingSbfError::Content)?;
                 Ok(LifecycleCanonicalBumpV4::Derived { address, bump })
             }
             Self::Verify { expected, next } => {
@@ -6506,6 +6623,11 @@ fn prepare_lifecycle_v4<'a, 'region>(
     rent: &Rent,
     aliases: &[usize],
     profile_join: ValidatedProfileJoinV3<'_>,
+    // The bumps the caller mined for the accounts this lifecycle CREATES, in
+    // the order the plan reaches them. Consumed only by the preplan; the replan
+    // reuses the preplan's table and derives nothing. A slot the caller left
+    // zero, and every created account past the end of the block, searches.
+    lifecycle_hints: [u8; 2],
     // `None` on the preplan, which collects the table. `Some` on the replan,
     // which reproduces it: see [`LifecycleBatchSinkV4`] for why the second
     // evaluation is not redundant and why it allocates nothing.
@@ -6572,6 +6694,10 @@ fn prepare_lifecycle_v4<'a, 'region>(
         counted = counted.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
     let mut sink = LifecycleBatchSinkV4::new(expected, planned)?;
+    // Which hint slot the next created account takes. Both passes walk the same
+    // plan in the same order, so the two walks agree on the assignment without
+    // carrying it between them.
+    let mut next_hint = 0_usize;
     let mut ordinal = 0_u16;
     while ordinal < plan_count {
         let selected = policy
@@ -6634,7 +6760,9 @@ fn prepare_lifecycle_v4<'a, 'region>(
                         if seed.checked_add(1) != Some(seed_count) || canonical_bump.is_some() {
                             return Err(TradingSbfError::Content.into());
                         }
-                        let bump = match seeds.pending_bump(program_id)? {
+                        let hint = lifecycle_hints.get(next_hint).copied().unwrap_or(0);
+                        next_hint = next_hint.checked_add(1).ok_or(TradingSbfError::Content)?;
+                        let bump = match seeds.pending_bump(program_id, hint)? {
                             LifecycleCanonicalBumpV4::Derived { address, bump } => {
                                 derived = Some(address);
                                 bump
@@ -7765,6 +7893,10 @@ fn preflight_child_routes_v3<'accounts, 'info>(
     let mut preflight_frame: Vec<AccountInfo<'info>> = Vec::new();
     let mut preflight_wire: Vec<u8> = Vec::new();
     let mut route = 0_u16;
+    // Position of the next child invocation in the whole walk, route-major.
+    // The execution walk counts the same way, so both agree on which hint slot
+    // an invocation owns without carrying the assignment between them.
+    let mut child_ordinal = 0_usize;
     while route < effect.route_count() {
         let count = effect
             .invocation_count(route, tail_count, scalars, identities)
@@ -7772,6 +7904,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
         caller_bumps.record_invocations(count)?;
         let mut invocation_index = 0_u32;
         while invocation_index < count {
+            let caller_hint = child_caller_hint_v1(envelope, child_ordinal);
             let invocation = effect
                 .resolved_invocation(route, invocation_index, tail_count, scalars, identities)
                 .map_err(|_| TradingSbfError::Content)?;
@@ -7813,6 +7946,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             generation: envelope.generation(),
                             trading_program: program_id.to_bytes(),
                         },
+                        caller_hint,
                     )?)?;
                     let suffix = usize::try_from(receipt_dependency_width_v3(invocation))
                         .map_err(|_| TradingSbfError::Content)?;
@@ -7878,16 +8012,19 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             generation: envelope.generation(),
                             parent_request_digest: request_digest,
                             trading_program: program_id.to_bytes(),
+                            child_relay: envelope.bump_hints().child_relay,
                         },
+                        caller_hint,
                     )?)?;
-                    // Plus the one byte `execute_custody_route_v3` appends: the
-                    // caller-authority bump the child reads instead of
-                    // searching. Sized here so the walk's single wire buffer is
+                    // Plus the three bytes `execute_custody_route_v3` appends:
+                    // the caller-authority bump, and the replay and transfer
+                    // authority bumps the child reads instead of searching for
+                    // them. Sized here so the walk's single wire buffer is
                     // still bought exactly once.
                     caller_bumps.record_wire_bytes(
                         invocation
                             .request_len
-                            .checked_add(1)
+                            .checked_add(CUSTODY_BUMP_RELAY_BYTES_V1)
                             .ok_or(TradingSbfError::Content)?,
                     );
                     #[cfg(not(any(
@@ -7923,6 +8060,7 @@ fn preflight_child_routes_v3<'accounts, 'info>(
                             selected_capability_program,
                             activation_account: frame.activation_cache.key.to_bytes(),
                         },
+                        caller_hint,
                     )?)?;
                     caller_bumps.record_wire_bytes(preflight_wire.len());
                     #[cfg(not(feature = "families"))]
@@ -7931,6 +8069,9 @@ fn preflight_child_routes_v3<'accounts, 'info>(
             }
             hot_cu_checkpoint!("pf-invocation-preflighted");
             invocation_index = invocation_index
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?;
+            child_ordinal = child_ordinal
                 .checked_add(1)
                 .ok_or(TradingSbfError::Content)?;
         }
@@ -7957,6 +8098,30 @@ struct ChildExecutionStateV3<'info> {
 // account data into the heap. The child-CPI buffer set added 128 bytes of
 // header to save thousands of bytes of per-invocation duplication.
 const _: [(); 216] = [(); core::mem::size_of::<ChildExecutionStateV3<'_>>()];
+
+/// The caller's mined bump for the child invocation at `ordinal`, if any.
+///
+/// `Some` turns a composition's `prepare` from the walk that SEARCHES into the
+/// walk that REPRODUCES: `child_caller_authority_v4` takes exactly this shape,
+/// and every composition already compares the address it produces against the
+/// account at coordinate 0. A wrong hint reproduces a different address and
+/// refuses there, unchanged, so the hint is a memo and never an authority --
+/// the same argument the module already makes for the preflight-to-execution
+/// carry, now extended one step further out to the caller who mined it.
+///
+/// Zero, and every invocation past the end of the block, means the preflight
+/// searches exactly as it used to.
+const fn child_caller_hint_v1(
+    envelope: HotExecutionEnvelopeV3,
+    ordinal: usize,
+) -> PreflightedCallerBumpV4 {
+    let hints = envelope.bump_hints().child_caller;
+    if ordinal < hints.len() {
+        hot_bump_hint_v1(hints[ordinal])
+    } else {
+        None
+    }
+}
 
 /// Read the next caller-authority bump the preflight walk derived.
 ///
@@ -8006,6 +8171,11 @@ fn execute_child_routes_v3<'accounts, 'info>(
     // The preflight walk's derivations, read back in the order it produced
     // them. See `ChildCallerBumpsV4`.
     let mut caller_bump_cursor = 0_usize;
+    // Counted exactly as the preflight walk counts it, so the two walks assign
+    // the same hint slot to the same invocation. This is NOT the cursor above:
+    // that one advances only for the roles the preflight preflighted, and the
+    // Claims route is derived here rather than there.
+    let mut child_ordinal = 0_usize;
     #[cfg(not(feature = "families"))]
     let _ = (capability_program_set, selected_capability_program);
     #[cfg(not(any(
@@ -8213,6 +8383,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 buffers,
                                 claims_program.ok_or(TradingSbfError::Release)?,
                                 sparse_post_resource_verification,
+                                child_caller_hint_v1(envelope, child_ordinal),
                             )?,
                             claims_program.ok_or(TradingSbfError::Release)?,
                         )
@@ -8249,6 +8420,7 @@ fn execute_child_routes_v3<'accounts, 'info>(
                                 generation: envelope.generation(),
                                 parent_request_digest: request_digest,
                                 trading_program: program_id.to_bytes(),
+                                child_relay: envelope.bump_hints().child_relay,
                             },
                             take_caller_bump_v4(caller_bumps, &mut caller_bump_cursor)?,
                         )?;
@@ -8361,6 +8533,9 @@ fn execute_child_routes_v3<'accounts, 'info>(
             .to_bytes();
             hot_heap_mark!("child-banked");
             invocation = invocation.checked_add(1).ok_or(TradingSbfError::Content)?;
+            child_ordinal = child_ordinal
+                .checked_add(1)
+                .ok_or(TradingSbfError::Content)?;
         }
         execution.route = route.checked_add(1).ok_or(TradingSbfError::Content)?;
     }
@@ -9017,6 +9192,7 @@ fn execute_claims_route_digest_v3<'info>(
     buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
     sparse_post_resource_verification: SparsePostResourceVerificationV3,
+    hint: PreflightedCallerBumpV4,
 ) -> Result<[u8; 32], ProgramError> {
     claims_receipt_digest_v3(execute_claims_route_v3(
         program_id,
@@ -9033,6 +9209,7 @@ fn execute_claims_route_digest_v3<'info>(
         buffers,
         claims_program,
         sparse_post_resource_verification,
+        hint,
     )?)
 }
 
@@ -10352,7 +10529,11 @@ fn authenticate_market(
         || state.identity.registry_program.to_bytes() != frame.registry.key.to_bytes()
         || state.identity.generation != envelope.generation()
         || envelope.market() != frame.market.key.to_bytes()
-        || market_core_state_address_v2(state, frame.core_program.key)? != *frame.market.key
+        || market_core_state_address_v2(
+            state,
+            frame.core_program.key,
+            envelope.bump_hints().market,
+        )? != *frame.market.key
     {
         return Err(TradingSbfError::Content.into());
     }
@@ -10375,15 +10556,25 @@ fn authenticate_market(
 /// market states only at the canonical bump. Canonicality is enforced where the
 /// account is made, not where it is read.
 ///
-/// A state with no recorded bump is one the founding wrote before the tail
-/// existed, and it searches. See `StateBumpsV1`.
+/// A state with no recorded bump takes the caller's mined hint instead, and
+/// searches only if it was given neither. Both carriers land in the same
+/// `create_program_address`, and the comparison above is what makes either one
+/// safe: a founding that predates the tail costs a stranger nothing, because
+/// the byte the founding did not write is a byte the caller can mine off chain
+/// for free. See `StateBumpsV1` and `HotBumpHintsV1`.
+///
+/// The order is not arbitrary. The recorded bump wins where it exists because
+/// it is the creator's own assertion, made once, on chain; the hint is the
+/// fallback for state that has none. Neither is trusted -- a wrong value from
+/// either carrier reproduces a different address and refuses.
 fn market_core_state_address_v2(
     state: CoreState,
     core_program: &Pubkey,
+    hint: u8,
 ) -> Result<Pubkey, ProgramError> {
     let seeds = MarketCoreStateSeedsV2::new(state.identity);
     let base = seeds.as_slices();
-    match state.bumps.market {
+    match state.bumps.market.or(hot_bump_hint_v1(hint)) {
         Some(bump) => {
             let bump_seed = [bump];
             Pubkey::create_program_address(
@@ -10399,56 +10590,19 @@ fn market_core_state_address_v2(
     }
 }
 
-/// Ask the Registry, live, whether `role` is still the deployment it was.
-///
-/// The cache account this hands the Registry arrives already held to its
-/// address, its owner and its privileges -- that is what
-/// [`ActivationCacheAuthenticatedV1`] is for, and it is a strictly stronger
-/// set of checks than the address-and-owner pair this function used to run for
-/// itself. What it bought by giving them up is the `find_program_address` that
-/// came with them: the caller now searches once for an address that both roles
-/// and the child-program decode all share.
-fn reauthenticate_role<'accounts, 'info>(
-    frame: HotFrameV3<'accounts, 'info>,
-    role: ExecutionRoleV1,
-    role_program: &AccountInfo<'info>,
-    role_programdata: &AccountInfo<'info>,
-    release_set: [u8; 32],
-    _cache: ActivationCacheAuthenticatedV1,
-) -> Result<AuthenticatedRoleReceiptV1, ProgramError> {
-    let instruction = Instruction {
-        program_id: *frame.registry.key,
-        accounts: vec![
-            AccountMeta::new_readonly(*frame.activation_cache.key, false),
-            AccountMeta::new_readonly(*role_program.key, false),
-            AccountMeta::new_readonly(*role_programdata.key, false),
-        ],
-        data: RegistryInstructionV1::Reauthenticate(role)
-            .to_bytes()
-            .to_vec(),
-    };
-    invoke(
-        &instruction,
-        &[
-            frame.activation_cache.clone(),
-            role_program.clone(),
-            role_programdata.clone(),
-            frame.registry.clone(),
-        ],
-    )
-    .map_err(|_| TradingSbfError::Release)?;
-    let (producer, bytes) = get_return_data().ok_or(TradingSbfError::Release)?;
-    let receipt =
-        AuthenticatedRoleReceiptV1::decode(&bytes).map_err(|_| TradingSbfError::Release)?;
-    if producer != *frame.registry.key
-        || receipt.role() != role
-        || receipt.execution_release_set_id().to_bytes() != release_set
-        || receipt.program().as_bytes() != &role_program.key.to_bytes()
-    {
-        return Err(TradingSbfError::Release.into());
-    }
-    Ok(receipt)
-}
+// `reauthenticate_role` lived here and CPI'd `RegistryInstructionV1::Reauthenticate`
+// once per root role. Decision 0017's option B deleted it: at 26,296 CU per
+// invocation it was the single largest routine cost on this route, and every
+// fact it returned is written in a Registry-OWNED account at a Registry-DERIVED
+// address that this frame already carries. The replacement is
+// `authenticate_top_level_root_roles_from_cache_v3`, which calls the same
+// authentication function the Registry's own handler calls.
+//
+// There is no fallback path and there must not be one -- the same sentence the
+// five child families carry. Re-adding the import is how a future contributor
+// would write a route that passes every test not run under a continuation and
+// dies on the one that is; `registry_hot_continuation.rs`'s per-family tripwire
+// is what turns that into a named red.
 
 mod seal;
 
@@ -10933,6 +11087,91 @@ mod tests {
         INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES_V3, InstructionV3, ProgramGeometryV3,
         ScalarRegisterV3, encode_program_atomic,
     };
+
+    use dclutch_market_core_codec::{
+        Identity, MarketIdentity, Phase as CorePhase, Readiness as CoreReadiness, StateBumpsV1,
+    };
+
+    /// A Market state carrying exactly the recorded bumps the test wants.
+    fn market_state_with_bumps(bumps: StateBumpsV1) -> CoreState {
+        CoreState {
+            phase: CorePhase::Open,
+            readiness: CoreReadiness::Consumed,
+            terminal_winner: 0,
+            identity: MarketIdentity {
+                market_id: Identity::new([1; 32]).expect("market"),
+                realm_id: Identity::new([2; 32]).expect("realm"),
+                product_record: Identity::new([3; 32]).expect("product record"),
+                product_id: Identity::new([4; 32]).expect("product"),
+                resolution_policy: Identity::new([5; 32]).expect("policy"),
+                capability_manifest: Identity::new([6; 32]).expect("manifest"),
+                selected_release_set: Identity::new([7; 32]).expect("release set"),
+                registry_program: Identity::new([8; 32]).expect("registry"),
+                generation: 7,
+            },
+            outstanding_capabilities: 1,
+            principal_cap_sets: 100,
+            rent_beneficiary: Identity::new([9; 32]).expect("beneficiary"),
+            terminal_receipt: None,
+            bumps,
+        }
+    }
+
+    /// The Market address is reproduced from whichever carrier holds the bump,
+    /// and a wrong byte in either one names a DIFFERENT address.
+    ///
+    /// This is the whole safety argument for accepting a caller-mined byte: the
+    /// caller of `market_core_state_address_v2` compares what comes back
+    /// against the account it was handed, so a hint that is not this Market's
+    /// canonical bump can only produce an address that comparison refuses.
+    #[test]
+    fn a_wrong_market_bump_hint_reproduces_another_address_and_refuses() {
+        let core_program = Pubkey::new_from_array([0x33; 32]);
+        let unrecorded = market_state_with_bumps(StateBumpsV1::UNRECORDED);
+        let seeds = MarketCoreStateSeedsV2::new(unrecorded.identity);
+        let (canonical_address, canonical) =
+            Pubkey::find_program_address(&seeds.as_slices(), &core_program);
+
+        // No carrier at all: the search this always did, unchanged.
+        assert_eq!(
+            market_core_state_address_v2(unrecorded, &core_program, 0).expect("searched"),
+            canonical_address,
+        );
+        // The caller mined it: reproduced, and no search was run.
+        assert_eq!(
+            market_core_state_address_v2(unrecorded, &core_program, canonical).expect("hinted"),
+            canonical_address,
+        );
+        // Every other hint yields something that is not this Market, either by
+        // refusing to be a program address at all or by being another address.
+        let mut refused = 0_u32;
+        for hint in 1..=u8::MAX {
+            if hint == canonical {
+                continue;
+            }
+            match market_core_state_address_v2(unrecorded, &core_program, hint) {
+                Ok(address) => assert_ne!(address, canonical_address, "hint {hint}"),
+                Err(_) => {}
+            }
+            refused = refused.saturating_add(1);
+        }
+        assert_eq!(refused, 254);
+
+        // A state that RECORDED its bump ignores the hint entirely: the
+        // creator's own assertion outranks a byte off the wire, and a caller
+        // cannot steer a Market that already knows its own address.
+        let recorded = market_state_with_bumps(StateBumpsV1 {
+            market: Some(canonical),
+            ..StateBumpsV1::UNRECORDED
+        });
+        for hint in [0, canonical, canonical.wrapping_sub(1), u8::MAX] {
+            assert_eq!(
+                market_core_state_address_v2(recorded, &core_program, hint).expect("recorded"),
+                canonical_address,
+                "hint {hint} steered a recorded Market",
+            );
+        }
+    }
 
     fn readonly_info(key: Pubkey) -> AccountInfo<'static> {
         AccountInfo::new(
@@ -12940,7 +13179,7 @@ mod tests {
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
         let program = Pubkey::new_from_array([0x77; 32]);
         assert!(matches!(
-            seeds.pending_bump(&program).expect("reused bump"),
+            seeds.pending_bump(&program, 0).expect("reused bump"),
             LifecycleCanonicalBumpV4::Reused { bump: 254 }
         ));
         // A preplan whose final seed is not a single bump byte is not a bump.
@@ -12950,7 +13189,68 @@ mod tests {
         };
         let mut seeds = LifecycleSeedsV4::new(Some(malformed.seeds.as_slice()), 2).expect("verify");
         seeds.push(&[0x11, 0x11]).expect("first seed agrees");
-        assert!(seeds.pending_bump(&program).is_err());
+        assert!(seeds.pending_bump(&program, 0).is_err());
+    }
+
+    /// The preplan reproduces the caller's mined bump instead of searching, and
+    /// a wrong one names an account this execution was not handed.
+    ///
+    /// A lifecycle-created state is the hardest address on the route to store a
+    /// bump for -- it does not exist yet -- and the easiest to mine off chain,
+    /// because its seeds come from registers the caller already computed. The
+    /// refusal is `prepare_lifecycle_v4`'s equality against the state
+    /// coordinate; here the property that equality rests on is what is pinned:
+    /// a wrong hint never lands on the canonical address.
+    #[test]
+    fn a_wrong_lifecycle_bump_hint_reproduces_another_address_and_refuses() {
+        let program = Pubkey::new_from_array([0x77; 32]);
+        let collect = || {
+            let mut seeds = LifecycleSeedsV4::new(None, 2).expect("collect");
+            seeds.push(&[0x11, 0x11]).expect("collected");
+            seeds
+        };
+        let LifecycleCanonicalBumpV4::Derived {
+            address: canonical_address,
+            bump: canonical,
+        } = collect().pending_bump(&program, 0).expect("searched")
+        else {
+            panic!("the collecting pass derives");
+        };
+        // Mined by the caller: the same address, with no search behind it.
+        assert!(matches!(
+            collect().pending_bump(&program, canonical).expect("hinted"),
+            LifecycleCanonicalBumpV4::Derived { address, bump }
+                if address == canonical_address && bump == canonical
+        ));
+        let mut refused = 0_u32;
+        for hint in 1..=u8::MAX {
+            if hint == canonical {
+                continue;
+            }
+            match collect().pending_bump(&program, hint) {
+                Ok(LifecycleCanonicalBumpV4::Derived { address, .. }) => {
+                    assert_ne!(address, canonical_address, "hint {hint}");
+                }
+                Ok(LifecycleCanonicalBumpV4::Reused { .. }) => {
+                    panic!("a collecting pass never reuses");
+                }
+                Err(_) => {}
+            }
+            refused = refused.saturating_add(1);
+        }
+        assert_eq!(refused, 254);
+
+        // The REPLAN still ignores the hint outright: it reuses the preplan's
+        // own final seed, so a hint cannot make the two passes disagree.
+        let prior = preplanned_invocation(1, 0x11, 0x63);
+        for hint in [0, 1, canonical, u8::MAX] {
+            let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
+            seeds.push(&[0x11, 0x11]).expect("first seed agrees");
+            assert!(matches!(
+                seeds.pending_bump(&program, hint).expect("reused"),
+                LifecycleCanonicalBumpV4::Reused { bump: 254 }
+            ));
+        }
     }
 
     /// The preplan derives the bump for real; the two modes are not
@@ -12961,7 +13261,7 @@ mod tests {
         seeds.push(&[0x11, 0x11]).expect("collected");
         let program = Pubkey::new_from_array([0x77; 32]);
         assert!(matches!(
-            seeds.pending_bump(&program).expect("derived"),
+            seeds.pending_bump(&program, 0).expect("derived"),
             LifecycleCanonicalBumpV4::Derived { .. }
         ));
         // A collecting cursor is never "exhausted", and a verifying one never
@@ -12984,7 +13284,7 @@ mod tests {
             let mut seeds = LifecycleSeedsV4::new(Some(prior.seeds.as_slice()), 2).expect("verify");
             seeds.push(&[0x11, 0x11]).expect("first seed agrees");
             let LifecycleCanonicalBumpV4::Reused { bump } =
-                seeds.pending_bump(&program).expect("reused")
+                seeds.pending_bump(&program, 0).expect("reused")
             else {
                 return Err(TradingSbfError::Content.into());
             };

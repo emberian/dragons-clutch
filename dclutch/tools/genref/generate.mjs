@@ -401,9 +401,10 @@ codes**.
 If you'd rather start with prose, the [guides](../guides/README.md)
 explain the protocol in plain terms and link back into these tables.
 
-The seven dClutch programs are deployed on Solana devnet. These tables describe
-the checked-in protocol and its devnet and local tooling; they are not a
-mainnet release manifest, and there is no open market or value at risk today.
+The seven dClutch programs are deployed on Solana devnet, where one market is
+now open for trading. These tables describe the checked-in protocol and its
+devnet and local tooling; they are not a mainnet release manifest, and that
+market's collateral is a devnet test token, so there is no value at risk.
 `,
   );
 }

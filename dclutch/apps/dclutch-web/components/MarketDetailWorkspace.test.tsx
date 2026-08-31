@@ -9,10 +9,10 @@ describe('Market detail route', () => {
   const html = renderToStaticMarkup(<MarketDetailWorkspace address={ADDRESS} />);
 
   it('names the four sections a Market detail owes its reader', () => {
-    expect(html).toContain('Overview');
-    expect(html).toContain('Economics');
-    expect(html).toContain('Realm');
-    expect(html).toContain('Capabilities');
+    expect(html).toContain('What this market is');
+    expect(html).toContain('The money');
+    expect(html).toContain('What it pays out in');
+    expect(html).toContain('What it is allowed to do');
     expect(html).toContain(ADDRESS);
     // The read starts on its own: the address is in the URL and the programs
     // come from the baked deployment, so nothing is asked for first.
@@ -27,19 +27,22 @@ describe('Market detail route', () => {
     // Four sections, and nothing has been read: each one says REFUSED and why,
     // rather than rendering as empty-but-fine.
     expect(html.split('REFUSED').length - 1).toBeGreaterThanOrEqual(3);
-    expect(html).toContain('No decoded Market root');
-    expect(html).toContain('No Realm was reacquired, because no Market root has been decoded.');
-    expect(html).toContain('No capability manifest identity exists to authenticate');
-    expect(html).toContain('Reading this Market at the finalized floor…');
+    expect(html).toContain('The market account has not been read yet');
+    expect(html).toContain('so there is no fingerprint to work an address out from');
+    expect(html).toContain('so there is no list to check');
+    expect(html).toContain('Reading this market from the chain…');
+    // And it does not yet say a Market can never trade, because it has not read
+    // one. That verdict is only ever spoken from an authenticated manifest.
+    expect(html).not.toContain('can never trade');
   });
 
   it('states the Hoard and capability funding contracts it is held to', () => {
     // The Hoard has no derivable account, and the surface says so before it is
     // ever asked to show a number.
-    expect(html).toContain('the Hoard is stated as underivable rather than guessed');
-    expect(html).toContain('A Core Market root carries no supply vector and no Hoard figure');
-    expect(html).toContain('seven segregated compartments with separate native-lamport and Realm-collateral totals, never merged into one number');
-    expect(html).toContain('content identity');
+    expect(html).toContain('where the vault cannot be worked out we say so rather than guess');
+    expect(html).toContain('The market account itself stores neither the claim counts nor the vault balance');
+    expect(html).toContain('seven separate compartments, with SOL and collateral totalled apart and never merged into one number');
+    expect(html).toContain('it stores a fingerprint of one');
   });
 
   it('presents raw atoms and never a market-data metric', () => {
@@ -47,7 +50,7 @@ describe('Market detail route', () => {
     // that route name is not this surface's vocabulary and is excluded here.
     const withoutNav = html.replace(/<nav>[\s\S]*?<\/nav>/, '');
     const disclaimers = [
-      'Raw u64 atoms, read where the chain keeps them. A Core Market root carries no supply vector and no Hoard figure, so this section is not decoded from the Market at all: the per-claim supplies come from the Claims LiabilityBasisV2 aggregate this Market derives, and the Hoard is stated as underivable rather than guessed.',
+      'Raw amounts, read where the chain keeps them. The market account itself stores neither the claim counts nor the vault balance, so nothing in this section comes from it: the counts come from the claims ledger this market points at, and where the vault cannot be worked out we say so rather than guess.',
     ];
     let remainder = withoutNav;
     for (const disclaimer of disclaimers) {

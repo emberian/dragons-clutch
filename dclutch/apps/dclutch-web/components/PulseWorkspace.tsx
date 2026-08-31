@@ -418,19 +418,19 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </div>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>The pulse, by the numbers</h2><p>Three counts from the simulator&apos;s last write. A dash is an unread value, never a zero; a read zero is shown as the zero it is.</p></div></header>
+      <header><span>01</span><div><h2>The pulse, by the numbers</h2><p>Three counts from the simulator&apos;s last write. A dash means we did not read it. A zero means we read a zero.</p></div></header>
       {/* FE-CHART mount: the pulse feeds the presentational NumberStrip; the
           reader in lib/simulatorStatus.ts decides what may appear here. */}
       <NumberStrip stats={status === null ? UNREAD_STATS : loadedStats(status)} provenance={provenance(read)} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>02</span><div><h2>The heartbeat</h2><p>Two things move between one reading and the next, and neither of them belongs to us: how far the chain got, and how long we took to come back. This is the part of the record that answers whether anything is on the other end of the line.</p></div></header>
+      <header><span>02</span><div><h2>The heartbeat</h2><p>Two things change between one reading and the next: how far the chain got, and how long we took to come back. Together they answer whether anything is still on the other end of the line.</p></div></header>
       <Heartbeat read={series} />
     </section>
 
     <section className="trade-v3-card">
-      <header><span>03</span><div><h2>Every law, at every boundary</h2><p>Seven conservation laws are re-checked after each cycle — that the collateral is all still somewhere we can name, that the positions add up to the issued supply, that the vault covers the worst outcome it could be asked to pay. Each row is one law; each column is one cycle.</p></div></header>
+      <header><span>03</span><div><h2>The seven checks, after every cycle</h2><p>After each cycle the simulator re-checks seven things: that the collateral is all still somewhere we can name, that the positions add up to the claims issued, that the vault covers the worst outcome it could be asked to pay, and four more like them. Each row is one check; each column is one cycle.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <ConservationLaws series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}
@@ -454,7 +454,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     </section>
 
     <section className="trade-v3-card">
-      <header><span>06</span><div><h2>Who is in this market</h2><p>Every position on the market and every account holding its collateral, as of the last recorded cycle. This is the table a prediction market usually calls a leaderboard; it is not called that here, because ordering one position ranks nothing. The first trade changes that by itself.</p></div></header>
+      <header><span>06</span><div><h2>Who is in this market</h2><p>Every position on the market, and every account holding its collateral, as of the last recorded cycle. Elsewhere this table would be called a leaderboard. It is not called that here, because ranking one position ranks nothing — the first real trade changes that by itself.</p></div></header>
       {series !== null && series.kind === 'loaded'
         ? <WhoIsHolding series={series.series} />
         : <p className="market-empty">{NO_SERIES_SENTENCE_V1}</p>}

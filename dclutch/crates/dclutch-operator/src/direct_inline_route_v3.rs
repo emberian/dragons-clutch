@@ -353,6 +353,17 @@ pub struct DirectInlineChildAuthoritiesV3 {
     pub custody_request_digests: [[u8; 32]; 4],
     /// Custody child caller-authority PDAs in Effect route order.
     pub custody_authorities: [Pubkey; 4],
+    /// Canonical bump of `claims_authority`, mined here so Trading need not.
+    ///
+    /// This projection already ran the search to produce the address above; the
+    /// bump it threw away is the one byte that lets the on-chain walk reproduce
+    /// the same address with `create_program_address` instead of searching for
+    /// it again. It is a hint and never an authority -- Trading rebuilds the
+    /// seeds itself and refuses unless the address reproduces the account at
+    /// coordinate 0. See `HotBumpHintsV1`.
+    pub claims_authority_bump: u8,
+    /// Canonical bumps of `custody_authorities`, in the same order.
+    pub custody_authority_bumps: [u8; 4],
 }
 
 /// Release-authenticated program and ProgramData coordinates used by Direct.
@@ -1641,9 +1652,11 @@ fn derive_child_authorities(
         claims_request_digest,
     )
     .map_err(|_| DirectInlineRouteErrorV3::ChildFrame)?;
-    let claims_authority = Pubkey::find_program_address(&claims_seeds.as_slices(), &trading).0;
+    let (claims_authority, claims_authority_bump) =
+        Pubkey::find_program_address(&claims_seeds.as_slices(), &trading);
     let mut custody_request_digests = [[0_u8; 32]; 4];
     let mut custody_authorities = [Pubkey::default(); 4];
+    let mut custody_authority_bumps = [0_u8; 4];
     for (index, request) in projected.custody.iter().enumerate() {
         let digest = hash(request).to_bytes();
         let seeds = CallerAuthoritySeedsV1::new(
@@ -1657,10 +1670,13 @@ fn derive_child_authorities(
         *custody_request_digests
             .get_mut(index)
             .ok_or(DirectInlineRouteErrorV3::ChildFrame)? = digest;
+        let (authority, bump) = Pubkey::find_program_address(&seeds.as_slices(), &trading);
         *custody_authorities
             .get_mut(index)
-            .ok_or(DirectInlineRouteErrorV3::ChildFrame)? =
-            Pubkey::find_program_address(&seeds.as_slices(), &trading).0;
+            .ok_or(DirectInlineRouteErrorV3::ChildFrame)? = authority;
+        *custody_authority_bumps
+            .get_mut(index)
+            .ok_or(DirectInlineRouteErrorV3::ChildFrame)? = bump;
     }
     if custody_authorities
         .iter()
@@ -1680,6 +1696,8 @@ fn derive_child_authorities(
         claims_authority,
         custody_request_digests,
         custody_authorities,
+        claims_authority_bump,
+        custody_authority_bumps,
     })
 }
 

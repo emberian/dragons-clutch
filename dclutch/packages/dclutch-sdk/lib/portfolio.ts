@@ -7,6 +7,7 @@ import {
 } from './marketCoreV2';
 import {
   inspectMarketDiscoveryV1,
+  marketActivationOutlookV1,
   MARKET_DISCOVERY_MAX_ADDRESSES,
   type MarketDiscoveryCardV1,
   type MarketProvenanceV1,
@@ -148,10 +149,16 @@ export function portfolioClaimV1(market: MarketDiscoveryCardV1, balances: Readon
     });
   }
   if (market.phase === 'Open') {
+    // The arithmetic is the same on every Open Market; the OPERATION is not.
+    // Merging a complete set back to collateral runs through the same trading
+    // route a trade does, so on a Market whose trading can never be switched on
+    // this count names something that cannot be performed -- and says so,
+    // rather than reading as an offer that is merely unexercised.
+    const closed = marketActivationOutlookV1(market).status === 'never';
     return Object.freeze({
       kind: 'mergeable',
       completeSetsAtoms: minimum(balances),
-      note: 'A complete set is one atom of every claim. Merging burns one complete set and withdraws exactly one collateral atom, so the count that can be merged is the smallest owned claim balance. This is arithmetic on these balances, not an offer.',
+      note: `A complete set is one atom of every claim. Merging burns one complete set and withdraws exactly one collateral atom, so the count that can be merged is the smallest owned claim balance. This is arithmetic on these balances, not an offer.${closed ? ' On this Market it is arithmetic only: its trading can never be switched on, and there is no other route that moves collateral out before it reaches its answer.' : ''}`,
     });
   }
   return Object.freeze({

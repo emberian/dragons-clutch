@@ -1,6 +1,6 @@
 {
   "campaign": "relayed-vertical",
-  "note": "The vertical's OWN transactions only. The campaign submits every tier-1 founding transaction before these (found_through_open is called, not copied), and tier 1's bindings are merged in front at fold time. Rows carrying a 'walk' field bind only that walk's evidence; the runner filters and strips the field before the shared census evaluator sees it, because a success-only wire reported as a stale binding on the failure walk would overstate nothing and still fail the fold.",
+  "note": "The vertical's OWN transactions only. The campaign submits every tier-1 founding transaction before these (found_through_open is called, not copied), and tier 1's bindings are merged in front at fold time. Rows carrying a 'walk' field bind only that walk's evidence; the runner filters and strips the field before the shared census evaluator sees it, because a success-only wire reported as a stale binding on the failure walk would overstate nothing and still fail the fold. The Resolution funding ladder is NOT here: found_through_open ends with the V7 readiness suffix, so CreateFund, ActivateFund and VerifyFundReady are tier-1 transactions labelled core-funding-create-v1, resolution-funding-activate-v1 and core-funding-accept-v1, and the routes they cover belong to tier 1's bindings. This campaign only authenticates their result.",
   "bindings": [
     {
       "label": "relayed vertical: top up the campaign payer",
@@ -24,51 +24,6 @@
       "outcome": "executed",
       "note": "An airdrop on a local validator; the walker pays its own fee and is credited the disclosed bounty by the walk.",
       "walk": "failure"
-    },
-    {
-      "label": "relayed vertical: prepay the Source state and the three Resolution Funds",
-      "routes": [],
-      "program": "",
-      "outcome": "executed",
-      "note": "System transfers to precommitted, prepaid destinations; the exact top-ups are the operator's arithmetic."
-    },
-    {
-      "label": "relayed vertical: create the resolution-funding routing table",
-      "routes": [],
-      "program": "",
-      "outcome": "executed",
-      "note": "Address-lookup-table program: create, for the two over-packet funding frames (CreateFund and VerifyFundReady measured at 2,016 bytes vs 1,232). Routing is table data, never protocol authority."
-    },
-    {
-      "label": "relayed vertical: extend the resolution-funding routing table page *",
-      "routes": [],
-      "program": "",
-      "outcome": "executed",
-      "note": "Address-lookup-table program: extend pages for the funding table."
-    },
-    {
-      "label": "relayed vertical: a no-recovery Market creates its own Resolution funding",
-      "routes": [
-        "core/resolution::process#CreateFund",
-        "core/process_instruction",
-        "resolution/process_create#CreateFund",
-        "resolution/core_effect::process_core_effect"
-      ],
-      "program": "core",
-      "outcome": "executed",
-      "note": "The first live execution of the e5b6923 no-recovery admission: the SHORT CreateFund frame (18 accounts, the two RecoveryPolicyV2 tail positions absent), coherence-checked against the authenticated material that names no recovery policy."
-    },
-    {
-      "label": "relayed vertical: activate the no-recovery Resolution funding",
-      "routes": [
-        "core/persist_state#VerifyFundReady",
-        "core/process_instruction",
-        "resolution/process_verify#VerifyFundReady",
-        "resolution/core_effect::process_core_effect"
-      ],
-      "program": "core",
-      "outcome": "executed",
-      "note": "VerifyFundReady over the same short frame; the three compartments go Active and the Market stays Open + Consumed."
     },
     {
       "label": "relayed vertical: prepay a terminal certificate destination",

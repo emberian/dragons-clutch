@@ -11,6 +11,10 @@ use dclutch_market_core_codec::{
     Action, CoreState, Identity as CoreIdentity, MarketCoreStateSeedsV2, MarketIdentity, Phase,
     Readiness, Request, StateBumpsV1,
 };
+use dclutch_market_open_v1_operator::{
+    REGISTRY_OPEN_MARKET_CONTINUATION_PREFIX_ACCOUNTS_V1, RegistryOpenMarketContinuationStateV1,
+    build_registry_open_market_continuation_v1,
+};
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
@@ -31,6 +35,7 @@ use dclutch_rent_contract::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
+use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAccount};
 use dclutch_token_svm::{LEGACY_TOKEN_PROGRAM_ID, PRODUCTION_ADAPTER_RELEASES};
 use solana_account::Account;
 use solana_program::{
@@ -42,10 +47,22 @@ use solana_program::{
 use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext};
-use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::{
+    instruction::InstructionError,
+    signature::{Keypair, Signer},
+    transaction::TransactionError,
+};
 use solana_sdk_ids::{bpf_loader_upgradeable, system_program, sysvar};
 use solana_transaction::Transaction;
 use spl_token_interface::state::Mint as SplMint;
+
+/// Core frame coordinates of the replay-initialization tail, from
+/// `open_market.rs`'s own INITIALIZE_* constants.
+const INITIALIZE_PAYER: usize = 11;
+const INITIALIZE_REFUND: usize = 14;
+/// `CoreSbfError::AccountFrame` and `CoreSbfError::Reference`.
+const CORE_ACCOUNT_FRAME: u32 = 0x3001;
+const CORE_REFERENCE: u32 = 0x3003;
 
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd1; 32]);
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xd2; 32]);
@@ -592,6 +609,94 @@ fn core_instruction(fixture: &Fixture, operation: OperationV1) -> Instruction {
     )
 }
 
+/// Same-finalized Registry and Loader facts the continuation is derived from.
+async fn continuation_state(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> RegistryOpenMarketContinuationStateV1 {
+    RegistryOpenMarketContinuationStateV1 {
+        registry_program: required_observed(context, REGISTRY_PROGRAM_ID).await,
+        activation_cache: required_observed(context, fixture.cache).await,
+        core_program: required_observed(context, CORE_PROGRAM_ID).await,
+        core_programdata: required_observed(context, fixture.core_programdata).await,
+        custody_program: required_observed(context, CUSTODY_PROGRAM_ID).await,
+        custody_programdata: required_observed(context, fixture.custody_programdata).await,
+    }
+}
+
+/// Wrap one Core frame in the Registry continuation that alone can admit it.
+///
+/// `2dc53776` moved market opening behind the Registry: the last account of a
+/// Core `OpenMarket` frame is an invocation-scoped admission PDA derived under
+/// the Registry program, and Core requires it to be a SIGNER. Nothing outside
+/// a Registry `invoke_signed` can produce that, so the route is not callable
+/// top level and this file drove a frame the program had stopped accepting --
+/// one account short, refused on length at 5,100 compute units, with every
+/// hostile case in the test passing for that reason instead of its own.
+///
+/// The operator is the same one `crates/dclutch-svm-harness` uses and the same
+/// one the successor bootstrap sends, so the frame under test is the frame
+/// that ships rather than a second author's idea of it.
+async fn continuation(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    operation: OperationV1,
+) -> Instruction {
+    let core = core_instruction(fixture, operation);
+    let state = continuation_state(context, fixture).await;
+    build_registry_open_market_continuation_v1(&state, &core)
+        .expect("chain-derived Registry continuation over the Core frame")
+        .instruction
+}
+
+/// Borrow one nested Core account meta out of the outer Registry frame.
+///
+/// The continuation carries a fixed Registry prefix and then the Core frame
+/// verbatim, so a Core index addresses the same account in both.
+fn nested_meta(instruction: &mut Instruction, core_index: usize) -> &mut AccountMeta {
+    instruction
+        .accounts
+        .get_mut(REGISTRY_OPEN_MARKET_CONTINUATION_PREFIX_ACCOUNTS_V1 + core_index)
+        .expect("nested Core account")
+}
+
+/// The exact custom refusal a submission produced, or `None` if it succeeded.
+///
+/// The four hostile cases here asserted only `is_err()` until 2026-08-30, and
+/// every one of them had been passing on a frame-length refusal none of them
+/// was about -- so the code is now named.
+fn refusal(result: Result<(), BanksClientError>) -> Option<u32> {
+    match result {
+        Ok(()) => None,
+        Err(BanksClientError::TransactionError(TransactionError::InstructionError(
+            _,
+            InstructionError::Custom(code),
+        ))) => Some(code),
+        Err(other) => panic!("expected a program refusal, got {other:?}"),
+    }
+}
+
+async fn required_observed(context: &mut ProgramTestContext, key: Pubkey) -> ObservedAccount {
+    let account = context
+        .banks_client
+        .get_account(key)
+        .await
+        .expect("account query")
+        .expect("required account exists");
+    ObservedAccount {
+        observation: Observation {
+            slot: 1,
+            unix_timestamp: 0,
+            finality: Finality::Finalized,
+        },
+        key,
+        owner: account.owner,
+        lamports: account.lamports,
+        executable: account.executable,
+        data: account.data,
+    }
+}
+
 async fn submit(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
@@ -653,6 +758,45 @@ async fn real_core_opens_exact_registry_realm_custody_and_commits_last() {
     let (test, fixture) = fixture();
     let mut context = test.start_with_context().await;
     let before_hostile = opening_snapshot(&mut context, &fixture).await;
+
+    // Every hostile case below substitutes an ACCOUNT and leaves the request
+    // bytes alone, because the continuation digest -- and therefore the
+    // admission address -- covers the Core instruction's data. A hostility
+    // that rewrote the data would move the admission and be refused for that
+    // instead, which is a refusal about the test rather than about the route.
+    let honest = continuation(&mut context, &fixture, OperationV1::InitializeReplay).await;
+
+    let mut missing_signer = honest.clone();
+    nested_meta(&mut missing_signer, INITIALIZE_PAYER).is_signer = false;
+    assert_eq!(
+        refusal(submit(&mut context, &fixture, missing_signer, false).await),
+        Some(CORE_ACCOUNT_FRAME),
+        "an unsigned sponsor is a frame refusal"
+    );
+
+    let mut read_only_sponsor = honest.clone();
+    nested_meta(&mut read_only_sponsor, INITIALIZE_PAYER).is_writable = false;
+    assert_eq!(
+        refusal(submit(&mut context, &fixture, read_only_sponsor, true).await),
+        Some(CORE_ACCOUNT_FRAME),
+        "a read-only sponsor is a frame refusal"
+    );
+
+    // A writable non-signer, because the frame's own privilege conjuncts run
+    // first: substituting a signer here refuses as a frame before the request
+    // coordinate is ever compared, which is a different assertion.
+    let mut substituted_refund = honest.clone();
+    nested_meta(&mut substituted_refund, INITIALIZE_REFUND).pubkey = Pubkey::new_unique();
+    assert_eq!(
+        refusal(submit(&mut context, &fixture, substituted_refund, true).await),
+        Some(CORE_REFERENCE),
+        "the refund account must be the one the request names"
+    );
+
+    // The one hostility the honest builder will not even emit: a request whose
+    // payer coordinate disagrees with the account the frame carries. Asserted
+    // where it is refused rather than restated as a program refusal it never
+    // reaches.
     let wrong_payer = core_instruction_with_coordinates(
         &fixture,
         OperationV1::InitializeReplay,
@@ -661,45 +805,14 @@ async fn real_core_opens_exact_registry_realm_custody_and_commits_last() {
         fixture.payer.pubkey(),
     );
     assert!(
-        submit(&mut context, &fixture, wrong_payer, true)
-            .await
-            .is_err()
+        build_registry_open_market_continuation_v1(
+            &continuation_state(&mut context, &fixture).await,
+            &wrong_payer,
+        )
+        .is_err(),
+        "a payer coordinate that disagrees with the frame is not admissible"
     );
 
-    let mut missing_signer = core_instruction(&fixture, OperationV1::InitializeReplay);
-    missing_signer
-        .accounts
-        .get_mut(11)
-        .expect("sponsor")
-        .is_signer = false;
-    assert!(
-        submit(&mut context, &fixture, missing_signer, false)
-            .await
-            .is_err()
-    );
-    let mut read_only_sponsor = core_instruction(&fixture, OperationV1::InitializeReplay);
-    read_only_sponsor
-        .accounts
-        .get_mut(11)
-        .expect("sponsor")
-        .is_writable = false;
-    assert!(
-        submit(&mut context, &fixture, read_only_sponsor, true)
-            .await
-            .is_err()
-    );
-    let substituted_refund = core_instruction_with_coordinates(
-        &fixture,
-        OperationV1::InitializeReplay,
-        fixture.payer.pubkey(),
-        context.payer.pubkey(),
-        fixture.payer.pubkey(),
-    );
-    assert!(
-        submit(&mut context, &fixture, substituted_refund, true)
-            .await
-            .is_err()
-    );
     assert_eq!(
         opening_snapshot(&mut context, &fixture).await,
         before_hostile,
@@ -711,14 +824,10 @@ async fn real_core_opens_exact_registry_realm_custody_and_commits_last() {
         .await
         .expect("payer balance");
     for operation in [OperationV1::InitializeReplay, OperationV1::OpenVault] {
-        submit(
-            &mut context,
-            &fixture,
-            core_instruction(&fixture, operation),
-            true,
-        )
-        .await
-        .expect("Core/Custody effect");
+        let instruction = continuation(&mut context, &fixture, operation).await;
+        submit(&mut context, &fixture, instruction, true)
+            .await
+            .expect("Core/Custody effect");
     }
     let market = context
         .banks_client

@@ -814,3 +814,485 @@ fn a_re_release_on_the_new_slot_authenticates_and_the_old_one_stays_refused() {
         Err(ActivationAuthErrorV1::Deployment),
     );
 }
+
+// ---------------------------------------------------------------------------
+// One decode, several roles.
+//
+// Decision 0017's option B moved Trading's top-level arm off two Registry
+// `Reauthenticate` CPIs and onto this crate. That arm reads FOUR roles out of
+// one account, so the pair below -- `authenticate_activation_cache_identity_v1`
+// then one `authenticate_activated_role_in_frame_v1` per role -- is the shape it
+// takes, and these are its refusals.
+//
+// Every case here uses `MultiRoleFixture`, not `Fixture`. `Fixture` binds all
+// five roles to the SAME program, which is legal and is what the aliasing
+// branch of `validate_projection` exists to permit -- but it means a fold that
+// read Core where it was asked for Trading would pass every assertion made
+// against it. The distinct-program fixture is what makes the role INDEX a
+// tested fact rather than an assumed one.
+// ---------------------------------------------------------------------------
+
+/// Five roles, five distinct programs, one activated release set.
+struct MultiRoleFixture {
+    registry: Pubkey,
+    release_set_id: ContentId,
+    cache_bytes: Vec<u8>,
+    roles: [(ExecutionRoleV1, AccountInfo<'static>, AccountInfo<'static>); 5],
+}
+
+impl MultiRoleFixture {
+    fn new() -> Self {
+        let registry = Pubkey::new_from_array([7; 32]);
+        let slot = 77_u64;
+        let mut bindings = Vec::new();
+        let mut inputs = Vec::new();
+        let mut accounts = Vec::new();
+        for (index, role) in ALL_ROLES.into_iter().enumerate() {
+            // A distinct program id AND a distinct ELF per role, so no two
+            // roles' releases, artifact ids or deployments can be confused.
+            let seed = 0x20_u8.saturating_add(index as u8);
+            let elf = vec![seed; 96 + index];
+            let program_key = Pubkey::new_from_array([seed; 32]);
+            let programdata_key =
+                Pubkey::find_program_address(&[program_key.as_ref()], &bpf_loader_upgradeable::ID)
+                    .0;
+            let release = ArtifactReleaseV1::new(
+                ProgramIdentityV1::new(program_key.to_bytes()).expect("program"),
+                ProgramIdentityV1::new(bpf_loader_upgradeable::ID.to_bytes()).expect("loader"),
+                programdata_key.to_bytes(),
+                ContentId::new([seed ^ 0x5a; 32]).expect("semantic release"),
+                hash(&elf).to_bytes(),
+                slot,
+                ArtifactUpgradePolicyV1::Immutable,
+                None,
+            )
+            .expect("artifact release");
+            let artifact_id = ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes())
+                .expect("artifact id");
+            bindings.push(ExecutionRoleBindingV1::new(release.program(), artifact_id));
+            let observation = DeploymentObservationV1::new(
+                program_key.to_bytes(),
+                bpf_loader_upgradeable::ID.to_bytes(),
+                true,
+                programdata_key.to_bytes(),
+                bpf_loader_upgradeable::ID.to_bytes(),
+                false,
+                programdata_key.to_bytes(),
+                bpf_loader_upgradeable::ID.to_bytes(),
+                slot,
+                hash(&elf).to_bytes(),
+                None,
+            )
+            .expect("observation");
+            inputs.push(ArtifactActivationInputV1::new(
+                artifact_id,
+                release,
+                observation,
+            ));
+            accounts.push((
+                role,
+                account(
+                    program_key,
+                    false,
+                    false,
+                    loader_program_bytes(programdata_key),
+                    bpf_loader_upgradeable::ID,
+                    true,
+                ),
+                account(
+                    programdata_key,
+                    false,
+                    false,
+                    immutable_programdata_bytes(slot, &elf),
+                    bpf_loader_upgradeable::ID,
+                    false,
+                ),
+            ));
+        }
+        let release_set = ExecutionReleaseSetV1::new(
+            *bindings.first().expect("core"),
+            *bindings.get(1).expect("claims"),
+            *bindings.get(2).expect("trading"),
+            *bindings.get(3).expect("resolution"),
+            *bindings.get(4).expect("custody"),
+        )
+        .expect("five distinct roles");
+        let release_set_id =
+            ContentId::new(hash(&release_set.to_bytes()).to_bytes()).expect("release set id");
+        let mut cache_bytes = vec![0_u8; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+        initialize_activation_cache_v1(&mut cache_bytes, release_set_id).expect("initialize");
+        for (index, role) in ALL_ROLES.into_iter().enumerate() {
+            activate_execution_role_into_v1(
+                &mut cache_bytes,
+                release_set_id,
+                &release_set,
+                role,
+                inputs.get(index).expect("input"),
+            )
+            .expect("activate role");
+        }
+        let mut iterator = accounts.into_iter();
+        let roles = [
+            iterator.next().expect("core"),
+            iterator.next().expect("claims"),
+            iterator.next().expect("trading"),
+            iterator.next().expect("resolution"),
+            iterator.next().expect("custody"),
+        ];
+        Self {
+            registry,
+            release_set_id,
+            cache_bytes,
+            roles,
+        }
+    }
+
+    fn registry_account(&self) -> AccountInfo<'static> {
+        account(
+            self.registry,
+            false,
+            false,
+            Vec::new(),
+            native_loader(),
+            true,
+        )
+    }
+
+    fn cache_at(&self, key: Pubkey, owner: Pubkey, bytes: Vec<u8>) -> AccountInfo<'static> {
+        account(key, false, false, bytes, owner, false)
+    }
+
+    fn cache(&self) -> AccountInfo<'static> {
+        self.cache_at(
+            activation_cache_address_v1(&self.registry, &self.release_set_id.to_bytes()),
+            self.registry,
+            self.cache_bytes.clone(),
+        )
+    }
+
+    fn frame(&self, role: ExecutionRoleV1) -> (&AccountInfo<'static>, &AccountInfo<'static>) {
+        let entry = self
+            .roles
+            .iter()
+            .find(|(candidate, _, _)| *candidate == role)
+            .expect("every role is staged");
+        (&entry.1, &entry.2)
+    }
+}
+
+/// Every role's program is distinct, so a role-index confusion cannot pass.
+///
+/// This is a property of the FIXTURE and it is asserted rather than assumed,
+/// because the whole value of the multi-role cases below rests on it.
+#[test]
+fn the_multi_role_fixture_stages_five_distinct_programs() {
+    let fixture = MultiRoleFixture::new();
+    for (left_index, (_, left_program, left_programdata)) in fixture.roles.iter().enumerate() {
+        for (_, right_program, right_programdata) in fixture.roles.iter().skip(left_index + 1) {
+            assert_ne!(left_program.key, right_program.key);
+            assert_ne!(left_programdata.key, right_programdata.key);
+        }
+    }
+}
+
+/// The whole point of the fold: N roles off ONE decode equal N independent
+/// authentications, receipt byte for receipt byte.
+///
+/// If this ever goes red, the one-decode path is not the same authentication as
+/// the per-role path and the CU saving was bought with a semantic.
+#[test]
+fn one_decode_authenticates_every_role_exactly_as_five_separate_reads_would() {
+    let fixture = MultiRoleFixture::new();
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+    let release_set = fixture.release_set_id.to_bytes();
+
+    let data = cache.try_borrow_data().expect("cache bytes");
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data).expect("view");
+    authenticate_activation_cache_identity_v1(&registry, &cache, &release_set, activated)
+        .expect("the identity of the account the caller decoded");
+
+    for role in ALL_ROLES {
+        let (program, programdata) = fixture.frame(role);
+        let folded =
+            authenticate_activated_role_in_frame_v1(&cache, activated, role, program, programdata)
+                .expect("role off the shared decode");
+        let separate = authenticate_activated_role_v1(
+            &registry,
+            &cache,
+            &release_set,
+            role,
+            program,
+            programdata,
+        )
+        .expect("role off its own decode");
+        assert_eq!(
+            folded.to_bytes(),
+            separate.to_bytes(),
+            "{role:?} authenticated differently depending on who decoded the account",
+        );
+        assert_eq!(folded.role(), role);
+        assert_eq!(folded.program().to_bytes(), program.key.to_bytes());
+    }
+}
+
+/// Asking for one role and supplying another role's deployment refuses.
+///
+/// The aliased `Fixture` cannot state this case at all: with every role bound to
+/// one program, every substitution is the identity. Here Core's Program and
+/// ProgramData are handed to a Trading read, and
+/// `cached_role_deployment_observation_v1` refuses at
+/// `program.key != release.program()`.
+#[test]
+fn a_role_read_with_another_roles_deployment_refuses() {
+    let fixture = MultiRoleFixture::new();
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+    let release_set = fixture.release_set_id.to_bytes();
+    let (core_program, core_programdata) = fixture.frame(ExecutionRoleV1::Core);
+
+    let data = cache.try_borrow_data().expect("cache bytes");
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data).expect("view");
+    authenticate_activation_cache_identity_v1(&registry, &cache, &release_set, activated)
+        .expect("identity");
+
+    assert_eq!(
+        authenticate_activated_role_in_frame_v1(
+            &cache,
+            activated,
+            ExecutionRoleV1::Trading,
+            core_program,
+            core_programdata,
+        ),
+        Err(ActivationAuthErrorV1::Deployment),
+        "Core's deployment cannot answer for Trading's role, however valid it is",
+    );
+}
+
+/// The identity check agrees with the borrow-and-decode entry it was extracted
+/// from, bump for bump -- the drift gate on the extraction itself.
+#[test]
+fn the_identity_check_and_the_borrowing_entry_return_the_same_witness() {
+    let fixture = MultiRoleFixture::new();
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+    let release_set = fixture.release_set_id.to_bytes();
+
+    let borrowing = authenticate_activation_cache_bump_v1(&registry, &cache, &release_set)
+        .expect("the borrowing entry");
+    let data = cache.try_borrow_data().expect("cache bytes");
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data).expect("view");
+    let extracted =
+        authenticate_activation_cache_identity_v1(&registry, &cache, &release_set, activated)
+            .expect("the extracted identity check");
+    assert_eq!(borrowing, extracted);
+
+    // And the witness both produced still opens the cache for a role.
+    let (program, programdata) = fixture.frame(ExecutionRoleV1::Custody);
+    assert!(
+        authenticate_activated_role_with_bump_v1(
+            &registry,
+            &cache,
+            &release_set,
+            extracted,
+            ExecutionRoleV1::Custody,
+            program,
+            programdata,
+        )
+        .is_ok()
+    );
+}
+
+/// A cache the Registry does not own is refused by the view-taking entry too.
+///
+/// The hazard the extraction has to answer: a caller that decodes for itself
+/// could decode a STRANGER's bytes. It cannot get past this, because the
+/// identity check re-takes ownership and width against the ACCOUNT and then
+/// reproduces the address from the body's bump under the Registry.
+#[test]
+fn the_identity_check_refuses_a_foreign_owner_and_a_wrong_width() {
+    let fixture = MultiRoleFixture::new();
+    let registry = fixture.registry_account();
+    let release_set = fixture.release_set_id.to_bytes();
+    let address = activation_cache_address_v1(&fixture.registry, &release_set);
+
+    let foreign = fixture.cache_at(
+        address,
+        Pubkey::new_from_array([200; 32]),
+        fixture.cache_bytes.clone(),
+    );
+    let data = foreign.try_borrow_data().expect("cache bytes");
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data).expect("view");
+    assert_eq!(
+        authenticate_activation_cache_identity_v1(&registry, &foreign, &release_set, activated),
+        Err(ActivationAuthErrorV1::ActivationCache),
+        "an account the Registry does not own cannot carry a Registry fact",
+    );
+    drop(data);
+
+    // The width conjunct, stated as the hazard it actually answers.
+    //
+    // A wrong-width ACCOUNT cannot produce a view at all -- `decode` refuses it
+    // on length -- so the naive substitution never reaches the identity check.
+    // What does reach it is a caller who decodes a PREFIX: the first 1,288 bytes
+    // of a longer Registry-owned account are a perfectly valid activation cache
+    // body, and a view over them is indistinguishable from the real one. That is
+    // the whole reason the identity check re-takes width against the ACCOUNT
+    // rather than trusting the view it was handed.
+    let mut widened = fixture.cache_bytes.clone();
+    widened.push(0);
+    let wide = fixture.cache_at(address, fixture.registry, widened);
+    let wide_data = wide.try_borrow_data().expect("cache bytes");
+    assert!(
+        ActivatedExecutionReleaseSetViewV1::decode(&wide_data).is_err(),
+        "a longer account is not decodable as the cache",
+    );
+    let prefix_view = ActivatedExecutionReleaseSetViewV1::decode(
+        wide_data
+            .get(..ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1)
+            .expect("prefix"),
+    )
+    .expect("the prefix of a longer account decodes as a valid cache body");
+    assert_eq!(
+        authenticate_activation_cache_identity_v1(&registry, &wide, &release_set, prefix_view),
+        Err(ActivationAuthErrorV1::ActivationCache),
+        "the cache has exactly one width, and a view decoded from a prefix of a longer \
+         account does not make that account the cache",
+    );
+}
+
+/// A complete, valid cache for ANOTHER release set refuses at its address.
+///
+/// This is the conjunct the Registry CPI could not make. `authenticate_cache_identity`
+/// derived the address from the release set the CACHE names, so this account
+/// passed it, and what refused the transaction was the caller comparing the
+/// returned receipt afterwards. Deriving from the release set the CALLER states
+/// it is executing under refuses it here, before a role is decoded.
+#[test]
+fn a_valid_cache_for_another_generation_refuses_at_its_address_in_the_fold() {
+    let mine = MultiRoleFixture::new();
+    let theirs = Fixture::new(9);
+    assert_ne!(
+        mine.release_set_id.to_bytes(),
+        theirs.release_set_id.to_bytes()
+    );
+    let registry = mine.registry_account();
+    let theirs_cache = mine.cache_at(
+        activation_cache_address_v1(&mine.registry, &theirs.release_set_id.to_bytes()),
+        mine.registry,
+        theirs.cache_bytes.clone(),
+    );
+    let data = theirs_cache.try_borrow_data().expect("cache bytes");
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data).expect("view");
+    assert_eq!(
+        authenticate_activation_cache_identity_v1(
+            &registry,
+            &theirs_cache,
+            &mine.release_set_id.to_bytes(),
+            activated,
+        ),
+        Err(ActivationAuthErrorV1::ActivationCache),
+        "another Market's activation is a real cache and is still not this one",
+    );
+}
+
+/// The read-only frame is taken PER ROLE, not once for the cache.
+///
+/// Each role brings its own Program and ProgramData, so the frame is a statement
+/// about the triple. A writable ProgramData on the second role must refuse even
+/// though the first role's frame was clean and the cache is the right cache.
+#[test]
+fn a_writable_frame_on_the_second_role_refuses_after_the_first_succeeded() {
+    let fixture = MultiRoleFixture::new();
+    let registry = fixture.registry_account();
+    let cache = fixture.cache();
+    let release_set = fixture.release_set_id.to_bytes();
+    let data = cache.try_borrow_data().expect("cache bytes");
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data).expect("view");
+    authenticate_activation_cache_identity_v1(&registry, &cache, &release_set, activated)
+        .expect("identity");
+
+    let (core_program, core_programdata) = fixture.frame(ExecutionRoleV1::Core);
+    assert!(
+        authenticate_activated_role_in_frame_v1(
+            &cache,
+            activated,
+            ExecutionRoleV1::Core,
+            core_program,
+            core_programdata,
+        )
+        .is_ok(),
+        "the first role's frame is clean",
+    );
+
+    let (trading_program, trading_programdata) = fixture.frame(ExecutionRoleV1::Trading);
+    let writable = account(
+        *trading_programdata.key,
+        false,
+        true,
+        trading_programdata
+            .try_borrow_data()
+            .expect("programdata bytes")
+            .to_vec(),
+        *trading_programdata.owner,
+        false,
+    );
+    assert_eq!(
+        authenticate_activated_role_in_frame_v1(
+            &cache,
+            activated,
+            ExecutionRoleV1::Trading,
+            trading_program,
+            &writable,
+        ),
+        Err(ActivationAuthErrorV1::AccountFrame),
+        "a ProgramData another instruction can still mutate is not a deployment observation",
+    );
+
+    let signing_cache = account(
+        *cache.key,
+        true,
+        false,
+        fixture.cache_bytes.clone(),
+        fixture.registry,
+        false,
+    );
+    assert_eq!(
+        authenticate_activated_role_in_frame_v1(
+            &signing_cache,
+            activated,
+            ExecutionRoleV1::Trading,
+            trading_program,
+            trading_programdata,
+        ),
+        Err(ActivationAuthErrorV1::AccountFrame),
+        "the cache's own privileges are re-taken on every role, not only the first",
+    );
+}
+
+/// The fold is exactly the Registry's own handler body, per role.
+///
+/// `process_reauthenticate` runs `require_readonly_frame` and then
+/// `authenticate_activated_role_in_cache_v1`. So does
+/// `authenticate_activated_role_in_frame_v1`, and this is the assertion that
+/// keeps it true: the drift decision 0017 §3 named as the shape's best property
+/// is only structural while the two really are the same pair.
+#[test]
+fn the_frame_entry_is_the_registry_handler_pair_for_every_role() {
+    let fixture = MultiRoleFixture::new();
+    let cache = fixture.cache();
+    let data = cache.try_borrow_data().expect("cache bytes");
+    let activated = ActivatedExecutionReleaseSetViewV1::decode(&data).expect("view");
+    for role in ALL_ROLES {
+        let (program, programdata) = fixture.frame(role);
+        let handler = require_readonly_frame(&cache, program, programdata).and_then(|()| {
+            authenticate_activated_role_in_cache_v1(activated, role, program, programdata)
+        });
+        let folded =
+            authenticate_activated_role_in_frame_v1(&cache, activated, role, program, programdata);
+        assert_eq!(
+            handler.map(|receipt| receipt.to_bytes()),
+            folded.map(|receipt| receipt.to_bytes()),
+        );
+    }
+}

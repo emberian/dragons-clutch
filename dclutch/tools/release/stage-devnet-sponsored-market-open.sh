@@ -13,19 +13,31 @@ PLAN=""
 REGISTRY=""
 FEE_RECIPIENT=""
 WINDOW_START=""
+FEE_BPS=""
 
 usage() {
     cat <<'EOF'
 Usage:
   stage-devnet-sponsored-market-open.sh --work ABSOLUTE_NEW_DIR \
     --plan ABSOLUTE_CHECKED_PLAN_JSON --registry-program-id PUBKEY \
-    --direct-fee-recipient PUBKEY --window-start UNIX_SECONDS [--rpc-url URL]
+    --direct-fee-recipient PUBKEY --direct-fee-basis-points N \
+    --window-start UNIX_SECONDS [--rpc-url URL]
 
 This stages the credential-free sponsored SOL/USD PriceUpdateV2 input and the
-real `devnet-sponsored-market` MarketRunInput. It always fixes Direct fees at
-50 basis points per side and writes an execute-only campaign wrapper that
-requires explicit environment variables and DCLUTCH_AUTHORIZE_MARKET_OPEN=YES.
-No key file is read and no transaction is submitted by this command.
+real `devnet-sponsored-market` MarketRunInput, then writes an execute-only
+campaign wrapper that requires explicit environment variables and
+DCLUTCH_AUTHORIZE_MARKET_OPEN=YES.  No key file is read and no transaction is
+submitted by this command.
+
+--direct-fee-basis-points has no default and must be stated.  The rate is
+sealed into the Market at founding and cannot be changed afterwards, and a
+fee-bearing Direct trade does not fit the compute ceiling: measured
+all-first-try 1,515,003 CU against 1,400,000, over by 115,003 before any key
+is drawn (docs/evidence/DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md).  A market
+founded at a nonzero rate today is a market that cannot trade, which is how
+7Mcu1ZT9 died of a different irreversible founding parameter.  Pass 0 for a
+market that must trade; pass a rate only when you mean to found one that
+cannot, or when the second-transaction fee leg has shipped.
 EOF
 }
 
@@ -43,6 +55,7 @@ while [ "$#" -gt 0 ]; do
         --plan) PLAN="${2:?--plan needs a value}"; shift 2 ;;
         --registry-program-id) REGISTRY="${2:?--registry-program-id needs a value}"; shift 2 ;;
         --direct-fee-recipient) FEE_RECIPIENT="${2:?--direct-fee-recipient needs a value}"; shift 2 ;;
+        --direct-fee-basis-points) FEE_BPS="${2:?--direct-fee-basis-points needs a value}"; shift 2 ;;
         --window-start) WINDOW_START="${2:?--window-start needs a value}"; shift 2 ;;
         --rpc-url) DEVNET_RPC="${2:?--rpc-url needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -50,19 +63,28 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-for required in WORK PLAN REGISTRY FEE_RECIPIENT WINDOW_START; do
+for required in WORK PLAN REGISTRY FEE_RECIPIENT FEE_BPS WINDOW_START; do
     if [ -z "${!required}" ]; then
         case "$required" in
             WORK) flag=--work ;;
             PLAN) flag=--plan ;;
             REGISTRY) flag=--registry-program-id ;;
             FEE_RECIPIENT) flag=--direct-fee-recipient ;;
+            FEE_BPS) flag=--direct-fee-basis-points ;;
             WINDOW_START) flag=--window-start ;;
         esac
         echo "$flag is required" >&2
         exit 2
     fi
 done
+# The rate is irreversible once founded, so it is checked before anything else
+# the operator can still fix: refuse anything but a plain decimal, so no shell
+# expansion or empty string can reach the compiler as a silent zero.
+case "$FEE_BPS" in ''|*[!0-9]*) echo "--direct-fee-basis-points must be a plain decimal count" >&2; exit 2 ;; esac
+if [ "$FEE_BPS" -gt 500 ]; then
+    echo "--direct-fee-basis-points exceeds MAX_FEE_BPS=500 (decision 0014 D2)" >&2
+    exit 2
+fi
 case "$WORK" in /*) ;; *) echo "--work must be absolute" >&2; exit 2 ;; esac
 case "$WINDOW_START" in ''|*[!0-9-]*) echo "--window-start must be decimal Unix seconds" >&2; exit 2 ;; esac
 absolute_existing --plan "$PLAN"
@@ -93,7 +115,7 @@ cargo run --locked --manifest-path "$BOOT/Cargo.toml" -- devnet-sponsored-market
     --plan "$PLAN" \
     --rpc-url "$DEVNET_RPC" \
     --i-mean-devnet "$DEVNET_GENESIS" \
-    --direct-fee-basis-points 50 \
+    --direct-fee-basis-points "$FEE_BPS" \
     --direct-fee-recipient "$FEE_RECIPIENT" \
     --price-update "$WORK/sol-usd.price-update-v2" \
     --window-start "$WINDOW_START" \
@@ -118,8 +140,34 @@ set -euo pipefail
 : "\${DCLUTCH_FOUNDING_BENEFICIARY_KEYPAIR:?absolute keypair path required}"
 : "\${DCLUTCH_FOUNDING_PROJECTION_WITNESS_KEYPAIR:?absolute keypair path required}"
 : "\${DCLUTCH_FOUNDING_SOURCE_FUNDER_KEYPAIR:?absolute keypair path required}"
-: "\${DCLUTCH_FOUNDING_FOUNDER:?public founder Pubkey required}"
+# The founder is the identity the founding mints the whole complete set to, and
+# burning those claims is the only route to an empty aggregate, which is the
+# only route to retirement and to the collateral. Terminal settlement binds the
+# signer to the Position owner, so an identity whose key nobody holds strands
+# the market's principal permanently: on 2026-08-30 all three live devnet
+# markets were found to share one such founder and none of them can ever be
+# retired (decision 0015 section 8). The driver still takes only a public key --
+# the founder never signs at founding -- so the obligation to HOLD it has to be
+# proved here or nowhere.
+: "\${DCLUTCH_FOUNDING_FOUNDER_KEYPAIR:?absolute founder keypair path required: found only against an identity you hold}"
+case "\$DCLUTCH_FOUNDING_FOUNDER_KEYPAIR" in /*) ;; *) echo 'DCLUTCH_FOUNDING_FOUNDER_KEYPAIR must be absolute' >&2; exit 2 ;; esac
+if [ ! -f "\$DCLUTCH_FOUNDING_FOUNDER_KEYPAIR" ] || [ -L "\$DCLUTCH_FOUNDING_FOUNDER_KEYPAIR" ]; then
+    echo 'DCLUTCH_FOUNDING_FOUNDER_KEYPAIR must be an existing regular non-symlink file' >&2
+    exit 2
+fi
+command -v solana-keygen >/dev/null || { echo 'solana-keygen is required to prove founder key custody' >&2; exit 2; }
+DCLUTCH_FOUNDING_FOUNDER_DERIVED="\$(solana-keygen pubkey "\$DCLUTCH_FOUNDING_FOUNDER_KEYPAIR")"
+if [ -n "\${DCLUTCH_FOUNDING_FOUNDER:-}" ] && [ "\$DCLUTCH_FOUNDING_FOUNDER" != "\$DCLUTCH_FOUNDING_FOUNDER_DERIVED" ]; then
+    echo "DCLUTCH_FOUNDING_FOUNDER names \$DCLUTCH_FOUNDING_FOUNDER but the keypair file holds \$DCLUTCH_FOUNDING_FOUNDER_DERIVED" >&2
+    exit 2
+fi
 : "\${DCLUTCH_SUBSTITUTED_FOUNDER:?distinct public substituted-founder Pubkey required}"
+# The substituted founder is the hostile cross-request probe's identity. It
+# never signs and is never funded, so a bare public key is correct for it.
+if [ "\$DCLUTCH_SUBSTITUTED_FOUNDER" = "\$DCLUTCH_FOUNDING_FOUNDER_DERIVED" ]; then
+    echo 'the substituted founder must be a DISTINCT identity from the founder' >&2
+    exit 2
+fi
 cargo run --locked --manifest-path '$BOOT/Cargo.toml' -- campaign --founding-only \\
   --rpc-url '$DEVNET_RPC' --i-mean-devnet '$DEVNET_GENESIS' \\
   --plan '$PLAN' --market '$WORK/market.json' --evidence '$WORK/campaign-open.json' \\
@@ -129,20 +177,34 @@ cargo run --locked --manifest-path '$BOOT/Cargo.toml' -- campaign --founding-onl
   --keypair-founding-beneficiary "\$DCLUTCH_FOUNDING_BENEFICIARY_KEYPAIR" \\
   --keypair-founding-projection-witness "\$DCLUTCH_FOUNDING_PROJECTION_WITNESS_KEYPAIR" \\
   --keypair-founding-source-funder "\$DCLUTCH_FOUNDING_SOURCE_FUNDER_KEYPAIR" \\
-  --founding-founder "\$DCLUTCH_FOUNDING_FOUNDER" \\
+  --founding-founder "\$DCLUTCH_FOUNDING_FOUNDER_DERIVED" \\
   --substituted-founder "\$DCLUTCH_SUBSTITUTED_FOUNDER" --execute
 EOF
 chmod 700 "$WORK/open-market.execute.sh"
 
-python3 - "$WORK/market-open-staging.json" "$WORK/market.json" "$PLAN" "$REGISTRY" "$FEE_RECIPIENT" "$DEVNET_RPC" "$DEVNET_GENESIS" "$PRICE_ACCOUNT" <<'PY'
+python3 - "$WORK/market-open-staging.json" "$WORK/market.json" "$PLAN" "$REGISTRY" "$FEE_RECIPIENT" "$DEVNET_RPC" "$DEVNET_GENESIS" "$PRICE_ACCOUNT" "$FEE_BPS" <<'PY'
 import json, sys
-out, market_path, plan, registry, recipient, rpc, genesis, price_account = sys.argv[1:]
+out, market_path, plan, registry, recipient, rpc, genesis, price_account, fee_bps = sys.argv[1:]
+
+
+def redact_origin(url):
+    """Scheme and host only. A keyed endpoint carries its credential in the
+    query string, and this manifest is an artifact people copy around, so the
+    credential must never reach it -- the drivers redact their own
+    `rpc_origin_redacted` for exactly this reason and this file did not.
+    Written after the raw key landed in a real staging manifest on 2026-08-30."""
+    from urllib.parse import urlsplit
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return '<redacted>'
+    tail = '/<redacted>' if (parts.query or parts.path not in ('', '/')) else ''
+    return f'{parts.scheme}://{parts.netloc}{tail}'
 market = json.load(open(market_path, encoding='utf-8'))
 if market.get('direct_capability') is None:
     raise SystemExit('compiler omitted the permanent Direct capability')
 document = {
   'schema': 'dclutch-devnet-sponsored-market-open-staging-v1',
-  'cluster': {'rpcUrl': rpc, 'genesisHash': genesis},
+  'cluster': {'rpcOriginRedacted': redact_origin(rpc), 'genesisHash': genesis},
   'plan': plan,
   'permanentProgramAuthority': {'registryProgramId': registry, 'programPinsSource': plan},
   'sponsoredPyth': {
@@ -155,9 +217,11 @@ document = {
     'product': 'product/sol-usd-sponsored-range-protection',
     'outcomes': 4,
     'cuts': ['12000', '18000'],
-    'directFeeBasisPointsPerSide': 50,
+    'directFeeBasisPointsPerSide': int(fee_bps),
     'directFeeRecipient': recipient,
     'marketInputPath': market_path,
+    'feeRateIsIrreversible': True,
+    'feeBearingTradeFitsCeiling': int(fee_bps) == 0,
   },
   'execution': {
     'driver': 'campaign --founding-only',
@@ -166,7 +230,8 @@ document = {
     'postOpenCapture': ['campaign-open.json accounts map', 'founding_custody_context', 'direct_selected_manifest_entry_index', 'finalized founding transaction signatures and slots'],
     'remainingRuntimeInputs': [
       'six explicit founding keypair paths: campaign-payer, collateral-mint, collateral-wallet, founding-beneficiary, founding-projection-witness, founding-source-funder',
-      'two distinct public identities: founding-founder and substituted-founder',
+      'a SEVENTH keypair path, DCLUTCH_FOUNDING_FOUNDER_KEYPAIR: the driver needs only the founder public key, but nobody can ever retire this market or recover its collateral without that secret, so the wrapper derives the identity from a file you hold',
+      'one public identity: substituted-founder, which never signs and is never funded',
       'separate authorization: DCLUTCH_AUTHORIZE_MARKET_OPEN=YES',
     ],
   },

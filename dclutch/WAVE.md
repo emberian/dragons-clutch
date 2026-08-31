@@ -464,9 +464,16 @@ pool prices, majors). Cross-cluster truth transport:
   swapping trust roots never moves semantics.
 - Majors' prices need no relayer at all: Pyth's devnet deployment already
   carries mainnet-derived prices under the existing adapter.
-- Candidate permissionless upgrade to verify: Wormhole Queries (guardian-signed
+- ~~Candidate permissionless upgrade to verify: Wormhole Queries (guardian-signed
   Solana account reads, verifiable against the devnet core bridge) — MR lane
-  owns pinning whether this actually supports what we need.
+  owns pinning whether this actually supports what we need.~~ **ANSWERED: NOT
+  AVAILABLE.** `docs/design/MAINNET_STATE_RELAY.md` §3 concluded Wormhole
+  Queries is *"not a candidate for v1 and not a near-term upgrade path"* —
+  §3.2 gives the reason (on devnet the guardian set is a single test key, so a
+  guardian signature there proves nothing a relayer signature does not), and
+  `:64` marks the row **"not available."** Flagged as a stale line by
+  `docs/design/ORPHAN_DESIGNS_TRIAGE_2026_08_30.md` §3.9 and left for whoever
+  next edited this file.
 - Later hardening path: multi-relayer quorum, TEE-attested signer.
 
 ## Close-out doctrine (ember, 2026-08-27)
@@ -1194,3 +1201,47 @@ sccache/workspace consolidation (waits for cold gates).
   allowlisted as stock Apache-2.0) — the 69-row SBOM queue closes
   mechanically. CFTC 1388: deliberately unfiled ("nothing unique to say
   about perps") — never re-raise.
+
+## Rulings — ember, 2026-08-30 (afternoon)
+
+- **ALL KEYS MUST TRANSACT.** "It's completely unacceptable that ANY numerator
+  of keys fails to transact. That's a bomb waiting to go off for whoever's key
+  fails to fit. We MUST ALWAYS ALLOW ALL KEYS." A key-dependent refusal is a
+  product defect, not a tail statistic. Target: zero `find_program_address` on
+  the public hot path — every bump stored at creation or caller-supplied and
+  verified by `create_program_address` (the derivation is the check). The
+  0.032% tail goes to exactly zero.
+- **Trust should ratchet forward as state mutates.** Per-transaction
+  re-verification of write-once, program-owned records is the part of the
+  "trust nothing" posture that overreaches; caller-supplied data stays
+  untrusted (O-016 stands). Extend the seal/verify-once pattern.
+- **Multi-transaction lifecycles are acceptable** where one transaction cannot
+  hold the work (e.g. fee-bearing trades). "I don't care about multi-tx
+  lifecycles; if that's what we need to do."
+
+## Rulings — ember, 2026-08-30 (evening, on the decision packet)
+
+- **E1 protocol revenue: DEFERRED, build nothing.** "While it is on devnet it
+  doesn't matter. Mainnet is a loooong way away." The as-built shape (per-
+  venue fee_recipient, no protocol take) stands by default, not by
+  ratification; revisit pre-mainnet. 0014 D1 closes as deferred-as-built.
+- **E2 dead markets: option B — resolve, redeem, retire.** "Delete that shut
+  and get rid of it; it burdens the reader with a detail that only matters to
+  us." The honest-bucket work (C) is mooted by B. Execution is a devnet
+  write → TRADE-2's queue.
+- **E3 seal rent: leaning collector-keeps ("garbage collect it and keep it
+  seems somehow fine"), burn as fallback; final call deferred** until the
+  consequences are laid out. No CloseSeal implementation yet.
+- **E4 unpaid-fee receivable: accepted, no deadline.** Noted discomfort about
+  protocol semantics — addressed in the packet discussion.
+- **E5 maker lockout: accepted CONDITIONAL on guaranteed self-cure** — "as
+  long as they are always free to unblock themselves." The implementation
+  must prove the debtor can always settle unilaterally, including when the
+  fee recipient's token account has vanished (create-idempotent or
+  equivalent). That condition is a charter requirement, not a suggestion.
+
+- **E2 final (ember): the founder keys are gone from all wallets — the
+  write-off stands.** "It's just devnet sol it isn't a big deal." The two
+  dead markets remain standing as unretireable; no pre-cut retirement
+  contingency; the reader-burden concern is solved editorially (0015 option
+  C — the honest bucket), not by deletion.

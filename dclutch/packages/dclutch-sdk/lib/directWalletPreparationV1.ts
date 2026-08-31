@@ -1,6 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 
 import { type DirectHotRouteInspectionV3 } from './directHotChain';
+import { mineDirectInlineHotBumpHintsV3 } from './directHotBumpHintsV1';
 import {
   compileDirectInlineTransactionV3,
   previewDirectInlineV3,
@@ -439,6 +440,38 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
     });
   }
 
+  // Mine the wire's eight reserved bump bytes here, from the finalized bodies
+  // this same inspection already read and authenticated. Off chain each search
+  // is free; on chain each rejected candidate costs the PROGRAM 1,500 CU at a
+  // depth drawn from whose key is trading, so an unmined browser trade pays a
+  // per-trader tax that a mined one does not. Every hint is reproduced against
+  // the account Trading was handed and a wrong one refuses, so nothing here can
+  // steer the execution -- see `mineDirectInlineHotBumpHintsV3`.
+  //
+  // The two child caller-authority slots stay zero, and that is the SAME gap
+  // the Rust builder has: their seeds end in a digest over each child's
+  // projected request, which only the selected Transition and Effect
+  // interpreters produce. `build_direct_inline_hot_v4` takes those two bytes as
+  // a parameter for exactly that reason. A zero slot searches, so this wire is
+  // correct and six-eighths cheaper rather than correct and whole.
+  //
+  // The size of what closing that would cost, so nobody has to guess: a
+  // TypeScript port of `project_direct_inline_ordinary_child_requests_v3` needs
+  // TransitionVM V3, Effect kernel V2/V3/V4, AccountProfileV2 geometry and the
+  // ordinary register projection -- 10,643 non-test Rust lines across four
+  // crates, measured, each of which would gain a second authority. The two
+  // slots are worth roughly a quarter of the block; that is the trade, and it
+  // is not obviously worth taking.
+  const bumpHints = mineDirectInlineHotBumpHintsV3({
+    source: routeInspection.bumpHintSource,
+    tradingProgram: route.tradingProgram,
+    market: route.market,
+    generation: route.generation,
+    releaseSet: route.releaseSet,
+    sellerMaker: input.signedSeller.maker,
+    buyerMaker: input.signedTaker.maker,
+    expectedLifecycleAccounts: [sellerNonceObservation.address, takerNonceObservation.address],
+  });
   const transactionPlan = compileDirectInlineTransactionV3({
     route,
     seller: input.signedSeller,
@@ -446,7 +479,11 @@ export function prepareDirectWalletTransactionV1(input: DirectWalletPreparationI
     fill: crossingPlan.fill,
     executionPrice: crossingPlan.executionPrice,
     clockSlot: currentSlot,
+    bumpHints,
   });
+  if (transactionPlan.minedBumpHintSlots === 0) {
+    throw new Error('mined Direct wallet wire carries an absent bump-hint block');
+  }
   if (transactionPlan.requiredSigners.length !== 1 || transactionPlan.requiredSigners[0] !== connectedWallet) {
     throw new Error('compiled Direct transaction does not name the connected wallet as its sole exact payer');
   }

@@ -54,7 +54,7 @@ Regenerate with: npm run abi:direct-v3
 | `DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3` | 32 | -- | `60 15 ce da 5a bf 1d 01 49 c3 08 76 8e ae 56 da c4 b7 66 c4 ca 42 4e fc b5 a5 c5 67 7c 5e 94 c9` |
 | `DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3` | 32 | -- | `b8 bb a5 93 6e 61 4a d5 f9 bb 1e d3 2e 6c 8a cc 84 5e c1 73 2d a3 9a ca a9 53 54 de 50 18 00 bf` |
 | `DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3` | 32 | -- | `bb de ab cf 02 8a a4 c2 3d 20 e7 00 8a 9e 77 11 f9 b5 4d 8f a7 44 0b 7f 9e 3e 73 2b 72 28 48 d5` |
-| `DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3` | 32 | -- | `89 33 50 73 38 30 2f fc 75 bd da e6 5a 8a fc 4f df f1 61 ca 63 4c ef b3 03 be c0 5e 39 5b 49 58` |
+| `DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3` | 32 | -- | `85 fe fd 7b b8 e6 64 f9 2f 17 52 b6 de 5e eb 08 c1 e7 32 89 cd 5e 3b 65 ed 99 e9 ad b9 c0 8a bf` |
 | `DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5` | 32 | -- | `19 3b e6 e3 b1 1e 70 88 31 c4 e0 a8 41 df e9 8c 0b d7 09 a9 07 23 d1 f1 93 5d f2 b3 3d c5 85 bc` |
 | `DIRECT_INLINE_ORDINARY_EFFECT_ID_V4` | 32 | -- | `ea b2 81 96 91 c7 d7 a5 17 ab 95 8a d3 94 ce 6a 38 ad 9b 0d 8f 76 d5 03 44 6c ec f0 8b ba f7 7a` |
 

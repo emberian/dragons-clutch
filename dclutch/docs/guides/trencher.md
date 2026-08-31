@@ -7,14 +7,16 @@ is the same failure: your money was somewhere a stranger could touch it.
 dClutch is a claims protocol built so there is no such place. This page
 tells you what you'd actually be holding, why the payout can't be walked
 back, and how an open market can fund a bounty for the person who closes its
-failure case. There is no bounty to collect on devnet today because there is
-no open market there.
+failure case. There is no bounty to collect on devnet today: the one market
+open there was founded with no recovery policy, so it funds none, and the
+public submission caller is not built either.
 
-First, the disclaimer you actually care about: **seven protocol programs
-are deployed on Solana devnet, but there is no open market, no token, and
-nothing to buy today.** The complete market and trading rehearsals still run
-on local test validators while the first public test market is prepared.
-You're early — this page is so you know what it is before that market opens.
+First, the disclaimer you actually care about: **seven protocol programs are
+deployed on Solana devnet, one market on it is open for trading, and its
+collateral is a devnet test token — so there is nothing to buy with money.**
+The complete market and trading rehearsals still run on local test validators.
+You're early — nothing has traded on that market yet, and this page is so you
+know what it is before something does.
 
 ## What a claim is
 
@@ -90,9 +92,10 @@ sending it** — escrowed by the market at founding, so it's already there,
 not a promise.
 
 That is the design, and the bounty really is escrowed. **You cannot collect
-one today**: no market is open, and the command below previews the
+one today**: the one market open on devnet was founded with no recovery
+policy, so it escrowed no bounty, and the command below previews the
 transaction without submitting it. The rest of this section is what the walk
-will look like when it opens.
+will look like on a market that funds one.
 
 ```sh
 dclutch walk --book walk-book.json --generation 1 --terminal-sequence 1 \
@@ -115,8 +118,8 @@ is the part still closed.
 
 ## The honest part
 
-- Seven programs are live on devnet. No open market and no token exist
-  today.
+- Seven programs are live on devnet, and one market on it is open for
+  trading. Its collateral is a devnet test token, not a token you can buy.
 - A winning-position payout has not completed end to end from a user's
   wallet on devnet yet. [The CLI](../../packages/dclutch-cli/README.md)
   tells you exactly which checks and submission steps it can perform.

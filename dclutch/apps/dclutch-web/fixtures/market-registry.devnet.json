@@ -3,8 +3,8 @@
   "cluster": "devnet",
   "provenance": "The names, questions, outcome labels, and stories in this registry are site-side editorial: the chain stores none of them. Every number, phase, address, and refusal shown beside them is read from the chain.",
   "markets": {
-    "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq": {
-      "title": "SOL/USD range — the first market that can trade",
+    "6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4": {
+      "title": "SOL/USD range — the market you can trade",
       "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
       "outcomes": [
         "Below $120",
@@ -13,7 +13,19 @@
         "The source failed to report"
       ],
       "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
-      "story": "The successor to the first public market, founded on 2026-08-30 to carry the one thing its predecessor was missing: a release that can switch trading on. Hours later it became the first market on any dClutch deployment to hold a live capability root — the account that has to exist before a single trade can be made — and the account is on devnet with the transaction that created it. The two markets founded before it stay open and readable, but they can never trade; this one can."
+      "story": "Founded on 2026-08-30 and, so far as this deployment's history goes, the first market on it that can actually take a trade. Its trading capability was switched on inside the same session that founded it, well before the deadline that closed on every market before it, and three participants were admitted afterwards. It charges no fee on either side. Its collateral is a devnet test token, so nothing on this page is worth money. No trade has been made on it yet — when one is, this page reads it from the chain like everything else."
+    },
+    "9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq": {
+      "title": "SOL/USD range — the first market with a live capability root",
+      "question": "Where does the SOL/USD price finish this market's window — below $120, between $120 and $180, or above $180?",
+      "outcomes": [
+        "Below $120",
+        "Between $120 and $180",
+        "Above $180",
+        "The source failed to report"
+      ],
+      "resolution": "The question settles from Pyth's SOL/USD price feed, read over this market's answer window. A window the feed cannot answer resolves to the source-failure outcome instead — silence is an outcome here, not a stall.",
+      "story": "The successor to the first public market, founded on 2026-08-30 to carry the one thing its predecessor was missing: a release that can switch trading on. Hours later it became the first market on any dClutch deployment to hold a live capability root — the account that has to exist before a single trade can be made — and the account is on devnet with the transaction that created it. It never traded. The cohort that followed widened the Core Market record by eight bytes, and this market's narrower record, intact and readable exactly as founding left it, is no longer a shape the deployed program will accept: it reached the same wall as the two markets before it, by a different road. Its successor was founded against the widened record and carries the trade."
     },
     "7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC": {
       "title": "SOL/USD range — the first public market",

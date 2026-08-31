@@ -31,6 +31,11 @@ dclutch-token-svm = { path = "../dclutch-token-svm" }
 # Test-only, and deliberately the OTHER implementation: the unit tests
 # recompute these digests against a library the crate no longer links.
 [dev-dependencies]
+# Test-only, and deliberately the OTHER author: the byte-identity gate in
+# `activation_bundle_v1` rebuilds this crate's sealed activation triple out of
+# the family-neutral template, so the template is proven to be THIS reviewed
+# artifact rather than a fourth opinion of it.
+dclutch-capability-activation-codec = { path = "../dclutch-capability-activation-codec" }
 sha2 = { version = "=0.10.9", default-features = false }
 
 [lints]

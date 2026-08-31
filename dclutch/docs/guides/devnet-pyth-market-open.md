@@ -23,13 +23,25 @@ tools/release/stage-devnet-sponsored-market-open.sh \
   --plan /absolute/checked-devnet-plan.json \
   --registry-program-id "$REGISTRY_PROGRAM" \
   --direct-fee-recipient "$DIRECT_FEE_RECIPIENT" \
+  --direct-fee-basis-points 0 \
   --window-start "$(date +%s)"
 ```
 
-The wrapper fixes Direct at **50 basis points per side** and compiles the
-four-outcome flagship SOL/USD range product with cuts `12000,18000`. The checked
-plan is the source of the permanent Registry, Core, Claims, Trading, Resolution,
-Custody, and Rent-Credit program pins; no ID is copied into the staging tool.
+`--direct-fee-basis-points` has **no default and must be stated**, because the
+rate is sealed into the Market at founding and a fee-bearing Direct trade does
+not fit the compute ceiling: measured all-first-try 1,515,003 CU against
+1,400,000, over by 115,003 before any key is drawn
+([`DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md`](../evidence/DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md)).
+**Pass `0` for any market that must trade.** A nonzero rate is legitimate only
+once the second-transaction fee leg has shipped
+([`FEE_SECOND_TRANSACTION_V1.md`](../design/FEE_SECOND_TRANSACTION_V1.md)), or
+when you deliberately mean to found a market that cannot trade. The tool refuses
+anything above `MAX_FEE_BPS = 500` (decision 0014 D2).
+
+The wrapper compiles the four-outcome flagship SOL/USD range product with cuts
+`12000,18000`. The checked plan is the source of the permanent Registry, Core,
+Claims, Trading, Resolution, Custody, and Rent-Credit program pins; no ID is
+copied into the staging tool.
 
 The resulting directory contains `market.json`, the 134-byte sponsored
 `sol-usd.price-update-v2`, `market-open-staging.json`, and an
@@ -41,12 +53,26 @@ the caller artifacts for Direct and terminal stages.
 
 ## Remaining execution inputs
 
-The execute wrapper requires only explicit inputs: six keypair paths
+The execute wrapper requires only explicit inputs: **seven** keypair paths
 (`campaign-payer`, `collateral-mint`, `collateral-wallet`, `founding-beneficiary`,
-`founding-projection-witness`, and `founding-source-funder`), two distinct public
-identities (`founding-founder` and `substituted-founder`), and a separate
+`founding-projection-witness`, `founding-source-funder`, and
+`DCLUTCH_FOUNDING_FOUNDER_KEYPAIR`), one public identity
+(`substituted-founder`, which never signs and is never funded), and a separate
 `DCLUTCH_AUTHORIZE_MARKET_OPEN=YES` authorization. It never falls back to a
 default wallet.
+
+**Why the founder needs a keypair and not a public key.** The founding driver
+only ever needs the founder's *address* — the founder does not sign at
+founding — and the flag is `--founding-founder PUBKEY` for that reason. But the
+founding mints the entire complete set to that identity, terminal settlement
+binds the redeeming signer to the Position's owner, and an aggregate with a
+nonzero supply can never be closed, so **a founder whose secret nobody holds is
+a market whose collateral is stranded and whose lifecycle can never reach
+`Retired`.** All three markets founded on devnet before 2026-08-30 share one
+such founder; see decision
+[0015 §8](../decisions/0015-markets-that-can-never-resolve.md). The wrapper
+therefore derives the identity from a file you hold, and refuses if the file
+disagrees with an explicitly-set `DCLUTCH_FOUNDING_FOUNDER`.
 
 ## Read-only preparation
 
@@ -64,7 +90,7 @@ tools/release/devnet-price-update.sh --url "$RPC" --out "$WORK/sol-usd.update"
 cargo run --manifest-path "$BOOT/Cargo.toml" -- devnet-sponsored-market \
   --registry-program-id "$REGISTRY_PROGRAM" --plan "$PLAN" \
   --rpc-url "$RPC" --i-mean-devnet "$GENESIS" \
-  --direct-fee-basis-points 50 \
+  --direct-fee-basis-points 0 \
   --direct-fee-recipient "$DIRECT_FEE_RECIPIENT" \
   --price-update "$WORK/sol-usd.update" --window-start "$(date +%s)" \
   > "$WORK/sponsored-market.json"

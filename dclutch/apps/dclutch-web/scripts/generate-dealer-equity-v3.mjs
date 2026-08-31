@@ -17,7 +17,16 @@ const sources = Object.freeze({
   lpProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_lp_artifacts.rs', root), 'utf8'),
   scenarioProfile: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_profile.rs', root), 'utf8'),
   scenarioArtifacts: readFileSync(new URL('programs/dclutch-trading-sbf/src/dealer/v3_trade_artifacts.rs', root), 'utf8'),
-  basis: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/runtime_v3.rs', root), 'utf8'),
+  // The `DCLTPAY3` layout scalars this generator scrapes are Lean-emitted
+  // and live in `generated_runtime_v3.rs`; `runtime_v3.rs` `include!`s that
+  // file and keeps only private aliases whose right-hand sides are names,
+  // not numbers, so the scalar regex below cannot see them there. Reading
+  // the emitted file directly also points this mirror at the actual
+  // authority rather than at a handwritten restatement of it.
+  basis: readFileSync(
+    new URL('crates/dclutch-product-payoff-v2-codec/src/generated_runtime_v3.rs', root),
+    'utf8',
+  ),
 });
 const outputUrl = new URL('../lib/generated/dealerEquityV3.ts', import.meta.url);
 

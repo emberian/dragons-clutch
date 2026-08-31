@@ -102,7 +102,7 @@ describe('Market detail projection', () => {
     if (card.status !== 'decoded') throw new Error(card.refusal);
     expect(card.phase).toBe('Open');
     expect(detail.phaseMeaning).toBe(marketPhaseMeaningV1('Open'));
-    expect(detail.phaseMeaning).toMatch(/no claim can be redeemed/);
+    expect(detail.phaseMeaning).toMatch(/nothing can be cashed in/);
     expect(card.identity).toMatchObject({
       schemaMagic: 'DCLTCOR3',
       schemaVersion: 3,

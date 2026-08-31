@@ -1,6 +1,28 @@
 # Decision 0017: children read the activation cache — ratifying the answer to the reentrancy wall
 
-Status: **OPEN — ratification requested.** Ledger M-23. The change was
+Status: **RATIFIED 2026-08-30 — A ratified, C refused. B BUILT AND MEASURED
+2026-08-30; the §7 tripwire ships with it.**
+§7's recommendation was adopted whole (`DECISION_PACKET_2026_08_30.md` §3,
+orchestrator ruling with ember's veto window open; `27f7944b`), including the
+condition: ratification ships with the tripwire this record asks for at the end
+of §7 — a per-family test exercising a child under a real continuation.
+**Option B is no longer sold on a qualitative label**: SEALWIDE measured it at
+**52,592 CU, invariant across 32 keys and two builds**
+(`docs/design/TRUST_RATCHET_V1.md`, `028f6047`), which makes it ordinary costed
+work and the single largest remaining routine CU win. M-23 closes with this
+record.
+
+**B landed and the number is bigger than the charter's.** The public Direct
+route's key-independent floor fell **1,319,672 → 1,252,751 CU**, a measured
+**66,921**, over the same 32 seeds and the same statistic
+(`programs/dclutch-trading-sbf/program-test/tests/direct_hot_top_level_margin_gate.rs`,
+whose constant fell with it). The ratchet's arithmetic net of ~49,500 was low
+because it sized the CPI pair and not the third full cache decode the pair made
+redundant — 25 `decode_role` calls, worth about 14,300. The fee-bearing arm fell
+by the same amount, 1,501,503 → 1,435,274, which does not make it fit: it is
+still 35,274 CU over the ceiling, down from 101,503. See §9.
+
+Ledger M-23, as originally posed: **ratification requested.** The change was
 implemented tree-wide on 2026-08-27 and is load-bearing at ~39 sites; the lane
 that found the wall yielded the question to ember and it was never answered.
 This record asks for the ruling that was skipped, and rules on one residual.
@@ -169,3 +191,118 @@ the case the ninth wall refused as reentrancy"*).
   gain a referent.
 - If B is chartered, the syscall audit's P0 acquires an owner and its
   qualitative payoff becomes a measurement.
+
+## 9. Option B as built (2026-08-30, lane CACHEREAD)
+
+Commits `f04654a0` (the conversion) and `09c1c8fc` (the tripwire), on top of
+`3ec7f415`.
+
+### The measurement
+
+**Floor 1,319,672 → 1,252,751 CU, −66,921**, at the key-independent statistic
+`min over seeds of (CU(seed) − 1,500 · T_known(seed))` over 32 seeds — the one
+`TRUST_RATCHET_V1.md` §8.2 asked for, and the one that survives the fact that
+converting the route changes the five ELF digests and therefore redraws every
+bump search on it. Before and after were measured by the same script on the same
+machine, `tools/gauntlet/hot-cu/cacheread-floor.sh`.
+
+| term | CU |
+|---|---|
+| the two `Reauthenticate` CPIs (SEALWIDE's measured 26,296 each) | −52,592 |
+| the third full cache decode `authenticate_activated_child_programs_v3` paid | ≈ −14,300 |
+| the local replacement: two role decodes, two observations, one identity check | ≈ +3,000 |
+| **measured total** | **−66,921** |
+
+The third decode is SEALWIDE's own bonus finding arriving as a number: `decode`
+validates the complete five-role projection and all ten aliasing pairs, so it is
+25 `decode_role` calls, and the route ran it three times over one immutable
+1,288-byte account. Seventy-five role decodes, one answer; now twenty-five.
+
+Two other gates moved, both because their subtrahend got cheaper and neither
+because anything got worse: `hot_heap_frame_is_inert`'s continuation-versus-
+top-level delta floor 36,713 → 103,307 (re-measured over twelve seeds, residuals
+on the 3,000 CU grid), and the fee-bearing lower bound 1,501,503 → 1,435,274.
+
+### The conjunction
+
+Every conjunct of `process_reauthenticate`
+(`programs/dclutch-registry-sbf/src/lib.rs`) is reproduced locally, and the
+deployment half is not a reproduction but the same function object — the
+Registry's handler and Trading's arm both call
+`dclutch_registry_activation_auth_v1::authenticate_activated_role_in_cache_v1`,
+so §3's "no drift is structural" property now covers this arm too.
+
+One conjunct is **stricter**: `authenticate_cache_identity` derived the cache
+address from the release set the CACHE names, so a valid cache for another
+Market passed it and only the caller's after-the-fact receipt comparison refused
+it. `authenticate_activation_cache_identity_v1` derives it from the release set
+THIS Market selected, so that cache refuses at its own address. This is §3's
+second "better than the CPI had" property, now applied where the CPI survived.
+
+Three caller-side checks became vacuous rather than being dropped: `producer ==
+registry.key` has no meaning without a CPI, and `receipt.role()` and
+`receipt.program()` are constructions of a local receipt rather than assertions
+about a returned one — the latter still required by
+`cached_role_deployment_observation_v1` before it observes anything.
+
+**One refusal code changes on purpose.** A superseded deployment slot reaches
+the caller as `TradingSbfError::ReleaseSuperseded` (`0x4007`) instead of the
+generic `Release` a failed `invoke` could only carry. Decision 0012's
+operator-actionable refusal is now sayable on this arm.
+
+### The subtractive wall, now complete
+
+`RegistryInstructionV1` no longer appears in Trading's code at all. §3 described
+the enforcement as deletion with no fallback across five child programs; it now
+holds for six, and the Registry's `Reauthenticate` route is reachable only from
+a top-level transaction — `dclutch-operator` still submits it as an attestation,
+so the route is not dead, it is simply no longer invoked by any program.
+
+### §7's condition, in two halves, both seen to fire
+
+`programs/dclutch-trading-sbf/program-test/tests/registry_hot_continuation.rs`:
+
+- **Dynamic.** `claims_and_custody_execute_as_children_under_a_real_continuation`
+  reads the runtime's invoke log and requires Registry [1], Trading [2], Claims
+  [3], Custody [3], with the transaction succeeding. Demonstrated red: a Registry
+  `invoke` restored in Claims' `sparse_native_transfer_v1` produced
+  `InstructionError(2, ReentrancyNotAllowed)`.
+- **Structural.** `assert_no_family_reaches_the_registry_by_cpi` refuses any of
+  the seven role adapters whose code names `RegistryInstructionV1`, over every
+  route of each. Demonstrated red: an import added to `dclutch-rent-sbf`.
+
+**What the dynamic half does not cover, measured rather than assumed.** Reading
+the invoke log of the canonical Direct Hot continuation: **Core is never invoked
+at all** on that route, and Dealer and Rent have no continuation fixture anywhere
+in the tree. So the dynamic half is two families of five. Worse, and more useful:
+the first attempt at its negative control put the `invoke` in Claims'
+`lib.rs::authenticate_activated_role` — the helper fourteen Claims sites share —
+and the test stayed GREEN, because this fixture drives
+`sparse_native_transfer_v1`, which takes the bump-witness API instead. The
+dynamic half covers ONE ROUTE of Claims. The structural half is what covers the
+other thirteen and the three families with no fixture.
+
+**Still owed, and sized rather than claimed:** a real continuation fixture for
+Core, Dealer and Rent. Each needs its own release waist, market and continuation
+admission, and there is no existing fixture to extend — `registry_hot_continuation`
+drives the Direct Hot bundle and that bundle does not reach them. Estimate 4–8
+hours per family, and the honest first question is whether a continuation into
+those families is a shape the protocol actually runs, because if it is not then
+the structural half is the whole of what the tripwire can be.
+
+### A drift seam this created, named rather than left
+
+`hot_v3::require_activation_cache_account_v3` is now a SECOND spelling of the
+identity conjunction the crate owns. It survives because it is the
+CONTINUATION's, is `#[inline(always)]` for a measured reason — extracting it as
+an ordinary call took the continuation route from passing to
+`consumed 1399850 of 1399850` — and a cross-crate call cannot be inlined at all.
+Both arms authenticate the same account under the same rule; the clean fix is
+for the continuation to afford the crate call, which is a compute problem.
+
+Separately, the continuation arm authenticates its role deployments through
+`dclutch-shadow-accelerator-auth-v4::authenticate_activated_current_deployment`
+rather than through this crate — a second implementation of the same rule, which
+is exactly what §3 says the cache-read shape avoids. It was already true before
+this lane and is out of its fence; it is recorded here so it is not discovered
+again.

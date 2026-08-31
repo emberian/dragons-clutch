@@ -1,0 +1,4171 @@
+{
+  "market_id": "m03",
+  "archetype": "coin-flip",
+  "basis": "categorical-degree-0",
+  "destiny": "resolves-clean",
+  "deadline_slots": 3104,
+  "personas": [
+    "sleeper",
+    "sleeper",
+    "prompt-redeemer",
+    "patient-maker"
+  ],
+  "law_ids": [
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+    "L6",
+    "L7"
+  ],
+  "laws": [
+    {
+      "id": "L1",
+      "status": "holds",
+      "detail": "tracked 1028858834 atoms across 8 accounts == Mint supply 1028858834"
+    },
+    {
+      "id": "L2",
+      "status": "holds",
+      "detail": "the Hoard moved 0 atoms since `simlife-m03-tick-0024`, exactly as declared; it holds 464429417"
+    },
+    {
+      "id": "L3",
+      "status": "holds",
+      "detail": "1 Positions sum to the aggregate supply vector [464429417, 464429417]"
+    },
+    {
+      "id": "L4",
+      "status": "holds",
+      "detail": "Hoard 464429417 >= worst outcome 464429417 x unit 1 = 464429417"
+    },
+    {
+      "id": "L5",
+      "status": "holds",
+      "detail": "tracked collateral moved 0 atoms since `simlife-m03-tick-0024`, exactly as declared"
+    },
+    {
+      "id": "L6",
+      "status": "holds",
+      "detail": "no watched account closed at this boundary"
+    },
+    {
+      "id": "L7",
+      "status": "inapplicable",
+      "detail": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess their fees"
+    }
+  ],
+  "positions": [
+    {
+      "label": "founder",
+      "address": "FU8XuCnu5K6dc9ecHqYi7pP2dyJxTEuYu1aWch6aTdNP",
+      "lamports": "1893120",
+      "claims": [
+        "464429417",
+        "464429417"
+      ],
+      "total_claims": "928858834"
+    }
+  ],
+  "collateral_holders": [
+    {
+      "label": "founder_wallet",
+      "address": "3FJQXjGwg2QmsLAvad5c9digFMGYAoqijknnXAQqNamH",
+      "atoms": "464429417"
+    },
+    {
+      "label": "hoard",
+      "address": "6aGWRjZ11NvYo4x1xUQCecYF4fsuBx2NqEBdvXMcNcJ2",
+      "atoms": "464429417"
+    },
+    {
+      "label": "participant_fixture_source",
+      "address": "9cjQJBLav3NQSmTSivNqAExZ6LJjAZpsWLN5pyT5ekRF",
+      "atoms": "75000000"
+    },
+    {
+      "label": "holder_m03-p0",
+      "address": "7GBXYCNSmFzQva9GZcXdnEE3Gr2b3nYpeooETNVi1cZQ",
+      "atoms": "6250000"
+    },
+    {
+      "label": "holder_m03-p1",
+      "address": "7mBtjrdtPfzFYxkxSApXRBcg7ZWbwEofrzYepdf2HnDu",
+      "atoms": "6250000"
+    },
+    {
+      "label": "holder_m03-p2",
+      "address": "FVmZaJN8QaozGivNm417XFRfRCX1znT1yZXvhty8KD1S",
+      "atoms": "6250000"
+    },
+    {
+      "label": "holder_m03-p3",
+      "address": "95fyag1N9nG5KPDZtbnKHKsTpShGUNQnRf6v2z7GJU6f",
+      "atoms": "6250000"
+    },
+    {
+      "label": "prior_00",
+      "address": "94g5Lpx62bGzM3zFNfgUCvm6PrVpKLoHRjEGLm4fYCtb",
+      "atoms": "0"
+    }
+  ],
+  "claim_unit_atoms": null,
+  "settlement": null,
+  "outcome_count": 2,
+  "cycles_recorded": 24,
+  "points_omitted_before": 0,
+  "census_file": "cycle-000024.json",
+  "points": [
+    {
+      "cycle": 2,
+      "stage": "simlife-m03-tick-0002",
+      "slot": "78525",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497482428033",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hihhiii",
+      "checks_held": 3,
+      "checks_broken": 0,
+      "checks_inapplicable": 4
+    },
+    {
+      "cycle": 3,
+      "stage": "simlife-m03-tick-0003",
+      "slot": "78525",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497482428033",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 4,
+      "stage": "simlife-m03-tick-0004",
+      "slot": "78525",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497482428033",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 5,
+      "stage": "simlife-m03-tick-0005",
+      "slot": "78668",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497480283753",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 6,
+      "stage": "simlife-m03-tick-0006",
+      "slot": "79028",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497475995193",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 7,
+      "stage": "simlife-m03-tick-0007",
+      "slot": "79744",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497465273793",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 8,
+      "stage": "simlife-m03-tick-0008",
+      "slot": "79747",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497465273793",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 9,
+      "stage": "simlife-m03-tick-0009",
+      "slot": "80038",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497460985233",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 10,
+      "stage": "simlife-m03-tick-0010",
+      "slot": "80189",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497458840953",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 11,
+      "stage": "simlife-m03-tick-0011",
+      "slot": "80333",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 12,
+      "stage": "simlife-m03-tick-0012",
+      "slot": "80333",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 13,
+      "stage": "simlife-m03-tick-0013",
+      "slot": "80336",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 14,
+      "stage": "simlife-m03-tick-0014",
+      "slot": "80336",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 15,
+      "stage": "simlife-m03-tick-0015",
+      "slot": "80336",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 16,
+      "stage": "simlife-m03-tick-0016",
+      "slot": "80336",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 17,
+      "stage": "simlife-m03-tick-0017",
+      "slot": "80336",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 18,
+      "stage": "simlife-m03-tick-0018",
+      "slot": "80337",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 19,
+      "stage": "simlife-m03-tick-0019",
+      "slot": "80337",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 20,
+      "stage": "simlife-m03-tick-0020",
+      "slot": "80338",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 21,
+      "stage": "simlife-m03-tick-0021",
+      "slot": "80338",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 22,
+      "stage": "simlife-m03-tick-0022",
+      "slot": "80338",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 23,
+      "stage": "simlife-m03-tick-0023",
+      "slot": "80339",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 24,
+      "stage": "simlife-m03-tick-0024",
+      "slot": "80339",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    },
+    {
+      "cycle": 25,
+      "stage": "simlife-m03-tick-0025",
+      "slot": "80339",
+      "recorded_at": null,
+      "supply": [
+        "464429417",
+        "464429417"
+      ],
+      "position_totals": [
+        "464429417",
+        "464429417"
+      ],
+      "mint_supply": "1028858834",
+      "payer_lamports": "497456696673",
+      "hoard_atoms": "464429417",
+      "tracked_collateral": "1028858834",
+      "law_statuses": "hhhhhhi",
+      "checks_held": 6,
+      "checks_broken": 0,
+      "checks_inapplicable": 1
+    }
+  ],
+  "schema": "dclutch-simulator-series-v4",
+  "captured_at": "2026-08-31T02:23:42+00:00",
+  "cluster": "local",
+  "market": null,
+  "mode": "finite",
+  "campaign": null,
+  "world": {
+    "seed": {
+      "preimage": "dclutch/simlife2/2026-08-30/hands-144",
+      "sha256": "5174e29b146eda390d22473b5386c76ffcb639925ed7d345f58a54fb6f95a711"
+    },
+    "plan_digest": "35f003a83fd078b8194ccd63272f64066f4b21bbd16cf57779e22d8cefc59347",
+    "spec": {
+      "archetype_mix": {
+        "kind": "categorical",
+        "options": [
+          {
+            "name": "coin-flip",
+            "weight": 4
+          },
+          {
+            "name": "short-fuse",
+            "weight": 2
+          },
+          {
+            "name": "ladder",
+            "weight": 3
+          },
+          {
+            "name": "tent-band",
+            "weight": 2
+          },
+          {
+            "name": "wide-field",
+            "weight": 2
+          },
+          {
+            "name": "quiet-corner",
+            "weight": 2
+          }
+        ]
+      },
+      "founding_stagger": {
+        "high": 6,
+        "kind": "int-uniform",
+        "low": 0
+      },
+      "markets": 6,
+      "persona_mix": {
+        "kind": "categorical",
+        "options": [
+          {
+            "name": "eager-maker",
+            "weight": 4
+          },
+          {
+            "name": "patient-maker",
+            "weight": 4
+          },
+          {
+            "name": "prompt-redeemer",
+            "weight": 3
+          },
+          {
+            "name": "sleeper",
+            "weight": 4
+          },
+          {
+            "name": "crank",
+            "weight": 2
+          },
+          {
+            "name": "compactor",
+            "weight": 2
+          }
+        ]
+      },
+      "slots_per_tick": 900,
+      "ticks": 26
+    },
+    "substrate": {
+      "name": "successor-bootstrap-lifecycle",
+      "label": "a loopback rehearsal chain restarted from RELAY-3 run 3 substrate, whose markets this run founds itself, observed and driven on 127.0.0.1:34500",
+      "cluster": "local",
+      "rpc_origin": "http://127.0.0.1:34500/",
+      "source_revision": "533540056d61c05faabaae07e9b78e8c90214a8e",
+      "routes": [
+        "admit",
+        "census",
+        "deadline-failure",
+        "fill",
+        "found",
+        "redeem",
+        "resolve",
+        "retire"
+      ],
+      "routes_absent": [
+        "compact"
+      ],
+      "basis_kinds": [
+        "categorical-degree-0"
+      ],
+      "basis_kinds_absent": [
+        "ramp-degree-1",
+        "tent-degree-1"
+      ]
+    },
+    "markets_planned": 6,
+    "markets_observed": 4,
+    "markets_founded_by_this_run": [
+      "m00",
+      "m03",
+      "m04",
+      "m05"
+    ],
+    "markets_pre_founded": [],
+    "tally": {
+      "admit": {
+        "blocked": 9,
+        "executed": 12,
+        "refused": 0,
+        "unattempted": 0
+      },
+      "census": {
+        "blocked": 52,
+        "executed": 87,
+        "refused": 0,
+        "unattempted": 0
+      },
+      "compact": {
+        "blocked": 0,
+        "executed": 0,
+        "refused": 0,
+        "unattempted": 6
+      },
+      "fill": {
+        "blocked": 7,
+        "executed": 0,
+        "refused": 21,
+        "unattempted": 0
+      },
+      "found": {
+        "blocked": 0,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 2
+      },
+      "redeem": {
+        "blocked": 9,
+        "executed": 0,
+        "refused": 0,
+        "unattempted": 0
+      },
+      "resolve": {
+        "blocked": 2,
+        "executed": 0,
+        "refused": 2,
+        "unattempted": 0
+      },
+      "retire": {
+        "blocked": 4,
+        "executed": 0,
+        "refused": 0,
+        "unattempted": 0
+      }
+    },
+    "planned": [
+      {
+        "market_id": "m00",
+        "archetype": "short-fuse",
+        "basis": "categorical-degree-0",
+        "destiny": "resolves-clean",
+        "outcome_count": 3,
+        "deadline_slots": 310,
+        "fee_basis_points": 0,
+        "founding_collateral_atoms": "24957844",
+        "participants": [
+          {
+            "persona": "prompt-redeemer",
+            "stake_atoms": "5737122",
+            "redeems": true
+          },
+          {
+            "persona": "eager-maker",
+            "stake_atoms": "19220722",
+            "redeems": true
+          }
+        ],
+        "observed": true
+      },
+      {
+        "market_id": "m01",
+        "archetype": "tent-band",
+        "basis": "tent-degree-1",
+        "destiny": "resolves-clean",
+        "outcome_count": 5,
+        "deadline_slots": 16300,
+        "fee_basis_points": 0,
+        "founding_collateral_atoms": "754399349",
+        "participants": [
+          {
+            "persona": "prompt-redeemer",
+            "stake_atoms": "206511105",
+            "redeems": true
+          },
+          {
+            "persona": "sleeper",
+            "stake_atoms": "104545105",
+            "redeems": false
+          },
+          {
+            "persona": "compactor",
+            "stake_atoms": "273109289",
+            "redeems": true
+          },
+          {
+            "persona": "eager-maker",
+            "stake_atoms": "170233850",
+            "redeems": true
+          }
+        ],
+        "observed": false
+      },
+      {
+        "market_id": "m02",
+        "archetype": "tent-band",
+        "basis": "tent-degree-1",
+        "destiny": "resolves-clean",
+        "outcome_count": 3,
+        "deadline_slots": 7836,
+        "fee_basis_points": 0,
+        "founding_collateral_atoms": "566027375",
+        "participants": [
+          {
+            "persona": "sleeper",
+            "stake_atoms": "96550701",
+            "redeems": false
+          },
+          {
+            "persona": "eager-maker",
+            "stake_atoms": "65031268",
+            "redeems": true
+          },
+          {
+            "persona": "prompt-redeemer",
+            "stake_atoms": "220787897",
+            "redeems": true
+          },
+          {
+            "persona": "compactor",
+            "stake_atoms": "171703648",
+            "redeems": false
+          },
+          {
+            "persona": "sleeper",
+            "stake_atoms": "11953861",
+            "redeems": false
+          }
+        ],
+        "observed": false
+      },
+      {
+        "market_id": "m03",
+        "archetype": "coin-flip",
+        "basis": "categorical-degree-0",
+        "destiny": "resolves-clean",
+        "outcome_count": 2,
+        "deadline_slots": 3104,
+        "fee_basis_points": 0,
+        "founding_collateral_atoms": "928858834",
+        "participants": [
+          {
+            "persona": "sleeper",
+            "stake_atoms": "267453693",
+            "redeems": false
+          },
+          {
+            "persona": "sleeper",
+            "stake_atoms": "178742303",
+            "redeems": false
+          },
+          {
+            "persona": "prompt-redeemer",
+            "stake_atoms": "224011669",
+            "redeems": true
+          },
+          {
+            "persona": "patient-maker",
+            "stake_atoms": "258651169",
+            "redeems": true
+          }
+        ],
+        "observed": true
+      },
+      {
+        "market_id": "m04",
+        "archetype": "wide-field",
+        "basis": "categorical-degree-0",
+        "destiny": "resolves-clean",
+        "outcome_count": 6,
+        "deadline_slots": 66276,
+        "fee_basis_points": 0,
+        "founding_collateral_atoms": "5073807456",
+        "participants": [
+          {
+            "persona": "patient-maker",
+            "stake_atoms": "2004245969",
+            "redeems": true
+          },
+          {
+            "persona": "crank",
+            "stake_atoms": "2983462814",
+            "redeems": false
+          },
+          {
+            "persona": "patient-maker",
+            "stake_atoms": "1907188",
+            "redeems": true
+          },
+          {
+            "persona": "sleeper",
+            "stake_atoms": "84191485",
+            "redeems": false
+          }
+        ],
+        "observed": true
+      },
+      {
+        "market_id": "m05",
+        "archetype": "quiet-corner",
+        "basis": "categorical-degree-0",
+        "destiny": "founded-then-sleepy",
+        "outcome_count": 2,
+        "deadline_slots": 186834,
+        "fee_basis_points": 0,
+        "founding_collateral_atoms": "252329312",
+        "participants": [
+          {
+            "persona": "compactor",
+            "stake_atoms": "170694477",
+            "redeems": true
+          },
+          {
+            "persona": "prompt-redeemer",
+            "stake_atoms": "81634835",
+            "redeems": true
+          }
+        ],
+        "observed": true
+      }
+    ],
+    "not_done": [
+      {
+        "route": "census",
+        "outcome": "blocked",
+        "reason": "m01 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 26
+      },
+      {
+        "route": "census",
+        "outcome": "blocked",
+        "reason": "m02 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 26
+      },
+      {
+        "route": "compact",
+        "outcome": "unattempted",
+        "reason": "claim-check compaction by a stranger has NO CLI anywhere. It is implemented and green in ProgramTest (programs/dclutch-claims-sbf/tests/claim_check/mod.rs, sixteen tests including a_market_retires_a_sleeping_holders_position_and_the_holder_is_still_paid) and no gauntlet binding names it, so it is covered and census-unbound. Sized rather than guessed: one new local-private-validator-claim-check-compaction-v1 subcommand shaped like the wallet payout driver, 6-10 hours plus 1-2 for the gauntlet binding, no program change",
+        "count": 6
+      },
+      {
+        "route": "fill",
+        "outcome": "blocked",
+        "reason": "m01 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 6
+      },
+      {
+        "route": "admit",
+        "outcome": "blocked",
+        "reason": "m02 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 5
+      },
+      {
+        "route": "admit",
+        "outcome": "blocked",
+        "reason": "m01 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 4
+      },
+      {
+        "route": "redeem",
+        "outcome": "blocked",
+        "reason": "m01 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 3
+      },
+      {
+        "route": "found",
+        "outcome": "unattempted",
+        "reason": "a tent is two degree-1 ramps and reaches the wire the same way a ramp does -- through GradedExactComplement, which the local founding compiler never emits (market.rs:1683)",
+        "count": 2
+      },
+      {
+        "route": "redeem",
+        "outcome": "blocked",
+        "reason": "m03 never reached a terminal answer, so there is nothing to collect and nothing to clean up",
+        "count": 2
+      },
+      {
+        "route": "redeem",
+        "outcome": "blocked",
+        "reason": "m00 never reached a terminal answer, so there is nothing to collect and nothing to clean up",
+        "count": 2
+      },
+      {
+        "route": "redeem",
+        "outcome": "blocked",
+        "reason": "m02 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 2
+      },
+      {
+        "route": "resolve",
+        "outcome": "refused",
+        "reason": "provisioning the resolution tables: Error: Error(\"authority keypair public key 66LVJypEwxMAMJwsoGAyUSQZDyK5uGH5BBaYUpiddQ4b differs from authenticated input EahMVb2ptYeDKia4uTbmQHsnqT7B8kmGz2xEMBvP1F6N\")",
+        "count": 2
+      },
+      {
+        "route": "fill",
+        "outcome": "blocked",
+        "reason": "m02 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p0->m04-p2#3.1: Error: Error(\"REFUSED: Direct root owner or width changed\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p0->m04-p3#3.2: Error: Error(\"REFUSED: Direct root owner or width changed\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p0#3.0: Error: Error(\"signature W5zzZz7JdTp1qDdGL5jEn2ZUunVRxeKt4a5m5q3JMJEJ54zKPn54u5DU4xVm17r7PCxky5MCXHfcZjWwrbujMNb has not reached finalized history; confirmed is never accepted\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p0->m04-p3#2.3: Error: Error(\"REFUSED: Direct root owner or width changed\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p0#2.0: Error: Error(\"REFUSED: Direct root owner or width changed\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p3#2.1: Error: Error(\"REFUSED: Direct root owner or width changed\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p3#2.2: Error: Error(\"REFUSED: Direct root owner or width changed\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p3->m04-p0#1.0: Error: Error(\"signature W5zzZz7JdTp1qDdGL5jEn2ZUunVRxeKt4a5m5q3JMJEJ54zKPn54u5DU4xVm17r7PCxky5MCXHfcZjWwrbujMNb has not reached finalized history; confirmed is never accepted\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p0->m04-p2#5.4: Error: Error(\"REFUSED: Direct root owner or width changed\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p0#5.2: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p3#5.1: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p3->m04-p2#5.0: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p3->m04-p2#5.3: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p0->m04-p3#4.2: Error: Error(\"signature 2sg7soLhszZ9RkYnbiK1xiYqvrFQGxLtvUCZDiTyrRtdJTArhRmrbD9LarmQ6cTQHAxFB1LsQzE2Nzfwf8WHCGwJ has not reached finalized history; confirmed is never accepted\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p0#4.0: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p3->m04-p2#4.1: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p3->m04-p2#4.3: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p3->m04-p2#4.4: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p0#0.0: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p3#0.1: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "fill",
+        "outcome": "refused",
+        "reason": "producing the trade for m04-p2->m04-p3#0.2: Error: Error(\"finalized signature omitted finalized transaction history\")",
+        "count": 1
+      },
+      {
+        "route": "resolve",
+        "outcome": "blocked",
+        "reason": "m02 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 1
+      },
+      {
+        "route": "resolve",
+        "outcome": "blocked",
+        "reason": "m01 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 1
+      },
+      {
+        "route": "retire",
+        "outcome": "blocked",
+        "reason": "m03 never reached a terminal answer, so there is nothing to collect and nothing to clean up",
+        "count": 1
+      },
+      {
+        "route": "retire",
+        "outcome": "blocked",
+        "reason": "m00 never reached a terminal answer, so there is nothing to collect and nothing to clean up",
+        "count": 1
+      },
+      {
+        "route": "retire",
+        "outcome": "blocked",
+        "reason": "m02 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 1
+      },
+      {
+        "route": "retire",
+        "outcome": "blocked",
+        "reason": "m01 asks for a basis this substrate cannot express, so it was never founded and nothing downstream of it happened",
+        "count": 1
+      }
+    ],
+    "timeline": [
+      {
+        "tick": 0,
+        "executed": 0,
+        "refused": 0,
+        "unattempted": 2,
+        "blocked": 3,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 0,
+        "routes": []
+      },
+      {
+        "tick": 1,
+        "executed": 0,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 5,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 0,
+        "routes": []
+      },
+      {
+        "tick": 2,
+        "executed": 2,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 2,
+        "mutations_executed": 1,
+        "mutations_refused": 0,
+        "census_executed": 1,
+        "routes": [
+          "found:executed"
+        ]
+      },
+      {
+        "tick": 3,
+        "executed": 1,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 4,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 1,
+        "routes": []
+      },
+      {
+        "tick": 4,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 4,
+        "mutations_executed": 2,
+        "mutations_refused": 0,
+        "census_executed": 2,
+        "routes": [
+          "admit:executed",
+          "found:executed"
+        ]
+      },
+      {
+        "tick": 5,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 3,
+        "mutations_executed": 1,
+        "mutations_refused": 0,
+        "census_executed": 3,
+        "routes": [
+          "found:executed"
+        ]
+      },
+      {
+        "tick": 6,
+        "executed": 8,
+        "refused": 1,
+        "unattempted": 0,
+        "blocked": 3,
+        "mutations_executed": 4,
+        "mutations_refused": 1,
+        "census_executed": 4,
+        "routes": [
+          "admit:executed",
+          "found:executed",
+          "resolve:refused"
+        ]
+      },
+      {
+        "tick": 7,
+        "executed": 8,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 3,
+        "mutations_executed": 4,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": [
+          "admit:executed"
+        ]
+      },
+      {
+        "tick": 8,
+        "executed": 6,
+        "refused": 4,
+        "unattempted": 0,
+        "blocked": 4,
+        "mutations_executed": 2,
+        "mutations_refused": 4,
+        "census_executed": 4,
+        "routes": [
+          "admit:executed",
+          "fill:refused",
+          "resolve:refused"
+        ]
+      },
+      {
+        "tick": 9,
+        "executed": 5,
+        "refused": 5,
+        "unattempted": 2,
+        "blocked": 5,
+        "mutations_executed": 1,
+        "mutations_refused": 5,
+        "census_executed": 4,
+        "routes": [
+          "admit:executed",
+          "fill:refused"
+        ]
+      },
+      {
+        "tick": 10,
+        "executed": 5,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 4,
+        "mutations_executed": 1,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": [
+          "admit:executed"
+        ]
+      },
+      {
+        "tick": 11,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 12,
+        "executed": 4,
+        "refused": 5,
+        "unattempted": 2,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 5,
+        "census_executed": 4,
+        "routes": [
+          "fill:refused"
+        ]
+      },
+      {
+        "tick": 13,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 1,
+        "blocked": 3,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 14,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 3,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 15,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 5,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 16,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 17,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 5,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 18,
+        "executed": 4,
+        "refused": 5,
+        "unattempted": 0,
+        "blocked": 4,
+        "mutations_executed": 0,
+        "mutations_refused": 5,
+        "census_executed": 4,
+        "routes": [
+          "fill:refused"
+        ]
+      },
+      {
+        "tick": 19,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 4,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 20,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 1,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 21,
+        "executed": 4,
+        "refused": 3,
+        "unattempted": 0,
+        "blocked": 3,
+        "mutations_executed": 0,
+        "mutations_refused": 3,
+        "census_executed": 4,
+        "routes": [
+          "fill:refused"
+        ]
+      },
+      {
+        "tick": 22,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 23,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 24,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      },
+      {
+        "tick": 25,
+        "executed": 4,
+        "refused": 0,
+        "unattempted": 0,
+        "blocked": 2,
+        "mutations_executed": 0,
+        "mutations_refused": 0,
+        "census_executed": 4,
+        "routes": []
+      }
+    ]
+  },
+  "markets": [
+    {
+      "market_id": "m00",
+      "archetype": "short-fuse",
+      "basis": "categorical-degree-0",
+      "destiny": "resolves-clean",
+      "deadline_slots": 310,
+      "personas": [
+        "prompt-redeemer",
+        "eager-maker"
+      ],
+      "law_ids": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7"
+      ],
+      "laws": [
+        {
+          "id": "L1",
+          "status": "holds",
+          "detail": "tracked 124957844 atoms across 6 accounts == Mint supply 124957844"
+        },
+        {
+          "id": "L2",
+          "status": "holds",
+          "detail": "the Hoard moved 0 atoms since `simlife-m00-tick-0024`, exactly as declared; it holds 12478922"
+        },
+        {
+          "id": "L3",
+          "status": "holds",
+          "detail": "1 Positions sum to the aggregate supply vector [12478922, 12478922, 12478922]"
+        },
+        {
+          "id": "L4",
+          "status": "holds",
+          "detail": "Hoard 12478922 >= worst outcome 12478922 x unit 1 = 12478922"
+        },
+        {
+          "id": "L5",
+          "status": "holds",
+          "detail": "tracked collateral moved 0 atoms since `simlife-m00-tick-0024`, exactly as declared"
+        },
+        {
+          "id": "L6",
+          "status": "holds",
+          "detail": "no watched account closed at this boundary"
+        },
+        {
+          "id": "L7",
+          "status": "inapplicable",
+          "detail": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess their fees"
+        }
+      ],
+      "positions": [
+        {
+          "label": "founder",
+          "address": "9ANgE8j8CLeaMq41i733YSW2wnf9K7UR5CY8eSyDPSQw",
+          "lamports": "1948800",
+          "claims": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "total_claims": "37436766"
+        }
+      ],
+      "collateral_holders": [
+        {
+          "label": "participant_fixture_source",
+          "address": "49dhPJpT8MdXFiZDFdthTr9zQgu3gcbAqPAvNnUbP3ub",
+          "atoms": "87500000"
+        },
+        {
+          "label": "founder_wallet",
+          "address": "bLDHGayqHe6pr7BjDyvDRADd8oV8U5PXvLvKrb8cxFR",
+          "atoms": "12478922"
+        },
+        {
+          "label": "hoard",
+          "address": "FzrvFoNk3tuMCUYVnLDmm6Y8mmeTrWDEcb8xWQfUC9MX",
+          "atoms": "12478922"
+        },
+        {
+          "label": "holder_m00-p0",
+          "address": "F1XnAnHUmnur7ozmV5WRBPC6BV1DLFP975qzkxpdAuPQ",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m00-p1",
+          "address": "HZKBrzb4XVwMsdZkUWnxDjQFYEjpdXq1Z7eqVFzh4Am2",
+          "atoms": "6250000"
+        },
+        {
+          "label": "prior_00",
+          "address": "6r2KZ44nx6xuh6XAhaFFWCfoF78uerYhpHwjgunsHHkL",
+          "atoms": "0"
+        }
+      ],
+      "claim_unit_atoms": null,
+      "settlement": null,
+      "outcome_count": 3,
+      "cycles_recorded": 20,
+      "points_omitted_before": 0,
+      "census_file": "cycle-000020.json",
+      "points": [
+        {
+          "cycle": 6,
+          "stage": "simlife-m00-tick-0006",
+          "slot": "78739",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497480283753",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hihhiii",
+          "checks_held": 3,
+          "checks_broken": 0,
+          "checks_inapplicable": 4
+        },
+        {
+          "cycle": 7,
+          "stage": "simlife-m00-tick-0007",
+          "slot": "79458",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497469562353",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 8,
+          "stage": "simlife-m00-tick-0008",
+          "slot": "79746",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497465273793",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 9,
+          "stage": "simlife-m00-tick-0009",
+          "slot": "80038",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497460985233",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 10,
+          "stage": "simlife-m00-tick-0010",
+          "slot": "80189",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497458840953",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 11,
+          "stage": "simlife-m00-tick-0011",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 12,
+          "stage": "simlife-m00-tick-0012",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 13,
+          "stage": "simlife-m00-tick-0013",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 14,
+          "stage": "simlife-m00-tick-0014",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 15,
+          "stage": "simlife-m00-tick-0015",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 16,
+          "stage": "simlife-m00-tick-0016",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 17,
+          "stage": "simlife-m00-tick-0017",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 18,
+          "stage": "simlife-m00-tick-0018",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 19,
+          "stage": "simlife-m00-tick-0019",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 20,
+          "stage": "simlife-m00-tick-0020",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 21,
+          "stage": "simlife-m00-tick-0021",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 22,
+          "stage": "simlife-m00-tick-0022",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 23,
+          "stage": "simlife-m00-tick-0023",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 24,
+          "stage": "simlife-m00-tick-0024",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 25,
+          "stage": "simlife-m00-tick-0025",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "position_totals": [
+            "12478922",
+            "12478922",
+            "12478922"
+          ],
+          "mint_supply": "124957844",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "12478922",
+          "tracked_collateral": "124957844",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        }
+      ]
+    },
+    {
+      "market_id": "m03",
+      "archetype": "coin-flip",
+      "basis": "categorical-degree-0",
+      "destiny": "resolves-clean",
+      "deadline_slots": 3104,
+      "personas": [
+        "sleeper",
+        "sleeper",
+        "prompt-redeemer",
+        "patient-maker"
+      ],
+      "law_ids": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7"
+      ],
+      "laws": [
+        {
+          "id": "L1",
+          "status": "holds",
+          "detail": "tracked 1028858834 atoms across 8 accounts == Mint supply 1028858834"
+        },
+        {
+          "id": "L2",
+          "status": "holds",
+          "detail": "the Hoard moved 0 atoms since `simlife-m03-tick-0024`, exactly as declared; it holds 464429417"
+        },
+        {
+          "id": "L3",
+          "status": "holds",
+          "detail": "1 Positions sum to the aggregate supply vector [464429417, 464429417]"
+        },
+        {
+          "id": "L4",
+          "status": "holds",
+          "detail": "Hoard 464429417 >= worst outcome 464429417 x unit 1 = 464429417"
+        },
+        {
+          "id": "L5",
+          "status": "holds",
+          "detail": "tracked collateral moved 0 atoms since `simlife-m03-tick-0024`, exactly as declared"
+        },
+        {
+          "id": "L6",
+          "status": "holds",
+          "detail": "no watched account closed at this boundary"
+        },
+        {
+          "id": "L7",
+          "status": "inapplicable",
+          "detail": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess their fees"
+        }
+      ],
+      "positions": [
+        {
+          "label": "founder",
+          "address": "FU8XuCnu5K6dc9ecHqYi7pP2dyJxTEuYu1aWch6aTdNP",
+          "lamports": "1893120",
+          "claims": [
+            "464429417",
+            "464429417"
+          ],
+          "total_claims": "928858834"
+        }
+      ],
+      "collateral_holders": [
+        {
+          "label": "founder_wallet",
+          "address": "3FJQXjGwg2QmsLAvad5c9digFMGYAoqijknnXAQqNamH",
+          "atoms": "464429417"
+        },
+        {
+          "label": "hoard",
+          "address": "6aGWRjZ11NvYo4x1xUQCecYF4fsuBx2NqEBdvXMcNcJ2",
+          "atoms": "464429417"
+        },
+        {
+          "label": "participant_fixture_source",
+          "address": "9cjQJBLav3NQSmTSivNqAExZ6LJjAZpsWLN5pyT5ekRF",
+          "atoms": "75000000"
+        },
+        {
+          "label": "holder_m03-p0",
+          "address": "7GBXYCNSmFzQva9GZcXdnEE3Gr2b3nYpeooETNVi1cZQ",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m03-p1",
+          "address": "7mBtjrdtPfzFYxkxSApXRBcg7ZWbwEofrzYepdf2HnDu",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m03-p2",
+          "address": "FVmZaJN8QaozGivNm417XFRfRCX1znT1yZXvhty8KD1S",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m03-p3",
+          "address": "95fyag1N9nG5KPDZtbnKHKsTpShGUNQnRf6v2z7GJU6f",
+          "atoms": "6250000"
+        },
+        {
+          "label": "prior_00",
+          "address": "94g5Lpx62bGzM3zFNfgUCvm6PrVpKLoHRjEGLm4fYCtb",
+          "atoms": "0"
+        }
+      ],
+      "claim_unit_atoms": null,
+      "settlement": null,
+      "outcome_count": 2,
+      "cycles_recorded": 24,
+      "points_omitted_before": 0,
+      "census_file": "cycle-000024.json",
+      "points": [
+        {
+          "cycle": 2,
+          "stage": "simlife-m03-tick-0002",
+          "slot": "78525",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497482428033",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hihhiii",
+          "checks_held": 3,
+          "checks_broken": 0,
+          "checks_inapplicable": 4
+        },
+        {
+          "cycle": 3,
+          "stage": "simlife-m03-tick-0003",
+          "slot": "78525",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497482428033",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 4,
+          "stage": "simlife-m03-tick-0004",
+          "slot": "78525",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497482428033",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 5,
+          "stage": "simlife-m03-tick-0005",
+          "slot": "78668",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497480283753",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 6,
+          "stage": "simlife-m03-tick-0006",
+          "slot": "79028",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497475995193",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 7,
+          "stage": "simlife-m03-tick-0007",
+          "slot": "79744",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497465273793",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 8,
+          "stage": "simlife-m03-tick-0008",
+          "slot": "79747",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497465273793",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 9,
+          "stage": "simlife-m03-tick-0009",
+          "slot": "80038",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497460985233",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 10,
+          "stage": "simlife-m03-tick-0010",
+          "slot": "80189",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497458840953",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 11,
+          "stage": "simlife-m03-tick-0011",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 12,
+          "stage": "simlife-m03-tick-0012",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 13,
+          "stage": "simlife-m03-tick-0013",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 14,
+          "stage": "simlife-m03-tick-0014",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 15,
+          "stage": "simlife-m03-tick-0015",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 16,
+          "stage": "simlife-m03-tick-0016",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 17,
+          "stage": "simlife-m03-tick-0017",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 18,
+          "stage": "simlife-m03-tick-0018",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 19,
+          "stage": "simlife-m03-tick-0019",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 20,
+          "stage": "simlife-m03-tick-0020",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 21,
+          "stage": "simlife-m03-tick-0021",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 22,
+          "stage": "simlife-m03-tick-0022",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 23,
+          "stage": "simlife-m03-tick-0023",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 24,
+          "stage": "simlife-m03-tick-0024",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 25,
+          "stage": "simlife-m03-tick-0025",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "464429417",
+            "464429417"
+          ],
+          "position_totals": [
+            "464429417",
+            "464429417"
+          ],
+          "mint_supply": "1028858834",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "464429417",
+          "tracked_collateral": "1028858834",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        }
+      ]
+    },
+    {
+      "market_id": "m04",
+      "archetype": "wide-field",
+      "basis": "categorical-degree-0",
+      "destiny": "resolves-clean",
+      "deadline_slots": 66276,
+      "personas": [
+        "patient-maker",
+        "crank",
+        "patient-maker",
+        "sleeper"
+      ],
+      "law_ids": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7"
+      ],
+      "laws": [
+        {
+          "id": "L1",
+          "status": "holds",
+          "detail": "tracked 5173807456 atoms across 11 accounts == Mint supply 5173807456"
+        },
+        {
+          "id": "L2",
+          "status": "holds",
+          "detail": "the Hoard moved 0 atoms since `simlife-m04-tick-0024`, exactly as declared; it holds 2536903728"
+        },
+        {
+          "id": "L3",
+          "status": "holds",
+          "detail": "1 Positions sum to the aggregate supply vector [2536903728, 2536903728, 2536903728, 2536903728, 2536903728, 2536903728]"
+        },
+        {
+          "id": "L4",
+          "status": "holds",
+          "detail": "Hoard 2536903728 >= worst outcome 2536903728 x unit 1 = 2536903728"
+        },
+        {
+          "id": "L5",
+          "status": "holds",
+          "detail": "tracked collateral moved 0 atoms since `simlife-m04-tick-0024`, exactly as declared"
+        },
+        {
+          "id": "L6",
+          "status": "holds",
+          "detail": "no watched account closed at this boundary"
+        },
+        {
+          "id": "L7",
+          "status": "inapplicable",
+          "detail": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess their fees"
+        }
+      ],
+      "positions": [
+        {
+          "label": "founder",
+          "address": "A4SdN4wJ2PuWzFuTxmQNSGvv5zisW63RwFnGskNN1Ukt",
+          "lamports": "2115840",
+          "claims": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "total_claims": "15221422368"
+        }
+      ],
+      "collateral_holders": [
+        {
+          "label": "founder_wallet",
+          "address": "EDAYk6eCN9LhwNqeJhN14YsPPHSagS3WuTGDBEhDLuBa",
+          "atoms": "2536903728"
+        },
+        {
+          "label": "hoard",
+          "address": "DC5fNWhsFLkx8J6QQGvYThuwdAJbLJgXqAwMqGjGQimJ",
+          "atoms": "2536903728"
+        },
+        {
+          "label": "participant_fixture_source",
+          "address": "3HcFa3SKeDEaPUtxUCHfpGXkD32wduTAExoijAC7ercp",
+          "atoms": "61500000"
+        },
+        {
+          "label": "holder_m04-p0",
+          "address": "EsKizvQfCbNwzaFmEB3qqS2rieLctLmfL1TgYab6rYnh",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m04-p1",
+          "address": "AJn8WJjLHVCn7UxadjA2Q2NnhSdNBGVjPKydYNvX1YgN",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m04-p2",
+          "address": "DUrGbNfxe1y4fYwFzqW1XsY992CmtB2XnivJk5oSR6Jy",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m04-p3",
+          "address": "Cjnhnv6o71WKXoiPT32oWKFWyP1uv9HZeHXEPA6XEDWA",
+          "atoms": "6250000"
+        },
+        {
+          "label": "prior_01",
+          "address": "8zEyL3zpaRuBdN1N7Tx76gzaibZgk9J5GgAPaw48D3ew",
+          "atoms": "6250000"
+        },
+        {
+          "label": "prior_02",
+          "address": "ACx23Xhfw4WKWHnNPKS8RCPBPSWUxjMRJW7Wczj6QW5i",
+          "atoms": "6250000"
+        },
+        {
+          "label": "prior_00",
+          "address": "6FBQrcdzJnHSsFZXa7M1GkBqd6bG7GWvzv9pihXdGcw7",
+          "atoms": "1000000"
+        },
+        {
+          "label": "prior_03",
+          "address": "E6GJYCVuD3C3FWWyARiEe6W4Z2vXYoUru5foxkeVwvJF",
+          "atoms": "0"
+        }
+      ],
+      "claim_unit_atoms": null,
+      "settlement": null,
+      "outcome_count": 6,
+      "cycles_recorded": 22,
+      "points_omitted_before": 0,
+      "census_file": "cycle-000022.json",
+      "points": [
+        {
+          "cycle": 4,
+          "stage": "simlife-m04-tick-0004",
+          "slot": "78668",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497480283753",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hihhiii",
+          "checks_held": 3,
+          "checks_broken": 0,
+          "checks_inapplicable": 4
+        },
+        {
+          "cycle": 5,
+          "stage": "simlife-m04-tick-0005",
+          "slot": "78668",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497480283753",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 6,
+          "stage": "simlife-m04-tick-0006",
+          "slot": "79028",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497475995193",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 7,
+          "stage": "simlife-m04-tick-0007",
+          "slot": "79744",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497465273793",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 8,
+          "stage": "simlife-m04-tick-0008",
+          "slot": "79894",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497463129513",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 9,
+          "stage": "simlife-m04-tick-0009",
+          "slot": "80189",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497458840953",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 10,
+          "stage": "simlife-m04-tick-0010",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 11,
+          "stage": "simlife-m04-tick-0011",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 12,
+          "stage": "simlife-m04-tick-0012",
+          "slot": "80335",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 13,
+          "stage": "simlife-m04-tick-0013",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 14,
+          "stage": "simlife-m04-tick-0014",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 15,
+          "stage": "simlife-m04-tick-0015",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 16,
+          "stage": "simlife-m04-tick-0016",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 17,
+          "stage": "simlife-m04-tick-0017",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 18,
+          "stage": "simlife-m04-tick-0018",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 19,
+          "stage": "simlife-m04-tick-0019",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 20,
+          "stage": "simlife-m04-tick-0020",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 21,
+          "stage": "simlife-m04-tick-0021",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 22,
+          "stage": "simlife-m04-tick-0022",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 23,
+          "stage": "simlife-m04-tick-0023",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 24,
+          "stage": "simlife-m04-tick-0024",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 25,
+          "stage": "simlife-m04-tick-0025",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "position_totals": [
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728",
+            "2536903728"
+          ],
+          "mint_supply": "5173807456",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "2536903728",
+          "tracked_collateral": "5173807456",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        }
+      ]
+    },
+    {
+      "market_id": "m05",
+      "archetype": "quiet-corner",
+      "basis": "categorical-degree-0",
+      "destiny": "founded-then-sleepy",
+      "deadline_slots": 186834,
+      "personas": [
+        "compactor",
+        "prompt-redeemer"
+      ],
+      "law_ids": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7"
+      ],
+      "laws": [
+        {
+          "id": "L1",
+          "status": "holds",
+          "detail": "tracked 352329312 atoms across 6 accounts == Mint supply 352329312"
+        },
+        {
+          "id": "L2",
+          "status": "holds",
+          "detail": "the Hoard moved 0 atoms since `simlife-m05-tick-0024`, exactly as declared; it holds 126164656"
+        },
+        {
+          "id": "L3",
+          "status": "holds",
+          "detail": "1 Positions sum to the aggregate supply vector [126164656, 126164656]"
+        },
+        {
+          "id": "L4",
+          "status": "holds",
+          "detail": "Hoard 126164656 >= worst outcome 126164656 x unit 1 = 126164656"
+        },
+        {
+          "id": "L5",
+          "status": "holds",
+          "detail": "tracked collateral moved 0 atoms since `simlife-m05-tick-0024`, exactly as declared"
+        },
+        {
+          "id": "L6",
+          "status": "holds",
+          "detail": "no watched account closed at this boundary"
+        },
+        {
+          "id": "L7",
+          "status": "inapplicable",
+          "detail": "external census: the transactions between boundaries were not driven by this ledger, and it refuses to guess their fees"
+        }
+      ],
+      "positions": [
+        {
+          "label": "founder",
+          "address": "g4onzKEnkbjeNZB5PhyzCH32yfB4W25A7wsBMdJuHmR",
+          "lamports": "1893120",
+          "claims": [
+            "126164656",
+            "126164656"
+          ],
+          "total_claims": "252329312"
+        }
+      ],
+      "collateral_holders": [
+        {
+          "label": "founder_wallet",
+          "address": "D1AanQAD7smUWhYbjwEpRGQvvEYbfyyRP42qNNN92tAi",
+          "atoms": "126164656"
+        },
+        {
+          "label": "hoard",
+          "address": "DrPgFaDLpKZPhok5UHMU6yppgYm2nv9auYPmxPGpFehT",
+          "atoms": "126164656"
+        },
+        {
+          "label": "participant_fixture_source",
+          "address": "9rZk4tfxi2RcEGYfjt3GCq8RsCrFcQDNUdUCNdsECW7f",
+          "atoms": "87500000"
+        },
+        {
+          "label": "holder_m05-p0",
+          "address": "Fiss9Wz7dyw3GYY8A3DY5GHRACUwA5DEdHvDLLGPipR6",
+          "atoms": "6250000"
+        },
+        {
+          "label": "holder_m05-p1",
+          "address": "GJkzZ28RHfQkSDEQQAmRVZNoSxDSTLDgNRHpvfJsm7pD",
+          "atoms": "6250000"
+        },
+        {
+          "label": "prior_00",
+          "address": "6CfT171ntu7VHZiFjcps3pNK3ZWuAKu8aZng3A7fMzNJ",
+          "atoms": "0"
+        }
+      ],
+      "claim_unit_atoms": null,
+      "settlement": null,
+      "outcome_count": 2,
+      "cycles_recorded": 21,
+      "points_omitted_before": 0,
+      "census_file": "cycle-000021.json",
+      "points": [
+        {
+          "cycle": 5,
+          "stage": "simlife-m05-tick-0005",
+          "slot": "78704",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497480283753",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hihhiii",
+          "checks_held": 3,
+          "checks_broken": 0,
+          "checks_inapplicable": 4
+        },
+        {
+          "cycle": 6,
+          "stage": "simlife-m05-tick-0006",
+          "slot": "79171",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497473850913",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 7,
+          "stage": "simlife-m05-tick-0007",
+          "slot": "79744",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497465273793",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 8,
+          "stage": "simlife-m05-tick-0008",
+          "slot": "80038",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497460985233",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 9,
+          "stage": "simlife-m05-tick-0009",
+          "slot": "80189",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497458840953",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 10,
+          "stage": "simlife-m05-tick-0010",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 11,
+          "stage": "simlife-m05-tick-0011",
+          "slot": "80333",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 12,
+          "stage": "simlife-m05-tick-0012",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 13,
+          "stage": "simlife-m05-tick-0013",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 14,
+          "stage": "simlife-m05-tick-0014",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 15,
+          "stage": "simlife-m05-tick-0015",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 16,
+          "stage": "simlife-m05-tick-0016",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 17,
+          "stage": "simlife-m05-tick-0017",
+          "slot": "80336",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 18,
+          "stage": "simlife-m05-tick-0018",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 19,
+          "stage": "simlife-m05-tick-0019",
+          "slot": "80337",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 20,
+          "stage": "simlife-m05-tick-0020",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 21,
+          "stage": "simlife-m05-tick-0021",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 22,
+          "stage": "simlife-m05-tick-0022",
+          "slot": "80338",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 23,
+          "stage": "simlife-m05-tick-0023",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 24,
+          "stage": "simlife-m05-tick-0024",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        },
+        {
+          "cycle": 25,
+          "stage": "simlife-m05-tick-0025",
+          "slot": "80339",
+          "recorded_at": null,
+          "supply": [
+            "126164656",
+            "126164656"
+          ],
+          "position_totals": [
+            "126164656",
+            "126164656"
+          ],
+          "mint_supply": "352329312",
+          "payer_lamports": "497456696673",
+          "hoard_atoms": "126164656",
+          "tracked_collateral": "352329312",
+          "law_statuses": "hhhhhhi",
+          "checks_held": 6,
+          "checks_broken": 0,
+          "checks_inapplicable": 1
+        }
+      ]
+    }
+  ]
+}

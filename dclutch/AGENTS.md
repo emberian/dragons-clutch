@@ -71,6 +71,16 @@ band 0 is never allocated, so a code below `0x1000` is not ours.
   registry base where taking a dependency on the program would be wrong.
   `assert!(text.contains("Custom(3)"))` is not a refusal assertion: it also
   accepts `Custom(30)`.
+- **A bare `is_err()` is not a refusal assertion either, and a hostile test
+  that asserts only `is_err()` is a test of nothing.** It passes on whatever
+  the transaction refuses first, which during any wall era is a universal
+  donor (ledger `M-38`). Measured twice on 2026-08-30: `67e96e5b` found four
+  hostile `is_err()` assertions that had been "passing" for four days on a
+  length refusal reached before any state was read, and `d1d1ff3f` found
+  fifteen more hostile assertions naming no code at all — three of which
+  refused somewhere other than where their author believed. Name the exact
+  discriminant, derived from the enum, and prove the test red before trusting
+  it green.
 - Bands are append-only. A new program takes the next free base; a deleted
   program's band is withdrawn, never reused.
 - `dclutch-route-census inventory --check-unique` is the gate, and it runs in

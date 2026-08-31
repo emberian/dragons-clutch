@@ -43,12 +43,34 @@
 //! order would be the failure mode the whole exercise exists to prevent: a
 //! policy that AUTHENTICATES -- every digest agreeing with itself -- and derives
 //! addresses the family does not execute at.
+//!
+//! # The eighth entry, and why a release without it publishes a dead Market
+//!
+//! A General release is not seven action bundles. It is seven action bundles
+//! plus the ONE coordinate that creates the root all seven execute against.
+//! `programs/dclutch-trading-sbf/src/outer.rs::authenticate_set_descriptor`
+//! admits only a descriptor stamped `CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V1`,
+//! and every action descriptor is stamped `v4::SCHEMA_RELEASE_ID` -- so a Market
+//! founded on a seven-entry set can never create its capability root, and every
+//! action it publishes is unreachable forever. That is why this compiler emits
+//! `GeneralReleaseProfileV1::SettlementWithActivation` and not the narrower
+//! profile: an activation-incapable General release is not a smaller release,
+//! it is an unfoundable one.
+//!
+//! The activation triple is not authored here. It comes from
+//! `dclutch_general_adapter_contract::activation_bundle_v1`, which composes it on
+//! the family-neutral `dclutch-capability-activation-codec` template and refuses
+//! -- rather than returning a bundle -- if the real effect kernel does not
+//! project exactly `general_root_creation_tail_v2`. This module publishes what
+//! that constructor returns; it neither restates a tail byte nor names a
+//! register.
 
+use dclutch_capability_activation_codec::{
+    ActivationBundleV1, activation_account_profile_schema_v1, activation_effect_schema_v1,
+};
 use dclutch_capability_program_contract::{
     set_v2::{
-        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityDescriptorReferenceV2,
-        CapabilityProgramSetEntryV2, CapabilityProgramSetV2, SelectorWidthV2,
-        encode_program_set_v2, encoded_program_set_bytes_v2,
+        CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2, SelectorWidthV2,
     },
     v4::{
         ArtifactReferenceV4, CapabilityArtifactsV4, CapabilityProgramV4,
@@ -67,6 +89,11 @@ use dclutch_general_adapter_contract::{
     account_rules_v3::{
         GeneralExternalAccountWidthsV3, encode_general_account_profile_v3_atomic,
         general_account_profile_bytes_v3,
+    },
+    activation_bundle_v1::{
+        GeneralActivationBundleInputV1, build_general_activation_bundle_v1,
+        build_general_activation_capable_program_set_v1, general_activation_descriptor_schema_v1,
+        general_activation_request_v1, validate_general_activation_bundle_v1,
     },
     artifacts_v3::{
         GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3, GENERAL_CONTROLLER_REQUEST_SCHEMA_ID_V3,
@@ -105,6 +132,12 @@ use solana_program::hash::hash;
 /// Number of action bundles one selectable General release compiles.
 pub const GENERAL_SELECTED_ACTION_COUNT_V1: usize = GENERAL_ACTION_PROGRAM_COUNT_V3;
 
+/// Coordinates one selectable General release publishes: the actions plus one.
+///
+/// Derived from the profile the release names, so the two cannot disagree.
+pub const GENERAL_SELECTED_ENTRY_COUNT_V1: usize =
+    general_selected_release_profile_v1().entry_count();
+
 /// Canonical General publication magic.
 pub const GENERAL_SELECTED_PUBLICATION_MAGIC_V1: [u8; 8] = *b"DCGNPB01";
 
@@ -117,9 +150,24 @@ pub const GENERAL_SELECTED_PUBLICATION_VERSION_V1: u16 = 1;
 /// already dispatched, so the executor a General release names is Trading.
 pub const GENERAL_EXECUTOR_ROLE_V1: ExecutionRoleV1 = ExecutionRoleV1::Trading;
 
+/// Compartment rows a General founding provisions in the selected ledger.
+///
+/// One, and it is derived rather than chosen: the capability-neutral selection
+/// seam authors its manifest entry with an all-zero dependency list, so the
+/// entry's dependency closure is the entry itself and the Trading
+/// `FundingLedgerV2` it owns carries exactly one row. The activation
+/// AccountProfile projects the parked Rent quote at the offset that row count
+/// determines, so a release that guessed a different count would publish a
+/// profile reading the wrong bytes of a real ledger.
+pub const GENERAL_SELECTED_FUNDING_LEDGER_SLOTS_V1: u16 = 1;
+
 const PUBLICATION_IDENTITY_START_V1: usize = 16;
 /// Identities that are not per-action descriptors.
-const PUBLICATION_FIXED_IDENTITY_COUNT_V1: usize = 11;
+///
+/// Twelve: the eleven release-wide coordinates plus the activation descriptor,
+/// which is a published fact of the release exactly as the seven action
+/// descriptors are.
+const PUBLICATION_FIXED_IDENTITY_COUNT_V1: usize = 12;
 const PUBLICATION_IDENTITY_COUNT_V1: usize =
     PUBLICATION_FIXED_IDENTITY_COUNT_V1 + GENERAL_SELECTED_ACTION_COUNT_V1;
 const PUBLICATION_SCALAR_START_V1: usize =
@@ -250,6 +298,11 @@ pub struct GeneralSelectedPublicationV1 {
     pub toolchain: [u8; 32],
     /// Translation-validation evidence identity.
     pub translation_validation: [u8; 32],
+    /// The activation descriptor the eighth set entry names.
+    ///
+    /// Without it the six coordinates above describe a release no Market can
+    /// activate, so it belongs in the summary a Market binds.
+    pub activation_descriptor: [u8; 32],
     /// Descriptor identities in canonical action order.
     pub descriptors: [[u8; 32]; GENERAL_SELECTED_ACTION_COUNT_V1],
     /// Immutable Market occurrence generation.
@@ -340,6 +393,7 @@ impl GeneralSelectedPublicationV1 {
         identities.push(self.compiler_release);
         identities.push(self.toolchain);
         identities.push(self.translation_validation);
+        identities.push(self.activation_descriptor);
         identities.extend_from_slice(&self.descriptors);
         identities
     }
@@ -350,7 +404,14 @@ impl GeneralSelectedPublicationV1 {
 pub struct GeneralSelectedReleaseV1 {
     /// Action bundles in canonical action order.
     pub bundles: Vec<GeneralSelectedBundleV1>,
-    /// Exact seven-entry CapabilityProgramSetV2 bytes.
+    /// The activation triple the eighth set entry names.
+    ///
+    /// Obtained from `build_general_activation_bundle_v1`, whose constructor
+    /// runs the real effect kernel over the effect it just built and refuses to
+    /// return a bundle whose projection is not the family's own creation tail.
+    /// A release therefore cannot hold an activation that would brick a root.
+    pub activation: ActivationBundleV1,
+    /// Exact eight-entry CapabilityProgramSetV2 bytes.
     pub program_set: Vec<u8>,
     /// Exact immutable GeneralConfigV3 bytes.
     pub config: Vec<u8>,
@@ -390,6 +451,17 @@ impl GeneralSelectedReleaseV1 {
     /// constant, so a publication plan cannot finalize a record under a schema
     /// the release does not actually select. That is the same single-author rule
     /// the seed contract enforces, applied to the publication chain.
+    ///
+    /// The three activation records close the list, and they are the three the
+    /// Trading activation frame authenticates: the `AccountProfileV1` at
+    /// `PROFILE_RAW`, the `EffectProgramV2` at `EFFECT_RAW`, and the
+    /// `CapabilityProgramV1` at `SET_DESCRIPTOR_RAW`. There is no fourth: the
+    /// activation transition is EMBEDDED in that descriptor
+    /// (`CapabilityProgramV1::decode` reads it off the bytes after the header),
+    /// so publishing it separately would finalize a record the seam never reads
+    /// and give the transition two authors. This is the same three-record shape
+    /// Direct publishes (`direct_activation_{account_profile,effect,descriptor}
+    /// _record`).
     pub fn publication_records(&self) -> Result<Vec<GeneralPublicationRecordV1<'_>>> {
         let set = CapabilityProgramSetV2::decode(&self.program_set)
             .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
@@ -477,6 +549,39 @@ impl GeneralSelectedReleaseV1 {
                 });
             }
         }
+
+        // The activation descriptor's schema is read off the set entry that
+        // names it, exactly as each action descriptor's is; the profile and
+        // effect schemas come from the activation codec, which is their single
+        // author -- a `CapabilityProgramV1` carries a content identity for its
+        // account profile and effect but no schema for either, and the seam
+        // authenticates both under constants of its own.
+        let activation_entry = set
+            .entry(activation_entry_index()?)
+            .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+        for (label, schema, body) in [
+            (
+                "activation-account-profile",
+                activation_account_profile_schema_v1(),
+                &self.activation.account_profile,
+            ),
+            (
+                "activation-effect",
+                activation_effect_schema_v1(),
+                &self.activation.effect,
+            ),
+            (
+                "activation-descriptor",
+                activation_entry.descriptor().schema().to_bytes(),
+                &self.activation.descriptor,
+            ),
+        ] {
+            records.push(GeneralPublicationRecordV1 {
+                label,
+                schema,
+                body,
+            });
+        }
         Ok(records)
     }
 
@@ -502,6 +607,12 @@ pub enum GeneralSelectedReleaseErrorV1 {
     ProgramSet,
     /// The complete seven-action release join refused.
     Release,
+    /// The activation triple refused to build, or the release carried another.
+    ///
+    /// Building it runs the real effect kernel over the effect it composes, so
+    /// this is also how a bundle that would brick a root is refused: the
+    /// constructor returns an error instead of an artifact.
+    Activation,
     /// Publication identities or scalars were not exact.
     Publication,
 }
@@ -531,7 +642,8 @@ pub fn general_selected_release_v1(
         bundles.push(bundle);
     }
 
-    let program_set = encode_action_program_set(&descriptors)?;
+    let activation = compile_activation(&bundles)?;
+    let program_set = encode_program_set(&descriptors, activation.descriptor_id)?;
     let config = encode_config(input, digest(&program_set))?;
 
     let publication = GeneralSelectedPublicationV1 {
@@ -546,6 +658,7 @@ pub fn general_selected_release_v1(
         compiler_release: input.deployment.compiler_release,
         toolchain: input.deployment.toolchain,
         translation_validation: input.deployment.translation_validation,
+        activation_descriptor: activation.descriptor_id,
         descriptors,
         generation: input.generation,
         price_scale: input.price_scale,
@@ -558,6 +671,7 @@ pub fn general_selected_release_v1(
 
     let release = GeneralSelectedReleaseV1 {
         bundles,
+        activation,
         program_set,
         config,
         publication,
@@ -599,7 +713,22 @@ pub fn validate_general_selected_release_v1(
             .ok_or(GeneralSelectedReleaseErrorV1::Release)? = digest(&bundle.descriptor);
     }
 
-    if release.program_set != encode_action_program_set(&descriptors)?
+    // The activation triple is rebuilt, not inspected: its constructor is the
+    // brick gate, so a substituted profile, effect or descriptor fails here
+    // because the only bundle that survives is the one this release compiles to.
+    if release.activation != compile_activation(&release.bundles)? {
+        return Err(GeneralSelectedReleaseErrorV1::Activation);
+    }
+    validate_general_activation_bundle_v1(
+        &release.activation,
+        GeneralActivationBundleInputV1 {
+            action_descriptor: &first_action_descriptor(&release.bundles)?,
+            funding_ledger_slot_count: GENERAL_SELECTED_FUNDING_LEDGER_SLOTS_V1,
+        },
+    )
+    .map_err(|_| GeneralSelectedReleaseErrorV1::Activation)?;
+
+    if release.program_set != encode_program_set(&descriptors, release.activation.descriptor_id)?
         || release.config != encode_config(input, digest(&release.program_set))?
     {
         return Err(GeneralSelectedReleaseErrorV1::ProgramSet);
@@ -612,7 +741,22 @@ pub fn validate_general_selected_release_v1(
         .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
     if set.selector_offset() != GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3
         || set.selector_width() != SelectorWidthV2::U8
-        || usize::from(set.entry_count()) != GENERAL_SELECTED_ACTION_COUNT_V1
+        || usize::from(set.entry_count()) != GENERAL_SELECTED_ENTRY_COUNT_V1
+    {
+        return Err(GeneralSelectedReleaseErrorV1::ProgramSet);
+    }
+    // The activation request is the one request no action can produce, and it
+    // must reach the activation descriptor under the one schema the seam
+    // accepts. Checked here as well as in the set builder, because this
+    // function is what a caller runs over a release it did not build.
+    let activation_selected = set
+        .select_descriptor(
+            &general_activation_request_v1()
+                .map_err(|_| GeneralSelectedReleaseErrorV1::Activation)?,
+        )
+        .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
+    if activation_selected.program().to_bytes() != release.activation.descriptor_id
+        || activation_selected.schema().to_bytes() != general_activation_descriptor_schema_v1()
     {
         return Err(GeneralSelectedReleaseErrorV1::ProgramSet);
     }
@@ -645,6 +789,7 @@ pub fn validate_general_selected_release_v1(
         compiler_release: input.deployment.compiler_release,
         toolchain: input.deployment.toolchain,
         translation_validation: input.deployment.translation_validation,
+        activation_descriptor: release.activation.descriptor_id,
         descriptors,
         generation: input.generation,
         price_scale: input.price_scale,
@@ -777,43 +922,66 @@ fn validate_input(input: GeneralSelectedReleaseInputV1) -> Result<()> {
     Ok(())
 }
 
-fn encode_action_program_set(
+/// Encode the eight-entry activation-capable set.
+///
+/// The table is not written down here. `build_general_activation_capable_program
+/// _set_v1` owns the selector order, the two schemas and the entry count, and
+/// re-authenticates the bytes it just wrote before returning them -- so a caller
+/// cannot obtain a set that does not activate. The one check this function keeps
+/// is the strictly ascending action order, because two coordinates behind one
+/// request byte is the same class of defect as a wrong seed, and it is cheap to
+/// refuse a caller-supplied descriptor list that is out of order before the
+/// builder ever sees it.
+fn encode_program_set(
     descriptors: &[[u8; 32]; GENERAL_SELECTED_ACTION_COUNT_V1],
+    activation_descriptor_id: [u8; 32],
 ) -> Result<Vec<u8>> {
-    let mut entries = Vec::with_capacity(GENERAL_SELECTED_ACTION_COUNT_V1);
     let mut previous: Option<u32> = None;
-    for (index, action) in GENERAL_ACTIONS_V3.into_iter().enumerate() {
+    for action in GENERAL_ACTIONS_V3 {
         let selector = u32::from(action as u8);
-        // The canonical order is strictly ascending. Checked here rather than
-        // trusted from the codec, because two coordinates behind one request
-        // byte is the same class of defect as a wrong seed.
         if previous.is_some_and(|prior| prior >= selector) {
             return Err(GeneralSelectedReleaseErrorV1::ProgramSet);
         }
         previous = Some(selector);
-        entries.push(CapabilityProgramSetEntryV2::new(
-            selector,
-            CapabilityDescriptorReferenceV2::new(
-                content(CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID)?,
-                content(
-                    *descriptors
-                        .get(index)
-                        .ok_or(GeneralSelectedReleaseErrorV1::ProgramSet)?,
-                )?,
-            ),
-        ));
     }
-    let width = encoded_program_set_bytes_v2(entries.len())
-        .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
-    let mut bytes = vec![0_u8; width];
-    encode_program_set_v2(
-        GENERAL_CONTROLLER_ACTION_SELECTOR_OFFSET_V3,
-        SelectorWidthV2::U8,
-        &entries,
-        &mut bytes,
-    )
-    .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)?;
-    Ok(bytes)
+    build_general_activation_capable_program_set_v1(descriptors, activation_descriptor_id)
+        .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)
+}
+
+/// The one descriptor the activation triple inherits its coordinates from.
+///
+/// Any of the seven would do -- `authenticate_general_release_v3` has already
+/// required all seven to agree on every entry-authored coordinate -- so the
+/// first is taken and the choice is stated rather than hidden.
+fn first_action_descriptor(bundles: &[GeneralSelectedBundleV1]) -> Result<Vec<u8>> {
+    Ok(bundles
+        .first()
+        .ok_or(GeneralSelectedReleaseErrorV1::Release)?
+        .descriptor
+        .clone())
+}
+
+/// Build the activation triple this release publishes.
+///
+/// Nothing about the General root tail is named here or anywhere in this
+/// module: the constructor derives the constant tail from
+/// `general_root_creation_tail_v2`, composes it with the three seam-supplied
+/// fields, and then runs the REAL effect kernel over the effect it has just
+/// built, returning an error rather than a bundle if the projection is not that
+/// tail byte for byte. A release therefore cannot carry an activation that would
+/// write a root no General action can decode.
+fn compile_activation(bundles: &[GeneralSelectedBundleV1]) -> Result<ActivationBundleV1> {
+    build_general_activation_bundle_v1(GeneralActivationBundleInputV1 {
+        action_descriptor: &first_action_descriptor(bundles)?,
+        funding_ledger_slot_count: GENERAL_SELECTED_FUNDING_LEDGER_SLOTS_V1,
+    })
+    .map_err(|_| GeneralSelectedReleaseErrorV1::Activation)
+}
+
+/// The set index of the activation coordinate: after every action entry.
+fn activation_entry_index() -> Result<u16> {
+    u16::try_from(GENERAL_SELECTED_ACTION_COUNT_V1)
+        .map_err(|_| GeneralSelectedReleaseErrorV1::ProgramSet)
 }
 
 fn encode_config(
@@ -1086,13 +1254,16 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 
 /// The profile a General release publishes, named rather than implied.
 ///
-/// Seven entries is [`GeneralReleaseProfileV1::SettlementOnly`]. The wider
-/// profiles are legal SETS and not yet admissible RELEASES: the collection and
-/// candidate actions have no authored artifact triple, so there is nothing to
-/// join at those coordinates.
+/// Eight entries: the seven settlement actions plus the activation coordinate.
+/// `SettlementOnly` is a legal SET and not a shippable RELEASE -- a Market
+/// founded on it can never create the root all seven actions execute against,
+/// because `authenticate_set_descriptor` admits only the V1 schema no action
+/// carries. The two wider profiles are legal sets and not yet admissible
+/// releases either: the collection and candidate actions have no authored
+/// artifact triple, so there is nothing to join at those coordinates.
 #[must_use]
 pub const fn general_selected_release_profile_v1() -> GeneralReleaseProfileV1 {
-    GeneralReleaseProfileV1::SettlementOnly
+    GeneralReleaseProfileV1::SettlementWithActivation
 }
 
 #[cfg(test)]

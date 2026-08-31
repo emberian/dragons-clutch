@@ -1,8 +1,35 @@
 # Decision 0014: the fee rate — the shape is already built, the band and the default are not
 
-Status: **OPEN — ember's ruling required.** Ledger M-26, open since
-2026-08-17, the oldest question in the project. This record does not freeze a
-rate; see §6 for why that matters.
+Status: **RULED 2026-08-30, all three; none of the three is built yet.** Ledger
+M-26, open since 2026-08-17, the oldest question in the project. This record
+does not freeze a rate; see §6 for why that matters.
+
+- **D1 — DEFERRED-AS-BUILT (ember).** *"While it is on devnet it doesn't
+  matter. Mainnet is a loooong way away."* The as-built shape — per-venue
+  `fee_recipient`, no protocol take — stands by default rather than by
+  ratification, and is revisited pre-mainnet (`WAVE.md`, "Rulings — ember,
+  2026-08-30 (evening, on the decision packet)", E1). §6's downstream line
+  for D1 (a paragraph in `README.md` and `docs/guides/trader.md` naming who
+  receives fees) is **unexecuted**.
+- **D2 — ADOPTED: `MAX_FEE_BPS = 500`, no lower bound**
+  (`DECISION_PACKET_2026_08_30.md` §1, orchestrator ruling, ember veto window).
+  **Enforced nowhere in the protocol.** The only live check is a shell guard in
+  `tools/release/stage-devnet-sponsored-market-open.sh:84-85`; the const, the
+  refusal discriminant and the Lean bound §6 costs are unbuilt, so a founding
+  that does not go through that one script is unbounded. Cross-finding
+  (`docs/design/FEE_SECOND_TRANSACTION_V1.md:683-688`): the band retires the
+  `FeeSole` Custody route, which is reachable only at exactly 10,000 bps.
+- **D3 — ADOPTED IN PRINCIPLE, BLOCKED ON MEASUREMENT.** The packet sequenced
+  rate diversity behind FEEWALL; FEEWALL then measured a fee-bearing Direct
+  trade at **1,515,003 CU all-first-try, over the 1,400,000 ceiling by 115,003
+  before any key is drawn, with no tail**
+  (`docs/evidence/DIRECT_HOT_FEE_BEARING_CU_2026_08_30.md`; `24b2b7f2`,
+  `3d5dda0e`). So every market founded today is zero-fee **by necessity, now
+  measured rather than inferred**, and D3 unblocks only when the
+  second-transaction fee leg ships
+  (`docs/design/FEE_SECOND_TRANSACTION_V1.md`). The release const D3 would
+  unpin is still `DIRECT_TOKEN_SETUP_FEE_BASIS_POINTS_V1: u16 = 50`
+  (`crates/dclutch-direct-codec/src/token_setup_v1.rs:25`).
 
 ## 1. The question
 

@@ -1036,15 +1036,87 @@ export async function inspectMarketDiscoveryV1(
  *
  * The rule is that the groups partition the listing exactly. Nothing is
  * dropped, nothing is counted twice, and the group a market lands in is a
- * function of its own phase -- so a founding attempt cannot be quietly promoted
- * into the headline, and a market that opened cannot be quietly buried.
+ * function of what its own accounts say -- so a founding attempt cannot be
+ * quietly promoted into the headline, and a market that opened cannot be
+ * quietly buried.
  */
 
 export type DecodedMarketDiscoveryCardV1 = Extract<MarketDiscoveryCardV1, Readonly<{ status: 'decoded' }>>;
 
+/**
+ * Whether a Market's trading can ever be switched on.
+ *
+ * Trading exists on a Market only once one of its capabilities is activated,
+ * and a capability whose activation policy carries a deadline is refused from
+ * the slot after it: Core's own comparison is `current_slot > deadline` refuses
+ * (`programs/dclutch-core-sbf/src/capability.rs`), enforced again in the funding
+ * ledger. The manifest is one of the Market PDA's identity seeds, so the entry
+ * set is fixed at founding and no republication can add to it -- which makes
+ * this decidable rather than a guess: once every entry's deadline is strictly
+ * below a finalized slot and no capability is outstanding, no later slot can
+ * change the answer.
+ *
+ * `unknown` is not `reachable`, and neither is a substitute for the other. A
+ * manifest this reader could not authenticate is a read that did not happen,
+ * and it never becomes a claim about what a Market can or cannot do.
+ */
+export type MarketActivationOutlookV1 =
+  | Readonly<{ status: 'reachable'; reason: string }>
+  | Readonly<{
+    status: 'never';
+    reason: string;
+    /** The last slot at which any capability of this Market could have been activated. */
+    lastActivationSlot: string;
+    /** The finalized slot this verdict was read behind, already past that deadline. */
+    observedSlot: string;
+  }>
+  | Readonly<{ status: 'unknown'; reason: string }>;
+
+/** Decide, from the card's own authenticated reads, whether trading is still reachable. */
+export function marketActivationOutlookV1(card: MarketDiscoveryCardV1): MarketActivationOutlookV1 {
+  if (card.status !== 'decoded') {
+    return Object.freeze({ status: 'unknown', reason: 'This account did not decode, so nothing is asserted about what it can do.' });
+  }
+  if (card.outstandingCapabilities !== '0') {
+    return Object.freeze({
+      status: 'reachable',
+      reason: `This Market already holds ${card.outstandingCapabilities} activated capability${card.outstandingCapabilities === '1' ? '' : ' set'}.`,
+    });
+  }
+  if (card.capabilities.status !== 'authenticated') {
+    return Object.freeze({ status: 'unknown', reason: card.capabilities.reason });
+  }
+  const badges = card.capabilities.badges;
+  // A manifest cannot decode with zero entries, so this is a shape the reader
+  // has never seen. It is reported as unread rather than read as a shut window.
+  if (badges.length === 0) {
+    return Object.freeze({ status: 'unknown', reason: 'This Market\'s manifest authenticated with no entries, which is not read as a closed activation window.' });
+  }
+  const observed = BigInt(card.observedSlot);
+  let last = BigInt(0);
+  for (const badge of badges) {
+    if (badge.activation !== 'deadline' || badge.deadline === null) {
+      return Object.freeze({ status: 'reachable', reason: `Capability ${badge.index} activates on demand, with no deadline to elapse.` });
+    }
+    const deadline = BigInt(badge.deadline);
+    if (deadline >= observed) {
+      return Object.freeze({ status: 'reachable', reason: `Capability ${badge.index} may still be activated up to slot ${badge.deadline}.` });
+    }
+    if (deadline > last) last = deadline;
+  }
+  return Object.freeze({
+    status: 'never',
+    lastActivationSlot: last.toString(),
+    observedSlot: card.observedSlot,
+    reason: `Every capability this Market will ever hold had to be activated by slot ${last}, and slot ${card.observedSlot} is finalized.`,
+  });
+}
+
 export type MarketListingV1 = Readonly<{
-  /** Founding is finished and the Market is live: phase `Open`. */
+  /** Founding is finished, the Market is `Open`, and trading is or can still be switched on. */
   open: ReadonlyArray<DecodedMarketDiscoveryCardV1>;
+  /** `Open` and readable, and no capability of it can ever be activated again. */
+  untradeable: ReadonlyArray<DecodedMarketDiscoveryCardV1>;
   /** The Market has reached or is unwinding from its answer. */
   settled: ReadonlyArray<DecodedMarketDiscoveryCardV1>;
   /** Founding was started and has not finished: phase `Founding`. */
@@ -1054,7 +1126,13 @@ export type MarketListingV1 = Readonly<{
 }>;
 
 /**
- * Split a listing into the four groups, featured Market first among the open.
+ * Split a listing into the five groups, featured Market first among the open.
+ *
+ * `untradeable` is the one group that is not a phase. The chain has no phase
+ * for it -- a Market whose activation window shut is `Open` exactly like one
+ * whose trading has not started yet -- so the separation is made here, from the
+ * two facts that decide it, and never by restating the phase. Every card keeps
+ * printing `Open`, because that is what the chain says.
  *
  * `featured` is the address a deployment has published as its own headline
  * Market. It only ever REORDERS: a featured address that is not open, or not in
@@ -1066,12 +1144,17 @@ export function curateMarketListingV1(
   featured: string | null = null,
 ): MarketListingV1 {
   const open: DecodedMarketDiscoveryCardV1[] = [];
+  const untradeable: DecodedMarketDiscoveryCardV1[] = [];
   const settled: DecodedMarketDiscoveryCardV1[] = [];
   const founding: DecodedMarketDiscoveryCardV1[] = [];
   const unreadable: MarketDiscoveryCardV1[] = [];
   for (const card of cards) {
     if (card.status !== 'decoded') { unreadable.push(card); continue; }
-    if (card.phase === 'Open') { open.push(card); continue; }
+    if (card.phase === 'Open') {
+      if (marketActivationOutlookV1(card).status === 'never') { untradeable.push(card); continue; }
+      open.push(card);
+      continue;
+    }
     if (card.phase === 'Founding') { founding.push(card); continue; }
     settled.push(card);
   }
@@ -1081,6 +1164,7 @@ export function curateMarketListingV1(
   }
   return Object.freeze({
     open: Object.freeze(open),
+    untradeable: Object.freeze(untradeable),
     settled: Object.freeze(settled),
     founding: Object.freeze(founding),
     unreadable: Object.freeze(unreadable),

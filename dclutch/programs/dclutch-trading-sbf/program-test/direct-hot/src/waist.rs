@@ -19,7 +19,10 @@ use std::{cell::Cell, collections::HashSet, env, fs, path::PathBuf};
 use crate::{
     DirectHotDeploymentWidthsV5,
     chain::install_direct_hot_chain_accounts_v5,
-    fixture::{DirectHotChainFixtureV5, DirectHotChainInputV5, build_direct_hot_chain_fixture_v5},
+    fixture::{
+        DirectHotChainFixtureV5, DirectHotChainInputV5, DirectTradeScenarioV1,
+        build_direct_hot_chain_fixture_v5,
+    },
 };
 use dclutch_capability_program_contract::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3,
@@ -710,28 +713,50 @@ pub fn direct_case_v4(
     substrate: FixtureSubstrateV1,
     geometry: DirectOrdinaryGeometryV3,
 ) -> DirectCase {
+    direct_case_v5(
+        test,
+        releases,
+        artifacts,
+        corrupt_destination,
+        vacant_seal,
+        substrate,
+        geometry,
+        DirectTradeScenarioV1::ZERO_FEE,
+    )
+}
+
+/// [`direct_case_v4`] executing an explicitly named trade.
+///
+/// # The scenario is the difference between one Custody route and two
+///
+/// Every other argument to this function moves identities, widths or geometry.
+/// This one moves what the transaction DOES: the transition derives the four
+/// Custody routes' enable registers from the combined fee, so a trade whose fee
+/// floors to zero projects exactly one live route and a trade whose fee does
+/// not projects two. `DirectTradeScenarioV1::ZERO_FEE` is the trade every CU
+/// figure in this repository was measured on, and it is the floor case, not the
+/// ordinary one: a market that charges a fee runs the other shape.
+///
+/// The scenario reaches the chain only through the fixture -- the five role
+/// ELFs are untouched by it -- so two sweeps that differ only in this argument
+/// are a CONTROLLED pair, with identical programs and identical bump depths at
+/// every site whose seeds the scenario does not enter.
+/// The exact chain-fixture input `direct_case_v5` builds its case from.
+///
+/// Extracted so a probe that needs the fixture's own derived values -- the
+/// projected Custody legs, say -- states the same input the case states rather
+/// than a second copy of it. Draws the payer and both makers from the ambient
+/// fixture seed, so it must be called inside the same
+/// [`with_fixture_seed`] scope as the case it describes.
+pub fn direct_chain_input_v5(
+    releases: Releases,
+    artifacts: &Elves,
+    substrate: FixtureSubstrateV1,
+    geometry: DirectOrdinaryGeometryV3,
+    trade: DirectTradeScenarioV1,
+) -> DirectHotChainInputV5 {
     let payer = fixture_keypair(0);
     let makers = [fixture_keypair(1), fixture_keypair(2)];
-    // The maker replays this fixture signs are valid for `clock_slot +- 1` and
-    // `hot_v3` reads the live `Clock`, so the bank has to BE at this slot when
-    // the campaign submits. `start_with_substrate` is the other half; calling
-    // `ProgramTest::start_with_context` directly on a pinned substrate leaves
-    // the bank at slot 1, where the pinned programs are not yet visible.
-    let clock = Clock {
-        slot: substrate.bank_slot(),
-        ..Clock::default()
-    };
-    test.add_sysvar_account(sysvar::clock::ID, &clock);
-    test.add_account(
-        payer.pubkey(),
-        Account {
-            lamports: 10_000_000_000,
-            data: Vec::new(),
-            owner: system_program::ID,
-            executable: false,
-            rent_epoch: 0,
-        },
-    );
     // Substrate-invariant by construction: Loader V3's metadata header is 45
     // bytes whether or not the authority option is set, so every substrate
     // stages the same account WIDTH and the chain fixture derives the same
@@ -755,7 +780,7 @@ pub fn direct_case_v4(
         .expect("immutable Direct deployment widths"),
         "the staged substrate changed a ProgramData account width",
     );
-    let input = DirectHotChainInputV5 {
+    DirectHotChainInputV5 {
         registry_program: REGISTRY_PROGRAM_ID,
         trading_program: TRADING_PROGRAM_ID,
         core_program: CORE_PROGRAM_ID,
@@ -770,12 +795,48 @@ pub fn direct_case_v4(
         deployment_widths,
         payer: payer.pubkey(),
         makers: [makers[0].pubkey(), makers[1].pubkey()],
-        clock_slot: clock.slot,
+        clock_slot: substrate.bank_slot(),
         geometry,
         // `add_release_waist` binds Trading at semantic release 0x33; the
         // validated-artifact seal is filed under exactly that release.
         trading_semantic_release: [0x33; 32],
+        trade,
+    }
+}
+
+pub fn direct_case_v5(
+    test: &mut ProgramTest,
+    releases: Releases,
+    artifacts: &Elves,
+    corrupt_destination: bool,
+    vacant_seal: bool,
+    substrate: FixtureSubstrateV1,
+    geometry: DirectOrdinaryGeometryV3,
+    trade: DirectTradeScenarioV1,
+) -> DirectCase {
+    let payer = fixture_keypair(0);
+    let makers = [fixture_keypair(1), fixture_keypair(2)];
+    // The maker replays this fixture signs are valid for `clock_slot +- 1` and
+    // `hot_v3` reads the live `Clock`, so the bank has to BE at this slot when
+    // the campaign submits. `start_with_substrate` is the other half; calling
+    // `ProgramTest::start_with_context` directly on a pinned substrate leaves
+    // the bank at slot 1, where the pinned programs are not yet visible.
+    let clock = Clock {
+        slot: substrate.bank_slot(),
+        ..Clock::default()
     };
+    test.add_sysvar_account(sysvar::clock::ID, &clock);
+    test.add_account(
+        payer.pubkey(),
+        Account {
+            lamports: 10_000_000_000,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    let input = direct_chain_input_v5(releases, artifacts, substrate, geometry, trade);
     let hand =
         build_direct_hot_chain_fixture_v5(input).expect("canonical Profile14 Direct chain fixture");
     // The campaign executes the BUILDER's bundle; the hand-built fixture rides
@@ -1244,6 +1305,7 @@ pub async fn submit_v0_observed(
                 return_data: metadata
                     .return_data
                     .map(|returned| (returned.program_id, returned.data)),
+                logs: metadata.log_messages,
             }
         }))
 }
@@ -1296,6 +1358,15 @@ pub struct SuccessfulExecution {
     pub compute_units_consumed: u64,
     /// Final transaction return-data producer and bytes, when present.
     pub return_data: Option<(Pubkey, Vec<u8>)>,
+    /// The program log, which a refusal already retained and a success did not.
+    ///
+    /// A CU figure says how much the transaction cost and nothing at all about
+    /// WHICH ROUTES it ran, and on this route that difference is the whole
+    /// question: the same instruction bytes invoke Custody once when the fee
+    /// floors to zero and twice when it does not. The invocation count lives
+    /// here, so a measurement can state the shape it measured rather than
+    /// asserting it from the fixture's own arithmetic.
+    pub logs: Vec<String>,
 }
 
 /// One refused execution together with the program log it reached.

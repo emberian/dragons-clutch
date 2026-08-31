@@ -1,5 +1,6 @@
 import DClutchSemantics.AbiSchema
 import DClutchSemantics.Codec
+import DClutchSemantics.LiabilityBasisV2PriceGate
 import Std.Tactic
 
 /-!
@@ -153,6 +154,33 @@ def knotBytes : Nat := 16
 def categoricalKind : Nat := 1
 def gradedExactComplementKind : Nat := 2
 
+/-- Header byte 16 value 3: the degree-2-to-3 B-spline family.
+
+**Allocating a tag is not admitting a record.**  No decoder in this tree
+accepts this byte, no encoder emits it into a `DCLTPAY3` record, and no
+evaluator exists for the family it names.  The allocation buys two things.  It
+takes the byte out of circulation, so a later record family cannot claim 3 and
+collide with a partially-landed spline.  And it forces every exhaustive match
+over the kind to state, at compile time, what it does with a family it cannot
+evaluate — which is how a refusal becomes a build failure rather than a
+runtime surprise.
+
+The reserved span at offset 18 is deliberately **not** spent here.  Degree is a
+property of this variant in the Rust type, not yet a field on the wire: a
+`DCLTPAY3` record carrying kind byte 3 is refused at the kind byte, before a
+degree would be read.  The set of byte strings this ABI accepts is therefore
+unchanged, which is what keeps this a type-level allocation rather than a wire
+migration. -/
+def splineDegree2To3Kind : Nat := 3
+
+/-- The closed degree interval the third family names.  Degree 0 is `Constant`
+and degree 1 is the ramp/tent family, both of which ship today through
+`BasisShapeV3` under `gradedExactComplementKind`; neither belongs to this kind.
+Above 3 is not a capacity limit — it is the interval the kernel's de Boor
+development and its price gate are proved over. -/
+def splineMinimumDegree : Nat := 2
+def splineMaximumDegree : Nat := 3
+
 /-- Header byte 17 names the rounding boundary, and the live decoder requires
 it to *agree with* the kind rather than merely be in range. -/
 def exactCategoricalBoundary : Nat := 0
@@ -241,25 +269,64 @@ theorem term_fields_bounded (placed : PlacedField TermField)
   simpa [termLayout, specialize, show schemaWidth termSchema = 32 from
     term_width_is_exact] using specializeFrom_bounded 0 termSchema placed member
 
-/-! ## The two properties a third kind will depend on
+/-! ## The two properties the third kind depends on
 
-Neither is spent here -- this commit adds no kind -- but both are the reason
-the reserved spans must stay reserved, so they are stated where the layout is
-defined rather than rediscovered later. -/
+Both were stated before a kind was added, as the reason the reserved spans had
+to stay reserved.  The third kind now spends neither of them: it lives entirely
+in the byte at offset 16, and the fifty reserved bytes are still fifty. -/
 
 /-- The header's slack is exactly fifty bytes, in two spans.  A future degree
 byte and interior-multiplicity bit have somewhere to go without moving a field,
-and a certificate digest has somewhere to go without a new header. -/
+and a certificate digest has somewhere to go without a new header.
+
+Restated after the third kind landed, and it is the same fifty.  The evaluator
+lane is what spends the two bytes at offset 18; allocating the kind did not. -/
 theorem header_reserved_span_is_fifty :
     ((headerSchema.filter fun field =>
         match field.kind with | .reserved _ => true | _ => false).map
       fun field => field.kind.byteWidth).sum = 50 := by native_decide
 
-/-- The kind and rounding discriminants are distinct and both fit a `u8`, so
-the byte at offset 16 can name a third family without widening. -/
+/-- The three kind discriminants are pairwise distinct and all fit a `u8`, so
+the byte at offset 16 names three families without widening. -/
 theorem kind_tags_distinct :
     categoricalKind ≠ gradedExactComplementKind ∧
-      gradedExactComplementKind < 256 := by
+      categoricalKind ≠ splineDegree2To3Kind ∧
+      gradedExactComplementKind ≠ splineDegree2To3Kind ∧
+      splineDegree2To3Kind < 256 := by
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+
+/-! ## Why the Rust admission conjunct takes no degree comparison
+
+The price gate exempts degree `≤ 1` by proof: at that degree the simplex
+condition is still the whole no-arbitrage condition, so a basis needs no
+certificate.  Above it, `not_admits_of_graded_without_certificate` says
+admission without a certificate is `false`.
+
+The interval this kind names starts at 2, which is strictly above the exempt
+degree.  So the conjunct in `runtime_v3.rs` demands a certificate for
+`SplineDegree2To3` *unconditionally* rather than comparing a degree at runtime,
+and the theorem below is why that is not a shortcut: the comparison it would
+perform has no false branch anywhere in the interval. -/
+
+open DClutch.LiabilityBasisV2 (Basis)
+open DClutch.LiabilityBasisV2.PriceGate (admits exemptDegree)
+
+/-- The exempt degree is below every degree this kind admits.  This is the one
+arithmetic fact the unconditional Rust conjunct rests on. -/
+theorem exempt_degree_below_spline_interval :
+    exemptDegree < splineMinimumDegree ∧ splineMinimumDegree ≤ splineMaximumDegree := by
   constructor <;> decide
+
+/-- **A basis at any degree this kind names is refused without a certificate.**
+Instantiating the price gate's own admission theorem across the whole interval,
+so the Rust refusal is a consequence rather than a restatement. -/
+theorem spline_degrees_require_a_certificate {Result : Type}
+    (basis : Basis Result) (degree : Nat)
+    (lower : splineMinimumDegree ≤ degree) :
+    admits basis degree none = false := by
+  refine DClutch.LiabilityBasisV2.PriceGate.not_admits_of_graded_without_certificate
+    basis degree ?_
+  have : exemptDegree < splineMinimumDegree := exempt_degree_below_spline_interval.left
+  omega
 
 end DClutch.ProductBasisV3Abi

@@ -204,4 +204,53 @@ describe('portfolio by Claims Position derivation', () => {
     });
     expect(portfolioClaimV1(refused, ['1']).kind).toBe('unavailable');
   });
+
+  /**
+   * The merge count is arithmetic and stays arithmetic. On a Market whose
+   * trading can never be switched on there is no route that performs it, so the
+   * note stops short of reading like an offer that is merely unexercised.
+   */
+  it('says the merge cannot be performed on a Market whose trading can never be switched on', async () => {
+    const portfolio = await inspectPortfolioV1(client(await chain()), request);
+    const [entry] = portfolio.entries;
+    if (entry.position.status !== 'held') throw new Error('expected a held Position');
+    const market = entry.market;
+    if (market.status !== 'decoded') throw new Error('expected a decoded Market');
+
+    const shut = Object.freeze({
+      ...market,
+      outstandingCapabilities: '0',
+      capabilities: Object.freeze({
+        status: 'authenticated' as const,
+        manifestId: market.identity.capabilityManifestId,
+        recordAddress: LIVE.market.address,
+        observedSlot: market.observedSlot,
+        badges: Object.freeze([Object.freeze({
+          index: 0,
+          kindId: 'ab'.repeat(32),
+          label: 'Direct successor',
+          recognized: true,
+          programSetId: 'cd'.repeat(32),
+          configId: 'ef'.repeat(32),
+          activation: 'deadline' as const,
+          deadline: (BigInt(market.observedSlot) - BigInt(1)).toString(),
+          dependencies: Object.freeze([]),
+          funding: Object.freeze({
+            compartments: Object.freeze([]),
+            nativeLamportsTotal: BigInt(0),
+            realmCollateralTotal: BigInt(0),
+            realmCollateral: null,
+          }),
+        })]),
+      }),
+    });
+
+    const claim = portfolioClaimV1(shut, entry.position.balances);
+    if (claim.kind !== 'mergeable') throw new Error('the count is still arithmetic and is still reported');
+    expect(claim.completeSetsAtoms).toBe('500000000');
+    expect(claim.note).toMatch(/On this Market it is arithmetic only/);
+    expect(claim.note).toMatch(/its trading can never be switched on/);
+    // On a Market that can still trade, the extra clause is absent entirely.
+    expect(portfolioClaimV1(market, entry.position.balances).note).not.toMatch(/arithmetic only/);
+  });
 });

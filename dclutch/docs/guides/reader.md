@@ -20,7 +20,8 @@ was published and funded before it opened.
 ## What works today
 
 Seven protocol programs are deployed at permanent addresses on Solana
-devnet. There is no open devnet market and nothing to buy. You can use the
+devnet, and one market on it is open for trading. That market's collateral is
+a devnet test token, so there is nothing to buy with money. You can use the
 public app to inspect the deployed programs and the Market accounts they
 own; the app labels anything it cannot authenticate instead of filling in
 missing facts.
@@ -40,15 +41,15 @@ The broader execution evidence is still local:
   untrusted view of the onchain accounts.
 - A TypeScript SDK and command-line client build and check the same flows.
 
-Still to come: the first open devnet market, its first public trade,
+Still to come: the first public trade on the open devnet market, then its
 resolution and wallet payout, followed by the broader product and trading
 families.
 
 ## The plan
 
-The next public milestone is an open market on Solana devnet, resolving a
-question about the state of Solana mainnet. Pyth's devnet feeds already
-carry mainnet prices for the majors; everything else can arrive through a
+That open market asks a question about the state of Solana mainnet, and the
+next public milestone is the first trade made on it. Pyth's devnet feeds
+already carry mainnet prices for the majors; everything else can arrive through a
 relayer that publishes signed copies of mainnet account data, checked and
 decoded on chain
 ([`docs/design/MAINNET_STATE_RELAY.md`](../design/MAINNET_STATE_RELAY.md)).

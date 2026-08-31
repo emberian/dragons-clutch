@@ -6,9 +6,15 @@ import {
 } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
+import bumpHintVector from '../fixtures/direct-hot-bump-hints.json';
+import { activationCacheFixtureV1 } from '../fixtures/hotBumpHintSource';
 import { type DirectHotRouteInspectionV3 } from './directHotChain';
+import { type DirectHotBumpHintSourceV3 } from './directHotBumpHintsV1';
 import {
   canonicalDirectInlineLookupAddressesV3,
+  encodeHotBumpHintsV1,
+  HOT_BUMP_HINTS_OFFSET_V1,
+  HOT_BUMP_HINT_COUNT_V1,
   DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3,
   DIRECT_INLINE_CURRENT_RUNTIME_TAIL_ACCOUNTS_V3,
   DIRECT_INLINE_CURRENT_WIRE_BYTES_V3,
@@ -167,7 +173,34 @@ function routeInspection(candidate: DirectInlineHotRouteV3): DirectHotRouteInspe
     transitionDigest: '26'.repeat(32),
     capabilitySealDigest: '27'.repeat(32),
     checkedOuter: candidate.outerEvidence,
+    bumpHintSource: bumpHintSource(candidate),
   });
+}
+
+/**
+ * The three finalized bodies a real inspection keeps so the wallet path can
+ * mine its hint block.
+ *
+ * The Market state and root header are the canonical encodings emitted by
+ * `crates/dclutch-operator/tests/browser_bump_hint_vector.rs`; nothing in this
+ * file depends on WHICH identities they carry, because the two slots they feed
+ * are derived from their own bytes rather than from the route. What this file
+ * does depend on is that mining runs at all on a route this builder accepts,
+ * and that the two lifecycle slots agree with the replay accounts the runtime
+ * frame already carries -- which is the join `mineDirectInlineHotBumpHintsV3`
+ * refuses on.
+ */
+function bumpHintSource(candidate: DirectInlineHotRouteV3): DirectHotBumpHintSourceV3 {
+  return Object.freeze({
+    coreProgram: bumpHintVector.coreProgram,
+    marketCoreState: fromHex(bumpHintVector.marketCoreStateHex),
+    capabilityRootHeader: fromHex(bumpHintVector.capabilityRootHeaderHex),
+    activationCache: activationCacheFixtureV1(new Uint8Array(candidate.releaseSet), { custody: key(70) }),
+  });
+}
+
+function fromHex(value: string): Uint8Array {
+  return Uint8Array.from(value.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
 }
 
 async function noncePair(candidate: DirectInlineHotRouteV3, seller = SELLER, taker = WALLET) {
@@ -298,6 +331,40 @@ describe('Direct wallet preparation V1', () => {
     expect(prepared.transactionPlan.requiredSigners).toEqual([input.context.current.connectedWallet]);
     expect(prepared.transactionPlan.loadedAddresses).toBe(DIRECT_INLINE_CURRENT_LOOKUP_ADDRESSES_V3);
     expect(prepared.transactionPlan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
+  });
+
+  it('compiles a MINED wallet wire, at the same 1,167 bytes as the unmined one', async () => {
+    // The lane's lead claim: a browser-built trade carries hints. Six of the
+    // eight slots are filled from the finalized bodies the route inspection
+    // already read; the two child caller-authority slots stay zero because
+    // their seeds end in a digest over a PROJECTED child request, which is the
+    // same gap `build_direct_inline_hot_v4` has and takes as a parameter.
+    const input = await fixture();
+    const prepared = prepareDirectWalletTransactionV1(input);
+    if (prepared.status !== 'wallet-preparable') throw new Error('unreachable test branch');
+    const plan = prepared.transactionPlan;
+    expect(plan.minedBumpHintSlots).toBe(6);
+    expect(plan.bumpHints.childCaller).toEqual([0, 0]);
+    for (const [field, bump] of [
+      ['market', plan.bumpHints.market],
+      ['root', plan.bumpHints.root],
+      ['seller replay', plan.bumpHints.lifecycle[0]],
+      ['buyer replay', plan.bumpHints.lifecycle[1]],
+      ['Custody replay', plan.bumpHints.childRelay[0]],
+      ['Custody authority', plan.bumpHints.childRelay[1]],
+    ] as const) {
+      expect(bump, `${field} slot mined to absent`).not.toBe(0);
+    }
+    const block = plan.hotInstructionBytes.slice(HOT_BUMP_HINTS_OFFSET_V1, HOT_BUMP_HINTS_OFFSET_V1 + HOT_BUMP_HINT_COUNT_V1);
+    expect([...block]).toEqual([...encodeHotBumpHintsV1(plan.bumpHints)]);
+    // The two lifecycle slots are the replay accounts the runtime frame already
+    // carries: mining derived them a second time, from seeds, and the miner
+    // refuses if the two derivations disagree.
+    expect(plan.bumpHints.lifecycle[0]).toBe(deriveDirectMakerReplayAddressV1(
+      input.routeInspection.route.tradingProgram, input.routeInspection.route.market,
+      input.routeInspection.route.generation, input.signedSeller.maker,
+    ).bump);
+    expect(plan.wireBytes).toHaveLength(DIRECT_INLINE_CURRENT_WIRE_BYTES_V3);
   });
 
   it('returns an honest operator handoff naming the exact route payer and does not compile', async () => {

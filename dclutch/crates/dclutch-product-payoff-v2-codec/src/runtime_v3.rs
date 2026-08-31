@@ -51,6 +51,7 @@ const PRODUCT_LINK_END: usize = RESULT_DOMAIN_ID_OFFSET + 32;
 
 const CATEGORICAL_KIND: u8 = BASIS_CATEGORICAL_KIND_V3;
 const GRADED_COMPLEMENT_KIND: u8 = BASIS_GRADED_COMPLEMENT_KIND_V3;
+const SPLINE_KIND: u8 = BASIS_SPLINE_DEGREE_2_TO_3_KIND_V3;
 
 /// Refusal from hostile decoding, construction, or exact evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,6 +88,30 @@ pub enum Error {
     SelectorOutOfRange,
     /// Checked record sizing or exact arithmetic overflowed.
     ArithmeticOverflow,
+    /// A degree-2-to-3 spline basis was selected and this build has no
+    /// evaluator for one.
+    ///
+    /// The kind is allocated on the wire and refused on every route. This is
+    /// the outermost conjunct of [`admit_basis_selection_v3`] and it fires
+    /// last, so the refusals below stay individually observable.
+    SplineEvaluatorAbsent,
+    /// A spline selection named a degree outside the closed interval
+    /// [`BASIS_SPLINE_MINIMUM_DEGREE_V3`]..=[`BASIS_SPLINE_MAXIMUM_DEGREE_V3`].
+    SplineDegreeOutOfProfile,
+    /// A spline selection's knot vector does not derive its declared width:
+    /// `knot_count - degree - 1 != basis_width`.
+    SplineWidthDerivationMismatch,
+    /// A spline selection carried no price-gate certificate digest.
+    ///
+    /// Degree 2 and 3 are both strictly above the gate's exempt degree, so a
+    /// certificate is required for the whole interval with no comparison —
+    /// see `exempt_degree_below_spline_interval` in
+    /// `DClutchSemantics/ProductBasisV3Abi.lean`.
+    PriceGateCertificateRequired,
+    /// A categorical or graded selection carried a price-gate certificate
+    /// digest. Degree 0 and 1 are exempt by proof; an input that is present is
+    /// never silently ignored.
+    PriceGateCertificateUnexpected,
 }
 
 /// Result alias for the runtime basis successor.
@@ -99,6 +124,29 @@ pub enum BasisKindV3 {
     CategoricalQ1,
     /// Nonnegative rational graded curves plus one exact complement.
     GradedExactComplement,
+    /// Degree-2-to-3 B-spline over the record's own knot vector.
+    ///
+    /// **No evaluator exists for this family and every route refuses it.** The
+    /// variant is allocated so the tree decides at compile time what each of
+    /// its exhaustive matches does with a kind it cannot evaluate, and so byte
+    /// 3 at [`BASIS_KIND_OFFSET_V3`] cannot be claimed by anything else.
+    ///
+    /// The degree travels in the variant rather than on the wire: the reserved
+    /// span at offset 18 that will eventually carry it is untouched, and a
+    /// `DCLTPAY3` record whose kind byte is 3 is refused at
+    /// [`BasisKindV3::decode`] before a degree would be read. So the set of
+    /// byte strings this codec accepts is unchanged by the allocation.
+    ///
+    /// The knot vector this degree interprets is the record's existing one —
+    /// `knot_count`, `knots` and `knot_denominator`. The binding between the
+    /// two is the width derivation checked by [`spline_basis_width_v3`], which
+    /// is the only sense in which a degree and a knot vector can be carried
+    /// together before an evaluator exists.
+    SplineDegree2To3 {
+        /// Spline degree, required to lie in
+        /// [`BASIS_SPLINE_MINIMUM_DEGREE_V3`]..=[`BASIS_SPLINE_MAXIMUM_DEGREE_V3`].
+        degree: u8,
+    },
 }
 
 impl BasisKindV3 {
@@ -106,6 +154,7 @@ impl BasisKindV3 {
         match self {
             Self::CategoricalQ1 => CATEGORICAL_KIND,
             Self::GradedExactComplement => GRADED_COMPLEMENT_KIND,
+            Self::SplineDegree2To3 { .. } => SPLINE_KIND,
         }
     }
 
@@ -113,6 +162,11 @@ impl BasisKindV3 {
         match tag {
             CATEGORICAL_KIND => Ok(Self::CategoricalQ1),
             GRADED_COMPLEMENT_KIND => Ok(Self::GradedExactComplement),
+            // Allocated, and refused. A record cannot reach this decoder
+            // carrying a degree -- the degree's wire slot is still
+            // zero-enforced reserved space -- so there is nothing to decode
+            // into even if an evaluator existed.
+            SPLINE_KIND => Err(Error::SplineEvaluatorAbsent),
             _ => Err(Error::UnsupportedKind),
         }
     }
@@ -303,6 +357,15 @@ impl<'a> ProductBasisV3<'a> {
                 self.validate_knots()?;
                 self.validate_terms()?;
                 validate_partition(self.failure_payouts(), self.payout_scale)?;
+            }
+            // Unreachable through `decode`, which refuses kind byte 3 before a
+            // record is built, and stated anyway: this is the arm that would
+            // have to grow a per-kind canonical form -- knot multiplicity, the
+            // width derivation, a rounding boundary of its own -- the day an
+            // evaluator exists. Leaving it as a refusal keeps the day it
+            // changes visible in a diff.
+            BasisKindV3::SplineDegree2To3 { .. } => {
+                return Err(Error::SplineEvaluatorAbsent);
             }
         }
         Ok(self)
@@ -613,6 +676,11 @@ pub fn basis_record_bytes_v3(
     let failure_count = match kind {
         BasisKindV3::CategoricalQ1 => 0,
         BasisKindV3::GradedExactComplement => basis_width,
+        // A width refused rather than guessed. Whether a spline basis carries
+        // failure payouts at all is an evaluator question, and answering it
+        // with a plausible number here would let a caller allocate a buffer
+        // for a record that can never be written into it.
+        BasisKindV3::SplineDegree2To3 { .. } => return Err(Error::SplineEvaluatorAbsent),
     };
     BASIS_HEADER_BYTES_V3
         .checked_add(failure_count.checked_mul(8).ok_or(Error::InvalidLength)?)
@@ -653,6 +721,11 @@ pub fn compile_basis_v3(input: BasisInputV3<'_>, output: &mut [u8]) -> Result<()
     let rounding = match input.kind {
         BasisKindV3::CategoricalQ1 => EXACT_CATEGORICAL_BOUNDARY_V3,
         BasisKindV3::GradedExactComplement => TERM_FLOOR_EXACT_COMPLEMENT_BOUNDARY_V3,
+        // The encoder has no boundary tag to write, because the family has no
+        // rounding rule yet -- the live per-term floor and the kernel's
+        // cumulative telescoping are different functions and which one a
+        // spline basis takes is the port's decision, not this lane's.
+        BasisKindV3::SplineDegree2To3 { .. } => return Err(Error::SplineEvaluatorAbsent),
     };
     put(output, ROUNDING_OFFSET, &[rounding])?;
     put(
@@ -735,6 +808,14 @@ fn validate_input(input: BasisInputV3<'_>) -> Result<()> {
     }
     let _ = u32::try_from(input.knots.len()).map_err(|_| Error::InvalidCount)?;
     let _ = u32::try_from(input.terms.len()).map_err(|_| Error::InvalidCount)?;
+    // The compiler input carries no price-gate certificate, so this refusal is
+    // unconditional and is deliberately stronger than
+    // `spline_admission_v3::admit_basis_selection_v3`: no certificate can
+    // rescue a spline record here, because there is nothing to compile it
+    // into. Admission is checked where a certificate exists to check.
+    if let BasisKindV3::SplineDegree2To3 { .. } = input.kind {
+        return Err(Error::SplineEvaluatorAbsent);
+    }
     match input.kind {
         BasisKindV3::CategoricalQ1 => {
             if input.payout_scale != 1
@@ -746,6 +827,9 @@ fn validate_input(input: BasisInputV3<'_>) -> Result<()> {
                 return Err(Error::NonCanonicalReserved);
             }
         }
+        // Refused by the guard above; restated so the day a spline input gains
+        // a canonical form is a change to this arm and not a deleted `if`.
+        BasisKindV3::SplineDegree2To3 { .. } => return Err(Error::SplineEvaluatorAbsent),
         BasisKindV3::GradedExactComplement => {
             if input.basis_width < 2 || input.knot_denominator == 0 || input.terms.is_empty() {
                 return Err(Error::InvalidCount);
@@ -1335,6 +1419,152 @@ mod tests {
         let mut output = vec![0; width];
         compile_basis_v3(input, &mut output).expect("compile");
         output
+    }
+
+    /// **The lane's central claim, asserted rather than argued.** The set of
+    /// byte strings this codec accepts is exactly what it was before the third
+    /// kind was allocated: a valid record whose kind byte is overwritten with
+    /// 3 is refused, and the refusal happens at the kind byte rather than
+    /// somewhere downstream where a partially-decoded record could do damage.
+    ///
+    /// Hostile 1 of `docs/design/BASIS_ABI_UNIFICATION_V1.md` §7. It refused
+    /// before this lane too, as `UnsupportedKind`; what changed is that the
+    /// refusal now names an allocated tag instead of an unrecognised one.
+    #[test]
+    fn a_record_whose_kind_byte_is_three_is_refused() {
+        let knots = [0_i128, 2, 4];
+        let terms = [
+            BasisTermV3 {
+                claim_index: 0,
+                shape: BasisShapeV3::RampUp { left: 0, right: 1 },
+                amplitude: 40,
+            },
+            BasisTermV3 {
+                claim_index: 1,
+                shape: BasisShapeV3::RampUp { left: 1, right: 2 },
+                amplitude: 60,
+            },
+        ];
+        let failure = [10_u64, 20, 70];
+        let mut bytes = compile(graded_input(&knots, &terms, &failure));
+        ProductBasisV3::decode(&bytes).expect("the unmodified record still decodes");
+
+        bytes[KIND_OFFSET] = SPLINE_KIND;
+        assert_eq!(
+            ProductBasisV3::decode(&bytes),
+            Err(Error::SplineEvaluatorAbsent),
+            "kind byte 3 is allocated and refused"
+        );
+
+        // And the byte above it is still unclaimed, so the allocation took
+        // exactly one value out of circulation and not a range.
+        bytes[KIND_OFFSET] = SPLINE_KIND + 1;
+        assert_eq!(
+            ProductBasisV3::decode(&bytes),
+            Err(Error::UnsupportedKind),
+            "byte 4 is still merely unsupported"
+        );
+    }
+
+    /// The degree's wire slot was not spent. Both reserved spans are still
+    /// zero-enforced for every kind, which is what lets a decoder that predates
+    /// this lane refuse rather than misread anything a later one writes.
+    #[test]
+    fn the_reserved_spans_are_still_refused_on_nonzero() {
+        let knots = [0_i128, 2, 4];
+        let terms = [
+            BasisTermV3 {
+                claim_index: 0,
+                shape: BasisShapeV3::RampUp { left: 0, right: 1 },
+                amplitude: 40,
+            },
+            BasisTermV3 {
+                claim_index: 1,
+                shape: BasisShapeV3::RampUp { left: 1, right: 2 },
+                amplitude: 60,
+            },
+        ];
+        let failure = [10_u64, 20, 70];
+        for offset in [HEADER_RESERVED_OFFSET, HEADER_TAIL_RESERVED_OFFSET] {
+            let mut bytes = compile(graded_input(&knots, &terms, &failure));
+            bytes[offset] = 2;
+            assert_eq!(
+                ProductBasisV3::decode(&bytes),
+                Err(Error::NonCanonicalReserved),
+                "offset {offset}"
+            );
+        }
+    }
+
+    /// The compiler refuses to build a spline record, and refuses to size a
+    /// buffer for one. Both are reachable from Rust — `BasisInputV3` is a
+    /// caller-built struct — so unlike the decode path these are not merely
+    /// defensive.
+    #[test]
+    fn the_compiler_refuses_the_spline_kind() {
+        assert_eq!(
+            basis_record_bytes_v3(BasisKindV3::SplineDegree2To3 { degree: 2 }, 4, 8, 0),
+            Err(Error::SplineEvaluatorAbsent),
+            "no buffer may be sized for a record that cannot be written"
+        );
+
+        let mut output = [0_u8; BASIS_HEADER_BYTES_V3];
+        assert_eq!(
+            compile_basis_v3(
+                BasisInputV3 {
+                    kind: BasisKindV3::SplineDegree2To3 { degree: 3 },
+                    ..graded_input(&[], &[], &[])
+                },
+                &mut output,
+            ),
+            Err(Error::SplineEvaluatorAbsent)
+        );
+        assert!(
+            output.iter().all(|byte| *byte == 0),
+            "a refused compile writes nothing"
+        );
+    }
+
+    /// The refusal does not depend on the degree being wrong. Every degree in
+    /// the profile, and degrees outside it, are refused identically here —
+    /// which is what distinguishes "no evaluator" from "bad input", and is why
+    /// the degree-shaped refusals live in `spline_admission_v3` instead.
+    #[test]
+    fn every_spline_degree_is_refused_by_the_codec() {
+        for degree in [0_u8, 1, 2, 3, 4, 255] {
+            assert_eq!(
+                basis_record_bytes_v3(BasisKindV3::SplineDegree2To3 { degree }, 4, 8, 0),
+                Err(Error::SplineEvaluatorAbsent),
+                "degree {degree}"
+            );
+        }
+    }
+
+    /// **Negative control, hostile 13.** The knot-ordering rule was not
+    /// relaxed. Interior multiplicity is what a spline needs and what this
+    /// lane did not grant: repeated knots still refuse on the two shipping
+    /// kinds. If a later lane relaxes the check globally instead of per-kind,
+    /// this goes red.
+    #[test]
+    fn repeated_knots_still_refuse_on_the_shipping_kinds() {
+        let knots = [0_i128, 2, 2];
+        let terms = [
+            BasisTermV3 {
+                claim_index: 0,
+                shape: BasisShapeV3::RampUp { left: 0, right: 1 },
+                amplitude: 40,
+            },
+            BasisTermV3 {
+                claim_index: 1,
+                shape: BasisShapeV3::RampUp { left: 1, right: 2 },
+                amplitude: 60,
+            },
+        ];
+        let failure = [10_u64, 20, 70];
+        assert_eq!(
+            validate_input(graded_input(&knots, &terms, &failure)),
+            Err(Error::UnorderedKnots)
+        );
     }
 
     #[test]

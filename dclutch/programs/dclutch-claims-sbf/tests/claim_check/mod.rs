@@ -511,11 +511,34 @@ fn admission_address(aggregate: Pubkey, owner: [u8; 32]) -> Pubkey {
 /// produced by the production codec, never hand-rolled, so the format still has
 /// exactly one author; only the act of putting them on chain is short-circuited.
 async fn plant_admission(context: &mut ProgramTestContext, fixture: &Fixture) -> Pubkey {
+    plant_admission_of_kind(context, fixture, ProtocolPositionOwnerKindV2::User).await
+}
+
+/// Plant the same admission record under a caller-chosen owner-kind tag.
+///
+/// The tag is the only thing compaction reads off this record, and it is the
+/// whole of what separates a position that may be compacted from one that may
+/// not. Varying it against a fixture that is otherwise known-compactable is
+/// what isolates the gate: every other reason to refuse is already disproved
+/// by the sibling test that compacts this exact position successfully.
+async fn plant_admission_of_kind(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    owner_kind: ProtocolPositionOwnerKindV2,
+) -> Pubkey {
     let owner = fixture.actor.pubkey().to_bytes();
     let address = admission_address(fixture.aggregate, owner);
+    // The record's own canonicalization binds the descriptor to the kind: a
+    // capability owner must name one, and the other two must not. Deriving it
+    // here from the kind rather than passing it in keeps the caller honest and
+    // keeps this helper producing records the production codec accepts.
+    let capability_descriptor = match owner_kind {
+        ProtocolPositionOwnerKindV2::ClaimsCapability => [0x4c; 32],
+        ProtocolPositionOwnerKindV2::TradingRecord | ProtocolPositionOwnerKindV2::User => [0; 32],
+    };
     let request = ProtocolPositionRequestV2 {
         action: ProtocolPositionActionV2::Admit,
-        owner_kind: ProtocolPositionOwnerKindV2::User,
+        owner_kind,
         presence: ProtocolPositionPresenceV2::Vacant,
         release_set: fixture.release_set,
         market: fixture.market.to_bytes(),
@@ -532,7 +555,7 @@ async fn plant_admission(context: &mut ProgramTestContext, fixture: &Fixture) ->
         position_rent_principal: Rent::default().minimum_balance(POSITION_BYTES),
         admission_rent_principal: Rent::default()
             .minimum_balance(PROTOCOL_POSITION_ADMISSION_BYTES_V2),
-        capability_descriptor: [0; 32],
+        capability_descriptor,
         capability_outcome: 0,
     }
     .new()
@@ -544,7 +567,7 @@ async fn plant_admission(context: &mut ProgramTestContext, fixture: &Fixture) ->
         request_digest: [0x46; 32],
         claims_program: CLAIMS_PROGRAM_ID.to_bytes(),
         trading_program: [0x47; 32],
-        capability_descriptor: [0; 32],
+        capability_descriptor,
         capability_outcome: 0,
         outcome_count: u32::try_from(K).expect("outcome count"),
     };
@@ -918,6 +941,81 @@ async fn a_position_cannot_be_compacted_twice() {
         after, minted,
         "the refused second crank moved no byte of the claim-check"
     );
+}
+
+/// A POSITION WHOSE OWNER CANNOT SIGN IS NOT COMPACTED — the Fractional reserve.
+///
+/// The Fractional reserve Position carries `owner_kind = TradingRecord` with a
+/// `position_owner` equal to the Trading-owned Fractional root PDA; that is
+/// asserted by the Fractional family itself, at
+/// `fractional_retirement_v3.rs`'s admission join. It holds the collateral
+/// backing every outstanding shard of one coordinate.
+///
+/// Compacting it would have written that collateral into a claim-check owned by
+/// a program-derived address. `RedeemClaimCheck` pays the record's `owner` and
+/// requires it to sign, and a PDA cannot sign a top-level instruction — so the
+/// record would be unopenable, by anyone, forever, while the Position every
+/// shard holder's own redemption reads was closed in the same transaction.
+/// Not a delay. A total loss, reachable by any caller past the deadline.
+///
+/// The fixture is deliberately the one the differential test compacts
+/// SUCCESSFULLY. Only the persisted owner-kind tag differs, so a pass here is a
+/// statement about the gate and about nothing else.
+#[tokio::test]
+async fn a_position_whose_owner_could_never_sign_for_it_is_not_compacted() {
+    for kind in [
+        ProtocolPositionOwnerKindV2::TradingRecord,
+        ProtocolPositionOwnerKindV2::ClaimsCapability,
+    ] {
+        let (test, fixture) = fixture(true);
+        let mut context = test.start_with_context().await;
+        create_claims_custody_replay(&mut context, &fixture).await;
+        plant_admission_of_kind(&mut context, &fixture, kind).await;
+        let cranker = context.payer.pubkey();
+        open_and_elapse(&mut context, &fixture).await;
+
+        let prestate = wallet_payout_prestate(&mut context, &fixture, fixture.actor_position).await;
+        let instruction = compaction_instruction(&fixture, cranker, &prestate);
+        let addresses = lookup_addresses(cranker, fixture.actor.pubkey(), &[instruction.clone()]);
+        let (table, _) = create_live_lookup_table(
+            &mut context,
+            &addresses,
+            "claims claim-check: unsignable owner",
+        )
+        .await;
+        let result = submit_compaction(
+            &mut context,
+            instruction,
+            table,
+            &addresses,
+            "crank on a position whose owner cannot sign",
+        )
+        .await;
+        assert_refused_with(&result, 0x560A, &format!("a {kind:?}-owned position"));
+
+        // The three things a partial refusal would have left behind. A route
+        // that refused after minting, or after debiting, would still have
+        // destroyed the shard holders' claim.
+        assert!(
+            maybe_observed(
+                &mut context,
+                claim_check_address(fixture.aggregate, fixture.actor.pubkey().to_bytes())
+            )
+            .await
+            .is_none(),
+            "{kind:?}: no claim-check is minted"
+        );
+        let position = observed(&mut context, fixture.actor_position).await;
+        assert_eq!(
+            lbv2_position_quantity(&position.data, WINNER),
+            ACTOR_CLAIMS[WINNERS],
+            "{kind:?}: the position keeps every atom it held"
+        );
+        assert_eq!(
+            position.owner, CLAIMS_PROGRAM_ID,
+            "{kind:?}: and the position is not closed out from under its claimants"
+        );
+    }
 }
 
 /// Submit one compaction through a v0 message carrying the lookup table.

@@ -191,6 +191,55 @@ describe('what the front page leads with', () => {
     expect(state.provenance).toContain('1 is still in founding');
   });
 
+  /**
+   * A market that is open and can never trade is not one you can do anything
+   * with, so the headline figure does not carry it. Being left out of a count
+   * is exactly how something goes quiet, so it is named in the same breath.
+   */
+  it('leaves a market that can never trade out of the headline and names it anyway', () => {
+    const shut: MarketDiscoveryCardV1 = Object.freeze({
+      ...card('shut1111111111111111111111111111111111111111', 'Open'),
+      capabilities: Object.freeze({
+        status: 'authenticated',
+        manifestId: IDENTITY.capabilityManifestId,
+        recordAddress: 'rec11111111111111111111111111111111111111111',
+        observedSlot: SCAN.scanSlot,
+        badges: Object.freeze([Object.freeze({
+          index: 0,
+          kindId: 'ab'.repeat(32),
+          label: 'Direct successor',
+          recognized: true,
+          programSetId: 'cd'.repeat(32),
+          configId: 'ef'.repeat(32),
+          activation: 'deadline' as const,
+          deadline: '490330281',
+          dependencies: Object.freeze([]),
+          funding: Object.freeze({
+            compartments: Object.freeze([]),
+            nativeLamportsTotal: BigInt(0),
+            realmCollateralTotal: BigInt(0),
+            realmCollateral: null,
+          }),
+        })]),
+      }),
+    });
+    const state = readPulseV1('Devnet', SCAN, discovery([card('open1111111111111111111111111111111111111111', 'Open'), shut]));
+    expect(state.stats[0]).toMatchObject({ label: 'Markets open', value: '1' });
+    expect(state.stats[0].detail).toContain('1 more is open to read but can never trade');
+    expect(state.provenance).toContain('2 markets are listed on this deployment in all: 1 open');
+    expect(state.provenance).toContain('1 is open and readable but can never trade');
+    expect(state.provenance).toContain('the window to switch trading on closed before it happened');
+
+    // With nothing left that can trade, the strip says that instead of
+    // reporting everything as still being founded.
+    const onlyShut = readPulseV1('Devnet', SCAN, discovery([shut]));
+    expect(onlyShut.stats[0]).toMatchObject({ value: '0' });
+    expect(onlyShut.stats[0].detail).toContain('none you can trade');
+    // It can still reach its answer, so the resolutions tile does not claim
+    // there is nothing here to resolve.
+    expect(onlyShut.stats[2].detail).toBe('none yet — a market reaches its answer when its own source reports, and not before');
+  });
+
   it('names refused and settled markets in the sentence rather than dropping them', () => {
     const refused: MarketDiscoveryCardV1 = Object.freeze({
       status: 'refused',

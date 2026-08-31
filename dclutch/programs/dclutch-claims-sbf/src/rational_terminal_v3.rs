@@ -12,8 +12,8 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use dclutch_claims_svm::{
     CallerRole,
     product_basis_terminal_v3::{
-        ProductBasisTerminalInputV3, TERMINAL_CANDIDATE_DOMAIN_V3,
-        encode_product_basis_terminal_signed_delta_v3,
+        Error as ProductBasisTerminalError, ProductBasisTerminalInputV3,
+        TERMINAL_CANDIDATE_DOMAIN_V3, encode_product_basis_terminal_signed_delta_v3,
     },
     protocol_position_v2::ProtocolPositionClaimsCapabilitySeedsV2,
     signed_delta_v3::{SignedDeltaReceiptV3, SignedDeltaV3, plan_bytes},
@@ -230,7 +230,15 @@ pub(crate) fn execute_rational_terminal_v3<'accounts, 'info>(
         &mut aggregate_scratch,
         &mut packet,
     )
-    .map_err(|_| ClaimsSbfError::Economic)?;
+    // Every other terminal refusal collapses into `Economic`, which is the
+    // shape this route has always had. The spline case is lifted out because
+    // it is the one refusal here that is not an economic fact about the
+    // market -- it is a missing capability in the deployed ELF, and a code
+    // that says `Economic` would send the reader to look at balances.
+    .map_err(|error| match error {
+        ProductBasisTerminalError::SplineEvaluatorAbsent => ClaimsSbfError::BasisEvaluatorAbsent,
+        _ => ClaimsSbfError::Economic,
+    })?;
     drop(exposure);
     drop(basis);
     drop(position);

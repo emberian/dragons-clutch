@@ -18,6 +18,19 @@ pub const FRACTIONAL_RETIREMENT_REQUEST_BYTES_V3: usize = 288;
 pub const FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3: usize = 22;
 /// Trading-owned root coordinate in the exact Claims retirement frame.
 pub const FRACTIONAL_RETIREMENT_COORDINATE_ROOT_V3: usize = 12;
+/// Exact Claims account frame that creates the ordered-retirement cursor.
+///
+/// Smaller than the coordinate frame because begin closes nothing: it carries
+/// no Position, no admission, no Mint and no Token program, and adds only the
+/// Core Market and its program, which are what make the terminal gate
+/// readable, plus the System program the allocation is invoked through.
+pub const FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3: usize = 16;
+/// Exact Claims account frame that closes the completed cursor.
+///
+/// Smaller than begin's: the walk is over, so the terminal gate has already
+/// been consumed once and every coordinate independently proved a drained
+/// reserve and a zero-supply Mint. Nothing is allocated, so no System program.
+pub const FRACTIONAL_RETIREMENT_FINISH_ACCOUNT_COUNT_V3: usize = 13;
 /// Cursor-state magic.
 pub const FRACTIONAL_RETIREMENT_CURSOR_MAGIC_V3: [u8; 8] = *b"DCFRCR03";
 /// Retirement-request magic.
@@ -28,6 +41,10 @@ pub const FRACTIONAL_RETIREMENT_CURSOR_PDA_SEED_V3: &[u8] = b"dclutch/fractional
 pub const FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_BYTES_V3: usize = 256;
 /// Successful one-coordinate receipt magic.
 pub const FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCFRCX03";
+/// Exact successful begin/finish receipt width.
+pub const FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_BYTES_V3: usize = 256;
+/// Successful begin/finish receipt magic.
+pub const FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCFRLC03";
 /// Cursor schema preimage.
 pub const FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_PREIMAGE_V3: &[u8] = b"dclutch/schema/fractional-retirement-cursor-v3|bytes296|terms-owned-ordered-coordinate|constant-width|revision-bound";
 /// SHA-256 identity of [`FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_PREIMAGE_V3`].
@@ -60,6 +77,18 @@ const CURSOR_NEXT_OFFSET: usize = 272;
 const CURSOR_WIDTH_OFFSET: usize = 276;
 const CURSOR_REVISION_OFFSET: usize = 280;
 const CURSOR_RENT_PRINCIPAL_OFFSET: usize = 288;
+
+const LIFECYCLE_REQUEST_DIGEST_OFFSET: usize = 16;
+const LIFECYCLE_CURSOR_DIGEST_OFFSET: usize = 48;
+const LIFECYCLE_CURSOR_OFFSET: usize = 80;
+const LIFECYCLE_ROOT_OFFSET: usize = 112;
+const LIFECYCLE_RENT_CREDIT_OFFSET: usize = 144;
+const LIFECYCLE_TERMS_OFFSET: usize = 176;
+const LIFECYCLE_WIDTH_OFFSET: usize = 208;
+const LIFECYCLE_NEXT_COORDINATE_OFFSET: usize = 212;
+const LIFECYCLE_REVISION_OFFSET: usize = 216;
+const LIFECYCLE_RENT_PRINCIPAL_OFFSET: usize = 224;
+const LIFECYCLE_LAMPORTS_SETTLED_OFFSET: usize = 232;
 
 const RECEIPT_REQUEST_DIGEST_OFFSET: usize = 16;
 const RECEIPT_POSITION_CLOSE_DIGEST_OFFSET: usize = 48;
@@ -463,6 +492,33 @@ impl FractionalRetirementCursorV3 {
         })
     }
 
+    /// The producer root's revision at the instant this cursor began.
+    ///
+    /// The Trading-owned root is written once, by the activation that creates
+    /// it, and no program mutates it afterwards -- so `root.revision` is a
+    /// CONSTANT for the whole life of the retirement it anchors. The cursor by
+    /// contrast consumes exactly one revision per act: one at [`Self::begin`],
+    /// one per [`Self::advance`], one at [`Self::finish`]. The two are equal
+    /// only in the instant before begin, and the relation that holds forever
+    /// after is this one:
+    ///
+    /// ```text
+    /// cursor.revision == root.revision + 1 + cursor.next_coordinate
+    /// ```
+    ///
+    /// It needs no new persisted byte: `revision` and `next_coordinate` are
+    /// already the two halves of it, and the 296-byte cursor has no spare
+    /// field to store a third. A consumer that instead compares the root's
+    /// revision to the cursor's CURRENT one is asking the frozen value to
+    /// track a moving one, which is satisfiable for at most a single
+    /// coordinate and refuses every step after it.
+    pub fn root_revision_anchor(self) -> Result<u64> {
+        self.revision
+            .checked_sub(1)
+            .and_then(|begun| begun.checked_sub(u64::from(self.next_coordinate)))
+            .ok_or(FractionalRetirementErrorV3::Arithmetic)
+    }
+
     /// Next coordinate that must retire.
     pub const fn next_coordinate(self) -> u32 {
         self.next_coordinate
@@ -691,6 +747,257 @@ pub struct FractionalRetirementFinishV3 {
     pub terminal_revision: u64,
     /// Historical cursor rent principal; never a fee.
     pub cursor_rent_principal: u64,
+}
+
+/// Exact evidence for the two acts that bound the ordered walk.
+///
+/// One record for both ends, because they answer the same question about the
+/// same account -- what the cursor was, and what the lamports did -- and
+/// because one hostile decoder over an action tag is a smaller surface than
+/// two decoders whose bodies would agree field for field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalRetirementLifecycleReceiptV3 {
+    action: FractionalRetirementActionV3,
+    request_digest: [u8; 32],
+    cursor_digest: [u8; 32],
+    cursor: [u8; 32],
+    root: [u8; 32],
+    rent_credit: [u8; 32],
+    terms: [u8; 32],
+    representation_width: u32,
+    next_coordinate: u32,
+    revision: u64,
+    cursor_rent_principal: u64,
+    lamports_settled: u64,
+}
+
+/// Exact facts a begin or finish act observed about the cursor account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FractionalRetirementLifecycleObservationV3 {
+    /// Cursor PDA address.
+    pub cursor: [u8; 32],
+    /// Digest of the cursor bytes this act wrote, or of the bytes it erased.
+    pub cursor_digest: [u8; 32],
+    /// Historical cursor rent principal.
+    pub cursor_rent_principal: u64,
+    /// Revision this act leaves behind.
+    ///
+    /// Begin writes it into the cursor it creates; finish only consumes it,
+    /// because the account that would have carried it stops existing in the
+    /// same instruction. Both are `expected_revision + 1`, which is what makes
+    /// the two ends of the walk verifiable by one rule.
+    pub post_revision: u64,
+    /// Lamports this act moved to the RentCredit; zero on begin.
+    ///
+    /// On finish this is what the account actually held, not the principal:
+    /// a cursor is a keyless address and anyone may donate to it, so draining
+    /// the principal alone would strand every donated lamport in an account
+    /// that is about to stop existing.
+    pub lamports_settled: u64,
+}
+
+impl FractionalRetirementLifecycleReceiptV3 {
+    /// Construct one canonical begin or finish receipt.
+    pub fn new(
+        cursor: FractionalRetirementCursorV3,
+        request: FractionalRetirementRequestV3,
+        request_digest: [u8; 32],
+        observed: FractionalRetirementLifecycleObservationV3,
+    ) -> Result<Self> {
+        let input = request.input();
+        let action = request.action();
+        if !matches!(
+            action,
+            FractionalRetirementActionV3::Begin | FractionalRetirementActionV3::Finish
+        ) || [
+            request_digest,
+            observed.cursor_digest,
+            observed.cursor,
+        ]
+        .contains(&[0; 32])
+            || cursor.root != input.root
+            || cursor.rent_credit != input.rent_credit
+            || observed.cursor_rent_principal != cursor.historical_rent_principal
+            // Begin settles nothing and finish always settles at least the
+            // rent-exempt principal, so the tag and the lamports state one
+            // fact between them and a receipt cannot disagree with itself.
+            || (action == FractionalRetirementActionV3::Finish)
+                != (observed.lamports_settled != 0)
+            || (action == FractionalRetirementActionV3::Finish
+                && observed.lamports_settled < observed.cursor_rent_principal)
+            || (action == FractionalRetirementActionV3::Finish)
+                != (cursor.next_coordinate == cursor.representation_width)
+            // Begin's revision is the one it just wrote into the cursor;
+            // finish's is one past the cursor's last, because finish consumes
+            // a revision the closed account never gets to hold.
+            || observed.post_revision
+                != match action {
+                    FractionalRetirementActionV3::Finish => cursor
+                        .revision
+                        .checked_add(1)
+                        .ok_or(FractionalRetirementErrorV3::Arithmetic)?,
+                    _ => cursor.revision,
+                }
+        {
+            return Err(FractionalRetirementErrorV3::InvalidTransition);
+        }
+        Ok(Self {
+            action,
+            request_digest,
+            cursor_digest: observed.cursor_digest,
+            cursor: observed.cursor,
+            root: cursor.root,
+            rent_credit: cursor.rent_credit,
+            terms: cursor.terms,
+            representation_width: cursor.representation_width,
+            next_coordinate: cursor.next_coordinate,
+            revision: observed.post_revision,
+            cursor_rent_principal: observed.cursor_rent_principal,
+            lamports_settled: observed.lamports_settled,
+        })
+    }
+
+    /// Hostile-decode one exact begin or finish receipt.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_BYTES_V3
+            || array::<8>(bytes, 0)? != FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_MAGIC_V3
+            || read_u16(bytes, 8)? != VERSION_V3
+            || bytes
+                .get(11..16)
+                .is_none_or(|reserved| reserved.iter().any(|byte| *byte != 0))
+            || bytes
+                .get(240..256)
+                .is_none_or(|reserved| reserved.iter().any(|byte| *byte != 0))
+        {
+            return Err(FractionalRetirementErrorV3::InvalidEncoding);
+        }
+        let receipt = Self {
+            action: FractionalRetirementActionV3::decode(byte(bytes, ACTION_OFFSET)?)?,
+            request_digest: array(bytes, LIFECYCLE_REQUEST_DIGEST_OFFSET)?,
+            cursor_digest: array(bytes, LIFECYCLE_CURSOR_DIGEST_OFFSET)?,
+            cursor: array(bytes, LIFECYCLE_CURSOR_OFFSET)?,
+            root: array(bytes, LIFECYCLE_ROOT_OFFSET)?,
+            rent_credit: array(bytes, LIFECYCLE_RENT_CREDIT_OFFSET)?,
+            terms: array(bytes, LIFECYCLE_TERMS_OFFSET)?,
+            representation_width: read_u32(bytes, LIFECYCLE_WIDTH_OFFSET)?,
+            next_coordinate: read_u32(bytes, LIFECYCLE_NEXT_COORDINATE_OFFSET)?,
+            revision: read_u64(bytes, LIFECYCLE_REVISION_OFFSET)?,
+            cursor_rent_principal: read_u64(bytes, LIFECYCLE_RENT_PRINCIPAL_OFFSET)?,
+            lamports_settled: read_u64(bytes, LIFECYCLE_LAMPORTS_SETTLED_OFFSET)?,
+        };
+        if receipt.action == FractionalRetirementActionV3::RetireCoordinate
+            || [
+                receipt.request_digest,
+                receipt.cursor_digest,
+                receipt.cursor,
+                receipt.root,
+                receipt.rent_credit,
+                receipt.terms,
+            ]
+            .contains(&[0; 32])
+            || receipt.root == receipt.rent_credit
+            || receipt.representation_width == 0
+            || receipt.next_coordinate > receipt.representation_width
+            || receipt.cursor_rent_principal == 0
+            || (receipt.action == FractionalRetirementActionV3::Finish)
+                != (receipt.lamports_settled != 0)
+            || (receipt.action == FractionalRetirementActionV3::Finish
+                && receipt.lamports_settled < receipt.cursor_rent_principal)
+            || (receipt.action == FractionalRetirementActionV3::Finish)
+                != (receipt.next_coordinate == receipt.representation_width)
+        {
+            return Err(FractionalRetirementErrorV3::NonCanonical);
+        }
+        Ok(receipt)
+    }
+
+    /// Encode one exact canonical begin or finish receipt.
+    pub fn to_bytes(self) -> [u8; FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_BYTES_V3] {
+        let mut output = [0; FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_BYTES_V3];
+        output[..8].copy_from_slice(&FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_MAGIC_V3);
+        output[8..10].copy_from_slice(&VERSION_V3.to_le_bytes());
+        output[ACTION_OFFSET] = self.action as u8;
+        for (offset, value) in [
+            (LIFECYCLE_REQUEST_DIGEST_OFFSET, self.request_digest),
+            (LIFECYCLE_CURSOR_DIGEST_OFFSET, self.cursor_digest),
+            (LIFECYCLE_CURSOR_OFFSET, self.cursor),
+            (LIFECYCLE_ROOT_OFFSET, self.root),
+            (LIFECYCLE_RENT_CREDIT_OFFSET, self.rent_credit),
+            (LIFECYCLE_TERMS_OFFSET, self.terms),
+        ] {
+            if let Some(field) = output.get_mut(offset..offset + 32) {
+                field.copy_from_slice(&value);
+            }
+        }
+        output[LIFECYCLE_WIDTH_OFFSET..LIFECYCLE_WIDTH_OFFSET + 4]
+            .copy_from_slice(&self.representation_width.to_le_bytes());
+        output[LIFECYCLE_NEXT_COORDINATE_OFFSET..LIFECYCLE_NEXT_COORDINATE_OFFSET + 4]
+            .copy_from_slice(&self.next_coordinate.to_le_bytes());
+        output[LIFECYCLE_REVISION_OFFSET..LIFECYCLE_REVISION_OFFSET + 8]
+            .copy_from_slice(&self.revision.to_le_bytes());
+        output[LIFECYCLE_RENT_PRINCIPAL_OFFSET..LIFECYCLE_RENT_PRINCIPAL_OFFSET + 8]
+            .copy_from_slice(&self.cursor_rent_principal.to_le_bytes());
+        output[LIFECYCLE_LAMPORTS_SETTLED_OFFSET..LIFECYCLE_LAMPORTS_SETTLED_OFFSET + 8]
+            .copy_from_slice(&self.lamports_settled.to_le_bytes());
+        output
+    }
+
+    /// Bind this receipt to the exact request that produced it.
+    pub fn verify_for(
+        self,
+        request: FractionalRetirementRequestV3,
+        request_digest: [u8; 32],
+    ) -> Result<()> {
+        let input = request.input();
+        // The request names the revision it EXPECTED to consume; the receipt
+        // names the one the cursor now carries. Begin and finish each consume
+        // exactly one, so the successor relation is the whole binding and a
+        // receipt replayed from a neighbouring act cannot satisfy it.
+        if self.action != request.action()
+            || self.request_digest != request_digest
+            || self.root != input.root
+            || self.rent_credit != input.rent_credit
+            || self.terms != input.terms
+            || self.revision
+                != input
+                    .expected_revision
+                    .checked_add(1)
+                    .ok_or(FractionalRetirementErrorV3::Arithmetic)?
+        {
+            return Err(FractionalRetirementErrorV3::InvalidTransition);
+        }
+        Ok(())
+    }
+
+    /// Which end of the walk this receipt witnesses.
+    pub const fn action(self) -> FractionalRetirementActionV3 {
+        self.action
+    }
+
+    /// Cursor PDA this act created or closed.
+    pub const fn cursor(self) -> [u8; 32] {
+        self.cursor
+    }
+
+    /// Lamports moved to the RentCredit; zero on begin.
+    pub const fn lamports_settled(self) -> u64 {
+        self.lamports_settled
+    }
+
+    /// Cursor revision after this act.
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Ordered coordinates already retired when this act ran.
+    pub const fn next_coordinate(self) -> u32 {
+        self.next_coordinate
+    }
+
+    /// Exact runtime representation width.
+    pub const fn representation_width(self) -> u32 {
+        self.representation_width
+    }
 }
 
 /// Stable retirement refusal.

@@ -173,6 +173,7 @@ export function readPulseV1(
 ): PulseState {
   const listing = curateMarketListingV1(discovery.cards);
   const open = listing.open.length;
+  const untradeable = listing.untradeable.length;
   // Counted over every decoded card rather than over the settled group, so a
   // terminal receipt is reported wherever the chain wrote one.
   const resolved = discovery.cards.filter((card) => card.status === 'decoded' && card.settlement.status === 'terminal').length;
@@ -182,6 +183,9 @@ export function readPulseV1(
   // The count leads with the two markets anyone came here for; the sentence
   // owes the reader every market the count left out, and what happened to it.
   const rest: string[] = [];
+  if (untradeable > 0) {
+    rest.push(`${untradeable} ${plural(untradeable, 'is', 'are')} open and readable but can never trade — the window to switch trading on closed before it happened`);
+  }
   if (listing.founding.length > 0) {
     rest.push(`${listing.founding.length} ${plural(listing.founding.length, 'is', 'are')} still in founding — earlier attempts from the build-out, left standing because devnet history is public`);
   }
@@ -204,9 +208,15 @@ export function readPulseV1(
       Object.freeze({
         label: OPEN_LABEL,
         value: String(open),
+        // The count is markets you can actually do something with, so the one
+        // class it leaves out is named right here rather than only in the
+        // sentence below it: a market that is open and can never trade is not
+        // silently folded into this figure, and not silently dropped either.
         detail: open === 0
-          ? 'none yet — every market here is still being founded'
-          : `founding is finished on ${plural(open, 'this one', 'these')}; ${plural(open, 'it holds', 'they hold')} live claims and locked collateral`,
+          ? untradeable === 0
+            ? 'none yet — every market here is still being founded'
+            : `none you can trade — ${plural(untradeable, 'the one market', `all ${untradeable} markets`)} that finished founding here can never have trading switched on`
+          : `founding is finished on ${plural(open, 'this one', 'these')}; ${plural(open, 'it holds', 'they hold')} live claims and locked collateral${untradeable === 0 ? '' : ` · ${untradeable} more ${plural(untradeable, 'is', 'are')} open to read but can never trade`}`,
       }),
       collateralTileV1(discovery),
       Object.freeze({
@@ -214,7 +224,9 @@ export function readPulseV1(
         value: String(resolved),
         detail: resolved > 0
           ? 'markets that have reached their answer'
-          : open === 0
+          // A market that can never trade can still reach its answer, so it
+          // counts as something there is to resolve.
+          : open + untradeable === 0
             ? 'none yet — no market is open to resolve'
             : 'none yet — a market reaches its answer when its own source reports, and not before',
       }),

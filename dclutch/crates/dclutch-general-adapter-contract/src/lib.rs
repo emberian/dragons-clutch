@@ -19,6 +19,9 @@ extern crate std;
 /// Exact Profile13 rules for General state, evidence, child frames, and scratch pages.
 pub mod account_rules_v3;
 /// Read-only admitted-AOT General settlement evaluator.
+#[cfg(not(target_os = "solana"))]
+pub mod activation_bundle_v1;
+
 pub mod admitted_accelerator_v3;
 /// Complete content-addressed General V3 artifact joins for generic Trading.
 pub mod artifacts_v3;

@@ -595,9 +595,42 @@ zero defaults happen to be correct pass, and the rest refuse.
 signs nothing and performs no CPI. The commit half — Trading's
 `process_hot_execution_v3` writing the capability root and returning a
 `DCLTHAK3` ack — additionally needs a founded Market whose capability manifest
-selects General, and no driver in this tree founds one.
+selects General, and whose capability root exists. Both now have drivers:
+`local-private-validator-market-v1` with `DCLUTCH_MARKET_CAPABILITY=general`
+compiles the selected market input, and
+`local-private-validator-general-capability-activation-v1` creates the root.
 `general_market_selection_requirements_v1` states the six facts such a Market
 must carry.
+
+## General capability activation
+
+```sh
+dclutch-local-successor-bootstrap \
+  local-private-validator-general-capability-activation-v1 \
+  --rpc-url http://127.0.0.1:PORT/ \
+  --plan ABSOLUTE_PLAN_JSON --campaign-report ABSOLUTE_FOUNDING_JSON \
+  --payer-keypair ABSOLUTE_DISPOSABLE_JSON \
+  --output ABSOLUTE_NEW_JSON [--execute]
+```
+
+One Core-signed transaction creates `CapabilityRootHeaderV1 || GeneralRootV2` at
+the manifest-selected root PDA, moving the funding ledger's parked Rent quote
+into it. Without `--execute` it plans, writes the derived coordinates, and
+signs nothing. A live Trading-owned root reports `already-active`.
+
+The campaign report supplies two ROUTING coordinates — the Market address and
+the Trading funding-ledger address. Everything semantic is re-derived from
+chain: the manifest from the Market's own identity, the General entry found in
+it by kind, the ProgramSet from that entry's `release_id` (which must
+authenticate as `SettlementWithActivation` — a seven-entry General release
+refuses here, because nothing founded on it could ever create a root), the
+activation descriptor selected out of that set, and the account-profile and
+effect records off that descriptor. The poststate is read with General's own
+decoder and checked against `GeneralRootV2::active`,
+`general_root_creation_tail_v2`, and `FundingLedgerV2::activate_in_place`.
+
+Loopback only. The Direct sibling, `devnet-direct-capability-activation-v1`,
+is the same route on an acknowledged devnet endpoint.
 
 **Series compiles its wire and refuses.** See that command's own refusal text
 for the exact reason; the short version is that the common authenticated Shadow

@@ -135,6 +135,111 @@ const SELLER_POSITION_REVISION: u64 = 9;
 const BUYER_POSITION_REVISION: u64 = 10;
 const CUSTODY_REVISION: u64 = 7;
 
+/// The trade this fixture executes, and the ONE input that decides how many
+/// Custody routes run.
+///
+/// # Why this is a fixture input and not a constant any more
+///
+/// It was a constant, and the constant was `FILL = 10` at `EXECUTION_PRICE =
+/// 50` against a `PRICE_SCALE` of 100 -- gross 5. At the market's 50 basis
+/// points per side that is `5 * 50 / 10_000`, which FLOORS TO ZERO. A zero
+/// combined fee sets `seller_terminal` and clears both fee registers, so the
+/// transition projects one live Custody route out of the four it declares, the
+/// transaction makes ONE Custody CPI, and the fee leg -- the second Custody
+/// route, its own caller authority, its own replay revision step, its own
+/// delegated transfer -- has never executed in any measurement this repository
+/// has ever taken. That was found on 2026-08-30
+/// (`docs/evidence/DIRECT_HOT_CU_VARIANCE_CENSUS_2026-08-30.md`, finding 3) and
+/// it is not a small caveat: a market that charges a fee runs a route whose
+/// compute nobody had measured.
+///
+/// So the trade size is stated rather than assumed, and the two values below
+/// are the two shapes the route actually has. `ZERO_FEE` reproduces the
+/// historical fixture byte for byte -- every account, every address, every
+/// signed preimage -- so nothing that was measured on it is invalidated by this
+/// type existing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectTradeScenarioV1 {
+    /// The Claims aggregate's supply of every outcome, which the seller holds
+    /// in full -- so it is also the largest fill this market can trade.
+    claim_supply: u64,
+    /// Quantity filled, in claims; also each intent's `maximum_fill`.
+    fill: u64,
+    /// Execution price, scaled by `PRICE_SCALE`; also each intent's limit.
+    ///
+    /// The protocol requires `execution_price <= price_scale`, so this is a
+    /// fraction of scale and `gross` can never exceed `fill`.
+    execution_price: u64,
+    /// The buyer's collateral balance, which must cover `gross + fee`.
+    source_balance: u64,
+}
+
+impl DirectTradeScenarioV1 {
+    /// The historical trade: gross 5, fee floors to zero, ONE Custody route.
+    ///
+    /// Every CU figure in `docs/evidence/DIRECT_HOT_CU_VARIANCE_CENSUS_2026-08-30.md`
+    /// and every constant in `direct_hot_top_level_margin_gate.rs` belongs to
+    /// this scenario.
+    pub const ZERO_FEE: Self = Self {
+        claim_supply: 100,
+        fill: FILL,
+        execution_price: EXECUTION_PRICE,
+        source_balance: 100,
+    };
+
+    /// The smallest trade at this market's 50 bps whose fee does not floor away.
+    ///
+    /// # Why the SIZE moves and the price does not
+    ///
+    /// The obvious way to buy a nonzero fee is a higher price, and the protocol
+    /// forbids it. `dclutch-direct-aot-v3-contract/src/lib.rs:163` requires
+    /// `execution_price <= price_scale` -- the price is a FRACTION of scale,
+    /// which is what a claim's price is -- so `gross = fill * price / scale` can
+    /// never exceed the fill, and `mul_div_EXACT` at :167 additionally requires
+    /// the product to divide the scale exactly. At 50 basis points a nonzero fee
+    /// needs `gross >= 200`, so it needs `fill >= 200`, and there is no price
+    /// anywhere in the admissible range that gets there on a fill of 10.
+    ///
+    /// That is worth stating plainly because it is the real shape of the wall:
+    /// the zero-fee measurement was not an unlucky constant, it was a trade two
+    /// orders of magnitude too small for this market's own fee rate to bite.
+    ///
+    /// So this scenario keeps the price at 50 of 100 -- the same half the
+    /// zero-fee scenario trades at -- and raises the size to 400 claims:
+    /// `gross = 400 * 50 / 100 = 200`, each side's fee is `200 * 50 / 10_000 =
+    /// 1`, seller net 199, combined fee 2, buyer debit 201. That is the smallest
+    /// admissible fee-bearing trade at this rate, and smallest is right: the
+    /// enable registers are booleans, so a larger trade buys nothing but a
+    /// bigger number to explain. What matters is that `seller_net != 0` too,
+    /// which selects `SellerIntermediate` + `FeeContinuation` -- the TWO-route
+    /// shape a real fee-charging market runs -- rather than the single `FeeSole`
+    /// route a fee with no seller leg would take.
+    pub const FEE_BEARING: Self = Self {
+        claim_supply: 1_000,
+        fill: 400,
+        execution_price: EXECUTION_PRICE,
+        source_balance: 1_000,
+    };
+
+    /// The claims quantity this trade moves.
+    #[must_use]
+    pub const fn fill(self) -> u64 {
+        self.fill
+    }
+
+    /// The scaled execution price, which is also both intents' limit.
+    #[must_use]
+    pub const fn execution_price(self) -> u64 {
+        self.execution_price
+    }
+
+    /// The Claims supply this market carries, and the seller's whole position.
+    #[must_use]
+    pub const fn claim_supply(self) -> u64 {
+        self.claim_supply
+    }
+}
+
 /// Externally installed release-waist and deployment identities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectHotChainInputV5 {
@@ -181,6 +286,10 @@ pub struct DirectHotChainInputV5 {
     /// Decision 0005: it is a seed of the validated-artifact seal, so a Trading
     /// release whose validators differ never reads another release's verdict.
     pub trading_semantic_release: [u8; 32],
+    /// The trade executed, which decides how many Custody routes run.
+    ///
+    /// `DirectTradeScenarioV1::ZERO_FEE` is the historical fixture exactly.
+    pub trade: DirectTradeScenarioV1,
 }
 
 /// Complete canonical Direct child instruction and owned account declarations.
@@ -658,6 +767,33 @@ fn market_and_claims(
         market_id: core_identity(market.to_bytes())?,
         ..provisional
     };
+    // The bumps a real founding writes into this state, derived the way
+    // `plan_found` derives them (`programs/dclutch-core-sbf/src/found.rs`) and
+    // not the way a fixture might find convenient.
+    //
+    // The Market bump: Core derives `(expected_market, bump)` from
+    // `MarketCoreStateSeedsV2::new(market_identity)` on the FINAL identity --
+    // the one whose `market_id` is the account it is about to create -- and
+    // records `StateBumpsV1::record(bump)`. `MarketCoreStateSeedsV2` projects
+    // the identity EXCLUDING the derived address, so this is necessarily the
+    // same pair the provisional derivation above produced. Derived again from
+    // `identity` anyway, because the founding's input is the thing being
+    // mirrored, and compared, because the day those two stop agreeing this
+    // fixture is staging a state no founding can write.
+    let (founding_market, market_bump) = Pubkey::find_program_address(
+        &MarketCoreStateSeedsV2::new(identity).as_slices(),
+        &input.core_program,
+    );
+    if founding_market != market {
+        return Err(DirectHotChainFixtureErrorV5::Encoding);
+    }
+    // The realm pair: `authenticate_references` hands `plan_found` the raw and
+    // staging bumps that `authenticate_content_addressed_record` derived while
+    // authenticating the Realm record, under the Registry, at
+    // `REALM_SCHEMA_RELEASE_ID_V1` and the hash of the record's own bytes.
+    // `record_bumps_v1` is that derivation, and `realm_id` is that hash.
+    let realm_record_bumps =
+        record_bumps_v1(input.registry_program, REALM_SCHEMA_RELEASE_ID_V1, realm_id);
     // One credit per Market lifecycle, and the Market is its own PDA seed.
     let rent_credit =
         lifecycle_rent_credit(input.rent_program, market, input.release_set, input.payer)?;
@@ -670,7 +806,26 @@ fn market_and_claims(
         principal_cap_sets: u64::MAX,
         rent_beneficiary: core_identity(rent_credit.0.to_bytes())?,
         terminal_receipt: None,
-        bumps: StateBumpsV1::UNRECORDED,
+        // What a founded Market's account actually holds. It was
+        // `StateBumpsV1::UNRECORDED` from `e93fe5e9`, which added the field and
+        // kept this file compiling, until 2026-08-30 -- and an unrecorded tail
+        // is not a neutral default, it is the pre-`a0cba859` route: all three
+        // Market readers (Trading `hot_v3`, Claims `sparse_native_transfer_v1`,
+        // Custody `lib`) and Custody's realm raw/staging pair take their `None`
+        // arm and SEARCH. Every compute measurement taken on this fixture was
+        // therefore measuring a market no widened founding produces, and the
+        // carry looked free because it was never exercised.
+        //
+        // A wrong bump here does not go unnoticed: each reader reproduces the
+        // address with `create_program_address` and compares it against the
+        // account it was handed, so a wrong bump refuses. See
+        // `direct_hot_top_level_margin_gate.rs`, which stages a deliberately
+        // wrong one and asserts the refusal.
+        bumps: StateBumpsV1 {
+            market: StateBumpsV1::record(market_bump),
+            realm_raw_record: StateBumpsV1::record(realm_record_bumps.0),
+            realm_staging_record: StateBumpsV1::record(realm_record_bumps.1),
+        },
     }
     .encode()
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
@@ -693,7 +848,7 @@ fn market_and_claims(
     let outcomes = usize::try_from(input.geometry.outcome_count())
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     let mut claims_bytes = vec![0_u8; LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + outcomes * 8];
-    let supplies = vec![100_u64; outcomes];
+    let supplies = vec![input.trade.claim_supply; outcomes];
     encode_liability_basis_market_into_v2(claims_input, &supplies, &mut claims_bytes)
         .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
     // The Claims founding route records these bumps when it creates the
@@ -708,7 +863,7 @@ fn market_and_claims(
     let mut seller_balances = vec![0_u64; outcomes];
     *seller_balances
         .first_mut()
-        .ok_or(DirectHotChainFixtureErrorV5::Encoding)? = 100;
+        .ok_or(DirectHotChainFixtureErrorV5::Encoding)? = input.trade.claim_supply;
     let buyer_balances = vec![0_u64; outcomes];
     let seller = position(
         input.claims_program,
@@ -779,8 +934,8 @@ fn intents(
             nonce: 0,
             valid_from: input.clock_slot.saturating_sub(1),
             valid_through: input.clock_slot.saturating_add(1),
-            maximum_fill: FILL,
-            limit_price: EXECUTION_PRICE,
+            maximum_fill: input.trade.fill,
+            limit_price: input.trade.execution_price,
             fee_basis_points: FEE_BPS,
             collateral_account: collateral[1].to_bytes(),
         },
@@ -793,8 +948,8 @@ fn intents(
             nonce: 0,
             valid_from: input.clock_slot.saturating_sub(1),
             valid_through: input.clock_slot.saturating_add(1),
-            maximum_fill: FILL,
-            limit_price: EXECUTION_PRICE,
+            maximum_fill: input.trade.fill,
+            limit_price: input.trade.execution_price,
             fee_basis_points: FEE_BPS,
             collateral_account: collateral[0].to_bytes(),
         },
@@ -818,8 +973,12 @@ fn direct_request(
     put(body, 32, &seller)?;
     put(body, 204, &makers[1].to_bytes())?;
     put(body, 236, &buyer)?;
-    put(body, 408, &FILL.to_le_bytes())?;
-    put(body, 416, &EXECUTION_PRICE.to_le_bytes())?;
+    // Read off the intents rather than off the fixture's constants: the fill
+    // and price the request carries and the fill and price the makers SIGNED
+    // are then the same values by construction, and a scenario cannot move one
+    // without moving the other.
+    put(body, 408, &intents[0].maximum_fill.to_le_bytes())?;
+    put(body, 416, &intents[0].limit_price.to_le_bytes())?;
     Ok(output)
 }
 
@@ -1059,7 +1218,7 @@ fn claims_request(
         generation: GENERATION,
         outcome: 0,
         claim_count: input.geometry.outcome_count(),
-        quantity: FILL,
+        quantity: input.trade.fill,
     })
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)
 }
@@ -1084,6 +1243,18 @@ enum CustodyRouteV3 {
     FeeContinuation,
     /// Route 4: a fee with no seller-net leg at all.
     FeeSole,
+}
+
+impl CustodyRouteV3 {
+    /// The route's name, for evidence lines that have to say which leg ran.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::SellerTerminal => "seller-terminal",
+            Self::SellerIntermediate => "seller-intermediate",
+            Self::FeeContinuation => "fee-continuation",
+            Self::FeeSole => "fee-sole",
+        }
+    }
 }
 
 /// The declared route order, which is also the order of the four
@@ -1134,9 +1305,12 @@ fn direct_side_fee(gross: u64) -> Result<u64, DirectHotChainFixtureErrorV5> {
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)
 }
 
-fn custody_registers() -> Result<CustodyRegistersV3, DirectHotChainFixtureErrorV5> {
-    let gross = FILL
-        .checked_mul(EXECUTION_PRICE)
+fn custody_registers(
+    trade: DirectTradeScenarioV1,
+) -> Result<CustodyRegistersV3, DirectHotChainFixtureErrorV5> {
+    let gross = trade
+        .fill
+        .checked_mul(trade.execution_price)
         .and_then(|value| value.checked_div(PRICE_SCALE))
         .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
     // The market applies the same immutable integer rate independently to the
@@ -1176,6 +1350,44 @@ fn custody_registers() -> Result<CustodyRegistersV3, DirectHotChainFixtureErrorV
     })
 }
 
+/// The seller's collateral balance before the trade.
+const SELLER_COLLATERAL_BALANCE: u64 = 30;
+/// The fee destination's collateral balance before the trade.
+const FEE_COLLATERAL_BALANCE: u64 = 40;
+
+/// The buyer's staged collateral balance and the allowance staged on it.
+///
+/// The allowance is the BUYER DEBIT, `gross + fee`, and not the gross. Under
+/// the zero-fee scenario those are the same number -- which is exactly why this
+/// fixture was able to stage the gross here for as long as it did -- but the
+/// projected `SellerIntermediate` request states `allowance_before = gross +
+/// fee` and Custody compares it against the token account's own
+/// `delegated_amount`, so under any fee-bearing scenario staging the gross
+/// refuses in Custody and reads like a route defect rather than a fixture one.
+fn source_collateral(
+    trade: DirectTradeScenarioV1,
+) -> Result<(u64, u64), DirectHotChainFixtureErrorV5> {
+    let registers = custody_registers(trade)?;
+    // The three admissibility conditions the on-chain transition would refuse
+    // on, checked here so a scenario that cannot trade fails at construction
+    // with a name rather than deep inside a projection.
+    if trade.source_balance < registers.buyer_debit
+        || trade.fill > trade.claim_supply
+        || trade.execution_price > PRICE_SCALE
+    {
+        return Err(DirectHotChainFixtureErrorV5::Input);
+    }
+    Ok((trade.source_balance, registers.buyer_debit))
+}
+
+/// The mint supply, which is the three staged collateral balances.
+fn mint_supply(trade: DirectTradeScenarioV1) -> u64 {
+    trade
+        .source_balance
+        .saturating_add(SELLER_COLLATERAL_BALANCE)
+        .saturating_add(FEE_COLLATERAL_BALANCE)
+}
+
 /// Reproduce one Custody route's projected child request exactly.
 ///
 /// This is the request the Effect program writes into the projected request
@@ -1206,7 +1418,7 @@ fn custody_request_bytes(
     realm: &RealmFixture,
     request: &[u8],
 ) -> Result<[u8; DELEGATED_CUSTODY_REQUEST_BYTES_V2], DirectHotChainFixtureErrorV5> {
-    let registers = custody_registers()?;
+    let registers = custody_registers(input.trade)?;
     let parent = hash(request).to_bytes();
     let seller_side = matches!(
         route,
@@ -1364,6 +1576,125 @@ fn custody_route_authorities(
         };
     }
     Ok(derived)
+}
+
+/// One projected Custody leg, in the exact wire and frame Custody admits.
+///
+/// The Direct inline Effect declares four Custody routes and the transition
+/// enables a subset of them; the enabled ones are executed as child CPIs inside
+/// the top-level Hot transaction. This type states one route's request BYTES --
+/// the same bytes [`custody_request_bytes`] hands the caller-authority
+/// derivation, so the digest that seeds the authority is the digest of exactly
+/// these -- together with the fourteen accounts
+/// `CustodyFrameSpecV1::new(OperationV1::Transfer)` declares for it, in
+/// coordinate order.
+///
+/// It exists so a probe can present one leg to Custody on its own, in its own
+/// transaction, without asking Trading to project it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectCustodyLegV1 {
+    /// Route name in `CUSTODY_ROUTES_V3` order, for evidence lines.
+    pub label: &'static str,
+    /// The exact projected `DelegatedCustodyRequestV2` bytes.
+    pub request: Vec<u8>,
+    /// SHA-256 of `request`; the caller authority's sixth seed.
+    pub request_digest: [u8; 32],
+    /// The Trading caller authority this route's request derives.
+    pub authority: Pubkey,
+    /// The fourteen Transfer-frame coordinates, in order.
+    pub frame: Vec<Pubkey>,
+}
+
+/// The four declared Custody legs of one Direct trade scenario.
+///
+/// Every value is derived from `input` by the same constructors
+/// [`build_direct_hot_chain_fixture_v5`] uses, so a leg's request bytes and
+/// caller authority are the ones that fixture installs and the artifact builder
+/// reproduces.
+pub fn direct_hot_custody_legs_v1(
+    input: DirectHotChainInputV5,
+) -> Result<[DirectCustodyLegV1; 4], DirectHotChainFixtureErrorV5> {
+    validate_input(input)?;
+    let rent = Rent::default();
+    let product = product_fixture(input, &rent)?;
+    let artifacts = build_direct_hot_artifact_fixture_v5(input.deployment_widths, input.geometry)
+        .map_err(DirectHotChainFixtureErrorV5::Artifact)?;
+    let config = DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
+        .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?
+        .encode();
+    let manifest = capability_manifest(input, &artifacts, &config)?;
+    let state = market_and_claims(input, &product, &manifest, &rent)?;
+    let intents = intents(input, state.market, product.collateral_accounts)?;
+    let request = direct_request(input.makers, intents)?;
+    let capability = capability_fixture(input, manifest, state.market)?;
+    let realm = realm_fixture(
+        input,
+        product.collateral_accounts,
+        state.market,
+        capability.buyer_maker,
+    )?;
+    let authorities =
+        custody_route_authorities(input, &product, &state, &capability, &realm, &request)?;
+    let mut legs = Vec::with_capacity(CUSTODY_ROUTES_V3.len());
+    for (slot, route) in CUSTODY_ROUTES_V3.into_iter().enumerate() {
+        let bytes = custody_request_bytes(
+            route,
+            input,
+            &product,
+            &state,
+            &capability,
+            &realm,
+            &request,
+        )?;
+        let derived = authorities
+            .get(slot)
+            .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+        let seller_side = matches!(
+            route,
+            CustodyRouteV3::SellerTerminal | CustodyRouteV3::SellerIntermediate
+        );
+        let destination = product
+            .collateral_accounts
+            .get(if seller_side { 1 } else { 2 })
+            .copied()
+            .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+        let source = product
+            .collateral_accounts
+            .first()
+            .copied()
+            .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+        // The fourteen Transfer coordinates, in `CustodyFrameSpecV1` order.
+        // The same fourteen the Direct AccountProfile lays out at logical
+        // coordinates 34..48, 48..62, 62..76 and 76..90.
+        let frame = vec![
+            derived.authority,
+            state.market,
+            input.activation_cache,
+            input.registry_program,
+            input.trading_program,
+            input.trading_programdata,
+            realm.realm.raw,
+            realm.realm.staging,
+            realm.custody_replay,
+            realm.mint,
+            source,
+            destination,
+            realm.custody_authority,
+            realm.token_program,
+        ];
+        legs.push(DirectCustodyLegV1 {
+            label: route.label(),
+            request: bytes.to_vec(),
+            request_digest: derived.request_digest,
+            authority: derived.authority,
+            frame,
+        });
+    }
+    let mut drain = legs.into_iter();
+    let mut next = || -> Result<DirectCustodyLegV1, DirectHotChainFixtureErrorV5> {
+        drain.next().ok_or(DirectHotChainFixtureErrorV5::Encoding)
+    };
+    Ok([next()?, next()?, next()?, next()?])
 }
 
 struct FixedHotAccountsV5 {
@@ -1887,9 +2218,15 @@ fn logical_accounts(
     set(
         &mut logical,
         43,
-        owned(rent, realm.mint, realm.token_program, mint_bytes(), false),
+        owned(
+            rent,
+            realm.mint,
+            realm.token_program,
+            mint_bytes(mint_supply(input.trade)),
+            false,
+        ),
     )?;
-    let gross = FILL * EXECUTION_PRICE / PRICE_SCALE;
+    let (source_balance, allowance) = source_collateral(input.trade)?;
     set(
         &mut logical,
         44,
@@ -1900,9 +2237,9 @@ fn logical_accounts(
             token_bytes(
                 realm.mint,
                 input.makers[1],
-                100,
+                source_balance,
                 Some(realm.custody_authority),
-                gross,
+                allowance,
             )?,
             true,
         ),
@@ -1914,7 +2251,13 @@ fn logical_accounts(
             rent,
             product.collateral_accounts[1],
             realm.token_program,
-            token_bytes(realm.mint, input.makers[0], 30, None, 0)?,
+            token_bytes(
+                realm.mint,
+                input.makers[0],
+                SELLER_COLLATERAL_BALANCE,
+                None,
+                0,
+            )?,
             true,
         ),
     )?;
@@ -1931,7 +2274,7 @@ fn logical_accounts(
             rent,
             product.collateral_accounts[2],
             realm.token_program,
-            token_bytes(realm.mint, input.payer, 40, None, 0)?,
+            token_bytes(realm.mint, input.payer, FEE_COLLATERAL_BALANCE, None, 0)?,
             true,
         ),
     )?;
@@ -2226,11 +2569,11 @@ fn lifecycle_rent_credit_account(
     ))
 }
 
-fn mint_bytes() -> Vec<u8> {
+fn mint_bytes(supply: u64) -> Vec<u8> {
     let mut output = vec![0_u8; SplMint::LEN];
     let value = SplMint {
         mint_authority: COption::None,
-        supply: 170,
+        supply,
         decimals: 0,
         is_initialized: true,
         freeze_authority: COption::None,
@@ -2301,6 +2644,7 @@ mod tests {
             clock_slot: 50,
             geometry: DirectOrdinaryGeometryV3::CANONICAL,
             trading_semantic_release: [0x33; 32],
+            trade: DirectTradeScenarioV1::ZERO_FEE,
         }
     }
 
@@ -2313,6 +2657,60 @@ mod tests {
         assert_eq!(seller_fee, 5);
         assert_eq!(buyer_fee, 5);
         assert_eq!(seller_fee.checked_add(buyer_fee), Some(10));
+    }
+
+    /// The two scenarios differ in exactly one thing: how many Custody routes
+    /// the transition enables.
+    ///
+    /// Asserted here, off-chain and in a hundred microseconds, because the
+    /// forty-second on-chain sweep that measures the fee leg is worth nothing
+    /// if the scenario it runs turns out to have floored its fee too. The
+    /// enable arithmetic is `custody_registers`' own reproduction of
+    /// `select_zero`, so this test is checking the fixture's model against the
+    /// scenario constants and NOT checking the chain -- the chain's answer is
+    /// the invocation count in `direct_hot_fee_bearing_margin_gate.rs`.
+    #[test]
+    fn only_the_fee_bearing_scenario_enables_the_second_custody_route() {
+        let zero = custody_registers(DirectTradeScenarioV1::ZERO_FEE).expect("zero-fee registers");
+        assert_eq!(
+            zero.combined_fee, 0,
+            "the historical fixture floors its fee"
+        );
+        assert_eq!(zero.seller_net, 5);
+        assert_eq!(zero.buyer_debit, 5);
+        // One route: `after_seller` steps once for `seller_terminal` and
+        // `after_fee` does not step again.
+        assert_eq!(zero.after_seller, CUSTODY_REVISION + 1);
+        assert_eq!(zero.after_fee, CUSTODY_REVISION + 1);
+
+        let fee = custody_registers(DirectTradeScenarioV1::FEE_BEARING).expect("fee registers");
+        assert_eq!(fee.combined_fee, 2, "gross 200 at 50 bps per side");
+        // The protocol bound the scenario has to respect to exist at all.
+        assert!(DirectTradeScenarioV1::FEE_BEARING.execution_price() <= PRICE_SCALE);
+        assert!(
+            DirectTradeScenarioV1::FEE_BEARING.fill()
+                <= DirectTradeScenarioV1::FEE_BEARING.claim_supply()
+        );
+        assert_eq!(fee.seller_net, 199);
+        assert_eq!(fee.buyer_debit, 201);
+        // Two routes: `SellerIntermediate` steps `after_seller` once and
+        // `FeeContinuation` steps `after_fee` again on top of it.
+        assert_eq!(fee.after_seller, CUSTODY_REVISION + 1);
+        assert_eq!(fee.after_fee, CUSTODY_REVISION + 2);
+
+        // The buyer's staged allowance is the DEBIT, and under the fee-bearing
+        // scenario that is not the gross.
+        let (balance, allowance) =
+            source_collateral(DirectTradeScenarioV1::FEE_BEARING).expect("fee collateral");
+        assert_eq!(allowance, 201);
+        assert!(balance >= allowance);
+        assert_eq!(
+            source_collateral(DirectTradeScenarioV1::ZERO_FEE).expect("zero-fee collateral"),
+            (100, 5),
+            "the zero-fee scenario must stage exactly what it always staged",
+        );
+        assert_eq!(mint_supply(DirectTradeScenarioV1::ZERO_FEE), 170);
+        assert_eq!(DirectTradeScenarioV1::ZERO_FEE.claim_supply(), 100);
     }
 
     #[test]
@@ -2821,10 +3219,7 @@ pub mod via_builder {
             input.release_set,
             input.payer,
         )?;
-        let gross = FILL
-            .checked_mul(EXECUTION_PRICE)
-            .and_then(|value| value.checked_div(PRICE_SCALE))
-            .ok_or(DirectHotChainFixtureErrorV5::Encoding)?;
+        let (source_balance, allowance) = source_collateral(input.trade)?;
 
         // The Direct corpus: every runtime self-coordinate the artifacts do
         // not determine. Maker replays (5, 8) and the five caller authorities
@@ -3022,7 +3417,12 @@ pub mod via_builder {
             ),
             (
                 43,
-                data_account(&rent, realm.mint, realm.token_program, mint_bytes()),
+                data_account(
+                    &rent,
+                    realm.mint,
+                    realm.token_program,
+                    mint_bytes(mint_supply(input.trade)),
+                ),
             ),
             (
                 44,
@@ -3033,9 +3433,9 @@ pub mod via_builder {
                     token_bytes(
                         realm.mint,
                         input.makers[1],
-                        100,
+                        source_balance,
                         Some(realm.custody_authority),
-                        gross,
+                        allowance,
                     )?,
                 ),
             ),
@@ -3045,7 +3445,13 @@ pub mod via_builder {
                     &rent,
                     product.collateral_accounts[1],
                     realm.token_program,
-                    token_bytes(realm.mint, input.makers[0], 30, None, 0)?,
+                    token_bytes(
+                        realm.mint,
+                        input.makers[0],
+                        SELLER_COLLATERAL_BALANCE,
+                        None,
+                        0,
+                    )?,
                 ),
             ),
             (46, vacant(realm.custody_authority)),
@@ -3056,7 +3462,7 @@ pub mod via_builder {
                     &rent,
                     product.collateral_accounts[2],
                     realm.token_program,
-                    token_bytes(realm.mint, input.payer, 40, None, 0)?,
+                    token_bytes(realm.mint, input.payer, FEE_COLLATERAL_BALANCE, None, 0)?,
                 ),
             ),
             (
@@ -3200,7 +3606,28 @@ pub mod via_builder {
                 clock_slot: 50,
                 geometry: DirectOrdinaryGeometryV3::CANONICAL,
                 trading_semantic_release: [0x33; 32],
+                trade: DirectTradeScenarioV1::ZERO_FEE,
             }
+        }
+
+        /// The same reproduction gate on the FEE-BEARING trade.
+        ///
+        /// The builder runs the real host transition engine, so it projects the
+        /// two live Custody routes rather than one. A hand fixture the builder
+        /// cannot reproduce is a hand fixture that has guessed at the fee leg.
+        #[test]
+        fn builder_reproduces_the_hand_built_fee_bearing_fixture() {
+            let input = DirectHotChainInputV5 {
+                trade: DirectTradeScenarioV1::FEE_BEARING,
+                ..input()
+            };
+            let hand = build_direct_hot_chain_fixture_v5(input).expect("hand fee fixture");
+            let built =
+                build_direct_hot_chain_fixture_via_builder_v1(input).expect("builder fee fixture");
+            assert_eq!(built.accounts, hand.accounts);
+            assert_eq!(built.custody_routes, hand.custody_routes);
+            assert_eq!(built.hot_instruction, hand.hot_instruction);
+            assert_eq!(built.signed_messages, hand.signed_messages);
         }
 
         /// The reproduction gate: the builder's bundle is the hand-built one,

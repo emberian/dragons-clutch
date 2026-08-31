@@ -183,11 +183,13 @@ pub(crate) fn demo_structured_market_input(
     rpc_url: &str,
     registry: Pubkey,
     collateral_mint: Pubkey,
+    shape: &crate::market::LocalMarketShapeV1,
 ) -> Result<crate::model::MarketRunInput> {
     let (plan, observation) =
         crate::direct_market::observe_local_market_policy_v1(plan_path, rpc_url, registry)?;
     let resolution_release = crate::direct_market::authenticated_resolution_release_v1(&plan)?;
-    let mut input = crate::market::demo_market_input_base(registry, resolution_release)?;
+    let mut input =
+        crate::market::demo_market_input_base_shaped(registry, resolution_release, shape)?;
 
     let lab = |label: &str| -> [u8; 32] {
         let mut hasher = Sha256::new();

@@ -19,14 +19,19 @@ describe('public devnet cut staging', () => {
     });
     expect(publicCutMarketHrefV1(pending)).toBe('/markets');
     expect(publicCutExplorerHrefV1(pending)).toBe('/explorer');
-    // The published cut itself: the first open devnet market, founded by the
-    // atomic DCLTGMF3 whose signature the cut carries.
-    expect(PUBLIC_DEVNET_CUT_V1.market).toBe('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC');
+    // The published cut itself: the market this deployment can actually
+    // trade, and the founding transaction that created its Market record.
+    expect(PUBLIC_DEVNET_CUT_V1.market).toBe('6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4');
     expect(PUBLIC_DEVNET_CUT_V1.activity.found).not.toBeNull();
+    // Nothing has traded, resolved, or redeemed on it: the ladder says so
+    // rather than borrowing a signature from another step.
+    expect(PUBLIC_DEVNET_CUT_V1.activity.trade).toBeNull();
+    expect(PUBLIC_DEVNET_CUT_V1.activity.resolve).toBeNull();
+    expect(PUBLIC_DEVNET_CUT_V1.activity.redeem).toBeNull();
     // The featured market is registry-named, so its permalink is the exported
     // per-market page that carries its own title and share card.
     expect(publicCutMarketHrefV1()).toBe(
-      '/markets/7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC',
+      '/markets/6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4',
     );
   });
 

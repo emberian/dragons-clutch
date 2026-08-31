@@ -15,9 +15,13 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
     v4::SCHEMA_RELEASE_ID as CAPABILITY_PROGRAM_SCHEMA_ID_V4,
+};
+use dclutch_capability_program_contract::{
+    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
 };
 use dclutch_capability_seal_contract::CAPABILITY_SEAL_PDA_DOMAIN_V1;
 use dclutch_claims_svm::{
@@ -40,9 +44,9 @@ use dclutch_direct_codec::{
     },
 };
 use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
-use dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1;
-use dclutch_capability_program_contract::{
-    set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, v4::CapabilityProgramV4,
+use dclutch_operator::{
+    direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
+    direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
 };
 use dclutch_product_payoff_v2_codec::registry_v3::GRADED_BASIS_RECORD_SCHEMA_ID_V3;
 use dclutch_product_runtime_v2_admission::{
@@ -50,10 +54,6 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
-use dclutch_operator::{
-    direct_inline_route_v3::derive_direct_inline_child_authorities_v3,
-    direct_inline_v3::{SignedDirectIntentV3, compile_direct_inline_request_v3},
-};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -69,6 +69,7 @@ use crate::{
     cluster::{
         ClusterOriginV1, DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH, ExpectedClusterV1,
     },
+    direct_ticket::{parse_portable_direct_ticket_v1, sign_direct_intent_v1 as signed_intent_v1},
     direct_trade::{
         AuthenticatedDevnetDirectSessionSourceV1, authenticate_devnet_direct_session_source_v1,
     },
@@ -96,7 +97,6 @@ pub(crate) const DEVNET_DIRECT_PRODUCER_COMMAND_V1: &str = "devnet-direct-trade-
 const DEVNET_PUBLIC_MANIFEST_SCHEMA_V1: &str = "dclutch-devnet-direct-trade-public-manifest-v1";
 const DEVNET_DIRECT_PRODUCER_JOURNAL_SCHEMA_V1: &str =
     "dclutch-devnet-direct-trade-producer-journal-v1";
-const PORTABLE_DIRECT_TICKET_KIND_V1: &str = "dclutch/direct-intent-ticket/v1";
 
 const FILL_ATOMS_V1: u64 = 100_000_000;
 const EXECUTION_PRICE_V1: u64 = 500_000;
@@ -154,32 +154,6 @@ struct DevnetDirectProducerArgumentsV1 {
     payer: Pubkey,
     payer_keypair: PathBuf,
     output_dir: PathBuf,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct PortableDirectTicketIntentV1 {
-    side: u8,
-    lifecycle: u8,
-    outcome: u32,
-    market: String,
-    generation: String,
-    nonce: String,
-    valid_from: String,
-    valid_through: String,
-    maximum_fill: String,
-    limit_price: String,
-    fee_basis_points: u16,
-    collateral_account: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct PortableDirectTicketV1 {
-    kind: String,
-    maker: String,
-    signature: String,
-    intent: PortableDirectTicketIntentV1,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -499,11 +473,11 @@ struct MakerFactsV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DirectTradeTermsV1 {
-    outcome: u32,
-    fill: u64,
-    execution_price: u64,
-    fee_basis_points: u16,
+pub(crate) struct DirectTradeTermsV1 {
+    pub(crate) outcome: u32,
+    pub(crate) fill: u64,
+    pub(crate) execution_price: u64,
+    pub(crate) fee_basis_points: u16,
 }
 
 #[derive(Clone)]
@@ -1196,106 +1170,7 @@ fn produce_devnet_direct_trade_v1(
     )
 }
 
-fn parse_portable_direct_ticket_v1(bytes: &[u8], label: &str) -> Result<SignedDirectIntentV3> {
-    if bytes.is_empty() || bytes.len() > 4_096 {
-        return Err(refusal(format!(
-            "{label} Direct ticket is outside the 1..4096 byte bound"
-        )));
-    }
-    require_unique_json_v1(bytes, &format!("{label} Direct ticket"))?;
-    let value = parse_json_without_duplicate_keys_v1(bytes)?;
-    let ticket: PortableDirectTicketV1 = serde_json::from_value(value.clone())
-        .map_err(|error| Error::new(format!("{label} Direct ticket shape: {error}")))?;
-    if serde_json::to_value(&ticket)? != value || ticket.kind != PORTABLE_DIRECT_TICKET_KIND_V1 {
-        return Err(refusal(format!(
-            "{label} Direct ticket kind, field set, or canonical JSON values changed"
-        )));
-    }
-    let maker = canonical_ticket_pubkey_v1(&ticket.maker, &format!("{label} maker"))?;
-    let market = canonical_ticket_pubkey_v1(&ticket.intent.market, &format!("{label} Market"))?;
-    let collateral = canonical_ticket_pubkey_v1(
-        &ticket.intent.collateral_account,
-        &format!("{label} collateral account"),
-    )?;
-    if maker == Pubkey::default()
-        || market == Pubkey::default()
-        || collateral == Pubkey::default()
-        || ticket.intent.side > 1
-        || ticket.intent.lifecycle > 1
-        || ticket.intent.fee_basis_points > 10_000
-    {
-        return Err(refusal(format!(
-            "{label} Direct ticket has an invalid identity, enum, or fee width"
-        )));
-    }
-    let signature_bytes = decode_hex_v1(&ticket.signature, &format!("{label} signature"))?;
-    let signature: [u8; 64] = signature_bytes
-        .try_into()
-        .map_err(|_| refusal(format!("{label} signature is not exactly 64 bytes")))?;
-    if signature.iter().all(|byte| *byte == 0) {
-        return Err(refusal(format!("{label} signature is all zero")));
-    }
-    let intent = CompactIntentV2 {
-        side: ticket.intent.side,
-        lifecycle: ticket.intent.lifecycle,
-        outcome: ticket.intent.outcome,
-        market: market.to_bytes(),
-        generation: canonical_ticket_u64_v1(&ticket.intent.generation, "generation")?,
-        nonce: canonical_ticket_u64_v1(&ticket.intent.nonce, "nonce")?,
-        valid_from: canonical_ticket_u64_v1(&ticket.intent.valid_from, "validFrom")?,
-        valid_through: canonical_ticket_u64_v1(&ticket.intent.valid_through, "validThrough")?,
-        maximum_fill: canonical_ticket_u64_v1(&ticket.intent.maximum_fill, "maximumFill")?,
-        limit_price: canonical_ticket_u64_v1(&ticket.intent.limit_price, "limitPrice")?,
-        fee_basis_points: ticket.intent.fee_basis_points,
-        collateral_account: collateral.to_bytes(),
-    };
-    let encoded = intent
-        .encode()
-        .map_err(|error| Error::new(format!("{label} Direct intent encode: {error:?}")))?;
-    if CompactIntentV2::decode(&encoded)
-        .map_err(|error| Error::new(format!("{label} Direct intent decode: {error:?}")))?
-        != intent
-    {
-        return Err(refusal(format!(
-            "{label} Direct ticket intent failed canonical codec roundtrip"
-        )));
-    }
-    let preimage = intent
-        .signed_preimage()
-        .map_err(|error| Error::new(format!("{label} Direct signed preimage: {error:?}")))?;
-    if !Signature::from(signature).verify(maker.as_ref(), &preimage) {
-        return Err(refusal(format!(
-            "{label} Direct ticket detached signature did not verify"
-        )));
-    }
-    Ok(SignedDirectIntentV3 {
-        maker,
-        signature,
-        intent,
-    })
-}
-
-fn canonical_ticket_pubkey_v1(value: &str, label: &str) -> Result<Pubkey> {
-    let key = pubkey(value)?;
-    if key.to_string() != value {
-        return Err(refusal(format!("{label} is not canonical base58 text")));
-    }
-    Ok(key)
-}
-
-fn canonical_ticket_u64_v1(value: &str, label: &str) -> Result<u64> {
-    let parsed = value
-        .parse::<u64>()
-        .map_err(|_| refusal(format!("Direct ticket {label} is not a u64")))?;
-    if parsed.to_string() != value {
-        return Err(refusal(format!(
-            "Direct ticket {label} is not canonical decimal text"
-        )));
-    }
-    Ok(parsed)
-}
-
-fn exact_ticket_pair_terms_v1(
+pub(crate) fn exact_ticket_pair_terms_v1(
     seller: &SignedDirectIntentV3,
     buyer: &SignedDirectIntentV3,
 ) -> Result<DirectTradeTermsV1> {
@@ -2225,9 +2100,18 @@ fn prepare_public_facts_v1(
         }
     }
 
-    let descriptor = record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_descriptor_record")?;
-    let descriptor_pair =
-        resolved_record_v1(plan, market_input, campaign, "direct_ordinary_descriptor_record")?;
+    let descriptor = record_coordinates_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_descriptor_record",
+    )?;
+    let descriptor_pair = resolved_record_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_descriptor_record",
+    )?;
     let descriptor_digest = hex32(&descriptor_pair.content_sha256)?;
     let trading_semantic_release = hex32(&plan.trading.semantic_release_id)?;
     let capability_seal = derive_capability_seal_v1(
@@ -2240,10 +2124,25 @@ fn prepare_public_facts_v1(
         fixed: ProducedDirectFixedCoordinatesV1 {
             market: market.to_string(),
             root: root.to_string(),
-            manifest: record_coordinates_v1(plan, market_input, campaign, "capability_manifest_record")?,
-            program_set: record_coordinates_v1(plan, market_input, campaign, "direct_program_set_record")?,
+            manifest: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "capability_manifest_record",
+            )?,
+            program_set: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_program_set_record",
+            )?,
             descriptor,
-            config: record_coordinates_v1(plan, market_input, campaign, "direct_execution_config_record")?,
+            config: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_execution_config_record",
+            )?,
             account_profile: record_coordinates_v1(
                 plan,
                 market_input,
@@ -2256,15 +2155,30 @@ fn prepare_public_facts_v1(
                 campaign,
                 "direct_ordinary_request_profile_record",
             )?,
-            transition: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_transition_record")?,
-            effect: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_effect_record")?,
+            transition: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_ordinary_transition_record",
+            )?,
+            effect: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_ordinary_effect_record",
+            )?,
             lifecycle: record_coordinates_v1(
                 plan,
                 market_input,
                 campaign,
                 "direct_ordinary_lifecycle_policy_record",
             )?,
-            strategy: record_coordinates_v1(plan, market_input, campaign, "direct_ordinary_strategy_record")?,
+            strategy: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "direct_ordinary_strategy_record",
+            )?,
             activation_cache: plan.activation.clone(),
             core_program: plan.core.program_id.clone(),
             core_programdata: plan.core.programdata_id.clone(),
@@ -2272,9 +2186,19 @@ fn prepare_public_facts_v1(
             trading_programdata: plan.trading.programdata_id.clone(),
             registry_program: plan.registry.program_id.clone(),
             product: record_coordinates_v1(plan, market_input, campaign, "product_record")?,
-            result_domain: record_coordinates_v1(plan, market_input, campaign, "result_domain_record")?,
+            result_domain: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "result_domain_record",
+            )?,
             portfolio: record_coordinates_v1(plan, market_input, campaign, "portfolio_record")?,
-            linked_basis: record_coordinates_v1(plan, market_input, campaign, "linked_liability_basis_record")?,
+            linked_basis: record_coordinates_v1(
+                plan,
+                market_input,
+                campaign,
+                "linked_liability_basis_record",
+            )?,
             capability_seal: capability_seal.to_string(),
         },
         seller_maker: seller_maker.to_string(),
@@ -2349,13 +2273,32 @@ fn prepare_public_facts_v1(
         token_program: token_program.to_string(),
         trading_program: trading.to_string(),
     };
-    let account_profile_bytes =
-        record_body_v1(plan, market_input, campaign, "direct_ordinary_account_profile_record")?;
-    let transition_bytes = record_body_v1(plan, market_input, campaign, "direct_ordinary_transition_record")?;
-    let effect_bytes = record_body_v1(plan, market_input, campaign, "direct_ordinary_effect_record")?;
+    let account_profile_bytes = record_body_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_account_profile_record",
+    )?;
+    let transition_bytes = record_body_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_transition_record",
+    )?;
+    let effect_bytes = record_body_v1(
+        plan,
+        market_input,
+        campaign,
+        "direct_ordinary_effect_record",
+    )?;
     let product_digest = record_digest_v1(plan, market_input, campaign, "product_record")?;
     let realm_digest = record_digest_v1(plan, market_input, campaign, "realm_record")?;
-    let linked_basis_digest = record_digest_v1(plan, market_input, campaign, "linked_liability_basis_record")?;
+    let linked_basis_digest = record_digest_v1(
+        plan,
+        market_input,
+        campaign,
+        "linked_liability_basis_record",
+    )?;
     let linked_basis_semantic = crate::market::semantic_basis_identity_v3(&decode_hex_v1(
         &market_input.linked_basis_hex,
         "linked liability basis",
@@ -2543,23 +2486,6 @@ fn authenticate_or_admit_pending_replay_v1(
     Ok(())
 }
 
-fn signed_intent_v1(keypair: &Keypair, intent: CompactIntentV2) -> Result<SignedDirectIntentV3> {
-    let preimage = intent
-        .signed_preimage()
-        .map_err(|error| Error::new(format!("Direct intent preimage: {error:?}")))?;
-    let signature = keypair.sign_message(&preimage);
-    if !signature.verify(keypair.pubkey().as_ref(), &preimage) {
-        return Err(refusal("fresh Direct signature did not verify"));
-    }
-    Ok(SignedDirectIntentV3 {
-        maker: keypair.pubkey(),
-        signature: signature.as_ref().try_into().map_err(|_| {
-            refusal("fresh Direct Ed25519 signature did not have the exact 64-byte width")
-        })?,
-        intent,
-    })
-}
-
 fn signed_manifest_v1(value: SignedDirectIntentV3) -> Result<ProducedSignedIntentManifestV1> {
     let encoded = value
         .intent
@@ -2647,7 +2573,9 @@ pub(crate) fn resolved_record_v1(
     // downstream as an address mismatch that named neither field.
     let key = RecordKeyV1::new(
         SchemaReleaseId::new(schema).map_err(|_| {
-            refusal(format!("campaign {label} record schema is the zero identity"))
+            refusal(format!(
+                "campaign {label} record schema is the zero identity"
+            ))
         })?,
         ContentDigest::new(digest).map_err(|_| {
             refusal(format!(
@@ -2682,10 +2610,7 @@ pub(crate) fn resolved_record_v1(
 
 /// The schema each devnet market record was published under; descriptor-owned
 /// schemas come from the decoded ordinary descriptor itself.
-fn devnet_market_record_schema_v1(
-    market_input: &MarketRunInput,
-    label: &str,
-) -> Result<[u8; 32]> {
+fn devnet_market_record_schema_v1(market_input: &MarketRunInput, label: &str) -> Result<[u8; 32]> {
     let direct = market_input.direct_capability.as_ref().ok_or_else(|| {
         refusal("devnet Direct record resolution requires the typed Direct capability payload")
     })?;
@@ -2694,7 +2619,8 @@ fn devnet_market_record_schema_v1(
         "direct_program_set_record" => CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
         "direct_ordinary_descriptor_record" => CAPABILITY_PROGRAM_SCHEMA_ID_V4,
         "direct_activation_account_profile_record" => {
-            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1()
+            dclutch_direct_codec::activation_bundle_v1::direct_activation_account_profile_schema_v1(
+            )
         }
         "direct_activation_effect_record" => {
             dclutch_direct_codec::activation_bundle_v1::direct_activation_effect_schema_v1()
@@ -2746,10 +2672,7 @@ fn devnet_market_record_schema_v1(
 }
 
 /// The Market input field that authors one devnet record body, when one does.
-fn devnet_market_record_body_hex_v1(
-    market_input: &MarketRunInput,
-    label: &str,
-) -> Option<String> {
+fn devnet_market_record_body_hex_v1(market_input: &MarketRunInput, label: &str) -> Option<String> {
     let direct = market_input.direct_capability.as_ref()?;
     Some(match label {
         "capability_manifest_record" => market_input.capability_manifest_hex.clone(),
@@ -2876,7 +2799,8 @@ pub(crate) fn derived_direct_execution_root_v1(
     market: Pubkey,
     entry_index: u16,
 ) -> Result<Pubkey> {
-    let manifest_pair = resolved_record_v1(plan, market_input, campaign, "capability_manifest_record")?;
+    let manifest_pair =
+        resolved_record_v1(plan, market_input, campaign, "capability_manifest_record")?;
     let manifest_body = decode_hex_v1(&manifest_pair.body_hex, "capability manifest")?;
     if sha256_hex(&manifest_body) != manifest_pair.content_sha256 {
         return Err(refusal("capability manifest body digest changed"));
@@ -3476,7 +3400,7 @@ fn require_unique_json_v1(bytes: &[u8], label: &str) -> Result<()> {
     Ok(())
 }
 
-fn decode_hex_v1(value: &str, label: &str) -> Result<Vec<u8>> {
+pub(crate) fn decode_hex_v1(value: &str, label: &str) -> Result<Vec<u8>> {
     if value.len() % 2 != 0
         || value
             .bytes()
@@ -3539,18 +3463,21 @@ mod tests {
         DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1, DevnetDirectParticipantSourceV1,
         DevnetDirectSessionProducerJournalV1, DevnetDirectSessionProducerPhaseV1,
         EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
-        OwnedLoopbackDirectProducerReceiptV1, PortableDirectTicketIntentV1, PortableDirectTicketV1,
-        ProducedDirectTradePrivateSessionV1, ProducedReplaySetupV1, ProducedTokenSetupV1,
+        OwnedLoopbackDirectProducerReceiptV1, ProducedDirectTradePrivateSessionV1,
+        ProducedReplaySetupV1, ProducedTokenSetupV1,
         authenticate_devnet_direct_participant_pair_v1,
         authenticate_devnet_session_producer_recovery_v1, derive_capability_seal_v1,
         devnet_direct_usage, devnet_session_producer_state_sha256_v1, devnet_session_usage,
         exact_quote_v1, exact_ticket_pair_terms_v1, fee_floor_v1, parse_devnet_direct_arguments_v1,
-        parse_devnet_session_arguments_v1, parse_portable_direct_ticket_v1,
-        private_session_sha256_v1, producer_receipt_sha256_v1, require_distinct_v1,
-        signed_intent_v1,
+        parse_devnet_session_arguments_v1, private_session_sha256_v1, producer_receipt_sha256_v1,
+        require_distinct_v1,
     };
     use crate::{
         cluster::{DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
+        direct_ticket::{
+            encode_portable_direct_ticket_v1, parse_portable_direct_ticket_v1,
+            sign_direct_intent_v1 as signed_intent_v1,
+        },
         direct_trade::AuthenticatedDevnetDirectSessionSourceV1,
         user_position_admission::FinalizedDirectParticipantEvidenceV1,
     };
@@ -3911,35 +3838,14 @@ mod tests {
         }
     }
 
+    /// The real writer, not a test-only restatement of it: this is exactly the
+    /// text `direct-intent-ticket-author-v1` writes and the browser panel emits.
     fn portable_ticket_bytes(
         signed: &dclutch_operator::direct_inline_v3::SignedDirectIntentV3,
     ) -> Vec<u8> {
-        let signature = signed
-            .signature
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        serde_json::to_vec(&PortableDirectTicketV1 {
-            kind: super::PORTABLE_DIRECT_TICKET_KIND_V1.into(),
-            maker: signed.maker.to_string(),
-            signature,
-            intent: PortableDirectTicketIntentV1 {
-                side: signed.intent.side,
-                lifecycle: signed.intent.lifecycle,
-                outcome: signed.intent.outcome,
-                market: Pubkey::new_from_array(signed.intent.market).to_string(),
-                generation: signed.intent.generation.to_string(),
-                nonce: signed.intent.nonce.to_string(),
-                valid_from: signed.intent.valid_from.to_string(),
-                valid_through: signed.intent.valid_through.to_string(),
-                maximum_fill: signed.intent.maximum_fill.to_string(),
-                limit_price: signed.intent.limit_price.to_string(),
-                fee_basis_points: signed.intent.fee_basis_points,
-                collateral_account: Pubkey::new_from_array(signed.intent.collateral_account)
-                    .to_string(),
-            },
-        })
-        .expect("ticket")
+        encode_portable_direct_ticket_v1(signed)
+            .expect("ticket")
+            .into_bytes()
     }
 
     #[test]

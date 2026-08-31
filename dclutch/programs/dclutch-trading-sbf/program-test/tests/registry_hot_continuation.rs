@@ -43,11 +43,11 @@ use solana_sdk::transaction::TransactionError;
 use solana_sdk_ids::{bpf_loader, system_program};
 
 use dclutch_direct_hot_program_test_support::waist::{
-    CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, DirectCase, Elves, RefusedExecution,
-    Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist, canonical_lookup_addresses,
-    direct_case, direct_case_v2, direct_case_v4, direct_registry_instructions, elves,
-    fixture_substrate, legacy_registry_hot_instruction, program_test, registry_hot_instruction,
-    start_with_substrate, submit_v0, submit_v0_observed,
+    CLAIMS_PROGRAM_ID, COMPUTE_LIMIT, CUSTODY_PROGRAM_ID, DirectCase, Elves, REGISTRY_PROGRAM_ID,
+    RefusedExecution, Releases, TRADING_PROGRAM_ID, add_lookup_table, add_release_waist,
+    canonical_lookup_addresses, direct_case, direct_case_v2, direct_case_v4,
+    direct_registry_instructions, elves, fixture_substrate, legacy_registry_hot_instruction,
+    program_test, registry_hot_instruction, start_with_substrate, submit_v0, submit_v0_observed,
 };
 
 // --- Named refusals ----------------------------------------------------------
@@ -1431,4 +1431,258 @@ async fn hot_refuses_a_seal_whose_body_was_altered_after_it_was_written() {
             refusal.logs
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The ninth wall's tripwire (decision 0017 §7, the ratification condition)
+// ---------------------------------------------------------------------------
+
+/// One `Program <id> invoke [<depth>]` line, as the runtime writes it.
+fn invoked_depths(logs: &[String], program: Pubkey) -> Vec<usize> {
+    let prefix = format!("Program {program} invoke [");
+    logs.iter()
+        .filter_map(|line| line.strip_prefix(&prefix))
+        .filter_map(|tail| tail.strip_suffix(']'))
+        .filter_map(|depth| depth.parse().ok())
+        .collect()
+}
+
+/// The depth at which a Registry CPI is reentrancy and the runtime refuses it.
+///
+/// The Registry enters at one. A child at three has the Registry already on the
+/// stack, so `RegistryInstructionV1::Reauthenticate` from there is not slow, it
+/// is `ReentrancyNotAllowed` -- the whole transaction, unconditionally.
+const REENTRANT_CHILD_DEPTH: usize = 3;
+
+/// Every child family this fixture can reach runs at the depth that would
+/// refuse a Registry CPI, and the transaction succeeds anyway.
+///
+/// # What this is for
+///
+/// Decision 0017 ratified "children read the activation cache instead of
+/// invoking the Registry", and §7 asked for one piece of implementation with
+/// it, because **the rule is enforced by deletion and nothing refuses a
+/// contributor who re-adds the import**:
+///
+/// > A future contributor who re-adds the import gets a route that works in
+/// > every test that does not run under a continuation and fails on the one
+/// > that does. If ratification comes with a single piece of implementation,
+/// > make it that: a test that exercises a child under a real continuation for
+/// > each family, so the wall has a tripwire and not only a comment.
+///
+/// This is that test for the families this fixture reaches. Claims and Custody
+/// are OBSERVED at depth three -- not assumed from the account frame, read out
+/// of the runtime's own invoke log -- and the execution is required to succeed.
+/// Re-add a Registry CPI to either program and this goes red immediately, on
+/// `ReentrancyNotAllowed`, naming the family.
+///
+/// `real_registry_executes_profile14_direct_hot_under_protocol_limit` has been
+/// executing this same shape all along. What it never did was SAY so, so a
+/// contributor who broke the wall would have met a red test about token
+/// balances and a Custody replay revision. The wall deserves a red that says
+/// the wall.
+///
+/// # It has been seen to fire
+///
+/// Not asserted -- run. A Registry `invoke` was put back into Claims'
+/// `sparse_native_transfer_v1::authenticate_releases`, the Claims ELF was
+/// rebuilt, and this case failed with
+/// `InstructionError(2, ReentrancyNotAllowed)` and the runtime log
+/// *"Cross-program invocation reentrancy not allowed for this instruction"*
+/// against Claims, Trading and the Registry in turn. The source change was
+/// reverted; the evidence is that the red exists and says the right thing.
+///
+/// # And the first attempt at that control did NOT fire, which is the point
+///
+/// The same `invoke` placed in `lib.rs::authenticate_activated_role` -- the
+/// helper FOURTEEN Claims sites share -- left this case GREEN, because the route
+/// this fixture drives is `sparse_native_transfer_v1`, which takes the
+/// bump-witness API instead and never touches that helper. So the dynamic half
+/// of the tripwire covers one route of Claims, measured, not "Claims". That is
+/// exactly the gap `assert_no_family_reaches_the_registry_by_cpi` exists to
+/// close, and it is why both halves are here.
+///
+/// # The three families this does NOT cover, stated rather than implied
+///
+/// 0017 §5 lists five converted families: claims, custody, core, dealer and
+/// rent. This fixture reaches two of them as children. Measured, by reading the
+/// runtime's invoke log on this very execution: Registry at [1], Trading at [2],
+/// Claims at [3], Custody at [3] -- and **Core is never invoked at all** on the
+/// Direct Hot route, nor are Dealer or Rent, which have no continuation fixture
+/// anywhere in the tree.
+///
+/// So the dynamic half of the tripwire is two families of five, and the other
+/// three are named in this lane's report as unbuilt rather than left to be
+/// assumed covered. `assert_no_family_reaches_the_registry_by_cpi` below is the
+/// structural half, which does cover all five, and covers every route of each
+/// rather than the one this fixture drives.
+#[tokio::test]
+async fn claims_and_custody_execute_as_children_under_a_real_continuation() {
+    let artifacts = elves();
+    let mut test = program_test(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let direct = direct_case(&mut test, releases, &artifacts, false);
+    let instructions = direct_registry_instructions(releases, &direct);
+    let addresses = canonical_lookup_addresses(&instructions, Pubkey::default());
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+    let execution = submit_v0_observed(
+        &mut context,
+        &instructions,
+        addresses,
+        Some(&direct.payer),
+        &[],
+    )
+    .await
+    .expect(
+        "a child under a real Registry continuation must EXECUTE. If this is \
+         ReentrancyNotAllowed, some role program has re-acquired a \
+         RegistryInstructionV1::Reauthenticate CPI and decision 0017's wall is \
+         down -- read the invoke log below for which family died at depth three.",
+    );
+
+    // The Registry really is on the stack, at the depth that makes the CPI
+    // illegal. Without this the case below could pass on a transaction that
+    // never entered through the continuation at all.
+    assert_eq!(
+        invoked_depths(&execution.logs, REGISTRY_PROGRAM_ID),
+        vec![1],
+        "this must be a REAL continuation: the Registry enters at depth one \
+         exactly once. Logs: {:#?}",
+        execution.logs,
+    );
+    assert_eq!(
+        invoked_depths(&execution.logs, TRADING_PROGRAM_ID),
+        vec![2],
+        "Trading must run as the continuation's child, not top-level",
+    );
+
+    for (family, program) in [
+        ("Claims", CLAIMS_PROGRAM_ID),
+        ("Custody", CUSTODY_PROGRAM_ID),
+    ] {
+        let depths = invoked_depths(&execution.logs, program);
+        assert!(
+            !depths.is_empty(),
+            "{family} never executed, so this transaction proves nothing about \
+             {family}'s wall. Logs: {:#?}",
+            execution.logs,
+        );
+        assert!(
+            depths.iter().all(|depth| *depth >= REENTRANT_CHILD_DEPTH),
+            "{family} ran at depths {depths:?}, and a Registry CPI is only \
+             reentrancy from {REENTRANT_CHILD_DEPTH} or deeper. This fixture has \
+             stopped exercising the wall.",
+        );
+    }
+}
+
+/// No role adapter can construct the Registry instruction the wall forbids.
+///
+/// The structural half of decision 0017 §7's tripwire, and the half that covers
+/// all five converted families rather than the two the continuation fixture
+/// reaches. §3 states the enforcement plainly -- *"The illegal call is not
+/// refused; it is unwriteable without re-adding an import"* -- so this reads the
+/// source for that import and refuses it by name.
+///
+/// # What each half proves, and neither proves alone
+///
+/// The dynamic case above proves a child really executes with the Registry on
+/// the stack, on the one route its fixture drives. It cannot speak for the other
+/// routes of the same family: Claims alone had fourteen release-set read sites.
+/// This one speaks for every route of every family and proves something weaker
+/// but categorical -- that no code path in a role adapter can name the
+/// instruction at all, so none of them can invoke it.
+///
+/// # Why the Registry and the operator are exempt, and Trading is not
+///
+/// `RegistryInstructionV1::Reauthenticate` is not deprecated: it is still the
+/// Registry's own public route, still dispatched by `process_instruction`, and
+/// `dclutch-operator` still submits it top-level as an attestation. What is
+/// forbidden is a ROLE ADAPTER invoking it, because a role adapter is what runs
+/// under the continuation. Trading is in the list even though its top-level arm
+/// was at depth one and legal: decision 0017's option B converted it anyway for
+/// 66,921 measured CU, and leaving it exempt would leave the one program with
+/// both arms free to reacquire the CPI on the arm that cannot have it.
+///
+/// Comments and doc comments are allowed to name it -- five of these programs
+/// carry a paragraph explaining what was deleted and why, and deleting those
+/// paragraphs to satisfy a checker would be exactly the wrong trade.
+#[test]
+fn assert_no_family_reaches_the_registry_by_cpi() {
+    const ROLE_ADAPTERS: [&str; 7] = [
+        "dclutch-claims-sbf",
+        "dclutch-custody-sbf",
+        "dclutch-core-sbf",
+        "dclutch-dealer-sbf",
+        "dclutch-rent-sbf",
+        "dclutch-trading-sbf",
+        "dclutch-resolution-proof-sbf",
+    ];
+    let programs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join("programs")
+        .canonicalize()
+        .expect("the programs directory");
+    let mut offences: Vec<String> = Vec::new();
+    let mut scanned = 0_usize;
+    for adapter in ROLE_ADAPTERS {
+        let source = programs.join(adapter).join("src");
+        assert!(
+            source.is_dir(),
+            "{adapter} has no src/ at {}: this list is stale and the gate is \
+             silently covering fewer families than it claims",
+            source.display(),
+        );
+        for file in rust_sources(&source) {
+            scanned += 1;
+            let text = std::fs::read_to_string(&file).expect("role adapter source");
+            for (index, line) in text.lines().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with("//") {
+                    continue;
+                }
+                if code.contains("RegistryInstructionV1") {
+                    offences.push(format!(
+                        "{}:{}  {}",
+                        file.display(),
+                        index.saturating_add(1),
+                        code.trim(),
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        scanned > 40,
+        "only {scanned} role-adapter sources were scanned, which cannot be the \
+         whole set -- the walker is broken and this gate is vacuous",
+    );
+    assert!(
+        offences.is_empty(),
+        "a role adapter names RegistryInstructionV1 in code. Under a Registry \
+         continuation the Registry sits at CPI depth one, so invoking it from a \
+         child is ReentrancyNotAllowed and costs the whole transaction -- \
+         decision 0017, and the wall the five families were converted off. Read \
+         the activation cache with dclutch-registry-activation-auth-v1 instead. \
+         Offending lines:\n{}",
+        offences.join("\n"),
+    );
+}
+
+/// Every `.rs` file below a directory.
+fn rust_sources(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        for entry in std::fs::read_dir(&directory).expect("readable source directory") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|value| value == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    out
 }

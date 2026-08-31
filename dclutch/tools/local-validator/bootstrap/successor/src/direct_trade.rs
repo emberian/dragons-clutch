@@ -1762,6 +1762,15 @@ fn collect_direct_trade_planning_from_snapshot_v1(
         validated.buyer,
         validated.public.fill,
         validated.public.execution_price,
+        // Claims then Custody: the order the child walk reaches them, which is
+        // the order the hint slots are assigned in. These two bumps were mined
+        // by the route projection that produced `route`, from the same child
+        // requests Trading will rebuild; a wrong one reproduces a different
+        // address and the trade refuses rather than executing wrongly.
+        [
+            route.child_authorities.claims_authority_bump,
+            route.child_authorities.custody_authority_bumps[0],
+        ],
     )
     .map_err(|error| Error::new(format!("Direct Hot report: {error:?}")))?;
     if hot_report.trading_artifact_release != route.chain.trading_artifact_release
@@ -6325,7 +6334,9 @@ fn journal_entries_v1(validated: &ValidatedManifestV1) -> Result<Vec<std::fs::Di
 /// Load only the immutable creation root needed to rederive a request-specific
 /// table on a later finalized observation. Full journal authentication occurs
 /// again after the named route and exact table address have been rederived.
-pub(crate) fn journal_root_v1(validated: &ValidatedManifestV1) -> Result<Option<DirectTradeJournalV1>> {
+pub(crate) fn journal_root_v1(
+    validated: &ValidatedManifestV1,
+) -> Result<Option<DirectTradeJournalV1>> {
     let entries = journal_entries_v1(validated)?;
     let Some(first) = entries.first() else {
         return Ok(None);
@@ -6502,8 +6513,9 @@ mod tests {
         authenticate_lookup_activation_slot_order_v1, direct_evidence_digest_v1,
         direct_evidence_schema_v1, direct_journal_schema_v1, direct_private_schema_v1,
         direct_public_schema_v1, expected_stage_v1, hex32, journal_intent_sha256_v1,
-        journal_state_sha256, refresh_direct_journal_digest_v1, require_unique_json_v1, usage,
-        parse_direct_return_data_v1, verify_expected_direct_poststates_v1, write_direct_journal_v1,
+        journal_state_sha256, parse_direct_return_data_v1, refresh_direct_journal_digest_v1,
+        require_unique_json_v1, usage, verify_expected_direct_poststates_v1,
+        write_direct_journal_v1,
     };
     use crate::cluster::ExpectedClusterV1;
     use dclutch_operator::{Finality, Observation, ObservedAccount};

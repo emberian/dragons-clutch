@@ -1584,6 +1584,7 @@ dependencies = [
  "dclutch-core-contract",
  "dclutch-fractional-claim-contract",
  "dclutch-fractional-claim-kernel",
+ "dclutch-market-core-codec",
  "dclutch-program-test-evidence",
  "dclutch-record-contract",
  "dclutch-registry-contract",

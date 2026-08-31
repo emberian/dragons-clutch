@@ -9,8 +9,8 @@
 use dclutch_core_contract::ContentId;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_CACHE_BUMP_OFFSET_V1,
+    ACTIVATION_PDA_DOMAIN_V1, ARTIFACT_RELEASE_SCHEMA_ID_V1, ActivatedExecutionReleaseSetV1,
     ActivatedExecutionReleaseSetViewV1, ArtifactActivationInputV1, ArtifactReleaseV1,
     DeploymentObservationV1, ExecutionReleaseActivationInputsV1, activate_execution_release_set_v1,
     activation_cache_progress_v1,
@@ -352,17 +352,17 @@ pub fn build_registry_activation_v1(
         ),
     )
     .map_err(|_| Error::InvalidReleaseSet)?;
-    let cache = Pubkey::find_program_address(
+    let (cache, cache_bump) = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, release_set_id.as_bytes()],
         &registry_program,
-    )
-    .0;
+    );
     let (mode, cache_rent_debit_lamports) = authenticate_activation_cache(
         registry_program,
         &rent,
         &state.payer,
         &state.cache,
         cache,
+        cache_bump,
         expected_cache,
     )?;
 
@@ -674,12 +674,29 @@ fn deployment_observation(
     .map_err(|_| Error::InvalidDeployment)
 }
 
+/// Classify one observed activation cache against the release set it must hold.
+///
+/// The body comparison skips exactly one byte, and the skip is what makes this
+/// function able to succeed at all. `ACTIVATION_CACHE_BUMP_OFFSET_V1` carries a
+/// fact about the cache ACCOUNT'S OWN ADDRESS;
+/// `ActivatedExecutionReleaseSetV1` is a projection of the RELEASE SET and has
+/// no field for it, so `to_bytes` leaves it zero while the Registry that signed
+/// the account into existence writes a real bump there — and
+/// `put_activation_cache_bump_v1` refuses zero. A full-body compare therefore
+/// refused every cache the Registry has ever written, which is what a
+/// byte-exact compare against a value with no author always does.
+///
+/// The byte is not dropped, it is checked where it can be: this caller derived
+/// the address and therefore knows the bump. Zero remains admissible because it
+/// means "written before this byte existed", which is that constant's own
+/// documented fallback; anything else must be the derived bump exactly.
 fn authenticate_activation_cache(
     registry_program: Pubkey,
     rent: &Rent,
     payer: &ObservedAccount,
     cache: &ObservedAccount,
     expected_key: Pubkey,
+    expected_cache_bump: u8,
     expected: ActivatedExecutionReleaseSetV1,
 ) -> Result<(RegistryActivationModeV1, u64), Error> {
     if cache.key != expected_key {
@@ -700,11 +717,35 @@ fn authenticate_activation_cache(
         || cache.executable
         || cache.data.len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
         || !rent.is_exempt(cache.lamports, cache.data.len())
-        || cache.data.as_slice() != expected.to_bytes()
+        || !activation_cache_body_matches(&cache.data, expected, expected_cache_bump)
     {
         return Err(Error::InvalidActivationCache);
     }
     Ok((RegistryActivationModeV1::Repeat, 0))
+}
+
+/// Whether an observed cache body is the exact complete activation of
+/// `expected`, with the address-derived bump checked rather than compared.
+fn activation_cache_body_matches(
+    observed: &[u8],
+    expected: ActivatedExecutionReleaseSetV1,
+    expected_cache_bump: u8,
+) -> bool {
+    let complete = expected.to_bytes();
+    if observed.len() != complete.len() {
+        return false;
+    }
+    let Some(observed_bump) = observed.get(ACTIVATION_CACHE_BUMP_OFFSET_V1).copied() else {
+        return false;
+    };
+    if observed_bump != 0 && observed_bump != expected_cache_bump {
+        return false;
+    }
+    observed
+        .iter()
+        .zip(complete.iter())
+        .enumerate()
+        .all(|(offset, (left, right))| offset == ACTIVATION_CACHE_BUMP_OFFSET_V1 || left == right)
 }
 
 fn authenticate_cache_identity<'a>(

@@ -45,8 +45,22 @@
 //! remember to write.
 //!
 //! `dclutch-registry-sbf` calls [`authenticate_activated_role_in_cache_v1`]
-//! from its own `Reauthenticate` handler, so the surviving top-level CPI and
-//! every child-local read are the same code and can never drift apart.
+//! from its own `Reauthenticate` handler, so every reader of this cache is the
+//! same code and they can never drift apart.
+//!
+//! ## Reading several roles from ONE decode
+//!
+//! [`ActivatedExecutionReleaseSetViewV1::decode`] validates the complete
+//! five-role projection and every aliasing pair, which is twenty-five
+//! `decode_role` calls; the account it validates is immutable for the life of
+//! its release set. A frame that authenticates two roles and reads two more
+//! programs out of the same cache must therefore decode it ONCE, and the pair
+//! that lets it is [`authenticate_activation_cache_identity_v1`] followed by one
+//! [`authenticate_activated_role_in_frame_v1`] per role. That is the Registry's
+//! own handler shape, and it is the shape decision 0017's option B put on
+//! Trading's top-level arm, which until then paid two Registry CPIs whose
+//! handlers each decoded the account again — three decodes, seventy-five role
+//! decodes, one answer.
 //!
 //! ## What this crate does not decide
 //!
@@ -211,12 +225,63 @@ pub fn authenticate_activation_cache_bump_v1(
     cache: &AccountInfo<'_>,
     release_set_id: &[u8; 32],
 ) -> Result<AuthenticatedActivationCacheBumpV1> {
+    // Kept ahead of the borrow, not folded into the identity check below, so
+    // the documented ordering survives the extraction: owner and exact width
+    // are required BEFORE a byte is read. The identity check takes them again
+    // because it is also reachable from a caller that decoded for itself, and
+    // three comparisons are the honest price of that being one spelling.
     require_cache_account(registry.key, cache)?;
     let bytes = cache
         .try_borrow_data()
         .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
     let activated = ActivatedExecutionReleaseSetViewV1::decode(&bytes)
         .map_err(|_| ActivationAuthErrorV1::ActivationCache)?;
+    authenticate_activation_cache_identity_v1(registry, cache, release_set_id, activated)
+}
+
+/// Authenticate the Registry-owned cache coordinate against a view the caller
+/// has ALREADY decoded, so a frame that reads several roles decodes once.
+///
+/// This is [`authenticate_activation_cache_bump_v1`] with the borrow and the
+/// decode hoisted into the caller, and that function is now written in terms of
+/// this one, so there is a single spelling of the identity conjunction:
+///
+/// * Registry OWNERSHIP, non-executability and the one exact fixed width, via
+///   [`require_cache_account`] — taken again here rather than trusted from the
+///   caller, because a decoded view carries no account;
+/// * the cache body must name the very `release_set_id` the caller is executing
+///   under, which is one of the two PDA seeds;
+/// * the address `create_program_address` reproduces from those seeds and the
+///   body's carried bump must equal the account the caller was handed, falling
+///   back to the search for a cache written before the bump was persisted.
+///
+/// # Why this takes a view instead of producing one
+///
+/// A view borrows the account's data, and the `Ref` that borrow lives in cannot
+/// be returned beside it — so a function that decoded FOR the caller could only
+/// hand back facts, and every role read would decode again. That is the shape
+/// this exists to retire: a top-level Direct transaction decoded this one
+/// immutable 1,288-byte account THREE times, and since `decode` validates the
+/// complete five-role projection plus every aliasing pair, that is seventy-five
+/// `decode_role` calls for one answer.
+///
+/// The Registry's own `Reauthenticate` handler already has exactly this shape —
+/// it borrows, decodes, checks identity, then calls
+/// [`authenticate_activated_role_in_cache_v1`] — so this adds no hazard class
+/// that the crate did not already carry. What it removes is the incentive for
+/// a multi-role caller to write its own second spelling of the identity check,
+/// which is what a Trading top-level frame had done.
+///
+/// The returned witness is the same opaque bump
+/// [`authenticate_activated_role_with_bump_v1`] accepts.
+#[inline(never)]
+pub fn authenticate_activation_cache_identity_v1(
+    registry: &AccountInfo<'_>,
+    cache: &AccountInfo<'_>,
+    release_set_id: &[u8; 32],
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
+) -> Result<AuthenticatedActivationCacheBumpV1> {
+    require_cache_account(registry.key, cache)?;
     if activated
         .execution_release_set_id()
         .map_err(|_| ActivationAuthErrorV1::ActivationCache)?
@@ -251,6 +316,33 @@ pub fn authenticate_activation_cache_bump_v1(
         return Err(ActivationAuthErrorV1::ActivationCache);
     }
     Ok(AuthenticatedActivationCacheBumpV1(bump))
+}
+
+/// Authenticate one role out of an already-identified cache view, under the
+/// Registry's own three-account read-only frame.
+///
+/// This is the exact pair the Registry's `Reauthenticate` handler runs per
+/// invocation — [`require_readonly_frame`] then
+/// [`authenticate_activated_role_in_cache_v1`]
+/// (`programs/dclutch-registry-sbf/src/lib.rs`, `process_reauthenticate`) — and
+/// it exists so a caller reading two roles from one decode cannot get the frame
+/// check and the role read out of step. Call it once per role; the cache's own
+/// identity is established once, by
+/// [`authenticate_activation_cache_identity_v1`].
+///
+/// The privilege bits are re-taken per role because each role brings its own
+/// Program and ProgramData accounts, and the frame is a statement about the
+/// triple, not about the cache alone.
+#[inline(never)]
+pub fn authenticate_activated_role_in_frame_v1(
+    cache: &AccountInfo<'_>,
+    activated: ActivatedExecutionReleaseSetViewV1<'_>,
+    role: ExecutionRoleV1,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+) -> Result<AuthenticatedRoleReceiptV1> {
+    require_readonly_frame(cache, program, programdata)?;
+    authenticate_role_in_view(activated, role, program, programdata)
 }
 
 /// Authenticate another role from the same cache using a previously

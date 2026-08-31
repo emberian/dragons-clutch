@@ -266,3 +266,281 @@ Two things it deliberately does not do:
 After `--write`, the literal pin in `apps/dclutch-web/lib/deployments.test.ts`
 still wants a human, and a new cohort may want a new ABI table in
 `packages/dclutch-sdk/lib/releaseIdentity.ts`. The script says both on exit.
+
+## The cohort cut window
+
+The cut is manual. Nothing here updates itself, and the window is the only
+time the whole-tree generators may run: `tools/genref/generate.sh` swept
+eighteen lanes' refusal codes into one reference when it was run casually, so
+the standing rule is that a lane runs it only inside an announced window on a
+quiet tree. This section is that window's checklist, written down because the
+lane that executes it will not be the lane that discovered the items.
+
+**One command does the regeneration half**, and it is the one above:
+`final-generated-convergence.py --write --expected-head <sha>` runs
+`tools/genref/generate.sh` inside a fixed batch that refuses a dirty or moving
+tree and confines its writes to named owners. `--check` at the same head is the
+verifier. Do not hand-run the individual generators.
+
+### Regenerate (quiet tree, announced first)
+
+`tools/genref/generate.sh --check` reports the whole backlog in one read; as of
+2026-08-30 it is **seven stale files, and they are one set, not three items**:
+
+```
+docs/reference/README.md          docs/reference/refusals.md
+docs/reference/decisions.md       docs/reference/routes.md
+docs/reference/programs.md        docs/reference/abi/refusalRegistryV1.md
+                                  docs/reference/abi/routeCensus.md
+```
+
+- `decisions.md` stops at 0013, so **all four of 2026-08-30's ADRs are missing
+  from the index that ships to the public site**. It is stale for the same
+  reason the other six are, and one regeneration closes all seven.
+- **The regeneration alone re-stamps a known overclaim.** `docs/reference/README.md`
+  is generated from `tools/genref/generate.mjs:406`, which still says *"there is
+  no open market or value at risk today"*. Regenerating without correcting the
+  generator first reproduces the sentence and makes it look handled. Correct the
+  source in the same window — see below.
+
+### The open-market posture, and the two assertions that pin it
+
+The site is written to a posture that was true when it was written. Correcting
+it is not a prose edit: `tools/genref/render-site.mjs` **asserts the untrue
+strings are present**, so changing the prose without the assertions fails the
+render, and changing the assertions without the prose fails it too. They move
+together or not at all.
+
+| # | site | what it says |
+|---|---|---|
+| 1 | `tools/genref/generate.mjs:406` | → generates `docs/reference/README.md:35` |
+| 2 | `tools/genref/render-site.mjs:453` | the footer, on **every** page |
+| 3 | `tools/genref/render-site.mjs:470` | the documentation landing |
+| 4 | `tools/genref/render-site.mjs:690` | **assertion**: `guides/README.html` must contain "There is no open market" |
+| 5 | `tools/genref/render-site.mjs:691` | **assertion**: `guides/trader.html` must contain "no devnet market is open for trading" |
+
+Assertion 5 is a *second* pinned string in a *different* file, and a sweep that
+counts "one link-check assertion" will miss it. Each assertion has a
+hand-written target that must change in the same commit, and there are more
+targets than assertions:
+
+- `docs/guides/README.md:23` (target of 4), `docs/guides/trader.md:7` (target of 5),
+- `docs/guides/reader.md:23`, and `docs/guides/trencher.md:11,14,15,93` — four
+  more instances that no assertion pins and no sweep has listed.
+
+Today the claim is false in letter and true in spirit: three markets are
+`Phase::Open` and none of them is tradeable (decision 0015 §8.1). **When
+market19 opens with an activated capability root it becomes flatly false**, and
+that is the moment all of the above must land together.
+
+> **EXECUTED 2026-08-30 (PUBLISH-2), at market19's opening.** All five sites
+> above moved in one commit, with the six hand-written instances. The posture
+> the site is now written to: *seven programs on devnet, one market open for
+> trading, its collateral a devnet test token, nothing bought with money, no
+> trade made yet.* Two things changed about the pins themselves, and the next
+> lane to read this table should know both. **The needles were reworded so the
+> FOOTER cannot satisfy them** — the old needle for site 4 ("There is no open
+> market") appeared verbatim in the footer that renders on every page, so
+> `guides/README.html` would have passed that assertion with its body deleted;
+> the new needles are body-only, and each was proved red by deleting the
+> sentence before the commit. And **`docs/reference/README.md` is not edited by
+> hand** — site 1 is the generator, and the regeneration in the same window is
+> what moves the generated file. The current needles are in
+> `render-site.mjs`; read them there rather than from this table, which
+> records the window, not the live state.
+
+### The public-cut fixture
+
+`apps/dclutch-web/fixtures/public-cut.devnet.json` headlines
+`7Mcu1ZT9…` with `trade`/`resolve`/`redeem` all `null`. At the cut it is
+replaced by market19, and the five sites above are checked against it.
+
+**Read decision 0015 §8 before deciding to wait.** That market is not merely
+"not traded yet": it can never trade *and* can never be retired, because its
+whole claim supply sits in a Position whose owner key no longer exists. The
+fixture is the site's front door, and it currently points at the deadest object
+on the cluster. If market19 slips, re-pointing it at market18
+(`9JwhTHyx…` — `Phase::Open`, `outstanding_capabilities = 1`, holding the only
+live capability root on any dClutch deployment) is available immediately and is
+not gated on the protocol cut.
+
+### Two different cuts
+
+They are routinely conflated and they have different blockers:
+
+- the **cohort cut** deploys ELFs and founds market19 (blocked on the release
+  verdict and the orchestrator's go);
+- the **publication cut** is a single-parent content-sync of the
+  `dragons-clutch` `dclutch/` subtree plus a `pages.yml` dispatch, and it is
+  what actually moves the live site.
+
+A fixture or prose correction reaches readers at a *publication* cut. Anything
+in this section that does not need market19 to exist should not be queued
+behind the cohort cut.
+
+### Whichever cut comes first
+
+The shared-window rule above is not "at the cohort cut". A generated file and
+the source it is generated from must move together at **whichever cut reaches
+readers first** — publication or cohort. `docs/reference/` is regenerated
+output; correcting `tools/genref/generate.mjs` in one window and regenerating in
+another ships a reference that disagrees with its own generator in between.
+
+### What the cohort upgrade does to the markets already on devnet
+
+State it plainly in the cut announcement; ember's standing Q1 ruling accepts
+devnet stranding, so this is disclosure, not a blocker. Verified rather than
+inferred:
+
+- **Every existing devnet market becomes permanently inert.** All three are 360
+  bytes on chain; the cohort's `CoreState::decode` refuses
+  `input.len() != STATE_BYTES` at 368. **There is no migration path and none can
+  be added after the fact**: the only `resize` calls in Core are `resize(0)`,
+  which is account *closure* (`retire_v1.rs`, `generic_founding_v1.rs`). A
+  360-byte market can never become a 368-byte one, so after the upgrade nothing
+  can trade, resolve, retire or close any of them.
+- **Market18 is included, and it is the expensive one.** `9JwhTHyx…` holds the
+  only live capability root on any dClutch deployment — the account the whole
+  first-trade effort produced. Note for honesty about cause: its collateral was
+  *already* unrecoverable before the cut, for the unrelated reason in decision
+  0015 §8. The upgrade does not create that stranding; it adds a second,
+  independent one, so no single fix restores it.
+- **The clients are already there.** `CORE_STATE_BYTES = 368` is generated into
+  both `packages/dclutch-sdk/lib/generated/coreFound.ts` and the web twin
+  *today*. The reader half of this is not a future consequence of the cut — the
+  current tree already cannot decode any live devnet market.
+- **The site degrades honestly rather than breaking**, which is CORESTATE's
+  work: `marketDiscovery.ts` classifies a market by **(magic, version, width)**
+  and files `(3, 360)` as a historical generation with a `refused` provenance,
+  instead of throwing. Worth confirming on the staged fixture before announcing.
+- **The honest-degradation path is implemented but never exercised for the
+  generation that matters.** `marketDiscovery.test.ts` (SDK and web twins) has
+  exactly one historical-account case and it is `DCLTCOR2 at 352 bytes`. The
+  `(3, 360)` generation — which describes **every live devnet market**, and which
+  the cut makes the universal case — has no test. The code path exists; nothing
+  proves it fires for the accounts it was written for. Add the 360-byte case
+  before announcing, or the "the site degrades honestly" line in the
+  announcement is an unverified claim.
+- **One stale doc contradicts that**, and it will mislead the next reader:
+  `marketCoreV2.ts` still documents `DCLTCOR3` as "360 fixed bytes" (SDK and web
+  twins both), one file away from the discovery reader that lists `(3, 360)` as
+  historical. Not this lane's file; route it with the cut notes.
+
+### The funding-readiness suffix, and why the devnet founding does not stall
+
+The post-Open funding-readiness suffix refuses offline in its builders. The
+founding pipeline **does** share them — `execute_generic_market_founding` calls
+`execute_funding_readiness_suffix_v1` immediately after
+`authenticate_open_market_poststate_v1`, inside the founding, not after it — so
+coordinate with that lane before a devnet sequence rather than assuming
+independence.
+
+But the devnet path takes an early return. The suffix's first act is to
+classify against chain state, and the atomic DCLTGMF3 founding
+(Lock+Found+Realize+Claims+Open in one transaction) consumes the staged
+readiness, so the plan comes back `FundingReadinessPlanV1::ConsumedByFounding`
+and the function returns `Ok(())` before touching a builder. The refusing arms
+are `Create`/`Activate`/`Accept`/`Complete`, which belong to the non-atomic
+walk.
+
+**The evidence is three for three**: every market this pipeline has founded on
+devnet reads `Readiness::Consumed`, which is exactly the state that selects the
+early return. **What that does not prove**: the arm is selected by a chain read,
+so it is only as good as the founding staying atomic, and the FOUND-5182 green
+proof is a *local* multi-step founding, not the devnet atomic one. If market19's
+founding stops being atomic — a frame that no longer fits, say; Found31 already
+needed an address lookup table to clear the legacy packet limit by ten bytes —
+the refusing arms become live and the stall is real.
+
+### Executing the upgrade: three things the plan does not say
+
+Learned on the 2026-08-30 attempt, which held at role 1 of 5 with devnet
+semantically unchanged (`/Users/ember/jobs/dclutch-cohort7-20260830/HELD_STATE.md`).
+
+**Core is last, and that is a safety property.** The role order is
+custody → resolution → claims → trading → **core**. The CoreState widening that
+strands every existing devnet market lands at the very end, so a partial cut is
+a holdable state and everything before core is reversible in effect.
+
+**`devnet-upgrade-extend-v1` invalidates its own role's baseline.** Its docs say
+it outright — *"After it completes, capture a new baseline: the Upgrade refuses
+the old one"* — so claims, trading and core each need extend → **fresh
+baseline** → journal row update → upgrade. Skipping the recapture refuses on a
+stale baseline. Extension rent for the three is **0.780856 SOL, non-refundable**,
+measured from the baselines rather than estimated.
+
+**The one-attempt Buffer writer can refuse on liveness, and it is not a
+semantic failure.** The exact code is:
+
+```
+Error("one-attempt Buffer writer returned before exact payload finalized;
+recovery is poll-only until expiry")
+```
+
+The receipt's `buffer_write_attempts[0].exit_disposition` was `returned_success`
+— the upload *finished* and the buffer held the exact payload — but the tool's
+finalization confirmation did not land inside a 512-block window. **Recovery:
+wait for the window to expire, then re-run the identical command with
+`--adopt-existing-buffer`.** Cost of the miss is one parked buffer (rent
+recoverable) plus ~0.0028 SOL of upload fees.
+
+Worth sizing before a long run: custody is the **smallest** payload at 563 KB
+and it is what hit this. Trading is 2,030,592 bytes and claims 1,263,616.
+
+**Run the execute on the KEYED endpoint, not the public one.** This is the
+mistake that stalled the 2026-08-30 attempt and it is one flag. The read-only
+captures genuinely demand the canonical public origin — `devnet-carry-forward-capture-v1`
+refuses anything else outright — and it is easy to carry that over to
+`devnet-upgrade-v1 --execute`, where it is wrong. Resuming a role
+re-authenticates **every** buffer-upload transaction with `getTransaction`, which
+for a 563 KB payload is hundreds of calls, and `api.devnet.solana.com`
+rate-limits it: `getTransaction returned HTTP 429 Too Many Requests`.
+
+That is a trap and not merely a slowdown, because `validate_receipt_binding` is
+called with `require_exact_rpc_origin = true` at both execute call sites. **A
+receipt written against the public endpoint can only ever be resumed against the
+public endpoint — the one that cannot serve its own resume.** The house already
+knew: *"execution campaigns run on a keyed endpoint"* (2026-08-29).
+
+**Use the CLI for `program extend`, not the driver.** `devnet-upgrade-extend-v1`
+builds the **checked** loader instruction (`upgrade.rs` imports
+`extend_program_checked`), and devnet's Loader-v3 rejects it outright:
+
+```
+InstructionError[0, InvalidInstructionData]
+Program BPFLoaderUpgradeab1e11111111111111111111111 failed: invalid instruction data
+```
+
+It fails in simulation, so it costs nothing and changes nothing. The documented
+house path is the CLI, and it is proven on this cluster: 2026-08-29 extended
+resolution, trading and core with `solana program extend` at the same pinned CLI
+version. Capture a **fresh baseline** afterwards either way.
+
+**And an armed receipt cannot be rescued by adopt.** `validate_receipt_binding`
+compares `receipt.buffer_adopted != args.adopt_existing_buffer`, so adding
+`--adopt-existing-buffer` to an existing non-adopt receipt refuses the binding,
+while keeping `--buffer-keypair` refuses because *"adopt refuses a Buffer keypair;
+only the retained Buffer authority is used"*. `--adopt-existing-buffer` is for a
+buffer some **other** run uploaded — pair it with a **fresh receipt path**.
+
+### Cut artifacts do not live in `/private/tmp`
+
+Three separate artifacts of the 2026-08-29 cohort were lost to scratch reaping,
+and each cost something different:
+
+1. the **founder keypair** — decision 0015 §8; three markets can never be
+   redeemed or retired, ~0.26 SOL and 1.5 billion collateral atoms stranded;
+2. the `founder-ids/` directory that held it;
+3. the **`SuccessorPlan`** the administration campaign runs on, recorded in
+   `campaign-open.json` at `…/scratchpad/spine-market/plan.json`.
+
+The third is recoverable — `prepare` regenerates a plan from the seven roles'
+ids, ELFs, digests and semantic release ids — but it is exacting work that has to
+be redone from scratch, and a wrong semantic release id refuses at activation
+*after* publication rent is spent.
+
+**So: keys, release ELFs, the checked gate, baselines, receipts, dumps, the
+deployment-set journal and the plan all belong in a durable job directory**
+(`/Users/ember/jobs/<job>/`), not a session scratchpad. The 2026-08-30 cohort
+keeps them at `dclutch-cohort7-20260830/` with a README that says, in as many
+words, *this is not a scratch directory*.

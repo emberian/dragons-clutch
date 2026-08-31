@@ -40,7 +40,7 @@ use crate::{
 pub use crate::generated_product_v3::{
     PRODUCT_REPRESENTATION_ADMISSION_BYTES_V3, PRODUCT_REPRESENTATION_ADMISSION_MAGIC_V3,
     PRODUCT_REPRESENTATION_ADMISSION_VERSION_V3, PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3,
-    PRODUCT_REPRESENTATION_GRADED_KIND_V3,
+    PRODUCT_REPRESENTATION_GRADED_KIND_V3, PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3,
 };
 
 /// Stable refusal from Product V3 representation admission or solvency.
@@ -60,6 +60,14 @@ pub enum Error {
     InvalidAdmission,
     /// Reserved bytes or the encoded basis-kind tag were noncanonical.
     NonCanonical,
+    /// The admission receipt named the degree-2-to-3 spline basis family, for
+    /// which no evaluator exists.
+    ///
+    /// Distinct from [`Error::NonCanonical`] on purpose: byte 3 at
+    /// `ADMISSION_BASIS_KIND_OFFSET_V3` is an *allocated* tag this build
+    /// cannot honour, not an unrecognised one, and a reader who cannot tell
+    /// those apart debugs the wrong thing.
+    SplineEvaluatorAbsent,
     /// A payout vector did not have the exact admitted partition shape.
     InvalidPayout,
     /// Exact representation/custody arithmetic exceeded the `u128` profile.
@@ -179,6 +187,12 @@ impl RepresentationAdmissionV3 {
         let basis_kind = match byte(input, ADMISSION_BASIS_KIND_OFFSET_V3)? {
             PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3 => BasisKindV3::CategoricalQ1,
             PRODUCT_REPRESENTATION_GRADED_KIND_V3 => BasisKindV3::GradedExactComplement,
+            // Allocated and refused. The receipt carries no degree field, so
+            // there is nothing to decode the variant's payload from even
+            // before the question of an evaluator arises.
+            PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3 => {
+                return Err(Error::SplineEvaluatorAbsent);
+            }
             _ => return Err(Error::NonCanonical),
         };
         let value = Self {
@@ -229,6 +243,17 @@ impl RepresentationAdmissionV3 {
         output[ADMISSION_BASIS_KIND_OFFSET_V3] = match self.basis_kind {
             BasisKindV3::CategoricalQ1 => PRODUCT_REPRESENTATION_CATEGORICAL_KIND_V3,
             BasisKindV3::GradedExactComplement => PRODUCT_REPRESENTATION_GRADED_KIND_V3,
+            // Unreachable: this struct's fields are private and its only
+            // constructor is the join below, which is fed by a
+            // `ProductBasisV3` whose decoder refuses kind byte 3. The arm
+            // writes the allocated tag rather than refusing because
+            // `to_bytes` is total and cannot refuse -- and writing the
+            // allocated tag is the fail-closed choice, since `decode` above
+            // refuses exactly that byte. A receipt written here is a receipt
+            // this crate will not read back.
+            BasisKindV3::SplineDegree2To3 { .. } => {
+                PRODUCT_REPRESENTATION_SPLINE_DEGREE_2_TO_3_KIND_V3
+            }
         };
         for (offset, value) in [
             (ADMISSION_DESCRIPTOR_ID_OFFSET_V3, self.descriptor_id),

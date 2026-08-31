@@ -62,6 +62,7 @@ use solana_program::{
 
 use crate::{
     TradingSbfError,
+    child_authority_v4::{PreflightedCallerBumpV4, child_caller_authority_v4},
     child_receipt_v3::{
         ReceiptDeliveryV3, deliver_receipt_dependency_v3, receipt_dependency_width_v3,
     },
@@ -128,6 +129,11 @@ pub(crate) fn execute_claims_route_v3<'info>(
     buffers: &mut ChildInvocationBuffersV3<'info>,
     claims_program: &AccountInfo<'info>,
     sparse_post_resource_verification: SparsePostResourceVerificationV3,
+    // The caller's mined bump for this route's Trading caller authority. The
+    // Claims route is the one child route with no preflight derivation to
+    // reuse, so without a hint this is where the search happens. `None` keeps
+    // it; `Some` reproduces and refuses at the coordinate-0 equality below.
+    hint: PreflightedCallerBumpV4,
 ) -> Result<ClaimsRouteReceiptV3, ProgramError> {
     if effect
         .account_count(tail_count)
@@ -158,8 +164,7 @@ pub(crate) fn execute_claims_route_v3<'info>(
         return Err(TradingSbfError::Content.into());
     }
     let (authority_seeds, receipt_kind) = route_authority(request, invocation.kind)?;
-    let (expected_authority, bump) =
-        Pubkey::find_program_address(&authority_seeds.as_slices(), program_id);
+    let (expected_authority, bump) = child_caller_authority_v4(&authority_seeds, program_id, hint)?;
     if buffers
         .accounts
         .first()

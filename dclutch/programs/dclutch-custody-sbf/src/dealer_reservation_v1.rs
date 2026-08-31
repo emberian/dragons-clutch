@@ -337,7 +337,7 @@ fn authenticate_effect(
     let market = authenticate_market(&release_frame, custody)?;
     authenticate_calling_release(program_id, &release_frame, custody, None, market.cache_bump)?;
     authenticate_realm(program_id, &release_frame, custody, market.state)?;
-    authenticate_replay_identity(program_id, account(accounts, REPLAY)?, custody)?;
+    authenticate_replay_identity(program_id, account(accounts, REPLAY)?, custody, None)?;
     let replay = read_replay(account(accounts, REPLAY)?)?;
     let expected_revision = replay
         .next_revision
@@ -639,7 +639,7 @@ fn execute_reserve_token_effect(
     let authority = account(accounts, CUSTODY_AUTHORITY)?;
     let token_program = account(accounts, TOKEN_PROGRAM)?;
     validate_token_program_and_mint(mint, token_program, original, realm)?;
-    let authority_bump = validate_custody_authority(program_id, authority, original)?;
+    let authority_bump = validate_custody_authority(program_id, authority, original, None)?;
     if source.owner != token_program.key || destination.owner != token_program.key {
         return Err(CustodySbfError::TokenState.into());
     }
@@ -861,7 +861,7 @@ fn execute_rollback_token_effect(
         .validate()
         .map_err(|_| CustodySbfError::Instruction)?;
     validate_token_program_and_mint(mint, token_program, *reverse, realm)?;
-    let authority_bump = validate_custody_authority(program_id, authority, *reverse)?;
+    let authority_bump = validate_custody_authority(program_id, authority, *reverse, None)?;
     validate_vault_key(program_id, escrow, *reverse, true)?;
     if original.source_compartment != CompartmentV1::External {
         validate_vault_key(program_id, source, *reverse, false)?;
@@ -1194,7 +1194,7 @@ fn authenticate_activation_release(
     let market = authenticate_market(&release_frame, request)?;
     authenticate_calling_release(program_id, &release_frame, request, None, market.cache_bump)?;
     let realm = authenticate_realm(program_id, &release_frame, request, market.state)?;
-    authenticate_replay_identity(program_id, account(accounts, ACT_REPLAY)?, request)?;
+    authenticate_replay_identity(program_id, account(accounts, ACT_REPLAY)?, request, None)?;
     validate_token_program_and_mint(
         account(accounts, ACT_MINT)?,
         account(accounts, ACT_TOKEN_PROGRAM)?,
@@ -1205,6 +1205,7 @@ fn authenticate_activation_release(
         program_id,
         account(accounts, ACT_CUSTODY_AUTHORITY)?,
         request,
+        None,
     )?;
     Ok(())
 }
@@ -1309,7 +1310,7 @@ fn activate_one_effect(
     if original.destination_compartment != CompartmentV1::External {
         validate_vault_key(program_id, destination, request, false)?;
     }
-    let authority_bump = validate_custody_authority(program_id, authority, request)?;
+    let authority_bump = validate_custody_authority(program_id, authority, request, None)?;
     let transfer_accounts = TransferAccounts {
         source: escrow,
         destination,
@@ -1811,16 +1812,12 @@ fn has_duplicate_keys_except(accounts: &[AccountInfo<'_>], excused: usize) -> bo
         .enumerate()
         .filter(|(index, _)| *index != excused)
         .any(|(index, current)| {
-            accounts
-                .get(..index)
-                .is_some_and(|prefix| {
-                    prefix
-                        .iter()
-                        .enumerate()
-                        .any(|(prior_index, prior)| {
-                            prior_index != excused && prior.key == current.key
-                        })
-                })
+            accounts.get(..index).is_some_and(|prefix| {
+                prefix
+                    .iter()
+                    .enumerate()
+                    .any(|(prior_index, prior)| prior_index != excused && prior.key == current.key)
+            })
         })
 }
 

@@ -56,7 +56,7 @@ describe('the front door', () => {
     expect(html).toContain('/notes/plan-to-compost-at-least-three/');
     expect(html).toContain('Plan to compost at least three');
     expect(html).toContain('How this was built');
-    expect(html).toContain('built twice before the version you are reading now');
+    expect(html).toContain('twice before the version you are reading now');
     expect(html).toContain('honest about what is proved and what is still only tested');
   });
 

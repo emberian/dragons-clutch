@@ -14,8 +14,10 @@ import {
 } from '@/lib/marketDetail';
 import { MARKET_EDITORIAL_NOTE_V1, marketEditorialV1 } from '@/lib/marketRegistry';
 import {
+  marketActivationOutlookV1,
   provenanceChipV1,
   shortAddressV1,
+  type MarketActivationOutlookV1,
   type MarketCapabilityBadgeV1,
   type MarketCapabilityManifestV1,
   type MarketCollateralV1,
@@ -86,7 +88,7 @@ function CopyableAddress({ label, address }: Readonly<{ label: string; address: 
 function FundingQuote({ funding }: Readonly<{ funding: CapabilityFundingQuoteV1 }>) {
   return <div className="capability-funding">
     <table>
-      <thead><tr><th>Compartment</th><th>Asset class</th><th>Amount · raw u64</th></tr></thead>
+      <thead><tr><th>Compartment</th><th>What kind of asset</th><th>Amount · raw</th></tr></thead>
       <tbody>
         {funding.compartments.map((compartment) => (
           <tr key={compartment.compartment} className={compartment.assetClass === 'not-applicable' ? 'compartment-empty' : ''}>
@@ -97,12 +99,12 @@ function FundingQuote({ funding }: Readonly<{ funding: CapabilityFundingQuoteV1 
         ))}
       </tbody>
       <tfoot>
-        <tr><td>Native lamport total</td><td>native-lamports</td><td>{funding.nativeLamportsTotal.toString()}</td></tr>
-        <tr><td>Realm collateral total</td><td>realm-collateral</td><td>{funding.realmCollateralTotal.toString()}</td></tr>
+        <tr><td>Total in SOL</td><td>native-lamports</td><td>{funding.nativeLamportsTotal.toString()}</td></tr>
+        <tr><td>Total in collateral</td><td>realm-collateral</td><td>{funding.realmCollateralTotal.toString()}</td></tr>
       </tfoot>
     </table>
     {funding.realmCollateral === null
-      ? <p>This capability quotes no Realm collateral, so it carries no collateral binding.</p>
+      ? <p>This one costs no collateral, so it is not tied to any particular collateral token.</p>
       : <dl className="detail-facts">
         <Fact label="Bound collateral mint" value={funding.realmCollateral.mint.reduce((text, byte) => text + byte.toString(16).padStart(2, '0'), '')} />
         <Fact label="Bound token program" value={funding.realmCollateral.tokenProgram.reduce((text, byte) => text + byte.toString(16).padStart(2, '0'), '')} />
@@ -124,12 +126,12 @@ function CapabilityEntry({ badge, clock, nowMs }: Readonly<{ badge: MarketCapabi
       <small>entry {badge.index} · {badge.activation === 'deadline' ? `activation deadline slot ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}` : 'immediate activation'}</small>
     </summary>
     <dl className="detail-facts">
-      <ContentId label="Kind ID" value={badge.kindId} />
-      <ContentId label="Release / program-set ID" value={badge.programSetId} />
-      <ContentId label="Config ID" value={badge.configId} />
-      <Fact label="Activation policy" value={badge.activation} />
-      <Fact label="Activation deadline slot" value={badge.deadline === null ? 'none — activation is immediate' : `${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}`} />
-      <Fact label="Depends on entries" value={badge.dependencies.length === 0 ? 'none' : badge.dependencies.join(', ')} />
+      <ContentId label="What kind it is" value={badge.kindId} />
+      <ContentId label="Which release runs it" value={badge.programSetId} />
+      <ContentId label="How it is configured" value={badge.configId} />
+      <Fact label="When it switches on" value={badge.activation} />
+      <Fact label="Must be switched on by" value={badge.deadline === null ? 'no deadline — it switches on the moment it is asked to' : `slot ${badge.deadline}${deadlinePhrase(badge.deadline, clock, nowMs)}`} />
+      <Fact label="Waits for" value={badge.dependencies.length === 0 ? 'nothing' : badge.dependencies.join(', ')} />
     </dl>
     <FundingQuote funding={badge.funding} />
   </details>;
@@ -144,9 +146,9 @@ function Capabilities({ capabilities, clock, nowMs }: Readonly<{ capabilities: M
   }
   return <>
     <dl className="detail-facts">
-      <ContentId label="Manifest content ID" value={capabilities.manifestId} />
-      <Fact label="Registry record" value={capabilities.recordAddress} />
-      <Fact label="Entries" value={String(capabilities.badges.length)} />
+      <ContentId label="Fingerprint of the list" value={capabilities.manifestId} />
+      <Fact label="Where the list is stored" value={capabilities.recordAddress} />
+      <Fact label="Things it can do" value={String(capabilities.badges.length)} />
     </dl>
     <div className="capability-drawers">{capabilities.badges.map((badge) => <CapabilityEntry key={badge.index} badge={badge} clock={clock} nowMs={nowMs} />)}</div>
   </>;
@@ -157,13 +159,13 @@ function Realm({ collateral }: Readonly<{ collateral: MarketCollateralV1 }>) {
     return <p className="market-refusal">{collateral.reason}</p>;
   }
   return <dl className="detail-facts">
-    <Fact label="Realm account" value={collateral.realmAddress} />
-    <ContentId label="Realm content ID" value={collateral.realmContentId} />
+    <Fact label="Collateral setup account" value={collateral.realmAddress} />
+    <ContentId label="Its fingerprint" value={collateral.realmContentId} />
     <Fact label="Token program" value={collateral.tokenProgram} />
-    <CopyableAddress label="Collateral mint" address={collateral.collateralMint} />
-    <ContentId label="Collateral adapter release ID" value={collateral.adapterReleaseId} />
-    <Fact label="Mint authority policy" value={collateral.mintAuthorityPolicy} />
-    <Fact label="Freeze authority policy" value={collateral.freezeAuthorityPolicy} />
+    <CopyableAddress label="The token it pays out in" address={collateral.collateralMint} />
+    <ContentId label="Release that handles that token" value={collateral.adapterReleaseId} />
+    <Fact label="Who may mint more of it" value={collateral.mintAuthorityPolicy} />
+    <Fact label="Who may freeze it" value={collateral.freezeAuthorityPolicy} />
   </dl>;
 }
 
@@ -173,7 +175,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   // never gate a read and never stand in for one: an unregistered market
   // renders its address, exactly as before.
   const editorial = marketEditorialV1(address);
-  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this Market at the finalized floor…' });
+  const [state, setState] = useState<State>({ kind: 'loading', message: 'Reading this market from the chain…' });
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
@@ -196,7 +198,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   }, []);
 
   const read = useCallback(async () => {
-    setState({ kind: 'loading', message: 'Reading this Market, the Realm record and capability manifest it commits to, and the Claims aggregate holding its liabilities, behind one finalized floor…' });
+    setState({ kind: 'loading', message: 'Reading this market, what it is collateralized in, what it is allowed to do, and the ledger holding the claims against it — all at the same finalized point in the chain…' });
     setClock(null);
     try {
       const client = new SolanaRpcClient(deployment.endpoint);
@@ -254,33 +256,36 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   }, []);
 
   const marketProvenance: MarketProvenanceV1 = card?.provenance
-    ?? Object.freeze({ kind: 'refused', reason: 'This Market has not been read at any finalized floor yet.' });
+    ?? Object.freeze({ kind: 'refused', reason: 'This market has not been read from the chain yet.' });
   const realmProvenance = detail?.realmProvenance
-    ?? Object.freeze({ kind: 'refused' as const, reason: 'No Realm has been reacquired, because no Market has been read.' });
+    ?? Object.freeze({ kind: 'refused' as const, reason: 'Not read yet — the market itself has not been read.' });
   const liabilityProvenance = detail?.liabilityProvenance
-    ?? Object.freeze({ kind: 'refused' as const, reason: 'No Claims aggregate has been read, because no Market has been read.' });
+    ?? Object.freeze({ kind: 'refused' as const, reason: 'Not read yet — the market itself has not been read.' });
   const capabilityProvenance = detail?.capabilityProvenance
-    ?? Object.freeze({ kind: 'refused' as const, reason: 'Nothing to show yet: no market has been read, so there is nothing to check.' });
+    ?? Object.freeze({ kind: 'refused' as const, reason: 'Not read yet — the market itself has not been read.' });
+  const activation: MarketActivationOutlookV1 = card === null
+    ? Object.freeze({ status: 'unknown', reason: 'This market has not been read from the chain yet.' })
+    : marketActivationOutlookV1(card);
 
   return <main className="product-shell trade-v3-shell">
     <Nav current="/markets" status={`${deployment.label} · finalized reads`} />
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow"><Anchor href="/markets">← all Markets</Anchor> · one Market, decoded field by field</p>
+        <p className="eyebrow"><Anchor href="/markets">← all markets</Anchor> · one market, field by field</p>
         <h1>{editorial === null ? shortAddressV1(address, 8) : editorial.title}<br /><em>{decoded === null ? (state.kind === 'loading' ? 'reading…' : card !== null && card.status === 'refused' ? 'refused' : 'unread') : decoded.phase}</em></h1>
         {editorial !== null && <p className="market-question">{editorial.question}</p>}
         {editorial !== null && editorial.resolution !== null && <p className="market-resolution">{editorial.resolution}</p>}
         {editorial !== null && editorial.story !== null && <p className="market-story">{editorial.story}</p>}
         {editorial !== null && <p className="market-editorial-note">{MARKET_EDITORIAL_NOTE_V1}</p>}
-        <p>Every field below is decoded from a finalized account this browser read, or the section carries REFUSED and its exact reason. Nothing here is aggregated, estimated, or carried over from a previous observation, and no sub-state renders as empty-but-fine.</p>
+        <p>Every figure below was read from the chain by this browser, just now. Where we could not read something, the section says REFUSED and gives the exact reason. Nothing is estimated, averaged, or carried over from an earlier visit, and no missing part is quietly shown as empty.</p>
       </div>
       <aside>
-        <span>Market address</span>
+        <span>This market lives at</span>
         <strong>{shortAddressV1(address, 10)}</strong>
         <p><code>{address}</code></p>
         <p><Anchor href={`/explorer?view=market&q=${encodeURIComponent(address)}`}>
-          Open the record graph in the explorer →
+          See everything it is connected to →
         </Anchor></p>
       </aside>
     </section>
@@ -288,15 +293,15 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     <section className="trade-v3-card route-card">
       <header>
         <span>00</span>
-        <div><h2>The read</h2><p>The program that owns this account is what decides what its bytes mean, and it — like every other program named on this page — comes from the active {deployment.label} deployment. What this market is allowed to do is checked against that same deployment, not taken from the market&apos;s own word for it.</p></div>
-        <div className="direct-actions"><button type="button" onClick={() => void read()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Re-read this Market'}</button></div>
+        <div><h2>Where this came from</h2><p>An account is just bytes until a program says what they mean, and the program that owns this one — like every other program named on this page — comes from the active {deployment.label} deployment. What this market is allowed to do is checked against that same deployment, not taken on the market&apos;s own word for it.</p></div>
+        <div className="direct-actions"><button type="button" onClick={() => void read()} disabled={state.kind === 'loading'}>{state.kind === 'loading' ? 'Reading…' : 'Read it again'}</button></div>
       </header>
       <p className="direct-status" aria-live="polite">{state.message}</p>
       {state.kind === 'ready' && <div className="trade-v3-evidence">
         <article><span>Endpoint</span><strong>{state.facts.solanaCore}</strong><small>{clusterNameV1(state.facts.genesisHash)} · genesis {shortAddressV1(state.facts.genesisHash, 6)}</small></article>
         <article><span>Finalized floor</span><strong>{state.detail.floorSlot}</strong><small>{clock === null ? 'one observation epoch for every section' : `read at ${new Date(clock.observedAtMs).toLocaleTimeString()} · one observation epoch for every section`}</small></article>
-        <article><span>Core program</span><strong>{shortAddressV1(state.detail.coreProgramId, 6)}</strong><small>owner of these bytes</small></article>
-        <article><span>Capability source</span><strong>{state.detail.registryProgramId === null ? 'not selected' : shortAddressV1(state.detail.registryProgramId, 6)}</strong><small>{state.detail.registryProgramId === null ? 'manifest unread' : 'manifest authenticated by content'}</small></article>
+        <article><span>Core program</span><strong>{shortAddressV1(state.detail.coreProgramId, 6)}</strong><small>owns these bytes and decides what they mean</small></article>
+        <article><span>Permissions checked against</span><strong>{state.detail.registryProgramId === null ? 'not selected' : shortAddressV1(state.detail.registryProgramId, 6)}</strong><small>{state.detail.registryProgramId === null ? 'the list was not read' : 'the list matches its own fingerprint'}</small></article>
       </div>}
       {clock !== null && <p className="slot-clock-note">{slotClockCaveatV1(clock)}</p>}
       {/* The live layer, stated rather than implied. A reader is told whether
@@ -314,32 +319,39 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     </section>
 
     <section className="trade-v3-card">
-      <header><span>01</span><div><h2>Overview</h2><p>What this account is, and the immutable identities it committed to when it was founded.</p></div><SectionProvenance provenance={marketProvenance} /></header>
+      <header><span>01</span><div><h2>What this market is</h2><p>What this account is, and what it locked itself to when it was created. None of it can be changed afterwards.</p></div><SectionProvenance provenance={marketProvenance} /></header>
       {refused !== null && <RefusedMarketStory refusal={refused.refusal} observedSlot={refused.observedSlot} address={address} />}
       {decoded === null
-        ? refused === null && <p className="market-empty">No decoded Market root. Nothing about phase, generation, or identity is asserted until one finalized read succeeds.</p>
+        ? refused === null && <p className="market-empty">The market account has not been read yet. Nothing about it is claimed here until one read of the chain succeeds.</p>
         : <>
           <dl className="detail-facts">
             <CopyableAddress label="Market address" address={decoded.address} />
+            <Fact label="Phase" value={decoded.phase} />
+            <Fact label="Read at finalized slot" value={decoded.observedSlot} />
             <Fact label="Schema" value={`${decoded.identity.schemaMagic} · version ${decoded.identity.schemaVersion}`} />
             <Fact label="Account width" value={`${decoded.identity.accountBytes} bytes, exact`} />
-            <Fact label="Phase" value={decoded.phase} />
             <Fact label="Founding readiness" value={decoded.readiness} />
             <Fact label="Generation" value={decoded.generation} />
             <Fact label="Outstanding capabilities" value={decoded.outstandingCapabilities} />
-            <Fact label="Finalized observed slot" value={decoded.observedSlot} />
-            <Fact label="Selected Registry program" value={decoded.identity.registryProgram} />
-            <Fact label="Rent beneficiary" value={decoded.identity.rentBeneficiary} />
+            <Fact label="Permissions checked against" value={decoded.identity.registryProgram} />
+            <Fact label="Rent goes back to" value={decoded.identity.rentBeneficiary} />
           </dl>
           <p className="phase-meaning"><strong>{decoded.phase}</strong> {detail?.phaseMeaning}</p>
-          <h3 className="detail-subhead">Immutable identities · content IDs, not addresses</h3>
+          {/* The chain has no phase for a market whose trading can never be
+              switched on, so the page says it beside the phase rather than
+              leaving a reader to infer it from an elapsed deadline. */}
+          {activation.status === 'never' && <p className="market-never-trades-note">
+            This market can never trade. The window to switch its trading on closed at slot {activation.lastActivationSlot} and cannot be reopened.
+            Nothing else about it changed: every field on this page is read live from the chain, and it stays readable.
+          </p>}
+          <h3 className="detail-subhead">What it locked itself to · fingerprints, not addresses</h3>
           <dl className="detail-facts">
-            <ContentId label="Realm" value={decoded.identity.realmId} />
-            <ContentId label="Product record" value={decoded.identity.productRecordId} />
-            <ContentId label="Product instance" value={decoded.identity.productInstanceId} />
-            <ContentId label="Resolution policy" value={decoded.identity.resolutionPolicyId} />
-            <ContentId label="Capability manifest" value={decoded.identity.capabilityManifestId} />
-            <ContentId label="Selected execution release set" value={decoded.identity.selectedReleaseSetId} />
+            <ContentId label="Its collateral setup" value={decoded.identity.realmId} />
+            <ContentId label="The kind of market it is" value={decoded.identity.productRecordId} />
+            <ContentId label="This particular market" value={decoded.identity.productInstanceId} />
+            <ContentId label="How it gets its answer" value={decoded.identity.resolutionPolicyId} />
+            <ContentId label="What it is allowed to do" value={decoded.identity.capabilityManifestId} />
+            <ContentId label="Which release runs it" value={decoded.identity.selectedReleaseSetId} />
           </dl>
           <ul className="market-bindings">
             {decoded.bindings.map((check) => (
@@ -353,25 +365,25 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     </section>
 
     {refused === null && <section className="trade-v3-card">
-      <header><span>02</span><div><h2>Economics</h2><p>Raw u64 atoms, read where the chain keeps them. A Core Market root carries no supply vector and no Hoard figure, so this section is not decoded from the Market at all: the per-claim supplies come from the Claims LiabilityBasisV2 aggregate this Market derives, and the Hoard is stated as underivable rather than guessed.</p></div><SectionProvenance provenance={liabilityProvenance} /></header>
+      <header><span>02</span><div><h2>The money</h2><p>Raw amounts, read where the chain keeps them. The market account itself stores neither the claim counts nor the vault balance, so nothing in this section comes from it: the counts come from the claims ledger this market points at, and where the vault cannot be worked out we say so rather than guess.</p></div><SectionProvenance provenance={liabilityProvenance} /></header>
       {decoded === null
-        ? <p className="market-empty">No decoded economic state. A zero is a fact a read has to justify, so none is shown here.</p>
+        ? <p className="market-empty">Nothing has been read yet. A zero is a fact a read has to earn, so none is shown here.</p>
         : decoded.liability.status !== 'bound'
           ? <p className="market-capability-refusal"><span>{decoded.liability.status === 'unread' ? 'liabilities unread' : 'liabilities refused'}</span>{decoded.liability.reason}</p>
           : <>
             <div className="trade-v3-preview">
-              <div><span>Exact required backing</span><strong>{decoded.liability.requiredBackingAtoms}</strong></div>
-              <div><span>Claim count</span><strong>{decoded.liability.claimCount}</strong></div>
-              <div><span>Aggregate revision</span><strong>{decoded.liability.revision}</strong></div>
-              <div><span>Terminal receipt</span><strong>{decoded.settlement.status === 'terminal' ? 'accepted' : 'none'}</strong></div>
-              <p>Required backing is measured against the {requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}.</p>
+              <div><span>Collateral it must hold</span><strong>{decoded.liability.requiredBackingAtoms}</strong></div>
+              <div><span>Outcomes</span><strong>{decoded.liability.claimCount}</strong></div>
+              <div><span>Ledger revision</span><strong>{decoded.liability.revision}</strong></div>
+              <div><span>Answer decided?</span><strong>{decoded.settlement.status === 'terminal' ? 'yes' : 'not yet'}</strong></div>
+              <p>That figure is the {requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}.</p>
             </div>
             <dl className="detail-facts">
-              <Fact label="Claims aggregate account" value={decoded.liability.aggregateAddress} />
+              <Fact label="Claims ledger account" value={decoded.liability.aggregateAddress} />
               <Fact label="Claims program" value={decoded.liability.claimsProgramId} />
-              <ContentId label="Liability basis" value={decoded.liability.liabilityBasisId} />
+              <ContentId label="Rule it pays by" value={decoded.liability.liabilityBasisId} />
             </dl>
-            <h3 className="detail-subhead">Per-claim supply · ordered, raw u64</h3>
+            <h3 className="detail-subhead">Claims bought, per outcome · in order, raw amounts</h3>
             {/* FE-CHART mount: the cell strip draws the same aggregate the
                 list below itemizes; the list stays as the exact-value twin. */}
             <CellStrip
@@ -379,15 +391,15 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
               winner={decoded.settlement.status === 'terminal' ? decoded.settlement.winner : null}
               requiredBackingAtoms={decoded.liability.requiredBackingAtoms}
               requiredBackingNote={requiredBackingMeaningV1(decoded.liability.requiredBackingBasis)}
-              caption="Each cell is one claim across this Market&rsquo;s outcome domain; heights are issued claim atoms from the Claims aggregate, against the exact required-backing line."
+              caption="One cell per outcome. The height is how many claims people bought on it, drawn against the line marking what this market has to be able to pay."
               notes={decoded.liability.supplyAtoms.map((_, index) => {
                 const outcome = editorial?.outcomes?.[index];
                 const status = decoded.settlement.status === 'terminal'
                   ? (decoded.settlement.winner === index
-                    ? 'winning · pays out under the Market’s own basis (one atom per claim atom when categorical)'
-                    : 'losing · pays zero')
-                  : 'unsettled · the terminal receipt decides what this claim pays';
-                return outcome === undefined ? status : `${outcome} (editorial name) · ${status}`;
+                    ? 'won · pays out on this market’s own terms; where the outcomes are a simple pick-one, that is one unit of collateral per claim'
+                    : 'lost · pays nothing')
+                  : 'no answer yet · the recorded answer decides what this claim pays';
+                return outcome === undefined ? status : `${outcome} (our name for it) · ${status}`;
               })}
             />
             <ol className="outcome-vector">
@@ -397,14 +409,14 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
                 <li key={index} className={decoded.settlement.status === 'terminal' && decoded.settlement.winner === index ? 'winning-outcome' : ''}>
                   <span>claim {index}{outcomeName === undefined ? '' : ` · ${outcomeName}`}</span>
                   <strong>{amount}</strong>
-                  {decoded.settlement.status === 'terminal' && <small>{decoded.settlement.winner === index ? 'winning · pays out under the Market\u2019s own basis (one atom per claim atom when categorical)' : 'losing · pays zero'}</small>}
+                  {decoded.settlement.status === 'terminal' && <small>{decoded.settlement.winner === index ? 'won · pays out on this market\u2019s own terms; where the outcomes are a simple pick-one, that is one unit of collateral per claim' : 'lost · pays nothing'}</small>}
                 </li>
                 );
               })}
             </ol>
             {editorial !== null && editorial.outcomes !== null
-              && <p className="market-editorial-note">The outcome names beside the claim indices are this site&apos;s editorial; the indices, atoms, and every figure above are the chain&apos;s.</p>}
-            <h3 className="detail-subhead">The issuance split</h3>
+              && <p className="market-editorial-note">The outcome names beside the numbers are ours; the numbers themselves, and every figure above, come from the chain.</p>}
+            <h3 className="detail-subhead">How those claims are split</h3>
             {/* FE-CHART mount: the same supply vector as the cell strip and
                 the ordered list, re-expressed as shares of the whole. */}
             <SupplyShareStrip
@@ -416,39 +428,39 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             {/* Drawn only for a market some run actually recorded; every other
                 market renders nothing here rather than an empty frame. */}
             <MarketIssuanceHistory address={address} outcomes={editorial?.outcomes ?? null} />
-            <h3 className="detail-subhead">Hoard</h3>
+            <h3 className="detail-subhead">The vault</h3>
             {decoded.hoard.status === 'derived'
               ? <dl className="detail-facts">
-                <Fact label="Principal (atoms)" value={decoded.hoard.principalAtoms} />
-                <Fact label="Vault" value={decoded.hoard.address} />
-                <Fact label="Custody transfer authority" value={decoded.hoard.custodyAuthority} />
-                <ContentId label="Custody namespace" value={decoded.hoard.custodyContext} />
+                <Fact label="Collateral held (raw)" value={decoded.hoard.principalAtoms} />
+                <Fact label="Vault account" value={decoded.hoard.address} />
+                <Fact label="Only this may move it" value={decoded.hoard.custodyAuthority} />
+                <ContentId label="Under this custody namespace" value={decoded.hoard.custodyContext} />
                 <Fact label="Custody program" value={decoded.hoard.custodyProgramId} />
-                <Fact label="Finalized observed slot" value={decoded.hoard.observedSlot} />
+                <Fact label="Read at finalized slot" value={decoded.hoard.observedSlot} />
               </dl>
-              : <p className="market-capability-refusal"><span>Hoard {decoded.hoard.status}</span>{decoded.hoard.reason}</p>}
-            <h3 className="detail-subhead">Terminal settlement</h3>
+              : <p className="market-capability-refusal"><span>Vault {decoded.hoard.status}</span>{decoded.hoard.reason}</p>}
+            <h3 className="detail-subhead">The answer</h3>
             {decoded.settlement.status === 'terminal'
               ? <dl className="detail-facts">
                 <Fact label="State" value={decoded.settlement.label} />
-                <Fact label="Winning claim" value={String(decoded.settlement.winner)} />
-                <ContentId label="Terminal receipt ID" value={decoded.settlement.receiptId} />
+                <Fact label="Outcome that won" value={String(decoded.settlement.winner)} />
+                <ContentId label="Fingerprint of the answer" value={decoded.settlement.receiptId} />
               </dl>
-              : <p className="market-hoard-note">No terminal receipt is written, so no claim is winning and no claim can be redeemed. This is the account&apos;s own state, not a missing read.</p>}
+              : <p className="market-hoard-note">No answer has been recorded, so no outcome has won and nothing can be cashed in yet. That is what the account itself says — not something we failed to read.</p>}
           </>}
     </section>}
 
     {refused === null && <section className="trade-v3-card">
-      <header><span>03</span><div><h2>Realm</h2><p>The Market names its Realm by content identity. The Realm account read here is the content-addressed program address of that identity, so the collateral binding is derived, never supplied.</p></div><SectionProvenance provenance={realmProvenance} /></header>
+      <header><span>03</span><div><h2>What it pays out in</h2><p>The market does not store the address of its collateral setup — it stores a fingerprint of one, and the address below is worked out from that fingerprint. So the collateral cannot be swapped for something else behind your back. The protocol calls this setup the Realm.</p></div><SectionProvenance provenance={realmProvenance} /></header>
       {decoded === null
-        ? <p className="market-empty">No Realm was reacquired, because no Market root has been decoded.</p>
+        ? <p className="market-empty">Nothing to show: the market account has not been read, so there is no fingerprint to work an address out from.</p>
         : <Realm collateral={decoded.collateral} />}
     </section>}
 
     {refused === null && <section className="trade-v3-card">
-      <header><span>04</span><div><h2>Capabilities</h2><p>A capability exists only if this Market&apos;s own authenticated manifest lists it. Each entry opens to its exact identities, activation policy, dependency list, and immutable funding quote — quoted in seven segregated compartments with separate native-lamport and Realm-collateral totals, never merged into one number.</p></div><SectionProvenance provenance={capabilityProvenance} /></header>
+      <header><span>04</span><div><h2>What it is allowed to do</h2><p>A market can do something only if its own list says so, and that list has to match its own fingerprint before we will read it. Each entry below opens up: what it is, when it switches on, what it waits for, and what it costs to fund — quoted in seven separate compartments, with SOL and collateral totalled apart and never merged into one number.</p></div><SectionProvenance provenance={capabilityProvenance} /></header>
       {decoded === null
-        ? <p className="market-empty">No capability manifest identity exists to authenticate, because no Market root has been decoded.</p>
+        ? <p className="market-empty">Nothing to show: the market account has not been read, so there is no list to check.</p>
         : <Capabilities capabilities={decoded.capabilities} clock={clock} nowMs={nowMs} />}
     </section>}
 
@@ -487,8 +499,8 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     />}
 
     <footer className="product-footer">
-      <span>Chain-derived fields, atoms, and refusals only</span>
-      <span>Hoard principal is never presented as an available balance</span>
+      <span>Read from the chain, or refused — nothing in between</span>
+      <span>What the vault holds is never shown as money you can spend</span>
     </footer>
   </main>;
 }

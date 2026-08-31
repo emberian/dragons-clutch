@@ -13,6 +13,7 @@ default = []
 
 [dependencies]
 dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
+dclutch-capability-activation-codec = { path = "../dclutch-capability-activation-codec" }
 dclutch-capability-contract = { path = "../dclutch-capability-contract" }
 dclutch-capability-program-contract = { path = "../dclutch-capability-program-contract" }
 dclutch-capability-seal-contract = { path = "../dclutch-capability-seal-contract" }

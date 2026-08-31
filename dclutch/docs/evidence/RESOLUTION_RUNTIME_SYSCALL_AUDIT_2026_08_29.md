@@ -258,6 +258,19 @@ searches plus repeated full cache decoding.
 
 ### P0 — replace Trading's repeated Registry reauthentication CPIs
 
+**CLOSED 2026-08-30 (lane CACHEREAD, `f04654a0`).** All three owners converted;
+`RegistryInstructionV1` no longer appears in Trading's code at all. This item's
+payoff label was "very high" and unsized; it is now **66,921 CU measured** at the
+top-level Direct route's key-independent floor — 52,592 for the CPI pair and
+about 14,300 for the third cache decode this section correctly named ("Registry
+then searches and decodes the same cache again") and did not size. See
+`docs/decisions/0017-cache-read-role-authentication.md` §9. The "preserve exact
+return-receipt comparisons" instruction was followed and then some: two of the
+three comparisons became constructions of a local receipt, and the cache address
+is now derived from the Market's selected release set rather than the cache's
+own, which is a check the CPI could not make.
+
+
 Exact owners:
 
 - `programs/dclutch-trading-sbf/src/outer.rs::reauthenticate_role`, called for

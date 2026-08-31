@@ -53,3 +53,11 @@ SBF_OUT_DIR="$sbf_out" cargo test \
   --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
   --test fractional_atomic \
   -- --nocapture
+
+# The permissioned-burn wall. It loads only Token-2022, so it is cheap, and it
+# is what stops the fractional claim-check's redemption route from being
+# designed around a burn no shard holder can ever perform.
+SBF_OUT_DIR="$sbf_out" cargo test \
+  --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
+  --test permissioned_burn_wall \
+  -- --nocapture

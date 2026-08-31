@@ -39,8 +39,9 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_resolution_codec::{
-    RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
-    SOURCE_CLOSURE_RECEIPT_BYTES_V3, SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
+    FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, SOURCE_CLOSURE_RECEIPT_BYTES_V3,
+    SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3, SourceClosureReceiptV3,
 };
 use dclutch_resolution_core_v3_operator::{
     Observation, ObservedAccount, ResolutionCloseFundSnapshotV3, ResolutionCreateFundSnapshotV3,
@@ -113,6 +114,11 @@ pub(crate) struct ResolutionAddressesV1 {
     /// staging cursor for it.
     pub(crate) pyth_release: Pubkey,
     pub(crate) source_state: Pubkey,
+    /// The V7 funding activation receipt `ActivateFund` writes and
+    /// `VerifyFundReady` reads. It is Resolution-owned once activation has run,
+    /// and a System-owned vacancy before it, so the builder's own refusal is
+    /// what says which side of activation this campaign is on.
+    pub(crate) activation_receipt: Pubkey,
     /// Resolution-owned subset ledger containing recovery, exhaustion, and failure rows.
     pub(crate) funding: Pubkey,
     pub(crate) funding_entry_indices: [u16; 3],
@@ -284,6 +290,16 @@ pub(crate) fn derive(
     )
     .0;
 
+    let activation_receipt = Pubkey::find_program_address(
+        &[
+            FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1,
+            addresses.founding_market.as_ref(),
+            &generation.to_le_bytes(),
+        ],
+        &resolution_program,
+    )
+    .0;
+
     let closure_receipt = Pubkey::find_program_address(
         &[
             SOURCE_CLOSURE_RECEIPT_PDA_DOMAIN_V3,
@@ -316,6 +332,7 @@ pub(crate) fn derive(
         portfolio,
         pyth_release,
         source_state,
+        activation_receipt,
         funding,
         funding_entry_indices,
         rent_beneficiary: Pubkey::new_from_array(market.rent_beneficiary.to_bytes()),
@@ -753,6 +770,11 @@ fn verify_snapshot(
         rent_sysvar: at(13)?,
         recovery_policy: at(14)?,
         recovery_policy_staging: vacant(observation, addresses.recovery_policy.staging),
+        // Observed, never assumed vacant: `build_resolution_verify_fund_ready_v3`
+        // REQUIRES a Resolution-owned receipt of the exact width, so handing it a
+        // constructed vacancy would turn "this campaign has not activated yet"
+        // into a bare `Funding` that names nothing.
+        activation_receipt: observed_or_vacant(rpc, observation, addresses.activation_receipt)?,
     })
 }
 

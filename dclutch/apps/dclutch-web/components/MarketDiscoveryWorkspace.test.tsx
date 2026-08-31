@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import { DEVNET_DEPLOYMENT_V1 } from '@/lib/deployments';
+import { type CapabilityFundingQuoteV1 } from '@/lib/capabilityManifest';
 import {
   curateMarketListingV1,
   type MarketDiscoveryCardV1,
@@ -27,8 +28,8 @@ describe('Market discovery route', () => {
 
   it('lands on the market list of the baked deployment, loading with zero typing', () => {
     expect(html).toContain('Markets on Devnet');
-    expect(html).toContain('Reading the finalized market list…');
-    expect(html).toContain('enumerated from the Core program itself');
+    expect(html).toContain('Reading the market list from the chain…');
+    expect(html).toContain('straight from the Core program itself');
     // "current-compatible" is our word for "a market this build can read".
     expect(html).not.toContain('current-compatible');
     // The one button is a refresh, disabled while the auto-load is in flight.
@@ -42,10 +43,10 @@ describe('Market discovery route', () => {
    * decoder can catch that kind, so it is pinned here instead.
    */
   it('leads with the markets that are open, and says where the rest went', () => {
-    expect(html).toContain('The markets that are open');
-    expect(html).toContain('The markets that are open come first');
-    expect(html).toContain('is counted and named below rather than dropped');
-    expect(html).toContain('One card per market that has finished founding');
+    expect(html).toContain('Markets you can trade');
+    expect(html).toContain('Markets you can trade come first');
+    expect(html).toContain('counted and named rather than dropped');
+    expect(html).toContain('One card per market that is finished and still open');
   });
 
   it('asks the visitor for NO endpoint and NO program address', () => {
@@ -161,7 +162,7 @@ describe('Market discovery route', () => {
       }}
     />);
     expect(empty).toContain('No current compatible market is listed on devnet');
-    expect(empty).toContain('1 historical DCLTCOR2 Market account');
+    expect(empty).toContain('1 account here was made by an older version of the');
     expect(empty).toContain('disclosed here but not listed as current');
     expect(empty).toContain(legacyAddress);
     expect(empty).toContain(`/explorer?view=account&amp;q=${legacyAddress}`);
@@ -232,7 +233,7 @@ describe('the rest of the record', () => {
   it('labels the abandoned foundings with their count and their reason, before anything is expanded', () => {
     // The summary is what a reader who never clicks walks away with, so the
     // count and the framing both have to live in it.
-    expect(html).toContain('<summary><span>2 foundings that never finished</span>');
+    expect(html).toContain('<summary><span>2 markets that were never finished</span>');
     expect(html).toContain('kept because devnet history is public');
     expect(html).toContain('stopped part-way through');
     expect(html).toContain('not because they are something to be quiet about');
@@ -251,9 +252,9 @@ describe('the rest of the record', () => {
   });
 
   it('gives the older-generation accounts a labelled row of their own', () => {
-    expect(html).toContain('1 older market this page cannot read');
+    expect(html).toContain('1 older market this build cannot read');
     expect(html).toContain('disclosed here but not listed as current');
-    expect(html).toContain('1 historical DCLTCOR2 Market account');
+    expect(html).toContain('1 account here was made by an older version of the');
     expect(html).toContain('will not guess at the difference');
     expect(html).toContain('3Dhpq9tufPuBMroMfUNaWhfZMPfLFh6MG7vwhJFfqjMm');
   });
@@ -266,9 +267,145 @@ describe('the rest of the record', () => {
   it('speaks in the singular for a single abandoned founding', () => {
     const one = curateMarketListingV1([card('found111111111111111111111111111111111111111', 'Founding')]);
     const singular = renderToStaticMarkup(<RestOfTheRecord listing={one} incompatible={[]} />);
-    expect(singular).toContain('1 founding that never finished');
-    expect(singular).toContain('this one stopped part-way through');
-    expect(singular).not.toContain('foundings that');
+    expect(singular).toContain('1 market that was never finished');
+    expect(singular).toContain('this one stopped part-way');
+    expect(singular).not.toContain('markets that were');
+  });
+});
+
+/**
+ * The bucket for a market that is `Open` and can never trade.
+ *
+ * This group exists because the site had exactly one untrue thing on it: two
+ * devnet markets whose trading can never be switched on were filed under "the
+ * markets that are open", which is where a reader looks for something they can
+ * act on. The phase is not wrong and is not edited — the card still prints
+ * `Open` — so the correction is a bucket, and what these pin is that a reader
+ * meets the plain fact before expanding anything, and that such a market can
+ * never be rendered among the open ones.
+ */
+describe('markets that can never trade', () => {
+  const NO_FUNDING: CapabilityFundingQuoteV1 = Object.freeze({
+    compartments: Object.freeze([]),
+    nativeLamportsTotal: BigInt(0),
+    realmCollateralTotal: BigInt(0),
+    realmCollateral: null,
+  });
+
+  /** An `Open` card whose only capability could last be activated at `deadline`. */
+  function shutCard(address: string, deadline = '490330281'): MarketDiscoveryCardV1 {
+    return Object.freeze({
+      ...card(address, 'Open'),
+      capabilities: Object.freeze({
+        status: 'authenticated' as const,
+        manifestId: IDENTITY.capabilityManifestId,
+        recordAddress: 'rec11111111111111111111111111111111111111111',
+        observedSlot: '490435916',
+        badges: Object.freeze([Object.freeze({
+          index: 0,
+          kindId: 'ab'.repeat(32),
+          label: 'Direct successor',
+          recognized: true,
+          programSetId: 'cd'.repeat(32),
+          configId: 'ef'.repeat(32),
+          activation: 'deadline' as const,
+          deadline,
+          dependencies: Object.freeze([]),
+          funding: NO_FUNDING,
+        })]),
+      }),
+    });
+  }
+
+  const listing = curateMarketListingV1([
+    shutCard('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC'),
+    shutCard('CasyDFowGxqREDW5iWvKRgSMCgk5HnLQjnjegvRsSNPM'),
+    card('open1111111111111111111111111111111111111111', 'Open'),
+  ]);
+  const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
+
+  it('names the group and its count before anything is expanded', () => {
+    expect(html).toContain('<summary><span>2 markets that can never trade</span>');
+    expect(html).toContain('trading can no longer be switched on');
+  });
+
+  it('says what happened in words a stranger can act on, without protocol vocabulary', () => {
+    expect(html).toContain('Trading has to be switched on within a set window');
+    expect(html).toContain('the window closed before that happened');
+    expect(html).toContain('Nothing can turn it on now');
+    expect(html).toContain('they stay readable for good');
+
+    // The prose this group adds is checked on its own. The card's chain-fact
+    // rows around it keep the protocol's vocabulary, as they must — those are
+    // quotations of what the account says, not an explanation of it.
+    const prose = [...html.matchAll(/<p class="(?:market-empty|market-never-trades-note)">(.*?)<\/p>/g)].map((match) => match[1]);
+    expect(prose).toHaveLength(3);
+    for (const jargon of ['capabilit', 'manifest', 'PDA', 'activation', 'program', 'protocol', 'we ', 'our ']) {
+      for (const sentence of prose) expect(sentence).not.toContain(jargon);
+    }
+  });
+
+  it('marks each card, and still prints the phase the chain actually says', () => {
+    expect(html).toContain('never trades');
+    expect(html).toContain('This market can never trade.');
+    expect(html).toContain('closed at slot 490330281 and cannot be reopened');
+    // The phase chip is chain fact and is not edited into something softer.
+    expect(html).toContain('>Open</span>');
+  });
+
+  it('keeps a market that can still trade out of the group entirely', () => {
+    expect(html).not.toContain('open1111111111111111111111111111111111111111');
+    expect(listing.open.map((entry) => entry.address)).toEqual(['open1111111111111111111111111111111111111111']);
+  });
+
+  it('speaks in the singular for one such market', () => {
+    const one = curateMarketListingV1([shutCard('7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC')]);
+    const singular = renderToStaticMarkup(<RestOfTheRecord listing={one} incompatible={[]} />);
+    expect(singular).toContain('1 market that can never trade');
+    expect(singular).toContain('on this one the window closed');
+    expect(singular).toContain('It is here to be read, not traded.');
+  });
+
+  /**
+   * The boundary this bucket must not cross. `(DCLTCOR3, version 3, 360 bytes)`
+   * is the width every Market on the cluster is written at, and this reader
+   * cannot decode it. Such an account is disclosed as one it cannot read — it
+   * is NOT filed as a market that can never trade, which would be the page
+   * inventing a verdict about trading out of a failed read.
+   */
+  it('does not absorb an account it simply could not decode', () => {
+    const undecodable: MarketDiscoveryCardV1 = Object.freeze({
+      status: 'refused',
+      address: '9JwhTHyxGhaoVsvSyT9VsJxV7PoQcPcjyhMLuJtY38Uq',
+      provenance: Object.freeze({ kind: 'refused', reason: 'Core Market state is 360 bytes; the exact current width is 368.' }),
+      observedSlot: '490435916',
+      refusal: 'Core Market state is 360 bytes; the exact current width is 368.',
+    });
+    const listing = curateMarketListingV1([undecodable]);
+    expect(listing.untradeable).toEqual([]);
+    expect(listing.open).toEqual([]);
+    expect(listing.unreadable.map((entry) => entry.address)).toEqual([undecodable.address]);
+
+    const rendered = renderToStaticMarkup(<RestOfTheRecord
+      listing={listing}
+      incompatible={[Object.freeze({ address: '7Mcu1ZT9KZBnvLZ2vhSvLeQMRA1ejQWD93yyPF2k8WAC', magic: 'DCLTCOR3', accountBytes: 360 })]}
+    />);
+    expect(rendered).toContain('1 account we could not read');
+    expect(rendered).toContain('Core Market state is 360 bytes; the exact current width is 368.');
+    expect(rendered).toContain('1 older market this build cannot read');
+    expect(rendered).toContain('disclosed here but not listed as current');
+    // Neither of them is dressed in the never-trades state, and the page does
+    // not claim anywhere that they cannot trade.
+    expect(rendered).not.toContain('never trades');
+    expect(rendered).not.toContain('can never trade');
+  });
+
+  it('leaves a market whose manifest was never read among the open ones', () => {
+    // An unread manifest is a read that did not happen. It is not evidence of a
+    // shut window, and it never becomes a claim that a market is finished.
+    const unread = curateMarketListingV1([card('open1111111111111111111111111111111111111111', 'Open')]);
+    expect(unread.untradeable).toEqual([]);
+    expect(renderToStaticMarkup(<RestOfTheRecord listing={unread} incompatible={[]} />)).toBe('');
   });
 });
 
@@ -290,7 +427,7 @@ describe('market names on cards', () => {
     expect(html).toBe('');
     const page = renderToStaticMarkup(<MarketDiscoveryWorkspace />);
     // The page-level editorial provenance sentence is always present.
-    expect(page).toContain('this site&#x27;s editorial');
+    expect(page).toContain('Only the name and the question are ours to write');
     expect(page).toContain('the chain stores no names');
   });
 
@@ -372,7 +509,7 @@ describe('a Hoard the page could authenticate', () => {
     const listing = curateMarketListingV1([card('found111111111111111111111111111111111111111', 'Founding', derived)]);
     const html = renderToStaticMarkup(<RestOfTheRecord listing={listing} incompatible={[]} />);
     expect(html).toContain('<strong>500000000</strong> atoms');
-    expect(html).toContain('the mint prints 6 display decimals, which never scale this figure');
+    expect(html).toContain('the 6 decimals the token displays never scale that figure');
     // The scaled figure is a landing-strip convenience and has no business
     // standing in for the quantity on a card.
     expect(html).not.toContain('>500<');

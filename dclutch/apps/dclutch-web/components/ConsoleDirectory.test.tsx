@@ -14,7 +14,7 @@ describe('the console index', () => {
 
   it('states readiness boundaries and names the provenance answer key', () => {
     expect(html).toContain('does not update programs');
-    expect(html).toContain('does not mean it can send a transaction');
+    expect(html).toContain('does not mean a page can send a transaction');
     expect(html).toContain('For market authors');
     expect(html).toContain('Wallet redemption');
     // The blurb used to offer redemption as something a reader could do today.

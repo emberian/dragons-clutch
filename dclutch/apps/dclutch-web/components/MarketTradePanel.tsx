@@ -667,14 +667,16 @@ export default function MarketTradePanel({
   const supplies = liability !== null && liability.status === 'bound' ? liability.supplyAtoms : null;
 
   return <section className="trade-v3-card">
-    <header><span>06</span><div><h2>Trade this Market</h2><p>Pick an outcome, size it, and cross one signed offer at the price its maker signed. Every number you see is read off the chain or computed by the exact code the chain runs. When something cannot happen yet, this panel tells you exactly why in one sentence — never a greyed-out button with no reason.</p></div></header>
+    <header><span>06</span><div><h2>Trade this market</h2><p>Pick an outcome, choose how much, and take one signed offer at the price its maker set. Every number here is read off the chain, or worked out by the exact code the chain runs. When something cannot happen yet, this panel says why in one sentence — never a greyed-out button with no reason.</p></div></header>
 
     <div className="direct-actions">
       <button type="button" onClick={() => void inspect()}>Ask the chain about trading here</button>
       <Anchor className="secondary-action" href="/trade">Advanced: full route workbench →</Anchor>
     </div>
     <p className="direct-status" aria-live="polite">{spineStatus}</p>
-    <p className="direct-status">Before anything is signed, this page re-reads both sides of the trade from the chain: who you would be trading with, the route itself, and the counters that stop the same trade being played twice. If your wallet is paying, it prepares the exact transaction and asks you to sign it; if an operator is paying, it names them instead. Signing sends nothing. Sending is a separate step you take, it happens once, and if you reload mid-flight this page picks up the transaction you already sent rather than sending a second one. Nothing is called a trade until the chain reports it finalized. The account that holds your claims is never your collateral account, and everything on this page is a copy — the programs on chain are what is true.</p>
+    <p className="direct-status">Before anything is signed, this page re-reads both sides of the trade from the chain: who you would be trading with, the route itself, and the counters that stop the same trade being played twice.</p>
+    <p className="direct-status">If your wallet is paying, it builds the exact transaction and asks you to sign. If an operator is paying, it names them instead. Signing sends nothing. Sending is a separate step you take, and it happens once — reload part-way through and this page picks up the transaction you already sent rather than sending a second one.</p>
+    <p className="direct-status">Nothing is called a trade until the chain reports it finalized. The account that holds your claims is never your collateral account, and everything on this page is a copy — the programs on chain are what is true.</p>
     <p className="direct-status" aria-live="polite">{participantStatus}</p>
 
     {spine !== null && spine.status === 'refused' && <p className="market-refusal">Refused: {spine.reason}</p>}
@@ -709,7 +711,7 @@ export default function MarketTradePanel({
       </>}
 
       <h3 className="detail-subhead">The other side&apos;s ticket</h3>
-      <p className="direct-status">A trade here is two signed halves: yours and someone else&apos;s. There is no order book to take from — the other half arrives as a small ticket (dclutch/direct-intent-ticket/v1) you can be handed any way you like. Pasting it is safe: nothing in it is believed until the chain itself checks the signature.</p>
+      <p className="direct-status">A trade here is two signed halves: yours and someone else&apos;s. There is no order book to take from — the other half reaches you as a small ticket (dclutch/direct-intent-ticket/v1), passed along any way you like. Pasting one is safe: nothing in it is believed until the chain itself checks the signature.</p>
       <label><span>Ticket JSON</span><textarea rows={5} spellCheck={false} value={ticketText} onChange={(event) => { setTicketText(event.target.value); invalidatePreview(); }} /></label>
       <div className="direct-form-grid">
         <label><span>My size · claim atoms (blank = take the ticket in full)</span><input inputMode="numeric" value={desired} onChange={(event) => { setDesired(event.target.value.trim()); invalidatePreview(); }} /></label>

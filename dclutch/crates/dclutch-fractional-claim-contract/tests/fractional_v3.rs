@@ -3,13 +3,19 @@
 #![allow(clippy::indexing_slicing, clippy::panic, clippy::unwrap_used)]
 
 use dclutch_fractional_claim_contract::{
-    FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3, FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_ID_V3,
-    FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_PREIMAGE_V3, FRACTIONAL_RETIREMENT_REQUEST_SCHEMA_ID_V3,
+    FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3,
+    FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3,
+    FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_MAGIC_V3, FRACTIONAL_RETIREMENT_CURSOR_BYTES_V3,
+    FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_ID_V3, FRACTIONAL_RETIREMENT_CURSOR_SCHEMA_PREIMAGE_V3,
+    FRACTIONAL_RETIREMENT_FINISH_ACCOUNT_COUNT_V3,
+    FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_BYTES_V3,
+    FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_MAGIC_V3, FRACTIONAL_RETIREMENT_REQUEST_SCHEMA_ID_V3,
     FRACTIONAL_RETIREMENT_REQUEST_SCHEMA_PREIMAGE_V3, FractionalChildRouteV3,
     FractionalExposureActionV2, FractionalExposureRequestInputV2, FractionalExposureRequestV2,
     FractionalPhysicalErrorV3, FractionalRetireCoordinateObservationV3,
     FractionalRetirementActionV3, FractionalRetirementCoordinateReceiptV3,
     FractionalRetirementCursorInputV3, FractionalRetirementCursorV3, FractionalRetirementErrorV3,
+    FractionalRetirementLifecycleObservationV3, FractionalRetirementLifecycleReceiptV3,
     FractionalRetirementRequestInputV3, FractionalRetirementRequestV3, FractionalSignerRoleV3,
     NO_EXPOSURE_COORDINATE_V2, NO_RETIREMENT_COORDINATE_V3, plan_fractional_physical_v3,
 };
@@ -459,4 +465,359 @@ fn request_and_cursor_reserved_bytes_and_terms_substitution_refuse() {
         ),
         Err(FractionalRetirementErrorV3::IdentityMismatch)
     );
+}
+
+/// The relation the on-chain root check must use, stated over a whole walk.
+///
+/// The Trading-owned root is written once and never mutated, so its revision
+/// is frozen for the cursor's whole life while the cursor consumes one per
+/// act. A consumer that compares the frozen value to the cursor's CURRENT
+/// revision is satisfiable for at most one coordinate; this is the relation
+/// that is satisfiable for all of them, and it holds at every step including
+/// both ends.
+#[test]
+fn the_root_revision_anchor_is_constant_across_the_whole_ordered_walk() {
+    const PRE_REVISION: u64 = 7;
+    let bytes = encoded_terms();
+    let terms = terms(&bytes);
+    let mut cursor = FractionalRetirementCursorV3::begin(
+        terms,
+        retirement_request(
+            FractionalRetirementActionV3::Begin,
+            PRE_REVISION,
+            NO_RETIREMENT_COORDINATE_V3,
+        ),
+        FractionalRetirementCursorInputV3 {
+            bump: 251,
+            pre_revision: PRE_REVISION,
+            historical_rent_principal: 2_039_280,
+        },
+    )
+    .unwrap();
+    assert_eq!(cursor.root_revision_anchor(), Ok(PRE_REVISION));
+
+    for coordinate in 0..3_u32 {
+        // The request's expected revision tracks the CURSOR and diverges from
+        // the root immediately -- which is the whole point.
+        assert_ne!(cursor.revision(), PRE_REVISION);
+        cursor = cursor
+            .advance(
+                terms,
+                retirement_request(
+                    FractionalRetirementActionV3::RetireCoordinate,
+                    cursor.revision(),
+                    coordinate,
+                ),
+                observation(usize::try_from(coordinate).unwrap()),
+            )
+            .unwrap();
+        assert_eq!(cursor.root_revision_anchor(), Ok(PRE_REVISION));
+    }
+    assert_eq!((cursor.next_coordinate(), cursor.revision()), (3, 11));
+    assert_eq!(cursor.root_revision_anchor(), Ok(PRE_REVISION));
+}
+
+/// A cursor whose two halves cannot both be true refuses to name an anchor.
+#[test]
+fn an_anchor_underflow_is_an_arithmetic_refusal_and_never_a_wrapped_revision() {
+    let bytes = encoded_terms();
+    let terms = terms(&bytes);
+    let cursor = FractionalRetirementCursorV3::begin(
+        terms,
+        retirement_request(
+            FractionalRetirementActionV3::Begin,
+            0,
+            NO_RETIREMENT_COORDINATE_V3,
+        ),
+        FractionalRetirementCursorInputV3 {
+            bump: 251,
+            pre_revision: 0,
+            historical_rent_principal: 1,
+        },
+    )
+    .unwrap();
+    // Revision 1, coordinate 0: the earliest anchor is exactly zero.
+    assert_eq!(cursor.root_revision_anchor(), Ok(0));
+
+    let mut hostile = cursor.to_bytes().unwrap();
+    // Advance the coordinate without advancing the revision, which no
+    // transition can produce and a forged account could still assert.
+    hostile[272..276].copy_from_slice(&1_u32.to_le_bytes());
+    assert_eq!(
+        FractionalRetirementCursorV3::decode(&hostile)
+            .unwrap()
+            .root_revision_anchor(),
+        Err(FractionalRetirementErrorV3::Arithmetic)
+    );
+}
+
+fn lifecycle_cursor(pre_revision: u64, steps: u32) -> FractionalRetirementCursorV3 {
+    let bytes = encoded_terms();
+    let terms = terms(&bytes);
+    let mut cursor = FractionalRetirementCursorV3::begin(
+        terms,
+        retirement_request(
+            FractionalRetirementActionV3::Begin,
+            pre_revision,
+            NO_RETIREMENT_COORDINATE_V3,
+        ),
+        FractionalRetirementCursorInputV3 {
+            bump: 251,
+            pre_revision,
+            historical_rent_principal: CURSOR_RENT,
+        },
+    )
+    .unwrap();
+    for coordinate in 0..steps {
+        cursor = cursor
+            .advance(
+                terms,
+                retirement_request(
+                    FractionalRetirementActionV3::RetireCoordinate,
+                    cursor.revision(),
+                    coordinate,
+                ),
+                observation(usize::try_from(coordinate).unwrap()),
+            )
+            .unwrap();
+    }
+    cursor
+}
+
+const CURSOR_RENT: u64 = 2_039_280;
+const CURSOR_ADDRESS: [u8; 32] = [31; 32];
+const REQUEST_DIGEST: [u8; 32] = [32; 32];
+const CURSOR_DIGEST: [u8; 32] = [33; 32];
+
+#[test]
+fn both_ends_of_the_walk_round_trip_and_bind_to_the_request_that_produced_them() {
+    // Begin's request names the ROOT's revision, finish's names the cursor's.
+    // Both then leave `expected + 1` behind, which is the one rule `verify_for`
+    // needs for either end.
+    for (action, steps, expected, settled, post) in [
+        (
+            FractionalRetirementActionV3::Begin,
+            0_u32,
+            7_u64,
+            0_u64,
+            8_u64,
+        ),
+        (FractionalRetirementActionV3::Finish, 3, 11, CURSOR_RENT, 12),
+    ] {
+        let cursor = lifecycle_cursor(7, steps);
+        let request = retirement_request(action, expected, NO_RETIREMENT_COORDINATE_V3);
+        let receipt = FractionalRetirementLifecycleReceiptV3::new(
+            cursor,
+            request,
+            REQUEST_DIGEST,
+            FractionalRetirementLifecycleObservationV3 {
+                cursor: CURSOR_ADDRESS,
+                cursor_digest: CURSOR_DIGEST,
+                cursor_rent_principal: CURSOR_RENT,
+                post_revision: post,
+                lamports_settled: settled,
+            },
+        )
+        .unwrap();
+        let encoded = receipt.to_bytes();
+        assert_eq!(
+            encoded.len(),
+            FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_BYTES_V3
+        );
+        assert_eq!(
+            FractionalRetirementLifecycleReceiptV3::decode(&encoded),
+            Ok(receipt)
+        );
+        assert_eq!(receipt.verify_for(request, REQUEST_DIGEST), Ok(()));
+        assert_eq!(receipt.lamports_settled(), settled);
+        assert_eq!(receipt.revision(), post);
+        // A substituted digest, and a neighbouring revision, each refuse.
+        assert_eq!(
+            receipt.verify_for(request, [34; 32]),
+            Err(FractionalRetirementErrorV3::InvalidTransition)
+        );
+        assert_eq!(
+            receipt.verify_for(
+                retirement_request(action, expected + 1, NO_RETIREMENT_COORDINATE_V3),
+                REQUEST_DIGEST,
+            ),
+            Err(FractionalRetirementErrorV3::InvalidTransition)
+        );
+    }
+}
+
+/// Begin settles nothing and finish settles everything, stated as one rule.
+///
+/// A partial finish -- the account closed but its lamports left behind, or a
+/// begin that moved lamports it had no business moving -- is exactly what this
+/// pairing refuses to describe, so such an act cannot produce evidence.
+#[test]
+fn a_lifecycle_receipt_cannot_disagree_with_itself_about_the_lamports() {
+    let begin = lifecycle_cursor(7, 0);
+    let complete = lifecycle_cursor(7, 3);
+    let observation = |settled| FractionalRetirementLifecycleObservationV3 {
+        cursor: CURSOR_ADDRESS,
+        cursor_digest: CURSOR_DIGEST,
+        cursor_rent_principal: CURSOR_RENT,
+        post_revision: 0,
+        lamports_settled: settled,
+    };
+    for (cursor, action, post, settled) in [
+        // A begin that moved lamports.
+        (begin, FractionalRetirementActionV3::Begin, 8_u64, 1_u64),
+        // A finish that moved none.
+        (complete, FractionalRetirementActionV3::Finish, 12, 0),
+        // A finish that stranded part of the principal.
+        (
+            complete,
+            FractionalRetirementActionV3::Finish,
+            12,
+            CURSOR_RENT - 1,
+        ),
+    ] {
+        assert_eq!(
+            FractionalRetirementLifecycleReceiptV3::new(
+                cursor,
+                retirement_request(action, cursor.revision(), NO_RETIREMENT_COORDINATE_V3),
+                REQUEST_DIGEST,
+                FractionalRetirementLifecycleObservationV3 {
+                    post_revision: post,
+                    ..observation(settled)
+                },
+            ),
+            Err(FractionalRetirementErrorV3::InvalidTransition)
+        );
+    }
+
+    // A donation on top of the principal is settled, not stranded.
+    let donated = FractionalRetirementLifecycleReceiptV3::new(
+        complete,
+        retirement_request(
+            FractionalRetirementActionV3::Finish,
+            complete.revision(),
+            NO_RETIREMENT_COORDINATE_V3,
+        ),
+        REQUEST_DIGEST,
+        FractionalRetirementLifecycleObservationV3 {
+            post_revision: 12,
+            ..observation(CURSOR_RENT + 4_242)
+        },
+    )
+    .unwrap();
+    assert_eq!(donated.lamports_settled(), CURSOR_RENT + 4_242);
+    assert_eq!(
+        FractionalRetirementLifecycleReceiptV3::decode(&donated.to_bytes()),
+        Ok(donated)
+    );
+}
+
+/// Finish is the only act that may claim a complete walk, and only a complete
+/// walk may be finished.
+#[test]
+fn only_a_complete_walk_finishes_and_only_finish_claims_one() {
+    let incomplete = lifecycle_cursor(7, 2);
+    assert_eq!(
+        FractionalRetirementLifecycleReceiptV3::new(
+            incomplete,
+            retirement_request(
+                FractionalRetirementActionV3::Finish,
+                incomplete.revision(),
+                NO_RETIREMENT_COORDINATE_V3,
+            ),
+            REQUEST_DIGEST,
+            FractionalRetirementLifecycleObservationV3 {
+                cursor: CURSOR_ADDRESS,
+                cursor_digest: CURSOR_DIGEST,
+                cursor_rent_principal: CURSOR_RENT,
+                post_revision: 11,
+                lamports_settled: CURSOR_RENT,
+            },
+        ),
+        Err(FractionalRetirementErrorV3::InvalidTransition)
+    );
+
+    let complete = lifecycle_cursor(7, 3);
+    assert_eq!(
+        FractionalRetirementLifecycleReceiptV3::new(
+            complete,
+            retirement_request(
+                FractionalRetirementActionV3::Begin,
+                complete.revision(),
+                NO_RETIREMENT_COORDINATE_V3,
+            ),
+            REQUEST_DIGEST,
+            FractionalRetirementLifecycleObservationV3 {
+                cursor: CURSOR_ADDRESS,
+                cursor_digest: CURSOR_DIGEST,
+                cursor_rent_principal: CURSOR_RENT,
+                post_revision: 11,
+                lamports_settled: 0,
+            },
+        ),
+        Err(FractionalRetirementErrorV3::InvalidTransition)
+    );
+}
+
+/// The coordinate walk has its own receipt; this one may never impersonate it.
+#[test]
+fn a_lifecycle_receipt_may_not_carry_the_coordinate_action() {
+    let cursor = lifecycle_cursor(7, 0);
+    assert_eq!(
+        FractionalRetirementLifecycleReceiptV3::new(
+            cursor,
+            retirement_request(FractionalRetirementActionV3::RetireCoordinate, 8, 0),
+            REQUEST_DIGEST,
+            FractionalRetirementLifecycleObservationV3 {
+                cursor: CURSOR_ADDRESS,
+                cursor_digest: CURSOR_DIGEST,
+                cursor_rent_principal: CURSOR_RENT,
+                post_revision: 8,
+                lamports_settled: 0,
+            },
+        ),
+        Err(FractionalRetirementErrorV3::InvalidTransition)
+    );
+
+    let mut hostile = FractionalRetirementLifecycleReceiptV3::new(
+        cursor,
+        retirement_request(
+            FractionalRetirementActionV3::Begin,
+            7,
+            NO_RETIREMENT_COORDINATE_V3,
+        ),
+        REQUEST_DIGEST,
+        FractionalRetirementLifecycleObservationV3 {
+            cursor: CURSOR_ADDRESS,
+            cursor_digest: CURSOR_DIGEST,
+            cursor_rent_principal: CURSOR_RENT,
+            post_revision: 8,
+            lamports_settled: 0,
+        },
+    )
+    .unwrap()
+    .to_bytes();
+    hostile[10] = FractionalRetirementActionV3::RetireCoordinate as u8;
+    assert_eq!(
+        FractionalRetirementLifecycleReceiptV3::decode(&hostile),
+        Err(FractionalRetirementErrorV3::NonCanonical)
+    );
+
+    // And the two receipt families do not share a magic.
+    assert_ne!(
+        FRACTIONAL_RETIREMENT_LIFECYCLE_RECEIPT_MAGIC_V3,
+        FRACTIONAL_RETIREMENT_COORDINATE_RECEIPT_MAGIC_V3
+    );
+}
+
+#[test]
+fn both_lifecycle_frames_are_exact_and_below_the_coordinate_frame() {
+    assert_eq!(FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3, 16);
+    assert_eq!(FRACTIONAL_RETIREMENT_FINISH_ACCOUNT_COUNT_V3, 13);
+    for count in [
+        FRACTIONAL_RETIREMENT_BEGIN_ACCOUNT_COUNT_V3,
+        FRACTIONAL_RETIREMENT_FINISH_ACCOUNT_COUNT_V3,
+    ] {
+        assert!(count < FRACTIONAL_RETIREMENT_COORDINATE_ACCOUNT_COUNT_V3);
+        assert!(count <= 64);
+    }
 }

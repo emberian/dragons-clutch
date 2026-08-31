@@ -1,3 +1,6 @@
+import { createHash, createPrivateKey, sign } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -7,7 +10,7 @@ import {
   largestAdmissibleFillV1,
   planDirectCrossingV1,
 } from './directTicket';
-import { type CompactIntentV2Input, type SignedDirectIntentV3 } from './directInlineV3';
+import { encodeCompactIntentSigningMessageV2, type CompactIntentV2Input, type SignedDirectIntentV3 } from './directInlineV3';
 import {
   DIRECT_MAKER_REPLAY_BYTES_V1,
   deriveDirectMakerReplayAddressV1,
@@ -149,5 +152,106 @@ describe('the counterparty ticket', () => {
     expect(() => planDirectCrossingV1({ ...base, ticket: sellerTicket(), clockSlot: 501n })).toThrow('expired');
     expect(() => planDirectCrossingV1({ ...base, ticket: sellerTicket({ feeBasisPoints: 30 }) })).toThrow('fee rate differs');
     expect(() => planDirectCrossingV1({ ...base, ticket: sellerTicket(), takerAddress: MAKER })).toThrow('two distinct makers');
+  });
+});
+
+/**
+ * THE TWO-SIDED TICKET VECTOR.
+ *
+ * Until 2026-08-30 the browser trade panel was the ONLY code in this repository
+ * that could WRITE a Direct ticket; every tool could only read one, which is why
+ * `devnet-direct-trade-produce-v1` demanded `--seller-ticket` and
+ * `--buyer-ticket` as inputs nothing under `tools/` could produce. The Rust
+ * author `direct-intent-ticket-author-v1` is the second writer, and this vector
+ * is how the two are held to one wire.
+ *
+ * TypeScript emits and Rust reproduces, because TypeScript is the incumbent:
+ * its bytes are the ones a chain has already been asked to accept. If this test
+ * changes the fixture, the Rust test in
+ * `tools/local-validator/bootstrap/successor/src/direct_ticket.rs` goes red next
+ * — which is the correct order, and the reason the fixture is not written from
+ * the Rust side.
+ *
+ * The 172-byte SIGNING MESSAGE underneath is owned by neither language but by
+ * `formal/dclutch-semantics/EmitDirectIntentV2Rust.lean`, whose emitted Rust
+ * constants `lib/generated/directInlineV3.ts` mirrors. `signatureHex` is
+ * therefore a real check on that message: Ed25519 is deterministic (RFC 8032),
+ * so node's `crypto.sign` here and `ed25519-dalek` there can only agree if both
+ * sides built the same bytes.
+ *
+ * Regenerate with `DCLUTCH_WRITE_TICKET_VECTOR=1` and only when the wire
+ * deliberately moved. Every intent field below is distinct and none is a
+ * default, so a swapped pair of offsets in either encoder cannot survive.
+ */
+const VECTOR_PATH = new URL('../fixtures/direct-intent-ticket.json', import.meta.url);
+const PKCS8_ED25519_PREFIX = '302e020100300506032b657004220420';
+const MAKER_SEED_FILL = 61;
+const MARKET_SEED_FILL = 63;
+const COLLATERAL_SEED_FILL = 64;
+
+function seededAddress(fill: number): string {
+  return Keypair.fromSeed(new Uint8Array(32).fill(fill)).publicKey.toBase58();
+}
+
+function ed25519Sign(seedFill: number, message: Uint8Array): Uint8Array {
+  const key = createPrivateKey({
+    key: Buffer.concat([Buffer.from(PKCS8_ED25519_PREFIX, 'hex'), Buffer.alloc(32, seedFill)]),
+    format: 'der',
+    type: 'pkcs8',
+  });
+  return new Uint8Array(sign(null, Buffer.from(message), key));
+}
+
+function vectorIntent(): CompactIntentV2Input {
+  return Object.freeze({
+    side: 0 as const,
+    lifecycle: 1 as const,
+    outcome: 3,
+    market: seededAddress(MARKET_SEED_FILL),
+    generation: 7n,
+    nonce: 9n,
+    validFrom: 11n,
+    validThrough: 4_294_967_295n,
+    maximumFill: 100_000_000n,
+    limitPrice: 500_000n,
+    feeBasisPoints: 50,
+    collateralAccount: seededAddress(COLLATERAL_SEED_FILL),
+  });
+}
+
+describe('the portable ticket wire the Rust author has to match', () => {
+  it('emits the exact fixture both languages are pinned to', () => {
+    const intent = vectorIntent();
+    const maker = seededAddress(MAKER_SEED_FILL);
+    const signature = ed25519Sign(MAKER_SEED_FILL, encodeCompactIntentSigningMessageV2(intent));
+    const ticketText = encodeDirectIntentTicketV1(Object.freeze({ maker, signature, intent }));
+    const produced = {
+      format: 'dclutch/direct-intent-ticket-vector/v1',
+      note: 'Two-sided vector for the portable Direct intent ticket. Emitted by directTicket.test.ts through the SAME encodeDirectIntentTicketV1 the browser trade panel calls, and reproduced byte-for-byte by the Rust author in tools/local-validator/bootstrap/successor/src/direct_ticket.rs (command direct-intent-ticket-author-v1). TypeScript is the incumbent producer and therefore the authority for the JSON envelope; the 172-byte signing message underneath is owned by neither language but by formal/dclutch-semantics/EmitDirectIntentV2Rust.lean, whose emitted Rust constants lib/generated/directInlineV3.ts mirrors. The three seed fills are 32-byte Ed25519 seeds supplied as INPUTS; maker, market, collateralAccount, signatureHex, ticketText and ticketSha256 are what the encoders produced from them. ticketText carries no trailing newline because JSON.stringify(value, null, 2) emits none.',
+      makerSeedFill: MAKER_SEED_FILL,
+      marketSeedFill: MARKET_SEED_FILL,
+      collateralSeedFill: COLLATERAL_SEED_FILL,
+      side: intent.side,
+      lifecycle: intent.lifecycle,
+      outcome: intent.outcome,
+      generation: Number(intent.generation),
+      nonce: Number(intent.nonce),
+      validFrom: Number(intent.validFrom),
+      validThrough: Number(intent.validThrough),
+      maximumFill: Number(intent.maximumFill),
+      limitPrice: Number(intent.limitPrice),
+      feeBasisPoints: intent.feeBasisPoints,
+      maker,
+      market: intent.market,
+      collateralAccount: intent.collateralAccount,
+      signatureHex: Array.from(signature, (byte) => byte.toString(16).padStart(2, '0')).join(''),
+      ticketText,
+      ticketSha256: createHash('sha256').update(ticketText, 'utf8').digest('hex'),
+    };
+    const body = `${JSON.stringify(produced, null, 2)}\n`;
+    if (process.env.DCLUTCH_WRITE_TICKET_VECTOR === '1') writeFileSync(VECTOR_PATH, body);
+    expect(readFileSync(VECTOR_PATH, 'utf8')).toBe(body);
+    expect(ticketText.endsWith('\n')).toBe(false);
+    expect(decodeDirectIntentTicketV1(ticketText).intent).toEqual(intent);
   });
 });

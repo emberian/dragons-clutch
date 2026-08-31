@@ -72,7 +72,7 @@ describe('the pulse surface, with a recorded run', () => {
    * true and shapeless; what a reader needs is which law and what it compared.
    */
   it('gives every conservation law its name, its verdict and its own sentence', () => {
-    expect(html).toContain('Every law, at every boundary');
+    expect(html).toContain('The seven checks, after every cycle');
     for (const id of series.lawIds) expect(html).toContain(`>${id}<`);
     // The census writes its sentences with real comparison operators in them
     // ("Hoard ... >= worst outcome ..."), which is exactly the phrasing worth
