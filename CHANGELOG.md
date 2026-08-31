@@ -7,6 +7,28 @@ why it lives here at the repository root rather than beside the crate.
 Everything released so far is the `dclutch` CLI, built from
 `dclutch/tools/dclutch-cli/`.
 
+## 0.1.0-devnet.2
+
+**The install line, fixed.** `0.1.0-devnet.1` published green and installs
+correctly, but the `README.md` that ships inside every archive told you to
+fetch the installer from `/releases/latest/download/…`, and GitHub's `latest`
+endpoint skips prereleases — so that URL returned 404. Every release here will
+be a prerelease for a while, so the README now names a version, says why, and
+points at the [releases
+page](https://github.com/emberian/dragons-clutch/releases) for the current
+number.
+
+Nothing else changed: same binary, same commands, same 33 tests. Install it
+with
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/emberian/dragons-clutch/releases/download/v0.1.0-devnet.2/dclutch-cli-installer.sh | sh
+```
+
+and read `0.1.0-devnet.1` below for what it is and what it refuses to do — all
+of which still holds.
+
 ## 0.1.0-devnet.1
 
 **The first release of anything in this project.** It is a prerelease, and it

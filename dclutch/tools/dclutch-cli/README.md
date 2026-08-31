@@ -10,8 +10,17 @@ our website.
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/emberian/dragons-clutch/releases/latest/download/dclutch-cli-installer.sh | sh
+  https://github.com/emberian/dragons-clutch/releases/download/v0.1.0-devnet.2/dclutch-cli-installer.sh | sh
 ```
+
+The URL names a version rather than `latest` on purpose, and it is not
+pedantry: every release so far is a **prerelease**, and GitHub's
+`/releases/latest/` endpoint skips prereleases entirely — that URL returns 404
+today, which is a bad first thing to hand a stranger. Take the current version
+from the [releases
+page](https://github.com/emberian/dragons-clutch/releases). When a release
+stops being a prerelease, `latest` starts working and this line can lose its
+version.
 
 macOS (Apple Silicon and Intel) and Linux x86-64. Or build it from this
 directory with `cargo build --release`; the binary lands at
