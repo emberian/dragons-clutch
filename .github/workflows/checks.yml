@@ -1,0 +1,181 @@
+# The repository's first CI. Deliberately a seed, not a pipeline.
+#
+# Before this there was none at all: `pages.yml` publishes on manual dispatch
+# and checks nothing, so every gate this project owns — and it owns a lot of
+# good ones — ran only when a human remembered to run it.
+#
+# WHAT THIS BUILDS AGAINST, and it changes what the results mean: the `dclutch/`
+# directory here is a SUBTREE, vendored from its working tree in waves. It
+# therefore LAGS, by construction and on purpose. Two consequences that shaped
+# every choice below:
+#
+#   - This checks WHAT IS PUBLISHED TO THE WORLD, which is a genuinely useful
+#     question and not the same one the live tree answers.
+#   - A drift gate against a deliberately-lagging snapshot measures the LAG,
+#     not correctness. So where a tool distinguishes "this is wrong" from
+#     "this is stale", this workflow gates on the first and only reports the
+#     second. Gating on staleness here would produce a permanently red build
+#     that everyone learns to ignore, which is worse than no CI.
+#
+# WHAT IS DELIBERATELY NOT HERE:
+#
+#   - No Lean build. The `check-generated.sh` byte-identity scripts and the
+#     four `lean-emit.mjs` verifiers all shell out to `lake`. That is not
+#     unaffordable — `formal/dclutch-semantics` pulls no mathlib and no
+#     external dependencies at all — but it is minutes, and it belongs on a
+#     tier that has earned it rather than in the first CI this repo has ever
+#     had. In the live tree it runs as a pre-push hook instead; see
+#     `dclutch/tools/emission-guard/README.md`.
+#   - No SBF/cargo-build job, no validator, no devnet traffic. Nothing here
+#     signs, submits, deploys, or publishes anything.
+#
+# HONESTY ABOUT WHAT WAS VERIFIED BEFORE THIS LANDED: the `hygiene` job's
+# steps were run locally against this repository's committed subtree, and the
+# SBOM classification gate passes there (failures=0, with drift=True — the
+# subtree lag described above, which is why it is reported and not gated).
+# The `suites` job's exact vitest invocations were validated locally for
+# their exclusion behaviour, but the suites themselves have NOT been run
+# against this subtree. The first run of this workflow is the real test of
+# that job, and it may well find something. That is the workflow working.
+name: checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: repository hygiene (no build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SBOM classification (gate) and drift (report)
+        working-directory: dclutch
+        run: |
+          set -o pipefail
+          python3 tools/sbom/sbom_check.py --verify > sbom.log 2>&1 || true
+          summary=$(grep '^SUMMARY' sbom.log | tail -1)
+          echo "$summary"
+          grep '^FAILURE' sbom.log || true
+
+          # The gate: a genuinely unclassified license, a forbidden dependency
+          # source, or an unexpected metadata failure. These are wrong wherever
+          # the tree came from, so they fail the build.
+          case "$summary" in
+            *failures=0*) echo "license classification: clean" ;;
+            *) echo "::error::SBOM reports classification failures — see FAILURE lines above"; exit 1 ;;
+          esac
+
+          # The report: drift and unresolvable manifests. Expected on a
+          # vendored snapshot that lags its source of truth. Surfaced loudly,
+          # never used to fail the build here — it is gated in the live tree.
+          case "$summary" in
+            *drift=True*) echo "::warning::committed SBOM.md/NOTICES.md differ from a fresh run — expected while the dclutch/ subtree lags; regenerate in the live tree" ;;
+          esac
+          case "$summary" in
+            *unresolvable=0*) ;;
+            *) echo "::warning::one or more mini-workspaces have a stale Cargo.lock (see UNRESOLVABLE lines); a reproducibility gap owed to the owning lane, not a license question" ;;
+          esac
+          echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: SBOM classification logic tests
+        working-directory: dclutch
+        run: python3 -m unittest tools.sbom.test_sbom_check -v
+
+      # A SECURITY.md is the one page where a wrong address is worse than no
+      # address: a report sent to a mailbox nobody reads is a report that was
+      # never made. So an unconfirmed contact placeholder must never reach a
+      # published tree, and this refuses rather than warns. It names exactly
+      # one human action and clears the moment that action is taken.
+      - name: Security contact is real
+        run: |
+          hits=$(grep -rl 'EMBER-CONFIRMS' --include=SECURITY.md . || true)
+          if [ -n "$hits" ]; then
+            echo "::error::SECURITY.md still carries an unconfirmed contact placeholder:"
+            echo "$hits"
+            echo "Replace EMBER-CONFIRMS-CONTACT-ADDRESS with the confirmed reporting address."
+            exit 1
+          fi
+          echo "no unconfirmed contact placeholders"
+
+      # The two steps below check for their tool before running it. That is
+      # not defensive padding: these tools exist in the live tree and reach
+      # this repository only when the subtree is refreshed, so "absent" is a
+      # true and useful statement about what is published right now, and a
+      # different fact from "failed". Both are reported; neither absence
+      # fails the build.
+      - name: Lean emission census
+        working-directory: dclutch
+        run: |
+          if [ -f tools/emission-guard/emission_guard.py ]; then
+            python3 tools/emission-guard/emission_guard.py --verify
+          else
+            echo "::warning::tools/emission-guard is not in the published subtree yet — refresh the subtree to gate the generated-file census here"
+          fi
+
+      - name: Seam audit
+        working-directory: dclutch
+        run: |
+          if [ -f tools/seam-audit/seam_audit.py ]; then
+            npm install --no-save --no-audit --no-fund @ast-grep/cli
+            PATH="$PWD/node_modules/.bin:$PATH" python3 tools/seam-audit/seam_audit.py
+          else
+            echo "::warning::tools/seam-audit is not in the published subtree yet — refresh the subtree to gate the seam register here"
+          fi
+
+  suites:
+    name: web + SDK test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: web
+            directory: dclutch/apps/dclutch-web
+          - name: sdk
+            directory: dclutch/packages/dclutch-sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+
+      - name: Install
+        working-directory: ${{ matrix.directory }}
+        run: npm ci
+
+      # WHY TWO FILES ARE EXCLUDED, since silently narrowing a suite is exactly
+      # the sort of thing that should never pass without a reason:
+      #
+      #   lib/abiVerification.test.ts enumerates every `abi:*:verify` script
+      #   out of package.json and runs it. Most are cheap. Four shell out to
+      #   `lake build` — and by the suite's own deliberate design they FAIL
+      #   rather than skip when lake is absent, because "an unverifiable ABI is
+      #   not a verified one". Running them here would mean installing a Lean
+      #   toolchain and paying a Lean build on every push. They run in the live
+      #   tree, where the toolchain lives, via the pre-push emission guard.
+      #
+      #   lib/sbomVerify.test.ts runs the full SBOM closure, which needs a
+      #   populated cargo registry and is gated in the `hygiene` job above on
+      #   the terms that actually make sense for a vendored subtree.
+      #
+      # Everything else in both suites runs, unfiltered. The live-devnet tests
+      # are already env-gated off by default and reach no network.
+      - name: Test
+        working-directory: ${{ matrix.directory }}
+        run: |
+          npx vitest run --config vitest.config.ts \
+            --exclude 'lib/abiVerification.test.ts' \
+            --exclude 'lib/sbomVerify.test.ts'

@@ -1,0 +1,441 @@
+# The tier that builds Rust. Companion to `checks.yml`, deliberately separate.
+#
+# `checks.yml` is the cheap lane: it runs on every push because everything in
+# it is seconds-to-a-minute and needs no toolchain beyond python and node. This
+# file is the expensive lane, and the split is about cost honesty rather than
+# taste. An SBF build plus a 32-seed compute sweep is minutes, and it needs the
+# whole Solana/Agave toolchain downloaded and cached. Paying that on a README
+# edit would teach everyone to ignore a slow red X, which is how a project ends
+# up with CI it routes around.
+#
+# So the tiering is: cheap things on every push, this on the paths that can
+# actually move a program, plus a daily run so a dependency or toolchain change
+# that breaks the build is found by a schedule rather than by a release.
+#
+# ---------------------------------------------------------------------------
+# WHERE THE TIERING IS DEFINED, AND IT IS NOT HERE.
+#
+# The jobs below call `dclutch/tools/ci/run.sh`, which lives in the live tree
+# beside the gates it runs. That indirection is the point. Before it, the only
+# written answer to "which of this project's gates run automatically" was a
+# YAML file in THIS repository -- which a lane working in the live tree cannot
+# see, and which describes a vendored snapshot rather than their tree. One
+# definition, two callers: this workflow and a human at a terminal.
+#
+# It also means this file does not restate a single threshold. In particular
+# THE COMPUTE MARGIN NUMBER IS NOT HERE and must never be added. The gate owns
+# its own constant, CI runs the gate. That is deliberate: the number is a
+# RATCHET -- when a lane makes the route cheaper it LOWERS it -- and a second
+# copy in this file would turn an ordinary act of progress into a two-repository
+# chore that somebody eventually gets half-right. This project has already
+# named "a value duplicated instead of read" as its signature defect.
+#
+# ---------------------------------------------------------------------------
+# WHAT A YELLOW RESULT MEANS HERE, because it is a third thing and not a shade
+# of the other two.
+#
+# `run.sh` exits 0 pass, 1 a gate failed, 2 A PREREQUISITE WAS MISSING AND
+# NOTHING WAS PROVEN. The 2 is load-bearing: this repository's `dclutch/`
+# directory is a SUBTREE, vendored in waves, and it currently does not carry
+# `tools/ci/`, `tools/seam-audit/` or `tools/emission-guard/` at all. Until the
+# next subtree cut lands, the steps below will say "not in the published
+# subtree" and report it rather than inventing a pass. A gate that cannot run
+# has not passed; saying so out loud is the only way the gap stays visible
+# instead of becoming a green check nobody questions.
+#
+# HONESTY ABOUT WHAT HAS BEEN VERIFIED: `tools/ci/run.sh` was exercised in the
+# live tree, and each gate it wires was observed BOTH failing AND declining to
+# run, with distinct exit codes each time -- a planted unguarded emission, a
+# planted over-length seed domain, a genuine compute overrun at 8d3ca1f9, a
+# real failing program-test row, and the journey compile check proven red at
+# TWO independent real defects (15 errors at e41d0b20^, one at d38b01b9) and
+# green at the commits that fixed them. Those are named revisions, not a
+# working tree, and that distinction is not pedantry: the first time this lane
+# reported a journey red from a working-tree run it drew the wrong conclusion
+# in BOTH directions inside one hour.
+#
+# What has NOT been verified is this workflow on GitHub's runners, because the
+# tools it calls are not in the published subtree yet. Its first real run is
+# after the next cut, and that run is the real test of it.
+name: rust
+
+on:
+  push:
+    paths:
+      - "dclutch/programs/**"
+      - "dclutch/crates/**"
+      - "dclutch/tools/ci/**"
+      - "dclutch/**/Cargo.toml"
+      - "dclutch/**/Cargo.lock"
+      - "dclutch/rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "dclutch/programs/**"
+      - "dclutch/crates/**"
+      - "dclutch/tools/ci/**"
+      - "dclutch/**/Cargo.toml"
+      - "dclutch/**/Cargo.lock"
+      - "dclutch/rust-toolchain.toml"
+      - ".github/workflows/rust.yml"
+  # A dependency yank, a toolchain bump or an expiring pin breaks a build that
+  # no diff touched. A schedule finds that on a Tuesday; a release finds it
+  # with a deploy already in flight, which this project has done once.
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # The compute margin gate, and the programs building at all.
+  #
+  # This is the job that matters. The public Direct route runs about eighteen
+  # thousand CU under a hard protocol ceiling, and this repository's history
+  # contains a commit that ate 7,520 of that margin while its own message said
+  # it had changed no program -- true, and still costly, because it changed two
+  # SHARED contract crates. Erosion that size is invisible to review and
+  # invisible to a program's own tests. It is visible to a 32-seed sweep.
+  # -------------------------------------------------------------------------
+  programs:
+    name: SBF programs and the Direct compute margin
+    runs-on: ubuntu-latest
+    # Generous, because a cold Solana toolchain install plus eight SBF links
+    # plus a 32-seed sweep is genuinely long the first time. If this starts
+    # timing out, the answer is a better cache, never a smaller sweep: twelve
+    # seeds already understated this route's worst draw by 7,659 CU once.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the Rust tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet, so NO Rust gate ran. This is a statement about what is published, not about the live tree. Refresh the subtree to make this job real."
+            {
+              echo "### Rust tier: not run"
+              echo
+              echo "\`dclutch/tools/ci/run.sh\` is absent from the vendored subtree."
+              echo "Nothing was built and no compute measurement was taken."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/cache@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cache/solana
+          key: rust-sbf-${{ hashFiles('dclutch/**/Cargo.lock', 'dclutch/rust-toolchain.toml') }}
+          restore-keys: rust-sbf-
+
+      # Pinned to a release channel rather than `stable`, so a toolchain change
+      # arrives as a diff to this line and not as a Tuesday morning mystery.
+      - name: Solana/Agave toolchain
+        if: steps.probe.outputs.present == '1'
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.2/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain versions, recorded
+        if: steps.probe.outputs.present == '1'
+        run: |
+          # Recorded every run because a CU number is only comparable against
+          # another number from the same toolchain: the SBF backend's inlining
+          # decides frame layout, and this route's whole margin is smaller than
+          # the cross-seed band a different codegen can produce.
+          rustc --version
+          cargo-build-sbf --version
+          solana --version
+
+      # `--commit HEAD` and not the working tree. On a CI runner the checkout
+      # IS a committed revision so the two agree -- but the flag makes the
+      # measured revision explicit in the log, and the same command a lane runs
+      # locally then measures a revision rather than whatever their shared tree
+      # happens to hold. That distinction cost a real half hour: the same gate,
+      # on the same machine, minutes apart, failed at a different seed with a
+      # different error once from a dirty tree and once from an archive.
+      - name: Build the programs and run the margin gate
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        run: |
+          set +e
+          tools/ci/run.sh programs --commit HEAD
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "programs tier: passed" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::the programs tier could not run -- a prerequisite is missing. Nothing was proven either way."
+              echo "programs tier: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::the programs tier FAILED. Either an SBF program did not build, or the public Direct route no longer holds its compute margin. If it is the margin: find what got more expensive before touching the gate's constant -- raising it IS spending margin, and there is very little left. Check the shared contract crates first, because the last change to cost this route real margin believed it had changed no program at all."
+              echo "programs tier: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+
+  # -------------------------------------------------------------------------
+  # Does the journey campaign still COMPILE.
+  #
+  # Its own job, and cheap, because it catches a class the expensive job above
+  # cannot see and should not have to wait for. The journey campaign links the
+  # tier-1 producer's modules VERBATIM by `#[path]` so it can never become a
+  # stale copy of the founding -- a deliberate tripwire, and a good one. On
+  # 2026-08-30 it had not built on main for about two days, because a tripwire
+  # with nothing pulling it is an alarm ringing in an empty room.
+  #
+  # `cargo check`, not a campaign run: a real journey needs a validator and is
+  # tens of minutes, which belongs to the cut. The compile check catches the
+  # entire two-day class for the price of a type-check. It does NOT say the
+  # campaign passes, and the tier's own cost line says so.
+  # -------------------------------------------------------------------------
+  journey:
+    name: the journey campaign compiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the Rust tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet, so the journey compile check did not run."
+          fi
+
+      - uses: actions/cache@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: journey-${{ hashFiles('dclutch/tools/gauntlet/journey/Cargo.lock') }}
+          restore-keys: journey-
+
+      - name: cargo check the journey
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        env:
+          CARGO_BUILD_JOBS: 4
+        run: |
+          set +e
+          tools/ci/run.sh journey --commit HEAD
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "journey: compiles" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::the journey tier could not run -- a prerequisite is missing."
+              echo "journey: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::the journey campaign does not compile. Most often the \`#[path]\` tripwire doing its job: a module under tools/local-validator/bootstrap/successor/src/ moved or changed shape. Fix the journey to match its upstream -- do NOT fork the module, which is the exact mirror the arrangement prevents."
+              echo "journey: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+
+  # -------------------------------------------------------------------------
+  # The other SBF program-test suites: custody, core, claims, dealer.
+  #
+  # Separate from `programs` because it is a different question with a
+  # different failure mode, and because one long job that answers two questions
+  # tells you less than two that each answer one. Also `continue-on-error` is
+  # NOT used here: these have a history of being silently red for days at a
+  # time, which is precisely the thing a tolerated yellow would recreate.
+  #
+  # Each row runs the runner its owning lane maintains. This workflow does not
+  # know, and must not learn, which ELFs any of them need.
+  # -------------------------------------------------------------------------
+  suites:
+    name: SBF program-test suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the Rust tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet, so no program-test suite ran."
+          fi
+
+      - uses: actions/cache@v4
+        if: steps.probe.outputs.present == '1'
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cache/solana
+          key: rust-sbf-${{ hashFiles('dclutch/**/Cargo.lock', 'dclutch/rust-toolchain.toml') }}
+          restore-keys: rust-sbf-
+
+      - name: Solana/Agave toolchain
+        if: steps.probe.outputs.present == '1'
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v4.0.2/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Run the suites
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        env:
+          CARGO_BUILD_JOBS: 4
+        run: |
+          set +e
+          tools/ci/run.sh suites
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "suites: passed" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::no suite ran -- a prerequisite is missing. The claims row in particular needs a populated cargo registry to build its audited Token-2022 fixture, and absence there is a host fact, not a claims defect."
+              echo "suites: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::an SBF program-test suite failed. The log names which row. These suites have twice been silently red for days because a change touched several programs and zero campaigns -- so treat this as a real finding about the protocol, not as suite maintenance."
+              echo "suites: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+
+  # -------------------------------------------------------------------------
+  # Every tracked Cargo workspace checks. NIGHTLY AND ON DEMAND ONLY.
+  #
+  # The root workspace is not an inventory of this repository -- program-test,
+  # fixture, generator and operator trees carry their own `[workspace]` tables
+  # on purpose -- so a root `cargo check` is silent about most of them. That is
+  # the general shape of the journey breakage, and `check-all-workspaces.py`
+  # already existed to catch it. It had NO CALLERS ANYWHERE.
+  #
+  # It gives every workspace a fresh target directory from an archived
+  # revision, which is exactly why it is honest and exactly why it is slow. On
+  # a schedule that is affordable; on a push it would be the slow red X that
+  # teaches people to stop looking.
+  # -------------------------------------------------------------------------
+  workspaces:
+    name: every Cargo workspace checks (nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tool archives a revision out of the repository's own history,
+          # so a depth-1 checkout cannot give it one.
+          fetch-depth: 0
+
+      - name: Is the Rust tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet."
+          fi
+
+      - name: check every workspace
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        env:
+          CARGO_BUILD_JOBS: 4
+        run: |
+          set +e
+          tools/ci/run.sh workspaces --commit HEAD
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "workspaces: all check" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              echo "::warning::the workspaces tier could not run."
+              echo "workspaces: NOT RUN" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::a tracked Cargo workspace does not check, or a Cargo invocation moved a lockfile inside the archive. The root workspace passing says nothing about the others -- that is the whole reason this tier exists."
+              echo "workspaces: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+
+  # -------------------------------------------------------------------------
+  # The gates that need no cargo build, run here as well as in checks.yml --
+  # NOT as duplication, but because this job pins them to the same revision
+  # the compute measurement above was taken at, and because `--require` means
+  # something different here: on this tier an unrun gate is reported, not
+  # quietly tolerated.
+  #
+  # It is cheap enough (~20s plus milliseconds) that running it beside a
+  # 40-minute SBF job costs nothing worth naming.
+  # -------------------------------------------------------------------------
+  registers:
+    name: seam register and emission census
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is the Rust tier in the published subtree yet?
+        id: probe
+        run: |
+          if [ -x dclutch/tools/ci/run.sh ]; then
+            echo "present=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::dclutch/tools/ci/ is not in the published subtree yet; checks.yml's own if-present steps still cover these two gates."
+          fi
+
+      # The seam audit's one prerequisite. Installed from npm because it needs
+      # no Rust toolchain that way, which keeps this job independent of the
+      # long one above.
+      - name: ast-grep
+        if: steps.probe.outputs.present == '1'
+        run: npm install --no-save --no-audit --no-fund @ast-grep/cli
+
+      - name: census and seam
+        if: steps.probe.outputs.present == '1'
+        working-directory: dclutch
+        run: |
+          export PATH="$PWD/../node_modules/.bin:$PATH"
+          set +e
+          tools/ci/run.sh cheap
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "census + seam: passed" | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            2)
+              # Reported loudly and NOT failed, because on a vendored subtree
+              # "the tool is not here" is a true and useful fact about what is
+              # published -- and a different fact from "this tree is broken".
+              echo "::warning::a register gate could not run. That is not a pass; see the log for which prerequisite is missing."
+              echo "census + seam: NOT RUN (missing prerequisite)" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::a register gate FAILED -- either a generated file arrived with nothing checking it, or there is a NEW seam finding against the committed baseline. Triage it; do not widen the baseline without a written reason."
+              echo "census + seam: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
