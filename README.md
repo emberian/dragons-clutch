@@ -1,65 +1,83 @@
 # Dragon's Clutch
 
-This is the home of **dClutch**, a Solana protocol for markets on
-real-world numbers — where a price will be at a stated time, for example.
-You buy claims on the outcome you believe in; if you're right, each claim
-pays out one collateral unit. Every claim is fully backed by collateral
-locked up before the claim exists, so there is no leverage, no
-liquidation, and no way to lose more than you paid.
+dClutch is a Solana protocol for prediction markets that are fully backed by
+collateral. Pick an outcome — where the SOL/USD price lands on Friday, say —
+and buy claims on it. If you are right, each claim pays you one unit of
+collateral. If you are wrong, it pays nothing.
 
-The active work lives in the [`dclutch/`](dclutch/) subtree, vendored here
-from its working tree in waves. **Start at
-[`dclutch/README.md`](dclutch/README.md).**
+Every claim is backed by collateral locked up before the claim exists. So
+there is nothing borrowed, nothing to be liquidated, and no way to lose more
+than you paid.
 
-Seven upgradeable program identities are parked on Solana devnet, and the
-public app reads that development deployment. There is not yet an open devnet
-market you can trade, and nothing here is deployed on mainnet or value-bearing.
-Local validators remain the primary place where the complete lifecycle is
-exercised while the next devnet upgrade is prepared.
+## It is running
 
-## Layout
+The seven programs are deployed on Solana's devnet and the site is live at
+**[clutch.dregg.pro](https://clutch.dregg.pro)**.
 
-- [`dclutch/`](dclutch/) — the current protocol. Everything else here is
-  context for it.
-- [`archive/`](archive/) — the first generation, superseded in August 2026.
-  [`archive/gen1/`](archive/gen1/) holds its implementation and formal work
-  ([`programs/`](archive/gen1/programs/), [`crates/`](archive/gen1/crates/),
-  [`apps/`](archive/gen1/apps/), [`lean/`](archive/gen1/lean/),
-  [`verus/`](archive/gen1/verus/), [`rocq/`](archive/gen1/rocq/),
-  [`research/`](archive/gen1/research/)), its architecture, protocol, and
-  review documents ([`docs/`](archive/gen1/docs/)), and its static microsite
-  ([`site/`](archive/gen1/site/) — no longer published; the live site builds
-  from `dclutch/`). [`archive/handoffs/`](archive/handoffs/) holds the
-  planning and status documents that drove it.
+The newest open market is
+[`6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4`](https://clutch.dregg.pro/market?address=6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4).
+It asks where SOL/USD finishes its window, and it treats the price feed
+failing to report as an outcome of its own rather than as a stall. It charges
+no fee on either side.
 
-## The first generation
+Devnet is a public test network whose tokens are worthless by construction:
+this is not an offering, there is nothing for sale, and no value is at risk
+anywhere.
 
-The first version of this project ("Clutch") is kept here as a working
-archive. It ran a complete market lifecycle on a local chain — real Pyth
-price verification, trading, resolution, redemption, every collateral
-atom accounted for — and its requirements, invariants, and counterexamples
-shaped the rebuild. It is no longer developed; anything found wrong in it
-gets fixed in dClutch instead.
+## Read a market yourself
 
-Where its history lives:
-[`archive/handoffs/CURRENT_TRUTH.md`](archive/handoffs/CURRENT_TRUTH.md) for
-what it did and didn't do,
-[`archive/gen1/docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md`](archive/gen1/docs/reviews/ARCHITECTURE_REVIEW_2026-08-22.md)
-for why the rebuild happened, and
-[`dclutch/COMPOST.md`](dclutch/COMPOST.md) for the rules on what may be
-carried forward.
+A market is a Solana account, and its bytes are the truth — the website and
+this page are both just renderings of them. `dclutch` is a small read-only
+tool that fetches those bytes over ordinary JSON-RPC and hands them to the
+same decoders the on-chain programs use, so you can check a market without
+trusting us about it.
 
-## Security
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/emberian/dragons-clutch/releases/download/v0.1.0-devnet.2/dclutch-cli-installer.sh | sh
+```
 
-There is no mainnet release and no live value-bearing market. Devnet execution
-and local-validator evidence are development evidence, not mainnet assurance.
-Security policy and threat model: [`SECURITY.md`](SECURITY.md).
+macOS (Apple Silicon and Intel) and Linux x86-64. That URL names a version
+rather than `latest` on purpose: every release so far is a **prerelease**, and
+GitHub's `latest` endpoint skips prereleases, so the `latest` URL returns 404.
+Take the current number from the [releases
+page](https://github.com/emberian/dragons-clutch/releases).
 
-## License and provenance
+Two commands do the work, and the honest pre-trade check is both of them: a
+market being open is necessary and not sufficient, because execution runs
+through a separate capability root.
+
+```
+$ dclutch market show 6WZXJ7jBPPA3eFZPc8hQmmNsf3R4zAZN4DRZzfhcV7a4
+  phase                     Open
+  …
+  This market is open: claims can be bought and sold, and it has not been answered yet.
+
+$ dclutch capability show 7kPABbyrKFmqP65FUWDKxNinb2mW7gP3EXGkeEjFWy3N
+  family                    Direct
+  phase                     Open
+  …
+  Direct trading is open on this market: new intents are admitted.
+```
+
+Each has an offline `decode` twin for bytes you already have. It never signs,
+never submits a transaction, and never opens a key file — every subcommand is
+a read. To actually trade, use the web app, which signs with your wallet.
+
+## Building from source
+
+The protocol lives in [`dclutch/`](dclutch/) — the programs, the formal work,
+the web app, and the tools that drive them. Start at
+[`dclutch/README.md`](dclutch/README.md), which has the build and the test
+instructions. Everything else in this repository is prior work, kept for
+reference.
+
+## License and security
 
 First-party source and documentation are licensed under
-[`AGPL-3.0-or-later`](LICENSE). The project is greenfield: it must not
-import, copy, or depend on JOSHI, joshibot, leanuweave, minidregg,
-breadstuffs, Oracle Pit, or historical DREGG prototypes without an
-explicit provenance and license review
-([`archive/gen1/docs/PROVENANCE.md`](archive/gen1/docs/PROVENANCE.md)).
+[AGPL-3.0-or-later](LICENSE).
+
+Found a vulnerability? Email `security@ember.software`. Testing the deployed
+programs is welcome within the ordinary courtesies of a shared public network
+— [`dclutch/SECURITY.md`](dclutch/SECURITY.md) says what to include in a
+report and what not to point at a public RPC endpoint.
