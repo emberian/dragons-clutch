@@ -1,4 +1,5 @@
-//! `dclutch ticket` — author one Direct intent ticket, and read one back.
+//! `dclutch ticket` — author one Direct intent ticket, read one back, and
+//! publish one to a board.
 //!
 //! WHAT THIS USED TO BE. Until the author became callable this module was a
 //! REFUSAL: a Direct inline fill settles two independently signed intents, the
@@ -20,6 +21,12 @@
 //!
 //! AUTHORING IS NOT SUBMITTING, and this binary still submits nothing. See
 //! [`where_the_ticket_goes_next_v1`].
+//!
+//! NEITHER IS PUBLISHING. [`post`] sends a ticket to an offer BOARD, which is a
+//! relay and not a cluster: it holds bearer-signed data and hands it on. No
+//! transaction is built and no lamport moves. A board can lose an offer or hide
+//! it; it cannot change one, because every field is covered by the maker's
+//! signature and a tampered field dies at the Ed25519 program.
 
 use crate::{Error, Result};
 
@@ -35,6 +42,19 @@ pub const PRODUCER_BINARY_V1: &str = "dclutch-local-successor-bootstrap";
 
 /// How the shared author names itself when this binary invokes it.
 const AUTHOR_INVOCATION_V1: &str = "dclutch ticket author";
+
+/// How the shared author names itself when `post` authors on the way through.
+const POST_AUTHOR_INVOCATION_V1: &str = "dclutch ticket post";
+
+/// The environment variable naming a board when `--board` is absent.
+///
+/// A board URL is not a credential — a board holds no keys and takes no
+/// custody, so there is nothing in it to leak. It is an environment variable
+/// anyway because a maker posts repeatedly to the same board, and because every
+/// refusal in this file prints [`crate::rpc::origin`] rather than the URL, which
+/// costs nothing and means a redirected `--board` cannot smuggle a secret into
+/// a shell transcript either.
+pub const BOARD_URL_ENV_V1: &str = "DCLUTCH_TICKET_BOARD_URL";
 
 /// Lift a shared-crate refusal into this binary's error, text unchanged.
 fn lift(error: dclutch_direct_ticket::Error) -> Error {
@@ -57,8 +77,9 @@ pub fn run(arguments: Vec<String>) -> Result<()> {
         }
         "author" => dclutch_direct_ticket::run_v1(AUTHOR_INVOCATION_V1, rest).map_err(lift),
         "verify" => verify(rest),
+        "post" => post(rest),
         other => Err(Error::new(format!(
-            "unknown ticket command `{other}`. Run `dclutch ticket` for the two it knows."
+            "unknown ticket command `{other}`. Run `dclutch ticket` for the three it knows."
         ))),
     }
 }
@@ -131,6 +152,228 @@ fn verify(arguments: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// Publish one ticket to a board — authoring it first if asked to.
+///
+/// POSTING IS NOT SUBMITTING, and the distinction is the whole reason this
+/// command is allowed to exist in a binary whose header says it submits
+/// nothing. A board is a relay: it accepts bearer-signed data, holds it, and
+/// hands it to whoever asks. Nothing here builds a transaction, nothing here
+/// reaches a cluster, and nothing here moves a lamport. The trade still happens
+/// later, somewhere else, when a taker crosses this ticket with their own and
+/// the chain verifies both signatures natively.
+///
+/// What a board can do to a ticket you post is LOSE it or HIDE it. What it
+/// cannot do is change it: every field is covered by the signature written
+/// here, and a tampered field dies at the Ed25519 program. That asymmetry is
+/// why publishing to a stranger's relay is a safe act rather than a trusting
+/// one.
+///
+/// Two shapes, because a maker has two situations:
+///
+/// - `post --board URL <PATH>` — a ticket already exists on disk; send it.
+/// - `post --board URL <AUTHOR ARGUMENTS>` — author one and send it in the same
+///   breath. The author's arguments are unchanged and unvalidated by this
+///   function; they go to the same shared author `dclutch ticket author` runs.
+fn post(arguments: Vec<String>) -> Result<()> {
+    let mut board: Option<String> = None;
+    let mut slot: Option<u64> = None;
+    let mut rest: Vec<String> = Vec::new();
+
+    let mut supplied = arguments.into_iter();
+    while let Some(argument) = supplied.next() {
+        match argument.as_str() {
+            "--board" | "--slot" => {
+                let Some(value) = supplied.next() else {
+                    return Err(Error::new(format!("`{argument}` needs a value")));
+                };
+                if argument == "--board" {
+                    board = Some(value);
+                } else {
+                    slot = Some(value.parse::<u64>().map_err(|_| {
+                        Error::new("`--slot` is not one unsigned 64-bit slot number")
+                    })?);
+                }
+            }
+            _ => rest.push(argument),
+        }
+    }
+
+    let board = match board.or_else(|| std::env::var(BOARD_URL_ENV_V1).ok()) {
+        Some(url) => url,
+        None => {
+            return Err(Error::new(format!(
+                "`dclutch ticket post` needs a board. Pass `--board URL` or set \
+                 {BOARD_URL_ENV_V1}. There is no default: a board is one deployment's \
+                 relay, not a property of the protocol, and guessing one would publish \
+                 your offer somewhere you did not choose."
+            )));
+        }
+    };
+
+    // Which shape? Exactly one bare path is "send this file"; anything else is
+    // author arguments, which the shared author validates in full.
+    let path = match rest.as_slice() {
+        [] => {
+            return Err(Error::new(
+                "usage: dclutch ticket post --board URL <PATH>\n   \
+                 or: dclutch ticket post --board URL <AUTHOR ARGUMENTS, including --out>\n\n\
+                 Run `dclutch ticket` for the author's arguments.",
+            ));
+        }
+        [only] if !only.starts_with('-') => std::path::PathBuf::from(only),
+        _ => {
+            dclutch_direct_ticket::run_v1(POST_AUTHOR_INVOCATION_V1, rest.clone()).map_err(lift)?;
+            authored_path_v1(&rest)?
+        }
+    };
+
+    let bytes = std::fs::read(&path).map_err(|error| {
+        Error::new(format!(
+            "could not read the ticket at {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    // Refuse HERE, before the network, with this binary's own reader. A maker
+    // should learn that their ticket is malformed from the tool in front of
+    // them, not from a stranger's service — and the board runs this identical
+    // reader, so a ticket that clears this line clears its admission too.
+    let signed =
+        dclutch_direct_ticket::parse_portable_direct_ticket_v1(&bytes, "this").map_err(lift)?;
+
+    let accepted = send_to_board_v1(&board, &bytes, slot)?;
+
+    println!("ticket           {}", path.display());
+    println!(
+        "sha256           {}",
+        dclutch_direct_ticket::sha256_hex_v1(&bytes)
+    );
+    println!("board            {}", crate::rpc::origin(&board));
+    println!(
+        "posted           {}",
+        if accepted.duplicate {
+            "already held (the board had this exact ticket)"
+        } else {
+            "accepted"
+        }
+    );
+    println!("digest           {}", accepted.digest);
+    println!("maker            {}", signed.maker);
+    println!("market           {}", crate::address(signed.intent.market));
+    println!("outcome          {}", signed.intent.outcome);
+    println!(
+        "valid slots      {}..={}",
+        signed.intent.valid_from, signed.intent.valid_through
+    );
+    println!(
+        "\nThe board holds this offer; it does not execute it. A relay can hide an\n\
+         offer from a taker, but it cannot change one — every field above is covered\n\
+         by your signature, and the chain re-derives the signing message and checks\n\
+         it natively when someone crosses this ticket. Nothing was submitted."
+    );
+    Ok(())
+}
+
+/// The `--out` path the author was told to write, read back out of its own
+/// arguments.
+///
+/// The author owns `--out`'s validation (absolute, must not already exist), so
+/// this only has to find it; a missing one means the author would have refused
+/// before reaching here.
+fn authored_path_v1(arguments: &[String]) -> Result<std::path::PathBuf> {
+    let mut walk = arguments.iter();
+    while let Some(argument) = walk.next() {
+        if argument == "--out" {
+            if let Some(value) = walk.next() {
+                return Ok(std::path::PathBuf::from(value));
+            }
+            break;
+        }
+    }
+    Err(Error::new(
+        "`dclutch ticket post` authored a ticket but cannot tell where: pass `--out PATH`.",
+    ))
+}
+
+/// What a board said when it took a ticket.
+struct AcceptedOfferV1 {
+    digest: String,
+    duplicate: bool,
+}
+
+/// POST one ticket's exact bytes to a board.
+///
+/// The bytes go up verbatim. A ticket's encoding is canonical and re-encoding
+/// it here would make this command a SECOND writer of a shape that has exactly
+/// one — the failure mode being a digest nobody else computes.
+fn send_to_board_v1(url: &str, bytes: &[u8], slot: Option<u64>) -> Result<AcceptedOfferV1> {
+    let endpoint = match slot {
+        Some(slot) => format!("{}/tickets?slot={slot}", url.trim_end_matches('/')),
+        None => format!("{}/tickets", url.trim_end_matches('/')),
+    };
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(concat!("dclutch/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|error| Error::new(format!("cannot build an HTTP client: {error}")))?;
+
+    let response = client
+        .post(&endpoint)
+        .header("content-type", "application/json")
+        .body(bytes.to_vec())
+        .send()
+        .map_err(|error| {
+            Error::new(format!(
+                "{} did not answer: {}",
+                crate::rpc::origin(url),
+                crate::rpc::redact(&error.to_string(), url)
+            ))
+        })?;
+
+    let status = response.status();
+    let body: serde_json::Value = response.json().map_err(|error| {
+        Error::new(format!(
+            "{} answered {status} with something that is not JSON: {}",
+            crate::rpc::origin(url),
+            crate::rpc::redact(&error.to_string(), url)
+        ))
+    })?;
+
+    if !status.is_success() {
+        // The board names every refusal. Carry BOTH halves: the name is what a
+        // script branches on, the sentence is what a person acts on.
+        let named = body
+            .get("refusal")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("UNNAMED");
+        let reason = body
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("and named no reason");
+        return Err(Error::new(format!(
+            "{} refused the offer ({named}): {reason}",
+            crate::rpc::origin(url)
+        )));
+    }
+
+    let digest = body
+        .get("digest")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "{} accepted the offer without naming its digest",
+                crate::rpc::origin(url)
+            ))
+        })?;
+    Ok(AcceptedOfferV1 {
+        digest: digest.to_owned(),
+        duplicate: body
+            .get("duplicate")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
 /// The sentence that keeps authoring and submitting separate.
 ///
 /// A reader who has just been handed a signed ticket will ask what to do with
@@ -169,6 +412,23 @@ pub fn usage() -> String {
          \x20 dclutch ticket verify <PATH>\n\
          \x20     Re-read a ticket, check its signature, and print every field it\n\
          \x20     binds. Takes no key and no network.\n\
+         \n\
+         \x20 dclutch ticket post --board URL [--slot SLOT] <PATH>\n\
+         \x20 dclutch ticket post --board URL [--slot SLOT] [AUTHOR ARGUMENTS]\n\
+         \x20     Publish a ticket to an offer board so a taker can find it —\n\
+         \x20     either one already on disk, or one authored on the way through\n\
+         \x20     with the same arguments `author` takes. `--slot` is your own\n\
+         \x20     current slot and only lets the board refuse an offer that has\n\
+         \x20     already expired. The board URL may come from {BOARD_URL_ENV_V1}\n\
+         \x20     instead; there is no default, because a board is one\n\
+         \x20     deployment's relay and guessing one would publish your offer\n\
+         \x20     somewhere you did not choose.\n\
+         \n\
+         \x20     POSTING IS NOT SUBMITTING. A board is a relay: it holds\n\
+         \x20     bearer-signed data and hands it on. This builds no transaction\n\
+         \x20     and reaches no cluster. A board can LOSE your offer or HIDE it;\n\
+         \x20     it cannot change one, because every field is covered by your\n\
+         \x20     signature and a tampered field dies at the Ed25519 program.\n\
          \n\
          THE KEY NEVER APPEARS ON THE COMMAND LINE\n\
          \n\
@@ -256,6 +516,81 @@ mod tests {
             let error = run(call).expect_err("verify must be strict about its one argument");
             assert!(error.to_string().contains("Exactly one path"), "{error}");
         }
+    }
+
+    #[test]
+    fn the_usage_screen_documents_post_and_keeps_it_apart_from_submitting() {
+        let text = usage();
+        assert!(text.contains("dclutch ticket post"), "{text}");
+        assert!(text.contains("--board URL"), "{text}");
+        assert!(text.contains(super::BOARD_URL_ENV_V1), "{text}");
+        // The distinction the whole command rests on: a relay is not a cluster.
+        assert!(text.contains("POSTING IS NOT SUBMITTING"), "{text}");
+        assert!(text.contains("it cannot change one"), "{text}");
+    }
+
+    #[test]
+    fn post_with_a_board_but_nothing_to_send_names_both_of_its_shapes() {
+        let error = run(vec![
+            "post".into(),
+            "--board".into(),
+            "http://127.0.0.1:8787".into(),
+        ])
+        .expect_err("post needs a ticket or the arguments to author one");
+        let text = error.to_string();
+        assert!(
+            text.contains("dclutch ticket post --board URL <PATH>"),
+            "{text}"
+        );
+        assert!(text.contains("AUTHOR ARGUMENTS, including --out"), "{text}");
+    }
+
+    #[test]
+    fn a_flag_without_its_value_is_refused_before_any_socket_opens() {
+        for flag in ["--board", "--slot"] {
+            let error =
+                run(vec!["post".into(), flag.into()]).expect_err("a dangling flag must be refused");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("`{flag}` needs a value")),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_that_is_not_a_slot_is_refused_by_name() {
+        let error = run(vec![
+            "post".into(),
+            "--board".into(),
+            "http://127.0.0.1:8787".into(),
+            "--slot".into(),
+            "soon".into(),
+        ])
+        .expect_err("`--slot` takes a slot number");
+        assert!(
+            error
+                .to_string()
+                .contains("`--slot` is not one unsigned 64-bit slot number"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_authored_path_is_read_back_out_of_the_authors_own_arguments() {
+        let found = super::authored_path_v1(&[
+            "--maker".into(),
+            "M".into(),
+            "--out".into(),
+            "/tmp/offer.json".into(),
+        ])
+        .expect("`--out` is right there");
+        assert_eq!(found, std::path::PathBuf::from("/tmp/offer.json"));
+
+        let error = super::authored_path_v1(&["--maker".into(), "M".into()])
+            .expect_err("without --out there is nothing to post");
+        assert!(error.to_string().contains("pass `--out PATH`"), "{error}");
     }
 
     #[test]

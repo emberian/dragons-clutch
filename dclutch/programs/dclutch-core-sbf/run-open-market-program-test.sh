@@ -26,6 +26,7 @@ output="$(mktemp -d)"
 # reached 373 GB and filled the volume once.
 trap 'rm -rf "$output"' EXIT HUP INT TERM
 
+log="$output/build-core-links.log"
 for manifest in \
   programs/dclutch-registry-sbf/Cargo.toml \
   programs/dclutch-rent-sbf/Cargo.toml \
@@ -33,8 +34,24 @@ for manifest in \
   programs/dclutch-trading-sbf/Cargo.toml \
   programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml \
   programs/dclutch-core-sbf/Cargo.toml; do
-  (cd "$workspace" && cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$output")
+  (cd "$workspace" && cargo build-sbf --manifest-path "$manifest" --sbf-out-dir "$output") \
+    >>"$log" 2>&1 || { tail -n 60 "$log" >&2; exit 1; }
 done
+
+# An SBF stack-frame overwrite is a silent miscompile, not a warning: the
+# affected frame's locals are clobbered at runtime and the program misbehaves
+# in ways no assertion here would attribute to the build. Refuse rather than
+# test something the compiler already said it could not lay out. The `suites`
+# tier does not check this itself (the gap named in
+# docs/evidence/SLIPPED_THROUGH_SWEEP_2026_08_30.md:98), so it has to live in
+# the runner -- and this crate's links now carry the succession ceremony, whose
+# 21-account frame is exactly the shape that would provoke one.
+diagnostics="$(grep -c 'overwrites values in the frame' "$log" || true)"
+if [ "$diagnostics" -ne 0 ]; then
+  echo "core: refusing -- $diagnostics SBF stack-frame-overwrite diagnostics" >&2
+  grep 'overwrites values in the frame' "$log" >&2
+  exit 1
+fi
 
 # `tests/*.rs` is not a guess at the target list, it is Cargo's own rule: the
 # crate declares no `[[test]]` table, so autodiscovery makes exactly these

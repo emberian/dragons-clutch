@@ -27,7 +27,7 @@ use dclutch_provider_transport_v3_operator::{
     build_provider_execute_v3, build_provider_submit_v3,
 };
 use dclutch_pyth_svm::FullPriceUpdateV2;
-use dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1;
+use dclutch_release_set_contract::PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2;
 use dclutch_resolution_codec::{
     PROVIDER_UPDATE_LIFECYCLE_BYTES_V3, PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
     RESOLUTION_CERTIFICATE_BYTES_V2, ResolutionCertificateKindV2, ResolutionCertificateV2,
@@ -397,7 +397,7 @@ pub(crate) fn resolve_through_pyth(
         &submit_snapshot(rpc, addresses, encoded.pubkey(), plan)?,
         ProviderSubmitDeploymentV3 {
             infrastructure: Pubkey::find_program_address(
-                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
                 &addresses.core_program,
             )
             .0,

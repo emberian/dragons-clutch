@@ -180,7 +180,7 @@ describe('strict Direct Hot route manifest admission', () => {
   it('refuses malformed checked evidence encodings, hex identities, and substitutions', async () => {
     const value = await manifestValue();
     await refuseBeforeRpc(JSON.stringify({ ...value, checkedInfrastructure: 'AA=' }), /canonical base64/);
-    await refuseBeforeRpc(JSON.stringify({ ...value, checkedInfrastructure: 'AAAA' }), /exactly 2280 bytes/);
+    await refuseBeforeRpc(JSON.stringify({ ...value, checkedInfrastructure: 'AAAA' }), /exactly 2360 bytes/);
     await refuseBeforeRpc(JSON.stringify({ ...value, checkedInfrastructureSha256: 'AB'.repeat(32) }), /lowercase 32-byte hex identity/);
     await refuseBeforeRpc(JSON.stringify({ ...value, checkedInfrastructureSha256: '00'.repeat(32) }), /nonzero lowercase/);
     await refuseBeforeRpc(JSON.stringify({ ...value, checkedInfrastructureSha256: '11'.repeat(32) }), /bytes differ from their exact manifest digest/);

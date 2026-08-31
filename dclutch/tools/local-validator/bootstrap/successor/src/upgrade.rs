@@ -2337,7 +2337,10 @@ fn load_set_journal_path(journal_path: &Path) -> Result<(UpgradeSetJournalV1, St
             )));
         }
         // Rows 0 and 1 are the carry-forward whitelist and nothing else may join
-        // it. Rows 2..7 are the cut's own roles: each is either a receipt-backed
+        // it: they are Registry and Rent, whose bytes move only by the
+        // infrastructure-profile succession ceremony and never by this journal
+        // (see `require_mutation_permit` for the constraint and what lifts it).
+        // Rows 2..7 are the cut's own roles: each is either a receipt-backed
         // Upgrade or -- when this cut did not change that role's bytes at all --
         // an AlreadyCurrent row whose equality is re-read from the cluster below.
         let disposition_admitted = if index < 2 {
@@ -2532,9 +2535,31 @@ fn require_mutation_permit(
     require_upgrade_receipt_path: bool,
     freshly_audited_raw_journal_sha256: Option<&str>,
 ) -> Result<String> {
+    // Why these two roles alone are barred here, and what lifts the bar.
+    //
+    // Registry and Rent are named by the Core-owned infrastructure profile,
+    // which was write-once with no second write route. Moving either one's
+    // bytes therefore left every profile-reading route refusing
+    // `ReleaseSuperseded` on a slot pin with no in-tree repair -- founding,
+    // all three retirement entries, the series-permit refund and both provider
+    // resolution routes at once. That is P-008 in
+    // `docs/OMISSION_INDEX.md`, and it is the reason this bar was load-bearing
+    // for eight cohorts while being encoded nowhere but here.
+    //
+    // The bar is now DOCUMENTED and LIFTABLE rather than absolute.
+    // `docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md` gives these two roles
+    // the succession the caches always had: a new profile version at a new PDA
+    // domain, created by the `InitializeProtocolInfrastructureV2` ceremony
+    // under the predecessor authority's on-chain consent, with the redeployed
+    // consumers reading the new version only. What that costs is exactly what
+    // this path cannot express: moving Registry or Rent is a Core-release-class
+    // event -- Core and resolution-proof take source changes, a new domain
+    // string ships, and the ceremony runs inside the same gate as the upgrade.
+    // So the move stays out of the per-role mutation path deliberately, and
+    // this refusal stands until a cut drives that ceremony instead.
     if matches!(args.role.as_str(), "registry" | "rent") {
         return Err(Error::new(
-            "Registry and Rent are CarryForward and can never enter an Upgrade/Extend mutation path",
+            "Registry and Rent move only by the infrastructure-profile succession ceremony, never an Upgrade/Extend mutation path",
         ));
     }
     let path = exact_reference_path(
@@ -2612,9 +2637,13 @@ fn require_mutation_permit(
             )));
         }
         if index < 2 {
+            // A carry-forward row that carries upgrade evidence is claiming a
+            // move this path cannot make: Registry and Rent move only by the
+            // infrastructure-profile succession ceremony, so a receipt or a
+            // baseline here describes something that did not happen.
             if role.receipt.sha256.is_some() || role.baseline.is_some() {
                 return Err(Error::new(
-                    "Registry and Rent are CarryForward and can never enter an Upgrade/Extend mutation path",
+                    "Registry and Rent carry-forward rows take no upgrade receipt or baseline; those bytes move only by the infrastructure-profile succession ceremony",
                 ));
             }
             continue;
@@ -13901,8 +13930,23 @@ mod tests {
         )
         .expect("Registry ProgramData");
         let error = require_mutation_permit(&registry, None, true, None)
-            .expect_err("CarryForward Registry mutation must refuse");
-        assert!(error.to_string().contains("CarryForward"));
+            .expect_err("a Registry mutation through this path must refuse");
+        // The refusal must NAME the route that does move the Registry. It used
+        // to say "CarryForward", which described the bar without saying what
+        // lifts it -- and P-008 is precisely the story of a load-bearing
+        // constraint whose reason was written nowhere. Now that the succession
+        // ceremony exists and has a caller
+        // (`local-private-validator-infrastructure-succession-v1`), an operator
+        // who reads this refusal must be told where to go.
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("infrastructure-profile succession ceremony"),
+            "the refusal must name the route that does move the Registry: {rendered}"
+        );
+        assert!(
+            rendered.contains("Upgrade/Extend mutation path"),
+            "and must still say which path is refusing: {rendered}"
+        );
 
         let mut core = fixture.args.clone();
         core.role = "core".into();

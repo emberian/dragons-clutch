@@ -25,6 +25,15 @@ cargo build-sbf \
 cargo build-sbf \
   --manifest-path programs/dclutch-claims-sbf/test-programs/claim-check-escrow-signer/Cargo.toml \
   --sbf-out-dir "$sbf_out"
+# The fractional compaction campaign composes the real Rent program: the ruled
+# fiftieth account (WAVE b4546291) makes the route derive the market's RentCredit
+# under it, so a campaign without this ELF cannot reach the route at all.
+cargo build-sbf --manifest-path programs/dclutch-rent-sbf/Cargo.toml --sbf-out-dir "$sbf_out"
+# The compaction caller: the only thing in this tree that can sign the Fractional
+# capability root for a 50-account frame, which is why the route had never run.
+cargo build-sbf \
+  --manifest-path programs/dclutch-claims-sbf/test-programs/fractional-compaction-caller/Cargo.toml \
+  --sbf-out-dir "$sbf_out"
 
 # Token-2022 is the audited v11 fixture. The campaign's Token behaviour is only
 # evidence if this is that exact artifact, so the digest is checked against the
@@ -66,6 +75,16 @@ SBF_OUT_DIR="$sbf_out" cargo test \
 SBF_OUT_DIR="$sbf_out" cargo test \
   --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
   --test permissioned_burn_wall \
+  -- --nocapture
+
+# A stranger compacts a sleeping fractional holder's reserve, end to end: the
+# permissionless escrow open, the 180-day warp, the crank over the full
+# 50-account frame, and the conservation table read off the transaction. Also
+# carries the ruled fiftieth account's red-proof (a RentCredit that does not
+# derive is refused 0x564D) and witness w8.
+SBF_OUT_DIR="$sbf_out" cargo test \
+  --manifest-path programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml \
+  --test fractional_compaction \
   -- --nocapture
 
 # The hand-off with a DERIVED escrow, over a Mint carrying the whole shard

@@ -18,7 +18,7 @@
 //! restated: they are projected from the SAME `DirectTradePlanningV1` the
 //! trade executor plans with (`direct_trade::collect_direct_trade_planning_v1`
 //! over one finalized snapshot), after the session's journal proves the frozen
-//! lookup table exists. The embedded 2280-byte checked-infrastructure evidence
+//! lookup table exists. The embedded 2360-byte checked-infrastructure evidence
 //! is assembled from the chain-served profile and Registry/Rent artifact
 //! records plus the sealed checked identities, then revalidated by
 //! `dclutch_release_tool::CheckedInfrastructureV1::decode`.
@@ -37,7 +37,7 @@ use dclutch_release_set_contract::{EXECUTION_RELEASE_SET_BYTES_V1, ExecutionRole
 use dclutch_release_tool::{
     CHECKED_INFRASTRUCTURE_BYTES_V1, CHECKED_INFRASTRUCTURE_COMPONENTS_V1,
     CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1, CHECKED_INFRASTRUCTURE_MAGIC_V1,
-    CHECKED_INFRASTRUCTURE_SCHEMA_V1, CHECKED_MULTIPROGRAM_BYTES_V1,
+    CHECKED_INFRASTRUCTURE_SCHEMA_V2, CHECKED_MULTIPROGRAM_BYTES_V1,
     CHECKED_MULTIPROGRAM_HEADER_BYTES_V1, CHECKED_MULTIPROGRAM_MAGIC_V1,
     CHECKED_MULTIPROGRAM_SCHEMA_V1, CheckedExecutionReleaseSetV1, CheckedInfrastructureV1,
     CheckedReleaseV1,
@@ -55,8 +55,7 @@ use crate::{
     rpc::{Rpc, WritePolicyV1},
 };
 
-pub(crate) const CHECKED_EXECUTION_RELEASE_COMMAND_V1: &str =
-    "devnet-checked-execution-release-v1";
+pub(crate) const CHECKED_EXECUTION_RELEASE_COMMAND_V1: &str = "devnet-checked-execution-release-v1";
 pub(crate) const HOT_ROUTE_MANIFEST_COMMAND_V3: &str = "devnet-direct-hot-route-manifest-v3";
 
 /// The only public JSON envelope admitted for one Direct InlineOrdinary route.
@@ -149,7 +148,9 @@ fn hex_text(bytes: &[u8]) -> String {
 
 fn exact_hex64(value: &str, label: &str) -> Result<String> {
     if value.len() != 64
-        || !value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
     {
         return Err(refusal(
             "input/expected-sha256",
@@ -167,8 +168,12 @@ fn pinned_bytes(path: &Path, expected_sha256: &str, label: &str) -> Result<Vec<u
             format!("{label} path must be absolute: {}", path.display()),
         ));
     }
-    let bytes = fs::read(path)
-        .map_err(|error| refusal("input/unreadable", format!("{label} {}: {error}", path.display())))?;
+    let bytes = fs::read(path).map_err(|error| {
+        refusal(
+            "input/unreadable",
+            format!("{label} {}: {error}", path.display()),
+        )
+    })?;
     let observed = sha256_hex(&bytes);
     if observed != expected_sha256 {
         return Err(refusal(
@@ -225,7 +230,10 @@ impl FlagWalkV1 {
                 ));
             }
             let value = iterator.next().ok_or_else(|| {
-                refusal("input/missing-value", format!("{flag} requires a value; usage: {usage}"))
+                refusal(
+                    "input/missing-value",
+                    format!("{flag} requires a value; usage: {usage}"),
+                )
             })?;
             pairs.push((flag, value));
         }
@@ -483,8 +491,13 @@ pub(crate) fn run_checked_execution_release(arguments: Vec<String>) -> Result<()
     let usage = checked_execution_release_usage();
     let mut walk = FlagWalkV1::parse(arguments, usage)?;
     let mut rpc = devnet_rpc(&mut walk, usage)?;
-    let (_, plan_bytes) =
-        pinned_named(&mut walk, "--plan", "--expected-plan-sha256", "successor plan", usage)?;
+    let (_, plan_bytes) = pinned_named(
+        &mut walk,
+        "--plan",
+        "--expected-plan-sha256",
+        "successor plan",
+        usage,
+    )?;
     let mut checked_files: Vec<(String, Vec<u8>)> = Vec::new();
     for (_, role) in EXECUTION_ROLE_ORDER_V1 {
         let flag = format!("--{role}-checked");
@@ -520,7 +533,8 @@ pub(crate) fn run_checked_execution_release(arguments: Vec<String>) -> Result<()
         (&checked_files[3].0, &checked_files[3].1),
         (&checked_files[4].0, &checked_files[4].1),
     ];
-    let (bytes, decoded) = assemble_checked_execution_release_v1(&plan, &cache.data, &checked_by_role)?;
+    let (bytes, decoded) =
+        assemble_checked_execution_release_v1(&plan, &cache.data, &checked_by_role)?;
     write_create_new(&output, &bytes)?;
 
     let checked_id = decoded
@@ -573,7 +587,7 @@ fn record_account(
     Ok(account.data)
 }
 
-/// Assemble and revalidate the 2280-byte user-supplied infrastructure blob.
+/// Assemble and revalidate the 2360-byte user-supplied infrastructure blob.
 #[allow(clippy::too_many_arguments)]
 fn assemble_checked_infrastructure_v1(
     rpc: &mut Rpc,
@@ -604,7 +618,12 @@ fn assemble_checked_infrastructure_v1(
         ));
     }
 
-    let registry_record = record_account(rpc, plan, "registry_artifact_release", "Registry artifact record")?;
+    let registry_record = record_account(
+        rpc,
+        plan,
+        "registry_artifact_release",
+        "Registry artifact record",
+    )?;
     let rent_record = record_account(rpc, plan, "rent_artifact_release", "Rent artifact record")?;
 
     let registry_checked = admit_checked_release(
@@ -630,7 +649,7 @@ fn assemble_checked_infrastructure_v1(
 
     let mut bytes = vec![0_u8; CHECKED_INFRASTRUCTURE_BYTES_V1];
     bytes[..8].copy_from_slice(&CHECKED_INFRASTRUCTURE_MAGIC_V1);
-    bytes[8..10].copy_from_slice(&CHECKED_INFRASTRUCTURE_SCHEMA_V1.to_le_bytes());
+    bytes[8..10].copy_from_slice(&CHECKED_INFRASTRUCTURE_SCHEMA_V2.to_le_bytes());
     bytes[10..12].copy_from_slice(&CHECKED_INFRASTRUCTURE_COMPONENTS_V1.to_le_bytes());
     let mut offset = CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1;
     bytes[offset..offset + CHECKED_MULTIPROGRAM_BYTES_V1].copy_from_slice(multiprogram_bytes);
@@ -799,8 +818,12 @@ fn project_manifest_document_v3(
 
     let lookup_table = planning.provision.lookup_table;
     if lookup_table == payer
-        || fixed.iter().any(|entry| entry.address == lookup_table.to_string())
-        || runtime.iter().any(|entry| entry.address == lookup_table.to_string())
+        || fixed
+            .iter()
+            .any(|entry| entry.address == lookup_table.to_string())
+        || runtime
+            .iter()
+            .any(|entry| entry.address == lookup_table.to_string())
     {
         return Err(refusal(
             "route-manifest/lookup-aliases",
@@ -909,7 +932,10 @@ pub(crate) fn run_hot_route_manifest(arguments: Vec<String>) -> Result<()> {
     if text.len() > 65_536 {
         return Err(refusal(
             "route-manifest/envelope-bytes",
-            format!("serialized manifest is {} bytes; the reader admits at most 65536", text.len()),
+            format!(
+                "serialized manifest is {} bytes; the reader admits at most 65536",
+                text.len()
+            ),
         ));
     }
     write_create_new(&output, text.as_bytes())?;
@@ -936,7 +962,10 @@ mod tests {
 
     #[test]
     fn fixed_role_labels_cover_the_exact_generated_frame() {
-        assert_eq!(DIRECT_HOT_FIXED_ROLE_LABELS_V3.len(), HOT_FIXED_ACCOUNT_COUNT_V3);
+        assert_eq!(
+            DIRECT_HOT_FIXED_ROLE_LABELS_V3.len(),
+            HOT_FIXED_ACCOUNT_COUNT_V3
+        );
         assert_eq!(DIRECT_HOT_FIXED_ROLE_LABELS_V3[0], "Market");
         assert_eq!(DIRECT_HOT_FIXED_ROLE_LABELS_V3[1], "Direct root");
         assert_eq!(DIRECT_HOT_FIXED_ROLE_LABELS_V3[38], "Capability seal");
@@ -990,7 +1019,10 @@ mod tests {
         let fixed = object["fixedAccounts"][0].as_object().unwrap();
         let mut fixed_keys: Vec<&str> = fixed.keys().map(String::as_str).collect();
         fixed_keys.sort_unstable();
-        assert_eq!(fixed_keys, vec!["address", "isSigner", "isWritable", "role"]);
+        assert_eq!(
+            fixed_keys,
+            vec!["address", "isSigner", "isWritable", "role"]
+        );
         assert_eq!(object["lookupTableCreationSlot"], "490118330");
     }
 
@@ -998,6 +1030,9 @@ mod tests {
     fn refusals_carry_their_pinned_bracketed_code() {
         let error = refusal("route-manifest/no-frozen-lookup", "not yet");
         let text = format!("{error}");
-        assert!(text.contains("REFUSED: [route-manifest/no-frozen-lookup]"), "{text}");
+        assert!(
+            text.contains("REFUSED: [route-manifest/no-frozen-lookup]"),
+            "{text}"
+        );
     }
 }

@@ -43,6 +43,11 @@ const SDK_OWNED_REEXPORTS = new Set([
   'lib/founding/principalCapacity.ts',
   'lib/marketDiscovery.ts',
   'lib/rationalTerminalChainV4.ts',
+  // The board's transport is SDK-owned and takes its URL as an argument; the
+  // web file is the deployment half, reading the one `NEXT_PUBLIC_*` variable
+  // that survives a static export. An SDK that reached for `process.env` would
+  // be a second place a deployment is decided.
+  'lib/ticketBoard.ts',
 ]);
 
 /** SDK files with deliberate local edits; never auto-copied. */

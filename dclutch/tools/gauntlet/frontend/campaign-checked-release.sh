@@ -26,6 +26,12 @@ usage: campaign-checked-release.sh --run PATH [options]
   --work PATH    scratch output root (default: <run>/checked-release)
   --tool PATH    prebuilt dclutch-release-tool binary
   --repo PATH    source repository (default: this script's repository)
+  --predecessor-profile PATH
+                 the dumped 144-byte infrastructure profile account this
+                 evidence's succession succeeds. REQUIRED: a succession is not
+                 a function of the successor alone, so the predecessor's own
+                 two binding ids -- which the ceremony copies into the profile
+                 it commits -- have to be read from the chain being succeeded.
   --tamper-role ROLE
                  build the evidence over a ONE-BYTE-ALTERED copy of that role's
                  ELF. The result is internally perfect - every create, verify and
@@ -42,6 +48,7 @@ RUN=""
 WORK=""
 TOOL=""
 REPO=""
+PREDECESSOR_PROFILE=""
 TAMPER_ROLE=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -49,12 +56,17 @@ while [ "$#" -gt 0 ]; do
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --tool) TOOL="${2:?--tool needs a value}"; shift 2 ;;
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
+        --predecessor-profile) PREDECESSOR_PROFILE="${2:?--predecessor-profile needs a value}"; shift 2 ;;
         --tamper-role) TAMPER_ROLE="${2:?--tamper-role needs a value}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 [ -n "$RUN" ] || { usage >&2; exit 2; }
+[ -n "$PREDECESSOR_PROFILE" ] \
+    || { echo "--predecessor-profile is required: the checked infrastructure evidence describes a succession, and the predecessor account it succeeds cannot be derived from source" >&2; exit 2; }
+[ -f "$PREDECESSOR_PROFILE" ] \
+    || { echo "--predecessor-profile is not a readable file: $PREDECESSOR_PROFILE" >&2; exit 2; }
 [ -f "$RUN/plan.json" ] || { echo "no plan.json under $RUN" >&2; exit 2; }
 [ -z "$REPO" ] && REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 [ -z "$WORK" ] && WORK="$RUN/checked-release"
@@ -247,6 +259,7 @@ echo "checked: five-role execution release set"
 "$TOOL" derive-infrastructure-profile \
     --registry "$EVIDENCE/registry/checked.bin" \
     --rent "$EVIDENCE/rent/checked.bin" \
+    --predecessor-profile "$PREDECESSOR_PROFILE" \
     --out "$INFRA_DIR/profile.bin"
 # shellcheck disable=SC2086
 "$TOOL" create-infrastructure \

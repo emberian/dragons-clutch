@@ -878,4 +878,27 @@ const FEE_BEARING_FLOOR_CU_V1: u64 = FEE_BEARING_MEASURED_FLOOR_CU_V1 + ATTEMPT_
 ///
 /// Before the split this statistic was a LOWER BOUND of 1,435,274 on a route
 /// that could not be run to completion, 35,274 over the ceiling.
-const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_262_994;
+///
+/// # 2026-08-31, re-measured: 1,262,994 -> 1,269,919
+///
+/// The assertion above predicted its own diagnosis -- "if BOTH moved by the same
+/// amount the change is upstream of the fee work" -- and that is exactly what
+/// happened, so this constant moves for a reason that has nothing to do with
+/// fees. Measured on this sweep at five points along one ancestor chain, the two
+/// arms moved IDENTICALLY at every point and the 131 CU gap between them held to
+/// the unit throughout, which is what a key-independent statistic is supposed to
+/// do and the strongest evidence that both are measuring the same route.
+///
+/// The cost is the `basis:` lane's `authenticate_product_basis_v3`, which this
+/// arm reaches by the same two call sites the zero-fee arm does. The full
+/// itemisation is in `direct_hot_top_level_margin_gate.rs` on
+/// `TOP_LEVEL_KEY_INDEPENDENT_CU_V1` and is not restated here -- one measurement,
+/// one place, per this repository's rule about a value duplicated instead of
+/// read. The short version: `ProductBasisV3::decode` was rewritten and runs four
+/// times per trade, a price-gate digest probe was added and runs twice, and
+/// `docs/design/BASIS_ABI_UNIFICATION_V1.md` says the hot path gains exactly zero
+/// CU, which this sweep falsifies by about 4,500.
+///
+/// Nothing got cheaper in exchange. The fee-bearing fill still fits: 32/32
+/// executed, and this floor sits 130,081 CU under the ceiling.
+const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_269_919;

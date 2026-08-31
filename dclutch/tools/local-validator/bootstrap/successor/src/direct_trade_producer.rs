@@ -835,9 +835,8 @@ fn classify_direct_token_destination_v1(
                 ));
             }
             if !token.native_reserve.is_none() {
-                refusing.push(
-                    "it carries a native reserve, so it is a wrapped-SOL account".to_owned(),
-                );
+                refusing
+                    .push("it carries a native reserve, so it is a wrapped-SOL account".to_owned());
             }
             if token.mint != mint.to_bytes() {
                 refusing.push(format!(
@@ -854,7 +853,10 @@ fn classify_direct_token_destination_v1(
         }
     }
     if refusing.is_empty() {
-        (Some(DirectTokenDestinationPrestateV1::Initialized), refusing)
+        (
+            Some(DirectTokenDestinationPrestateV1::Initialized),
+            refusing,
+        )
     } else {
         (None, refusing)
     }
@@ -4033,20 +4035,20 @@ mod tests {
 
     use super::{
         ACCOUNT_BYTES, CAPABILITY_SEAL_PDA_DOMAIN_V1, DEVNET_DIRECT_PRODUCER_COMMAND_V1,
-        DirectTokenDestinationPrestateV1, classify_direct_token_destination_v1,
         DEVNET_SESSION_PRODUCER_JOURNAL_SCHEMA_V1, DevnetDirectParticipantSourceV1,
         DevnetDirectSessionProducerJournalV1, DevnetDirectSessionProducerPhaseV1,
-        DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTradeTermsV1,
-        EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1, FinalizedTicketExpectationV1,
-        OwnedLoopbackDirectProducerReceiptV1, ProducedDirectTradePrivateSessionV1,
-        ProducedReplaySetupV1, ProducedTokenSetupV1, SignedDirectIntentV3,
-        authenticate_devnet_direct_participant_pair_v1,
+        DirectTokenAccountRoleV1, DirectTokenAccountSeedsV1, DirectTokenDestinationPrestateV1,
+        DirectTradeTermsV1, EXECUTION_PRICE_V1, FEE_BASIS_POINTS_V1, FILL_ATOMS_V1,
+        FinalizedTicketExpectationV1, OwnedLoopbackDirectProducerReceiptV1,
+        ProducedDirectTradePrivateSessionV1, ProducedReplaySetupV1, ProducedTokenSetupV1,
+        SignedDirectIntentV3, authenticate_devnet_direct_participant_pair_v1,
         authenticate_devnet_session_producer_recovery_v1,
-        authenticate_direct_execution_root_shape_v1, derive_capability_seal_v1,
-        devnet_direct_usage, devnet_session_producer_state_sha256_v1, devnet_session_usage,
-        exact_quote_v1, exact_ticket_pair_terms_v1, fee_floor_v1, parse_devnet_direct_arguments_v1,
-        parse_devnet_session_arguments_v1, private_session_sha256_v1, producer_receipt_sha256_v1,
-        refusing_ticket_clauses_v1, require_distinct_v1,
+        authenticate_direct_execution_root_shape_v1, classify_direct_token_destination_v1,
+        derive_capability_seal_v1, devnet_direct_usage, devnet_session_producer_state_sha256_v1,
+        devnet_session_usage, exact_quote_v1, exact_ticket_pair_terms_v1, fee_floor_v1,
+        parse_devnet_direct_arguments_v1, parse_devnet_session_arguments_v1,
+        private_session_sha256_v1, producer_receipt_sha256_v1, refusing_ticket_clauses_v1,
+        require_distinct_v1,
     };
     use crate::{
         cluster::{DEVNET_ACKNOWLEDGMENT_FLAG, DEVNET_GENESIS_HASH},
@@ -5023,7 +5025,10 @@ mod tests {
         underfunded.lamports = 1;
         let (prestate, _) =
             classify_direct_token_destination_v1(Some(&underfunded), mint, owner, token_program);
-        assert_eq!(prestate, Some(DirectTokenDestinationPrestateV1::Initialized));
+        assert_eq!(
+            prestate,
+            Some(DirectTokenDestinationPrestateV1::Initialized)
+        );
 
         // Each mutation below moves exactly one field and must refuse by name.
         let cases: [(&str, Box<dyn Fn(&mut RpcAccount)>, &str); 5] = [
@@ -5076,7 +5081,9 @@ mod tests {
             classify_direct_token_destination_v1(Some(&good), other, owner, token_program);
         assert_eq!(prestate, None);
         assert!(
-            clauses.iter().any(|clause| clause.contains("collateral Mint")),
+            clauses
+                .iter()
+                .any(|clause| clause.contains("collateral Mint")),
             "{clauses:?}"
         );
         let (prestate, clauses) = classify_direct_token_destination_v1(

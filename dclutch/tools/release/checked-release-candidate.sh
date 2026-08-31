@@ -24,6 +24,13 @@ usage: checked-release-candidate.sh [options]
   --tool PATH    prebuilt dclutch-release-tool binary (never emits an Upgrade gate;
                  default source-pinned build under --work is required for that gate)
   --commit REV   source revision to archive (default: HEAD)
+  --predecessor-profile PATH
+                 the dumped 144-byte infrastructure profile account this
+                 candidate's succession succeeds. REQUIRED, and the one input
+                 that cannot be built from source: a succession is not a
+                 function of the successor alone, so the predecessor's own two
+                 binding ids -- which the ceremony copies into the profile it
+                 commits -- have to be read from the chain being succeeded.
   --keep-elf     legacy option; refused because reused ELFs have no fresh-build proof
   --allow-build-diagnostics
                  admit artifacts whose SBF build emitted a stack-frame
@@ -40,6 +47,7 @@ WORK="/private/tmp/dclutch-release-candidate"
 TOOL=""
 PREBUILT_TOOL="false"
 COMMIT="HEAD"
+PREDECESSOR_PROFILE=""
 KEEP_ELF="false"
 ALLOW_DIAGNOSTICS="false"
 while [ "$#" -gt 0 ]; do
@@ -48,6 +56,7 @@ while [ "$#" -gt 0 ]; do
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --tool) TOOL="${2:?--tool needs a value}"; PREBUILT_TOOL="true"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
+        --predecessor-profile) PREDECESSOR_PROFILE="${2:?--predecessor-profile needs a value}"; shift 2 ;;
         --keep-elf) KEEP_ELF="true"; shift ;;
         --allow-build-diagnostics) ALLOW_DIAGNOSTICS="true"; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -63,6 +72,12 @@ if [ "$KEEP_ELF" = "true" ]; then
     echo "refusing --keep-elf: a checked release requires a fresh top-package compile marker for every SBF link; use a new --work root" >&2
     exit 2
 fi
+if [ -z "$PREDECESSOR_PROFILE" ]; then
+    echo "--predecessor-profile is required: the checked infrastructure evidence describes a succession, and the predecessor account it succeeds cannot be derived from source" >&2
+    exit 2
+fi
+[ -f "$PREDECESSOR_PROFILE" ] \
+    || { echo "--predecessor-profile is not a readable file: $PREDECESSOR_PROFILE" >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRESHNESS_CHECKER="$SCRIPT_DIR/check_sbf_build_freshness.py"
@@ -592,6 +607,7 @@ echo "checked: five-role execution release set"
 run_tool derive-infrastructure-profile \
     --registry "$EVIDENCE/registry/checked.bin" \
     --rent "$EVIDENCE/rent/checked.bin" \
+    --predecessor-profile "$PREDECESSOR_PROFILE" \
     --out "$INFRA_DIR/profile.bin"
 # shellcheck disable=SC2086
 run_tool create-infrastructure \

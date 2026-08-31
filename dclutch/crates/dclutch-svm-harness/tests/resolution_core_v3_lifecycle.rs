@@ -62,8 +62,8 @@ use dclutch_registry_contract::{
 };
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
-    ProtocolInfrastructureProfileV1,
+    ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
+    ProtocolInfrastructureProfileV2,
 };
 use dclutch_resolution_codec::{
     FUNDING_ACTIVATION_RECEIPT_PDA_DOMAIN_V1, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
@@ -670,7 +670,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         registry_release.to_bytes().to_vec(),
     );
     let infrastructure = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &CORE_PROGRAM_ID,
     )
     .0;
@@ -678,9 +678,17 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         program_identity(sysvar::rent::ID),
         ArtifactReleaseIdV1::new([0x44; 32]).expect("rent artifact identity"),
     );
-    let infrastructure_value =
-        ProtocolInfrastructureProfileV1::new(binding(registry_release), rent_binding)
-            .expect("immutable infrastructure profile");
+    // Registry moved across the succession and Rent did not: the predecessor
+    // Registry id names the distinct release this profile succeeded, while
+    // Rent holds the same id on both sides of it.
+    let predecessor_registry_release = release(REGISTRY_PROGRAM_ID, [0xb3; 32], &elves.registry);
+    let infrastructure_value = ProtocolInfrastructureProfileV2::new(
+        binding(registry_release),
+        rent_binding,
+        artifact_id(predecessor_registry_release),
+        rent_binding.artifact_release(),
+    )
+    .expect("infrastructure succession profile");
     test.add_account(
         infrastructure,
         protocol_account(CORE_PROGRAM_ID, infrastructure_value.to_bytes().to_vec()),
@@ -2077,7 +2085,7 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     assert_eq!(
         submit_deployment.infrastructure,
         Pubkey::find_program_address(
-            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
             &submit_snapshot.market.owner,
         )
         .0

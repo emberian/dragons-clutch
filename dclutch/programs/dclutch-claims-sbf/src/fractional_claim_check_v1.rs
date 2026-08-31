@@ -60,7 +60,6 @@ use dclutch_fractional_claim_kernel::{
     FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
     FractionalExposureTermsV2,
 };
-use dclutch_rent_contract::lifecycle_v2::LifecycleRentCreditV2;
 use dclutch_token_svm::{
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenBehaviorSelectionV2,
 };
@@ -81,6 +80,7 @@ use crate::claim_check_compaction_v1::{
     COMPACT_TERMINAL_POSITION_ACCOUNT_V1, allocate_and_assign, close_and_split, observation,
     token_balance,
 };
+use crate::protocol_position_v2::{LifecycleRentCreditIdentityV2, authenticate_rent_credit};
 use crate::rational_representation_v2::authenticate_finalized_rational_record;
 
 /// Stable fractional claim-check compaction refusal.
@@ -117,6 +117,20 @@ pub enum FractionalClaimCheckCompactionSbfErrorV1 {
     Terms = 0x564B,
     /// The shard Mint's profile, supply, or burn-authority hand-off refused.
     ShardMint = 0x564C,
+    /// The RentCredit was not the admission's, or did not derive under the Rent
+    /// program.
+    ///
+    /// Its own code rather than a fold into [`Self::Identity`], and the reason
+    /// is what a validator log has to be able to tell apart. `Identity` on this
+    /// route means a *coordinate* did not derive the account passed for it --
+    /// the escrow, the record, the reserve's admission -- all of which are this
+    /// program's own PDAs. This one means the residual beneficiary is wrong,
+    /// which is a different accusation with a different fix: the transaction
+    /// named a RentCredit that is not the one the reserve Position was admitted
+    /// against, or named a Rent program that does not own and does not derive
+    /// it. Folding the two would make the one refusal that says "your rent is
+    /// going somewhere else" indistinguishable from a mistyped escrow.
+    Rent = 0x564D,
 }
 
 impl FractionalClaimCheckCompactionSbfErrorV1 {
@@ -126,7 +140,7 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
     /// [`FractionalClaimCheckCompactionSbfErrorV1::ordinal`], whose match is exhaustive: a variant
     /// added to the enum does not compile until its author writes an arm here, and the only arm
     /// that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Accounts,
         Self::Authority,
         Self::Identity,
@@ -140,11 +154,12 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
         Self::Scope,
         Self::Terms,
         Self::ShardMint,
+        Self::Rent,
     ];
 
     /// This refusal's position in [`FractionalClaimCheckCompactionSbfErrorV1::ALL`].
     ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: a fourteenth variant is
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a fifteenth variant is
     /// a COMPILE ERROR here rather than a discriminant no assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -161,6 +176,7 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
             Self::Scope => 10,
             Self::Terms => 11,
             Self::ShardMint => 12,
+            Self::Rent => 13,
         }
     }
 }
@@ -741,30 +757,58 @@ fn authenticate_fractional_compaction(
         return Err(FractionalClaimCheckCompactionSbfErrorV1::Scope.into());
     }
 
-    // What this route can prove about the RentCredit, and what it cannot.
+    // THE RESIDUAL BENEFICIARY, AUTHENTICATED RATHER THAN READ (WAVE
+    // `b4546291`; design §17.9 left this as named debt and the fiftieth account
+    // closes it).
     //
-    // The residual beneficiary is bound to THIS market: the record must decode
-    // and must carry the market, release set and generation the request already
-    // pinned everywhere else, so a caller naming their own wallet (which holds
-    // no such record) or another market's credit is refused here. What is NOT
-    // proved is the PDA derivation under the Rent program's id, because this
-    // frame declares no Rent program account to derive it against --
-    // `authenticate_rent_credit` needs one and retirement's frame carries it.
-    // Adding a fiftieth account is a frame-declaration change and a design
-    // decision, not a lane's; the residual is named as debt rather than
-    // absolved. The native sibling checks strictly less here (writability only).
-    let rent_credit_bytes = rent_credit_account
-        .try_borrow_data()
-        .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
-    let rent_credit = LifecycleRentCreditV2::decode(&rent_credit_bytes)
-        .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
-    if rent_credit.market().to_bytes() != input.market
-        || rent_credit.release_set().to_bytes() != input.release_set
-        || rent_credit.generation() != input.generation
-    {
-        return Err(FractionalClaimCheckCompactionSbfErrorV1::Identity.into());
-    }
-    drop(rent_credit_bytes);
+    // What stood here before proved the record's CONTENT: it decoded, and it
+    // carried the market, release set and generation the request pinned
+    // everywhere else. Every one of those conjuncts survives below, because
+    // `authenticate_rent_credit` makes all three itself. What content alone
+    // could never prove is that this account is the *derived* credit -- and
+    // content is the half a caller supplies. `create_program_address` over the
+    // record's own persisted seeds needs a Rent program id to derive under, and
+    // a frame with no Rent program account has none to offer that is not the
+    // caller's own word for it.
+    //
+    // WHERE THE TWO PINS COME FROM, AND WHY NEITHER IS THE CALLER'S. Both are
+    // read off the reserve Position's admission, decoded immediately above from
+    // an account this route derived itself and required this program to own.
+    // Claims wrote that record at admission time and it has been immutable
+    // since; it persists the RentCredit *and* the Rent program together. So a
+    // caller substituting either half has to have gotten it past admission
+    // years earlier.
+    //
+    // This is one conjunct stronger than `fractional_retirement_v3`'s finish,
+    // which is the closest sibling: there the address is fixed by the cursor and
+    // the program account is then permitted to name itself, which is safe --
+    // a substituted program would have to already own the one address the root
+    // chose -- but it is safe by consequence rather than by pinning. Here both
+    // halves are pinned outright.
+    //
+    // The native sibling still checks strictly less than either (writability
+    // only), and that is not an argument for checking less here: it is a
+    // permissionless crank that moves an entire coordinate's residue, not one
+    // sleeper's.
+    let rent_program_account = role_account(accounts, FractionalCompactionRoleV1::RentProgram)?;
+    // The returned bytes are the credit's, and this route wants none of them --
+    // the sweep credits the account, not an identity read out of it. Dropped
+    // here rather than bound, so nothing downstream can start depending on a
+    // decode this function performs for its own reasons.
+    drop(
+        authenticate_rent_credit(
+            rent_credit_account,
+            rent_program_account,
+            LifecycleRentCreditIdentityV2 {
+                rent_credit: admission.rent_credit(),
+                rent_program: admission.rent_program(),
+                market: input.market,
+                release_set: input.release_set,
+                generation: input.generation,
+            },
+        )
+        .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Rent)?,
+    );
 
     // The finalized terms: raw AND staging, together. The raw half must hash to
     // the expected digest and the staging cursor must be VACANT, which is what
@@ -1581,6 +1625,10 @@ mod frame_guard_tests {
     }
 
     fn request_bytes() -> Vec<u8> {
+        request_bytes_owned_by(ROOT)
+    }
+
+    fn request_bytes_owned_by(owner: [u8; 32]) -> Vec<u8> {
         let settlement = TerminalSettlementRequestV3::new(TerminalSettlementRequestInputV3 {
             caller_role: CallerRole::Claims,
             release_set: [1; 32],
@@ -1591,7 +1639,7 @@ mod frame_guard_tests {
             exposure_id: [6; 32],
             exposure_digest: [7; 32],
             terminal_record_digest: [8; 32],
-            owner: ROOT,
+            owner,
             position: [10; 32],
             recipient_owner: ESCROW,
             recipient_token_account: VAULT,
@@ -1626,7 +1674,7 @@ mod frame_guard_tests {
         .to_vec()
     }
 
-    /// A frame whose thirteen roles carry exactly the privileges declared.
+    /// A frame whose fourteen roles carry exactly the privileges declared.
     ///
     /// Built by asking [`FractionalCompactionRoleV1::privileges`] rather than by
     /// writing the flags out again, so the fixture cannot drift away from the
@@ -1656,8 +1704,104 @@ mod frame_guard_tests {
     }
 
     fn refusal(accounts: &[AccountInfo<'_>]) -> ProgramError {
-        process_fractional_compaction(&PROGRAM, accounts, &request_bytes())
+        refusal_of(accounts, &request_bytes())
+    }
+
+    fn refusal_of(accounts: &[AccountInfo<'_>], instruction_data: &[u8]) -> ProgramError {
+        process_fractional_compaction(&PROGRAM, accounts, instruction_data)
             .expect_err("this frame must be refused")
+    }
+
+    /// The exact byte span the terminal header spends on the owner coordinate.
+    ///
+    /// Found by DIFFERENCING two encodings rather than by naming an offset. The
+    /// offset constants are private to their own codec, which is right -- a
+    /// second spelling of a wire offset in a test is a second author for the
+    /// layout, and this file has no business knowing that number. Differencing
+    /// asks the encoder where it put the field, so the hostile below cannot
+    /// silently start zeroing some neighbouring field if the layout ever moves.
+    fn owner_span() -> core::ops::Range<usize> {
+        let left = request_bytes_owned_by([0xAA; 32]);
+        let right = request_bytes_owned_by([0xBB; 32]);
+        let differing: Vec<usize> = left
+            .iter()
+            .zip(right.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(index, _)| index)
+            .collect();
+        let start = *differing.first().expect("the owner is on the wire");
+        let end = start + 32;
+        assert_eq!(
+            differing,
+            (start..end).collect::<Vec<_>>(),
+            "the owner must be one contiguous 32-byte field and the only thing that moved"
+        );
+        start..end
+    }
+
+    /// **The unset owner coordinate cannot reach the frame walk, and this is
+    /// where that stops being an argument.**
+    ///
+    /// `tools/seam-audit` reports `UNSET_PUBKEY_UNGUARDED` against
+    /// [`authenticate_fractional_compaction`]: it pins the System program by key
+    /// and authenticates a coordinate against a wire pubkey
+    /// (`root_account.key.to_bytes() != request.root()`), with no all-zero
+    /// refusal anywhere in that function. The reading is correct about the
+    /// function and wrong about the route, and the difference is worth writing
+    /// down rather than arguing.
+    ///
+    /// The guard is one layer up and it is a TYPE invariant, not a path check.
+    /// [`TerminalSettlementRequestV3`] is a tuple struct with a private field;
+    /// its only two constructors are `new` and `decode`, `decode` routes through
+    /// `new`, and `new` runs `nonzero` over eighteen identities including
+    /// `owner`. So no value of that type with a zero owner can be constructed,
+    /// and `request.root()` reads straight off it. That is why the register
+    /// entry for this finding is `benign-typed-nonzero-wire` and not
+    /// `hazard-unset-pin`: the class's own note records those eighteen because
+    /// "fails somewhere downstream is an argument, not a guard, and the
+    /// downstream check is one refactor away from moving". This one fails
+    /// UPSTREAM, at a constructor no caller can go around.
+    ///
+    /// Proved with hostile BYTES rather than a hostile struct, because a hostile
+    /// struct is exactly what the type system refuses to make -- the only way to
+    /// present a zero owner to this route at all is to write the wire by hand.
+    /// The non-vacuity note, because the obvious version of this test is vacuous
+    /// and it took a run to find out. Asserting only that the hostile wire
+    /// refuses `0x5642` at the route proves nothing: these synthetic frames
+    /// carry empty account data, so a *well-formed* request refuses `0x5642`
+    /// too, from a derivation further in. Same code, different cause, and the
+    /// assertion could not tell them apart. So the discriminating half is made
+    /// against the DECODER, which is the thing actually being claimed about, and
+    /// the route assertion is kept only to pin which code the refusal surfaces.
+    #[test]
+    fn an_unset_owner_coordinate_is_refused_before_any_account_is_read() {
+        let span = owner_span();
+        let mut hostile = request_bytes();
+        hostile
+            .get_mut(span.clone())
+            .expect("the owner span is inside the wire")
+            .fill(0);
+        assert_eq!(hostile.len(), FRACTIONAL_COMPACT_TO_CLAIM_CHECK_BYTES_V1);
+
+        // THE DISCRIMINATING HALF. One byte-span apart, and the decoder splits
+        // them: the type cannot be built around an unset owner, so the value the
+        // route would have read simply never exists.
+        assert!(
+            FractionalCompactToClaimCheckRequestV1::decode(&hostile).is_err(),
+            "an unset owner must not decode"
+        );
+        assert!(
+            FractionalCompactToClaimCheckRequestV1::decode(&request_bytes()).is_ok(),
+            "and the same wire with a real owner must, or the line above is vacuous"
+        );
+
+        // And the code it surfaces at the route, pinned so a validator log can
+        // be read. Not discriminating on its own -- see the note above.
+        assert_eq!(
+            refusal_of(&admitted_frame(), &hostile),
+            ProgramError::Custom(0x5642),
+        );
     }
 
     /// The admitted frame gets PAST the guard, which is what makes the rest mean
@@ -1785,11 +1929,29 @@ mod frame_guard_tests {
         }
     }
 
-    /// The frame is exactly 49, and neither 48 nor 50 is admitted.
+    /// The frame is exactly 50, and neither 49 nor 51 is admitted.
+    ///
+    /// **The short arm is now the ruled account's absence, red-proved.** Popping
+    /// the last account removes exactly
+    /// [`FractionalCompactionRoleV1::RentProgram`], because the ruling put it
+    /// last -- so this asserts the thing WAVE `b4546291` asked for: a frame
+    /// arriving without the Rent program is refused *at the frame*, by width,
+    /// before any rent reasoning runs at all. It cannot degrade into skipping
+    /// the authentication, which is the failure mode a route that treated the
+    /// account as optional would have.
     #[test]
     fn only_the_exact_declared_width_is_admitted() {
         let mut short = admitted_frame();
-        short.pop();
+        let dropped = short.pop().expect("the frame is not empty");
+        assert_eq!(
+            short.len(),
+            FractionalCompactionRoleV1::RentProgram
+                .index()
+                .expect("the ruled account is admitted"),
+            "popping the tail must be popping the Rent program, or this test has \
+             stopped witnessing the ruled account's absence"
+        );
+        drop(dropped);
         assert_eq!(refusal(&short), ProgramError::Custom(0x5640));
 
         let mut long = admitted_frame();
@@ -1797,10 +1959,10 @@ mod frame_guard_tests {
         long.push(account(*last.key, *last.owner, false, false));
         assert_eq!(refusal(&long), ProgramError::Custom(0x5640));
 
-        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, 49);
+        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, 50);
         assert_eq!(
             FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 - TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3,
-            13
+            14
         );
     }
 
@@ -1809,7 +1971,7 @@ mod frame_guard_tests {
     /// The route runs its whole authentication walk over a frame that contains
     /// no caller-authority account anywhere, because there is no coordinate at
     /// which one could sit: `TradingCallerAuthority.index()` is `None`, and the
-    /// frame is exactly the thirteen admitted roles. Design §17.8 ruling 2 as an
+    /// frame is exactly the fourteen admitted roles. Design §17.8 ruling 2 as an
     /// observation over the shipped entry point rather than an assertion about
     /// the declaration.
     ///

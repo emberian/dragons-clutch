@@ -13,8 +13,8 @@ reachable inside an entry route's request.
 
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 21 | 125 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:62) |
-| `core` | `dclutch-core-sbf` | 0x3 | 19 | 14 | 23 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:315) |
+| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 21 | 126 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:62) |
+| `core` | `dclutch-core-sbf` | 0x3 | 20 | 14 | 28 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:362) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 10 | 11 | 13 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:245) |
 | `dealer` | `dclutch-dealer-sbf` | 0x7 | 1 | 0 | 11 | `process_instruction` (programs/dclutch-dealer-sbf/src/lib.rs:415) |
 | `dealer-accelerator` | `dclutch-dealer-accelerator-sbf` | 0xD | 1 | 0 | 3 | `program_entrypoint` (programs/dclutch-dealer-accelerator-sbf/src/lib.rs:123) |

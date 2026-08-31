@@ -7,7 +7,12 @@ import {
 import { ascii, hex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+  CORE_PHASE_OPEN_TAG,
   CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_STATE_PHASE_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_VERSION,
   PORTFOLIO_SCHEMA_ID_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -22,12 +27,6 @@ import {
   CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
   CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID,
   DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3,
-  DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3,
-  DIRECT_INLINE_ORDINARY_EFFECT_ID_V4,
-  DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5,
-  DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3,
-  DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3,
-  DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3,
   DIRECT_ORDINARY_COMMON_IDENTITIES_V3,
   DIRECT_ORDINARY_COMMON_SCALARS_V3,
   DIRECT_SUCCESSOR_KIND_ID_V3,
@@ -580,24 +579,39 @@ export function decodeDirectDescriptorV4(bytes: Uint8Array): Readonly<{
   const transition = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_TRANSITION_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_TRANSITION_PROGRAM_OFFSET, 'Transition');
   const effect = artifact(DirectAbi.CAPABILITY_PROGRAM_V4_EFFECT_SCHEMA_OFFSET, DirectAbi.CAPABILITY_PROGRAM_V4_EFFECT_PROGRAM_OFFSET, 'Effect');
   const derivationPolicy = slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_DERIVATION_POLICY_OFFSET, 32);
-  if (!same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_KIND_OFFSET, 32), DIRECT_SUCCESSOR_KIND_ID_V3)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_CONFIG_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_REQUEST_SCHEMA_OFFSET, 32), DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3)
-      || !same(slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_ROOT_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_ROOT_SCHEMA_ID_V1)
-      || !same(derivationPolicy, lifecycle.program)
-      || !same(accountProfile.schema, ACCOUNT_SCHEMA_RELEASE_ID)
-      || !same(requestProfile.schema, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID)
-      || !same(lifecycle.schema, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5)
-      || !same(strategy.schema, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)
-      || !same(transition.schema, TRANSITION_SCHEMA_RELEASE_ID)
-      || !same(effect.schema, EFFECT_SCHEMA_RELEASE_ID_V4)
-      || !same(accountProfile.program, DIRECT_INLINE_ORDINARY_ACCOUNT_PROFILE_ID_V3)
-      || !same(requestProfile.program, DIRECT_INLINE_ORDINARY_REQUEST_PROFILE_ID_V3)
-      || !same(lifecycle.program, DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5)
-      || !same(strategy.program, DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3)
-      || !same(transition.program, DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3)
-      || !same(effect.program, DIRECT_INLINE_ORDINARY_EFFECT_ID_V4)) {
-    throw new Error('selected CapabilityProgramV4 is not the schema-bound signed Direct InlineOrdinary bundle');
+  // The schema conjuncts mirror the live Rust authenticator
+  // (`authenticate_direct_artifacts_v4` in dclutch-direct-codec's
+  // `artifacts_v4.rs`): each artifact's SCHEMA is release identity, required
+  // exactly. The artifact PROGRAM fields are content digests, and Rust
+  // deliberately does NOT pin them -- it requires each named digest to match
+  // the loaded artifact bytes (`require_content`); this client does the same
+  // where it fetches the records (`finalizedRecord` derives the Registry PDA
+  // from the descriptor's own schema+digest and hashes the bytes). Pinning
+  // the publisher's current program ids here refused every republication the
+  // chain accepts -- the drift class that turned real readers away.
+  //
+  // A refusal names the one field that disagreed and both values, because a
+  // seventeen-field conjunct that reports only its own name once cost a
+  // manual chain diff to localize.
+  const schemaConjuncts: ReadonlyArray<readonly [string, Uint8Array, Uint8Array]> = [
+    ['successor kind', slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_KIND_OFFSET, 32), DIRECT_SUCCESSOR_KIND_ID_V3],
+    ['config schema', slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_CONFIG_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1],
+    ['request schema', slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_REQUEST_SCHEMA_OFFSET, 32), DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3],
+    ['root schema', slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_ROOT_SCHEMA_OFFSET, 32), DirectAbi.DIRECT_ROOT_SCHEMA_ID_V1],
+    ['AccountProfile schema', accountProfile.schema, ACCOUNT_SCHEMA_RELEASE_ID],
+    ['RequestProfile schema', requestProfile.schema, REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID],
+    ['Lifecycle schema', lifecycle.schema, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5],
+    ['Strategy schema', strategy.schema, EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2],
+    ['Transition schema', transition.schema, TRANSITION_SCHEMA_RELEASE_ID],
+    ['Effect schema', effect.schema, EFFECT_SCHEMA_RELEASE_ID_V4],
+  ];
+  for (const [field, actual, release] of schemaConjuncts) {
+    if (!same(actual, release)) {
+      throw new Error(`selected CapabilityProgramV4 is not the schema-bound signed Direct InlineOrdinary bundle: its ${field} is ${hex(actual)} and this build decodes ${hex(release)}`);
+    }
+  }
+  if (!same(derivationPolicy, lifecycle.program)) {
+    throw new Error('selected CapabilityProgramV4 is not the schema-bound signed Direct InlineOrdinary bundle: its derivation policy is not its own Lifecycle program');
   }
   const capacityProfile = slice(bytes, DirectAbi.CAPABILITY_PROGRAM_V4_CAPACITY_PROFILE_OFFSET, 32);
   requireNonzero(capacityProfile, 'CapabilityProgramV4 capacity profile');
@@ -893,7 +907,12 @@ export async function inspectDirectHotRouteV3(
   const registryProgram = fixed[HOT_REGISTRY_PROGRAM_ACCOUNT_V3].address;
   const market = required(observation.accounts, marketAddress, 'Market');
   const root = required(observation.accounts, rootAddress, 'capability root');
-  if (market.owner !== coreProgram || market.executable || market.data.length !== CORE_STATE_BYTES || ascii(market.data, 0, 8) !== 'DCLTCOR2' || u16(market.data, 8) !== 2 || market.data[10] !== 1) throw new Error('Market is not one open Core V2 state owned by the selected Core program');
+  if (market.owner !== coreProgram || market.executable || market.data.length !== CORE_STATE_BYTES
+      || !same(slice(market.data, 0, 8), CORE_STATE_MAGIC)
+      || u16(market.data, CORE_STATE_VERSION_OFFSET) !== CORE_VERSION
+      || market.data[CORE_STATE_PHASE_OFFSET] !== CORE_PHASE_OPEN_TAG) {
+    throw new Error('Market is not one open Core V2 state owned by the selected Core program');
+  }
   if (root.owner !== tradingProgram || root.executable) throw new Error('Direct capability root has the wrong owner or executable bit');
   const selection = decodeDirectRootSelectionV1(root.data);
   const releaseSet = slice(market.data, MARKET_RELEASE_SET_OFFSET, 32);

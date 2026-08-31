@@ -35,9 +35,12 @@ pub use generated_capability_execution::{
 };
 pub use generated_protocol_infrastructure::*;
 pub use protocol_infrastructure::{
-    InitializeProtocolInfrastructureV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_PREIMAGE_V1, ProtocolInfrastructureProfileV1,
+    InitializeProtocolInfrastructureV1, InitializeProtocolInfrastructureV2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_PREIMAGE_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_PREIMAGE_V2, ProtocolInfrastructureProfileV1,
+    ProtocolInfrastructureProfileV2,
 };
 pub use source_semantic_release::{
     SOURCE_REVISION_HEX_BYTES_V1, SOURCE_SEMANTIC_RELEASE_DOMAIN_V1,

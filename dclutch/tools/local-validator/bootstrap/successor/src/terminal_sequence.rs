@@ -2471,10 +2471,7 @@ fn authenticate_terminal_message_decompilation_v1(intent: &DurableTerminalIntent
                 differed.push(format!("key {key} != intended {expected_key}"));
             }
             if signer != expected.signer {
-                differed.push(format!(
-                    "signer {signer} != intended {}",
-                    expected.signer
-                ));
+                differed.push(format!("signer {signer} != intended {}", expected.signer));
             }
             if writable != expected.writable {
                 differed.push(format!(

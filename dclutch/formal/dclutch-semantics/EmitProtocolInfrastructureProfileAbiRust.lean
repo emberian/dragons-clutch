@@ -26,3 +26,12 @@ def main : IO Unit := do
   emitBytes "INITIALIZE_PROTOCOL_INFRASTRUCTURE_MAGIC_V1" initializeMagic
   for field in initializeLayout do
     IO.println s!"pub const {InitializeField.rustName field.spec.name}: usize = {field.offset};"
+  IO.println s!"pub const PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2: usize = {profileBytesV2};"
+  IO.println s!"pub const PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_V2: u16 = {schemaVersionV2};"
+  emitBytes "PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_V2" profileMagicV2
+  for field in profileLayoutV2 do
+    IO.println s!"pub const {ProfileFieldV2.rustName field.spec.name}: usize = {field.offset};"
+  IO.println s!"pub const INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V2: usize = {initializeBytes};"
+  emitBytes "INITIALIZE_PROTOCOL_INFRASTRUCTURE_MAGIC_V2" initializeMagicV2
+  for field in initializeLayout do
+    IO.println s!"pub const {InitializeField.rustNameV2 field.spec.name}: usize = {field.offset};"

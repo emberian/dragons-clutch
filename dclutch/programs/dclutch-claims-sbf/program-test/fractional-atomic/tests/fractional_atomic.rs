@@ -17,6 +17,12 @@ use std::{env, fs, path::PathBuf};
 
 use dclutch_capability_program_contract::{CapabilityRootHeaderV1, SelectedRecordBumpsV1};
 use dclutch_core_contract::ContentId;
+use dclutch_fractional_atomic_program_test::campaign_support::{
+    ReleaseSetInputV1, activation_cache as shared_activation_cache, add_account, add_finalized,
+    add_upgradeable_program, collateral_mint_bytes as shared_collateral_mint_bytes, finalized,
+    mint_bytes as shared_mint_bytes, programdata_address,
+    token_account_bytes_for as shared_token_account_bytes_for, token_program_id,
+};
 use dclutch_fractional_atomic_program_test::narrow_fixture::{
     FRACTIONAL_MAX_REPRESENTATION_WIDTH_V2, NarrowFixtureError, NarrowFixtureInputV2,
     NarrowFixtureV2, NarrowRecordV2, NarrowTerminalInputV2, compile_narrow_fixture_v2,
@@ -31,16 +37,9 @@ use dclutch_fractional_claim_kernel::{
     FractionalExposureTermsInputV2, encode_fractional_exposure_terms_v2,
     fractional_exposure_terms_bytes_v2,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
-use dclutch_registry_contract::{
-    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
-    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
-    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
-    initialize_activation_cache_v1,
-};
+use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
-    ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1, ProgramIdentityV1,
+    CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1, ExecutionRoleV1,
 };
 use dclutch_token_svm::{
     TOKEN_2022_PROGRAM_ID, TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, TokenBehaviorSelectionV2,
@@ -55,7 +54,7 @@ use solana_program::{
 };
 use solana_program_test::{ProgramTest, ProgramTestContext};
 use solana_sdk::{signature::Keypair, signer::Signer};
-use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
+use solana_sdk_ids::system_program;
 use solana_transaction::Transaction;
 
 const CLAIMS_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa1; 32]);
@@ -84,7 +83,6 @@ const MINT_DECIMALS: u8 = 0;
 const GRAPH_ID: [u8; 32] = [0x7c; 32];
 const RENT_CREDIT: Pubkey = Pubkey::new_from_array([0x65; 32]);
 const EXPOSURE_ID: [u8; 32] = [0x7a; 32];
-const TOKEN_ACCOUNT_BYTES: usize = 165;
 
 /// Deterministic actor identity: it must sign, so it needs a real key.
 /// The selection-config identity the split makes a root header carry.
@@ -129,8 +127,19 @@ fn actor_keypair() -> Keypair {
     Keypair::new_from_array([0x5c; 32])
 }
 
-fn token_program_id() -> Pubkey {
-    Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID)
+/// This campaign's release set: the Trading role is the ATOMIC test caller.
+///
+/// The one thing the two campaigns genuinely disagree about, so it is the one
+/// thing named here rather than in the shared builder: the Fractional
+/// capability root is derived under whichever program must `invoke_signed` for
+/// it, and for this campaign that is `fractional-atomic-caller`.
+fn activation_cache(artifacts: &Artifacts, custody: Option<Pubkey>) -> ([u8; 32], Vec<u8>) {
+    shared_activation_cache(&ReleaseSetInputV1 {
+        core: (CORE_PROGRAM_ID, artifacts.core.as_slice()),
+        claims: (CLAIMS_PROGRAM_ID, artifacts.claims.as_slice()),
+        trading: (TEST_CALLER_PROGRAM_ID, artifacts.caller.as_slice()),
+        custody: custody.map(|program| (program, artifacts.custody.as_slice())),
+    })
 }
 
 struct Artifacts {
@@ -157,164 +166,6 @@ fn artifacts() -> Artifacts {
         token: read("spl_token_2022.so"),
         custody: read("dclutch_custody_sbf.so"),
     }
-}
-
-fn identity(key: Pubkey) -> ProgramIdentityV1 {
-    ProgramIdentityV1::new(key.to_bytes()).expect("nonzero program identity")
-}
-
-fn programdata_address(program: Pubkey) -> Pubkey {
-    Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
-}
-
-fn put(output: &mut [u8], offset: usize, input: &[u8]) {
-    let end = offset.checked_add(input.len()).expect("fixture offset");
-    output
-        .get_mut(offset..end)
-        .expect("fixture field")
-        .copy_from_slice(input);
-}
-
-fn immutable_programdata(elf: &[u8]) -> Vec<u8> {
-    let mut bytes = vec![0; 45 + elf.len()];
-    put(&mut bytes, 0, &3_u32.to_le_bytes());
-    put(&mut bytes, 4, &0_u64.to_le_bytes());
-    *bytes.get_mut(12).expect("ProgramData authority option") = 0;
-    put(&mut bytes, 45, elf);
-    bytes
-}
-
-fn add_account(test: &mut ProgramTest, key: Pubkey, owner: Pubkey, data: Vec<u8>) {
-    test.add_account(
-        key,
-        Account {
-            lamports: Rent::default().minimum_balance(data.len()).max(1),
-            data,
-            owner,
-            executable: false,
-            rent_epoch: 0,
-        },
-    );
-}
-
-fn add_upgradeable_program(
-    test: &mut ProgramTest,
-    name: &'static str,
-    program: Pubkey,
-    elf: &[u8],
-) {
-    test.add_upgradeable_program_to_genesis(name, &program);
-    add_account(
-        test,
-        programdata_address(program),
-        bpf_loader_upgradeable::ID,
-        immutable_programdata(elf),
-    );
-}
-
-fn release(program: Pubkey, semantic_seed: u8, elf: &[u8]) -> ArtifactReleaseV1 {
-    ArtifactReleaseV1::new(
-        identity(program),
-        identity(bpf_loader_upgradeable::ID),
-        programdata_address(program).to_bytes(),
-        ContentId::new([semantic_seed; 32]).expect("semantic release"),
-        hash(elf).to_bytes(),
-        0,
-        ArtifactUpgradePolicyV1::Immutable,
-        None,
-    )
-    .expect("artifact release")
-}
-
-fn artifact_id(value: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
-    ArtifactReleaseIdV1::new(hash(&value.to_bytes()).to_bytes()).expect("artifact ID")
-}
-
-fn binding(value: ArtifactReleaseV1) -> ExecutionRoleBindingV1 {
-    ExecutionRoleBindingV1::new(value.program(), artifact_id(value))
-}
-
-fn activation_input(value: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
-    let observation = DeploymentObservationV1::new(
-        value.program().to_bytes(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        true,
-        value.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        false,
-        value.programdata(),
-        bpf_loader_upgradeable::ID.to_bytes(),
-        value.deployment_slot(),
-        value.elf_digest(),
-        value.upgrade_authority(),
-    )
-    .expect("deployment observation");
-    ArtifactActivationInputV1::new(artifact_id(value), value, observation)
-}
-
-fn activation_cache(artifacts: &Artifacts, custody: Option<Pubkey>) -> ([u8; 32], Vec<u8>) {
-    let core = release(CORE_PROGRAM_ID, 0x31, &artifacts.core);
-    let claims = release(CLAIMS_PROGRAM_ID, 0x32, &artifacts.claims);
-    let trading = release(TEST_CALLER_PROGRAM_ID, 0x33, &artifacts.caller);
-    // Custody must be a program distinct from Claims -- the replay-creation
-    // route explicitly refuses `custody_program.key == program_id` -- so a
-    // terminal campaign binds the real Custody ELF where an atomic one can
-    // leave the role pointing at Claims.
-    let custody = match custody {
-        None => claims,
-        Some(program) => release(program, 0x34, &artifacts.custody),
-    };
-    let release_set = ExecutionReleaseSetV1::new(
-        binding(core),
-        binding(claims),
-        binding(trading),
-        binding(claims),
-        binding(custody),
-    )
-    .expect("release set");
-    let release_set_id = hash(&release_set.to_bytes()).to_bytes();
-    let content = ContentId::new(release_set_id).expect("release-set ID");
-    let mut bytes = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
-    initialize_activation_cache_v1(&mut bytes, content).expect("initialize cache");
-    for (role, value) in [
-        (ExecutionRoleV1::Core, core),
-        (ExecutionRoleV1::Claims, claims),
-        (ExecutionRoleV1::Trading, trading),
-        (ExecutionRoleV1::Resolution, claims),
-        (ExecutionRoleV1::Custody, custody),
-    ] {
-        activate_execution_role_into_v1(
-            &mut bytes,
-            content,
-            &release_set,
-            role,
-            &activation_input(value),
-        )
-        .expect("activate role");
-    }
-    ActivatedExecutionReleaseSetV1::decode(&bytes).expect("complete cache");
-    (release_set_id, bytes)
-}
-
-/// Reproduce the shared fixture's finalized-record PDA derivation.
-fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> NarrowRecordV2 {
-    let digest = hash(&bytes).to_bytes();
-    let raw = Pubkey::find_program_address(&[RAW_RECORD_PDA_SEED_V1, &schema, &digest], &owner).0;
-    let staging =
-        Pubkey::find_program_address(&[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest], &owner).0;
-    NarrowRecordV2 {
-        owner,
-        schema,
-        digest,
-        raw,
-        staging,
-        bytes,
-    }
-}
-
-fn add_finalized(test: &mut ProgramTest, record: &NarrowRecordV2) {
-    add_account(test, record.raw, record.owner, record.bytes.clone());
-    add_account(test, record.staging, system_program::ID, Vec::new());
 }
 
 fn compile_shared(
@@ -351,32 +202,11 @@ fn compile_shared(
 /// and then tagged, so this is not the legacy 82-byte layout. Mirrors
 /// `retirement_mint_bytes` in the protocol-position campaign.
 fn mint_bytes(controller: Pubkey, supply: u64) -> Vec<u8> {
-    const TLV_START: usize = 166;
-    let mut bytes = vec![0_u8; TLV_START];
-    put(&mut bytes, 0, &1_u32.to_le_bytes());
-    put(&mut bytes, 4, controller.as_ref());
-    put(&mut bytes, 36, &supply.to_le_bytes());
-    *bytes.get_mut(44).expect("Mint decimals") = MINT_DECIMALS;
-    *bytes.get_mut(45).expect("Mint initialized") = 1;
-    *bytes.get_mut(165).expect("Mint account type") = 1;
-    for extension in [3_u16, 28_u16] {
-        bytes.extend_from_slice(&extension.to_le_bytes());
-        bytes.extend_from_slice(&32_u16.to_le_bytes());
-        bytes.extend_from_slice(controller.as_ref());
-    }
-    bytes
+    shared_mint_bytes(controller, supply, MINT_DECIMALS)
 }
 
 fn token_account_bytes_for(mint: Pubkey, owner: Pubkey, amount: u64) -> Vec<u8> {
-    let mut bytes = vec![0_u8; TOKEN_ACCOUNT_BYTES];
-    put(&mut bytes, 0, mint.as_ref());
-    put(&mut bytes, 32, owner.as_ref());
-    put(&mut bytes, 64, &amount.to_le_bytes());
-    put(&mut bytes, 72, &0_u32.to_le_bytes());
-    *bytes.get_mut(108).expect("state") = 1;
-    put(&mut bytes, 109, &0_u32.to_le_bytes());
-    put(&mut bytes, 129, &0_u32.to_le_bytes());
-    bytes
+    shared_token_account_bytes_for(mint, owner, amount)
 }
 
 /// One action's exact wrapper bytes and its release-scoped caller authority.
@@ -594,7 +424,7 @@ fn fixture() -> (ProgramTest, Fixture) {
     );
     add_account(&mut test, actor, system_program::ID, Vec::new());
 
-    let mut arm = |action: FractionalExposureActionV2, test: &mut ProgramTest| -> ActionArm {
+    let arm = |action: FractionalExposureActionV2, test: &mut ProgramTest| -> ActionArm {
         // Wrap counts native Claims; WholeUnwrap counts shard atoms, and
         // divide_exposure_shards_v2 splits those back into whole Claims and
         // change. The inverse of wrapping 7 Claims is unwrapping 7 * D shards.
@@ -1186,6 +1016,8 @@ use dclutch_token_svm::PRODUCTION_ADAPTER_RELEASES;
 
 const CUSTODY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xa4; 32]);
 const COLLATERAL_MINT: Pubkey = Pubkey::new_from_array([0x74; 32]);
+/// Collateral Mint decimals, named rather than spelled inside the encoder.
+const COLLATERAL_DECIMALS: u8 = 6;
 const RECIPIENT_TOKEN: Pubkey = Pubkey::new_from_array([0x85; 32]);
 const CERTIFICATE_ACCOUNT: Pubkey = Pubkey::new_from_array([0x86; 32]);
 const RESOLUTION_POLICY: [u8; 32] = [0x51; 32];
@@ -1303,7 +1135,11 @@ fn terminal_certificate_bytes(
         attempt_index: 0,
         schedule_index: 0,
         selector: terms.winner,
-        work_paid: if failed { FAILURE_WALK_BOUNTY_LAMPORTS } else { 0 },
+        work_paid: if failed {
+            FAILURE_WALK_BOUNTY_LAMPORTS
+        } else {
+            0
+        },
         funding_remaining: 0,
         result_numerator: i128::from(!failed),
         result_denominator: u64::from(!failed),
@@ -1319,13 +1155,7 @@ fn terminal_certificate_bytes(
 /// The Realm's `RequireAbsent` policies are why the collateral Mint carries
 /// neither authority; unlike the shard Mints it has no extensions.
 fn collateral_mint_bytes(supply: u64) -> Vec<u8> {
-    let mut bytes = vec![0_u8; 82];
-    put(&mut bytes, 0, &0_u32.to_le_bytes());
-    put(&mut bytes, 36, &supply.to_le_bytes());
-    *bytes.get_mut(44).expect("decimals") = 6;
-    *bytes.get_mut(45).expect("initialized") = 1;
-    put(&mut bytes, 46, &0_u32.to_le_bytes());
-    bytes
+    shared_collateral_mint_bytes(supply, COLLATERAL_DECIMALS)
 }
 
 struct TerminalFixture {
@@ -1931,7 +1761,10 @@ async fn a_losing_coordinate_burns_its_shards_and_pays_exactly_nothing() {
     let replay_before = account(&mut context, fixture.custody_replay).await;
     assert_eq!(mint_supply(&before[0]), TERMINAL_SHARDS);
     assert_eq!(token_amount(&before[1]), TERMINAL_SHARDS);
-    assert_eq!(balance(&before[2], fixture.coordinate as usize), WRAP_NATIVE_CLAIMS);
+    assert_eq!(
+        balance(&before[2], fixture.coordinate as usize),
+        WRAP_NATIVE_CLAIMS
+    );
 
     let (accepted, logs, units, result) = submit(
         &mut context,

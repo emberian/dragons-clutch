@@ -32,7 +32,9 @@ use dclutch_market_core_codec::{
 };
 use dclutch_release_set_contract::{
     CAPABILITY_EXECUTION_SELECTION_BYTES_V1, CapabilityExecutionSelectionV1,
-    INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1, InitializeProtocolInfrastructureV1,
+    INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1, INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V2,
+    INITIALIZE_PROTOCOL_INFRASTRUCTURE_MAGIC_V2, InitializeProtocolInfrastructureV1,
+    InitializeProtocolInfrastructureV2,
 };
 use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, program_error::ProgramError,
@@ -47,6 +49,7 @@ mod found;
 mod frame;
 mod generic_founding_v1;
 mod infrastructure;
+mod infrastructure_v2;
 mod open_market;
 mod product_runtime_v2;
 mod records;
@@ -64,7 +67,7 @@ pub use execute_provider_v3::{
 };
 pub use frame::{
     FOUND_ACCOUNT_COUNT_V3, INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1,
-    PROJECTED_FOUND_ACCOUNT_COUNT_V2,
+    INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V2, PROJECTED_FOUND_ACCOUNT_COUNT_V2,
 };
 pub use generic_founding_v1::{
     GENERIC_FOUNDING_FOUND_FIXED_ACCOUNT_COUNT_V1, GENERIC_FOUNDING_FOUND_SUFFIX_ACCOUNT_COUNT_V1,
@@ -179,6 +182,40 @@ pub enum CoreSbfError {
     /// width, coordinates not strictly increasing, a zero atom weight, a
     /// non-primitive weight scale, or prices not partitioning the scale.
     PriceGateNonCanonical = 0x3016,
+    /// The succession ceremony found no decodable V1 profile at its PDA.
+    ///
+    /// Succession without a predecessor is initialization's job
+    /// (`InitializeProtocolInfrastructureV1`); the V2 ceremony refuses a
+    /// vacant or malformed V1 by name (ruling §5 conjunct 2).
+    InfrastructurePredecessorAbsent = 0x3017,
+    /// A succession tried to move the Registry or Rent program identity.
+    ///
+    /// A hop may move a role's bytes, never its identity (the lineage
+    /// machinery's conjunct 4, applied to the infrastructure pair). A
+    /// program-id move is a different, bigger act — refused here by name,
+    /// always (ruling §5 conjunct 3).
+    InfrastructureIdentityMoved = 0x3018,
+    /// The succession does not move strictly forward.
+    ///
+    /// A moved binding's successor record must bind a strictly later
+    /// deployment slot than its predecessor record (Loader V3 slots only
+    /// move forward), and a succession in which NEITHER binding moves
+    /// selects nothing new and would only burn the one V2 vacancy
+    /// (ruling §5 conjunct 4; the lineage self-succession refusal).
+    InfrastructureNotForward = 0x3019,
+    /// A moved binding lacks its predecessor release's bound authority.
+    ///
+    /// The key the Loader already required for the physical upgrade must
+    /// co-sign the re-selection; an unmoved binding must carry the System
+    /// program — no consent, and nothing that could look like consent —
+    /// in its consent slot (ruling §5 conjunct 5).
+    InfrastructureConsentMissing = 0x301A,
+    /// The V2 profile PDA is already occupied: the succession happened.
+    ///
+    /// Write-once by the same vacancy discipline as V1 — one succession
+    /// per domain, ever. A second ceremony is a fork attempt and refuses
+    /// by name (ruling §5 conjunct 6).
+    InfrastructureAlreadySucceeded = 0x301B,
 }
 
 impl CoreSbfError {
@@ -188,7 +225,7 @@ impl CoreSbfError {
     /// [`CoreSbfError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 28] = [
         Self::Instruction,
         Self::AccountFrame,
         Self::FinalizedRecord,
@@ -212,12 +249,17 @@ impl CoreSbfError {
         Self::PriceGateHullRefused,
         Self::PriceGateCapacity,
         Self::PriceGateNonCanonical,
+        Self::InfrastructurePredecessorAbsent,
+        Self::InfrastructureIdentityMoved,
+        Self::InfrastructureNotForward,
+        Self::InfrastructureConsentMissing,
+        Self::InfrastructureAlreadySucceeded,
     ];
 
     /// This refusal's position in [`CoreSbfError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a twenty-fourth variant is a COMPILE ERROR here rather than a discriminant no
+    /// a twenty-ninth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -244,6 +286,11 @@ impl CoreSbfError {
             Self::PriceGateHullRefused => 20,
             Self::PriceGateCapacity => 21,
             Self::PriceGateNonCanonical => 22,
+            Self::InfrastructurePredecessorAbsent => 23,
+            Self::InfrastructureIdentityMoved => 24,
+            Self::InfrastructureNotForward => 25,
+            Self::InfrastructureConsentMissing => 26,
+            Self::InfrastructureAlreadySucceeded => 27,
         }
     }
 }
@@ -349,10 +396,24 @@ pub fn process_instruction(
         );
     }
     if instruction_data.len() == INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1 {
+        // The two ceremonies share one fixed width; the magic is the whole
+        // discriminant. The V2 arm is checked first so its instruction never
+        // falls through to V1's decoder and dies as a generic magic refusal.
+        if instruction_data.get(..INITIALIZE_PROTOCOL_INFRASTRUCTURE_MAGIC_V2.len())
+            == Some(INITIALIZE_PROTOCOL_INFRASTRUCTURE_MAGIC_V2.as_slice())
+        {
+            InitializeProtocolInfrastructureV2::decode(instruction_data)
+                .map_err(|_| CoreSbfError::Instruction)?;
+            return infrastructure_v2::process_initialize_v2(program_id, accounts);
+        }
         InitializeProtocolInfrastructureV1::decode(instruction_data)
             .map_err(|_| CoreSbfError::Instruction)?;
         return infrastructure::process_initialize(program_id, accounts);
     }
+    const _: () = assert!(
+        INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V1 == INITIALIZE_PROTOCOL_INFRASTRUCTURE_BYTES_V2,
+        "the length dispatch above serves both ceremony versions"
+    );
     if instruction_data.len() >= SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1
         && instruction_data.get(..SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.len())
             == Some(SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1.as_slice())

@@ -114,6 +114,11 @@ const INSTRUCTION_RENDERERS: ReadonlyArray<InstructionRenderer> = Object.freeze(
     summary: 'Works out what a founding would create, without creating it.',
   },
   {
+    routeId: 'core/infrastructure_v2::process_initialize_v2',
+    summary:
+      'Names the Registry and Rent builds this deployment trusts, succeeding the selection made before them. The key that moved a program\u2019s bytes has to consent here, on chain, before anything will accept them.',
+  },
+  {
     routeId: 'core/generic_founding_v1::process',
     summary: 'The Core program’s half of founding a market: create it, or open it for trading.',
     bodyMagic: magicText(GENERIC_FOUNDING_REQUEST_MAGIC_V1),

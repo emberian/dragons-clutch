@@ -81,6 +81,7 @@ const DIVERGED_MODULES: Readonly<Record<string, string>> = Object.freeze({
   'lib/marketDiscovery.ts': REEXPORT,
   'lib/rationalTerminalChainV4.ts': REEXPORT,
   'lib/founding/principalCapacity.ts': REEXPORT,
+  'lib/ticketBoard.ts': REEXPORT,
   'lib/activity.ts': BACKLOG,
   'lib/activity.test.ts': BACKLOG,
   'lib/capabilityModel.ts': BACKLOG,

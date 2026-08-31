@@ -365,14 +365,18 @@ pub(crate) fn plan_founding_submission_v1(
         return Err(refusal("founding recovery payload was empty"));
     }
     let (unique, required_signatures) = message_geometry_v1(&plan.message, &plan.expected_signers)?;
-    if unique != plan.operation.exact_unique_accounts(binding.market_has_recovery_policy)
+    if unique
+        != plan
+            .operation
+            .exact_unique_accounts(binding.market_has_recovery_policy)
         || required_signatures != plan.operation.exact_required_signatures()
         || plan.expected_signers.first() != Some(&binding.payer)
     {
         return Err(refusal(format!(
             "{} planned geometry changed: expected {} unique accounts and {} signers, observed {unique} and {required_signatures}",
             plan.operation.label(),
-            plan.operation.exact_unique_accounts(binding.market_has_recovery_policy),
+            plan.operation
+                .exact_unique_accounts(binding.market_has_recovery_policy),
             plan.operation.exact_required_signatures(),
         )));
     }

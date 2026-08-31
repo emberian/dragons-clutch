@@ -4031,7 +4031,8 @@ mod tests {
         // founding collateral plus the fixture liquidity and nothing else.
         let mut widened = receipt.clone();
         widened.founding_collateral_atoms = 5_073_807_456;
-        widened.total_supply_atoms = 5_073_807_456 + crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1;
+        widened.total_supply_atoms =
+            5_073_807_456 + crate::market::LOCAL_PARTICIPANT_FIXTURE_LIQUIDITY_ATOMS_V1;
         authenticate_local_participant_fixture_evidence_v1(
             crate::cluster::ExpectedClusterV1::OwnedLoopback,
             Some(&widened),

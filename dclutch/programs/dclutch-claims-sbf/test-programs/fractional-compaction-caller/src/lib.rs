@@ -9,9 +9,15 @@
 //! capability root. In production that program is Trading, whose
 //! `fractional_root_signer` marks the root's meta a signer after authenticating
 //! the root's bytes against the same request. Nothing in this repository could
-//! produce that signature for a 49-account frame, so the shipped handler had
+//! produce that signature for the compaction frame, so the shipped handler had
 //! never executed. This program is that caller and nothing more: it owns no
 //! protocol state and publishes no production ABI.
+//!
+//! The width is deliberately not named here. This caller reads
+//! `FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1` and the role coordinates from the
+//! declaration itself, so the ruled fiftieth account (WAVE `b4546291`, the Rent
+//! program) cost this file one sentence and no code -- which is the property the
+//! declaration exists to give.
 //!
 //! # One signature, and that is the whole point
 //!

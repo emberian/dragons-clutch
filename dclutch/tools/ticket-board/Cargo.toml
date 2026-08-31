@@ -1,0 +1,86 @@
+[package]
+name = "dclutch-ticket-board"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+rust-version = "1.89"
+description = "A relay that holds bearer-signed Direct intent tickets so a taker can find one: no keys, no custody, no authority"
+publish = false
+
+# Its own workspace, like every other host tool under `tools/`. The protocol
+# workspace is `no_std` kernel and contract crates; this binary needs `std`, an
+# async runtime and an HTTP server, and adding that tree to the root `members`
+# list is an integration decision this crate does not get to make for everyone
+# else.
+[workspace]
+
+[lib]
+name = "dclutch_ticket_board"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dclutch-ticket-board"
+path = "src/main.rs"
+
+[dependencies]
+# THE LIFT, and the reason this crate is small.
+#
+# Every byte of a ticket interpreted here is interpreted by
+# `parse_portable_direct_ticket_v1` — shape, canonical form, codec roundtrip,
+# and the detached Ed25519 signature against the preimage that reader rebuilds.
+# This board re-derives no signing message and parses no wire format of its own,
+# because a second implementation of a signing preimage is a signature that
+# verifies nowhere, discovered at the refused trade.
+#
+# `default-features = false` turns the `author` feature OFF, so no signer crate
+# is linked into this binary at all. A relay that cannot forge is the invariant
+# this whole service rests on, and here it is a property of the dependency graph
+# rather than a promise in a comment.
+dclutch-direct-ticket = { path = "../../crates/dclutch-direct-ticket", default-features = false }
+
+# `Pubkey`, from the same crate the on-chain programs use. Nothing here
+# re-derives an address.
+solana-program = { version = "=3.0.0", default-features = false }
+
+# THE SERVER. `hyper` and not `axum`, and the reason is dependency surface
+# rather than taste: `hyper 1.11.0`, `hyper-util 0.1.20`, `http-body-util 0.1.5`
+# and `tokio 1.53.1` are the exact versions every other lockfile in this tree
+# already resolves through reqwest, so this crate adds a server without adding a
+# stack. `axum` appears in no lockfile here and would pull `h2`, `axum-core`,
+# `tower-http` and `matchit` behind it — to route three paths, which `http.rs`
+# does with a `match` that is shorter than the router configuration would be.
+hyper = { version = "=1.11.0", features = ["server", "http1"] }
+hyper-util = { version = "=0.1.20", features = ["tokio"] }
+http-body-util = "=0.1.5"
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "macros"] }
+
+# NOT `=` PINNED, for the reason `dclutch-direct-ticket` states in its own
+# manifest: three independent workspaces resolve that shared crate and they do
+# not agree on a serde patch version. The pinning happens in this crate's
+# committed `Cargo.lock`, where pinning actually reproduces a build.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# The tests author real tickets, so they need the signer this binary
+# deliberately does not link. Enabling `author` here and nowhere else is the
+# point: a hostile test that cannot produce a valid signature cannot prove that
+# a tampered one is refused.
+dclutch-direct-ticket = { path = "../../crates/dclutch-direct-ticket", features = ["author"] }
+dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
+solana-keypair = "=3.1.2"
+solana-signer = "=3.0.1"
+tempfile = "3"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+checked_conversions = "deny"
+float_arithmetic = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+unwrap_used = "deny"

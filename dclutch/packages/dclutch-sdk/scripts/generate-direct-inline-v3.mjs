@@ -1,6 +1,8 @@
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { requireGeneratorFollowsRoute } from './route-binding.mjs';
+
 const root = new URL('../../../', import.meta.url);
 
 /**
@@ -47,37 +49,34 @@ function relabel(rust, aliases) {
   return text;
 }
 
-const sources = Object.freeze({
-  hot: readFileSync(new URL('crates/dclutch-capability-program-contract/src/hot_v3.rs', root), 'utf8'),
-  descriptor: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_v3.rs', root), 'utf8'),
-  descriptorContract: readFileSync(new URL('crates/dclutch-capability-program-contract/src/v3.rs', root), 'utf8'),
-  descriptorV4: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_v4.rs', root), 'utf8'),
-  descriptorContractV4: readFileSync(new URL('crates/dclutch-capability-program-contract/src/v4.rs', root), 'utf8'),
-  root: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated.rs', root), 'utf8'),
-  rootContract: readFileSync(new URL('crates/dclutch-capability-program-contract/src/lib.rs', root), 'utf8'),
-  selection: readFileSync(new URL('crates/dclutch-release-set-contract/src/generated_capability_execution.rs', root), 'utf8'),
-  manifest: relabel(
-    readFileSync(new URL('crates/dclutch-capability-contract/src/generated_abi.rs', root), 'utf8'),
-    MANIFEST_ALIASES,
-  ),
-  set: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v1.rs', root), 'utf8'),
-  setV2: readFileSync(new URL('crates/dclutch-capability-program-contract/src/generated_set_v2.rs', root), 'utf8'),
-  direct: readFileSync(new URL('crates/dclutch-direct-codec/src/execution_v3.rs', root), 'utf8'),
-  nativeEvidence: readFileSync(new URL('crates/dclutch-direct-codec/src/native_evidence_v3.rs', root), 'utf8'),
-  intent: readFileSync(new URL('crates/dclutch-direct-codec/src/generated_intent_v2.rs', root), 'utf8'),
-  ordinary: readFileSync(
-    new URL('crates/dclutch-direct-codec/src/generated_ordinary_v3.rs', root),
-    'utf8',
-  ),
-  ordinaryArtifacts: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_artifacts_v3.rs', root), 'utf8'),
-  ordinaryBundle: readFileSync(new URL('crates/dclutch-direct-codec/src/ordinary_bundle_v4.rs', root), 'utf8'),
-  successor: readFileSync(new URL('crates/dclutch-direct-codec/src/successor.rs', root), 'utf8'),
-  successorGenerated: readFileSync(new URL('crates/dclutch-direct-codec/src/generated_successor.rs', root), 'utf8'),
-  account: readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2.rs', root), 'utf8'),
-  accountProfile14: readFileSync(new URL('crates/dclutch-account-profile-contract/src/v2/generated_profile14.rs', root), 'utf8'),
-  request: readFileSync(new URL('crates/dclutch-request-profile-contract/src/v2.rs', root), 'utf8'),
-  requestGenerated: readFileSync(new URL('crates/dclutch-request-profile-contract/src/generated.rs', root), 'utf8'),
-  transition: readFileSync(new URL('crates/dclutch-transition-vm/src/v3.rs', root), 'utf8'),
+// The single place a scraped file's path is written. The route-binding gate
+// below reads these same strings, so a source that moves cannot be checked
+// against a stale copy of where it used to live.
+const SOURCE_FILES = Object.freeze({
+  hot: 'crates/dclutch-capability-program-contract/src/hot_v3.rs',
+  descriptor: 'crates/dclutch-capability-program-contract/src/generated_v3.rs',
+  descriptorContract: 'crates/dclutch-capability-program-contract/src/v3.rs',
+  descriptorV4: 'crates/dclutch-capability-program-contract/src/generated_v4.rs',
+  descriptorContractV4: 'crates/dclutch-capability-program-contract/src/v4.rs',
+  root: 'crates/dclutch-capability-program-contract/src/generated.rs',
+  rootContract: 'crates/dclutch-capability-program-contract/src/lib.rs',
+  selection: 'crates/dclutch-release-set-contract/src/generated_capability_execution.rs',
+  manifest: 'crates/dclutch-capability-contract/src/generated_abi.rs',
+  set: 'crates/dclutch-capability-program-contract/src/generated_set_v1.rs',
+  setV2: 'crates/dclutch-capability-program-contract/src/generated_set_v2.rs',
+  direct: 'crates/dclutch-direct-codec/src/execution_v3.rs',
+  nativeEvidence: 'crates/dclutch-direct-codec/src/native_evidence_v3.rs',
+  intent: 'crates/dclutch-direct-codec/src/generated_intent_v2.rs',
+  ordinary: 'crates/dclutch-direct-codec/src/generated_ordinary_v3.rs',
+  ordinaryArtifacts: 'crates/dclutch-direct-codec/src/ordinary_artifacts_v3.rs',
+  ordinaryBundle: 'crates/dclutch-direct-codec/src/ordinary_bundle_v4.rs',
+  successor: 'crates/dclutch-direct-codec/src/successor.rs',
+  successorGenerated: 'crates/dclutch-direct-codec/src/generated_successor.rs',
+  account: 'crates/dclutch-account-profile-contract/src/v2.rs',
+  accountProfile14: 'crates/dclutch-account-profile-contract/src/v2/generated_profile14.rs',
+  request: 'crates/dclutch-request-profile-contract/src/v2.rs',
+  requestGenerated: 'crates/dclutch-request-profile-contract/src/generated.rs',
+  transition: 'crates/dclutch-transition-vm/src/v3.rs',
   // The effect kernel has three live generations and their names do not track
   // their preimages: `v3.rs`'s schema preimage reads
   // `effect-program-v4-ordered-receipt-dependencies-v1`, while `v4.rs`'s reads
@@ -86,23 +85,131 @@ const sources = Object.freeze({
   // authenticator binds V4 (`dclutch-direct-codec/src/artifacts_v4.rs`,
   // `dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs`), and V3 is
   // kept only so the explorer can still name records published before cohort-8.
-  effect: readFileSync(new URL('crates/dclutch-effect-kernel/src/v3.rs', root), 'utf8'),
-  effectV4: readFileSync(new URL('crates/dclutch-effect-kernel/src/v4.rs', root), 'utf8'),
-  lifecycle: readFileSync(new URL('crates/dclutch-account-profile-contract/src/lifecycle_v3.rs', root), 'utf8'),
-  strategy: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/v2.rs', root), 'utf8'),
-  strategyGenerated: readFileSync(new URL('crates/dclutch-execution-strategy-contract/src/generated_v2.rs', root), 'utf8'),
+  // Which of the two the route binds is no longer a comment's word: the gate
+  // below walks the route's own use-tree to the defining file.
+  effect: 'crates/dclutch-effect-kernel/src/v3.rs',
+  effectV4: 'crates/dclutch-effect-kernel/src/v4.rs',
+  lifecycle: 'crates/dclutch-account-profile-contract/src/lifecycle_v3.rs',
+  strategy: 'crates/dclutch-execution-strategy-contract/src/v2.rs',
+  strategyGenerated: 'crates/dclutch-execution-strategy-contract/src/generated_v2.rs',
   // The `DCLTPAY3` layout scalars this generator scrapes are Lean-emitted
   // and live in `generated_runtime_v3.rs`; `runtime_v3.rs` `include!`s that
   // file and keeps only private aliases whose right-hand sides are names,
   // not numbers, so the scalar regex below cannot see them there. Reading
   // the emitted file directly also points this mirror at the actual
   // authority rather than at a handwritten restatement of it.
-  basis: readFileSync(
-    new URL('crates/dclutch-product-payoff-v2-codec/src/generated_runtime_v3.rs', root),
-    'utf8',
-  ),
-  basisGenerated: readFileSync(new URL('crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs', root), 'utf8'),
+  basis: 'crates/dclutch-product-payoff-v2-codec/src/generated_runtime_v3.rs',
+  basisGenerated: 'crates/dclutch-product-payoff-v2-codec/src/generated_admission_v3.rs',
 });
+
+function readCrateFile(file) {
+  return readFileSync(new URL(file, root), 'utf8');
+}
+
+const sources = Object.freeze(Object.fromEntries(
+  Object.entries(SOURCE_FILES).map(([key, file]) => [
+    key,
+    key === 'manifest' ? relabel(readCrateFile(file), MANIFEST_ALIASES) : readCrateFile(file),
+  ]),
+));
+
+/**
+ * The route-binding gate.
+ *
+ * A `--check` byte gate proves this file's OUTPUT is fresh against whatever
+ * source it points at. It cannot prove the source is the one the live route
+ * authenticates against -- and that is the exact hole that shipped: this
+ * generator scraped the effect kernel's `v3.rs` while
+ * `authenticate_direct_artifacts_v4` bound `v4.rs`, and everything stayed
+ * green while a real reader was turned away.
+ *
+ * So for every authority-selecting constant (anything whose VALUE picks a
+ * generation), walk the route's own use-tree -- through re-exports, in real
+ * source text -- to the file that defines it, and require that file and
+ * constant to be the ones scraped here. Layout scalars need no gate: an
+ * offset that moves breaks the byte gate loudly.
+ */
+const ROUTE_FILE = 'crates/dclutch-direct-codec/src/artifacts_v4.rs';
+const ROUTE_CRATE = 'dclutch_direct_codec';
+const routeText = readCrateFile(ROUTE_FILE);
+
+const ROUTE_BOUND_AUTHORITIES = Object.freeze([
+  {
+    routeName: 'CAPABILITY_PROGRAM_SCHEMA_ID_V4',
+    conjunct: 'content(CAPABILITY_PROGRAM_SCHEMA_ID_V4)?',
+    source: 'descriptorContractV4', sourceConstant: 'SCHEMA_RELEASE_ID',
+  },
+  {
+    routeName: 'DIRECT_SUCCESSOR_KIND_ID_V3',
+    conjunct: 'descriptor.kind().to_bytes() != DIRECT_SUCCESSOR_KIND_ID_V3',
+    source: 'direct', sourceConstant: 'DIRECT_SUCCESSOR_KIND_ID_V3',
+  },
+  {
+    routeName: 'DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1',
+    conjunct: 'descriptor.config_schema().to_bytes() != DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1',
+    source: 'successor', sourceConstant: 'DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1',
+  },
+  {
+    routeName: 'DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3',
+    conjunct: 'descriptor.request_schema().to_bytes() != DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3',
+    source: 'direct', sourceConstant: 'DIRECT_EXECUTION_REQUEST_SCHEMA_ID_V3',
+  },
+  {
+    routeName: 'DIRECT_ROOT_SCHEMA_ID_V1',
+    conjunct: 'descriptor.root_schema().to_bytes() != DIRECT_ROOT_SCHEMA_ID_V1',
+    source: 'successor', sourceConstant: 'DIRECT_ROOT_SCHEMA_ID_V1',
+  },
+  {
+    routeName: 'ACCOUNT_PROFILE_SCHEMA_ID_V2',
+    conjunct: 'descriptor.account_profile().schema().to_bytes() != ACCOUNT_PROFILE_SCHEMA_ID_V2',
+    source: 'account', sourceConstant: 'SCHEMA_RELEASE_ID',
+  },
+  {
+    // Two hops, both read from source: the route takes this from the
+    // capability contract's `v4`, which `pub use`s it from `lifecycle_v3` as
+    // CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5. If the route ever moves to a V6
+    // lifecycle, one of those hops stops leading here and this reds.
+    routeName: 'SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5',
+    conjunct: 'descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5',
+    source: 'lifecycle', sourceConstant: 'CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5',
+  },
+  {
+    routeName: 'EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2',
+    conjunct: 'descriptor.strategy().schema().to_bytes() != EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2',
+    source: 'strategy', sourceConstant: 'EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2',
+  },
+  {
+    // The route spells this one as a full path in the conjunct rather than
+    // binding it in a use-tree, so there is no alias to resolve.
+    qualified: 'dclutch_transition_vm::v3::SCHEMA_RELEASE_ID',
+    conjunct: 'descriptor.transition().schema().to_bytes() != dclutch_transition_vm::v3::SCHEMA_RELEASE_ID',
+    source: 'transition', sourceConstant: 'SCHEMA_RELEASE_ID',
+  },
+  {
+    // The convicted one. `EFFECT_SCHEMA_ID_V4` must resolve to the effect
+    // kernel's v4.rs, never v3.rs, whose preimage misleadingly reads
+    // `effect-program-v4-...`.
+    routeName: 'EFFECT_SCHEMA_ID_V4',
+    conjunct: 'descriptor.effect().schema().to_bytes() != EFFECT_SCHEMA_ID_V4',
+    source: 'effectV4', sourceConstant: 'SCHEMA_RELEASE_ID_V4',
+  },
+  {
+    routeName: 'REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID',
+    conjunct: 'descriptor.request_profile().schema().to_bytes() != REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID',
+    source: 'request', sourceConstant: 'REQUEST_PROFILE_V2_SCHEMA_RELEASE_ID',
+  },
+]);
+
+for (const binding of ROUTE_BOUND_AUTHORITIES) {
+  const sourceFile = SOURCE_FILES[binding.source];
+  if (sourceFile === undefined) throw new Error(`route gate names unknown generator source ${binding.source}`);
+  requireGeneratorFollowsRoute({
+    routeText,
+    routeCrate: ROUTE_CRATE,
+    readSource: readCrateFile,
+    binding: { ...binding, sourceFile },
+  });
+}
 const outputUrl = new URL('../lib/generated/directInlineV3.ts', import.meta.url);
 
 function scalar(source, name) {

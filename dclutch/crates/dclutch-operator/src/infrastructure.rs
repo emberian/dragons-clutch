@@ -15,8 +15,8 @@ use dclutch_registry_contract::{
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+    ProtocolInfrastructureProfileV2,
 };
 use dclutch_release_tool::CheckedInfrastructureV1;
 use solana_program::{
@@ -29,7 +29,7 @@ use crate::{Finality, Observation, ObservedAccount, registry::RegistryFinalizedR
 /// Exact finalized accounts needed to inspect one infrastructure chain.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolInfrastructureStateV1 {
-    /// Core-owned immutable 144-byte infrastructure profile PDA.
+    /// Core-owned 224-byte succession infrastructure profile PDA.
     pub profile: ObservedAccount,
     /// Registry-owned activated execution-release-set cache selected by a Market.
     pub activation_cache: ObservedAccount,
@@ -92,7 +92,7 @@ pub struct ProtocolInfrastructureReportV1 {
     pub execution_release_set_id: ContentId,
     /// Derived Core-owned infrastructure-profile PDA.
     pub profile_pda: Pubkey,
-    /// SHA-256 of the exact 144-byte profile.
+    /// SHA-256 of the exact 224-byte profile.
     pub profile_digest: ContentId,
     /// Immutable current Core deployment evidence.
     pub core: InfrastructureComponentEvidenceV1,
@@ -242,7 +242,7 @@ fn inspect_infrastructure_under_class(
     require_distinct_keys(state)?;
     let rent = decode_rent(&state.rent_sysvar)?;
 
-    let profile = ProtocolInfrastructureProfileV1::decode(&state.profile.data)
+    let profile = ProtocolInfrastructureProfileV2::decode(&state.profile.data)
         .map_err(|_| InfrastructureInspectionErrorV1::InvalidProfile)?;
     let profile_digest = ContentId::new(hash(&state.profile.data).to_bytes())
         .map_err(|_| InfrastructureInspectionErrorV1::InvalidProfile)?;
@@ -314,19 +314,19 @@ fn inspect_infrastructure_under_class(
 
 fn authenticate_profile_account(
     state: &ProtocolInfrastructureStateV1,
-    profile: ProtocolInfrastructureProfileV1,
+    profile: ProtocolInfrastructureProfileV2,
     core_program: Pubkey,
     rent: &Rent,
 ) -> Result<(), InfrastructureInspectionErrorV1> {
     let expected = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &core_program,
     )
     .0;
     if state.profile.key != expected
         || state.profile.owner != core_program
         || state.profile.executable
-        || state.profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        || state.profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         || !rent.is_exempt(state.profile.lamports, state.profile.data.len())
         || profile.registry().program().to_bytes() != state.registry_program.key.to_bytes()
         || profile.rent().program().to_bytes() != state.rent_program.key.to_bytes()
@@ -338,7 +338,7 @@ fn authenticate_profile_account(
 
 fn authenticate_activation_cache<'a>(
     state: &'a ProtocolInfrastructureStateV1,
-    profile: ProtocolInfrastructureProfileV1,
+    profile: ProtocolInfrastructureProfileV2,
     rent: &Rent,
     registry_program: Pubkey,
 ) -> Result<ActivatedExecutionReleaseSetViewV1<'a>, InfrastructureInspectionErrorV1> {
@@ -500,7 +500,7 @@ fn require_admissible_release(
 fn recognize_checked_manifest(
     checked_manifest: Option<&[u8]>,
     state: &ProtocolInfrastructureStateV1,
-    profile: ProtocolInfrastructureProfileV1,
+    profile: ProtocolInfrastructureProfileV2,
     activated: &ActivatedExecutionReleaseSetViewV1<'_>,
     registry_release: ArtifactReleaseV1,
     rent_release: ArtifactReleaseV1,
@@ -778,15 +778,26 @@ mod tests {
 
     impl ReleaseFixture {
         fn immutable(seed: u8) -> Self {
-            let program = Pubkey::new_from_array(bytes(seed));
+            Self::immutable_at(seed, seed)
+        }
+
+        /// One immutable release of `program_seed`'s program carrying
+        /// `release_seed`'s ELF, slot, and semantic preimage.
+        ///
+        /// Holding the program fixed while the release moves is the shape a
+        /// succession arm has: the same program identity on both sides of the
+        /// profile, a different artifact release id.
+        fn immutable_at(program_seed: u8, release_seed: u8) -> Self {
+            let program = Pubkey::new_from_array(bytes(program_seed));
             let programdata =
                 Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0;
-            let elf = sbf_elf(seed);
+            let elf = sbf_elf(release_seed);
             let program_bytes = loader_program_bytes(programdata);
-            let programdata_bytes = immutable_programdata_bytes(u64::from(seed), &elf);
-            let metadata = BuildMetadataV1::parse(&metadata_text(program, programdata, seed))
-                .expect("metadata");
-            let semantic = vec![seed; 16];
+            let programdata_bytes = immutable_programdata_bytes(u64::from(release_seed), &elf);
+            let metadata =
+                BuildMetadataV1::parse(&metadata_text(program, programdata, release_seed))
+                    .expect("metadata");
+            let semantic = vec![release_seed; 16];
             let checked = build_checked_release(ReleaseEvidenceV1 {
                 elf: &elf,
                 semantic_preimage: &semantic,
@@ -886,9 +897,17 @@ mod tests {
             .expect("activation cache");
             let registry = ReleaseFixture::immutable(seed + 50);
             let rent_program = ReleaseFixture::immutable(seed + 60);
-            let profile =
-                ProtocolInfrastructureProfileV1::new(registry.binding(), rent_program.binding())
-                    .expect("profile");
+            // Registry moved across the succession and Rent did not: the
+            // predecessor Registry id names the distinct release this profile
+            // succeeded, while Rent holds the same id on both sides of it.
+            let predecessor_registry = ReleaseFixture::immutable_at(seed + 50, seed + 70);
+            let profile = ProtocolInfrastructureProfileV2::new(
+                registry.binding(),
+                rent_program.binding(),
+                predecessor_registry.binding().artifact_release(),
+                rent_program.binding().artifact_release(),
+            )
+            .expect("profile");
             let checked = build_checked_infrastructure_v1(
                 execution,
                 profile,
@@ -909,7 +928,7 @@ mod tests {
                 &rent,
             );
             let profile_key = Pubkey::find_program_address(
-                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
                 &core.program.key,
             )
             .0;
@@ -922,7 +941,7 @@ mod tests {
                 profile: observed(
                     profile_key,
                     core.program.key,
-                    rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
+                    rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2),
                     false,
                     profile.to_bytes().to_vec(),
                 ),
@@ -1149,10 +1168,10 @@ mod tests {
     }
 
     #[test]
-    fn profile_width_is_the_frozen_144_byte_wire() {
+    fn profile_width_is_the_frozen_224_byte_wire() {
         let fixture = Fixture::new(11);
-        assert_eq!(fixture.state.profile.data.len(), 144);
-        assert_eq!(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, 144);
+        assert_eq!(fixture.state.profile.data.len(), 224);
+        assert_eq!(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, 224);
         assert!(ProgramIdentityV1::new([0; 32]).is_err());
     }
 }

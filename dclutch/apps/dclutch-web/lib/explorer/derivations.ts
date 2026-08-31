@@ -53,7 +53,10 @@ import {
   SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5,
   TRANSITION_SCHEMA_RELEASE_ID,
 } from '../generated/directInlineV3';
-import { PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1 } from '../generated/protocolInfrastructure';
+import {
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+} from '../generated/protocolInfrastructure';
 import { REALM_PDA_DOMAIN_V1 } from '../generated/realmPositionV1';
 import { deriveFinalizedRecordAddressesV1 } from '../releaseRegistry';
 import { magicText, type DecodedRecord } from './accountRecords';
@@ -311,12 +314,24 @@ export function derivationsForRecord(
     }
   }
 
-  if (spec.name === 'Protocol infrastructure profile') {
+  // Both profile domains are offered for either record, because both accounts
+  // live on chain at once: the succession profile is what every route reads,
+  // and its predecessor stays written forever at its own address.
+  if (spec.name === 'Protocol infrastructure profile' || spec.name === 'Protocol infrastructure succession profile') {
     found.push(
       derive(
         'Protocol infrastructure profile',
         [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
         [seedLabel(PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1)],
+        owner,
+        address,
+      ),
+    );
+    found.push(
+      derive(
+        'Protocol infrastructure succession profile',
+        [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+        [seedLabel(PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2)],
         owner,
         address,
       ),

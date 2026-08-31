@@ -21,8 +21,10 @@ import {
   type MarketCapabilityBadgeV1,
   type MarketCapabilityManifestV1,
   type MarketCollateralV1,
+  type MarketHoardV1,
   type MarketProvenanceV1,
 } from '@/lib/marketDiscovery';
+import { denominationUnitV1, formatQuantityV1, type DenominationV1 } from '@/lib/quantity';
 import CellStrip from '@/components/charts/CellStrip';
 import MarketIssuanceHistory from '@/components/charts/MarketIssuanceHistory';
 import SupplyShareStrip from '@/components/charts/SupplyShareStrip';
@@ -36,6 +38,32 @@ import { clusterNameV1 } from '@/lib/rpcDefault';
 import { deadlineMomentPhraseV1, readSlotClockV1, slotClockCaveatV1, type SlotClockV1 } from '@/lib/slotClock';
 import { watchSentenceV1 } from '@/lib/rpcSubscribe';
 import { useAccountWatchV1 } from '@/lib/useAccountWatch';
+
+/**
+ * The collateral's display denomination for one Market, resolved once.
+ *
+ * The decimals are the vault mint's own byte and stay null until that mint
+ * authenticates -- null is never read as 0, which would silently multiply
+ * every quantity on the page by a million.
+ *
+ * The mint address is taken from the vault when it derived, and otherwise
+ * from the Realm the Market root commits to, so it survives a vault that was
+ * never read. When neither authenticated there is no mint to name and the
+ * field is empty, which is the honest reading of "not read" rather than a
+ * placeholder address.
+ *
+ * The unit stays null until an editorial entry names one; absent that,
+ * nothing is invented and the word is `collateral`.
+ */
+function collateralDenominationV1(hoard: MarketHoardV1, collateral: MarketCollateralV1): DenominationV1 {
+  return Object.freeze({
+    decimals: hoard.status === 'derived' ? hoard.mintDisplayDecimals : null,
+    unit: null,
+    mint: hoard.status === 'derived'
+      ? hoard.collateralMint
+      : collateral.status === 'bound' ? collateral.collateralMint : '',
+  });
+}
 
 type State =
   | Readonly<{ kind: 'idle' | 'loading' | 'refused'; message: string }>
@@ -179,6 +207,8 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
   const detail = state.kind === 'ready' ? state.detail : null;
   const card = detail?.card ?? null;
   const decoded = card !== null && card.status === 'decoded' ? card : null;
+  /** Resolved once for the page, and handed to every surface that shows a quantity. */
+  const denomination = decoded === null ? null : collateralDenominationV1(decoded.hoard, decoded.collateral);
   const refused = card !== null && card.status === 'refused' ? card : null;
   // Wall-clock layer: measured slot-rate clock plus a ticking now, both
   // absent until they can be true — see MarketDiscoveryWorkspace.
@@ -424,6 +454,10 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
             <h3 className="detail-subhead">The vault</h3>
             {decoded.hoard.status === 'derived'
               ? <dl className="detail-facts">
+                {/* Humanized above, and the raw atoms keep their own row right
+                    below it -- the exact twin is never more than a glance
+                    away, and it is never the tooltip alone. */}
+                <Fact label="Collateral held" value={`${formatQuantityV1(decoded.hoard.principalAtoms, denomination!).display} ${denominationUnitV1(denomination!)}`} />
                 <Fact label="Collateral held (raw)" value={decoded.hoard.principalAtoms} />
                 <Fact label="Vault account" value={decoded.hoard.address} />
                 <Fact label="Only this may move it" value={decoded.hoard.custodyAuthority} />
@@ -479,6 +513,10 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       custodyProgramId={deployment.programs.custody}
       rentProgramId={deployment.programs.rent}
       liability={decoded.liability}
+      denomination={denomination!}
+      editorial={editorial}
+      clock={clock}
+      nowMs={nowMs}
     />}
 
     {decoded !== null && <AggregateRetirementStatus

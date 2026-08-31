@@ -19,6 +19,10 @@ describe('the market-detail trade panel', () => {
     custodyProgramId={null}
     rentProgramId={null}
     liability={null}
+    denomination={{ decimals: null, unit: null, mint: '' }}
+    editorial={null}
+    clock={null}
+    nowMs={null}
   />);
 
   it('treats the named refusal as the product surface, not a disabled button', () => {
@@ -51,6 +55,27 @@ describe('the market-detail trade panel', () => {
     }
   });
 
+  /**
+   * FLOWFUL, 2026-08-31: the stepper does not exist until the chain has been
+   * asked.
+   *
+   * This is not a loading nicety. Two of the four named walls are MARKET-level
+   * -- `phase` and `activation` -- and until those have been read, rendering
+   * seven steps would be promising a flow that may turn out to be impossible
+   * on this market. The gate replaces the stepper in that case, so neither can
+   * be drawn before the read that decides between them.
+   *
+   * The signing vocabulary follows from the same fact rather than being a
+   * separate rule: every control that says `Sign` or `Submit` lives inside a
+   * step, so an unread panel offers no signing surface at all.
+   */
+  it('shows no stepper, and no signing vocabulary, before the chain has been asked', () => {
+    expect(html).not.toContain('flow-rail');
+    expect(html).not.toContain('flow-step');
+    expect(html).not.toContain('Sign');
+    expect(html).not.toContain('Submit');
+  });
+
   // This panel used to promise "There is no submit button here", and this test
   // pinned that sentence. Then submission shipped and the sentence stayed --
   // green, and untrue to every reader, on a public page. The assertions below
@@ -59,11 +84,14 @@ describe('the market-detail trade panel', () => {
   it('describes the submission it really performs, and the guarantees around it', () => {
     expect(html).not.toContain('There is no submit button here');
     expect(html).not.toContain('signed packet is never described as an executed trade');
-    // What is still true, and is the part that mattered: signing is not
-    // sending, sending happens once, and a signature is not a trade.
-    expect(html).toContain('Signing sends nothing.');
-    expect(html).toContain('it happens once');
-    expect(html).toContain('rather than sending a second one');
+    // Renegotiated 2026-08-31 (FLOWFUL). The resumption promise -- "Signing
+    // sends nothing … rather than sending a second one" -- used to render
+    // here, above everything, to a reader who did not yet know what signing or
+    // sending were. It now renders in step 6's header, one step away from
+    // being true, and it is pinned in `trade/steps/SignStep.test.tsx` whole
+    // and unsplit. The promise is RELOCATED, not weakened: this assertion
+    // exists so that "it moved" can never quietly become "it went".
+    expect(html).not.toContain('Signing sends nothing.');
     // Renegotiated 2026-08-31. Three paragraphs of guarantees stood above the
     // controls: what gets re-read before signing, who pays, what "finalized"
     // means, and that everything on the page is a copy. What a reader needs

@@ -1847,6 +1847,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-relay-contract",
@@ -2111,12 +2112,15 @@ dependencies = [
 name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
  "dclutch-core-contract",
  "dclutch-execution-strategy-contract",
  "dclutch-pyth-svm",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
+ "serde_json",
  "sha2 0.10.9",
  "solana-program",
 ]

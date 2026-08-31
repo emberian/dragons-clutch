@@ -4205,8 +4205,8 @@ fn acquire_snapshot(
         .into_iter()
         .zip(table_values)
         .map(|(key, value)| {
-            let value = value
-                .ok_or_else(|| Error::new(format!("snapshot missing routing table {key}")))?;
+            let value =
+                value.ok_or_else(|| Error::new(format!("snapshot missing routing table {key}")))?;
             Ok(ObservedAccount {
                 observation,
                 key,
@@ -6633,7 +6633,7 @@ mod tests {
     #[test]
     fn collateral_meta_requires_explicit_null_return_data() {
         assert!(authenticate_collateral_return_data(Some(&Value::Null), None).is_ok());
-            // The RPC omits the field when none was set; absent == null.
+        // The RPC omits the field when none was set; absent == null.
         assert!(authenticate_collateral_return_data(None, None).is_ok());
         assert!(authenticate_collateral_return_data(Some(&json!({})), None).is_err());
         assert!(

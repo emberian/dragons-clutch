@@ -1,8 +1,155 @@
 # GOAL — work until 11am: the protocol as good as it can be, all debt burned down
 
+## THE AFTERNOON SWARM (ember: "what oughta we be swarming over") —
+## six lanes live, all opus:
+- FLOW-1 LANDED (6ba98617): @theme binds BY REFERENCE (verified in the
+  emitted stylesheet — :root stays the single source), units module
+  incl. the self-caught parseQuantityV1 ("relabelling the box 'claims'
+  without converting input would have been ember's bug pointed the
+  other way"), the machine extracted 2-lines-different-of-439 with the
+  moving type error as proof of faithfulness. → FLOW-2 SPAWNED: the
+  7-step stepper + step bodies + board-first step 3 + refusal mapping.
+- TICKET-BOARD LANDED (9d26ae80): relay + clients + `dclutch ticket
+  post`; two rulings confirmed (WAVE 0db4b643: no clock, no eviction;
+  chip says WELL-FORMED never verified).
+- (was) FLOW-1: FLOWFUL phase-1 foundations (@theme token aliasing, the
+  units module — 500000000 becomes 500 with atoms one hover away, the
+  verbatim machine extraction). Stepper+bodies are the next lane.
+- CANON-IMPL DELIVERED THE MANDATE (5 commits): six pins now DERIVE
+  (account-profile substitution flipped refusal→acceptance = the
+  fluidity proof; schema substitution stays red BY NAME), dealer key
+  V3→V5 with hand-transcribed vectors, route-binding gates on all 11
+  route constants (red-proof #2 = the historical bug re-staged; the
+  gate's own walker had 2 gaps, self-caught), vintage refusals, sweep:
+  NO second conviction. Queued from its flags: the private-const PDA
+  seed domain (authenticated by nothing on chain — look first), the
+  general-successor V2-emit-vs-V3-dispatch, the dealer decoy preimage,
+  4 NO-ROUTE deletion questions. Census regen committed by orch
+  (5154bd65); 3 workspace-lock debts → LOCKS spawned (real conflict:
+  solana-account 4.3.2 vs 4.6.0 across the new path dep).
+- (was) CANON-IMPL: S3 derive (six program-id pins drop), S4 dealer→V5,
+  S1 route-binding gates on the generators (the structural fix for
+  the wrong-file pointer class).
+- TICKET-BOARD: the dregg relay (tools/ticket-board, axum, lifted
+  validation), lib clients web+sdk, `dclutch ticket post` — §4.5's
+  missing maker flow gets its first primitive.
+- PROFILE-3: §8.1 brick repro, §8.5 declarations, the bootstrap
+  ceremony rehearsal (unblocked by 6a9a2ba0).
+- OPERATOR-FORMS SPAWNED (ember: "extremely raw forms... oughta be
+  more semantic"): phase A = the full-input audit across 8 consoles +
+  OPERATOR_FORMS_V1 spec (typed fields; DERIVE rule — chain-derivable
+  fields pre-fill with provenance; the KEYPAIR rule — no key path ever
+  typed into a browser; the ACT shape — simulate primary, execute
+  gated); phase B = shared typed fields + the two worst consoles
+  converted. Grouping not simplification; precision preserved.
+- LOCKS LANDED (3a4565bd): SBOM STOP → PASS (58 manifests, 0/0). The
+  conflict decided by STRUCTURE not headcount (downward impossible:
+  dclutch-operator hard-pins ALT 3.2.0) + the documented bump-older-
+  upward rule; root cause = today's dev→dependencies promotion.
+  Honest debt: the compaction campaign not re-confirmed post-bump
+  (Token-2022 fixture builder refuses Darwin) → HBOX-CONTROL spawned
+  (swarm-build, filtered, co-tenant discipline).
+- CLOSE-DRIVER LANDED (7 commits): both cut-day invocations (gate-9
+  close + ZeroBump one-shot), dry-run as a TRANSPORT PROPERTY (no
+  --execute = ReadsOnly connection), refusals mirrored by calling
+  close_maker_replay_v2 itself (cannot drift; ordering pinned so
+  LiveIntents reports before FeeOutstanding — never misdirect an
+  operator to settle a fee that wasn't the blocker). CUT CHECKLIST +=
+  one loopback close run (the RPC derive_coordinates path is the named
+  residual risk; ride the bootstrap-stage world). PROFILE-3's parked
+  ceremony-CLI wiring cherry-picked onto main by orch (f4bb48b7,
+  compiles clean). Queued small: the direct_market capacity tautology.
+- (was) CLOSE-DRIVER: the devnet close plan-builder + ZeroBump one-shot
+  (cut-day prerequisites; refuse-at-plan-time discipline).
+- TIERS: margin-gate attribution mid-measurement (+6,928 both arms,
+  three suspects refuted by reading; Claims-frame hypothesis live).
+Also landed this hour: UPKEEP_VAULT_V0 design sketch (e9aea603 —
+neither taken nor burned, but housed; cohort-10 pair with the
+opener-receivable completion; ember likes it).
+
 ## COHORT-9 OPENS (~11:0x, ember's steer: "fix up more of them bugs";
 ## all bumps/breaks authorized; Helius ruled scheduled-rotation)
 
+★ PUBLISH-7 SHIPPED (4e154b5de, pages green): EMBER CAN RETRY — the
+served chunk BINDS V4 in its acceptance predicate (verified in the
+minified code; both markets tradable=true from the published site).
+Cleared 5 web reds via regeneration; refused to baseline the one real
+security question (unguarded zero-pubkey at fractional_claim_check
+:612 → routed to FRACCHECK-7 with the guard-or-adjudicate charter).
+CANON adjudication landed (f035e26a): five surfaces ruled — S1
+generate-with-ROUTE-BINDING-gate (a generator must prove its scraped
+file is what the live route binds), S3 DERIVE (drop the six equality
+pins; Rust binds by content only), S4 the dealer key → V5 from the
+route author (V3 has zero binders), S5 refusal-quality half first;
+six emitter briefs for the twin-less SUSPECT class; process defect
+flagged (twins diverged without twinIdentity redding). Implementation
+order: LITERALS (running) → S3/S4 → S1 → S5 → emitters.
+LITERAL SWEEP convicted a table (export in scratchpad): hard-drift
+incl. directHotChain pinning DCLTCOR2/v2 vs generated DCLTCOR3/v3 (web
+AND sdk, which also DIFFER from each other), the stride-16, dealer-256;
+shadow constants incl. one sharing the EXACT NAME of its emitted twin;
+whole literal decoders beside their imported offset sets. SUSPECT class
+(no twin exists yet: V1 resolution cert emitter, the seal contract has
+NO generated file — P-007 again) → CANON's doc. → LITERALS spawned
+(opus, mechanical fixes; DCLTCOR2 liveness verdict first).
+BUDGET STEER (ember, ~2:30pm): Fable at 87% for the week — Opus lanes
+resume freely; subFables wind down (land the coherent core + write
+zero-research handoff briefs for Opus/codex successors). NO NEW FABLE
+SPAWNS. 429 wave resumed: PUBLISH-7 + child (ember waits on the cut),
+FRACCHECK-7, PROFILE-BUILD (wind-down: Lean core + handoff; its
+scout's campaign map exported to scratchpad/profile-campaign-map),
+CANON + child (wind-down: adjudication doc + dispositions).
+★ PROFILE-2 landed (12 commits, 5/5 mutants killed on real ELFs): the
+succession is REAL end to end. Consumers V2-only with no fallback
+(2951b226) and red-proofed BOTH ways -- the structural window before the
+ceremony refuses founding, and so does a frame aimed at the sealed
+predecessor in a world where nothing is missing. Shipped operator builder
+(b8ecb8a4, 23 named refusals, no authority arg and no moved knob: it
+derives moved-ness from content and consent from the predecessor record).
+Real-ELF ceremony campaign (86f2b87e + 8622ac55) driving that builder, one
+hostile per conjunct, 6 targets 33 tests. THE FLOOR FOUND A HOLE: relaxing
+conjunct 4 from strictly-later to not-earlier passed the entire campaign,
+because every not-forward hostile bound a LATER slot; the equal-slot case
+now exists and kills it, 4 of 5 mutants redding EXACTLY the assertion that
+owns them. Measured, not assumed: the ceremony costs 174,624 CU (the
+ruling's section 7 only argued it would fit), and the unmoved binding
+really does ride the predecessor's admission -- 42,445 CU when nothing
+hashes. THREE CONSTRAINTS THE RULING DID NOT HAVE: a consent key cannot
+also be the payer (privilege union; the cut needs a second wallet), an
+unsigned Core authority refuses AccountFrame not Infrastructure (the
+frame's parse shadows conjunct 1's own clause), and a world whose Registry
+never moved cannot reach V2 AT ALL -- so the local-validator bootstrap must
+rehearse the cut ordering, and is left coherently on V1 rather than
+half-flipped. Found three tiers ALREADY RED on main and fixed the two that
+blocked me: seam (unbaselined since the ceremony route landed) and journey
+(since fcd6aecc left FoundStateV2.price_gate unset); programs' Direct
+margin gate and emission's market-core-codec clippy are routed to their
+owners, not mine. REMAINS: section 8.1's brick (needs two banks), 8.5's
+declarations, and the bootstrap ceremony stage (blocked -- that crate does
+not compile at HEAD).
+★★ THE COMPACTION CAMPAIGN IS DRIVEN (FRACCHECK-7, 7 commits after
+six honest refusals): a stranger compacts a sleeping holder end to
+end on real ELFs — conservation off the ACTUAL transactions (579,240
+CU vs ~928k projected; zero burned; zero residue = correct), the
+holder-pays-nothing witness ("the line between a permissionless crank
+and a fee levied on the absent"), the worthless-coordinate witness
+(Mint bytes identical), its own campaign's hardcoded-scenario defect
+self-caught. Rulings answered in WAVE b0e81f7c (seam tag confirmed;
+Economic-collapse queued; opener-shortfall → ember).
+(PROFILE-2's own fuller entry stands above; bootstrap stage unblocked
+by the 16-file adoption 6a9a2ba0.)
+★ FLOW-IA SPEC LANDED (2458f320, 1215 lines): three journeys, 7-step
+trade flow with ~25 mapped refusals remedy-first, THE UNITS SMOKING GUN
+(formatAtomsV1 existed and was tested — ember's 500000000 was 500 all
+along; the panel never received the decimals), ticket-board-first step
+3 with the transport ladder priced (U-002's on-chain records ALREADY
+EXIST in codec+explorer; the missing piece is the MAKER flow §4.5),
+shadcn via @theme aliasing (Tailwind already installed, zero utilities
+in use; keep <details> or 224 honesty guards go vacuous), phase 1 ≈8
+lane-days. Drive-bys documented: /direct is a byte-identical dup of
+/trade; /resolution header lies; /live scoreboard tiles hard-coded.
+TIERS lane spawned (margin gate +5,500 attribution + re-pin; clippy;
+final board). Canvas "Flowful Clutch" updated with all 5 review fixes.
 ★ PROFILE-RULE ruled + BLESSED (f985bede + WAVE cd666f42): ProfileV2
 SUCCESSION rides the cut — slot-tolerance refused as UNSOUND (deployer
 alone could rebind everything behind a lying digest); the ceremony =

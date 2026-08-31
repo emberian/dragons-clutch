@@ -37,6 +37,28 @@ pub struct SealAccountDumpV1 {
 }
 
 impl SealAccountDumpV1 {
+    /// Build one probe input from an account read off a live cluster.
+    ///
+    /// The offline gate parses a `solana account --output json` dump; the
+    /// cut-time one-shot reads the same account over RPC. Both converge on this
+    /// value and are judged by [`probe_defunct_seal_v1`], so the command that
+    /// actually sends the close cannot reach a verdict the gate could not.
+    /// Only the SOURCE of the four fields differs, never their meaning.
+    #[must_use]
+    pub const fn from_observed_v1(
+        address: [u8; 32],
+        owner: [u8; 32],
+        lamports: u64,
+        data: Vec<u8>,
+    ) -> Self {
+        Self {
+            address,
+            owner,
+            lamports,
+            data,
+        }
+    }
+
     /// Read one account dump, with an optional address the caller supplies.
     ///
     /// A dump that names its own `pubkey` and a caller who names a different

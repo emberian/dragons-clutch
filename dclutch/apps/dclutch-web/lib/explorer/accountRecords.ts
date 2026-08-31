@@ -400,6 +400,18 @@ import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_PROGRAM_OFFSET_V1,
   PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_OFFSET_V1,
   PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_ARTIFACT_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_PROGRAM_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_ARTIFACT_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_PROGRAM_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V2,
 } from '../generated/protocolInfrastructure';
 import {
   ASSET_BYTES_V2,
@@ -809,7 +821,36 @@ const RECORD_RENDERERS: ReadonlyArray<RecordSpec> = Object.freeze([
       field('Rent program', PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_PROGRAM_OFFSET_V1, 'pubkey'),
       field('Rent artifact', PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_ARTIFACT_OFFSET_V1, 'identity'),
     ],
-    note: null,
+    note: 'Sealed once its succession profile exists: still on chain, still the record the successor names, but no longer the selection any route reads.',
+  },
+  {
+    magic: PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_V2,
+    name: 'Protocol infrastructure succession profile',
+    family: 'Release',
+    summary:
+      'The Registry and Rent programs this deployment runs, each with the fingerprint of the build, and the two records this selection succeeded.',
+    width: { kind: 'fixed', bytes: PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2 },
+    fields: [
+      version(PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V2),
+      field('Artifact profile', PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_OFFSET_V2, 'u16'),
+      field('Reserved', PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_OFFSET_V2, 'reserved'),
+      field('Registry program', PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_PROGRAM_OFFSET_V2, 'pubkey'),
+      field('Registry artifact', PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_ARTIFACT_OFFSET_V2, 'identity'),
+      field('Rent program', PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_PROGRAM_OFFSET_V2, 'pubkey'),
+      field('Rent artifact', PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_ARTIFACT_OFFSET_V2, 'identity'),
+      field(
+        'Predecessor registry artifact',
+        PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2,
+        'identity',
+      ),
+      field(
+        'Predecessor rent artifact',
+        PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2,
+        'identity',
+      ),
+      field('Reserved tail', PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2, 'reserved'),
+    ],
+    note: 'A predecessor artifact equal to the binding beside it means that program did not move; a different one means it did, and the key that moved it consented on chain.',
   },
 
   // -------------------------------------------------------------------- Claims

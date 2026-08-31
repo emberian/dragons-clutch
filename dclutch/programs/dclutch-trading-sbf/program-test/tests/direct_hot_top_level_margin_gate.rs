@@ -328,7 +328,92 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// For the record, the route got CHEAPER, not dearer: cohort-7 shipped a
 /// 1,319,583 floor and this is 1,263,176, 56,407 CU below it, with the
 /// affordable bump-search count up from 54 to 85 over the same seven sites.
-const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_264_676;
+///
+/// # Why it rose 6,876 CU on 2026-08-31, and why this one is a REGRESSION
+///
+/// The two paragraphs above spend margin and say what was bought. This one
+/// spends margin and the honest answer is that nothing was bought. It is
+/// recorded that way on purpose.
+///
+/// The method first, because it is what makes the rest quotable. The same gate,
+/// same statistic, same 32 seeds, each revision built as a clean `git archive`
+/// with its own ELF set. At the commit that set the constant above the sweep
+/// reproduced it TO THE UNIT -- `1743be0a` reads 1,263,176, and the gate passes
+/// there. A bisect that cannot reproduce the old number is measuring a different
+/// instrument, so that control comes first and everything below is a difference
+/// against it.
+///
+/// ```text
+///   the pin, 1743be0a                                          1,263,176
+///   main to b3e3821c                                                +343
+///   main to a18760c4                                              +1,330
+///   the basis lane merging in                                     +5,058
+///   the Claims 49->50 account frame, and its rent-credit auth          +2
+///   main to 612ddeb3                                                +144
+///   ------------------------------------------------------------------
+///   measured here                                              1,270,053
+///   the clippy regrouping in `retirement_checkpoint_v1`                -1
+///   ------------------------------------------------------------------
+///   the tree this constant is pinned to                        1,270,052
+/// ```
+///
+/// **74% of it is one lane, and it is not the one anybody suspected.** The
+/// candidates offered were CLOSEMAKER's fifth `ProgramSet` entry, SPLINE-WIRE's
+/// two optional `Found` accounts, and the union'd refusal registries. All three
+/// are refuted. `b3e3821c` sits after the first two and the whole span to it
+/// costs 343 CU; the registries are `const _: () = { ... }` and `pub const ALL`,
+/// which no trade evaluates. The Claims frame growing 49 -> 50 accounts -- the
+/// most trade-shaped change in the range -- costs **2 CU**, because
+/// `process_fractional_compaction` is behind a magic-byte dispatch a Direct fill
+/// does not carry, and the CPI account list on this route is built from
+/// `invocation.fixed_account_count`, not from that frame constant.
+///
+/// **What it actually is**: `authenticate_product_basis_v3` in
+/// `dclutch-product-runtime-v2-svm-reader`. Split against its own merge base
+/// `2ebeb798` (1,263,174, which is the pin's value to within 2 CU, the two
+/// branches having diverged there):
+///
+/// ```text
+///   48d591b5 + ae173f02 + b951bba2, admit_selection_v3 made
+///     unconditional on the shared join                              +446
+///   dbf5fe02 + 5ef8a221 + fcd6aecc, ProductBasisV3::decode
+///     rewritten and the price-gate digest probe added             +4,567
+///   ------------------------------------------------------------------
+///   the lane                                                      +5,013
+/// ```
+///
+/// The gate is green at `b951bba2` and red at `fcd6aecc`, so the second line is
+/// where the public route lost its margin. The multiplicity is why three small
+/// reads add up: `authenticate_product_basis_v3` runs TWICE per transaction --
+/// Trading `hot_v3.rs:1999` and the Claims child `sparse_native_transfer_v1.rs`
+/// -- and `ProductBasisV3::decode` runs twice inside each, so the rewritten
+/// decode executes FOUR times per trade and the digest probe twice.
+///
+/// **The design said this would cost nothing, and that claim is now false.**
+/// `docs/design/BASIS_ABI_UNIFICATION_V1.md` line 735 reads "No trade ever
+/// verifies a certificate, and the hot path gains exactly zero CU", and its
+/// hostile 21 says the hot path's cost is "asserted by CU measurement". The
+/// first half is true and this sweep confirms it -- the fixture stages a zero
+/// `price_gate_certificate_digest` and `verify_price_gate_v1` never runs. The
+/// second half was never measured against this gate. The comment at
+/// `svm-reader/src/lib.rs:459` calls that function "founding's join, the place
+/// Core reaches before it commits a founding permit", and that premise is what
+/// is wrong: it is also the join the public Direct route takes, twice.
+///
+/// **This comment's bargain is NOT met and no trade was made.** The 8,874 above
+/// bought a fee-bearing market that was unreachable at any price. This 6,876
+/// buys an admission check on a route that does not need it and a probe for a
+/// gate that cannot fire at degree <= 1. It is pinned rather than left red
+/// because a red gate nobody can act on stops being read, and because the cost
+/// is now attributed to the line -- but the margin is spent and it is spent on
+/// nothing.
+///
+/// The fix is cheap and belongs to the basis lane, not here: hoist
+/// `admit_selection_v3` and the certificate-digest probe to the founding caller,
+/// or gate them on the founding path, and roughly 4,500 CU comes back to the
+/// public route. Until then this route sits 129,948 CU under the ceiling on the
+/// key-independent statistic, against 105,373 when the fee leg landed.
+const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_271_552;
 
 /// The protocol maximum a transaction may consume.
 const PROTOCOL_CEILING: u64 = 1_400_000;

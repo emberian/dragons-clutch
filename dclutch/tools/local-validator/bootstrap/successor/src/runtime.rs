@@ -366,19 +366,21 @@ pub(crate) fn found_through_open(
             "infrastructure profile unexpectedly existed at genesis",
         ));
     }
-    transactions.push(rpc.send_expected_failure(
-        "wrong authority cannot initialize infrastructure",
-        &[initialize_instruction(
-            &plan,
-            hostile.pubkey(),
-            hostile.pubkey(),
-        )?],
-        &hostile,
-    )?
-    // CoreSbfError::Infrastructure: the bootstrap's own immutability-authority
-    // check refused. An account-frame refusal instead would mean the hostile
-    // never reached that check.
-    .refusing(0x300F)?);
+    transactions.push(
+        rpc.send_expected_failure(
+            "wrong authority cannot initialize infrastructure",
+            &[initialize_instruction(
+                &plan,
+                hostile.pubkey(),
+                hostile.pubkey(),
+            )?],
+            &hostile,
+        )?
+        // CoreSbfError::Infrastructure: the bootstrap's own immutability-authority
+        // check refused. An account-frame refusal instead would mean the hostile
+        // never reached that check.
+        .refusing(0x300F)?,
+    );
     if rpc.account(profile)?.is_some() {
         return Err(Error::new(
             "wrong-authority initialization left a profile account",
@@ -402,20 +404,22 @@ pub(crate) fn found_through_open(
             "release activation cache unexpectedly existed at genesis",
         ));
     }
-    transactions.push(rpc.send_expected_failure(
-        "immutable release activation refuses pre-revocation Core",
-        &[role_activation_instruction(
-            &plan,
-            authority.pubkey(),
-            ExecutionRoleV1::Core,
-        )?],
-        &authority,
-    )?
-    // RegistryError::Release: the release-set admission refused because Core is
-    // still mutable. RegistryError::Deployment (0x1003) is the neighbouring
-    // wall -- Loader/ProgramData/slot -- and passing this probe on THAT code
-    // would mean the immutability requirement was never the thing tested.
-    .refusing(0x1004)?);
+    transactions.push(
+        rpc.send_expected_failure(
+            "immutable release activation refuses pre-revocation Core",
+            &[role_activation_instruction(
+                &plan,
+                authority.pubkey(),
+                ExecutionRoleV1::Core,
+            )?],
+            &authority,
+        )?
+        // RegistryError::Release: the release-set admission refused because Core is
+        // still mutable. RegistryError::Deployment (0x1003) is the neighbouring
+        // wall -- Loader/ProgramData/slot -- and passing this probe on THAT code
+        // would mean the immutability requirement was never the thing tested.
+        .refusing(0x1004)?,
+    );
     if rpc.account(activation)?.is_some() {
         return Err(Error::new("pre-revocation activation left a cache account"));
     }
@@ -445,19 +449,20 @@ pub(crate) fn found_through_open(
     let mut late_activation =
         role_activation_instruction(&plan, authority.pubkey(), ExecutionRoleV1::Custody)?;
     substitute_role_programdata(&mut late_activation, pubkey(&plan.core.programdata_id)?)?;
-    let late_failure = rpc.send_expected_failure(
-        "late activation substitution rolls back prior transfer",
-        &[
-            transfer(&authority.pubkey(), &rollback_recipient, 1),
-            late_activation,
-        ],
-        &authority,
-    )?
-    // RegistryError::Deployment: the substituted ProgramData broke the
-    // Loader/ProgramData linkage. This probe substitutes a coordinate, so it
-    // must die at the linkage wall and not at release admission (0x1004) --
-    // the two are one apart and this case is the reason they are distinct.
-    .refusing(0x1003)?;
+    let late_failure = rpc
+        .send_expected_failure(
+            "late activation substitution rolls back prior transfer",
+            &[
+                transfer(&authority.pubkey(), &rollback_recipient, 1),
+                late_activation,
+            ],
+            &authority,
+        )?
+        // RegistryError::Deployment: the substituted ProgramData broke the
+        // Loader/ProgramData linkage. This probe substitutes a coordinate, so it
+        // must die at the linkage wall and not at release admission (0x1004) --
+        // the two are one apart and this case is the reason they are distinct.
+        .refusing(0x1003)?;
     let fee = late_failure
         .fee_lamports
         .ok_or_else(|| Error::new("late-failure transaction omitted exact fee"))?;
@@ -1102,16 +1107,18 @@ pub(crate) fn publish_record(
                 .get_mut(2)
                 .ok_or_else(|| Error::new("Finalize omitted refund-wallet coordinate"))?
                 .pubkey = hostile_wallet;
-            transactions.push(rpc.send_expected_failure(
-                "publish record: substituted refund wallet refuses",
-                &[hostile],
-                payer,
-            )?
-            // RegistryError::Record: the immutable-record publication refused
-            // the substituted refund coordinate. A record whose address is the
-            // hash of its own body has many ways to refuse; this pins that the
-            // refund wallet was the one that did it.
-            .refusing(0x100C)?);
+            transactions.push(
+                rpc.send_expected_failure(
+                    "publish record: substituted refund wallet refuses",
+                    &[hostile],
+                    payer,
+                )?
+                // RegistryError::Record: the immutable-record publication refused
+                // the substituted refund coordinate. A record whose address is the
+                // hash of its own body has many ways to refuse; this pins that the
+                // refund wallet was the one that did it.
+                .refusing(0x100C)?,
+            );
         }
         // The raw record address keeps every publication row's label distinct
         // across the many records one campaign publishes; classifiers match

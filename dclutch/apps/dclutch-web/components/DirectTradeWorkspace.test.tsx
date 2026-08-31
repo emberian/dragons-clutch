@@ -12,7 +12,7 @@ describe('Direct V3 trade workbench', () => {
     expect(html).toContain('see the exact collateral arithmetic');
     expect(html).toContain('Route manifest · JSON');
     expect(html).toContain('infrastructure.checked');
-    expect(html).toContain('2,280 bytes');
+    expect(html).toContain('2,360 bytes');
     expect(html).toContain('Review exact arithmetic');
     expect(html).toContain('Execution remains closed');
     // This console reads and never sends -- but it used to say "read-only

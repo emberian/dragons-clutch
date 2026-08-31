@@ -3,7 +3,7 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify` (also wired into `tools/gauntlet` — see `tools/sbom/README.md`).
 
-**53 manifests, 2061 unique dependency rows (1235 cargo, 826 npm), 0 flagged for human review, 67 reviewed and allowed.**
+**58 manifests, 2066 unique dependency rows (1240 cargo, 826 npm), 0 flagged for human review, 67 reviewed and allowed.**
 
 ## Counts by license
 
@@ -12,7 +12,7 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 | `MIT` | 765 |
 | `Apache-2.0` | 498 |
 | `MIT OR Apache-2.0` | 333 |
-| `AGPL-3.0-or-later` | 149 |
+| `AGPL-3.0-or-later` | 154 |
 | `MIT/Apache-2.0` | 67 |
 | `Apache-2.0 OR MIT` | 48 |
 | `MPL-2.0` | 30 |
@@ -448,6 +448,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-custody-leg-caller-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/custody-leg-caller` | declared |
 | `dclutch-custody-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-custody-sbf` | declared |
 | `dclutch-custody-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-custody-sbf/test-programs/caller` | inherited-default (publish=false, undeclared) |
+| `dclutch-dealer-accelerator-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-dealer-accelerator-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf` | declared |
 | `dclutch-dealer-accelerator-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller` | declared |
 | `dclutch-dealer-codec` | 0.1.0 | `MIT OR Apache-2.0` | `path+crates/dclutch-dealer-codec` | declared |
@@ -480,11 +481,13 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-fractional-signed-delta-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/fractional-signed-delta` | inherited-default (publish=false, undeclared) |
 | `dclutch-fractional-signed-delta-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/fractional-signed-delta-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-gauntlet-direct-campaign` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/direct/producer` | declared |
+| `dclutch-general-accelerator-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-general-accelerator-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf` | declared |
 | `dclutch-general-accelerator-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-general-accelerator-sbf/test-programs/general-caller` | declared |
 | `dclutch-general-adapter-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-adapter-contract` | declared |
 | `dclutch-general-codec` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-codec` | declared |
 | `dclutch-general-config-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-general-config-contract` | declared |
+| `dclutch-journey-campaign` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/journey` | declared |
 | `dclutch-liability-basis-v2-kernel` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-liability-basis-v2-kernel` | declared |
 | `dclutch-lineage-loopback` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/lineage-loopback` | declared |
 | `dclutch-local-successor-bootstrap` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/local-validator/bootstrap/successor` | declared |
@@ -529,6 +532,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-registry-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-registry-sbf` | declared |
 | `dclutch-registry-svm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-registry-svm` | declared |
 | `dclutch-relay-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-relay-contract` | declared |
+| `dclutch-relayed-vertical-campaign` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/gauntlet/relayed-vertical` | declared |
 | `dclutch-relayer` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/relayer` | declared |
 | `dclutch-release-set-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-release-set-contract` | declared |
 | `dclutch-release-tool` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-release-tool` | declared |
@@ -556,6 +560,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-structured-v2-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-structured-v2-operator` | declared |
 | `dclutch-svm-harness` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-svm-harness` | inherited-default (publish=false, undeclared) |
 | `dclutch-terminal-settlement-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller` | inherited-default (publish=false, undeclared) |
+| `dclutch-ticket-board` | 0.1.0 | `AGPL-3.0-or-later` | `path+tools/ticket-board` | declared |
 | `dclutch-token-behavior-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-token-svm/program-test` | inherited-default (publish=false, undeclared) |
 | `dclutch-token-svm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-token-svm` | declared |
 | `dclutch-trading-core-caller-test-program` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/test-programs/core-caller` | declared |
@@ -2322,7 +2327,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `packages/dclutch-cli/package.json` | 299 |
 | `packages/dclutch-sdk/package.json` | 270 |
 | `programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml` | 773 |
-| `programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml` | 791 |
+| `programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml` | 787 |
 | `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml` | 783 |
 | `programs/dclutch-claims-sbf/program-test/protocol-position/Cargo.toml` | 790 |
 | `programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml` | 790 |
@@ -2339,13 +2344,15 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller/Cargo.toml` | 173 |
 | `programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml` | 175 |
 | `programs/dclutch-custody-sbf/test-programs/caller/Cargo.toml` | 165 |
+| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 813 |
 | `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml` | 201 |
 | `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 771 |
+| `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 807 |
 | `programs/dclutch-general-accelerator-sbf/test-programs/general-caller/Cargo.toml` | 160 |
 | `programs/dclutch-series-shadow-sbf/generator/Cargo.toml` | 198 |
 | `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml` | 787 |
 | `programs/dclutch-trading-sbf/dealer-program-test/Cargo.toml` | 734 |
-| `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 795 |
+| `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 809 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/core-caller/Cargo.toml` | 163 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/custody-leg-caller/Cargo.toml` | 164 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-claims/Cargo.toml` | 232 |
@@ -2362,18 +2369,12 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `tools/gauntlet/aot-cu/Cargo.toml` | 772 |
 | `tools/gauntlet/census/Cargo.toml` | 22 |
 | `tools/gauntlet/direct/producer/Cargo.toml` | 754 |
+| `tools/gauntlet/journey/Cargo.toml` | 404 |
+| `tools/gauntlet/relayed-vertical/Cargo.toml` | 408 |
 | `tools/lineage-loopback/Cargo.toml` | 230 |
 | `tools/local-validator/bootstrap/successor/Cargo.toml` | 409 |
 | `tools/relayer/Cargo.toml` | 229 |
-
-## Unresolvable manifests (stale lockfile, not a license question)
-
-Each manifest below refused `cargo metadata --locked --offline`: its `Cargo.lock` does not match its `Cargo.toml` (typically a dependency edge added or changed without re-running cargo in that mini-workspace). This tool cannot see that manifest's dependency graph at all until its owning lane runs `cargo metadata`/`cargo check` there and commits the refreshed lock — recorded here as owed work, not folded into the flagged-license review list above, and not failing `--verify` by itself, since it is a reproducibility gap rather than an unclassified license.
-
-- `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `tools/gauntlet/journey/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
-- `tools/gauntlet/relayed-vertical/Cargo.toml: Cargo.lock does not match Cargo.toml (cargo metadata --locked --offline refused to resolve it)`
+| `tools/ticket-board/Cargo.toml` | 241 |
 
 ## Stray lockfiles (not read by cargo, not part of this closure)
 

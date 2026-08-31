@@ -10,14 +10,22 @@
 //! stranger can check a market for themselves without trusting our website.
 //!
 //! WHAT IT IS NOT. It never submits a transaction and never writes to a
-//! cluster. Every command that touches the network here is a read, and takes no
+//! cluster. Every command that touches a CLUSTER here is a read, and takes no
 //! credential of any kind.
 //!
-//! THE ONE EXCEPTION, stated where it cannot be missed: `dclutch ticket author`
-//! opens ONE key file — named by an environment variable, never by a flag — to
-//! sign one Direct intent into a portable ticket on local disk. That is a local
-//! authoring act with no network in it at all. Authoring and submitting are
-//! separate, and this binary only does the first.
+//! THE TWO EXCEPTIONS, stated where they cannot be missed, because neither is a
+//! cluster write and both would otherwise look like one:
+//!
+//! - `dclutch ticket author` opens ONE key file — named by an environment
+//!   variable, never by a flag — to sign one Direct intent into a portable
+//!   ticket on local disk. A local authoring act with no network in it at all.
+//! - `dclutch ticket post` sends one such ticket to an offer BOARD, which is a
+//!   relay and not a cluster. It builds no transaction and moves no lamport. A
+//!   board can lose or hide an offer; it cannot change one, because every field
+//!   is covered by the maker's signature.
+//!
+//! Authoring, publishing, and submitting are three separate acts. This binary
+//! does the first two and never the third.
 //!
 //! SINGLE AUTHORSHIP, which is why this file is short. Three crates own every
 //! byte interpreted here:
@@ -153,6 +161,10 @@ pub fn usage() -> String {
          \n\
          \x20 dclutch ticket verify <PATH>\n\
          \x20     Check a ticket's signature and print every field it binds.\n\
+         \n\
+         \x20 dclutch ticket post --board URL <PATH | AUTHOR ARGUMENTS>\n\
+         \x20     Publish a ticket to an offer board so a taker can find it.\n\
+         \x20     A board is a relay, not a cluster: nothing is submitted.\n\
          \x20     No key, no network.\n\
          \n\
          OPTIONS (on the `show` commands)\n\

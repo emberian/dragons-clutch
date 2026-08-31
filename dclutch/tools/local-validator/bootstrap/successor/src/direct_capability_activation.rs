@@ -335,7 +335,8 @@ pub(crate) fn direct_execution_root_v1(
     )
     .map_err(|error| Error::new(format!("execution selection: {error:?}")))?;
     let root_header = CapabilityRootHeaderV1::new(
-        ContentId::new(release_set.to_bytes()).map_err(|_| Error::new("release set".to_string()))?,
+        ContentId::new(release_set.to_bytes())
+            .map_err(|_| Error::new("release set".to_string()))?,
         market.to_bytes(),
         generation,
         selection,

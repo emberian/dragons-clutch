@@ -13,7 +13,7 @@ use dclutch_market_core_codec::{
     AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1, AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
     AGGREGATE_RETIREMENT_FINISH_MAGIC_V1, AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1,
     AggregateRetirementCheckpointV1, AggregateRetirementPhaseV1,
-    AggregateRetirementSuffixRequestV1,
+    AggregateRetirementSuffixBindingV1, AggregateRetirementSuffixRequestV1,
 };
 use dclutch_market_retirement_v1_operator::{
     CHECKPOINT_RETIREMENT_CUSTODY_SUFFIX_BYTES_V1, CHECKPOINT_RETIREMENT_FINISH_BYTES_V1,
@@ -1725,15 +1725,16 @@ mod tests {
         accounts[0] = AccountMeta::new(market, false);
         accounts[4] = AccountMeta::new_readonly(core, false);
         accounts[14] = AccountMeta::new(checkpoint, false);
-        let bundle = [7; 32];
-        let source = [8; 32];
+        let binding = AggregateRetirementSuffixBindingV1 {
+            market: market.to_bytes(),
+            checkpoint: checkpoint.to_bytes(),
+            bundle_digest: [7; 32],
+            source_receipt_digest: [8; 32],
+        };
         let suffix = |magic, phase, custody| {
             AggregateRetirementSuffixRequestV1::new(
                 magic,
-                market.to_bytes(),
-                checkpoint.to_bytes(),
-                bundle,
-                source,
+                binding,
                 if magic == AGGREGATE_RETIREMENT_FINISH_MAGIC_V1 {
                     [0; 32]
                 } else {

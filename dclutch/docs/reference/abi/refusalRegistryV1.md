@@ -62,6 +62,7 @@ export const REFUSAL_BANDS_V1: ReadonlyArray<RefusalBandV1> = [
   { label: "test/resolution-receipt-caller", package: "dclutch-resolution-receipt-test-caller-sbf", base: 0x10A000, tier: "test-caller" },
   { label: "test/claims-fractional-atomic-caller", package: "dclutch-fractional-atomic-test-caller-sbf", base: 0x10B000, tier: "test-caller" },
   { label: "test/claims-claim-check-escrow-signer", package: "dclutch-claim-check-escrow-signer-test-sbf", base: 0x10C000, tier: "test-caller" },
+  { label: "test/claims-fractional-compaction-caller", package: "dclutch-fractional-compaction-test-caller-sbf", base: 0x10D000, tier: "test-caller" },
 ];
 ```
 ```ts
@@ -128,6 +129,11 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x3014, name: "CoreSbfError::PriceGateHullRefused", meaning: "**The hull identity failed.** `price * mass != sum(weight * payout)` at some claim, with every payout recomputed through the production evaluator rather than read from the certificate. This is the refusal a forged certificate earns.", band: "core" },
   { code: 0x3015, name: "CoreSbfError::PriceGateCapacity", meaning: "The certificate carried no hull atoms, or more than the affine-Caratheodory capacity of ten permits.", band: "core" },
   { code: 0x3016, name: "CoreSbfError::PriceGateNonCanonical", meaning: "The certificate's body was non-canonical: padding past a declared width, coordinates not strictly increasing, a zero atom weight, a non-primitive weight scale, or prices not partitioning the scale.", band: "core" },
+  { code: 0x3017, name: "CoreSbfError::InfrastructurePredecessorAbsent", meaning: "The succession ceremony found no decodable V1 profile at its PDA.", band: "core" },
+  { code: 0x3018, name: "CoreSbfError::InfrastructureIdentityMoved", meaning: "A succession tried to move the Registry or Rent program identity.", band: "core" },
+  { code: 0x3019, name: "CoreSbfError::InfrastructureNotForward", meaning: "The succession does not move strictly forward.", band: "core" },
+  { code: 0x301A, name: "CoreSbfError::InfrastructureConsentMissing", meaning: "A moved binding lacks its predecessor release's bound authority.", band: "core" },
+  { code: 0x301B, name: "CoreSbfError::InfrastructureAlreadySucceeded", meaning: "The V2 profile PDA is already occupied: the succession happened.", band: "core" },
   { code: 0x4000, name: "TradingSbfError::UnsupportedContent", meaning: "The instruction is not supported by an admitted content profile.", band: "trading" },
   { code: 0x4001, name: "TradingSbfError::Release", meaning: "The Registry receipt did not authenticate this Program as current Trading.", band: "trading" },
   { code: 0x4002, name: "TradingSbfError::Root", meaning: "The immutable Trading child root or its PDA refused.", band: "trading" },
@@ -270,6 +276,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x564A, name: "FractionalClaimCheckCompactionSbfErrorV1::Scope", meaning: "A position kind this route does not fractionally compact.", band: "claims" },
   { code: 0x564B, name: "FractionalClaimCheckCompactionSbfErrorV1::Terms", meaning: "The finalized exposure terms, or the coordinate they declare, refused.", band: "claims" },
   { code: 0x564C, name: "FractionalClaimCheckCompactionSbfErrorV1::ShardMint", meaning: "The shard Mint's profile, supply, or burn-authority hand-off refused.", band: "claims" },
+  { code: 0x564D, name: "FractionalClaimCheckCompactionSbfErrorV1::Rent", meaning: "The RentCredit was not the admission's, or did not derive under the Rent program.", band: "claims" },
   { code: 0x5660, name: "FractionalClaimCheckRedemptionSbfErrorV1::Accounts", meaning: "The fixed account frame, ownership, or writability refused.", band: "claims" },
   { code: 0x5661, name: "FractionalClaimCheckRedemptionSbfErrorV1::Authority", meaning: "The signer was not the presented shard account's own owner.", band: "claims" },
   { code: 0x5662, name: "FractionalClaimCheckRedemptionSbfErrorV1::Identity", meaning: "The record was not at its derived address, or a mint did not match.", band: "claims" },

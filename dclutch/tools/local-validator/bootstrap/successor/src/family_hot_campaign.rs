@@ -72,8 +72,8 @@ use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
-    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2,
-    RequestTransportV2, SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
+    AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
+    SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
@@ -443,7 +443,9 @@ fn run_series(arguments: &ArgumentsV1) -> Result<()> {
             ack_disposition: None,
         };
         write_json_atomic_v1(
-            &arguments.journal_dir.join(format!("series-{action:?}.json")),
+            &arguments
+                .journal_dir
+                .join(format!("series-{action:?}.json")),
             &journal,
         )?;
     }
@@ -628,7 +630,8 @@ fn execute_general_action_v1(
 
     let mut page_keys = Vec::new();
     for page_index in 0..page_count {
-        let key = campaign_account_key_v1(arguments.caller, step.ordinal, "scratch-page", page_index);
+        let key =
+            campaign_account_key_v1(arguments.caller, step.ordinal, "scratch-page", page_index);
         if !arguments.execute {
             let page_bytes = general_scratch_page_v1(
                 &bank,
@@ -638,12 +641,7 @@ fn execute_general_action_v1(
                 page_index,
                 arguments.caller,
             )?;
-            write_genesis_account_v1(
-                &arguments.account_dir,
-                key,
-                arguments.caller,
-                &page_bytes,
-            )?;
+            write_genesis_account_v1(&arguments.account_dir, key, arguments.caller, &page_bytes)?;
         }
         page_keys.push(key);
     }
@@ -750,8 +748,7 @@ fn execute_general_action_v1(
         }
         None => {
             // Prepared: the exact bytes are durable before the first send.
-            let packet =
-                rpc.prepare_signed_legacy_packet(&label, &[instruction.clone()], payer)?;
+            let packet = rpc.prepare_signed_legacy_packet(&label, &[instruction.clone()], payer)?;
             journal.phase = FamilyHotPhaseV1::Prepared;
             journal.legacy_packet_bytes = Some(
                 BASE64
@@ -816,7 +813,10 @@ fn execute_general_action_v1(
         action: step.label.clone(),
         signature: packet.signature,
         finalized_slot: finalized.evidence.slot,
-        compute_units_consumed: finalized.evidence.compute_units_consumed.unwrap_or_default(),
+        compute_units_consumed: finalized
+            .evidence
+            .compute_units_consumed
+            .unwrap_or_default(),
         legacy_packet_bytes: journal.legacy_packet_bytes.unwrap_or_default(),
         account_count,
         scratch_page_count: page_count,
@@ -905,7 +905,6 @@ fn general_envelope_v1(family_request: &[u8]) -> Result<Vec<u8>> {
     Ok(envelope.to_bytes().to_vec())
 }
 
-
 /// Encode one exact General controller request at named coordinates.
 ///
 /// The coordinates are not decoration. A settlement step names the revision it
@@ -939,8 +938,7 @@ fn general_request_v1(
 }
 
 fn content_v1(value: u8) -> Result<ContentId> {
-    ContentId::new([value; 32])
-        .map_err(|error| Error::new(format!("content identity: {error:?}")))
+    ContentId::new([value; 32]).map_err(|error| Error::new(format!("content identity: {error:?}")))
 }
 
 fn general_product_record_v1() -> Vec<u8> {
@@ -1170,7 +1168,10 @@ pub(crate) fn general_campaign_steps_v1(width: u32) -> Result<Vec<GeneralStepV1>
         general_local_state_v1(GeneralLocalStateKindV3::Selection, width, &opened)?,
     );
     consider.insert(
-        general_evidence_coordinate_v1(Action::Consider, GeneralReadonlyEvidenceKindV3::SelectionPolicy)?,
+        general_evidence_coordinate_v1(
+            Action::Consider,
+            GeneralReadonlyEvidenceKindV3::SelectionPolicy,
+        )?,
         general_policy_v1()?
             .to_bytes()
             .map_err(|error| Error::new(format!("policy bytes: {error:?}")))?
@@ -1333,7 +1334,11 @@ pub(crate) fn general_campaign_steps_v1(width: u32) -> Result<Vec<GeneralStepV1>
                     row.execution_index,
                     row.manifest_order_index,
                 )?,
-                (row.page_index, row.execution_index, row.manifest_order_index),
+                (
+                    row.page_index,
+                    row.execution_index,
+                    row.manifest_order_index,
+                ),
                 runtime,
             )?;
             cursor = settle_native_v1(
@@ -1376,7 +1381,6 @@ pub(crate) fn general_campaign_steps_v1(width: u32) -> Result<Vec<GeneralStepV1>
     )?;
     Ok(steps)
 }
-
 
 /// The canonical register bank one action reads.
 fn general_input_bank_v1(
@@ -1437,10 +1441,7 @@ fn general_input_bank_v1(
         (identity::RENT_CREDIT, [10; 32]),
         (identity::RENT_PROGRAM, [11; 32]),
         (identity::GENERAL_ROOT, [12; 32]),
-        (
-            identity::PAYER,
-            if initialize { [13; 32] } else { [0; 32] },
-        ),
+        (identity::PAYER, if initialize { [13; 32] } else { [0; 32] }),
         // The route-dependent identities. These are the ones a first pass
         // silently leaves zero, and zero is not a neutral value here: for the
         // two VAULT_CONTEXT registers it is what the ENABLED route requires,
@@ -1448,7 +1449,11 @@ fn general_input_bank_v1(
         // is live" on every action where it is not.
         (
             identity::RENT_REFUND,
-            if initialize || close { [14; 32] } else { [0; 32] },
+            if initialize || close {
+                [14; 32]
+            } else {
+                [0; 32]
+            },
         ),
         (
             identity::CUSTODY_SOURCE_OWNER,
@@ -1460,11 +1465,19 @@ fn general_input_bank_v1(
         ),
         (
             identity::CUSTODY_DESTINATION_OWNER,
-            if distribute || close { [21; 32] } else { [0; 32] },
+            if distribute || close {
+                [21; 32]
+            } else {
+                [0; 32]
+            },
         ),
         (
             identity::DESTINATION_VAULT_CONTEXT,
-            if distribute || close { [0; 32] } else { [22; 32] },
+            if distribute || close {
+                [0; 32]
+            } else {
+                [22; 32]
+            },
         ),
     ] {
         write_bank_identity_v1(&mut bank, width, coordinate, value);
@@ -1474,7 +1487,11 @@ fn general_input_bank_v1(
     // zero would disagree with every settlement row it carried.
     let (page_index, execution_index, manifest_order_index) = coordinates;
     write_bank_scalar_v1(&mut bank, scalar::PAGE_INDEX, u64::from(page_index));
-    write_bank_scalar_v1(&mut bank, scalar::EXECUTION_INDEX, u64::from(execution_index));
+    write_bank_scalar_v1(
+        &mut bank,
+        scalar::EXECUTION_INDEX,
+        u64::from(execution_index),
+    );
     write_bank_scalar_v1(
         &mut bank,
         scalar::MANIFEST_ORDER_INDEX,

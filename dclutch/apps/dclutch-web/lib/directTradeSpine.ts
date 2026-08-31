@@ -2,6 +2,7 @@ import { PublicKey } from '@solana/web3.js';
 
 import { hex, requireNonzero, requireZero, sha256, slice, u16, u64 } from './bytes';
 import { decodeCapabilityManifestV1 } from './capabilityManifest';
+import { describeDirectDecodeVintageV1 } from './directDecodeVintage';
 import {
   decodeDirectDescriptorV4,
   decodeDirectProgramSetV2,
@@ -187,11 +188,27 @@ export async function inspectDirectTradeSpineV1(
 
     const programSetRecord = await finalizedRecordBody(client, registryProgramId, DirectAbi.CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, directEntry.programSet, floor, 'CapabilityProgramSetV2');
     const selected = decodeDirectProgramSetV2(programSetRecord.data);
+    // Not a new gate -- the same equality as before, saying more. A Market
+    // whose release is newer than this build is not a broken Market, and the
+    // sentence should not read as an accusation: it names the chain's release
+    // identity, both schemas, and what this build is.
     if (hex(selected.schema) !== hex(DirectAbi.CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID)) {
-      return Object.freeze({ status: 'refused', reason: 'the Direct entry selects a descriptor schema other than CapabilityProgramV4' });
+      return Object.freeze({
+        status: 'refused',
+        reason: `this Market (release set ${market.identity.selectedReleaseSetId}) selects descriptor schema ${hex(selected.schema)}; this build decodes ${hex(DirectAbi.CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID)} — if the Market's release is newer, this build predates it: ${describeDirectDecodeVintageV1()}`,
+      });
     }
     const descriptorRecord = await finalizedRecordBody(client, registryProgramId, selected.schema, selected.program, floor, 'CapabilityProgramV4 descriptor');
-    const descriptor = decodeDirectDescriptorV4(descriptorRecord.data);
+    // The descriptor decoder names the one disagreeing field and both values;
+    // this adds the chain's release identity, so a vintage refusal carries
+    // everything needed to place it without a manual chain diff. Rethrown
+    // unchanged otherwise -- corruption must keep reading as corruption.
+    let descriptor;
+    try {
+      descriptor = decodeDirectDescriptorV4(descriptorRecord.data);
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)} (this Market's release set is ${market.identity.selectedReleaseSetId}; ${describeDirectDecodeVintageV1()})`);
+    }
     const configRecord = await finalizedRecordBody(client, registryProgramId, descriptor.configSchema, directEntry.config, floor, 'Direct config');
     const config = decodeDirectConfig(configRecord.data);
 

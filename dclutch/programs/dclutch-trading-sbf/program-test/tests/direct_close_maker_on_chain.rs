@@ -55,6 +55,7 @@ use dclutch_direct_codec::{
         direct_close_maker_account_privileges_v1,
     },
     intent_v2::CompactIntentV2,
+    ordinary_bundle_v4::DirectInlineOrdinaryHotBundleV4,
     ordinary_geometry_v3::DirectOrdinaryGeometryV3,
     program_set_v4::build_direct_inline_ordinary_lifecycle_program_set_v1,
     retirement_v1::{
@@ -67,6 +68,13 @@ use dclutch_direct_codec::{
         DirectRootPhaseV1, DirectRootStateLayoutV1, DirectRootStateV1, MakerReplayFirstUseV1,
         MakerReplayObservationV1, MakerReplaySeedsV1, MakerReplayVacancyV1, NonceConsumptionV2,
         consume_nonce_v2,
+    },
+};
+use dclutch_operator::{
+    Finality, Observation, ObservedAccount,
+    direct_close_maker_v1::{
+        DirectCloseMakerClusterV1, DirectCloseMakerPlanErrorV1, DirectCloseMakerPlanV1,
+        DirectCloseMakerSnapshotV1, plan_direct_close_maker_v1,
     },
 };
 use dclutch_direct_hot_program_test_support::{
@@ -310,6 +318,13 @@ struct CloseMakerCase {
     root_bytes: Vec<u8>,
     market: Pubkey,
     native_close_transition: Vec<u8>,
+    /// The canonical ordinary bundle this release was regenerated from.
+    ///
+    /// The operator plan builder takes it as a witness and rebuilds the whole
+    /// five-entry release from it, so handing it the fixture's own bundle is
+    /// what lets the builder re-derive -- rather than be told -- which
+    /// descriptor, profile, and effect the close is allowed to use.
+    ordinary: DirectInlineOrdinaryHotBundleV4,
     clean: InstalledReplay,
     debtor: InstalledReplay,
     live: InstalledReplay,
@@ -765,6 +780,7 @@ fn build_case(test: &mut ProgramTest, releases: Releases, artifacts: &Elves) -> 
         root_bytes,
         market,
         native_close_transition: release.native_close.transition.clone(),
+        ordinary: release.ordinary,
         clean,
         debtor,
         live,
@@ -1140,4 +1156,238 @@ async fn close_maker_refuses_hostile_frames() {
         assert_eq!(untouched.lamports, replay.lamports);
         assert_eq!(untouched.owner, TRADING_PROGRAM_ID);
     }
+}
+
+/// Read one live account as the operator crate's finalized observation.
+///
+/// A bank has no commitment ladder, so the finality label here is asserted by
+/// the fixture rather than observed. That is honest for what this test is
+/// proving -- that the builder's INSTRUCTION is one the real program accepts --
+/// and the freshness rules themselves are red-proofed in the builder's own
+/// unit tests, where a mixed observation is cheap to construct.
+/// An absent account is read as the empty System account it would become, which
+/// is what an RPC client sees for a wallet nobody has funded yet. The debtor
+/// and live-intent replays have exactly that: a recorded rent owner that has
+/// never been credited, because their closes have never been allowed to run.
+async fn observed_account(
+    context: &mut ProgramTestContext,
+    key: Pubkey,
+    observation: Observation,
+) -> ObservedAccount {
+    match account_maybe(context, key).await {
+        Some(account) => ObservedAccount {
+            observation,
+            key,
+            owner: account.owner,
+            lamports: account.lamports,
+            executable: account.executable,
+            data: account.data,
+        },
+        None => ObservedAccount {
+            observation,
+            key,
+            owner: solana_sdk_ids::system_program::ID,
+            lamports: 0,
+            executable: false,
+            data: Vec::new(),
+        },
+    }
+}
+
+/// Gather the exact 22-account graph the close plan builder authenticates.
+///
+/// The coordinates come from the frame the fixture already built by hand, so
+/// this reads what the route reads and nothing else. The replay and rent-owner
+/// slots are per-close and are filled from the installed replay.
+async fn close_snapshot(
+    context: &mut ProgramTestContext,
+    case: &CloseMakerCase,
+    replay: &InstalledReplay,
+) -> DirectCloseMakerSnapshotV1 {
+    let observation = Observation {
+        slot: 1_000,
+        unix_timestamp: 1_788_000_000,
+        finality: Finality::Finalized,
+    };
+    let mut keys = case
+        .close_metas
+        .iter()
+        .map(|meta| meta.pubkey)
+        .collect::<Vec<_>>();
+    *keys
+        .get_mut(DIRECT_CLOSE_MAKER_REPLAY_ACCOUNT_V1)
+        .expect("replay coordinate") = replay.address;
+    *keys
+        .get_mut(DIRECT_CLOSE_MAKER_RENT_OWNER_ACCOUNT_V1)
+        .expect("rent owner coordinate") = replay.rent_owner;
+
+    let mut gathered = Vec::with_capacity(DIRECT_CLOSE_MAKER_ACCOUNT_COUNT_V1);
+    for key in &keys {
+        gathered.push(observed_account(context, *key, observation).await);
+    }
+    let at = |index: usize| gathered.get(index).expect("gathered coordinate").clone();
+
+    DirectCloseMakerSnapshotV1 {
+        // A program-test bank is neither devnet nor mainnet, which is exactly
+        // what the owned-loopback arm is for. A builder hard-wired to devnet's
+        // genesis could not have been driven from a bank at all.
+        cluster: DirectCloseMakerClusterV1::OwnedLoopback,
+        genesis_hash: [0x11; 32],
+        ordinary_release_witness: case.ordinary,
+        root: at(0),
+        market: at(1),
+        capability_manifest: at(2),
+        program_set: at(3),
+        program_set_staging: at(4),
+        descriptor: at(5),
+        descriptor_staging: at(6),
+        config: at(7),
+        config_staging: at(8),
+        account_profile: at(9),
+        account_profile_staging: at(10),
+        effect: at(11),
+        effect_staging: at(12),
+        activation_cache: at(13),
+        core_program: at(14),
+        core_programdata: at(15),
+        trading_program: at(16),
+        trading_programdata: at(17),
+        registry_program: at(18),
+        rent_sysvar: at(19),
+        maker: replay.maker,
+        maker_replay: at(20),
+        rent_owner: at(21),
+    }
+}
+
+/// The operator's close plan builder, driven against the real ELFs.
+///
+/// The builder's own unit tests prove it agrees with its own fixture. This
+/// proves the thing those cannot: that the instruction it emits from a real
+/// account graph is one the deployed program accepts, and that the poststate
+/// it PREDICTED -- the receipt bytes, the root digest, the beneficiary's
+/// balance -- is the poststate the chain actually produced. A builder whose
+/// projection drifted from the route by one byte would still be green in a
+/// scratchpad and wrong here.
+///
+/// The two named refusals are checked on the same real graph, and they are
+/// checked at PLAN time: no transaction is built, signed, or sent for either.
+/// That is the cut-day property the operator half exists to provide.
+#[tokio::test]
+async fn operator_plan_builder_drives_a_real_close_and_refuses_the_two_by_name() {
+    let artifacts = elves();
+    let mut test = program_test_without_forced_budget(&artifacts);
+    let releases = add_release_waist(&mut test, &artifacts);
+    let case = build_case(&mut test, releases, &artifacts);
+
+    let begin = transaction_instructions(case.begin_retiring_instruction(), COMPUTE_LIMIT);
+    let close_clean = transaction_instructions(case.close_instruction(&case.clean), COMPUTE_LIMIT);
+    let mut addresses = Vec::new();
+    for arm in [&begin, &close_clean] {
+        addresses.extend(canonical_lookup_addresses(arm, Pubkey::default()));
+    }
+    addresses.sort_unstable_by_key(Pubkey::to_bytes);
+    addresses.dedup();
+    add_lookup_table(&mut test, &addresses);
+    let mut context = start_with_substrate(test, fixture_substrate()).await;
+
+    // The close needs a Retiring root, so the sequence runs for real first.
+    submit_v0_observed(&mut context, &begin, addresses.clone(), None, &[])
+        .await
+        .expect("begin-retiring over standing maker roots");
+
+    // ---- the debtor and the live replay refuse BEFORE a transaction exists --
+    let debtor = close_snapshot(&mut context, &case, &case.debtor).await;
+    assert_eq!(
+        plan_direct_close_maker_v1(&debtor).expect_err("a debtor replay must not plan"),
+        DirectCloseMakerPlanErrorV1::FeeOutstanding,
+        "the debtor's close must refuse at plan time, mirroring 0x4011",
+    );
+
+    let live = close_snapshot(&mut context, &case, &case.live).await;
+    assert_eq!(
+        plan_direct_close_maker_v1(&live).expect_err("a live replay must not plan"),
+        DirectCloseMakerPlanErrorV1::LiveIntents,
+        "the live-intent close must refuse at plan time, mirroring 0x4012",
+    );
+
+    // ---- the clean replay plans, and the plan is the fixture's own frame ----
+    let snapshot = close_snapshot(&mut context, &case, &case.clean).await;
+    let report = match plan_direct_close_maker_v1(&snapshot).expect("a clean replay must plan") {
+        DirectCloseMakerPlanV1::Submit(report) => report,
+        DirectCloseMakerPlanV1::Complete(_) => panic!("a standing replay must not be Complete"),
+    };
+
+    // Two independent authors of the same frame agree: the hand-built fixture
+    // instruction and the chain-derived one are byte-identical.
+    let handbuilt = case.close_instruction(&case.clean);
+    assert_eq!(report.instruction.program_id, handbuilt.program_id);
+    assert_eq!(report.instruction.data, handbuilt.data);
+    assert_eq!(report.instruction.accounts, handbuilt.accounts);
+    assert!(
+        report.instruction.accounts.iter().all(|meta| !meta.is_signer),
+        "the close is permissionless; nothing in its frame may ask to sign",
+    );
+
+    let owner_before = account(&mut context, case.clean.rent_owner).await.lamports;
+    let close = transaction_instructions(report.instruction.clone(), COMPUTE_LIMIT);
+
+    // ---- submit the BUILDER's instruction, not the fixture's ----
+    let execution = submit_v0_observed(&mut context, &close, addresses.clone(), None, &[])
+        .await
+        .expect("the plan builder's own close instruction");
+    println!(
+        "CLOSEMAKER(operator-planned) compute units consumed: {}",
+        execution.compute_units_consumed
+    );
+
+    // The predicted receipt is the receipt the chain produced -- producer and
+    // bytes both. This is the projection O-016 is about: the builder never told
+    // the chain what to write, and still knew exactly what it would write.
+    let (producer, body) = execution.return_data.expect("close receipt return data");
+    assert_eq!(producer, report.expected_receipt_producer);
+    assert_eq!(
+        body,
+        report.expected_receipt_body.to_vec(),
+        "the predicted receipt bytes are not the ones the route emitted",
+    );
+    let landed = DirectCloseMakerReceiptV1::decode(&body).expect("landed receipt");
+    assert_eq!(landed, report.expected_receipt);
+
+    // The predicted poststate is the poststate.
+    let after_root = account(&mut context, case.root).await;
+    assert_eq!(
+        after_root.data, report.expected_post_root_data,
+        "the predicted post-root bytes are not the ones the route wrote",
+    );
+    let after_tail = DirectRootStateV1::decode(
+        after_root
+            .data
+            .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+            .expect("Direct tail"),
+    )
+    .expect("post tail");
+    assert_eq!(
+        after_tail.open_maker_root_count(),
+        report.expected_remaining_open_maker_roots,
+    );
+
+    // The money went where the replay said, in the amount the replay said.
+    let owner_after = account(&mut context, case.clean.rent_owner).await.lamports;
+    assert_eq!(owner_after, report.expected_rent_owner_lamports);
+    assert_eq!(owner_after - owner_before, report.total_credit);
+    assert_eq!(
+        report.rent_principal + report.unclassified_donation,
+        report.total_credit,
+    );
+
+    // The replay is gone, and the builder now says so instead of planning a
+    // second close that could only refuse by absence.
+    let drained = account_maybe(&mut context, case.clean.address).await;
+    assert!(
+        drained
+            .as_ref()
+            .is_none_or(|account| account.lamports == 0 && account.data.is_empty()),
+        "the closed replay must be gone or empty, found {drained:?}",
+    );
 }

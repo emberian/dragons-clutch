@@ -1,0 +1,8 @@
+# `panic`, `unwrap_used` and `indexing_slicing` are denied for this crate's
+# source. Tests are held to a different bar on purpose: a test that must thread
+# a `Result` through every fixture line reads worse and proves the same thing.
+# Non-test code in `src/` keeps the full bar.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

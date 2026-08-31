@@ -4321,6 +4321,10 @@ fn found_state<'a>(
     Ok(FoundStateV2 {
         payer: projection.payer,
         market: projection.market,
+        // No price gate: this bootstrap founds no curved market. Every request
+        // it composes carries a zero price-gate certificate digest, and the
+        // curved arm demands a real one.
+        price_gate: None,
         rent_credit: snapshot.observation(credit)?,
         rent_program: projection.rent_program,
         realm: projection.realm,

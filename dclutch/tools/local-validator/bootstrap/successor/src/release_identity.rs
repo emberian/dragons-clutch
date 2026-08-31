@@ -31,9 +31,7 @@
 use dclutch_registry_contract::ActivatedExecutionReleaseSetV1;
 use dclutch_release_set_contract::ExecutionRoleV1;
 
-use crate::{
-    Error, Result, campaign::ObservedRoleV1, model::SuccessorPlan, plan::hex, runtime,
-};
+use crate::{Error, Result, campaign::ObservedRoleV1, model::SuccessorPlan, plan::hex, runtime};
 
 /// The five execution roles, with the role names the plan and the observed
 /// substrate rows use, in the activation cache's own order.
@@ -131,9 +129,10 @@ mod tests {
         let mut digests: Vec<String> = Vec::new();
         for (index, slot) in slots.into_iter().enumerate() {
             let program = Pubkey::new_from_array([(index as u8) + 1; 32]);
-            let programdata =
-                Pubkey::find_program_address(&[program.as_ref()], &loader).0;
-            let elf: Vec<u8> = (0..64u8).map(|byte| byte.wrapping_add(slot as u8)).collect();
+            let programdata = Pubkey::find_program_address(&[program.as_ref()], &loader).0;
+            let elf: Vec<u8> = (0..64u8)
+                .map(|byte| byte.wrapping_add(slot as u8))
+                .collect();
             let elf_digest: [u8; 32] = sha2::Sha256::digest(&elf).into();
             let mut record = [0u8; ARTIFACT_RELEASE_BYTES_V1];
             record[..8].copy_from_slice(b"DCLTARF1");
@@ -191,9 +190,7 @@ mod tests {
         ACTIVATED_ROLE_NAMES_V1
             .iter()
             .enumerate()
-            .map(|(index, (_, name))| {
-                row(name, Some(slots[index]), Some(digests[index].clone()))
-            })
+            .map(|(index, (_, name))| row(name, Some(slots[index]), Some(digests[index].clone())))
             .collect()
     }
 
@@ -215,11 +212,15 @@ mod tests {
             activated_release_supersession_v1(expected, &rows(live_slots, &live_digests));
         // Five slot disagreements and five ELF disagreements, each named.
         assert_eq!(refusals.len(), 10, "{refusals:#?}");
-        assert!(refusals.iter().any(|refusal| refusal
-            == "core: activation pinned deployment slot 700, live slot is 900"));
-        assert!(refusals.iter().any(|refusal| refusal.starts_with(
-            "custody: activation pinned live ELF sha256"
-        )));
+        assert!(
+            refusals.iter().any(|refusal| refusal
+                == "core: activation pinned deployment slot 700, live slot is 900")
+        );
+        assert!(
+            refusals
+                .iter()
+                .any(|refusal| refusal.starts_with("custody: activation pinned live ELF sha256"))
+        );
         assert_ne!(activated_digests[0], live_digests[0]);
     }
 

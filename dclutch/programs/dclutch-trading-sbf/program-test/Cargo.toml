@@ -29,6 +29,11 @@ dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }
 dclutch-general-adapter-contract = { path = "../../../crates/dclutch-general-adapter-contract" }
 dclutch-general-config-contract = { path = "../../../crates/dclutch-general-config-contract" }
 dclutch-market-core-codec = { path = "../../../crates/dclutch-market-core-codec" }
+# `direct_close_maker_on_chain` drives the operator's close plan builder against
+# the real ELFs. A builder tested only against its own hand-written fixture
+# proves that it agrees with itself; the question worth answering is whether the
+# instruction it emits is one the deployed program actually accepts.
+dclutch-operator = { path = "../../../crates/dclutch-operator" }
 dclutch-product-payoff-v2-codec = { path = "../../../crates/dclutch-product-payoff-v2-codec" }
 dclutch-product-runtime-v2 = { path = "../../../crates/dclutch-product-runtime-v2" }
 dclutch-product-runtime-v2-admission = { path = "../../../crates/dclutch-product-runtime-v2-admission" }

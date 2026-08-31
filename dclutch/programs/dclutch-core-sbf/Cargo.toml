@@ -44,6 +44,7 @@ solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [dev-dependencies]
 dclutch-direct-codec = { path = "../../crates/dclutch-direct-codec" }
+dclutch-operator = { path = "../../crates/dclutch-operator" }
 dclutch-market-open-v1-operator = { path = "../../crates/dclutch-market-open-v1-operator" }
 dclutch-resolution-core-v3-operator = { path = "../../crates/dclutch-resolution-core-v3-operator" }
 dclutch-registry-sbf = { path = "../dclutch-registry-sbf", features = ["no-entrypoint"] }

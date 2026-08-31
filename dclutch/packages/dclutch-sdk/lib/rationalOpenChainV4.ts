@@ -8,8 +8,29 @@ import {
 
 import { ascii, hex, requireNonzero, requireZero, slice, u16, u64 } from './bytes';
 import {
+  LIABILITY_BASIS_MARKET_BASIS_OFFSET,
+  LIABILITY_BASIS_MARKET_CLAIM_COUNT_OFFSET,
+  LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET,
+  LIABILITY_BASIS_MARKET_GENERATION_OFFSET,
+  LIABILITY_BASIS_MARKET_HEADER_BYTES_V2,
+  LIABILITY_BASIS_MARKET_LOGICAL_ID_OFFSET,
+  LIABILITY_BASIS_MARKET_MAGIC_V2,
+  LIABILITY_BASIS_MARKET_PRODUCT_OFFSET,
+  LIABILITY_BASIS_MARKET_REALM_OFFSET,
+  LIABILITY_BASIS_MARKET_REGISTRY_OFFSET,
+  LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET,
+  LIABILITY_BASIS_MARKET_REVISION_OFFSET,
   LIABILITY_BASIS_MARKET_SEED_V2 as CLAIMS_AGGREGATE_SEED,
+  LIABILITY_BASIS_POSITION_BASIS_OFFSET,
+  LIABILITY_BASIS_POSITION_CLAIM_COUNT_OFFSET,
+  LIABILITY_BASIS_POSITION_HEADER_BYTES_V2,
+  LIABILITY_BASIS_POSITION_MAGIC_V2,
+  LIABILITY_BASIS_POSITION_MARKET_OFFSET,
+  LIABILITY_BASIS_POSITION_OWNER_OFFSET,
+  LIABILITY_BASIS_POSITION_RESERVED_OFFSET,
+  LIABILITY_BASIS_POSITION_REVISION_OFFSET,
   LIABILITY_BASIS_POSITION_SEED_V2 as POSITION_SEED,
+  LIABILITY_BASIS_STATE_VERSION_V2,
 } from './generated/coreFound';
 import * as Hot from './generated/directInlineV3';
 import {
@@ -50,8 +71,6 @@ const REPRESENTATION_AUTHORITY_SEED = new TextEncoder().encode('dclutch:rational
 const REPLAY_SEED = new TextEncoder().encode('dclutch:rational-replay:v2');
 const CALLER_AUTHORITY_SEED = new TextEncoder().encode('dclutch:role-authority:v1');
 const ACCOUNT_PROFILE_HEADER = 40;
-const ACCOUNT_PROFILE_RULE = 16;
-const ACCOUNT_PROFILE_OPERATION = 16;
 
 type Meta = RationalHotAccountMetaV4;
 type OpenRpc = RationalHotRpcV4;
@@ -152,31 +171,38 @@ export type RationalClaimsAggregateV2 = Readonly<{ revision: bigint; basis: Uint
 export function decodeRationalClaimsAggregateV2(bytes: Uint8Array, input: Readonly<{
   market: string; releaseSet: Uint8Array; registry: string; product: Uint8Array; realm: Uint8Array; generation: bigint; outcomes: number;
 }>): RationalClaimsAggregateV2 {
-  if (bytes.length !== 256 + input.outcomes * 8 || ascii(bytes, 0, 8) !== 'DCLLBM02' || u16(bytes, 8) !== 2 || u32(bytes, 12) !== input.outcomes) {
+  if (bytes.length !== LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 + input.outcomes * 8
+      || !same(slice(bytes, 0, 8), LIABILITY_BASIS_MARKET_MAGIC_V2)
+      || u16(bytes, 8) !== LIABILITY_BASIS_STATE_VERSION_V2
+      || u32(bytes, LIABILITY_BASIS_MARKET_CLAIM_COUNT_OFFSET) !== input.outcomes) {
     throw new Error('Claims aggregate has the wrong exact runtime-width ABI');
   }
   requireZero(bytes, 10, 2, 'Claims aggregate');
   for (const [observed, expected, field] of [
-    [slice(bytes, 24, 32), key(input.market, 'Market').toBytes(), 'Market'],
-    [slice(bytes, 56, 32), input.releaseSet, 'release set'],
-    [slice(bytes, 88, 32), key(input.registry, 'Registry').toBytes(), 'Registry'],
-    [slice(bytes, 120, 32), input.product, 'Product record'],
-    [slice(bytes, 184, 32), input.realm, 'Realm'],
+    [slice(bytes, LIABILITY_BASIS_MARKET_LOGICAL_ID_OFFSET, 32), key(input.market, 'Market').toBytes(), 'Market'],
+    [slice(bytes, LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET, 32), input.releaseSet, 'release set'],
+    [slice(bytes, LIABILITY_BASIS_MARKET_REGISTRY_OFFSET, 32), key(input.registry, 'Registry').toBytes(), 'Registry'],
+    [slice(bytes, LIABILITY_BASIS_MARKET_PRODUCT_OFFSET, 32), input.product, 'Product record'],
+    [slice(bytes, LIABILITY_BASIS_MARKET_REALM_OFFSET, 32), input.realm, 'Realm'],
   ] as const) if (!same(observed, expected)) throw new Error(`Claims aggregate ${field} differs from Core`);
-  if (u64(bytes, 248) !== input.generation) throw new Error('Claims aggregate generation differs from Core');
-  const basis = slice(bytes, 152, 32); requireNonzero(basis, 'Claims semantic basis');
-  const custodyContext = slice(bytes, 216, 32); requireNonzero(custodyContext, 'Claims custody context');
-  return Object.freeze({ revision: u64(bytes, 16), basis, custodyContext });
+  if (u64(bytes, LIABILITY_BASIS_MARKET_GENERATION_OFFSET) !== input.generation) throw new Error('Claims aggregate generation differs from Core');
+  const basis = slice(bytes, LIABILITY_BASIS_MARKET_BASIS_OFFSET, 32); requireNonzero(basis, 'Claims semantic basis');
+  const custodyContext = slice(bytes, LIABILITY_BASIS_MARKET_CUSTODY_CONTEXT_OFFSET, 32); requireNonzero(custodyContext, 'Claims custody context');
+  return Object.freeze({ revision: u64(bytes, LIABILITY_BASIS_MARKET_REVISION_OFFSET), basis, custodyContext });
 }
 
 export function decodeRationalClaimsPositionV2(bytes: Uint8Array, aggregate: string, owner: string, basis: Uint8Array, outcomes: number): bigint {
-  if (bytes.length !== 128 + outcomes * 8 || ascii(bytes, 0, 8) !== 'DCLLBP02' || u16(bytes, 8) !== 2 || u32(bytes, 12) !== outcomes) {
+  if (bytes.length !== LIABILITY_BASIS_POSITION_HEADER_BYTES_V2 + outcomes * 8
+      || !same(slice(bytes, 0, 8), LIABILITY_BASIS_POSITION_MAGIC_V2)
+      || u16(bytes, 8) !== LIABILITY_BASIS_STATE_VERSION_V2
+      || u32(bytes, LIABILITY_BASIS_POSITION_CLAIM_COUNT_OFFSET) !== outcomes) {
     throw new Error('Claims Position has the wrong exact runtime-width ABI');
   }
-  requireZero(bytes, 10, 2, 'Claims Position'); requireZero(bytes, 120, 8, 'Claims Position');
-  if (new PublicKey(slice(bytes, 24, 32)).toBase58() !== aggregate || new PublicKey(slice(bytes, 56, 32)).toBase58() !== owner
-      || !same(slice(bytes, 88, 32), basis)) throw new Error('Claims Position aggregate, owner, or semantic basis differs');
-  return u64(bytes, 16);
+  requireZero(bytes, 10, 2, 'Claims Position'); requireZero(bytes, LIABILITY_BASIS_POSITION_RESERVED_OFFSET, 8, 'Claims Position');
+  if (new PublicKey(slice(bytes, LIABILITY_BASIS_POSITION_MARKET_OFFSET, 32)).toBase58() !== aggregate
+      || new PublicKey(slice(bytes, LIABILITY_BASIS_POSITION_OWNER_OFFSET, 32)).toBase58() !== owner
+      || !same(slice(bytes, LIABILITY_BASIS_POSITION_BASIS_OFFSET, 32), basis)) throw new Error('Claims Position aggregate, owner, or semantic basis differs');
+  return u64(bytes, LIABILITY_BASIS_POSITION_REVISION_OFFSET);
 }
 
 export function decodeRationalRepresentationReplayV2(account: RpcAccount, claims: string, descriptor: Uint8Array, actor: string): bigint {
@@ -197,17 +223,17 @@ function validateProgramAccount(address: string, account: RpcAccount, field: str
 }
 
 export function compactRationalProfile11AccountsV4(profile: Uint8Array, tailCount: number, injected: ReadonlyArray<Meta>, child: ReadonlyArray<Meta>, accounts: ReadonlyMap<string, RpcAccount | null>): ReadonlyArray<Meta> {
-  if (profile.length < ACCOUNT_PROFILE_HEADER || ascii(profile, 0, 8) !== 'DCLTAP02' || u16(profile, 8) !== 2 || u16(profile, 10) !== 11) {
+  if (profile.length < ACCOUNT_PROFILE_HEADER || !same(slice(profile, 0, 8), Hot.MAGIC) || u16(profile, 8) !== 2 || u16(profile, 10) !== 11) {
     throw new Error('selected AccountProfile is not exact authenticated-route-alias Profile11');
   }
   const fixed = u16(profile, 12); const stride = u16(profile, 14); const fixedOps = u16(profile, 16); const itemOps = u16(profile, 18);
-  const expectedWidth = ACCOUNT_PROFILE_HEADER + (fixed + stride) * ACCOUNT_PROFILE_RULE + (fixedOps + itemOps) * ACCOUNT_PROFILE_OPERATION;
+  const expectedWidth = ACCOUNT_PROFILE_HEADER + (fixed + stride) * Hot.RULE_BYTES + (fixedOps + itemOps) * Hot.OPERATION_BYTES;
   const logical = [...injected, ...child];
   if (profile.length !== expectedWidth || logical.length !== fixed + stride * tailCount) throw new Error('Profile11 bytes or runtime logical width differs from Product N');
   const representative = (coordinate: number): number => {
     const item = coordinate < fixed ? -1 : Math.floor((coordinate - fixed) / stride);
     const local = coordinate < fixed ? coordinate : fixed + ((coordinate - fixed) % stride);
-    const offset = ACCOUNT_PROFILE_HEADER + local * ACCOUNT_PROFILE_RULE;
+    const offset = ACCOUNT_PROFILE_HEADER + local * Hot.RULE_BYTES;
     const alias = profile[offset + 2]; const index = u16(profile, offset + 4);
     if (alias === 0 && index === 0) return coordinate;
     if (alias === 1 && index < fixed && index < coordinate) return index;
@@ -217,7 +243,7 @@ export function compactRationalProfile11AccountsV4(profile: Uint8Array, tailCoun
   const output: Meta[] = [];
   for (let coordinate = 0; coordinate < logical.length; coordinate += 1) {
     const itemLocal = coordinate < fixed ? coordinate : fixed + ((coordinate - fixed) % stride);
-    const offset = ACCOUNT_PROFILE_HEADER + itemLocal * ACCOUNT_PROFILE_RULE;
+    const offset = ACCOUNT_PROFILE_HEADER + itemLocal * Hot.RULE_BYTES;
     const privileges = profile[offset] ?? 255;
     if ((privileges & ~7) !== 0) throw new Error(`Profile11 coordinate ${coordinate} has undefined privilege bits`);
     const observed = logical[coordinate]; const rep = representative(coordinate); const source = logical[rep];
@@ -239,7 +265,7 @@ export function compactRationalProfile11AccountsV4(profile: Uint8Array, tailCoun
       for (let other = 0; other < logical.length; other += 1) {
         if (representative(other) === coordinate) {
           const otherLocal = other < fixed ? other : fixed + ((other - fixed) % stride);
-          const bits = profile[ACCOUNT_PROFILE_HEADER + otherLocal * ACCOUNT_PROFILE_RULE] ?? 0;
+          const bits = profile[ACCOUNT_PROFILE_HEADER + otherLocal * Hot.RULE_BYTES] ?? 0;
           signer ||= (bits & 1) !== 0; writable ||= (bits & 2) !== 0;
         }
       }
@@ -422,7 +448,7 @@ export async function inspectRationalOpenChainV4(
 export function buildRationalOpenCandidateV4(inspection: RationalOpenChainInspectionV4, recentBlockhash: string): RationalOpenCandidateV4 {
   key(recentBlockhash, 'recent blockhash');
   const outer = new Uint8Array(128 + inspection.family.familyBytes.length);
-  outer.set(new TextEncoder().encode('DCLTHOT3'), 0); putU16(outer, 8, 3); putU16(outer, 10, 1);
+  outer.set(Hot.HOT_EXECUTION_MAGIC_V3, 0); putU16(outer, 8, 3); putU16(outer, 10, 1);
   putU32(outer, 12, inspection.family.familyBytes.length); outer.set(inspection.family.familyBytes, 128);
   // The selected family owns these immutable envelope joins; no caller DTO.
   const releaseSet = slice(inspection.family.familyBytes, 16, 32);

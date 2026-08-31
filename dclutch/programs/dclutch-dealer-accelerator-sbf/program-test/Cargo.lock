@@ -1827,6 +1827,7 @@ dependencies = [
  "dclutch-fractional-claim-contract",
  "dclutch-fractional-claim-kernel",
  "dclutch-fractional-claims-kernel",
+ "dclutch-fractional-compaction-test-caller-sbf",
  "dclutch-market-core-codec",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",
@@ -1837,10 +1838,13 @@ dependencies = [
  "dclutch-record-contract",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
+ "dclutch-rent-contract",
  "dclutch-representation-composition-v3-kernel",
  "dclutch-resolution-codec",
  "dclutch-token-svm",
+ "solana-account 4.6.0",
  "solana-program",
+ "solana-program-test",
  "solana-sdk-ids",
 ]
 
@@ -1888,6 +1892,17 @@ dependencies = [
  "dclutch-fractional-claim-kernel",
  "dclutch-sha256-adapter",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "dclutch-fractional-compaction-test-caller-sbf"
+version = "0.1.0"
+dependencies = [
+ "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
+ "dclutch-fractional-claim-contract",
+ "dclutch-refusal-registry",
+ "solana-program",
 ]
 
 [[package]]
@@ -1983,6 +1998,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-relay-contract",
@@ -2243,12 +2259,15 @@ dependencies = [
 name = "dclutch-release-tool"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
  "dclutch-core-contract",
  "dclutch-execution-strategy-contract",
  "dclutch-pyth-svm",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
+ "serde_json",
  "sha2 0.10.9",
  "solana-program",
 ]

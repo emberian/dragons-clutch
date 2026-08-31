@@ -863,8 +863,7 @@ mod tests {
     fn a_refresh_may_select_the_projected_hoard_digest() {
         // The value this market's chain actually persists, measured from the
         // live Hoard vault and Trading replay on the driven substrate.
-        const PERSISTED: &str =
-            "82306216694facaf3322cb94f1051d62bc9ef48d13b454218238a08b4b3b200d";
+        const PERSISTED: &str = "82306216694facaf3322cb94f1051d62bc9ef48d13b454218238a08b4b3b200d";
         assert_eq!(
             hex(&chain_persisted_custody_context_v1(
                 hex32(PRE_IMAGE).expect("pre-image")

@@ -144,9 +144,9 @@ pub(crate) fn merge_selected_manifest_v1(
         .release_id();
     let mut entries = Vec::with_capacity(4);
     for index in 0..base.entry_count() {
-        let entry = base
-            .entry(index)
-            .map_err(|error| Error::new(format!("Resolution capability entry {index}: {error:?}")))?;
+        let entry = base.entry(index).map_err(|error| {
+            Error::new(format!("Resolution capability entry {index}: {error:?}"))
+        })?;
         if entry.kind_id().to_bytes() == selected_kind || entry.release_id() != first_release {
             return Err(Error::new(
                 "Resolution base must contain three same-release companions of other kinds \
@@ -369,7 +369,9 @@ pub(crate) fn selected_capability_kind_v1(
 pub(crate) fn market_realm_identity_v1(
     collateral_mint: solana_sdk::pubkey::Pubkey,
 ) -> Result<[u8; 32]> {
-    use dclutch_realm_contract::{FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input};
+    use dclutch_realm_contract::{
+        FreezeAuthorityPolicy, MintAuthorityPolicy, RealmV1, RealmV1Input,
+    };
     use dclutch_token_svm::{CollateralAdapterReleaseV1, TOKEN_2022_PROGRAM_ID};
 
     let adapter = CollateralAdapterReleaseV1::token_2022_zero_extension_exact_transfer();

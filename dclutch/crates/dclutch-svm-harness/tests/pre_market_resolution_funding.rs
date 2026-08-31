@@ -50,8 +50,8 @@ use dclutch_registry_contract::{
 use dclutch_release_set_contract::CallerAuthoritySeedsV1;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
-    ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
+    ProtocolInfrastructureProfileV2,
 };
 use dclutch_rent_contract::{
     RefundAuthority,
@@ -617,13 +617,21 @@ fn fixture() -> Fixture {
     registry_artifact.add(&mut test);
     rent_artifact.add(&mut test);
     let infrastructure = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &CORE_PROGRAM_ID,
     )
     .0;
-    let infrastructure_value =
-        ProtocolInfrastructureProfileV1::new(binding(registry_release), binding(rent_release))
-            .expect("infrastructure profile");
+    // Registry moved across the succession and Rent did not: the predecessor
+    // Registry id names the distinct release this profile succeeded, while
+    // Rent holds the same id on both sides of it.
+    let predecessor_registry_release = release(REGISTRY_PROGRAM_ID, [0xb2; 32], &elves.registry);
+    let infrastructure_value = ProtocolInfrastructureProfileV2::new(
+        binding(registry_release),
+        binding(rent_release),
+        artifact_id(predecessor_registry_release),
+        artifact_id(rent_release),
+    )
+    .expect("infrastructure succession profile");
     test.add_account(
         infrastructure,
         Account {

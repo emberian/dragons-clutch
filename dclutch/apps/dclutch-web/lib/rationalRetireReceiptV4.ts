@@ -24,9 +24,12 @@ import {
 } from './generated/claimsCustodyReplayV1';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+  LIABILITY_BASIS_MARKET_HEADER_BYTES_V2 as CLAIMS_MARKET_HEADER_BYTES,
+  LIABILITY_BASIS_MARKET_MAGIC_V2,
   LIABILITY_BASIS_MARKET_SEED_V2 as CLAIMS_MARKET_SEED,
   LIABILITY_BASIS_POSITION_SEED_V2 as POSITION_SEED,
   LIFECYCLE_RENT_CREDIT_BYTES_V2,
+  LIFECYCLE_RENT_CREDIT_MAGIC_V2,
   LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2,
   PORTFOLIO_SCHEMA_ID_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
@@ -74,12 +77,7 @@ export const CAPABILITY_PROGRAM_V4_SCHEMA = Uint8Array.from([
 const MAX_U64 = 18_446_744_073_709_551_615n;
 const ABSENT_POSITION_REVISION = MAX_U64;
 const DESCRIPTOR_HEADER_BYTES = 256;
-const CLAIMS_MARKET_HEADER_BYTES = 256;
 const LIFECYCLE_COORDINATE_BYTES = 272;
-const CAPABILITY_ROOT_HEADER_BYTES = 232;
-const CAPABILITY_SET_HEADER_BYTES = 32;
-const CAPABILITY_SET_ENTRY_BYTES = 72;
-const CAPABILITY_PROGRAM_V4_BYTES = 600;
 const SYSTEM_INSTRUCTIONS_SYSVAR = 'Sysvar1nstructions1111111111111111111111111';
 const CALLER_AUTHORITY_SEED = new TextEncoder().encode('dclutch:role-authority:v1');
 const REPRESENTATION_AUTHORITY_SEED = new TextEncoder().encode('dclutch:rational-authority:v2');
@@ -359,14 +357,14 @@ export type RationalHotRootSelectionV4 = Readonly<{ entryIndex: number; manifest
 type RootSelection = RationalHotRootSelectionV4;
 
 export function decodeRationalHotRootV4(bytes: Uint8Array, releaseSet: Uint8Array, market: string, generation: bigint): RootSelection {
-  if (bytes.length <= CAPABILITY_ROOT_HEADER_BYTES || ascii(bytes, 0, 8) !== 'DCLTCRT1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
+  if (bytes.length <= Hot.CAPABILITY_ROOT_HEADER_BYTES_V1 || !same(slice(bytes, 0, 8), Hot.CAPABILITY_ROOT_MAGIC_V1) || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 1) {
     throw new Error('capability root has the wrong exact V1 header or no mutable state');
   }
   requireZero(bytes, 12, 4, 'capability root header');
   if (!same(slice(bytes, 16, 32), releaseSet) || new PublicKey(slice(bytes, 48, 32)).toBase58() !== market || u64(bytes, 80) !== generation) {
     throw new Error('capability root release, Market, or generation differs from Core');
   }
-  if (ascii(bytes, 88, 8) !== 'DCLTCER1' || u16(bytes, 96) !== 1 || u16(bytes, 98) !== 1) {
+  if (!same(slice(bytes, 88, 8), Hot.CAPABILITY_EXECUTION_SELECTION_MAGIC_V1) || u16(bytes, 96) !== 1 || u16(bytes, 98) !== 1) {
     throw new Error('capability root selection has the wrong exact ABI');
   }
   requireZero(bytes, 102, 2, 'capability selection');
@@ -389,21 +387,21 @@ export function selectRationalHotManifestEntryV4(bytes: Uint8Array, selection: R
 }
 
 export function selectRationalHotCapabilityV4(set: Uint8Array, selector: number): Readonly<{ schema: Uint8Array; digest: Uint8Array }> {
-  if (set.length < CAPABILITY_SET_HEADER_BYTES || ascii(set, 0, 8) !== 'DCLTCPS2' || u16(set, 8) !== 2 || u16(set, 10) !== 2) {
+  if (set.length < Hot.CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 || !same(slice(set, 0, 8), Hot.CAPABILITY_PROGRAM_SET_MAGIC_V2) || u16(set, 8) !== 2 || u16(set, 10) !== 2) {
     throw new Error('compact retirement does not select CapabilityProgramSetV2');
   }
   const selectorOffset = u32(set, 12);
   const selectorWidth = set[16];
   const count = u16(set, 18);
   if (selectorOffset !== 10 || selectorWidth !== 1 || set[17] !== 0 || count === 0 || count > 32
-      || set.length !== CAPABILITY_SET_HEADER_BYTES + count * CAPABILITY_SET_ENTRY_BYTES) {
+      || set.length !== Hot.CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 + count * Hot.CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2) {
     throw new Error('compact retirement ProgramSet has noncanonical selector geometry');
   }
   requireZero(set, 20, 12, 'CapabilityProgramSetV2 header');
   let prior = -1;
   let selected: Readonly<{ schema: Uint8Array; digest: Uint8Array }> | null = null;
   for (let index = 0; index < count; index += 1) {
-    const offset = CAPABILITY_SET_HEADER_BYTES + index * CAPABILITY_SET_ENTRY_BYTES;
+    const offset = Hot.CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2 + index * Hot.CAPABILITY_PROGRAM_SET_ENTRY_BYTES_V2;
     const value = u32(set, offset);
     if (value <= prior || value > 255) throw new Error('CapabilityProgramSetV2 selectors are not canonical');
     prior = value;
@@ -432,7 +430,7 @@ export type RationalHotCapabilityV4 = Readonly<{
 }>;
 
 export function decodeRationalHotCapabilityV4(bytes: Uint8Array): RationalHotCapabilityV4 {
-  if (bytes.length !== CAPABILITY_PROGRAM_V4_BYTES || ascii(bytes, 0, 8) !== 'DCLTCPR4' || u16(bytes, 8) !== 4 || u16(bytes, 10) !== 4) {
+  if (bytes.length !== Hot.CAPABILITY_PROGRAM_V4_BYTES || !same(slice(bytes, 0, 8), Hot.CAPABILITY_PROGRAM_V4_MAGIC) || u16(bytes, 8) !== 4 || u16(bytes, 10) !== 4) {
     throw new Error('selected descriptor is not the exact CapabilityProgramV4 ABI');
   }
   requireZero(bytes, 12, 4, 'CapabilityProgramV4 header');
@@ -494,7 +492,7 @@ export function decodeRationalRepresentationDescriptorV3(bytes: Uint8Array, id: 
 }
 
 function decodeClaimsMarket(bytes: Uint8Array, market: string, releaseSet: Uint8Array, registry: string, productRecord: Uint8Array, realm: Uint8Array, generation: bigint, outcomeCount: number): bigint {
-  if (bytes.length !== CLAIMS_MARKET_HEADER_BYTES + outcomeCount * 8 || ascii(bytes, 0, 8) !== 'DCLLBM02' || u16(bytes, 8) !== 2 || u32(bytes, 12) !== outcomeCount) {
+  if (bytes.length !== CLAIMS_MARKET_HEADER_BYTES + outcomeCount * 8 || !same(slice(bytes, 0, 8), LIABILITY_BASIS_MARKET_MAGIC_V2) || u16(bytes, 8) !== 2 || u32(bytes, 12) !== outcomeCount) {
     throw new Error('Claims aggregate has the wrong exact runtime-width ABI');
   }
   requireZero(bytes, 10, 2, 'Claims aggregate header');
@@ -513,7 +511,7 @@ function decodeClaimsMarket(bytes: Uint8Array, market: string, releaseSet: Uint8
 }
 
 function decodeLifecycleRentCredit(address: string, account: RpcAccount, market: string, releaseSet: Uint8Array, generation: bigint): Readonly<{ program: string; balance: bigint }> {
-  if (account.executable || account.data.length !== LIFECYCLE_RENT_CREDIT_BYTES_V2 || ascii(account.data, 0, 8) !== 'DCLRNTL2' || u16(account.data, 8) !== 2) {
+  if (account.executable || account.data.length !== LIFECYCLE_RENT_CREDIT_BYTES_V2 || !same(slice(account.data, 0, 8), LIFECYCLE_RENT_CREDIT_MAGIC_V2) || u16(account.data, 8) !== 2) {
     throw new Error('RentCredit is not the exact LifecycleRentCreditV2 ABI');
   }
   requireZero(account.data, 11, 5, 'LifecycleRentCreditV2 header');
@@ -745,7 +743,7 @@ export async function inspectRationalRetireReceiptV4(
   if (descriptor.market !== marketAddress || !same(descriptor.releaseSet, market.releaseSet) || descriptor.tokenProgram !== TOKEN_2022_PROGRAM_ID || descriptor.outcomeCount === 0) {
     throw new Error('representation descriptor differs from the Market lifecycle or Token-2022 successor');
   }
-  if (rootAccount.data.length !== CAPABILITY_ROOT_HEADER_BYTES + selected.capability.rootStateBytes) {
+  if (rootAccount.data.length !== Hot.CAPABILITY_ROOT_HEADER_BYTES_V1 + selected.capability.rootStateBytes) {
     throw new Error('capability root width differs from the selected CapabilityProgramV4 capacity');
   }
   const authority = PublicKey.findProgramAddressSync([REPRESENTATION_AUTHORITY_SEED, descriptor.id], key(activation.claims, 'Claims program'))[0];
@@ -879,7 +877,7 @@ export function buildRationalRetireReceiptCandidateV4(
     throw new Error('compact RetireReceipt inspection has inconsistent fixed, support, Claims, or request geometry');
   }
   const outer = new Uint8Array(RATIONAL_LIFECYCLE_COMPACT_OUTER_BYTES_V4);
-  outer.set(new TextEncoder().encode('DCLTHOT3'), 0); putU16(outer, 8, 3); putU16(outer, 10, 1);
+  outer.set(Hot.HOT_EXECUTION_MAGIC_V3, 0); putU16(outer, 8, 3); putU16(outer, 10, 1);
   putU32(outer, 12, RATIONAL_LIFECYCLE_COMPACT_REQUEST_BYTES_V4); outer.set(inspection.releaseSet, 16);
   outer.set(key(inspection.market, 'Market').toBytes(), 48); putU64(outer, 80, inspection.generation);
   outer.set(inspection.rootDigest, 88); outer.set(inspection.familyBytes, 128);

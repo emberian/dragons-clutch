@@ -14,6 +14,8 @@ pub use dclutch_market_core_codec::{
 pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 24;
 /// Exact account count for one-time infrastructure-profile initialization.
 pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1: usize = 14;
+/// Exact account count for the one-time infrastructure succession ceremony.
+pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V2: usize = 21;
 
 /// Exact Found accounts in canonical order.
 pub(crate) struct FoundAccounts<'accounts, 'info> {
@@ -572,6 +574,209 @@ impl<'accounts, 'info> InitializeInfrastructureAccounts<'accounts, 'info> {
             system,
         })
     }
+}
+
+/// Exact accounts for the one-time infrastructure succession ceremony.
+///
+/// The V1 initialization frame plus the predecessor evidence the ruling's
+/// conjuncts read: the V1 profile itself, the predecessor artifact records
+/// for each MOVED binding, and one consent slot per binding. An UNMOVED
+/// binding presents the System program in its predecessor-record and consent
+/// slots, exactly as `DeclareSuccessor` does for an unmoved role — nothing is
+/// being consented to, so nothing may stand there that could look like
+/// consent.
+pub(crate) struct InitializeInfrastructureV2Accounts<'accounts, 'info> {
+    pub payer: &'accounts AccountInfo<'info>,
+    /// The vacant V2 profile PDA (conjunct 6 owns its vacancy).
+    pub profile: &'accounts AccountInfo<'info>,
+    /// The written V1 profile PDA (conjunct 2 owns its presence).
+    pub predecessor_profile: &'accounts AccountInfo<'info>,
+    pub core_programdata: &'accounts AccountInfo<'info>,
+    pub upgrade_authority: &'accounts AccountInfo<'info>,
+    pub registry_artifact_raw: &'accounts AccountInfo<'info>,
+    pub registry_artifact_staging: &'accounts AccountInfo<'info>,
+    pub registry_program: &'accounts AccountInfo<'info>,
+    pub registry_programdata: &'accounts AccountInfo<'info>,
+    pub rent_artifact_raw: &'accounts AccountInfo<'info>,
+    pub rent_artifact_staging: &'accounts AccountInfo<'info>,
+    pub rent_program: &'accounts AccountInfo<'info>,
+    pub rent_programdata: &'accounts AccountInfo<'info>,
+    pub predecessor_registry_artifact_raw: &'accounts AccountInfo<'info>,
+    pub predecessor_registry_artifact_staging: &'accounts AccountInfo<'info>,
+    pub registry_consent_authority: &'accounts AccountInfo<'info>,
+    pub predecessor_rent_artifact_raw: &'accounts AccountInfo<'info>,
+    pub predecessor_rent_artifact_staging: &'accounts AccountInfo<'info>,
+    pub rent_consent_authority: &'accounts AccountInfo<'info>,
+    pub rent: &'accounts AccountInfo<'info>,
+    pub system: &'accounts AccountInfo<'info>,
+}
+
+impl<'accounts, 'info> InitializeInfrastructureV2Accounts<'accounts, 'info> {
+    #[inline(never)]
+    pub fn parse(accounts: &'accounts [AccountInfo<'info>]) -> Result<Self, CoreSbfError> {
+        if accounts.len() != INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V2 {
+            return Err(CoreSbfError::AccountFrame);
+        }
+        let [
+            payer,
+            profile,
+            predecessor_profile,
+            core_programdata,
+            upgrade_authority,
+            registry_artifact_raw,
+            registry_artifact_staging,
+            registry_program,
+            registry_programdata,
+            rent_artifact_raw,
+            rent_artifact_staging,
+            rent_program,
+            rent_programdata,
+            predecessor_registry_artifact_raw,
+            predecessor_registry_artifact_staging,
+            registry_consent_authority,
+            predecessor_rent_artifact_raw,
+            predecessor_rent_artifact_staging,
+            rent_consent_authority,
+            rent,
+            system,
+        ] = accounts
+        else {
+            return Err(CoreSbfError::AccountFrame);
+        };
+        if !payer.is_signer
+            || !payer.is_writable
+            || payer.executable
+            || profile.is_signer
+            || !profile.is_writable
+            || profile.executable
+            || predecessor_profile.is_signer
+            || predecessor_profile.is_writable
+            || predecessor_profile.executable
+            || core_programdata.is_signer
+            || core_programdata.is_writable
+            || core_programdata.executable
+            || !upgrade_authority.is_signer
+            || upgrade_authority.executable
+            || registry_program.is_signer
+            || registry_program.is_writable
+            || !registry_program.executable
+            || registry_programdata.is_signer
+            || registry_programdata.is_writable
+            || registry_programdata.executable
+            || rent_program.is_signer
+            || rent_program.is_writable
+            || !rent_program.executable
+            || rent_programdata.is_signer
+            || rent_programdata.is_writable
+            || rent_programdata.executable
+            || rent.key != &sysvar::rent::ID
+            || rent.is_signer
+            || rent.is_writable
+            || rent.executable
+            || system.key != &system_program::ID
+            || system.is_signer
+            || system.is_writable
+            || !system.executable
+        {
+            return Err(CoreSbfError::AccountFrame);
+        }
+        for account in [
+            registry_artifact_raw,
+            registry_artifact_staging,
+            rent_artifact_raw,
+            rent_artifact_staging,
+        ] {
+            if account.is_signer || account.is_writable || account.executable {
+                return Err(CoreSbfError::AccountFrame);
+            }
+        }
+        // The unmoved-arm slots. An UNMOVED binding stands the System program
+        // here, and every runtime presents that account as executable — the
+        // same mutual-satisfiability trap `DeclareSuccessor` hit (d6e43b11),
+        // exempted the same way. The exemption decides nothing: whether the
+        // System program may stand in a given slot is the succession arm's
+        // call (conjuncts 4 and 5), where it is admitted only for a binding
+        // that did NOT move. Every other executable account is refused here.
+        for account in [
+            predecessor_registry_artifact_raw,
+            predecessor_registry_artifact_staging,
+            predecessor_rent_artifact_raw,
+            predecessor_rent_artifact_staging,
+        ] {
+            if account.is_signer
+                || account.is_writable
+                || (account.executable && account.key != &system_program::ID)
+            {
+                return Err(CoreSbfError::AccountFrame);
+            }
+        }
+        // Whether a consent slot must sign is a function of whether its
+        // binding moved, which is not known until the records are decoded.
+        // The succession arm owns the signer bit; the frame refuses only what
+        // could never be a consent: a writable slot, or an executable one
+        // that is not the System program standing for "no consent demanded".
+        for slot in [registry_consent_authority, rent_consent_authority] {
+            if slot.is_writable || (slot.executable && slot.key != &system_program::ID) {
+                return Err(CoreSbfError::AccountFrame);
+            }
+        }
+        require_distinct_for_succession(accounts)?;
+        Ok(Self {
+            payer,
+            profile,
+            predecessor_profile,
+            core_programdata,
+            upgrade_authority,
+            registry_artifact_raw,
+            registry_artifact_staging,
+            registry_program,
+            registry_programdata,
+            rent_artifact_raw,
+            rent_artifact_staging,
+            rent_program,
+            rent_programdata,
+            predecessor_registry_artifact_raw,
+            predecessor_registry_artifact_staging,
+            registry_consent_authority,
+            predecessor_rent_artifact_raw,
+            predecessor_rent_artifact_staging,
+            rent_consent_authority,
+            rent,
+            system,
+        })
+    }
+}
+
+/// Distinctness for the succession frame, with exactly two named exemptions.
+///
+/// 1. The natural-person slots — payer (0), Core's upgrade authority (4), and
+///    the two consent authorities (15, 18) — may share keys freely: on devnet
+///    they are one key, and conjunct 5 constrains what each must SIGN, not
+///    that the humans be distinct people.
+/// 2. Any two slots that both hold the System program may alias: an unmoved
+///    binding stands `system_program::ID` in up to three slots beside the
+///    frame's own System account (20).
+///
+/// Everything else must be distinct, exactly as the V1 ceremony demanded.
+fn require_distinct_for_succession(accounts: &[AccountInfo<'_>]) -> Result<(), CoreSbfError> {
+    const PERSON_SLOTS: [usize; 4] = [0, 4, 15, 18];
+    for (left_index, left) in accounts.iter().enumerate() {
+        for (right_index, right) in accounts
+            .iter()
+            .enumerate()
+            .skip(left_index.saturating_add(1))
+        {
+            if left.key != right.key {
+                continue;
+            }
+            let persons = PERSON_SLOTS.contains(&left_index) && PERSON_SLOTS.contains(&right_index);
+            let both_system = left.key == &system_program::ID;
+            if !persons && !both_system {
+                return Err(CoreSbfError::AccountFrame);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn require_distinct_except_payer_authority(

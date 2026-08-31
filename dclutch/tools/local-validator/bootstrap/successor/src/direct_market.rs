@@ -1087,11 +1087,16 @@ fn direct_manifest_entry_v1(
     )
 }
 
-fn decode_direct_release_v1(
+/// The canonical ordinary bundle one market plan witnesses.
+///
+/// Every consumer that regenerates a Direct release needs exactly these seven
+/// bodies, and each one that spelled them out separately was a second place for
+/// a field to be forgotten. The close driver reads it to hand the operator's
+/// plan builder a witness rather than a list of record addresses.
+pub(crate) fn direct_ordinary_bundle_v1(
     payload: &DirectMarketCapabilityV1,
-    capacity_profile: [u8; 32],
-) -> Result<DirectInlineOrdinaryLifecycleProgramSetV1> {
-    let ordinary = DirectInlineOrdinaryHotBundleV4 {
+) -> Result<DirectInlineOrdinaryHotBundleV4> {
+    Ok(DirectInlineOrdinaryHotBundleV4 {
         account_profile: exact_array(&payload.ordinary_account_profile_hex, "ordinary profile")?,
         lifecycle_policy: exact_array(
             &payload.ordinary_lifecycle_policy_hex,
@@ -1105,7 +1110,14 @@ fn decode_direct_release_v1(
         strategy: exact_array(&payload.ordinary_strategy_hex, "ordinary strategy")?,
         effect: exact_array(&payload.ordinary_effect_hex, "ordinary effect")?,
         descriptor: exact_array(&payload.ordinary_descriptor_hex, "ordinary descriptor")?,
-    };
+    })
+}
+
+fn decode_direct_release_v1(
+    payload: &DirectMarketCapabilityV1,
+    capacity_profile: [u8; 32],
+) -> Result<DirectInlineOrdinaryLifecycleProgramSetV1> {
+    let ordinary = direct_ordinary_bundle_v1(payload)?;
     let close_descriptor = decode_hex(&payload.native_close_descriptor_hex)?;
     let close = CapabilityProgramV1::decode(&close_descriptor)
         .map_err(|error| Error::new(format!("Direct native-close descriptor: {error:?}")))?;
@@ -1364,6 +1376,7 @@ mod tests {
     use dclutch_capability_program_contract::set_v2::CapabilityProgramSetV2;
     use dclutch_direct_codec::{
         activation_bundle_v1::DIRECT_ACTIVATION_SELECTOR_V1,
+        close_maker_v1::DIRECT_CLOSE_MAKER_SELECTOR_V1,
         native_close_bundle_v1::DIRECT_NATIVE_CLOSE_SELECTOR_V1,
         retirement_v1::DIRECT_BEGIN_RETIRING_SELECTOR_V1,
     };
@@ -2327,7 +2340,11 @@ mod tests {
         let second = release([0x52; 32]);
         assert_ne!(first.program_set_id, second.program_set_id);
         let set = CapabilityProgramSetV2::decode(&first.program_set).expect("ProgramSetV2");
-        assert_eq!(set.entry_count(), 4);
+        // Five since cohort-9: the maker-replay close is a lifecycle action of
+        // the same standing as begin-retiring, and a market founded without its
+        // entry is permanently unretirable once filled. This assertion said
+        // four until the fifth entry landed and nothing re-ran it.
+        assert_eq!(set.entry_count(), 5);
         assert_eq!(set.entry(0).expect("ordinary selector").selector(), 1);
         assert_eq!(
             set.entry(1).expect("begin-retiring selector").selector(),
@@ -2340,6 +2357,12 @@ mod tests {
         assert_eq!(
             set.entry(3).expect("activation selector").selector(),
             DIRECT_ACTIVATION_SELECTOR_V1
+        );
+        // Entry four is the maker close, and its index is load-bearing: the
+        // operator's close plan builder selects the descriptor by this index.
+        assert_eq!(
+            set.entry(4).expect("close-maker selector").selector(),
+            DIRECT_CLOSE_MAKER_SELECTOR_V1
         );
         assert_eq!(
             dclutch_direct_codec::COMPILED_DIRECT_RELEASE_ID_V1,

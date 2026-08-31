@@ -26,7 +26,8 @@ use dclutch_custody_contract::{
 use dclutch_market_core_codec::{
     AGGREGATE_RETIREMENT_CHECKPOINT_BYTES_V1, AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1,
     AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1, AGGREGATE_RETIREMENT_FINISH_MAGIC_V1,
-    AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action, AggregateRetirementSuffixRequestV1,
+    AGGREGATE_RETIREMENT_SUFFIX_REQUEST_BYTES_V1, Action, AggregateRetirementSuffixBindingV1,
+    AggregateRetirementSuffixRequestV1,
     CoreState, MarketCoreStateSeedsV2, Phase, REQUEST_BYTES, RETIREMENT_BUNDLE_BYTES_V1,
     RETIREMENT_CUSTODY_RECEIPT_COUNT_V1, RETIREMENT_POST_RESOURCE_DIGEST_DOMAIN_V1,
     RETIREMENT_ROLE_COUNT_V1, Request, RetirementBundleInputV1, RetirementBundleV1, STATE_BYTES,
@@ -46,7 +47,7 @@ use dclutch_registry_svm::{
 };
 use dclutch_release_set_contract::{
     CallerAuthoritySeedsV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
 use dclutch_rent_contract::lifecycle_v2::{
     LifecycleAccountIdV2, LifecycleRentCoreCloseAuthoritySeedsV2, LifecycleRentCreditV2,
@@ -646,12 +647,18 @@ pub fn build_checkpoint_market_retirement_v1(
         accounts: accounts.clone(),
         data: prepare_data,
     };
+    // Which retirement of which market all three suffixes name, written once.
+    // These four were four positional digests repeated per phase; the three
+    // requests agreeing on them is the whole point of the phase chain.
+    let binding = AggregateRetirementSuffixBindingV1 {
+        market: snapshot.market.key.to_bytes(),
+        checkpoint: snapshot.claims_aggregate.key.to_bytes(),
+        bundle_digest,
+        source_receipt_digest: source_digest,
+    };
     let vault_suffix = AggregateRetirementSuffixRequestV1::new(
         AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
-        snapshot.market.key.to_bytes(),
-        snapshot.claims_aggregate.key.to_bytes(),
-        bundle_digest,
-        source_digest,
+        binding,
         hash(close_vault_bytes).to_bytes(),
         1,
         old.custody_pre_revision,
@@ -659,10 +666,7 @@ pub fn build_checkpoint_market_retirement_v1(
     .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
     let replay_suffix = AggregateRetirementSuffixRequestV1::new(
         AGGREGATE_RETIREMENT_CLOSE_REPLAY_MAGIC_V1,
-        snapshot.market.key.to_bytes(),
-        snapshot.claims_aggregate.key.to_bytes(),
-        bundle_digest,
-        source_digest,
+        binding,
         hash(close_replay_bytes).to_bytes(),
         2,
         old.custody_middle_revision,
@@ -670,10 +674,7 @@ pub fn build_checkpoint_market_retirement_v1(
     .map_err(|_| MarketRetirementOperatorErrorV1::Encoding)?;
     let finish_suffix = AggregateRetirementSuffixRequestV1::new(
         AGGREGATE_RETIREMENT_FINISH_MAGIC_V1,
-        snapshot.market.key.to_bytes(),
-        snapshot.claims_aggregate.key.to_bytes(),
-        bundle_digest,
-        source_digest,
+        binding,
         [0; 32],
         3,
         old.custody_post_revision,
@@ -885,7 +886,7 @@ fn authenticate_infrastructure(
     snapshot: &MarketRetirementSnapshotV1,
 ) -> Result<(), MarketRetirementOperatorErrorV1> {
     let expected_profile = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &snapshot.core_program.key,
     )
     .0;
@@ -896,7 +897,7 @@ fn authenticate_infrastructure(
     {
         return Err(MarketRetirementOperatorErrorV1::Release);
     }
-    let profile = ProtocolInfrastructureProfileV1::decode(&snapshot.infrastructure_profile.data)
+    let profile = ProtocolInfrastructureProfileV2::decode(&snapshot.infrastructure_profile.data)
         .map_err(|_| MarketRetirementOperatorErrorV1::Release)?;
     authenticate_infrastructure_artifact(
         snapshot,

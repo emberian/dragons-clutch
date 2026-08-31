@@ -1682,6 +1682,7 @@ dependencies = [
  "dclutch-direct-codec",
  "dclutch-market-core-codec",
  "dclutch-market-open-v1-operator",
+ "dclutch-operator",
  "dclutch-product-contract",
  "dclutch-product-payoff-v2-codec",
  "dclutch-product-runtime-v2",

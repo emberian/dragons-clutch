@@ -31,6 +31,8 @@ pub mod dealer_scenario_hot_v4;
 pub mod delegated_custody;
 /// Chain-derived unsigned Direct root retirement construction.
 pub mod direct_begin_retiring_v1;
+/// Chain-derived unsigned Direct maker-replay close construction.
+pub mod direct_close_maker_v1;
 /// Canonical logical-to-physical routing and finalized poststate planning for Direct V3.
 pub mod direct_inline_route_v3;
 /// Chain-derived action-selected Direct V3 inline execution construction.
@@ -47,6 +49,8 @@ pub mod general_invocation_v1;
 pub mod general_selected_release_v1;
 /// Chain-derived inspection of immutable Core/Registry/Rent infrastructure.
 pub mod infrastructure;
+/// Chain-derived unsigned Core infrastructure succession composition.
+pub mod infrastructure_succession_v1;
 /// Shared authentication of Rent, Clock, and finalized-record observations.
 pub mod observation;
 /// Lifecycle-scoped RentCredit creation, sweeping, and close evidence.

@@ -9,7 +9,9 @@ use dclutch_registry_contract::{
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
+    ProtocolInfrastructureProfileV2,
 };
 use solana_program::{
     account_info::AccountInfo,
@@ -118,6 +120,19 @@ pub(crate) fn authenticate_projected_found(
 ///
 /// The profile is the noncyclic authority root for both programs. Callers may
 /// use Registry records only after this observation succeeds.
+///
+/// **V2 only, and never a fallback.** Every route reaching here reads the
+/// succession profile at `dclutch:infrastructure:v2` and nothing else. A
+/// try-V2-then-V1 read was considered and refused by
+/// `docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md` §6: it would stand up
+/// two live authentication paths (the O-005 parallel-authority smell), and
+/// its failure mode — the ceremony forgotten and V1 silently still ruling —
+/// is the exact silent divergence the succession exists to end. Before the
+/// ceremony this read refuses on vacancy (`CoreSbfError::Infrastructure`, the
+/// width check below, since a vacant PDA is System-owned and zero-length);
+/// the ceremony is what un-refuses it. V1 stays on chain byte-identical, a
+/// sealed historical record still content-walkable from V2's predecessor
+/// artifact ids, and is never again an authority here.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_profile(
     program_id: &Pubkey,
@@ -131,17 +146,17 @@ pub(crate) fn authenticate_profile(
     rent_program: &AccountInfo<'_>,
     rent_programdata: &AccountInfo<'_>,
     rent: &Rent,
-) -> Result<ProtocolInfrastructureProfileV1, CoreSbfError> {
+) -> Result<ProtocolInfrastructureProfileV2, CoreSbfError> {
     let expected =
-        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1], program_id)
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], program_id)
             .0;
     if infrastructure_profile.key != &expected
         || infrastructure_profile.owner != program_id
-        || infrastructure_profile.data_len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        || infrastructure_profile.data_len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         || infrastructure_profile.executable
         || !rent.is_exempt(
             infrastructure_profile.lamports(),
-            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
         )
     {
         return Err(CoreSbfError::Infrastructure);
@@ -149,7 +164,7 @@ pub(crate) fn authenticate_profile(
     let bytes = infrastructure_profile
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Infrastructure)?;
-    let profile = ProtocolInfrastructureProfileV1::decode(&bytes)
+    let profile = ProtocolInfrastructureProfileV2::decode(&bytes)
         .map_err(|_| CoreSbfError::Infrastructure)?;
     if profile.registry().program().to_bytes() != registry_program.key.to_bytes()
         || profile.rent().program().to_bytes() != rent_program.key.to_bytes()
@@ -249,7 +264,7 @@ fn authenticate_immutable_core_release_accounts(
     require_pinned_deployment(core_program, core_programdata, release)
 }
 
-fn authenticate_current_core_upgrade_authority(
+pub(crate) fn authenticate_current_core_upgrade_authority(
     program_id: &Pubkey,
     programdata: &AccountInfo<'_>,
     authority: &AccountInfo<'_>,
@@ -278,7 +293,7 @@ fn authenticate_current_core_upgrade_authority(
 /// The two differ by exactly one fact: whether the complete deployed ELF must
 /// be hashed to check the artifact record's *claimed* `elf_digest`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ArtifactAdmissionV1 {
+pub(crate) enum ArtifactAdmissionV1 {
     /// The claimed digest has never been checked against the deployed bytes.
     ///
     /// A finalized artifact-release record is an attacker-publishable
@@ -317,6 +332,33 @@ fn authenticate_artifact(
     rent: &Rent,
     admission: ArtifactAdmissionV1,
 ) -> Result<ExecutionRoleBindingV1, CoreSbfError> {
+    let (binding, _) = authenticate_artifact_release(
+        registry,
+        raw,
+        staging,
+        program,
+        programdata,
+        rent,
+        admission,
+    )?;
+    Ok(binding)
+}
+
+/// [`authenticate_artifact`], also returning the decoded release record.
+///
+/// The succession ceremony needs the record's own facts (its deployment slot
+/// for the forward-only conjunct) beside the binding; every check is
+/// identical.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_artifact_release(
+    registry: &Pubkey,
+    raw: &AccountInfo<'_>,
+    staging: &AccountInfo<'_>,
+    program: &AccountInfo<'_>,
+    programdata: &AccountInfo<'_>,
+    rent: &Rent,
+    admission: ArtifactAdmissionV1,
+) -> Result<(ExecutionRoleBindingV1, ArtifactReleaseV1), CoreSbfError> {
     let bytes = raw
         .try_borrow_data()
         .map_err(|_| CoreSbfError::Infrastructure)?;
@@ -347,7 +389,7 @@ fn authenticate_artifact(
         }
     }
     let artifact = ArtifactReleaseIdV1::new(digest).map_err(|_| CoreSbfError::Infrastructure)?;
-    Ok(ExecutionRoleBindingV1::new(release.program(), artifact))
+    Ok((ExecutionRoleBindingV1::new(release.program(), artifact), release))
 }
 
 /// Observe a pinned deployment whose ELF digest was already authenticated.
@@ -403,6 +445,17 @@ fn require_pinned_deployment(
 /// wants for "the profile and the chain disagree". A moved slot is different:
 /// it is the expected consequence of upgrading the substrate, and its remedy is
 /// a re-release rather than an investigation (decision 0012).
+///
+/// Which remedy, though, depends on WHICH account moved, and for eight cohorts
+/// this comment named one that did not exist here. Decision 0012's
+/// re-release-then-reactivate remedy belongs to the five cache-pinned roles,
+/// whose selection a later release set can rewrite. The infrastructure profile
+/// is write-once by vacancy with no second write route, so a Registry or Rent
+/// upgrade left every route reading it refusing with nothing to re-release INTO
+/// (P-008). The profile's actual remedy is the succession ceremony in
+/// `infrastructure_v2.rs`: a new profile version at its own domain, naming the
+/// records it succeeded. So an operator reading `ReleaseSuperseded` from a
+/// profile-backed route should reach for that ceremony, not for a re-release.
 const fn pinned_deployment_refusal(error: dclutch_registry_contract::Error) -> CoreSbfError {
     match error {
         dclutch_registry_contract::Error::ReleaseSupersededByUpgrade => {

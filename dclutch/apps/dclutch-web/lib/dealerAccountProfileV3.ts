@@ -13,6 +13,7 @@ import {
   DEALER_LP_CLOSE_ACCOUNT_COUNT_V3,
   DEALER_LP_IDENTITY_COUNT_V3,
   DEALER_LP_OPEN_ACCOUNT_COUNT_V3,
+  DEALER_LP_POSITION_BYTES_V3,
   DEALER_LP_SCALAR_COUNT_V3,
   DEALER_LP_STATE_ACCOUNT_V3,
   DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4,
@@ -263,7 +264,7 @@ function expectedLpProfile(route: Extract<DealerAccountProfileRouteV3, { kind: '
   const open = route.kind === 'lp-open';
   const fixed = open ? DEALER_LP_OPEN_ACCOUNT_COUNT_V3 : DEALER_LP_CLOSE_ACCOUNT_COUNT_V3;
   const operationCount = open ? 14 : 13;
-  if (lengths.length !== fixed || lengths[DEALER_LP_STATE_ACCOUNT_V3] !== 0 && lengths[DEALER_LP_STATE_ACCOUNT_V3] !== 256) {
+  if (lengths.length !== fixed || lengths[DEALER_LP_STATE_ACCOUNT_V3] !== 0 && lengths[DEALER_LP_STATE_ACCOUNT_V3] !== DEALER_LP_POSITION_BYTES_V3) {
     throw new Error('Dealer LP logical data-length vector has the wrong action/state width');
   }
   const output = profileHeader(
@@ -501,7 +502,7 @@ function requireProfileShape(profile: Profile, route: DealerAccountProfileRouteV
         || profile.commonScalars !== DEALER_LP_SCALAR_COUNT_V3 || profile.itemScalarStride !== 0
         || profile.commonIdentities !== DEALER_LP_IDENTITY_COUNT_V3 || profile.itemIdentityStride !== 0
         || profile.rules[DEALER_LP_STATE_ACCOUNT_V3]?.prestate !== 1
-        || profile.rules[DEALER_LP_STATE_ACCOUNT_V3]?.dataLength !== 256
+        || profile.rules[DEALER_LP_STATE_ACCOUNT_V3]?.dataLength !== DEALER_LP_POSITION_BYTES_V3
         || profile.rules.some((rule, index) => index !== DEALER_LP_STATE_ACCOUNT_V3 && rule.prestate !== 0)) {
       throw new Error('Dealer LP route did not select its exact Profile6 Open/Close geometry');
     }

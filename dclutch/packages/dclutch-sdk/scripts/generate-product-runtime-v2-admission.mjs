@@ -1,7 +1,10 @@
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// TWO live sources, and only live ones.
+import { requireGeneratorFollowsRoute } from './route-binding.mjs';
+
+// TWO live sources scraped, and only live ones -- plus one read to prove they
+// are the right ones.
 //
 //   crates/dclutch-product-runtime-v2-admission/src/lib.rs
 //     the wire: DCLTPRQ2 request, DCLTPRM2 Product record, DCLTPRA2 receipt,
@@ -9,7 +12,11 @@ import { fileURLToPath } from 'node:url';
 //     receipt decoder pins.
 //   programs/dclutch-product-runtime-v2-sbf/src/lib.rs
 //     the frame: the exact executable account count and the refusal band the
-//     adapter raises from.
+//     adapter raises from. NOT the authority for any schema ID below -- it
+//     binds none of them, which is exactly why the gate reads a third file.
+//   crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs
+//     the route: read, never scraped. It is where the three schema IDs
+//     actually key Registry records, so it is what the binding gate follows.
 //
 // WHY A SECOND PRODUCT GENERATOR EXISTS. `DCLTPRQ2` names TWO incompatible
 // 112-byte requests. The dead one belonged to `dclutch-product-payoff-v2-svm`,
@@ -27,10 +34,37 @@ import { fileURLToPath } from 'node:url';
 // generator reads source text, and a private constant is still the crate's
 // single statement of where a field sits.
 const root = new URL('../../../', import.meta.url);
+const ADMISSION_FILE = 'crates/dclutch-product-runtime-v2-admission/src/lib.rs';
+const readCrateFile = (file) => readFileSync(new URL(file, root), 'utf8');
 const sources = Object.freeze({
-  admission: readFileSync(new URL('crates/dclutch-product-runtime-v2-admission/src/lib.rs', root), 'utf8'),
-  adapter: readFileSync(new URL('programs/dclutch-product-runtime-v2-sbf/src/lib.rs', root), 'utf8'),
+  admission: readCrateFile(ADMISSION_FILE),
+  adapter: readCrateFile('programs/dclutch-product-runtime-v2-sbf/src/lib.rs'),
 });
+
+// The route-binding gate (see scripts/route-binding.mjs for the conviction it
+// generalizes).
+//
+// The SBF program above is the FRAME -- it counts accounts and raises the
+// refusal band, and it binds none of the three schema IDs emitted below; it
+// delegates to `authenticate_product_runtime_v2`. So the file that would have
+// been read as this generator's route proves nothing about these values. The
+// actual binder is the SVM reader, where each ID keys a Registry record
+// against a digest. That is the file this gate follows.
+const ROUTE_FILE = 'crates/dclutch-product-runtime-v2-svm-reader/src/lib.rs';
+const ROUTE_CRATE = 'dclutch_product_runtime_v2_svm_reader';
+const routeText = readCrateFile(ROUTE_FILE);
+for (const [constant, conjunct] of [
+  ['PRODUCT_RECORD_SCHEMA_ID_V2', 'PRODUCT_RECORD_SCHEMA_ID_V2, expected_product_digest,'],
+  ['RESULT_DOMAIN_SCHEMA_ID_V2', 'RESULT_DOMAIN_SCHEMA_ID_V2, product.result_domain_digest(),'],
+  ['PORTFOLIO_SCHEMA_ID_V2', 'PORTFOLIO_SCHEMA_ID_V2, product.portfolio_digest(),'],
+]) {
+  requireGeneratorFollowsRoute({
+    routeText,
+    routeCrate: ROUTE_CRATE,
+    readSource: readCrateFile,
+    binding: { routeName: constant, conjunct, sourceFile: ADMISSION_FILE, sourceConstant: constant },
+  });
+}
 const outputUrl = new URL('../lib/generated/productRuntimeV2Admission.ts', import.meta.url);
 
 function scalar(source, name) {

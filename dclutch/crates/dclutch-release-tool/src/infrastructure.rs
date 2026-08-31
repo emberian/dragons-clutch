@@ -19,8 +19,9 @@ use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
+    ArtifactReleaseIdV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
+    ProtocolInfrastructureProfileV2,
 };
 use solana_program::pubkey::Pubkey;
 
@@ -32,7 +33,13 @@ use crate::{
 /// Canonical checked-infrastructure evidence magic.
 pub const CHECKED_INFRASTRUCTURE_MAGIC_V1: [u8; 8] = *b"DCLTIEV1";
 /// Implemented checked-infrastructure evidence schema.
-pub const CHECKED_INFRASTRUCTURE_SCHEMA_V1: u16 = 1;
+///
+/// Schema 2 embeds the 224-byte succession profile where schema 1 embedded the
+/// 144-byte predecessor, which moves every offset after it and the total width
+/// (2280 -> 2360). The magic names the evidence family and stays `DCLTIEV1`;
+/// this field is what says which layout the bytes are in, so that a reader
+/// built for either one refuses the other by name instead of misreading it.
+pub const CHECKED_INFRASTRUCTURE_SCHEMA_V2: u16 = 2;
 /// Number of checked program components: Core, Registry, and Rent.
 pub const CHECKED_INFRASTRUCTURE_COMPONENTS_V1: u16 = 3;
 /// Fixed checked-infrastructure header width.
@@ -42,7 +49,7 @@ pub const CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1: usize = ARTIFACT_RELEASE_BYTES_V
 /// Exact checked-infrastructure evidence width.
 pub const CHECKED_INFRASTRUCTURE_BYTES_V1: usize = CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1
     + CHECKED_MULTIPROGRAM_BYTES_V1
-    + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+    + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
     + 32
     + 2 * CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1;
 
@@ -51,7 +58,7 @@ const COMPONENT_COUNT_OFFSET: usize = 10;
 const RESERVED_OFFSET: usize = 12;
 const EXECUTION_OFFSET: usize = CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1;
 const PROFILE_OFFSET: usize = EXECUTION_OFFSET + CHECKED_MULTIPROGRAM_BYTES_V1;
-const PROFILE_PDA_OFFSET: usize = PROFILE_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1;
+const PROFILE_PDA_OFFSET: usize = PROFILE_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2;
 const REGISTRY_OFFSET: usize = PROFILE_PDA_OFFSET + 32;
 const RENT_OFFSET: usize = REGISTRY_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1;
 
@@ -59,7 +66,7 @@ const RENT_OFFSET: usize = REGISTRY_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES_V
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CheckedInfrastructureV1 {
     execution: CheckedExecutionReleaseSetV1,
-    profile: ProtocolInfrastructureProfileV1,
+    profile: ProtocolInfrastructureProfileV2,
     profile_pda: [u8; 32],
     registry_artifact: ArtifactReleaseV1,
     registry_checked_release_id: ContentId,
@@ -76,7 +83,7 @@ impl CheckedInfrastructureV1 {
         if bytes.get(..8) != Some(CHECKED_INFRASTRUCTURE_MAGIC_V1.as_slice()) {
             return Err(Error::InvalidMagic);
         }
-        if read_u16(bytes, SCHEMA_OFFSET)? != CHECKED_INFRASTRUCTURE_SCHEMA_V1 {
+        if read_u16(bytes, SCHEMA_OFFSET)? != CHECKED_INFRASTRUCTURE_SCHEMA_V2 {
             return Err(Error::UnsupportedSchema);
         }
         if read_u16(bytes, COMPONENT_COUNT_OFFSET)? != CHECKED_INFRASTRUCTURE_COMPONENTS_V1 {
@@ -90,10 +97,10 @@ impl CheckedInfrastructureV1 {
             EXECUTION_OFFSET,
             CHECKED_MULTIPROGRAM_BYTES_V1,
         )?)?;
-        let profile = ProtocolInfrastructureProfileV1::decode(subslice(
+        let profile = ProtocolInfrastructureProfileV2::decode(subslice(
             bytes,
             PROFILE_OFFSET,
-            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
         )?)
         .map_err(|_| Error::InvalidInfrastructureManifest)?;
         let profile_pda = read_array(bytes, PROFILE_PDA_OFFSET)?;
@@ -134,7 +141,7 @@ impl CheckedInfrastructureV1 {
         copy(
             &mut output,
             SCHEMA_OFFSET,
-            &CHECKED_INFRASTRUCTURE_SCHEMA_V1.to_le_bytes(),
+            &CHECKED_INFRASTRUCTURE_SCHEMA_V2.to_le_bytes(),
         );
         copy(
             &mut output,
@@ -269,8 +276,8 @@ impl CheckedInfrastructureV1 {
         self.execution
     }
 
-    /// Return the exact immutable Core-owned infrastructure profile.
-    pub const fn profile(self) -> ProtocolInfrastructureProfileV1 {
+    /// Return the exact Core-owned infrastructure succession profile.
+    pub const fn profile(self) -> ProtocolInfrastructureProfileV2 {
         self.profile
     }
 
@@ -320,7 +327,7 @@ impl CheckedInfrastructureV1 {
         validate_binding(self.profile.registry(), self.registry_artifact)?;
         validate_binding(self.profile.rent(), self.rent_artifact)?;
         let expected_profile = Pubkey::find_program_address(
-            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
             &Pubkey::new_from_array(core_program),
         )
         .0;
@@ -334,7 +341,7 @@ impl CheckedInfrastructureV1 {
 /// Build one checked infrastructure manifest from independently checked inputs.
 pub fn build_checked_infrastructure_v1(
     execution: CheckedExecutionReleaseSetV1,
-    profile: ProtocolInfrastructureProfileV1,
+    profile: ProtocolInfrastructureProfileV2,
     core_checked: &CheckedReleaseV1,
     registry_checked: &CheckedReleaseV1,
     rent_checked: &CheckedReleaseV1,
@@ -351,7 +358,7 @@ pub fn build_checked_infrastructure_v1(
     let rent_artifact = artifact_release_from_checked(rent_checked)?;
     let core_program = Pubkey::new_from_array(core_artifact.program().to_bytes());
     let profile_pda = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &core_program,
     )
     .0
@@ -369,13 +376,19 @@ pub fn build_checked_infrastructure_v1(
     Ok(result)
 }
 
-/// Derive the one canonical Core-owned infrastructure profile that checked
+/// Derive the one canonical Core-owned V1 infrastructure profile that checked
 /// Registry and Rent manifests already determine.
 ///
-/// Both bindings are pure functions of the supplied checked manifests, exactly
-/// as [`build_checked_infrastructure_v1`] will re-derive and require them. The
+/// Both bindings are pure functions of the supplied checked manifests. The
 /// profile stays Core-owned: this derives its exact bytes offline and never
 /// initializes, publishes, or signs the PDA that holds it.
+///
+/// This derives the write-once V1 profile, the one
+/// `InitializeProtocolInfrastructureV1` commits at
+/// `dclutch:infrastructure:v1`. It cannot derive the succession profile
+/// [`CheckedInfrastructureV1`] now carries: V2 additionally pins the two
+/// predecessor artifact-release ids, which name what the succession succeeded
+/// and are therefore not a function of the successor's own manifests.
 pub fn derive_protocol_infrastructure_profile_v1(
     registry_checked: &CheckedReleaseV1,
     rent_checked: &CheckedReleaseV1,
@@ -384,6 +397,31 @@ pub fn derive_protocol_infrastructure_profile_v1(
     let rent = binding_from_checked(rent_checked)?;
     ProtocolInfrastructureProfileV1::new(registry, rent)
         .map_err(|_| Error::InvalidInfrastructureManifest)
+}
+
+/// Derive the succession profile the ceremony commits, offline.
+///
+/// V2's two predecessor artifact ids are exactly the predecessor profile's own
+/// binding ids -- literally what `process_initialize_v2` composes from the V1
+/// account it authenticates -- so the dumped predecessor account is the whole
+/// of the extra input, and nothing here is invented. An operator holding the
+/// predecessor account and the two successor manifests can therefore reproduce
+/// the ceremony's exact bytes before the ceremony runs, and compare them
+/// against what lands afterwards.
+pub fn derive_protocol_infrastructure_profile_v2(
+    registry_checked: &CheckedReleaseV1,
+    rent_checked: &CheckedReleaseV1,
+    predecessor: ProtocolInfrastructureProfileV1,
+) -> Result<ProtocolInfrastructureProfileV2> {
+    let registry = binding_from_checked(registry_checked)?;
+    let rent = binding_from_checked(rent_checked)?;
+    ProtocolInfrastructureProfileV2::new(
+        registry,
+        rent,
+        predecessor.registry().artifact_release(),
+        predecessor.rent().artifact_release(),
+    )
+    .map_err(|_| Error::InvalidInfrastructureManifest)
 }
 
 fn binding_from_checked(
@@ -521,7 +559,8 @@ mod tests {
         execution_releases: [CheckedReleaseV1; 5],
         registry: CheckedReleaseV1,
         rent: CheckedReleaseV1,
-        profile: ProtocolInfrastructureProfileV1,
+        predecessor_registry_artifact: ArtifactReleaseIdV1,
+        profile: ProtocolInfrastructureProfileV2,
         checked: CheckedInfrastructureV1,
     }
 
@@ -547,11 +586,15 @@ mod tests {
                     .expect("execution evidence");
             let registry = release(71, None);
             let rent = release(81, None);
-            let profile = ProtocolInfrastructureProfileV1::new(
-                binding(artifact_release_from_checked(&registry).expect("Registry artifact")),
-                binding(artifact_release_from_checked(&rent).expect("Rent artifact")),
-            )
-            .expect("profile");
+            let predecessor_registry_artifact = predecessor_artifact(71, None);
+            let profile = succeed(
+                ProtocolInfrastructureProfileV1::new(
+                    binding(artifact_release_from_checked(&registry).expect("Registry artifact")),
+                    binding(artifact_release_from_checked(&rent).expect("Rent artifact")),
+                )
+                .expect("profile"),
+                predecessor_registry_artifact,
+            );
             let checked = build_checked_infrastructure_v1(
                 execution,
                 profile,
@@ -565,6 +608,7 @@ mod tests {
                 execution_releases,
                 registry,
                 rent,
+                predecessor_registry_artifact,
                 profile,
                 checked,
             }
@@ -598,8 +642,12 @@ mod tests {
                     .expect("execution evidence");
             let registry = release(71, Some(authority));
             let rent = release(81, Some(authority));
-            let profile = derive_protocol_infrastructure_profile_v1(&registry, &rent)
-                .expect("slot-pinned profile");
+            let predecessor_registry_artifact = predecessor_artifact(71, Some(authority));
+            let profile = succeed(
+                derive_protocol_infrastructure_profile_v1(&registry, &rent)
+                    .expect("slot-pinned profile"),
+                predecessor_registry_artifact,
+            );
             let checked = build_checked_infrastructure_v1(
                 execution,
                 profile,
@@ -613,6 +661,7 @@ mod tests {
                 execution_releases,
                 registry,
                 rent,
+                predecessor_registry_artifact,
                 profile,
                 checked,
             }
@@ -661,16 +710,47 @@ mod tests {
         ExecutionRoleBindingV1::new(artifact.program(), artifact_id)
     }
 
+    /// The artifact-release id of a distinct earlier release of `seed`'s program.
+    ///
+    /// Same program identity, different artifact bytes and deployment slot:
+    /// the shape a succession arm's predecessor has.
+    fn predecessor_artifact(seed: u8, authority: Option<[u8; 32]>) -> ArtifactReleaseIdV1 {
+        let mut checked = release(seed, authority);
+        checked.artifact_digest = [seed.wrapping_add(100); 32];
+        checked.deployment_slot = checked.deployment_slot.wrapping_sub(1);
+        binding(artifact_release_from_checked(&checked).expect("predecessor artifact"))
+            .artifact_release()
+    }
+
+    /// Lift one pair of live bindings into the succession profile the manifest carries.
+    ///
+    /// Registry moved across the succession and Rent did not: the predecessor
+    /// Registry id names the distinct release this profile succeeded, while
+    /// Rent holds the same id on both sides of it.
+    fn succeed(
+        live: ProtocolInfrastructureProfileV1,
+        predecessor_registry_artifact: ArtifactReleaseIdV1,
+    ) -> ProtocolInfrastructureProfileV2 {
+        ProtocolInfrastructureProfileV2::new(
+            live.registry(),
+            live.rent(),
+            predecessor_registry_artifact,
+            live.rent().artifact_release(),
+        )
+        .expect("succession profile")
+    }
+
     #[test]
     fn the_infrastructure_profile_is_derivable_and_carries_each_component_policy() {
         let fixture = Fixture::immutable();
         let derived = derive_protocol_infrastructure_profile_v1(&fixture.registry, &fixture.rent)
             .expect("derived profile");
-        assert_eq!(derived, fixture.profile);
+        assert_eq!(derived.registry(), fixture.profile.registry());
+        assert_eq!(derived.rent(), fixture.profile.rent());
         assert_eq!(
             build_checked_infrastructure_v1(
                 fixture.execution,
-                derived,
+                succeed(derived, fixture.predecessor_registry_artifact),
                 &fixture.execution_releases[0],
                 &fixture.registry,
                 &fixture.rent,
@@ -712,7 +792,7 @@ mod tests {
         assert_eq!(
             fixture.checked.profile_pda(),
             Pubkey::find_program_address(
-                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+                &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
                 &Pubkey::new_from_array(fixture.execution.artifacts()[0].program().to_bytes()),
             )
             .0
@@ -829,15 +909,18 @@ mod tests {
             let is_registry = mutable.deployment_slot() == 71;
             let mixed = build_checked_infrastructure_v1(
                 fixture.execution,
-                derive_protocol_infrastructure_profile_v1(
-                    if is_registry {
-                        &mutable
-                    } else {
-                        &fixture.registry
-                    },
-                    if is_registry { &fixture.rent } else { &mutable },
-                )
-                .expect("mixed profile"),
+                succeed(
+                    derive_protocol_infrastructure_profile_v1(
+                        if is_registry {
+                            &mutable
+                        } else {
+                            &fixture.registry
+                        },
+                        if is_registry { &fixture.rent } else { &mutable },
+                    )
+                    .expect("mixed profile"),
+                    fixture.predecessor_registry_artifact,
+                ),
                 &fixture.execution_releases[0],
                 if is_registry {
                     &mutable
@@ -902,12 +985,14 @@ mod tests {
     fn aliases_and_hostile_headers_are_never_canonical() {
         let fixture = Fixture::immutable();
         let core = fixture.execution.artifacts()[0];
-        let alias_profile = ProtocolInfrastructureProfileV1::new(
+        let alias_profile = ProtocolInfrastructureProfileV2::new(
             ExecutionRoleBindingV1::new(
                 core.program(),
                 fixture.profile.registry().artifact_release(),
             ),
             fixture.profile.rent(),
+            fixture.predecessor_registry_artifact,
+            fixture.profile.predecessor_rent_artifact(),
         )
         .expect("profile codec only forbids Registry/Rent aliases");
         assert_eq!(

@@ -300,3 +300,154 @@ on any lane. Recorded here with the class's standing reason (a test file
 spelling the record-contract's seed tuple, like its many sibling test files)
 so the landed tree is green; the fix remains the class's shared-constructor
 refactor.
+
+---
+
+## 2026-08-31 — cohort-9 FRACCHECK-7: one new tag, and the reason it is not `hazard-unset-pin`
+
+### benign-typed-nonzero-wire
+
+**1 entry.** `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs` ·
+`authenticate_fractional_compaction`.
+
+The reader is right about the function and wrong about the route, and the
+difference is the whole reason this is a separate tag. The function does pin the
+System program by key, and it does authenticate a coordinate against a wire
+pubkey — `root_account.key.to_bytes() != request.root()` — with no all-zero
+refusal lexically inside it. What the reader cannot see is that the value it is
+comparing against **cannot be zero, by type**.
+
+`request.root()` reads `TerminalSettlementRequestV3`'s `owner`.
+`TerminalSettlementRequestV3` is a tuple struct with a private field; its only
+constructors are `new` and `decode`; `decode` routes through `new`; and `new`
+runs `nonzero` over eighteen identities, `owner` among them. So there is no
+value of that type carrying a zero owner for the route to read — not "the
+derivation would catch it later", but "the value does not exist".
+
+**Why not `hazard-unset-pin`.** That class's own note is the standard this had
+to clear: its eighteen entries are recorded because *"fails somewhere
+downstream is an argument, not a guard, and the downstream check is one
+refactor away from moving."* This one does not fail downstream. It fails
+**upstream**, at a constructor no caller can go around, and a refactor cannot
+move it without making the private field public or adding a third constructor —
+either of which is a visible change to the codec, not a quiet drift in a route.
+Filing it as a hazard would say this tree carries nineteen unguarded frames when
+it carries eighteen, and a register that overstates is worth as little as one
+that excuses.
+
+**It is not taken on argument.** Two witnesses landed with this entry, and the
+second was written only after the first turned out vacuous:
+
+- `terminal_settlement_v3::tests::no_identity_on_this_wire_may_be_the_unset_pubkey`
+  — the guard's first witness ever. It sweeps every 32-byte window of a
+  canonical encoding, zeroes it, and requires the decode to refuse by name;
+  exactly eighteen windows do. Stated over all eighteen rather than over `owner`
+  alone, because a test naming one field goes on passing while a later edit
+  drops any of the other seventeen from the array, and the array is the only
+  thing holding them. Mutation-proven: removing `input.owner` from that array
+  reds it at seventeen.
+- `fractional_claim_check_v1::frame_guard_tests::an_unset_owner_coordinate_is_refused_before_any_account_is_read`
+  — the route half, with a note recording that the obvious version of it was
+  vacuous. Asserting only that a zeroed-owner wire refuses `0x5642` at the route
+  proves nothing: these synthetic frames carry empty account data, so a
+  well-formed request refuses `0x5642` too, from a derivation further in. Same
+  code, different cause. The discriminating assertion is therefore made against
+  the decoder, and the route assertion is kept only to pin which code a
+  validator log will show.
+
+**inventory-guard-present ×3** land in the same commit and are not findings:
+`claims-svm/fractional_claim_check_compaction_receipt_v1.rs` (this thread's own,
+from FRACCHECK-6's receipt), `product-payoff-v2-codec/runtime_v3.rs` and
+`product-runtime-v2-svm-reader/lib.rs` grew unset-pubkey guards. Three more
+files that refuse the unset pubkey, recorded so losing the last guard in any of
+them trips the ratchet — per that class's own note, this is three new guards and
+not three new defects.
+
+Baseline edited **by hand**, never `--write`: the FRACCHECK-2 precedent holds,
+because `--write` retriages the whole register against a committed tree and
+would have swept these four in under whatever tag the reader defaulted to,
+which is exactly the adjudication this entry exists to make.
+
+---
+
+## 2026-08-31 — cohort-9 PROFILE-2: the succession rename, and two rows main was red without
+
+### debt-derivation-restatement, +19 / −13
+
+No new tag and no new argument. The population moved because the
+infrastructure profile's PDA domain changed name, plus two rows this lane did
+not author.
+
+**Seventeen are the same debt under a new constant.** The profile succession
+(`docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md`) flipped every consumer
+from `PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1` to its `_V2` successor.
+The register keys a finding by `SYMBOL\tfile`, so each of those sites left as a
+`_V1` row and arrived as a `_V2` row — the same second author for the same
+address, in the same file, restating the same kind of seed tuple. Thirteen `_V1`
+rows are gone for exactly that reason and not because anything was fixed; the
+count differs from seventeen because four sites are new readers this lane added
+and the successor bootstrap's own `_V1` rows stay, that tool still reading the
+predecessor profile until it gains a ceremony stage. The class's standing
+reason carries over unchanged, and so does the real fix: one shared derivation
+helper exported by the crate that owns the domain.
+
+**One is the ceremony route's predecessor read.** `infrastructure_v2.rs`
+restates the `_V1` domain because conjunct 2 authenticates the predecessor
+profile at its own address — the one place in the tree that must derive the
+older domain on purpose. It reached main unrecorded when the route landed, so
+the gate was red on main rather than on any lane, exactly the shape the
+CLOSEMAKER addendum above describes.
+
+**Two are FRACCHECK-7's**, `RAW_RECORD_PDA_SEED_V1` and
+`STAGING_CURSOR_PDA_SEED_V1` in
+`programs/dclutch-claims-sbf/program-test/fractional-atomic/src/campaign_support.rs`.
+A campaign support file spelling the record contract's seed tuple, like its
+many sibling test files. Recorded here with the class's standing reason, on the
+CLOSEMAKER precedent, so the landed tree is green — flagged as not this lane's
+authorship rather than absorbed silently.
+
+Retriaged with `--write` and then verdicted by hand. `--write` was safe here
+because it tags everything it does not recognise `untriaged` rather than
+guessing, and the gate refuses an untriaged row — so nothing could enter under
+a default tag without this entry being written. It also declined to read the
+successor bootstrap's files while another author had them uncommitted, which is
+why that tool's rows are untouched above.
+
+### debt-derivation-restatement, +4 (PROFILE-2's own builder)
+
+`crates/dclutch-operator/src/infrastructure_succession_v1.rs` restates four
+domains: both infrastructure profile PDA domains, and the record contract's raw
+and staging seeds.
+
+All four are the same second-author debt the class has always described, and
+they are unavoidable in this file for a reason worth stating. The builder
+re-derives every address the succession ceremony will read, because its whole
+contract is to refuse locally whatever the chain would refuse -- a builder that
+took an address on trust would compose frames the chain rejects, which the
+crate's own header calls not a service to the caller. It derives BOTH profile
+domains because the ceremony spans them: the successor at its own address, and
+the predecessor at the address it has always had.
+
+The fix is the class's standing one, a shared derivation helper exported by the
+crate that owns each domain, and it would retire these four with the rest.
+
+Two rows left the register in the same measurement and were NOT fixed by this
+lane: the fractional-atomic campaign's raw-record and staging-cursor
+restatements, which their own author repaired. The population shrinking there
+is a repair; the population growing here is not.
+
+### debt-derivation-restatement, +4 (the succession campaign)
+
+`programs/dclutch-core-sbf/tests/infrastructure_succession_program_test.rs`
+restates the same four domains its builder does: both infrastructure profile
+PDA domains, and the record contract's raw and staging seeds.
+
+A real-ELF campaign has to plant the world it tests, and planting an account
+means naming its address. The two profile domains appear because the ceremony
+spans both -- the successor's vacancy and the predecessor's written account are
+different assertions about different addresses. The record seeds appear because
+the campaign plants finalized artifact records for the Registry and Rent
+releases the succession selects.
+
+The class's standing reason and standing fix apply unchanged. This file is one
+of the many test files the note already describes.

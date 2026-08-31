@@ -284,7 +284,10 @@ pub(crate) fn run(arguments: Vec<String>) -> Result<()> {
     }
 
     let payer = Keypair::new_from_array(read_keypair_file(&parsed.payer, "payer")?);
-    let label = format!("series_consume Found at {} outcomes", manifest.expect.outcome_count);
+    let label = format!(
+        "series_consume Found at {} outcomes",
+        manifest.expect.outcome_count
+    );
 
     // The compute budget is NOT set here: `bounded_instructions` owns the
     // ComputeBudget declarations and refuses a duplicate. It already asks for

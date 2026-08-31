@@ -58,8 +58,9 @@ use dclutch_registry_contract::{
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, CapabilityExecutionSelectionV1,
     EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
-    ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProgramIdentityV1,
-    ProtocolInfrastructureProfileV1,
+    ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
+    ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
 };
 use dclutch_rent_contract::{
     RefundAuthority,
@@ -249,6 +250,8 @@ struct Fixture {
     manifest: Record,
     release_set: Record,
     cache: Pubkey,
+    /// The sealed predecessor profile, still on chain and never again read.
+    predecessor_profile: Pubkey,
     core_programdata: Pubkey,
     trading_programdata: Pubkey,
     claims_programdata: Pubkey,
@@ -258,6 +261,16 @@ struct Fixture {
     profile: Pubkey,
     registry_artifact: Record,
     rent_artifact: Record,
+    /// The Registry record an operator would publish AFTER the upgrade -- the
+    /// re-release the superseded-deployment refusal points them at. It is
+    /// finalized, well-formed, and binds the generation actually deployed; it
+    /// is simply not the record the sealed profile pins. Planted in every
+    /// world: its address is a function of its own digest, so it collides with
+    /// nothing and no other test reads it.
+    republished_registry_artifact: Record,
+    /// The slot the bank must be warped to before submitting, when this world
+    /// carries an upgraded deployment generation.
+    bank_slot: Option<u64>,
     outcome_count: u32,
 }
 
@@ -332,7 +345,14 @@ fn programdata_address(program: Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
 }
 
-fn programdata_bytes(elf: &[u8], authority: Option<Pubkey>) -> Vec<u8> {
+/// Compose Loader V3 ProgramData reporting `deployment_slot`.
+///
+/// The slot is a PARAMETER rather than a constant `0` because moving it is the
+/// whole of a program upgrade as every reader in this tree can observe one:
+/// there is no `bpf_loader_upgradeable::Upgrade` in any harness, and a pinned
+/// release is superseded precisely when the generation the Loader reports stops
+/// being the generation the release bound. See [`RegistryDeploymentV1`].
+fn programdata_bytes(elf: &[u8], authority: Option<Pubkey>, deployment_slot: u64) -> Vec<u8> {
     let mut bytes = vec![0; 45 + elf.len()];
     bytes
         .get_mut(0..4)
@@ -341,7 +361,7 @@ fn programdata_bytes(elf: &[u8], authority: Option<Pubkey>) -> Vec<u8> {
     bytes
         .get_mut(4..12)
         .expect("slot")
-        .copy_from_slice(&0_u64.to_le_bytes());
+        .copy_from_slice(&deployment_slot.to_le_bytes());
     match authority {
         Some(authority) => {
             *bytes.get_mut(12).expect("authority tag") = 1;
@@ -362,9 +382,10 @@ fn add_program(
     program: Pubkey,
     elf: &[u8],
     authority: Option<Pubkey>,
+    deployment_slot: u64,
 ) {
     test.add_upgradeable_program_to_genesis(name, &program);
-    let data = programdata_bytes(elf, authority);
+    let data = programdata_bytes(elf, authority, deployment_slot);
     test.add_account(
         programdata_address(program),
         Account {
@@ -383,6 +404,22 @@ fn release(
     semantic: u8,
     authority: Option<Pubkey>,
 ) -> ArtifactReleaseV1 {
+    release_at_slot(program, elf, semantic, authority, GENESIS_DEPLOYMENT_SLOT)
+}
+
+/// A release binding an explicit deployment generation.
+///
+/// Only the republished Registry record needs one: it is the "re-release" the
+/// superseded-deployment refusal points an operator at, and its whole point is
+/// that it binds the generation the upgrade produced rather than the one the
+/// sealed profile pins.
+fn release_at_slot(
+    program: Pubkey,
+    elf: &[u8],
+    semantic: u8,
+    authority: Option<Pubkey>,
+    deployment_slot: u64,
+) -> ArtifactReleaseV1 {
     let (policy, authority_bytes) = match authority {
         Some(authority) => (
             ArtifactUpgradePolicyV1::ExactAuthority,
@@ -396,7 +433,7 @@ fn release(
         programdata_address(program).to_bytes(),
         CoreContentId::new([semantic; 32]).expect("semantic release"),
         hash(elf).to_bytes(),
-        0,
+        deployment_slot,
         policy,
         authority_bytes,
     )
@@ -1079,7 +1116,7 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
     let funding_source_replay = fixture_pubkey(ROLE_FUNDING_SOURCE_REPLAY_VAULT);
     let claims_programdata_meta = if fault == SeriesFault::BatchClaimsProgramdata {
         let substituted = fixture_pubkey(ROLE_SUBSTITUTED_CLAIMS_PROGRAMDATA);
-        let data = programdata_bytes(&[0x42; 32], None);
+        let data = programdata_bytes(&[0x42; 32], None, GENESIS_DEPLOYMENT_SLOT);
         test.add_account(
             substituted,
             Account {
@@ -1300,34 +1337,186 @@ fn series_fixture(fault: SeriesFault) -> SeriesFixture {
     }
 }
 
+/// The generation every program in this fixture is deployed in by default, and
+/// the one every `ArtifactReleaseV1` here pins.
+const GENESIS_DEPLOYMENT_SLOT: u64 = 0;
+/// The Registry's Loader upgrade authority in the worlds that have one.
+///
+/// It never signs anything here: an upgrade is simulated by restaging
+/// ProgramData, and the Found route only ever COMPARES this key against the one
+/// the release bound.
+const REGISTRY_UPGRADE_AUTHORITY: Pubkey = Pubkey::new_from_array([0xd2; 32]);
+/// The generation the Registry lands in when this campaign upgrades it.
+///
+/// Any later slot works; this is `direct-hot/src/waist.rs`'s
+/// `UPGRADED_DEPLOYMENT_SLOT`, reused so the two upgrade fixtures in this tree
+/// describe the same event with the same number.
+const UPGRADED_REGISTRY_DEPLOYMENT_SLOT: u64 = 531;
+
+/// Which Registry deployment generation the bank observes.
+///
+/// This is the ruling's §8.1 obligation -- P-008's brick, reproduced rather
+/// than argued. The profile pins the Registry's `ArtifactReleaseV1` BY CONTENT,
+/// deployment slot included, so an upgrade that moves the Registry's bytes to a
+/// new generation supersedes the very selection every consumer authenticates
+/// against, and the write-once profile cannot be re-pointed at the new one.
+///
+/// The two variants are one bank each, and they differ in EXACTLY ONE FACT: the
+/// slot Loader V3 ProgramData reports for the Registry. The ELF bytes are
+/// byte-identical across both, which is deliberate and is what makes this a
+/// measurement rather than a tautology -- a fixture whose upgrade also changed
+/// the ELF digest could not distinguish "the slot pin refuses the release that
+/// moved" from "some other coordinate of the release changed". The slot alone
+/// bricks it.
+///
+/// Two banks and not one, for the reason `waist.rs:265-305` documents at
+/// length: `solana-program-test` holds exactly one nonzero deployment
+/// generation on its fork, and `warp_to_slot` roots the slot below and drops
+/// every bank under it, so staging a before-generation and an after-generation
+/// in the same bank makes the program cache reload the first one forever.
+///
+/// **This is measured against the V2 profile, which is what the shipped
+/// consumers read**, not against V1. The brick is not a property of the
+/// profile's VERSION -- it is a property of a content pin over a write-once
+/// account with one vacancy. V1 was bricked because its vacancy was spent and
+/// it had no succession route; V2's vacancy is spent by the cohort-9 ceremony,
+/// so the constraint P-008 names as standing ("an infrastructure upgrade is a
+/// Core-release-class event, forever") is exactly what these two banks measure.
+/// A literal V1-only-consumer reproduction is no longer runnable at HEAD --
+/// `authenticate_profile` reads V2 and nothing else (ruling §6, no fallback) --
+/// and reverting the consumers to build one would prove less about the code
+/// that ships.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RegistryDeploymentV1 {
+    /// An IMMUTABLE Registry in the generation its binding pins. This is the
+    /// world every other test in this file already runs in, and it is a world
+    /// where the brick is structurally unreachable — see
+    /// [`RegistryDeploymentV1::upgrade_authority`].
+    AsPinned,
+    /// A MUTABLE Registry, still in the generation its binding pins. The
+    /// control: decision 0012's iteration substrate, admitted while the slot
+    /// pin holds.
+    MutablePinned,
+    /// The same mutable Registry, one upgrade later. The pin breaks.
+    Upgraded,
+    /// An IMMUTABLE Registry standing in a later generation anyway. No upgrade
+    /// could have put it there, so the observation is substituted rather than
+    /// superseded, and the route must not offer the re-release remedy.
+    ImmutableMoved,
+}
+
+impl RegistryDeploymentV1 {
+    /// What the Registry's ProgramData reports.
+    const fn observed_deployment_slot(self) -> u64 {
+        match self {
+            Self::AsPinned | Self::MutablePinned => GENESIS_DEPLOYMENT_SLOT,
+            Self::Upgraded | Self::ImmutableMoved => UPGRADED_REGISTRY_DEPLOYMENT_SLOT,
+        }
+    }
+
+    /// The Registry's Loader upgrade authority in this world.
+    ///
+    /// `None` is an immutable Registry, and it is why the brick pair below is
+    /// NOT simply the default world with a moved slot. A program with no
+    /// upgrade authority cannot be upgraded, and the route refuses to call a
+    /// moved slot under one an upgrade: `require_pinned_deployment` names a
+    /// later generation `ReleaseSuperseded` only when the observed authority is
+    /// still the one the release bound, and otherwise refuses the generic
+    /// `Infrastructure` — a SUBSTITUTED ProgramData is not a supersession, and
+    /// the refusal an operator reads must not promise a re-release remedy for a
+    /// world where nothing was released. Measured here, not assumed: with an
+    /// immutable Registry this pair refuses `Infrastructure` (0x300f) and the
+    /// brick's own narrative would have been mis-attributed.
+    ///
+    /// So P-008's brick is a property of decision 0012's MUTABLE iteration
+    /// substrate — which is exactly what devnet runs, and exactly why the
+    /// Registry was upgradable enough to brick the protocol in the first place.
+    const fn upgrade_authority(self) -> Option<Pubkey> {
+        match self {
+            Self::AsPinned | Self::ImmutableMoved => None,
+            Self::MutablePinned | Self::Upgraded => Some(REGISTRY_UPGRADE_AUTHORITY),
+        }
+    }
+
+    /// The slot the bank must run at, or `None` to leave it where
+    /// `ProgramTest` starts it.
+    ///
+    /// A Loader V3 program is visible from `deployment_slot + 1`, and the
+    /// deployment slot must be an ancestor of the executing slot.
+    const fn bank_slot(self) -> Option<u64> {
+        match self {
+            Self::AsPinned | Self::MutablePinned => None,
+            Self::Upgraded | Self::ImmutableMoved => Some(UPGRADED_REGISTRY_DEPLOYMENT_SLOT + 1),
+        }
+    }
+}
+
+/// Which infrastructure profile stands in the fixture's world.
+///
+/// `Succeeded` is the world after the succession ceremony: the V2 profile at
+/// the V2 PDA, which is the only profile any redeployed consumer reads.
+/// `PredecessorOnly` is the world BETWEEN the Registry upgrade and the
+/// ceremony -- the predecessor still written at its own address, the
+/// succession address still vacant. That window is structural (a first
+/// admission can only hash deployed bytes, so the ceremony cannot precede the
+/// upgrade), and every profile-reading route must refuse inside it by name.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SuccessionStateV1 {
+    Succeeded,
+    PredecessorOnly,
+}
+
 fn fixture(core_mutable: bool) -> Fixture {
-    fixture_with(core_mutable, false)
+    fixture_with(
+        core_mutable,
+        false,
+        SuccessionStateV1::Succeeded,
+        RegistryDeploymentV1::AsPinned,
+    )
 }
 
 /// The same fixture, over a degree-2 curved basis and its certificate.
 fn curved_fixture() -> Fixture {
-    fixture_with(false, true)
+    fixture_with(
+        false,
+        true,
+        SuccessionStateV1::Succeeded,
+        RegistryDeploymentV1::AsPinned,
+    )
 }
 
-fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
+fn fixture_with(
+    core_mutable: bool,
+    curved: bool,
+    succession: SuccessionStateV1,
+    registry_deployment: RegistryDeploymentV1,
+) -> Fixture {
     let artifacts = artifacts();
     let mutable_authority = core_mutable.then(|| Pubkey::new_from_array([0xd1; 32]));
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
     test.set_compute_max_units(1_400_000);
+    // Every program but the Registry stays in the genesis generation, so the
+    // bank never holds more than ONE nonzero deployment generation -- the
+    // constraint `solana-program-test` enforces by reloading the first
+    // generation forever if a second is staged (`direct-hot/src/waist.rs`, on
+    // `observed_deployment_slot`). The Registry is the only program this
+    // campaign upgrades, so it is the only one that needs the other generation.
     add_program(
         &mut test,
         "dclutch_core_sbf",
         CORE_PROGRAM_ID,
         &artifacts.core,
         mutable_authority,
+        GENESIS_DEPLOYMENT_SLOT,
     );
     add_program(
         &mut test,
         "dclutch_registry_sbf",
         REGISTRY_PROGRAM_ID,
         &artifacts.registry,
-        None,
+        registry_deployment.upgrade_authority(),
+        registry_deployment.observed_deployment_slot(),
     );
     add_program(
         &mut test,
@@ -1335,6 +1524,7 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         RENT_PROGRAM_ID,
         &artifacts.rent,
         None,
+        GENESIS_DEPLOYMENT_SLOT,
     );
     add_program(
         &mut test,
@@ -1342,6 +1532,7 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         TRADING_PROGRAM_ID,
         &artifacts.trading,
         None,
+        GENESIS_DEPLOYMENT_SLOT,
     );
     add_program(
         &mut test,
@@ -1349,6 +1540,7 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         CLAIMS_PROGRAM_ID,
         &artifacts.core,
         None,
+        GENESIS_DEPLOYMENT_SLOT,
     );
     add_program(
         &mut test,
@@ -1356,9 +1548,29 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         CUSTODY_PROGRAM_ID,
         &artifacts.core,
         None,
+        GENESIS_DEPLOYMENT_SLOT,
     );
+    // The Clock the runtime serves has to agree with the bank the fixture will
+    // warp to, or the upgraded generation is staged at a slot the executing
+    // bank does not descend from.
+    if let Some(slot) = registry_deployment.bank_slot() {
+        test.add_sysvar_account(
+            sysvar::clock::ID,
+            &solana_program::clock::Clock {
+                slot,
+                ..solana_program::clock::Clock::default()
+            },
+        );
+    }
     let core_release = release(CORE_PROGRAM_ID, &artifacts.core, 0xa0, mutable_authority);
-    let registry_release = release(REGISTRY_PROGRAM_ID, &artifacts.registry, 0xa1, None);
+    // Pinned to the GENESIS generation in every world -- the release is what the
+    // sealed profile names, and it never moves. Only ProgramData does.
+    let registry_release = release(
+        REGISTRY_PROGRAM_ID,
+        &artifacts.registry,
+        0xa1,
+        registry_deployment.upgrade_authority(),
+    );
     let rent_release = release(RENT_PROGRAM_ID, &artifacts.rent, 0xa2, None);
     let trading_release = release(TRADING_PROGRAM_ID, &artifacts.trading, 0xa3, None);
     let claims_release = release(CLAIMS_PROGRAM_ID, &artifacts.core, 0xa4, None);
@@ -1494,6 +1706,21 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         ARTIFACT_RELEASE_SCHEMA_ID_V1,
         rent_release.to_bytes().to_vec(),
     );
+    // The same Registry ELF, re-released against the generation the upgrade
+    // produced. Everything about it is honest; it is the escape the P-008
+    // narrative has to kill.
+    let republished_registry_artifact = Record::new(
+        ARTIFACT_RELEASE_SCHEMA_ID_V1,
+        release_at_slot(
+            REGISTRY_PROGRAM_ID,
+            &artifacts.registry,
+            0xa1,
+            registry_deployment.upgrade_authority(),
+            UPGRADED_REGISTRY_DEPLOYMENT_SLOT,
+        )
+        .to_bytes()
+        .to_vec(),
+    );
     if let Some(certificate) = price_gate.as_ref() {
         certificate.add(&mut test);
     }
@@ -1511,6 +1738,7 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         &release_set,
         &registry_artifact,
         &rent_artifact,
+        &republished_registry_artifact,
     ] {
         record.add(&mut test);
     }
@@ -1581,25 +1809,66 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
             rent_epoch: 0,
         },
     );
-    let profile_value =
-        ProtocolInfrastructureProfileV1::new(binding(registry_release), binding(rent_release))
-            .expect("infrastructure profile");
-    let profile = Pubkey::find_program_address(
+    // The succession profile every redeployed consumer reads (ruling section 6:
+    // V2 only, no fallback). The predecessor ids carry the cohort-9 shape the
+    // ceremony records -- the Registry moved, so its predecessor is the distinct
+    // release this profile succeeded, while Rent stayed byte-identical and holds
+    // the same id on both sides of the succession.
+    let predecessor_registry_release =
+        release(REGISTRY_PROGRAM_ID, &artifacts.registry, 0xb1, None);
+    let profile_value = ProtocolInfrastructureProfileV2::new(
+        binding(registry_release),
+        binding(rent_release),
+        artifact_id(predecessor_registry_release),
+        artifact_id(rent_release),
+    )
+    .expect("infrastructure succession profile");
+    // The predecessor selection, as it stood before the Registry moved: the same
+    // two programs, bound to the registry release the succession replaces. It is
+    // planted in EVERY world, because the succession never touches it -- it stays
+    // written at its own address forever, perfectly decodable, and never again an
+    // authority.
+    let predecessor_value = ProtocolInfrastructureProfileV1::new(
+        binding(predecessor_registry_release),
+        binding(rent_release),
+    )
+    .expect("predecessor infrastructure profile");
+    let predecessor_profile = Pubkey::find_program_address(
         &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
         &CORE_PROGRAM_ID,
     )
     .0;
-    let profile_data = profile_value.to_bytes().to_vec();
+    let predecessor_data = predecessor_value.to_bytes().to_vec();
     test.add_account(
-        profile,
+        predecessor_profile,
         Account {
-            lamports: Rent::default().minimum_balance(profile_data.len()),
-            data: profile_data,
+            lamports: Rent::default().minimum_balance(predecessor_data.len()),
+            data: predecessor_data,
             owner: CORE_PROGRAM_ID,
             executable: false,
             rent_epoch: 0,
         },
     );
+    // The one address every redeployed consumer derives, and the only profile
+    // any of them reads. Vacant until the ceremony creates it.
+    let profile = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
+        &CORE_PROGRAM_ID,
+    )
+    .0;
+    if succession == SuccessionStateV1::Succeeded {
+        let profile_data = profile_value.to_bytes().to_vec();
+        test.add_account(
+            profile,
+            Account {
+                lamports: Rent::default().minimum_balance(profile_data.len()),
+                data: profile_data,
+                owner: CORE_PROGRAM_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        );
+    }
     Fixture {
         test: Some(test),
         payer,
@@ -1618,6 +1887,7 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         manifest,
         release_set,
         cache,
+        predecessor_profile,
         core_programdata: programdata_address(CORE_PROGRAM_ID),
         trading_programdata: programdata_address(TRADING_PROGRAM_ID),
         claims_programdata: programdata_address(CLAIMS_PROGRAM_ID),
@@ -1627,6 +1897,8 @@ fn fixture_with(core_mutable: bool, curved: bool) -> Fixture {
         profile,
         registry_artifact,
         rent_artifact,
+        republished_registry_artifact,
+        bank_slot: registry_deployment.bank_slot(),
         outcome_count,
     }
 }
@@ -1814,7 +2086,8 @@ async fn execute(
 ) -> (Fixture, solana_program_test::ProgramTestContext, bool) {
     let mut test = fixture.test.take().expect("ProgramTest");
     let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
-    let context = test.start_with_context().await;
+    let mut context = test.start_with_context().await;
+    warp_to_deployment_generation(&mut context, &fixture);
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
@@ -1833,6 +2106,62 @@ async fn execute(
         .await
         .is_ok();
     (fixture, context, accepted)
+}
+
+/// Put the bank one slot past this world's deployment generation.
+///
+/// `ProgramTest` starts at slot 1, where ProgramData reporting a later slot
+/// makes the program invisible and the runtime reports a program-cache
+/// replacement rather than anything about the deployment. Worlds that never
+/// moved a generation are left exactly where they started, so this is inert for
+/// every test that predates the upgrade fixture.
+fn warp_to_deployment_generation(
+    context: &mut solana_program_test::ProgramTestContext,
+    fixture: &Fixture,
+) {
+    if let Some(slot) = fixture.bank_slot {
+        context
+            .warp_to_slot(slot)
+            .expect("warp the bank one slot past the deployment generation");
+    }
+}
+
+/// Submit a Found frame and render any refusal, for hostiles that must name one.
+///
+/// [`execute`] answers only whether the bank accepted, which cannot tell a
+/// refusal at the conjunct under test from one three checks earlier -- and a
+/// hostile that asserts only "not accepted" is a test of nothing.
+async fn execute_reporting_failure(
+    mut fixture: Fixture,
+    instruction: Instruction,
+) -> (
+    Fixture,
+    solana_program_test::ProgramTestContext,
+    Option<String>,
+) {
+    let mut test = fixture.test.take().expect("ProgramTest");
+    let lookup = add_instruction_lookup(&mut test, core::slice::from_ref(&instruction));
+    let mut context = test.start_with_context().await;
+    warp_to_deployment_generation(&mut context, &fixture);
+    let blockhash = context
+        .banks_client
+        .get_latest_blockhash()
+        .await
+        .expect("blockhash");
+    let transaction = signed_v0(
+        &context.payer.pubkey(),
+        &[instruction],
+        &lookup,
+        blockhash,
+        &[&context.payer, &fixture.payer],
+    );
+    let failure = context
+        .banks_client
+        .process_transaction(transaction)
+        .await
+        .err()
+        .map(|error| format!("{error:?}"));
+    (fixture, context, failure)
 }
 
 async fn execute_project(
@@ -2209,6 +2538,254 @@ async fn swapped_registry_and_rent_artifacts_refuse_without_market_write() {
         market.lamports,
         Rent::default().minimum_balance(STATE_BYTES)
     );
+}
+
+/// Founding refuses by name in the window before the ceremony.
+///
+/// The reader's half of the ruling's §8.1 obligation
+/// (`docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md`). The window between the
+/// Registry upgrade and the succession ceremony is STRUCTURAL -- a first
+/// admission can only hash deployed bytes, so the ceremony cannot precede the
+/// upgrade -- and inside it founding must refuse rather than quietly proceed
+/// against a selection the chain has stopped standing behind. The frame is the
+/// honest one a redeployed host builds, aimed at the address every consumer now
+/// derives; that address is simply not written yet. Exactly one fact about the
+/// world differs from the accepting case, so this cannot pass for an unrelated
+/// malformation.
+#[tokio::test]
+async fn founding_refuses_while_only_the_predecessor_profile_stands() {
+    let fixture = fixture_with(
+        false,
+        false,
+        SuccessionStateV1::PredecessorOnly,
+        RegistryDeploymentV1::AsPinned,
+    );
+    let instruction = found_instruction(&fixture, false);
+    let (fixture, context, failure) = execute_reporting_failure(fixture, instruction).await;
+    let failure = failure.expect("a vacant succession profile must refuse founding");
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::Infrastructure as u32,
+        "CoreSbfError::Infrastructure on a succession profile that does not exist yet",
+    );
+    // Nothing was created on the way to the refusal.
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+}
+
+/// The sealed predecessor cannot be presented as the authority again.
+///
+/// The other half of "V2 only, no fallback" (ruling §6). Here the succession
+/// HAS happened and the world is complete, so nothing is missing and nothing is
+/// malformed: the predecessor still stands at its own address, still decodes,
+/// and still names the same two programs. A caller aims the frame at it anyway.
+/// It is refused for the only reason that matters -- it is not the account this
+/// program reads -- which is what makes the predecessor a historical record
+/// rather than a second live authentication path.
+#[tokio::test]
+async fn founding_refuses_a_frame_aimed_at_the_sealed_predecessor_profile() {
+    let fixture = fixture(false);
+    let mut instruction = found_instruction(&fixture, false);
+    let slot = instruction
+        .accounts
+        .iter()
+        .position(|meta| meta.pubkey == fixture.profile)
+        .expect("the honest frame carries the succession profile");
+    instruction.accounts[slot].pubkey = fixture.predecessor_profile;
+    let (fixture, context, failure) = execute_reporting_failure(fixture, instruction).await;
+    let failure = failure.expect("the sealed predecessor must never authenticate again");
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::Infrastructure as u32,
+        "CoreSbfError::Infrastructure on the sealed predecessor profile",
+    );
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+}
+
+/// P-008's brick, reproduced: a Registry upgrade supersedes the sealed
+/// selection and founding stops.
+///
+/// The ruling's §8.1 obligation
+/// (`docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md`) — "the measurement that
+/// makes everything after it a fix rather than a feature". PROFILE-2 proved the
+/// reader's half (a profile that is not written yet refuses); this is the half
+/// where nothing is missing and nothing is malformed. The profile stands, it
+/// decodes, it names the right two programs, the records are finalized and
+/// present, and the Registry it selects is deployed and executable. One fact
+/// moved: the generation the Loader reports for the Registry. That alone
+/// refuses founding, by name, forever — because the profile is write-once and
+/// its selection is pinned BY CONTENT, deployment slot included.
+///
+/// The pair is the point, and it is why there are two banks. The `AsPinned`
+/// bank is the control: the identical frame, the identical ELF bytes, the
+/// identical records, founding lands. A campaign that only showed the refusal
+/// could not distinguish "the slot pin refuses the release that moved" from
+/// "this fixture refuses" — the discrimination `slot_pin_supersession.rs` makes
+/// explicit and this pair inherits.
+#[tokio::test]
+async fn a_registry_upgrade_supersedes_the_pinned_selection_and_bricks_founding() {
+    // The pin holds. Same bytes, same records, same frame, same authority.
+    let held = fixture_with(
+        false,
+        false,
+        SuccessionStateV1::Succeeded,
+        RegistryDeploymentV1::MutablePinned,
+    );
+    let instruction = found_instruction(&held, false);
+    let (held, context, accepted) = execute(held, instruction).await;
+    assert!(
+        accepted,
+        "the control must found while the pinned generation is the deployed one"
+    );
+    let market = context
+        .banks_client
+        .get_account(held.market)
+        .await
+        .expect("Market query")
+        .expect("Market");
+    assert_eq!(market.owner, CORE_PROGRAM_ID);
+
+    // The pin breaks. The Registry moved to a later generation and nothing
+    // else in the world changed at all.
+    let upgraded = fixture_with(
+        false,
+        false,
+        SuccessionStateV1::Succeeded,
+        RegistryDeploymentV1::Upgraded,
+    );
+    let instruction = found_instruction(&upgraded, false);
+    let (upgraded, context, failure) = execute_reporting_failure(upgraded, instruction).await;
+    let failure = failure.expect("an upgraded Registry must supersede the sealed selection");
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::ReleaseSuperseded as u32,
+        "CoreSbfError::ReleaseSuperseded on a Registry deployment the sealed profile no longer pins",
+    );
+    // Nothing was created on the way to the brick.
+    let market = context
+        .banks_client
+        .get_account(upgraded.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+}
+
+/// The supersession refusal is reserved for a world where an upgrade was
+/// possible.
+///
+/// The discriminator the brick pair above rests on, and it was MEASURED rather
+/// than assumed: the first version of that pair ran an immutable Registry and
+/// refused `Infrastructure`, not `ReleaseSuperseded`. That is the route being
+/// right. `require_pinned_deployment` names a later generation a supersession
+/// only when the observed upgrade authority is still the one the release bound;
+/// a moved slot under an absent authority is a SUBSTITUTED ProgramData, because
+/// a program with no upgrade authority cannot have been upgraded. The
+/// distinction is operator-facing — `ReleaseSuperseded` promises a re-release
+/// remedy, and promising it to someone whose ProgramData was swapped would send
+/// them to republish a record that could not help.
+///
+/// Which is also why P-008 is a story about decision 0012's mutable iteration
+/// substrate: the Registry bricked the protocol because it was upgradable.
+#[tokio::test]
+async fn a_moved_slot_under_no_upgrade_authority_is_substituted_rather_than_superseded() {
+    // The brick's world in every respect but one: the Registry binds no upgrade
+    // authority, so the generation it is standing in cannot have been reached
+    // by an upgrade.
+    let fixture = fixture_with(
+        false,
+        false,
+        SuccessionStateV1::Succeeded,
+        RegistryDeploymentV1::ImmutableMoved,
+    );
+    let instruction = found_instruction(&fixture, false);
+    let (fixture, context, failure) = execute_reporting_failure(fixture, instruction).await;
+    let failure = failure.expect("a substituted Registry ProgramData must still refuse founding");
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::Infrastructure as u32,
+        "CoreSbfError::Infrastructure on a moved slot no upgrade authority could have moved",
+    );
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
+}
+
+/// The first escape is dead: republishing the record cannot re-point the pin.
+///
+/// The other half of §8.1 — "prove the two escapes dead". The refusal an
+/// operator reads from the brick above points at a re-release, and
+/// `infrastructure.rs:457-462` says so in as many words. So take that advice
+/// exactly: publish a finalized `ArtifactReleaseV1` for the Registry binding the
+/// generation that is actually deployed, and present it. It is a perfectly good
+/// record — it authenticates, and its own pin HOLDS, which is what makes this a
+/// real escape attempt rather than a malformed frame. It is refused anyway, at
+/// the content pin, because the sealed profile names a specific record by
+/// digest and a different record has a different digest. There is no route from
+/// here to a profile that names the new one.
+///
+/// The second escape — rewriting the profile — is dead by vacancy, and is
+/// already proved by name in `infrastructure_succession_program_test.rs`
+/// (`InfrastructureAlreadySucceeded` on the replayed ceremony, and the V1
+/// vacancy check in `infrastructure_program_test.rs`). It is cited rather than
+/// duplicated here.
+#[tokio::test]
+async fn the_republished_registry_record_cannot_escape_the_sealed_content_pin() {
+    let fixture = fixture_with(
+        false,
+        false,
+        SuccessionStateV1::Succeeded,
+        RegistryDeploymentV1::Upgraded,
+    );
+    let mut instruction = found_instruction(&fixture, false);
+    let mut swapped = 0;
+    for meta in instruction.accounts.iter_mut() {
+        if meta.pubkey == fixture.registry_artifact.raw {
+            meta.pubkey = fixture.republished_registry_artifact.raw;
+            swapped += 1;
+        } else if meta.pubkey == fixture.registry_artifact.staging {
+            meta.pubkey = fixture.republished_registry_artifact.staging;
+            swapped += 1;
+        }
+    }
+    assert_eq!(
+        swapped, 2,
+        "the honest frame must carry the pinned Registry record's raw and staging accounts"
+    );
+    let (fixture, context, failure) = execute_reporting_failure(fixture, instruction).await;
+    let failure = failure.expect("a record the sealed profile does not name must be refused");
+    assert_refused_with(
+        &failure,
+        dclutch_core_sbf::CoreSbfError::Infrastructure as u32,
+        "CoreSbfError::Infrastructure on a republished record the write-once profile cannot name",
+    );
+    let market = context
+        .banks_client
+        .get_account(fixture.market)
+        .await
+        .expect("Market query")
+        .expect("vacant Market");
+    assert_eq!(market.owner, system_program::ID);
+    assert!(market.data.is_empty());
 }
 
 #[tokio::test]

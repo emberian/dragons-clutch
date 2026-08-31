@@ -23,29 +23,50 @@ import {
 } from './releaseRegistry';
 import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_V1,
   PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_V1,
-  PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_ARTIFACT_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_ARTIFACT_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_PROGRAM_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_PROGRAM_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_ARTIFACT_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_ARTIFACT_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_PROGRAM_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_PROGRAM_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V2,
   PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_V2,
 } from './generated/protocolInfrastructure';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
-export const CHECKED_INFRASTRUCTURE_BYTES_V1 = 2_280;
-
 const CHECKED_INFRASTRUCTURE_HEADER_BYTES = 16;
 const CHECKED_INFRASTRUCTURE_PROFILE_OFFSET = CHECKED_INFRASTRUCTURE_HEADER_BYTES + CHECKED_MULTIPROGRAM_BYTES;
-const CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET = CHECKED_INFRASTRUCTURE_PROFILE_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1;
+const CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET = CHECKED_INFRASTRUCTURE_PROFILE_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2;
 const CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET = CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET + 32;
 const CHECKED_INFRASTRUCTURE_LEAF_BYTES = ARTIFACT_RELEASE_BYTES + 32;
 const CHECKED_INFRASTRUCTURE_RENT_OFFSET = CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES;
+
+/**
+ * Header, the five-role execution evidence, the succession profile and its PDA,
+ * then the Registry and Rent leaves — the same sum the release tool encodes.
+ */
+export const CHECKED_INFRASTRUCTURE_BYTES_V1 = CHECKED_INFRASTRUCTURE_RENT_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES;
+
+const PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_BYTES_V2 =
+  PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2 - PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2;
 
 export type InfrastructureBindingV1 = Readonly<{
   program: string;
@@ -58,11 +79,28 @@ export type ProtocolInfrastructureProfileV1 = Readonly<{
   rent: InfrastructureBindingV1;
 }>;
 
+/**
+ * The succession profile: V1's two bindings plus the artifact-release ids the
+ * predecessor V1 profile pinned.
+ *
+ * V1 is write-once and stays on chain forever as the sealed predecessor, so a
+ * succession cannot rewrite it — it occupies a distinct per-Core PDA and names
+ * the two records it succeeded, which is what makes the lineage walkable from
+ * the successor alone.
+ */
+export type ProtocolInfrastructureProfileV2 = Readonly<{
+  bytes: Uint8Array;
+  registry: InfrastructureBindingV1;
+  rent: InfrastructureBindingV1;
+  predecessorRegistryArtifactReleaseId: string;
+  predecessorRentArtifactReleaseId: string;
+}>;
+
 export type CheckedInfrastructureV1 = Readonly<{
   bytes: Uint8Array;
   checkedInfrastructureId: string;
   execution: CheckedMultiprogramV1;
-  profile: ProtocolInfrastructureProfileV1;
+  profile: ProtocolInfrastructureProfileV2;
   profilePda: string;
   registryArtifact: ArtifactReleaseV1;
   registryCheckedReleaseId: string;
@@ -190,6 +228,54 @@ export function decodeProtocolInfrastructureProfileV1(bytes: Uint8Array): Protoc
   return Object.freeze({ bytes: new Uint8Array(bytes), registry, rent });
 }
 
+export function decodeProtocolInfrastructureProfileV2(bytes: Uint8Array): ProtocolInfrastructureProfileV2 {
+  if (
+    bytes.length !== PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+    || !same(slice(bytes, PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_OFFSET_V2, 8), PROTOCOL_INFRASTRUCTURE_PROFILE_MAGIC_V2)
+    || u16(bytes, PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_OFFSET_V2) !== PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_VERSION_V2
+    // The succession moved the profile, not the artifact record it selects, so
+    // a V2 profile still declares the V1 artifact profile.
+    || u16(bytes, PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_OFFSET_V2) !== PROTOCOL_INFRASTRUCTURE_PROFILE_ARTIFACT_PROFILE_V1
+  ) throw new Error('infrastructure profile has the wrong exact width, magic, schema, or profile');
+  requireZero(bytes, PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_OFFSET_V2, 4, 'infrastructure profile header');
+  requireZero(
+    bytes,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_BYTES_V2,
+    'infrastructure profile tail',
+  );
+  const registry = exactProfileBinding(
+    bytes,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_PROGRAM_OFFSET_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_REGISTRY_ARTIFACT_OFFSET_V2,
+    'Registry',
+  );
+  const rent = exactProfileBinding(
+    bytes,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_PROGRAM_OFFSET_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_RENT_ARTIFACT_OFFSET_V2,
+    'Rent',
+  );
+  const predecessorRegistryArtifact = slice(bytes, PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2, 32);
+  const predecessorRentArtifact = slice(bytes, PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2, 32);
+  requireNonzero(predecessorRegistryArtifact, 'predecessor Registry artifact release');
+  requireNonzero(predecessorRentArtifact, 'predecessor Rent artifact release');
+  const predecessorRegistryArtifactReleaseId = hex(predecessorRegistryArtifact);
+  const predecessorRentArtifactReleaseId = hex(predecessorRentArtifact);
+  if (
+    registry.program === rent.program
+    || registry.artifactReleaseId === rent.artifactReleaseId
+    || predecessorRegistryArtifactReleaseId === predecessorRentArtifactReleaseId
+  ) throw new Error('infrastructure profile aliases Registry and Rent');
+  return Object.freeze({
+    bytes: new Uint8Array(bytes),
+    registry,
+    rent,
+    predecessorRegistryArtifactReleaseId,
+    predecessorRentArtifactReleaseId,
+  });
+}
+
 function releaseSetBytes(artifacts: Readonly<Record<RegistryRole, ArtifactReleaseV1>>, artifactIds: Readonly<Record<RegistryRole, string>>): Uint8Array {
   const output = new Uint8Array(336);
   output.set(new TextEncoder().encode('DCLTRLS1'));
@@ -270,15 +356,15 @@ async function decodeEmbeddedCheckedMultiprogramV1(bytes: Uint8Array): Promise<C
 }
 
 export async function decodeCheckedInfrastructureV1(bytes: Uint8Array): Promise<CheckedInfrastructureV1> {
-  if (bytes.length !== CHECKED_INFRASTRUCTURE_BYTES_V1 || ascii(bytes, 0, 8) !== 'DCLTIEV1' || u16(bytes, 8) !== 1 || u16(bytes, 10) !== 3) {
+  if (bytes.length !== CHECKED_INFRASTRUCTURE_BYTES_V1 || ascii(bytes, 0, 8) !== 'DCLTIEV1' || u16(bytes, 8) !== 2 || u16(bytes, 10) !== 3) {
     throw new Error('checked infrastructure has the wrong exact width, magic, schema, or component count');
   }
   requireZero(bytes, 12, 4, 'checked infrastructure header');
   const execution = await decodeEmbeddedCheckedMultiprogramV1(slice(bytes, 16, CHECKED_MULTIPROGRAM_BYTES));
-  const profile = decodeProtocolInfrastructureProfileV1(slice(
+  const profile = decodeProtocolInfrastructureProfileV2(slice(
     bytes,
     CHECKED_INFRASTRUCTURE_PROFILE_OFFSET,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
   ));
   const profilePda = new PublicKey(slice(bytes, CHECKED_INFRASTRUCTURE_PROFILE_PDA_OFFSET, 32)).toBase58();
   const registryArtifact = decodeArtifactReleaseV1(slice(bytes, CHECKED_INFRASTRUCTURE_REGISTRY_OFFSET, ARTIFACT_RELEASE_BYTES));
@@ -296,7 +382,7 @@ export async function decodeCheckedInfrastructureV1(bytes: Uint8Array): Promise<
     || registryArtifact.program === rentArtifact.program
   ) throw new Error('checked infrastructure aliases Core, Registry, or Rent programs');
   const expectedProfilePda = PublicKey.findProgramAddressSync(
-    [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+    [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
     new PublicKey(execution.artifacts.core.program),
   )[0].toBase58();
   if (
@@ -354,7 +440,7 @@ function component(artifactReleaseId: string, artifact: ArtifactReleaseV1): Infr
 
 function manifestMatches(
   manifest: CheckedInfrastructureV1,
-  profile: ProtocolInfrastructureProfileV1,
+  profile: ProtocolInfrastructureProfileV2,
   profilePda: string,
   activated: ActivatedProjectionV1,
   registryArtifact: ArtifactReleaseV1,
@@ -392,13 +478,13 @@ export async function inspectProtocolInfrastructureV1(
   const coreArtifact = initialCache.artifacts.core;
   slotPinned(coreArtifact, 'Core');
   const profilePda = PublicKey.findProgramAddressSync(
-    [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+    [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
     new PublicKey(coreArtifact.program),
   )[0].toBase58();
 
   const profileObservation = await client.multipleAccounts([profilePda], initial.slot);
   const initialProfileAccount = required(accountMap(profileObservation), profilePda, 'infrastructure profile');
-  const profile = decodeProtocolInfrastructureProfileV1(initialProfileAccount.data);
+  const profile = decodeProtocolInfrastructureProfileV2(initialProfileAccount.data);
   if (profile.registry.program !== input.registryProgram) throw new Error('Core profile selects a different Registry program');
   if (
     coreArtifact.program === profile.registry.program
@@ -460,7 +546,7 @@ export async function inspectProtocolInfrastructureV1(
   if (!same(observedCoreArtifact.bytes, coreArtifact.bytes)) throw new Error('Core artifact changed during finalized reacquisition');
 
   const [profileRent, cacheRent, artifactRent] = await Promise.all([
-    client.minimumBalanceForRentExemption(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1),
+    client.minimumBalanceForRentExemption(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2),
     client.minimumBalanceForRentExemption(ACTIVATION_CACHE_BYTES),
     client.minimumBalanceForRentExemption(ARTIFACT_RELEASE_BYTES),
   ]);

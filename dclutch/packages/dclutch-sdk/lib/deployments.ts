@@ -1,5 +1,7 @@
 import { PublicKey } from '@solana/web3.js';
 
+import { SOLANA_DEVNET_GENESIS_HASH_V1 } from './rpc';
+
 /**
  * The deployment manifest — the protocol addresses this app ships KNOWING.
  *
@@ -88,7 +90,7 @@ export const DEVNET_DEPLOYMENT_V1: DeploymentV1 = Object.freeze({
   cluster: 'devnet',
   label: 'Devnet',
   endpoint: 'https://api.devnet.solana.com',
-  genesisHash: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+  genesisHash: SOLANA_DEVNET_GENESIS_HASH_V1,
   programs: Object.freeze({
     registry: 'Hies39GBowHUMZw9rVCfaDTAXNorkQqMGKnukY2MD4Qj',
     rent: 'DgfYeuorJUmnktxgCmUXy65f6MFBGcc1aMQoauxoJCY3',

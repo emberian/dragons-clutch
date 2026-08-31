@@ -247,7 +247,11 @@ fn execution_row_v1(
         ExecutionV2::decode(&bytes)
             .map_err(|error| Error::new(format!("row decode: {error:?}")))?,
     )
-    .map_err(|error| Error::new(format!("row does not authenticate against its order: {error:?}")))?;
+    .map_err(|error| {
+        Error::new(format!(
+            "row does not authenticate against its order: {error:?}"
+        ))
+    })?;
     Ok(bytes)
 }
 
@@ -338,8 +342,9 @@ pub(crate) fn terminal_fixture_v1(
     // then re-encode with the digest those bytes produce.
     let mut candidate = vec![
         0_u8;
-        candidate_len(width)
-            .map_err(|error| Error::new(format!("candidate width: {error:?}")))?
+        candidate_len(width).map_err(|error| Error::new(format!(
+            "candidate width: {error:?}"
+        )))?
     ];
     let header = CandidateHeaderV2 {
         outcome_count: width,
@@ -420,7 +425,8 @@ pub(crate) fn terminal_fixture_v1(
         let row = execution_row_v1(width, page_coordinate, batch, order_bytes, *lots)?;
         let mut page = vec![
             0_u8;
-            page_len(width, 1).map_err(|error| Error::new(format!("page width: {error:?}")))?
+            page_len(width, 1)
+                .map_err(|error| Error::new(format!("page width: {error:?}")))?
         ];
         PageV2::encode_into(
             PageHeaderV2 {
@@ -458,8 +464,7 @@ pub(crate) fn terminal_fixture_v1(
                 order: order_bytes,
                 cursor_before: &cursor,
                 verified_before: &zero_verified,
-                expected_page_index: u32::try_from(index)
-                    .map_err(|_| Error::new("page index"))?,
+                expected_page_index: u32::try_from(index).map_err(|_| Error::new("page index"))?,
                 expected_row_index: 0,
                 expected_revision: u64::try_from(index).map_err(|_| Error::new("revision"))?,
             },
@@ -679,11 +684,7 @@ mod tests {
         let fixture = terminal_fixture_v1(1, product_id()).expect("fixture");
         let mut cursor = initialized_cursor_v1(&fixture).expect("initialized cursor");
         let opening = settlement_revision_v1(&cursor).expect("revision");
-        let manifests: Vec<&[u8]> = fixture
-            .manifests
-            .iter()
-            .map(Vec::as_slice)
-            .collect();
+        let manifests: Vec<&[u8]> = fixture.manifests.iter().map(Vec::as_slice).collect();
         // Three Collect rows: manifest zero row zero, then manifest one rows
         // zero and one. This ordering is the manifest's own, not a guess.
         let rows: [(usize, u32); 3] = [(0, 0), (1, 0), (1, 1)];
@@ -697,8 +698,14 @@ mod tests {
             )
             .expect("collect");
         }
-        cursor = settle_native_v1(&fixture, &cursor, RuntimeSettlementActionV2::Materialize, None, 0)
-            .expect("materialize");
+        cursor = settle_native_v1(
+            &fixture,
+            &cursor,
+            RuntimeSettlementActionV2::Materialize,
+            None,
+            0,
+        )
+        .expect("materialize");
         for (manifest_index, order_index) in rows {
             cursor = settle_native_v1(
                 &fixture,

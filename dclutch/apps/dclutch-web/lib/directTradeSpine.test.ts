@@ -1,7 +1,7 @@
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { sha256 } from './bytes';
+import { hex, sha256 } from './bytes';
 import {
   CAPABILITY_ENTRY_BYTES_V1,
   CAPABILITY_ENTRY_QUOTE_OFFSET_V1,
@@ -48,6 +48,7 @@ import {
   LIABILITY_BASIS_MARKET_RELEASE_SET_OFFSET,
   LIABILITY_BASIS_STATE_VERSION_V2,
 } from './generated/coreFound';
+import { DIRECT_DECODE_VINTAGE_V1, describeDirectDecodeVintageV1 } from './directDecodeVintage';
 import { deriveClaimsAggregateAddressV2 } from './marketCoreV2';
 import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 import { type RpcAccount } from './rpc';
@@ -189,12 +190,28 @@ function account(owner: string, data: Uint8Array): RpcAccount {
   return Object.freeze({ data, executable: false, lamports: '1000000', owner, space: data.length });
 }
 
-async function chainFixture(phase: number = CORE_PHASE_OPEN_TAG): Promise<Record<string, RpcAccount>> {
+/**
+ * Doctoring hooks run BEFORE each artifact is hashed, so the record still
+ * matches its own content identity. Mutating the bytes after the fact only
+ * ever proves the content check works -- it never reaches the decoder under
+ * test.
+ */
+type ChainDoctorV1 = Readonly<{
+  descriptor?: (bytes: Uint8Array) => void;
+  programSet?: (bytes: Uint8Array) => void;
+}>;
+
+async function chainFixture(
+  phase: number = CORE_PHASE_OPEN_TAG,
+  doctor: ChainDoctorV1 = {},
+): Promise<Record<string, RpcAccount>> {
   const config = configFixture();
   const configDigest = await sha256(config);
   const descriptor = descriptorFixture();
+  doctor.descriptor?.(descriptor);
   const descriptorDigest = await sha256(descriptor);
   const programSet = programSetFixture(descriptorDigest);
+  doctor.programSet?.(programSet);
   const programSetDigest = await sha256(programSet);
   const manifest = manifestFixture(programSetDigest, configDigest);
   const manifestDigest = await sha256(manifest);
@@ -315,5 +332,79 @@ describe('the Direct trade spine', () => {
     expect(() => directPacketWallV1(-1)).toThrow(/nonnegative safe integer/);
     expect(DIRECT_PRESTATE_WALL_V1.detail).toContain('distinct Token-2022 collateral account');
     expect(DIRECT_PRESTATE_WALL_V1.detail).not.toContain('does not exist');
+  });
+
+  // A Market published under a release this build predates must be told apart
+  // from a broken one. These assert the refusal SENTENCE, not a new gate --
+  // this half of release-awareness adds messages only, so a known-current
+  // release cannot acquire a refusal path it did not already have.
+  it('names the chain release, both schemas, and its own vintage when the descriptor schema is unknown', async () => {
+    const accounts = await chainFixture(CORE_PHASE_OPEN_TAG, {
+      programSet: (bytes) => bytes.set(identity(99), Abi.CAPABILITY_PROGRAM_SET_HEADER_BYTES_V2
+        + Abi.CAPABILITY_PROGRAM_SET_ENTRY_DESCRIPTOR_SCHEMA_OFFSET_V2),
+    });
+
+    const spine = await inspectDirectTradeSpineV1(client(accounts), {
+      marketAddress: MARKET, coreProgramId: CORE, registryProgramId: REGISTRY,
+      tradingProgramId: TRADING, claimsProgramId: CLAIMS, owner: OWNER,
+    });
+    expect(spine.status).toBe('refused');
+    if (spine.status !== 'refused') return;
+    // The chain's own release identity, so the reader can place the Market.
+    expect(spine.reason).toContain(hex(identity(65)));
+    // Both sides named, so nobody has to diff the chain by hand.
+    expect(spine.reason).toContain(hex(identity(99)));
+    expect(spine.reason).toContain(hex(Abi.CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID));
+    // And what this build is -- the sentence describes us, it does not accuse
+    // the record.
+    expect(spine.reason).toContain('this build decodes');
+    expect(spine.reason).toContain('if the Market\'s release is newer, this build predates it');
+  });
+
+  it('carries the release identity onto a per-field descriptor disagreement', async () => {
+    const accounts = await chainFixture(CORE_PHASE_OPEN_TAG, {
+      descriptor: (bytes) => bytes.set(identity(98), Abi.CAPABILITY_PROGRAM_V4_STRATEGY_SCHEMA_OFFSET),
+    });
+
+    const spine = await inspectDirectTradeSpineV1(client(accounts), {
+      marketAddress: MARKET, coreProgramId: CORE, registryProgramId: REGISTRY,
+      tradingProgramId: TRADING, claimsProgramId: CLAIMS, owner: OWNER,
+    });
+    expect(spine.status).toBe('refused');
+    if (spine.status !== 'refused') return;
+    expect(spine.reason).toContain('Strategy schema');
+    expect(spine.reason).toContain(hex(identity(98)));
+    expect(spine.reason).toContain(hex(Abi.EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2));
+    expect(spine.reason).toContain(hex(identity(65)));
+  });
+
+  it('still reads a corrupt record as corruption, never as a newer vintage', async () => {
+    // Corrupt magic on a record that is otherwise its own honest content: the
+    // refusal must stay a corruption sentence, with no vintage language.
+    const accounts = await chainFixture(CORE_PHASE_OPEN_TAG, {
+      descriptor: (bytes) => { bytes[7] ^= 0xff; },
+    });
+
+    const spine = await inspectDirectTradeSpineV1(client(accounts), {
+      marketAddress: MARKET, coreProgramId: CORE, registryProgramId: REGISTRY,
+      tradingProgramId: TRADING, claimsProgramId: CLAIMS, owner: OWNER,
+    });
+    expect(spine.status).toBe('refused');
+    if (spine.status !== 'refused') return;
+    expect(spine.reason).toContain('wrong exact ABI');
+    expect(spine.reason).not.toContain('predates');
+  });
+
+  it('is a view over the canon, holding no schema value of its own', () => {
+    // The never-wrongly-refuse property is structural: every id in the vintage
+    // is the SAME OBJECT the generated ABI exports, so this cannot drift from
+    // the canon and cannot become one more mirror to go stale.
+    expect(DIRECT_DECODE_VINTAGE_V1.descriptor).toBe(Abi.CAPABILITY_PROGRAM_V4_SCHEMA_RELEASE_ID);
+    expect(DIRECT_DECODE_VINTAGE_V1.effect).toBe(Abi.EFFECT_SCHEMA_RELEASE_ID_V4);
+    expect(DIRECT_DECODE_VINTAGE_V1.lifecycle).toBe(Abi.SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5);
+    expect(DIRECT_DECODE_VINTAGE_V1.transition).toBe(Abi.TRANSITION_SCHEMA_RELEASE_ID);
+    for (const [field, id] of Object.entries(DIRECT_DECODE_VINTAGE_V1)) {
+      expect(describeDirectDecodeVintageV1()).toContain(`${field} ${hex(id).slice(0, 8)}`);
+    }
   });
 });

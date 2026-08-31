@@ -1486,3 +1486,31 @@ rather than taken from a lane's report.
   pent-up debt ruled OUT of this cut (deferral now a decision). For
   ember, non-blocking: the ceremony's dual-signer estates question
   (mainnet-era) and Rent's deferral list (§9 of the ruling).
+
+- **FRACCHECK-7's rulings answered (orchestrator):** (1) the invented
+  seam verdict tag `benign-typed-nonzero-wire` is CONFIRMED — an
+  upstream private-constructor guard is not the "fails downstream is an
+  argument" class, and filing it as hazard-unset-pin would claim 19
+  unguarded frames where the tree has 18; the tag now exists for the
+  next honest case. (2) The Economic error-collapse (inner refusals
+  flattened to one code on the compaction route) is QUEUED to cohort-9
+  polish — codes are additive and CEILINGS' exhaustive bands make the
+  widening safe, but it is a refusal-surface change and rides a
+  deliberate commit, not a debug session. (3) The opener-shortfall
+  economics (one crank leaves the opener 1,348,376 lamports short with
+  zero residue — the amended order working as designed; multi-crank
+  markets repay progressively, single-crank markets never do) is put
+  to EMBER as an economics ruling: accept as the cost of opening, or
+  redesign the order so the opener is made whole before the cranker.
+
+- **TICKET-BOARD's two decisions CONFIRMED as rulings (orchestrator):**
+  (1) the board keeps no clock — expiry filters responses at the
+  caller's slot and never mutates state; the alternative hands any
+  caller a lever to expire everyone else's offers, the one power a
+  relay structurally lacks and must keep lacking. Cost accepted: no GC,
+  reclaim by restart. (2) A full board refuses (BOARD_FULL) rather than
+  evicts, same reason. Also binding on the site: the signature chip
+  says WELL-FORMED, never verified — the TS decoder does not check
+  Ed25519 (the board does, at admission) and a test forbids the word.
+  Known limit for any public deployment: no rate limiting — loopback
+  default stands until that rung is built.

@@ -88,6 +88,8 @@ import {
   HOT_RENT_SYSVAR_ACCOUNT_V3,
   HOT_ROOT_ACCOUNT_V3,
   HOT_TRADING_PROGRAM_ACCOUNT_V3,
+  MAGIC as ACCOUNT_PROFILE_MAGIC_V2,
+  OPERATION_BYTES,
   RULE_BYTES,
 } from './generated/directInlineV3';
 import {
@@ -628,7 +630,7 @@ export function validateRuntimeAccountProfileV2(
   accounts: ReadonlyArray<DirectHotAccountMetaV3>,
   accountData?: ReadonlyArray<Uint8Array>,
 ): void {
-  if (profile.length < HEADER_BYTES || new TextDecoder('ascii', { fatal: true }).decode(profile.slice(0, 8)) !== 'DCLTAP02') throw new Error('AccountProfile has the wrong V2 magic/width');
+  if (profile.length < HEADER_BYTES || !same(profile.slice(0, 8), ACCOUNT_PROFILE_MAGIC_V2)) throw new Error('AccountProfile has the wrong V2 magic/width');
   const view = new DataView(profile.buffer, profile.byteOffset, profile.byteLength);
   const artifactProfile = view.getUint16(10, true);
   if (view.getUint16(8, true) !== 2 || ![2, 3, FIXED_DATA_PREDICATE_ARTIFACT_PROFILE].includes(artifactProfile)) throw new Error('AccountProfile header is unsupported or noncanonical');
@@ -651,7 +653,7 @@ export function validateRuntimeAccountProfileV2(
   } else if (view.getUint32(28, true) !== 0) {
     throw new Error('AccountProfile header is unsupported or noncanonical');
   }
-  const expectedProfile = profileHeader + (fixed + stride) * RULE_BYTES + (fixedOperations + itemOperations) * 16;
+  const expectedProfile = profileHeader + (fixed + stride) * RULE_BYTES + (fixedOperations + itemOperations) * OPERATION_BYTES;
   const expectedAccounts = fixed + stride * outcomeCount;
   if (profile.length !== expectedProfile || accounts.length !== expectedAccounts || (accountData !== undefined && accountData.length !== accounts.length)) throw new Error('AccountProfile or expanded runtime account width differs');
   for (let coordinate = 0; coordinate < accounts.length; coordinate += 1) {

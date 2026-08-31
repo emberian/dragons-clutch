@@ -1369,11 +1369,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     // caller keeps compiling the Direct-selected demo market unchanged.
     let market = match std::env::var("DCLUTCH_MARKET_CAPABILITY") {
         Ok(family) if family == "general" => crate::general_market::demo_general_market_input(
-            &plan_path,
-            &rpc_url,
-            registry,
-            recipient,
-            &shape,
+            &plan_path, &rpc_url, registry, recipient, &shape,
         )?,
         // Rational needs one fact General does not: its config record binds
         // the immutable Realm, and the Realm is RealmV1 over the collateral
@@ -1490,9 +1486,8 @@ fn market_shape_from_arguments_v1(
         Some(raw) => parse_list(raw)
             .into_iter()
             .map(|part| {
-                part.parse::<u64>().map_err(|_| {
-                    Error::new("--coefficients must be a comma-separated list of u64")
-                })
+                part.parse::<u64>()
+                    .map_err(|_| Error::new("--coefficients must be a comma-separated list of u64"))
             })
             .collect::<Result<Vec<_>>>()?,
     };
@@ -1505,7 +1500,11 @@ fn market_shape_from_arguments_v1(
         }
     };
     let shape = crate::market::LocalMarketShapeV1 {
-        cut_denominator: scalar(cut_denominator, "--cut-denominator", default.cut_denominator)?,
+        cut_denominator: scalar(
+            cut_denominator,
+            "--cut-denominator",
+            default.cut_denominator,
+        )?,
         cuts,
         coefficients,
         initial_collateral_atoms: scalar(
@@ -1515,9 +1514,9 @@ fn market_shape_from_arguments_v1(
         )?,
         terminal_window_width_seconds: match terminal_window_width_seconds {
             None => default.terminal_window_width_seconds,
-            Some(raw) => raw.parse::<i64>().map_err(|_| {
-                Error::new("--terminal-window-width-seconds must be a decimal i64")
-            })?,
+            Some(raw) => raw
+                .parse::<i64>()
+                .map_err(|_| Error::new("--terminal-window-width-seconds must be a decimal i64"))?,
         },
         generation: scalar(generation, "--generation", default.generation)?,
     };

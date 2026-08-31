@@ -1,0 +1,5 @@
+# A running board writes its snapshot beside itself. It is live state, not
+# source: every row is one maker's bearer artifact, and none of it belongs in
+# git.
+ticket-board-snapshot.json
+ticket-board-snapshot.json.writing

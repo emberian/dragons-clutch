@@ -38,8 +38,8 @@ use dclutch_registry_contract::{
 use dclutch_registry_svm::RegistryInstructionV1;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    ProgramIdentityV1, ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+    ProgramIdentityV1, ProtocolInfrastructureProfileV2,
 };
 use dclutch_resolution_codec::{
     FundedTransitionActionV3, PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
@@ -708,15 +708,24 @@ impl Fixture {
             required_semantic_release("DCLUTCH_RENT_SEMANTIC_RELEASE_ID"),
             &elves.rent,
         );
-        let infrastructure =
-            ProtocolInfrastructureProfileV1::new(binding(registry_release), binding(rent_release))
-                .expect("distinct Registry/Rent infrastructure profile");
+        // Registry moved across the succession and Rent did not: the
+        // predecessor Registry id names the distinct release this profile
+        // succeeded, while Rent holds the same id on both sides of it.
+        let predecessor_registry_release =
+            artifact(REGISTRY_PROGRAM_ID, [0xb1; 32], &elves.registry);
+        let infrastructure = ProtocolInfrastructureProfileV2::new(
+            binding(registry_release),
+            binding(rent_release),
+            artifact_id(predecessor_registry_release),
+            artifact_id(rent_release),
+        )
+        .expect("distinct Registry/Rent infrastructure succession profile");
         assert_eq!(
             infrastructure.to_bytes().len(),
-            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         );
         let infrastructure_address = Pubkey::find_program_address(
-            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
             &CORE_PROGRAM_ID,
         )
         .0;

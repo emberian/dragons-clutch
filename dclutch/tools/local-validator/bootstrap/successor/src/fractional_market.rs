@@ -289,8 +289,9 @@ mod tests {
     /// The manifest a founding would have to publish for terms bound to one
     /// candidate market: closure → entry → merged four-entry manifest.
     fn manifest_for_market(market: [u8; 32]) -> Vec<u8> {
-        let closure = fractional_selected_closure_v1(&terms_bytes_for(market), [0x50; 32], widths())
-            .expect("Fractional closure compiles for a named market");
+        let closure =
+            fractional_selected_closure_v1(&terms_bytes_for(market), [0x50; 32], widths())
+                .expect("Fractional closure compiles for a named market");
         let entry = selected_manifest_entry_v1(SelectedCapabilityClosureV1 {
             program_set: &closure.program_set,
             selected_descriptor: &closure.selected_descriptor,
@@ -342,7 +343,9 @@ mod tests {
             CapabilityManifestV1::encode_into(&entries, &mut bytes).expect("base manifest");
             bytes
         };
-        merge_selected_manifest_v1(&base, entry).expect("merged manifest").0
+        merge_selected_manifest_v1(&base, entry)
+            .expect("merged manifest")
+            .0
     }
 
     /// THE INVERSION. The old form of this test proved the iteration
@@ -400,7 +403,10 @@ mod tests {
         let closure =
             fractional_selected_closure_v1(&terms_bytes_for([0x77; 32]), [0x50; 32], widths())
                 .expect("closure");
-        assert_eq!(closure.config_schema, FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1);
+        assert_eq!(
+            closure.config_schema,
+            FRACTIONAL_SELECTION_CONFIG_SCHEMA_ID_V1
+        );
         assert_eq!(closure.terms_schema, FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2);
         assert_ne!(closure.config, closure.terms);
 
@@ -461,8 +467,9 @@ mod tests {
         );
 
         // Nothing in the payload moves when only the Market moves.
-        let other = fractional_selected_closure_v1(&terms_bytes_for([0x19; 32]), [0x50; 32], widths())
-            .expect("closure");
+        let other =
+            fractional_selected_closure_v1(&terms_bytes_for([0x19; 32]), [0x50; 32], widths())
+                .expect("closure");
         let other_payload = fractional_selected_payload_v1(&other, u64::MAX, 1_000_000);
         assert_eq!(payload.program_set_hex, other_payload.program_set_hex);
         assert_eq!(payload.config_hex, other_payload.config_hex);

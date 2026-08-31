@@ -64,16 +64,18 @@ use dclutch_claims_svm::{
     custody_replay_v1::ClaimsCustodyReplayRequestV1,
     liability_basis_state_v2::{LIABILITY_BASIS_MARKET_SEED_V2, LiabilityBasisMarketViewV2},
 };
+use dclutch_core_contract::ContentId;
 use dclutch_custody_contract::{
     CUSTODY_REPLAY_BYTES_V1, CallerRoleV1, CustodyReplaySeedsV1, CustodyReplayV1,
 };
-use dclutch_core_contract::ContentId;
 use dclutch_market_core_codec::CoreState;
 use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use solana_program::hash::hash;
 
-use crate::campaign::{parse_campaign_terminal_evidence_with_expected_cluster_v1, read_keypair_file};
+use crate::campaign::{
+    parse_campaign_terminal_evidence_with_expected_cluster_v1, read_keypair_file,
+};
 use crate::cluster::ExpectedClusterV1;
 use crate::model::{SuccessorPlan, TransactionEvidence};
 use crate::plan::pubkey;
@@ -152,7 +154,11 @@ pub(crate) fn run_owned_loopback_v1(arguments: Vec<String>) -> Result<()> {
         )));
     }
 
-    let evidence = rpc.send("Claims custody replay creation", &[plan.instruction.clone()], &payer)?;
+    let evidence = rpc.send(
+        "Claims custody replay creation",
+        &[plan.instruction.clone()],
+        &payer,
+    )?;
     if let Some(error) = evidence.error.as_ref() {
         return Err(Error::new(format!(
             "the Claims replay creation refused on chain: {error}"
@@ -276,10 +282,12 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<PlanV1> {
         request_digest,
     )
     .map_err(|error| Error::new(format!("Claims caller authority seeds: {error:?}")))?;
-    let caller_authority =
-        Pubkey::find_program_address(&caller_seeds.as_slices(), &claims).0;
-    let replay =
-        Pubkey::find_program_address(&CustodyReplaySeedsV1::from_request(request).as_slices(), &custody).0;
+    let caller_authority = Pubkey::find_program_address(&caller_seeds.as_slices(), &claims).0;
+    let replay = Pubkey::find_program_address(
+        &CustodyReplaySeedsV1::from_request(request).as_slices(),
+        &custody,
+    )
+    .0;
 
     // First use means first use: an occupied address is not this route's to
     // create, and saying so here is cheaper than a cluster round trip.
@@ -292,7 +300,12 @@ fn plan(rpc: &mut Rpc, arguments: &ArgumentsV1) -> Result<PlanV1> {
         )));
     }
 
-    let realm = routed_record(&evidence, "realm_record", registry, REALM_SCHEMA_RELEASE_ID_V1)?;
+    let realm = routed_record(
+        &evidence,
+        "realm_record",
+        registry,
+        REALM_SCHEMA_RELEASE_ID_V1,
+    )?;
     let claims_programdata = pubkey(&plan.claims.programdata_id)?;
 
     // Indices 0..12 are Custody's InitializeReplay frame verbatim; 13 and 14
@@ -362,11 +375,7 @@ fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn write_evidence(
-    path: &Path,
-    plan: &PlanV1,
-    landed: Option<&TransactionEvidence>,
-) -> Result<()> {
+fn write_evidence(path: &Path, plan: &PlanV1, landed: Option<&TransactionEvidence>) -> Result<()> {
     let document = json!({
         "schema": "dclutch-claims-custody-replay-evidence-v1",
         "cluster": "owned-loopback",
@@ -388,7 +397,10 @@ fn write_evidence(
             "feeLamports": evidence.fee_lamports,
         })),
     });
-    std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&document)?))?;
+    std::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&document)?),
+    )?;
     Ok(())
 }
 
@@ -421,7 +433,11 @@ fn parse(arguments: Vec<String>) -> Result<ArgumentsV1> {
             "--fee-payer" => &mut fee_payer,
             "--fee-payer-keypair" => &mut fee_payer_keypair,
             "--output" => &mut output,
-            other => return Err(Error::new(format!("unknown {COMMAND_V1} argument: {other}"))),
+            other => {
+                return Err(Error::new(format!(
+                    "unknown {COMMAND_V1} argument: {other}"
+                )));
+            }
         };
         if slot.replace(value).is_some() {
             return Err(Error::new(format!("{flag} was given twice")));

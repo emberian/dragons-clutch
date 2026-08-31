@@ -136,7 +136,7 @@ pub fn fetch_account_v1(url: &str, address: &str) -> Result<FetchedAccountV1> {
 /// `reqwest` puts the full URL in its `Display`, which is exactly the string a
 /// provider's API key rides in. We cannot rewrite the library's message, so we
 /// substitute the origin for every occurrence of the URL and of its path.
-fn redact(message: &str, url: &str) -> String {
+pub fn redact(message: &str, url: &str) -> String {
     let mut redacted = message.replace(url, &origin(url));
     if let Some((_, rest)) = url.split_once("://")
         && let Some(index) = rest.find('/')

@@ -1261,6 +1261,286 @@ async fn every_moved_role_needs_its_own_authority() {
     }
 }
 
+/// Cohort-9's shape: Custody alone stands still.
+///
+/// The ruling's verdict 2, made concrete. Across 8-to-9 the profile succession
+/// gives Resolution V2-only reads, which is a SOURCE change to the one role
+/// that did not move in 7-to-8 -- so Resolution flips to moved and Custody
+/// becomes the sole unmoved role. That inversion is the point of declaring both
+/// hops in one campaign: the unmoved role is not a fixed property of some role,
+/// it is a per-hop measurement, and `d6e43b11`'s conjunct fix has to hold for
+/// whichever role happens to hold still.
+fn cohort9_specs(authority: Pubkey) -> [RoleSpec; 5] {
+    let mut specs = successor_specs(authority);
+    for (index, (elf, slot)) in [
+        (0x91_u8, 491_000_000_u64),
+        (0x92, 491_000_100),
+        (0x93, 491_000_200),
+        (0x94, 491_000_300),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if let Some(spec) = specs.get_mut(index) {
+            spec.elf = elf;
+            spec.slot = slot;
+        }
+    }
+    specs
+}
+
+/// The generation the Registry lands in when the cut upgrades it (step 3).
+const UPGRADED_REGISTRY_DEPLOYMENT_SLOT: u64 = 531;
+/// A Loader V3 program is visible from `deployment_slot + 1`, and the
+/// deployment slot must be an ancestor of the executing slot.
+const UPGRADED_REGISTRY_BANK_SLOT: u64 = UPGRADED_REGISTRY_DEPLOYMENT_SLOT + 1;
+
+/// Compose Loader V3 ProgramData reporting an explicit deployment generation.
+fn programdata_bytes(elf: &[u8], deployment_slot: u64) -> Vec<u8> {
+    let mut bytes = vec![0; 45 + elf.len()];
+    bytes
+        .get_mut(0..4)
+        .expect("tag")
+        .copy_from_slice(&3_u32.to_le_bytes());
+    bytes
+        .get_mut(4..12)
+        .expect("slot")
+        .copy_from_slice(&deployment_slot.to_le_bytes());
+    // Immutable: the cut revokes the Registry's upgrade authority after the
+    // move, and the declaration route never reads this account anyway.
+    *bytes.get_mut(12).expect("authority tag") = 0;
+    bytes.get_mut(45..).expect("ELF").copy_from_slice(elf);
+    bytes
+}
+
+fn programdata_address(program: Pubkey) -> Pubkey {
+    Pubkey::find_program_address(&[program.as_ref()], &bpf_loader_upgradeable::ID).0
+}
+
+/// Declare one hop and return the record that landed.
+async fn declare_hop(
+    context: &mut ProgramTestContext,
+    predecessor: &CacheFixture,
+    successor: &CacheFixture,
+    authority: &Keypair,
+    funder: &Keypair,
+) -> ReleaseLineageV1 {
+    let lineage = release_lineage_address_and_bump_v1(
+        &REGISTRY_PROGRAM_ID,
+        predecessor.release_set_id.as_bytes(),
+    )
+    .0;
+    let state = RegistryDeclareSuccessorState {
+        payer: observe(context, funder.pubkey()).await,
+        lineage: observe(context, lineage).await,
+        predecessor_cache: observe(context, predecessor.address).await,
+        successor_cache: observe(context, successor.address).await,
+        system_program: observe(context, system_program::ID).await,
+        rent_sysvar: observe(context, sysvar::rent::ID).await,
+    };
+    let report = build_registry_declare_successor_v1(REGISTRY_PROGRAM_ID, &state)
+        .expect("the builder must admit an honest cut hop");
+    submit(context, report.instruction.clone(), &[funder, authority])
+        .await
+        .expect("the upgraded Registry must admit the builder's frame");
+    let landed = context
+        .banks_client
+        .get_account(lineage)
+        .await
+        .expect("banks client")
+        .expect("the lineage record must exist");
+    assert_eq!(landed.owner, REGISTRY_PROGRAM_ID);
+    assert_eq!(landed.data.len(), RELEASE_LINEAGE_BYTES_V1);
+    assert_eq!(
+        landed.data,
+        report.record.to_bytes(),
+        "the landed record must be byte-equal to the one the builder projected"
+    );
+    ReleaseLineageV1::decode(&landed.data).expect("the landed record must decode")
+}
+
+/// The cut's two declarations ride the UPGRADED Registry, and one walk follows
+/// both hops.
+///
+/// The ruling's §8.5 obligation. Every other bank in this file runs the Registry
+/// at the genesis deployment generation, which is the one thing cohort-9's cut
+/// guarantees will not be true when these declarations are sent: step 3 moves
+/// the Registry's bytes, step 4 is the profile succession ceremony, and step 5
+/// is these two hops. So the declarations are proved where they will actually
+/// be made -- on a Registry whose ProgramData reports a generation that did not
+/// exist when either cache was written.
+///
+/// That the route survives its own program moving is not free by inspection.
+/// `DeclareSuccessor` reads two cache accounts and CPIs only System, so it
+/// observes no deployment and has no slot pin of its own -- which is exactly
+/// why it is the route that still works in the window where founding and
+/// retirement do not (`found_program_test.rs`, on the brick). This test is what
+/// turns that reading of the code into a measurement.
+///
+/// Both hops, one bank, because a lineage chain is only a chain if the hops
+/// agree: `walk_lineage_to(destination)` is asked to cross BOTH, and it is
+/// `walk_lineage_to` and never `is_already_current` -- the live-measured trap
+/// named in `RELEASE_SET_COHORT_LINEAGE_2026_08_31.md`, where a walk that asks
+/// "am I current?" answers about the wrong endpoint.
+#[tokio::test]
+async fn the_cut_declarations_ride_an_upgraded_registry_and_the_walk_follows_both_hops() {
+    let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
+    let elf = fs::read(directory.join("dclutch_registry_sbf.so"))
+        .expect("compiled Registry ELF in SBF_OUT_DIR");
+    assert_eq!(
+        elf.get(..4),
+        Some(&[0x7f, b'E', b'L', b'F'][..]),
+        "the Registry artifact must be a real ELF"
+    );
+
+    let authority = authority_keypair();
+    let cohort7 = build_cache(predecessor_specs(authority.pubkey()));
+    let cohort8 = build_cache(successor_specs(authority.pubkey()));
+    let cohort9 = build_cache(cohort9_specs(authority.pubkey()));
+    // The two hops invert which role holds still, and both arms of `d6e43b11`'s
+    // conjunct fix are therefore exercised in one campaign.
+    assert_eq!(
+        moved_mask(
+            predecessor_specs(authority.pubkey()),
+            successor_specs(authority.pubkey())
+        ),
+        [true, true, true, false, true],
+        "7-to-8 is the four-moved devnet shape, resolution unmoved"
+    );
+    assert_eq!(
+        moved_mask(
+            successor_specs(authority.pubkey()),
+            cohort9_specs(authority.pubkey())
+        ),
+        [true, true, true, true, false],
+        "8-to-9 moves resolution and leaves custody alone"
+    );
+
+    let mut test = ProgramTest::default();
+    test.prefer_bpf(true);
+    test.set_compute_max_units(1_400_000);
+    test.add_upgradeable_program_to_genesis("dclutch_registry_sbf", &REGISTRY_PROGRAM_ID);
+    // Step 3 of the cut: the Registry's bytes move to a new generation. There is
+    // no Loader `Upgrade` in any harness, so the upgrade IS this restaging --
+    // the same simulation `direct-hot/src/waist.rs` uses, and the only nonzero
+    // deployment generation this bank holds.
+    test.add_account(
+        programdata_address(REGISTRY_PROGRAM_ID),
+        Account {
+            lamports: Rent::default().minimum_balance(45 + elf.len()),
+            data: programdata_bytes(&elf, UPGRADED_REGISTRY_DEPLOYMENT_SLOT),
+            owner: bpf_loader_upgradeable::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+    test.add_sysvar_account(
+        solana_sdk_ids::sysvar::clock::ID,
+        &solana_program::clock::Clock {
+            slot: UPGRADED_REGISTRY_BANK_SLOT,
+            ..solana_program::clock::Clock::default()
+        },
+    );
+    for cache in [&cohort7, &cohort8, &cohort9] {
+        test.add_account(cache.address, registry_account(cache.bytes.clone()));
+    }
+    let funder = Keypair::new_from_array([0x2f; 32]);
+    test.add_account(
+        funder.pubkey(),
+        Account {
+            lamports: 10_000_000_000,
+            data: Vec::new(),
+            owner: system_program::ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    );
+
+    let mut context = test.start_with_context().await;
+    context
+        .warp_to_slot(UPGRADED_REGISTRY_BANK_SLOT)
+        .expect("warp the bank one slot past the upgraded generation");
+
+    // The upgrade is real to the runtime, not just to the fixture's intent.
+    let observed = context
+        .banks_client
+        .get_account(programdata_address(REGISTRY_PROGRAM_ID))
+        .await
+        .expect("banks client")
+        .expect("the Registry ProgramData must exist");
+    assert_eq!(
+        observed.data.get(4..12).map(|slot| {
+            let mut bytes = [0_u8; 8];
+            bytes.copy_from_slice(slot);
+            u64::from_le_bytes(bytes)
+        }),
+        Some(UPGRADED_REGISTRY_DEPLOYMENT_SLOT),
+        "the bank must be running the upgraded Registry generation"
+    );
+
+    // ---- step 5, hop one: 7 to 8, the unmoved-resolution arm ----
+    let first = declare_hop(&mut context, &cohort7, &cohort8, &authority, &funder).await;
+    assert_eq!(first.predecessor(), cohort7.release_set_id);
+    assert_eq!(first.successor(), cohort8.release_set_id);
+    assert!(
+        !first.moved(ExecutionRoleV1::Resolution),
+        "7-to-8 records resolution as unmoved"
+    );
+    assert_eq!(
+        first.consenting_authority(ExecutionRoleV1::Resolution),
+        None,
+        "an unmoved role consents with nobody"
+    );
+
+    // ---- step 5, hop two: 8 to 9, custody now the unmoved role ----
+    let second = declare_hop(&mut context, &cohort8, &cohort9, &authority, &funder).await;
+    assert_eq!(second.predecessor(), cohort8.release_set_id);
+    assert_eq!(second.successor(), cohort9.release_set_id);
+    assert!(
+        second.moved(ExecutionRoleV1::Resolution),
+        "8-to-9 moves resolution, because the profile succession changed its source"
+    );
+    assert!(
+        !second.moved(ExecutionRoleV1::Custody),
+        "8-to-9 records custody as the unmoved role"
+    );
+
+    // ---- one walk, both hops ----
+    let mut chain = BTreeMap::new();
+    for endpoint in [
+        cohort7.release_set_id,
+        cohort8.release_set_id,
+        cohort9.release_set_id,
+    ] {
+        chain.insert(
+            endpoint.as_bytes().to_vec(),
+            lineage_at(&mut context, endpoint).await,
+        );
+    }
+    let lookup = |set: ContentId| {
+        *chain
+            .get(set.as_bytes().as_slice())
+            .unwrap_or(&LineageAt::Undeclared)
+    };
+    let to_destination = walk_lineage_to(cohort7.release_set_id, cohort9.release_set_id, lookup)
+        .expect("cohort-9 is reachable from cohort-7");
+    assert_eq!(
+        to_destination.hops(),
+        2,
+        "the walk crosses both declarations the cut makes"
+    );
+    // The intermediate endpoint is reachable in one, which is what makes the
+    // two above a CHAIN rather than a single hop counted twice.
+    let to_middle = walk_lineage_to(cohort7.release_set_id, cohort8.release_set_id, lookup)
+        .expect("cohort-8 is reachable from cohort-7");
+    assert_eq!(to_middle.hops(), 1);
+    let to_head =
+        walk_lineage_to_head(cohort7.release_set_id, lookup).expect("the chain has a head");
+    assert_eq!(to_head.endpoint(), cohort9.release_set_id);
+    assert_eq!(to_head.hops(), 2);
+    assert!(!to_head.is_already_current());
+}
+
 /// Clone the honest instruction and change exactly one thing about its frame.
 fn perturbed(honest: &Instruction, edit: impl FnOnce(&mut Vec<AccountMeta>)) -> Instruction {
     let mut instruction = honest.clone();

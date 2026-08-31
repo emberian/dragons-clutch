@@ -186,6 +186,36 @@ activated, and new markets founded on it. Fail-closed, disclosed (the
 any reader), and exactly requirement 3. A third party cannot upgrade at all
 without the authority's signature.
 
+**Correction, 2026-08-31: that remedy did not exist for the sixth admission
+site.** "Published, activated, and new markets founded on it" is a remedy the
+five cache-pinned roles have because a cache can be rewritten per release set.
+The infrastructure profile cannot: it is Core-owned, write-once by vacancy,
+with no re-initialize and no succession route, so admitting `ExactAuthority`
+at the infrastructure sites above (the paragraph beginning "The infrastructure
+admission sites") widened what its pinned records may SAY without giving it
+anywhere to say something new. A Registry or Rent upgrade therefore moved the
+slot and refused founding, all three retirement entries, the series-permit
+refund and both provider resolution routes permanently, with both escapes
+structurally dead — a new record fails the content pin, a rewrite fails the
+vacancy check. The refusal's own doc comment pointed the reader at this
+paragraph for a remedy that, for that one account, was not there. That is
+P-008 in `docs/OMISSION_INDEX.md`, and the carry-forward whitelist in the
+successor bootstrap was the only place the constraint was written down.
+
+The remedy for the sixth admission site is **profile succession**, ruled in
+`docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md`: a new write-once profile
+version at its own PDA domain, created by a ceremony strictly stronger than
+the original creation (Core's upgrade authority, first-admission full-ELF
+hashing, predecessor presence, program-identity invariance, forward-only
+slots, the predecessor release's bound authority consenting to each moved
+binding, no-fork vacancy, read-back), with redeployed consumers reading the
+new version only. The predecessor is never mutated. What this costs, stated
+where the next reader will need it: moving Registry or Rent is a
+Core-release-class event, forever — a new profile version, Core and
+resolution-proof source changes, and the ceremony inside the same gate as the
+upgrade. That coupling is the documented replacement for a carry-forward that
+was load-bearing for eight cohorts while being explained nowhere.
+
 ## The iteration economics this buys
 
 - Deploy the seven roles **once, mutable, never revoke**. ~31.7 SOL parked as

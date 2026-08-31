@@ -6,6 +6,7 @@ import {
   CHECKED_INFRASTRUCTURE_BYTES_V1,
   decodeCheckedInfrastructureV1,
   decodeProtocolInfrastructureProfileV1,
+  decodeProtocolInfrastructureProfileV2,
   inspectProtocolInfrastructureV1,
 } from './infrastructure';
 import {
@@ -24,7 +25,11 @@ import {
 } from './releaseRegistry';
 import {
   PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-  PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2,
+  PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2,
 } from './generated/protocolInfrastructure';
 import { type RpcAccount } from './rpc';
 
@@ -122,17 +127,19 @@ async function fixture(seed: number, upgradeAuthority?: PublicKey): Promise<Fixt
   const registryArtifactId = await sha256(registryFixture.artifact.bytes);
   const rentArtifactId = await sha256(rentFixture.artifact.bytes);
 
-  const profile = new Uint8Array(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1);
-  profile.set(new TextEncoder().encode('DCLTINF1'));
+  const profile = new Uint8Array(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2);
+  profile.set(new TextEncoder().encode('DCLTINF2'));
   const profileView = new DataView(profile.buffer);
-  profileView.setUint16(8, 1, true);
+  profileView.setUint16(8, 2, true);
   profileView.setUint16(10, 1, true);
   profile.set(new PublicKey(registryFixture.artifact.program).toBytes(), 16);
   profile.set(registryArtifactId, 48);
   profile.set(new PublicKey(rentFixture.artifact.program).toBytes(), 80);
   profile.set(rentArtifactId, 112);
+  profile.fill(seed + 70, PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2 + 32);
+  profile.fill(seed + 80, PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2 + 32);
   const profilePda = PublicKey.findProgramAddressSync(
-    [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+    [PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
     new PublicKey(artifacts.core.artifact.program),
   )[0];
 
@@ -166,7 +173,7 @@ async function fixture(seed: number, upgradeAuthority?: PublicKey): Promise<Fixt
   const checkedManifest = new Uint8Array(CHECKED_INFRASTRUCTURE_BYTES_V1);
   checkedManifest.set(new TextEncoder().encode('DCLTIEV1'));
   const checkedView = new DataView(checkedManifest.buffer);
-  checkedView.setUint16(8, 1, true);
+  checkedView.setUint16(8, 2, true);
   checkedView.setUint16(10, 3, true);
   checkedManifest.set(multiprogram, 16);
   checkedManifest.set(profile, 16 + CHECKED_MULTIPROGRAM_BYTES);
@@ -214,11 +221,31 @@ describe('immutable protocol infrastructure inspection', () => {
   it('decodes the exact generated profile and checked evidence', async () => {
     const value = await fixture(11);
     const checked = await decodeCheckedInfrastructureV1(value.checkedManifest);
-    expect(value.checkedManifest).toHaveLength(2_280);
-    expect(checked.profile.bytes).toHaveLength(144);
+    expect(value.checkedManifest).toHaveLength(2_360);
+    expect(checked.profile.bytes).toHaveLength(224);
     expect(checked.profile.registry.program).toBe(value.registryProgram);
-    expect(decodeProtocolInfrastructureProfileV1(checked.profile.bytes)).toEqual(checked.profile);
+    expect(decodeProtocolInfrastructureProfileV2(checked.profile.bytes)).toEqual(checked.profile);
+    expect(checked.profile.predecessorRegistryArtifactReleaseId).not.toBe(checked.profile.predecessorRentArtifactReleaseId);
     expect(checked.execution.artifacts.core.upgradeAuthority).toBeNull();
+  });
+
+  // V1 is write-once: the succession leaves the predecessor record standing at
+  // its own PDA, so V1's decoder still has a record to read — and must never
+  // stand in for V2's, which is what a fallback read would make it do.
+  it('still reads the sealed predecessor V1 profile, and refuses to read it as V2', () => {
+    const sealed = new Uint8Array(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1);
+    sealed.set(new TextEncoder().encode('DCLTINF1'));
+    const sealedView = new DataView(sealed.buffer);
+    sealedView.setUint16(8, 1, true);
+    sealedView.setUint16(10, 1, true);
+    sealed.set(key(0x21).toBytes(), 16);
+    sealed.fill(0x22, 48, 80);
+    sealed.set(key(0x23).toBytes(), 80);
+    sealed.fill(0x24, 112, 144);
+    const predecessor = decodeProtocolInfrastructureProfileV1(sealed);
+    expect(predecessor.registry.program).toBe(key(0x21).toBase58());
+    expect(predecessor.rent.program).toBe(key(0x23).toBase58());
+    expect(() => decodeProtocolInfrastructureProfileV2(sealed)).toThrow('wrong exact width');
   });
 
   it('keeps internal consistency distinct from caller-supplied recognition', async () => {
@@ -265,11 +292,29 @@ describe('immutable protocol infrastructure inspection', () => {
   it('refuses profile PDA and reserved-byte substitution', async () => {
     const value = await fixture(11);
     const wrongPda = new Uint8Array(value.checkedManifest);
-    wrongPda[16 + CHECKED_MULTIPROGRAM_BYTES + 144] ^= 1;
+    wrongPda[16 + CHECKED_MULTIPROGRAM_BYTES + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2] ^= 1;
     await expect(decodeCheckedInfrastructureV1(wrongPda)).rejects.toThrow('PDA');
     const reserved = new Uint8Array(value.checkedManifest);
     reserved[12] = 1;
     await expect(decodeCheckedInfrastructureV1(reserved)).rejects.toThrow('reserved');
+  });
+
+  // The two refusals the succession profile carries that V1 has no room for:
+  // the tail the layout reserves for a later field, and predecessor ids that
+  // would name one predecessor record as both Registry and Rent.
+  it('refuses a noncanonical succession tail and aliased predecessor ids', async () => {
+    const value = await fixture(11);
+    const profileOffset = 16 + CHECKED_MULTIPROGRAM_BYTES;
+    const tail = new Uint8Array(value.checkedManifest);
+    tail[profileOffset + PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2] = 1;
+    await expect(decodeCheckedInfrastructureV1(tail)).rejects.toThrow('profile tail');
+    const aliased = new Uint8Array(value.checkedManifest);
+    aliased.copyWithin(
+      profileOffset + PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_RENT_ARTIFACT_OFFSET_V2,
+      profileOffset + PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2,
+      profileOffset + PROTOCOL_INFRASTRUCTURE_PROFILE_PREDECESSOR_REGISTRY_ARTIFACT_OFFSET_V2 + 32,
+    );
+    await expect(decodeCheckedInfrastructureV1(aliased)).rejects.toThrow('aliases Registry and Rent');
   });
 
   // Decision 0012. This assertion used to read the other way: flipping the
@@ -298,7 +343,7 @@ describe('immutable protocol infrastructure inspection', () => {
   // The residue of `require_slot_pinned_release_v1`: what `MutableRegistryRelease`
   // still means is a NON-CANONICAL pairing, and there are exactly two of them.
   it('refuses both non-canonical policy/authority pairings by name', async () => {
-    const registryOffset = 16 + CHECKED_MULTIPROGRAM_BYTES + 144 + 32;
+    const registryOffset = 16 + CHECKED_MULTIPROGRAM_BYTES + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2 + 32;
     const immutableWithAuthority = new Uint8Array((await fixture(11)).checkedManifest);
     immutableWithAuthority.fill(0x44, registryOffset + 184, registryOffset + 216);
     await expect(decodeCheckedInfrastructureV1(immutableWithAuthority)).rejects.toThrow('upgrade authority is noncanonical');

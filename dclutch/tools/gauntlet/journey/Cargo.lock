@@ -695,6 +695,7 @@ dependencies = [
  "dclutch-rational-representation-v2-lifecycle-contract",
  "dclutch-realm-contract",
  "dclutch-record-contract",
+ "dclutch-registry-activation-auth-v1",
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-relay-contract",

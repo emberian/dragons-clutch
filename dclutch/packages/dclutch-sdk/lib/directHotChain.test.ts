@@ -11,7 +11,7 @@ import {
   validateProductBasisV3,
   validateDirectSignedRequestProfileV2,
 } from './directHotChain';
-import { sha256 } from './bytes';
+import { hex, sha256 } from './bytes';
 import * as Abi from './generated/directInlineV3';
 import {
   LOADER_V3_PROGRAMDATA_OFFSET,
@@ -365,6 +365,9 @@ describe('Direct V3 chain-selected artifacts', () => {
 
   it('hostile-decodes the schema-bound V4 successor descriptor', () => {
     const decoded = decodeDirectDescriptorV4(descriptorFixture());
+    // These assert the FIXTURE round-trips the program ids it was built from,
+    // not that the authenticator pins them: Rust binds artifact programs by
+    // content (`require_content`), never by equality to a publisher id.
     expect(decoded.lifecycle.program).toEqual(Abi.DIRECT_INLINE_ORDINARY_LIFECYCLE_ID_V5);
     expect(decoded.strategy.program).toEqual(Abi.DIRECT_INLINE_ORDINARY_STRATEGY_ID_V3);
     expect(decoded.transition.program).toEqual(Abi.DIRECT_INLINE_ORDINARY_TRANSITION_ID_V3);
@@ -372,15 +375,29 @@ describe('Direct V3 chain-selected artifacts', () => {
     const width = descriptorFixture();
     putU32(width, Abi.CAPABILITY_PROGRAM_V4_ROOT_STATE_BYTES_OFFSET, Abi.DIRECT_ROOT_STATE_BYTES_V1 + 1);
     expect(() => decodeDirectDescriptorV4(width)).toThrow(/root-tail width/);
+
+    // A substituted SCHEMA stays refused, and the refusal now localizes itself:
+    // it names the one disagreeing field and both values.
     const strategy = descriptorFixture();
     strategy.set(identity(11), Abi.CAPABILITY_PROGRAM_V4_STRATEGY_SCHEMA_OFFSET);
     expect(() => decodeDirectDescriptorV4(strategy)).toThrow(/schema-bound/);
-    const staleAccountProfile = descriptorFixture();
-    staleAccountProfile.set(identity(12), Abi.CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_PROGRAM_OFFSET);
-    expect(() => decodeDirectDescriptorV4(staleAccountProfile)).toThrow(/schema-bound/);
+    expect(() => decodeDirectDescriptorV4(strategy)).toThrow(/Strategy schema/);
+    expect(() => decodeDirectDescriptorV4(strategy)).toThrow(new RegExp(hex(identity(11))));
+    expect(() => decodeDirectDescriptorV4(strategy))
+      .toThrow(new RegExp(hex(Abi.EXECUTION_STRATEGY_PROGRAM_SCHEMA_ID_V2)));
+
+    // A republished artifact PROGRAM id is accepted: the chain accepts any
+    // content the descriptor's own digest names, and so does this client
+    // (integrity lives at the fetch, where the bytes are hashed). This is the
+    // fluidity proof that the pinned-mirror refusal class is retired.
+    const republishedAccountProfile = descriptorFixture();
+    republishedAccountProfile.set(identity(12), Abi.CAPABILITY_PROGRAM_V4_ACCOUNT_PROFILE_PROGRAM_OFFSET);
+    expect(decodeDirectDescriptorV4(republishedAccountProfile).accountProfile.program)
+      .toEqual(identity(12));
+
     const parallelLifecycle = descriptorFixture();
     parallelLifecycle.set(identity(11), Abi.CAPABILITY_PROGRAM_V4_DERIVATION_POLICY_OFFSET);
-    expect(() => decodeDirectDescriptorV4(parallelLifecycle)).toThrow(/schema-bound/);
+    expect(() => decodeDirectDescriptorV4(parallelLifecycle)).toThrow(/derivation policy is not its own Lifecycle program/);
   });
 
   it('validates the embedded request interpreter and both distinct native-signature destinations', () => {

@@ -653,6 +653,13 @@ tier_journey() {
 #            and tools/gauntlet/dealer's family test was red from 2026-08-27
 #            until 33a61576, both times because a release-path change touched
 #            seven programs and zero campaigns.
+#   registry the release-set successor declaration on a real Registry ELF.
+#            Added 2026-08-31, having run in NO tier since it was written: the
+#            campaign that red-proofed d6e43b11's consent geometry was reachable
+#            only by someone typing its runner path by hand, which is the
+#            "unrun gate is not a passing gate" shape this tier exists to close.
+#            It is also the gate for the 7-to-8 and 8-to-9 declarations the
+#            cohort-9 cut must land.
 #
 # NOT A ROW, and the reason is a cost rather than a judgement: the SUCCESSOR
 # BOOTSTRAP has no runner script, needs a real solana-test-validator, and its
@@ -671,6 +678,7 @@ custody|programs/dclutch-custody-sbf/run-program-test.sh|Custody vault routes ag
 core|programs/dclutch-core-sbf/run-open-market-program-test.sh|every core program-test target, discovered from tests/
 claims|programs/dclutch-claims-sbf/run-rational-representation-v2-program-test.sh|the rational representation V2 lowering
 dealer|programs/dclutch-dealer-accelerator-sbf/program-test/run-program-test.sh|the dealer accelerator link and its family tests
+registry|programs/dclutch-registry-sbf/run-lineage-program-test.sh|the release-set successor declaration and the walk that follows the hop
 fee2tx|programs/dclutch-trading-sbf/program-test/run-fee-second-transaction.sh|the Direct fee leg in a transaction of its own, against real Custody
 postjoin|programs/dclutch-trading-sbf/program-test/run-postjoin-hostiles.sh|Trading refuses three isolated child adversaries and rolls the whole transaction back"
 

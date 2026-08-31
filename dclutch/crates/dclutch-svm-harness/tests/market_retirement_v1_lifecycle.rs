@@ -155,13 +155,21 @@ async fn joined_fixture() -> (JoinedFixture, ProgramTestContext) {
         rent_release.to_bytes().to_vec(),
     );
     let infrastructure_profile = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &CORE_PROGRAM_ID,
     )
     .0;
-    let infrastructure =
-        ProtocolInfrastructureProfileV1::new(binding(registry_release), binding(rent_release))
-            .expect("immutable infrastructure profile");
+    // Registry moved across the succession and Rent did not: the predecessor
+    // Registry id names the distinct release this profile succeeded, while
+    // Rent holds the same id on both sides of it.
+    let predecessor_registry_release = release(REGISTRY_PROGRAM_ID, [0xb5; 32], &elves.registry);
+    let infrastructure = ProtocolInfrastructureProfileV2::new(
+        binding(registry_release),
+        binding(rent_release),
+        artifact_id(predecessor_registry_release),
+        artifact_id(rent_release),
+    )
+    .expect("infrastructure succession profile");
     test.add_account(
         infrastructure_profile,
         protocol_account(CORE_PROGRAM_ID, infrastructure.to_bytes().to_vec()),

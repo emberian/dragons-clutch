@@ -2372,3 +2372,141 @@ has two authors even briefly.
 - **The remainder still goes nowhere**, the 180-day deadline is unchanged, and
   **`ClaimsCapability` is still stranded** — all three exactly as ruled.
 - **No devnet write.**
+
+---
+
+### 17.10 The route ran, and the table came off the chain
+
+Written by FRACCHECK-7, 2026-08-31, from building the ruled fiftieth account and
+the campaign. Commits: `604215bd` (the frame at 50), `6d624b6e` (the unset-owner
+adjudication), `d704283e` (shared fixture encoders), `4fb425ec` (the campaign).
+
+**Commit 10 is done, and §17.9's "not verified" list is now three lines
+shorter.** The route has a CU number (579,240, against §17.3's ~928k lower-bound
+projection), the 50 is an observation rather than a declaration, and w7 and w8
+are driven rather than argued.
+
+#### The ruled fiftieth account, and where its authority actually comes from
+
+WAVE `b4546291` ruled the Rent program into the frame so `authenticate_rent_credit`
+could run. The question the ruling left open is the one that matters: pinned
+against *what*? The compaction request carries no rent field, and letting the
+supplied program name itself is what `fractional_retirement_v3`'s finish does —
+safe there only because the cursor fixes the address first.
+
+It comes from the **reserve Position's admission**, which this route already
+decodes one screen earlier for its owner kind, and which persists the RentCredit
+and its Rent program together (`EVIDENCE_RENT_CREDIT_OFFSET` /
+`EVIDENCE_RENT_PROGRAM_OFFSET`). Both halves pinned from one Claims-authored
+immutable record — one conjunct stronger than the sibling, and the change is
+monotone: FRACCHECK-6's three content conjuncts are made by
+`authenticate_rent_credit` itself, so nothing checked stopped being checked.
+
+The account went **last** in the frame, not beside the credit it authenticates.
+An existing witness settled it: the readable placement pushes `SystemProgram` off
+index 41 and silently ends the asserted parity in which the first six of this
+frame are the native crank's own six in the native crank's own order. That parity
+is what lets the two routes' tails be read side by side, and it is load-bearing
+for a thread whose whole discipline is one author per number.
+
+Its refusal is its own code, `0x564D Rent`, not a fold into `Identity`. On this
+route `Identity` means a coordinate did not derive an account — all of them this
+program's own PDAs. This one means the residual beneficiary is wrong. Folding
+them makes "your rent is going somewhere else" indistinguishable from a mistyped
+escrow in a validator log.
+
+#### What the campaign found that reading the code could not
+
+Three, and each cost a real refusal to find:
+
+1. **Coordinate 14 is the caller program, and a compaction's caller is Claims.**
+   Copying the sibling terminal frame — which puts its Trading-role test caller
+   there — is refused `0x5202`. The release authentication resolves that
+   coordinate against the activation cache's binding for whichever role the
+   *request* states.
+2. **Coordinate 0 must be writable.** The sibling carries a read-only caller
+   authority; a compaction carries the party the sweep rewards, and the runtime
+   itself refuses `ReadonlyLamportChange` the moment `close_and_split` credits it.
+3. **The Claims-role Custody replay must exist first.** `authenticate_custody_accounts`
+   refuses a cursor whose bytes are not exactly `CUSTODY_REPLAY_BYTES_V1`, and an
+   empty account is the shape a campaign gets for free. Created by its own real
+   route, never planted.
+
+#### The conservation table, and the two things it said that arithmetic would not
+
+| | |
+|---|---:|
+| hoard | 10,000 → 9,993 |
+| vault | 0 → 7 |
+| payout / whole claims / rate | 7 / 7 / 1 |
+| swept (position + admission) | 6,681,624 |
+| → claim-check rent | 3,118,080 |
+| → opener repaid | 3,363,544 |
+| → cranker reward | 200,000 |
+| → RentCredit residue | 0 |
+| → **burned** | **0** |
+| opener outlay / still out | 4,711,920 / 1,348,376 |
+
+**The residue is zero, and the first version of the campaign asserted it could
+not be.** Zero is correct — the record's rent and the crank rank above the
+opener, and two closed accounts did not hold more than those three claims.
+A campaign demanding a positive residue is demanding a fixture rich enough to
+leave one, and would have called a correct route wrong. "The remainder goes
+nowhere" is the absence of a fifth term in the equation, not a positive number.
+
+**One compaction does not make the opener whole** — 1,348,376 short here. That is
+the amended order working, and it is now asserted from the other side (the sweep
+may never pay the opener *more* than they advanced), so a later change that
+over-repays them out of the residue has to argue with a line.
+
+#### The no-claim branch is reachable only through supply, never through rate
+
+Added after the campaign landed, from writing the witness for the other half of
+the `mints_claim_check() == (escrowed_atoms != 0)` weld. The paying campaign
+proves the minting direction; the non-minting direction is the one where a bug
+is unrecoverable, because an authority handed to an escrow that will never hold
+a claim is a Mint whose shards nobody can burn — and after retirement the root
+cannot hand it back.
+
+Writing it found that **a zero rate cannot express this case at all**. The wire
+refuses `payout_per_claim == 0` as `InvalidEntitlement`, on the stated ground
+that "a rate of zero promises a record nobody would ever redeem". So the plan's
+`escrowed_atoms == 0` branch is unreachable through the rate, and the conservation
+plan's own note — *"there is deliberately no separate refusal for a zero rate"* —
+is true but describes a case the request type has already refused one layer up.
+
+The branch is reached through **supply**: a coordinate the market resolved away
+from has had its shards burned by its holders (`TerminalZeroBurn`), so the
+outstanding supply is zero, zero whole claims form, and `whole_claims × rate` is
+zero whatever the rate. That is the lifecycle rather than a fixture convenience,
+and it is the only state the protocol can actually be in when a fractional
+compaction escrows nothing. The witness models it that way and observes: no
+collateral moves, no record is minted, and the shard Mint's bytes are
+**byte-identical** across the crank — asserted over the whole account rather
+than over the extension a reader would think to check.
+
+It also caught a defect in the campaign's own host-side reproduction: the
+terminal scenario was hardcoded to the reserve's coordinate, so on a market that
+resolved elsewhere the reproduction went on computing a paying scenario while
+the chain computed a worthless one. The two would have disagreed silently, which
+is exactly the failure the reproduction exists to make impossible. It now reads
+the winner from the same fact the chain does.
+
+#### Still not verified, and named
+
+- **No devnet.** Everything is `solana-program-test` against real ELFs.
+- **No ALT.** A `ProgramTest` bank enforces the 64-account lock limit and not the
+  1,232-byte packet size, so the campaign sends a 51-account legacy transaction
+  exactly as the sibling terminal campaign does. On a real cluster this frame
+  needs the table, and that is untested here.
+- **The root is derived under the test signer, not under Trading**, which
+  `fractional-compaction-caller` documents and cannot avoid. The two halves meet
+  in the design, not in one test.
+- **The campaign runs at width 8 on one market with one coordinate.** It is an
+  existence proof for the route and the arithmetic, not a sweep.
+- **The route collapses every inner error to `Economic`.** Debugging the campaign
+  required temporarily un-mapping it to see `0x5202` and `0x5002` at all. That
+  lossiness is real and is left as named debt: widening it is a refusal-surface
+  change, and this lane had already spent its frame budget.
+- **`ClaimsCapability` is still stranded**, the 180-day deadline is unchanged, and
+  the remainder still goes nowhere — all three exactly as ruled.

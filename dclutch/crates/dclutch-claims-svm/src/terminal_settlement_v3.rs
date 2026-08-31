@@ -676,6 +676,57 @@ mod tests {
         })
         .expect("request")
     }
+    /// **Every one of the eighteen identities refuses the unset pubkey, and
+    /// until now not one of them had a witness.**
+    ///
+    /// `nonzero` has been the sole author of this refusal since the type was
+    /// written, and every consumer of a `TerminalSettlementRequestV3` inherits
+    /// it -- including the fractional compaction route, whose
+    /// `authenticate_fractional_compaction` `tools/seam-audit` reports as
+    /// `UNSET_PUBKEY_UNGUARDED` because the guard is not lexically inside it.
+    /// The guard is here instead, and it is stronger than a check in that
+    /// function would be: this type's field is private and both constructors run
+    /// this sweep, so a value carrying a zero identity cannot be built at all.
+    ///
+    /// Stated over ALL eighteen rather than over `owner`, which is the one the
+    /// compaction route reads. A test naming a single field would go on passing
+    /// while a later edit dropped any of the other seventeen from the array --
+    /// and the array is the only thing holding them.
+    #[test]
+    fn no_identity_on_this_wire_may_be_the_unset_pubkey() {
+        let canonical = request().to_bytes();
+        // The control: the wire this differs from is accepted.
+        assert!(TerminalSettlementRequestV3::decode(&canonical).is_ok());
+
+        let mut witnessed = 0;
+        // Every 32-byte-aligned window that holds one of the eighteen identities
+        // is found by zeroing it and requiring the decode to refuse BY NAME.
+        // Driven off the encoding rather than an offset list, so a field added
+        // to the struct and to `nonzero` is covered here the day it lands.
+        for start in 0..canonical.len().saturating_sub(31) {
+            let mut hostile = canonical;
+            let window = start..start + 32;
+            let Some(slice) = hostile.get_mut(window.clone()) else {
+                continue;
+            };
+            if slice.iter().all(|byte| *byte == 0) {
+                // Already zero: reserved padding, not an identity.
+                continue;
+            }
+            slice.fill(0);
+            if let Err(error) = TerminalSettlementRequestV3::decode(&hostile) {
+                if error == TerminalSettlementErrorV3::ZeroIdentity {
+                    witnessed += 1;
+                }
+            }
+        }
+        assert!(
+            witnessed >= 18,
+            "all eighteen identities must refuse the unset pubkey by name; only \
+             {witnessed} windows did"
+        );
+    }
+
     fn evidence(payout: u64) -> TerminalSettlementReceiptInputV3 {
         TerminalSettlementReceiptInputV3 {
             request_digest: id(31),

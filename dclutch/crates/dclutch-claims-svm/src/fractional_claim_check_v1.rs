@@ -672,7 +672,8 @@ pub const FRACTIONAL_COMPACT_TERMINAL_FRAME_V1: usize =
 
 /// Accounts one fractional compaction adds past the terminal frame.
 ///
-/// **Thirteen, and the number moved twice for opposite reasons.**
+/// **Fourteen, and the number moved three times -- twice for opposite reasons,
+/// and once because a check the route could not run turned out to be cheap.**
 ///
 /// *Up, from twelve to fourteen: what authentication costs.* The first
 /// declaration gave `ExposureTerms` and `TokenBehavior` one account each. Both
@@ -703,7 +704,27 @@ pub const FRACTIONAL_COMPACT_TERMINAL_FRAME_V1: usize =
 /// O-016's exact shape of ceremony: inclusion mistaken for authority. The role
 /// stays *declared*, refused with its own reason, so the account cannot come
 /// back by being forgotten about.
-pub const FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1: usize = 13;
+///
+/// *Up again, from thirteen to fourteen: what an unrunnable check cost.* The
+/// route decodes a real `LifecycleRentCreditV2`
+/// and binds it to this market by its content -- market, release set,
+/// generation -- which refuses a caller naming their own wallet or another
+/// market's credit. What content alone cannot prove is that the account is the
+/// **derived** RentCredit: `create_program_address` over the record's own
+/// persisted seeds needs the Rent program's id to derive *under*, and a frame
+/// with no Rent program account has no id to offer that is not the caller's own
+/// word. This is the same lesson the raw/staging pair above taught one
+/// paragraph earlier, arriving at a different account: a record is not
+/// authenticated by its content alone.
+///
+/// So [`FractionalCompactionRoleV1::RentProgram`] joins the frame, read-only,
+/// and `authenticate_rent_credit` runs -- the one this crate's siblings all run
+/// and this route alone could not. It is the *eighth* account the Fractional
+/// family adds over the native crank, and the native crank is the reason it can
+/// be added at no cost to anyone: that route checks the RentCredit's writability
+/// and nothing else, so nothing downstream was relying on this frame being the
+/// narrower of the two.
+pub const FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1: usize = 14;
 
 /// Exact fractional compaction frame width.
 pub const FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1: usize =
@@ -797,13 +818,15 @@ pub enum FractionalCompactionAdmissionV1 {
 /// its to name. [`Self::index`] states where each one sits, so the constants a
 /// route indexes by have one author here rather than one per program.
 ///
-/// # The seven the Fractional family adds over the native crank
+/// # The eight the Fractional family adds over the native crank
 ///
 /// The native compaction needs six accounts past the terminal frame: the
 /// escrow, the record it mints, the admission it reads the owner kind off, the
 /// RentCredit, the opener it repays, and the System program. Every one of those
-/// is here too, for the same reason. The other seven are what §17.4's hand-off
-/// costs:
+/// is here too, for the same reason. **Seven** of the other eight are what
+/// §17.4's hand-off costs; the eighth,
+/// [`Self::RentProgram`], is not a hand-off cost at all but the price of
+/// authenticating a record this route was previously only able to read:
 ///
 /// - [`Self::FractionalCapabilityRoot`], alone, because it is what
 ///   "Trading-composed" means for this route: composed **for signature, not for
@@ -827,6 +850,11 @@ pub enum FractionalCompactionAdmissionV1 {
 ///   expected digest and the staging cursor must be vacant. Without the cursors
 ///   the route could compare a digest but could not prove the record is settled,
 ///   which on the terms account means reading a denominator mid-rewrite.
+/// - [`Self::RentProgram`] -- the eighth, and the odd one out. Not the
+///   hand-off's cost but the RentCredit's: without a Rent program id to derive
+///   under, the residual beneficiary is checked by its content alone, and
+///   content is what a caller supplies. It is the raw/staging lesson arriving at
+///   a second account.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FractionalCompactionRoleV1 {
     /// The per-market escrow: outstanding-count bookkeeper and future approver.
@@ -895,6 +923,32 @@ pub enum FractionalCompactionRoleV1 {
     TokenBehavior,
     /// The TokenBehavior record's staging cursor, for the same reason.
     TokenBehaviorStaging,
+    /// The executable Rent program the RentCredit is derived and owned under.
+    ///
+    /// **The account that turns a content check into an authentication.** Every
+    /// other conjunct on the RentCredit reads the record's own bytes -- market,
+    /// release set, generation -- and bytes are what a caller supplies. The
+    /// missing proof is that the account presented is the *derived* credit:
+    /// `create_program_address` over the record's own persisted seeds, under a
+    /// program id, must reproduce the account's own address. That needs a
+    /// program id the route did not take from whoever built the transaction.
+    ///
+    /// It gets one from a place the caller cannot reach: the reserve Position's
+    /// **admission**, which Claims wrote at admission time and which persists
+    /// both the RentCredit and its Rent program
+    /// (`ProtocolPositionAdmissionV2::rent_credit`/`rent_program`). So this
+    /// frame pins *both* halves of the identity from one Claims-authored record.
+    /// That is strictly stronger than `fractional_retirement_v3`'s finish, where
+    /// the address is fixed by the cursor and the program account then names
+    /// itself -- safe there, because a substituted program would have to already
+    /// own the one address the root chose, but one conjunct short of this.
+    ///
+    /// Read-only and never a signer: a program account this route only derives
+    /// against needs no more, and a write lock it does not need is one some
+    /// other transaction could have used.
+    ///
+    /// Last in the frame rather than beside its credit; [`Self::frame`] says why.
+    RentProgram,
     /// A shard holder's own shard token account: declared, and refused.
     HolderShardTokens,
     /// A shard holder's own collateral token account: declared, and refused.
@@ -923,6 +977,17 @@ impl FractionalCompactionRoleV1 {
             Self::ExposureTermsStaging,
             Self::TokenBehavior,
             Self::TokenBehaviorStaging,
+            // LAST, and not beside the credit it authenticates, which is where a
+            // reader would put it. The first six of this frame are the native
+            // crank's own six in the native crank's own order, so the two
+            // routes' tails can be read side by side -- a property this module
+            // asserts and one the whole thread depends on, since the payout, the
+            // sweep and the conservation all have a single author across both
+            // routes. The Rent program is an account the native crank does not
+            // have, so it belongs with the Fractional additions and nowhere
+            // else. Adjacency with the credit would have been prettier and would
+            // have cost the parity.
+            Self::RentProgram,
         ]
     }
 
@@ -944,6 +1009,7 @@ impl FractionalCompactionRoleV1 {
             Self::ExposureTermsStaging,
             Self::TokenBehavior,
             Self::TokenBehaviorStaging,
+            Self::RentProgram,
             Self::HolderShardTokens,
             Self::HolderCollateralTokens,
             Self::NativeClaimCheckRecord,
@@ -959,6 +1025,7 @@ impl FractionalCompactionRoleV1 {
             | Self::FractionalClaimCheckRecord
             | Self::ReserveAdmission
             | Self::RentCredit
+            | Self::RentProgram
             | Self::Opener
             | Self::SystemProgram
             | Self::FractionalCapabilityRoot
@@ -1023,8 +1090,11 @@ impl FractionalCompactionRoleV1 {
             | Self::Opener
             | Self::ShardMint => (false, true),
             // Every one of these is read and never written, and the two staging
-            // cursors are read precisely to confirm they hold nothing.
+            // cursors are read precisely to confirm they hold nothing. The Rent
+            // program is here rather than beside its credit: the credit receives
+            // the residue and is written, the program is only derived against.
             Self::SystemProgram
+            | Self::RentProgram
             | Self::ShardTokenProgram
             | Self::ExposureTerms
             | Self::ExposureTermsStaging
@@ -1631,7 +1701,7 @@ mod tests {
     }
 
     #[test]
-    fn the_compaction_frame_wraps_the_terminal_frame_and_adds_exactly_thirteen() {
+    fn the_compaction_frame_wraps_the_terminal_frame_and_adds_exactly_fourteen() {
         // The shape §17.5 names, as arithmetic rather than a "~". The terminal
         // half is not re-enumerated here on purpose -- it has one author, and
         // this asserts that this module agrees with that author rather than
@@ -1641,11 +1711,33 @@ mod tests {
             crate::terminal_settlement_v3::TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3
         );
         assert_eq!(FRACTIONAL_COMPACT_TERMINAL_FRAME_V1, 36);
-        // WITNESS w6 (design §17.8 ruling 2): the frame is 49, and the dropped
-        // role has no index. Pinned as literals, not derived from the enum --
-        // deriving 49 from `frame().len()` would agree with any frame at all.
-        assert_eq!(FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1, 13);
-        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, 49);
+        // WITNESS w6 (design §17.8 ruling 2), carried forward to the ruled
+        // fiftieth account (WAVE `b4546291`): the frame is 50, and the dropped
+        // role STILL has no index. Pinned as literals, not derived from the enum
+        // -- deriving 50 from `frame().len()` would agree with any frame at all.
+        assert_eq!(FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1, 14);
+        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1, 50);
+        // The account the ruling added, pinned as a literal and placed LAST --
+        // the fiftieth is the fiftieth. It is deliberately not beside the credit
+        // it authenticates: the first six of this frame are the native crank's
+        // own six in the native crank's own order, the Rent program is an
+        // account the native crank does not have, and keeping that prefix intact
+        // is worth more than adjacency. The assertion below on `SystemProgram`
+        // is the other half of that pair, and an edit that moved this account
+        // for tidiness would red it.
+        assert_eq!(FractionalCompactionRoleV1::RentProgram.index(), Some(49));
+        // READ-ONLY, and its credit is not. A program account this route only
+        // derives against needs neither a signature nor a write lock; the credit
+        // receives the residue and must be written. An edit granting the program
+        // either privilege has to argue with these two lines.
+        assert_eq!(
+            FractionalCompactionRoleV1::RentProgram.privileges(),
+            (false, false)
+        );
+        assert_eq!(
+            FractionalCompactionRoleV1::RentCredit.privileges(),
+            (false, true)
+        );
         assert_eq!(
             FractionalCompactionRoleV1::TradingCallerAuthority.index(),
             None,
@@ -1656,10 +1748,12 @@ mod tests {
             FractionalCompactionRoleV1::frame().len(),
             FRACTIONAL_COMPACT_OWN_ACCOUNT_COUNT_V1
         );
-        // Six of the thirteen are the native crank's own; the other seven are
-        // what the §17.4 hand-off costs. The native frame is 42; this one is 49,
-        // and both fit one transaction's locks without an address table.
-        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 - 7, 42);
+        // Six of the fourteen are the native crank's own; seven of the other
+        // eight are what the §17.4 hand-off costs, and the eighth is the Rent
+        // program the ruled authentication derives under. The native frame is
+        // 42; this one is 50, and both fit one transaction's locks without an
+        // address table.
+        assert_eq!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 - 8, 42);
         assert!(FRACTIONAL_COMPACT_ACCOUNT_COUNT_V1 < MAX_TRANSACTION_LOCKS_V1);
         // Both finalized Registry records are carried as raw/staging PAIRS, the
         // way every sibling route carries them. Stated as a property over the
@@ -1771,10 +1865,17 @@ mod tests {
                 FractionalCompactionRoleV1::ExposureTermsStaging,
                 FractionalCompactionRoleV1::TokenBehavior,
                 FractionalCompactionRoleV1::TokenBehaviorStaging,
+                FractionalCompactionRoleV1::RentProgram,
             ]
         );
         // The first six are the native crank's own six, in the native crank's
-        // own order, so the two routes' tails can be read side by side.
+        // own order, so the two routes' tails can be read side by side. This
+        // pair is why the ruled fiftieth account went to the END of the frame
+        // instead of beside the credit it authenticates: an insertion at the
+        // readable place would have pushed `SystemProgram` off the native six
+        // and quietly ended the parity, which is a property the whole thread
+        // leans on -- the payout, the sweep and the conservation each have one
+        // author across both routes.
         assert_eq!(
             FractionalCompactionRoleV1::Escrow.index(),
             Some(FRACTIONAL_COMPACT_TERMINAL_FRAME_V1)

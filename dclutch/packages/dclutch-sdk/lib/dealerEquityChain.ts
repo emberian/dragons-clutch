@@ -17,7 +17,12 @@ import { type CheckedHotOuterEvidenceV3, type DirectHotAccountMetaV3 } from './d
 import * as HotAbi from './generated/directInlineV3';
 import {
   CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+  CORE_PHASE_OPEN_TAG,
   CORE_STATE_BYTES,
+  CORE_STATE_MAGIC,
+  CORE_STATE_PHASE_OFFSET,
+  CORE_STATE_VERSION_OFFSET,
+  CORE_VERSION,
   PORTFOLIO_SCHEMA_ID_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   RESULT_DOMAIN_SCHEMA_ID_V2,
@@ -292,8 +297,11 @@ export async function inspectDealerEquityRouteV3(
   const registryProgram = fixed[HotAbi.HOT_REGISTRY_PROGRAM_ACCOUNT_V3]?.address ?? '';
   const market = required(observation.accounts, marketAddress, 'Market');
   const root = required(observation.accounts, rootAddress, 'Dealer root');
-  if (market.owner !== coreProgram || market.executable || market.data.length !== CORE_STATE_BYTES || ascii(market.data, 0, 8) !== 'DCLTCOR2'
-      || u16(market.data, 8) !== 2 || market.data[10] !== 1 || root.owner !== tradingProgram || root.executable) {
+  if (market.owner !== coreProgram || market.executable || market.data.length !== CORE_STATE_BYTES
+      || !same(slice(market.data, 0, 8), CORE_STATE_MAGIC)
+      || u16(market.data, CORE_STATE_VERSION_OFFSET) !== CORE_VERSION
+      || market.data[CORE_STATE_PHASE_OFFSET] !== CORE_PHASE_OPEN_TAG
+      || root.owner !== tradingProgram || root.executable) {
     throw new Error('Dealer Market/root does not have the exact open Core/Trading ownership state');
   }
   const selection = decodeDirectRootSelectionV1(root.data);
@@ -357,9 +365,29 @@ export async function inspectDealerEquityRouteV3(
   const requestProfileRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HotAbi.HOT_REQUEST_PROFILE_RAW_ACCOUNT_V3]?.address ?? '', fixed[HotAbi.HOT_REQUEST_PROFILE_STAGING_ACCOUNT_V3]?.address ?? '',
     descriptor.requestProfileSchema, descriptor.requestProfileProgram, 'Dealer RequestProfile');
+  // The V3 descriptor shape carries a bare content id for lifecycle (no
+  // schema field), so this key cannot be derived from chain the way
+  // requestProfile and strategy are just above -- it must name the schema the
+  // PUBLISHER registered under. That publisher is
+  // `crates/dclutch-rational-lifecycle-hot-v3/src/selected_bundle_v6.rs:149`:
+  // `lifecycle: artifact(LIFECYCLE_SCHEMA_ID_V5, lifecycle_id.to_bytes())`,
+  // where `LIFECYCLE_SCHEMA_ID_V5 = CURRENT_RENT_QUOTE_SCHEMA_RELEASE_ID_V5`,
+  // re-validated at :242. The V3 `LIFECYCLE_SCHEMA_RELEASE_ID` this line used
+  // to name has ZERO qualified Rust binders repo-wide, so it derived a
+  // Registry PDA no publisher writes -- every real dealer route would have
+  // refused with 'not canonical Registry PDAs'.
+  //
+  // CONFIRMATION GAP, named rather than guessed: no dealer market exists on
+  // chain yet, so this is confirmed against the publishing authority's source,
+  // not against a live record. The confirming observation is the dealer
+  // lifecycle Registry record found at
+  // PDA(registryProgram, SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, descriptor.lifecycle)
+  // when the first dealer market founds. If the record is NOT there, the
+  // divergence is the publisher's and the fix moves there -- not back to a
+  // client pin.
   await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HotAbi.HOT_LIFECYCLE_RAW_ACCOUNT_V3]?.address ?? '', fixed[HotAbi.HOT_LIFECYCLE_STAGING_ACCOUNT_V3]?.address ?? '',
-    HotAbi.LIFECYCLE_SCHEMA_RELEASE_ID, descriptor.lifecycle, 'Dealer lifecycle');
+    HotAbi.SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5, descriptor.lifecycle, 'Dealer lifecycle');
   const strategyRaw = await finalizedRecord(client, observation.accounts, registryProgram,
     fixed[HotAbi.HOT_STRATEGY_RAW_ACCOUNT_V3]?.address ?? '', fixed[HotAbi.HOT_STRATEGY_STAGING_ACCOUNT_V3]?.address ?? '',
     descriptor.strategySchema, descriptor.strategyProgram, 'Dealer ExecutionStrategy');

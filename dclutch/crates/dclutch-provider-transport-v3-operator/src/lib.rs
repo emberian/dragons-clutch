@@ -14,7 +14,7 @@ use dclutch_pyth_svm::{PostUpdateParamsView, PythReleaseV1, VerifiedEncodedVaaV1
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::ACTIVATION_PDA_DOMAIN_V1;
 use dclutch_release_set_contract::{
-    CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
+    CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
 };
 #[cfg(feature = "transaction-planning")]
 use dclutch_resolution_codec::{
@@ -368,7 +368,7 @@ pub fn build_provider_submit_v3(
     let activation =
         Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set], &registry).0;
     let infrastructure = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &snapshot.market.owner,
     )
     .0;
@@ -713,7 +713,7 @@ pub fn build_provider_execute_v3(
     let activation =
         Pubkey::find_program_address(&[ACTIVATION_PDA_DOMAIN_V1, &release_set], &registry).0;
     let infrastructure = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &snapshot.market.owner,
     )
     .0;

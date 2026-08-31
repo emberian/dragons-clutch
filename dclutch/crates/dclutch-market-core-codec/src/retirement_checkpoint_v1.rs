@@ -452,18 +452,55 @@ pub struct AggregateRetirementSuffixRequestV1 {
     pub expected_custody_revision: u64,
 }
 
+/// The four fields every suffix request of one retirement must carry alike.
+///
+/// A retirement issues THREE suffix requests -- close vault, close replay,
+/// finish -- and these four fields are identical in all three: they say which
+/// retirement of which market this is. Only the magic, the child request digest
+/// and the two revisions differ per phase.
+///
+/// Grouping them is not tidying. Passed positionally they are four adjacent
+/// `[u8; 32]` arguments, restated at each of the three call sites, and any two
+/// of them transposed type-checks and encodes a request that names a real
+/// market and the wrong bundle. Built once and reused, the "all three agree"
+/// property is a fact about the program text rather than a thing three call
+/// sites have to keep saying the same way.
+///
+/// It carries no validation of its own on purpose: the checks these fields face
+/// live in [`AggregateRetirementSuffixRequestV1::new`] in the order that
+/// function has always run them, and a wrong request must keep refusing with
+/// the error it already refuses with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AggregateRetirementSuffixBindingV1 {
+    /// Core Market identity.
+    pub market: [u8; 32],
+    /// Reused Claims aggregate / Core checkpoint identity.
+    pub checkpoint: [u8; 32],
+    /// Digest of the complete original retirement bundle.
+    pub bundle_digest: [u8; 32],
+    /// Digest of the exact immutable Resolution closure receipt.
+    pub source_receipt_digest: [u8; 32],
+}
+
 impl AggregateRetirementSuffixRequestV1 {
     /// Construct a suffix request for one of the three named actions.
+    ///
+    /// Arguments are in wire order: the magic at offset 0, the binding's four
+    /// digests at 16 through 143, then the child request digest and the two
+    /// revisions.
     pub fn new(
         magic: [u8; 8],
-        market: [u8; 32],
-        checkpoint: [u8; 32],
-        bundle_digest: [u8; 32],
-        source_receipt_digest: [u8; 32],
+        binding: AggregateRetirementSuffixBindingV1,
         child_request_digest: [u8; 32],
         expected_phase_revision: u64,
         expected_custody_revision: u64,
     ) -> AggregateRetirementCheckpointResultV1<Self> {
+        let AggregateRetirementSuffixBindingV1 {
+            market,
+            checkpoint,
+            bundle_digest,
+            source_receipt_digest,
+        } = binding;
         if !matches!(
             magic,
             AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1
@@ -522,10 +559,12 @@ impl AggregateRetirementSuffixRequestV1 {
         require_zero(input, 10, 6)?;
         Self::new(
             array(input, 0)?,
-            array(input, 16)?,
-            array(input, 48)?,
-            array(input, 80)?,
-            array(input, 112)?,
+            AggregateRetirementSuffixBindingV1 {
+                market: array(input, 16)?,
+                checkpoint: array(input, 48)?,
+                bundle_digest: array(input, 80)?,
+                source_receipt_digest: array(input, 112)?,
+            },
             array(input, 144)?,
             u64_at(input, 176)?,
             u64_at(input, 184)?,
@@ -539,7 +578,7 @@ impl AggregateRetirementSuffixRequestV1 {
 }
 
 fn require_nonzero(values: &[[u8; 32]]) -> AggregateRetirementCheckpointResultV1<()> {
-    if values.iter().any(|value| *value == [0; 32]) {
+    if values.contains(&[0; 32]) {
         return Err(AggregateRetirementCheckpointErrorV1::ZeroIdentity);
     }
     Ok(())
@@ -702,12 +741,15 @@ mod tests {
 
     #[test]
     fn suffix_actions_are_distinct_and_finish_has_no_child() {
+        let binding = AggregateRetirementSuffixBindingV1 {
+            market: [1; 32],
+            checkpoint: [2; 32],
+            bundle_digest: [3; 32],
+            source_receipt_digest: [4; 32],
+        };
         let vault = AggregateRetirementSuffixRequestV1::new(
             AGGREGATE_RETIREMENT_CLOSE_VAULT_MAGIC_V1,
-            [1; 32],
-            [2; 32],
-            [3; 32],
-            [4; 32],
+            binding,
             [5; 32],
             1,
             21,
@@ -720,10 +762,7 @@ mod tests {
         assert_eq!(
             AggregateRetirementSuffixRequestV1::new(
                 AGGREGATE_RETIREMENT_FINISH_MAGIC_V1,
-                [1; 32],
-                [2; 32],
-                [3; 32],
-                [4; 32],
+                binding,
                 [5; 32],
                 3,
                 23,

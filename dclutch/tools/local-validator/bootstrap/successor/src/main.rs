@@ -11,6 +11,8 @@ mod campaign;
 mod claims_custody_replay;
 mod cluster;
 mod direct_capability_activation;
+mod capability_seal_close;
+mod direct_close_maker;
 mod direct_fee_settlement;
 mod direct_hot_route_manifest;
 mod direct_market;
@@ -28,6 +30,7 @@ mod funding_readiness;
 mod general_capability_activation;
 mod general_market;
 mod general_settlement_fixture;
+mod infrastructure_succession;
 mod local_mutable;
 mod release_lineage;
 mod series_consume_campaign;
@@ -180,11 +183,29 @@ fn run() -> Result<()> {
         Some(command) if command == claims_custody_replay::COMMAND_V1 => {
             claims_custody_replay::run_owned_loopback_v1(arguments.collect())
         }
+        Some(command) if command == capability_seal_close::COMMAND_V1 => {
+            capability_seal_close::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == capability_seal_close::COMMAND_DEVNET_V1 => {
+            capability_seal_close::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == direct_close_maker::COMMAND_V1 => {
+            direct_close_maker::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == direct_close_maker::COMMAND_DEVNET_V1 => {
+            direct_close_maker::run_devnet_v1(arguments.collect())
+        }
         Some(command) if command == direct_fee_settlement::COMMAND_V1 => {
             direct_fee_settlement::run_owned_loopback_v1(arguments.collect())
         }
         Some(command) if command == direct_fee_settlement::COMMAND_DEVNET_V1 => {
             direct_fee_settlement::run_devnet_v1(arguments.collect())
+        }
+        Some(command) if command == infrastructure_succession::COMMAND_V1 => {
+            infrastructure_succession::run_owned_loopback_v1(arguments.collect())
+        }
+        Some(command) if command == infrastructure_succession::COMMAND_DEVNET_V1 => {
+            infrastructure_succession::run_devnet_v1(arguments.collect())
         }
         Some(command) if command == release_lineage::COMMAND_V1 => {
             release_lineage::run_owned_loopback_v1(arguments.collect())
@@ -1642,7 +1663,10 @@ fn usage() {
     println!("{}", private_lifecycle::direct_payout_schedule_usage());
     println!("{}", claims_custody_replay::usage());
     println!("{}", direct_fee_settlement::usage());
+    println!("{}", direct_close_maker::usage());
+    println!("{}", capability_seal_close::usage());
     println!("{}", release_lineage::usage());
+    println!("{}", infrastructure_succession::usage());
     println!("{}", flagship_resolution::usage());
     println!("{}", flagship_resolution::owned_loopback_usage());
     println!("{}", sponsored_push::usage());

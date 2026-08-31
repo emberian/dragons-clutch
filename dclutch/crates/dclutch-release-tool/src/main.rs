@@ -13,7 +13,9 @@ use std::{
 };
 
 use dclutch_capability_seal_contract::CAPABILITY_SEAL_BYTES_V1;
-use dclutch_release_set_contract::{ExecutionReleaseSetV1, ProtocolInfrastructureProfileV1};
+use dclutch_release_set_contract::{
+    ExecutionReleaseSetV1, ProtocolInfrastructureProfileV1, ProtocolInfrastructureProfileV2,
+};
 use dclutch_release_tool::{
     BuildMetadataV1, CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1,
     CHECKED_TRANSLATION_VALIDATION_LABELS_V1, CheckedCapabilityExecutionV1,
@@ -22,7 +24,7 @@ use dclutch_release_tool::{
     TranslationValidationEvidenceV1, build_checked_capability_execution_from_bytes_v1,
     build_checked_execution_release_set, build_checked_infrastructure_v1, build_checked_release,
     build_checked_translation_validation, derive_execution_release_set,
-    derive_protocol_infrastructure_profile_v1, loader_v3_program_account_data_v1,
+    derive_protocol_infrastructure_profile_v2, loader_v3_program_account_data_v1,
     loader_v3_programdata_account_data_v1, loader_v3_programdata_address_v1, probe_defunct_seal_v1,
     verify_checked_capability_execution_v1, verify_checked_execution_release_set,
     verify_checked_infrastructure_v1, verify_checked_release,
@@ -30,7 +32,7 @@ use dclutch_release_tool::{
 };
 use solana_program::pubkey::Pubkey;
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --predecessor-profile PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
 
 fn main() -> ExitCode {
     match run() {
@@ -136,7 +138,7 @@ fn create_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), St
 
     let execution = verify_checked_execution_release_set(&execution_manifest, manifests.refs())
         .map_err(format_release_error)?;
-    let profile = ProtocolInfrastructureProfileV1::decode(&profile_bytes)
+    let profile = ProtocolInfrastructureProfileV2::decode(&profile_bytes)
         .map_err(|error| format!("infrastructure profile refused: {error:?}"))?;
     let checked = manifests.decode()?;
     let result = build_checked_infrastructure_v1(execution, profile, &checked[0], &registry, &rent)
@@ -350,8 +352,16 @@ fn derive_infrastructure_profile(flags: &mut BTreeMap<String, PathBuf>) -> Resul
     let output = required(flags, "--out")?;
     let registry = load_checked_release(required(flags, "--registry")?)?;
     let rent = load_checked_release(required(flags, "--rent")?)?;
+    // The predecessor account is a chain fact, not a function of the successor
+    // manifests, so it is supplied rather than derived. It is required because
+    // the succession profile is the only one any redeployed consumer reads: a
+    // command that could still emit the predecessor's own shape would hand the
+    // pipeline bytes the chain has stopped answering to.
+    let predecessor_bytes = read_bytes(required(flags, "--predecessor-profile")?)?;
     require_no_flags(flags)?;
-    let profile = derive_protocol_infrastructure_profile_v1(&registry, &rent)
+    let predecessor = ProtocolInfrastructureProfileV1::decode(&predecessor_bytes)
+        .map_err(|error| format!("predecessor infrastructure profile refused: {error:?}"))?;
+    let profile = derive_protocol_infrastructure_profile_v2(&registry, &rent, predecessor)
         .map_err(format_release_error)?;
     fs::write(&output, profile.to_bytes())
         .map_err(|error| format!("failed writing {}: {error}", output.display()))

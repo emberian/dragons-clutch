@@ -32,8 +32,8 @@ use dclutch_registry_contract::{
 };
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
-    CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1, ProtocolInfrastructureProfileV1,
+    CallerAuthoritySeedsV1, ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
 use dclutch_resolution_codec::{
     PROVIDER_EXECUTION_REQUEST_BYTES_V3, PROVIDER_EXECUTION_REQUEST_MAGIC_V3,
@@ -522,7 +522,7 @@ fn authenticate_market_and_infrastructure(
 
     let infrastructure = frame.account(6);
     let expected_infrastructure = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         frame.account(11).key,
     )
     .0;
@@ -532,12 +532,12 @@ fn authenticate_market_and_infrastructure(
     if infrastructure.key != &expected_infrastructure
         || infrastructure.owner != frame.account(11).key
         || infrastructure.executable
-        || infrastructure_data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        || infrastructure_data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         || !rent.is_exempt(infrastructure.lamports(), infrastructure_data.len())
     {
         return Err(ResolutionError::ResolutionRelease.into());
     }
-    let profile = ProtocolInfrastructureProfileV1::decode(&infrastructure_data)
+    let profile = ProtocolInfrastructureProfileV2::decode(&infrastructure_data)
         .map_err(|_| ResolutionError::ResolutionRelease)?;
     drop(infrastructure_data);
     if profile.registry().program().to_bytes() != frame.registry_program().key.to_bytes() {

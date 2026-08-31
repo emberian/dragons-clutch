@@ -17,7 +17,7 @@ describe('Registry release presentation', () => {
     expect(html).toContain('exactly 1,592 bytes');
     expect(html).toContain('evidence/core/checked.bin');
     expect(html).toContain('infrastructure.checked');
-    expect(html).toContain('exactly 2,280 bytes');
+    expect(html).toContain('exactly 2,360 bytes');
     expect(html).toContain('Drop the file here, or click to choose it');
     expect(html).toContain('Offline fallback · paste the same file as base64');
     // Steps feed forward and say so: the wallet fills the payer, the plan

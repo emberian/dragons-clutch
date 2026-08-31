@@ -28,8 +28,8 @@ use dclutch_registry_contract::{
 use dclutch_registry_svm::{ProgramDataV3View, ProgramV3View};
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, ExecutionRoleBindingV1, ExecutionRoleV1,
-    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
-    ProtocolInfrastructureProfileV1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+    ProtocolInfrastructureProfileV2,
 };
 use dclutch_rent_contract::lifecycle_v2::{
     LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleRentCreditV2,
@@ -545,7 +545,7 @@ fn authenticate_runtime_accounts(state: FoundProjectionStateV2<'_>) -> Result<()
         || state.activation_cache.executable
         || state.infrastructure_profile.owner != state.core_program.key
         || state.infrastructure_profile.executable
-        || state.infrastructure_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+        || state.infrastructure_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
         || state.registry_programdata.executable
         || state.rent_programdata.executable
         || state.system_program.key != system_program::ID
@@ -679,17 +679,17 @@ fn authenticate_activation(
 
 fn authenticate_infrastructure(state: FoundProjectionStateV2<'_>, rent: &Rent) -> Result<()> {
     let expected_profile = Pubkey::find_program_address(
-        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2],
         &state.core_program.key,
     )
     .0;
     if state.infrastructure_profile.key != expected_profile
         || state.infrastructure_profile.lamports
-            < rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1)
+            < rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2)
     {
         return Err(Error::AccountAuthority);
     }
-    let profile = ProtocolInfrastructureProfileV1::decode(state.infrastructure_profile.data)
+    let profile = ProtocolInfrastructureProfileV2::decode(state.infrastructure_profile.data)
         .map_err(|_| Error::InvalidRecord)?;
     if profile.registry().program().to_bytes() != state.registry_program.key.to_bytes()
         || profile.rent().program().to_bytes() != state.rent_program.key.to_bytes()

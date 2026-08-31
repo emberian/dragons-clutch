@@ -142,13 +142,17 @@ Core release in that exact set, bind the exact profile to independently checked
 Registry and Rent artifacts, derive the profile PDA, and refuse any upgradeable
 component.
 
-The 144-byte profile is likewise determined by the checked Registry and Rent
-manifests. `derive-infrastructure-profile` emits it and refuses an upgradeable
-component at derivation time rather than letting one reach the manifest.
+The 224-byte succession profile is determined by the checked Registry and Rent
+manifests plus the predecessor profile account it succeeds, whose own two
+binding ids become its predecessor ids -- exactly what the on-chain ceremony
+composes, so the bytes emitted here can be compared against what lands.
+`derive-infrastructure-profile` emits it and refuses an upgradeable component at
+derivation time rather than letting one reach the manifest.
 
 ```text
 dclutch-release-tool derive-infrastructure-profile \
   --registry <registry.checked> --rent <rent.checked> \
+  --predecessor-profile <predecessor-profile.bin> \
   --out <infrastructure-profile.bin>
 
 dclutch-release-tool create-infrastructure \
