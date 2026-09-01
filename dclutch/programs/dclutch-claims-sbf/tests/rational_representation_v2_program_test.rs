@@ -4109,15 +4109,33 @@ async fn submit_legacy_signed(
     instruction: Instruction,
     label: &str,
 ) -> Submission {
+    submit_legacy_with(context, instruction, &[&fixture.actor], label).await
+}
+
+/// The same legacy submission with an explicit extra-signer list.
+///
+/// Split out rather than duplicated because a hostile that builds its own
+/// transaction is a hostile that can pass for the wrong reason. The payer is
+/// always a signer; everything else is the caller's, which is what lets one
+/// campaign submit both an actor-signed act and a stranger-signed one against
+/// the same route without two submission paths.
+async fn submit_legacy_with(
+    context: &mut ProgramTestContext,
+    instruction: Instruction,
+    extra_signers: &[&Keypair],
+    label: &str,
+) -> Submission {
     let blockhash = context
         .banks_client
         .get_latest_blockhash()
         .await
         .expect("blockhash");
+    let mut signers: Vec<&Keypair> = std::vec![&context.payer];
+    signers.extend_from_slice(extra_signers);
     let transaction = Transaction::new_signed_with_payer(
         &[instruction],
         Some(&context.payer.pubkey()),
-        &[&context.payer, &fixture.actor],
+        &signers,
         blockhash,
     );
     let signature = transaction
@@ -4158,6 +4176,21 @@ async fn submit_legacy_signed(
         wire_bytes,
         logs,
     }
+}
+
+/// The exact custom refusal a submission carries, parsed rather than matched.
+///
+/// `logs.iter().any(|line| line.contains("Custom(3)"))` is not a refusal
+/// assertion -- it accepts `Custom(30)` too (AGENTS.md, refusal codes). The
+/// runtime writes the code as the final token of its own line, so parsing that
+/// token is exact where a substring is not, and a caller then compares against
+/// a discriminant taken off the enum.
+fn custom_code(submission: &Submission) -> Option<u32> {
+    const MARKER: &str = "custom program error: 0x";
+    submission.logs.iter().find_map(|line| {
+        let hex = line.split(MARKER).nth(1)?.trim();
+        u32::from_str_radix(hex, 16).ok()
+    })
 }
 
 async fn observed(context: &mut ProgramTestContext, key: Pubkey) -> Account {
@@ -4630,6 +4663,217 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         denominated.compute_units,
         reconstituted.wire_bytes,
         reconstituted.compute_units,
+    );
+}
+
+/// **The one account in this family that had no route home now has one, and the
+/// rent goes back to the party who advanced it.**
+///
+/// `authenticate_or_allocate_replay` creates one cursor per
+/// `(descriptor, actor)`, and before `process_replay_close` the seed constant
+/// `RATIONAL_REPLAY_SEED_V2` had exactly ONE on-chain use in the whole tree:
+/// that derivation. `rational_lifecycle_v2` closes the receipt Mint, every
+/// shard Mint, every structured custody account, every Position and every
+/// admission, and never reaches this one. One per actor, so the stranded total
+/// grows with adoption.
+///
+/// The arithmetic asserted here is the whole clause: the actor's balance rises
+/// by EXACTLY the cursor's lamports, the cursor ends at zero lamports, zero
+/// length and System ownership, and no third party is credited a thing. The
+/// close is actor-signed by design and the alternative is refused out loud in
+/// the request's own doc: a permissionless sweep of a sleeping actor's cursor
+/// would be precisely the absent-holder charge this contract forbids.
+///
+/// The cursor is created by a real `IssueStructured` first, because a cursor
+/// planted by a fixture is a shape nothing in the tree has ever produced.
+#[tokio::test]
+async fn a_spent_replay_cursor_closes_to_its_actor_and_strands_no_rent() {
+    use dclutch_claims_sbf::rational_representation_v2::RationalReplayCloseSbfErrorV1;
+    use dclutch_rational_representation_v2_contract::{
+        RATIONAL_REPLAY_CLOSE_ACCOUNT_COUNT_V1, RationalReplayCloseRequestV1,
+    };
+
+    let (test, fixture) = fixture(false);
+    let mut context = test.start_with_context().await;
+    let issue = wrapper_instruction(
+        &fixture,
+        RepresentationActionV2::IssueStructured,
+        0,
+        false,
+        None,
+        None,
+    );
+    let payer = context.payer.pubkey();
+    let addresses = lookup_addresses(payer, fixture.actor.pubkey(), std::slice::from_ref(&issue));
+    let (table, _) = create_live_lookup_table(
+        &mut context,
+        &addresses,
+        "claims rational-representation-v2: replay close",
+    )
+    .await;
+    let issued = submit_v0(
+        &mut context,
+        &fixture,
+        issue,
+        table,
+        &addresses,
+        "claims rational-representation-v2: IssueStructured before a replay close",
+    )
+    .await
+    .expect("IssueStructured transaction");
+    assert!(
+        issued.accepted,
+        "the cursor is only a real account after an action creates it: {:?}",
+        issued.logs.last()
+    );
+
+    let cursor_before = observed(&mut context, fixture.representation_replay).await;
+    assert_eq!(cursor_before.owner, CLAIMS_PROGRAM_ID, "cursor is live");
+    assert_eq!(cursor_before.data.len(), RATIONAL_REPLAY_BYTES_V2);
+    let stranded = cursor_before.lamports;
+    assert!(stranded > 0, "an account with no rent strands nothing");
+    let actor_before = observed(&mut context, fixture.actor.pubkey())
+        .await
+        .lamports;
+
+    let close = |descriptor: [u8; 32], named_actor: Pubkey, actor_account: Pubkey| {
+        let request = RationalReplayCloseRequestV1::new(descriptor, named_actor.to_bytes())
+            .expect("canonical replay close request");
+        let accounts = std::vec![
+            AccountMeta::new(actor_account, true),
+            AccountMeta::new(fixture.representation_replay, false),
+        ];
+        assert_eq!(accounts.len(), RATIONAL_REPLAY_CLOSE_ACCOUNT_COUNT_V1);
+        Instruction {
+            program_id: CLAIMS_PROGRAM_ID,
+            accounts,
+            data: request.to_bytes().to_vec(),
+        }
+    };
+
+    // HOSTILE 1, `Authority`: the signing account and the actor the request
+    // names disagree. This is the conjunct that stops a signature being spent
+    // on a close somebody else authored.
+    let mut foreign_actor = fixture.actor.pubkey().to_bytes();
+    foreign_actor[0] ^= 1;
+    let mismatched = submit_legacy_signed(
+        &mut context,
+        &fixture,
+        close(
+            fixture.descriptor_id,
+            Pubkey::new_from_array(foreign_actor),
+            fixture.actor.pubkey(),
+        ),
+        "claims rational-representation-v2: replay close naming another actor",
+    )
+    .await;
+    assert!(
+        !mismatched.accepted,
+        "a close whose request names another actor must be refused"
+    );
+    assert_eq!(
+        custom_code(&mismatched),
+        Some(RationalReplayCloseSbfErrorV1::Authority as u32),
+        "refused as Authority, by name"
+    );
+
+    // HOSTILE 2, `Identity`: a stranger names THEMSELVES -- so the account and
+    // the request agree and `Authority` passes -- and points at the actor's
+    // cursor. The derivation is the only thing left standing between them and
+    // somebody else's rent, and it is what refuses. This is the attack the
+    // route exists to survive, so it is submitted under the stranger's own
+    // signature rather than the actor's.
+    let stranger = context.payer.pubkey();
+    let stolen = submit_legacy_with(
+        &mut context,
+        close(fixture.descriptor_id, stranger, stranger),
+        &[],
+        "claims rational-representation-v2: a stranger reaches for the actor's rent",
+    )
+    .await;
+    assert!(
+        !stolen.accepted,
+        "a stranger must not close another actor's cursor"
+    );
+    assert_eq!(
+        custom_code(&stolen),
+        Some(RationalReplayCloseSbfErrorV1::Identity as u32),
+        "refused as Identity: the cursor a stranger derives is not the one they were handed"
+    );
+
+    // HOSTILE 3, `Identity`: the right actor, the wrong descriptor. The other
+    // half of the same derivation.
+    let mut other_descriptor = fixture.descriptor_id;
+    other_descriptor[0] ^= 1;
+    let wrong_coordinate = submit_legacy_signed(
+        &mut context,
+        &fixture,
+        close(
+            other_descriptor,
+            fixture.actor.pubkey(),
+            fixture.actor.pubkey(),
+        ),
+        "claims rational-representation-v2: replay close at another descriptor",
+    )
+    .await;
+    assert!(
+        !wrong_coordinate.accepted,
+        "a cursor that does not derive must be refused"
+    );
+    assert_eq!(
+        custom_code(&wrong_coordinate),
+        Some(RationalReplayCloseSbfErrorV1::Identity as u32),
+        "refused as Identity, by name"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.representation_replay)
+            .await
+            .lamports,
+        stranded,
+        "no refusal may move a lamport"
+    );
+
+    let closed = submit_legacy_signed(
+        &mut context,
+        &fixture,
+        close(
+            fixture.descriptor_id,
+            fixture.actor.pubkey(),
+            fixture.actor.pubkey(),
+        ),
+        "claims rational-representation-v2: the actor reclaims its replay rent",
+    )
+    .await;
+    assert!(
+        closed.accepted,
+        "the actor must be able to reclaim its own rent: {:?}",
+        closed.logs.last()
+    );
+
+    let cursor_after = context
+        .banks_client
+        .get_account(fixture.representation_replay)
+        .await
+        .expect("account query");
+    match cursor_after {
+        None => {}
+        Some(account) => {
+            assert_eq!(account.lamports, 0, "a closed cursor keeps nothing");
+            assert!(account.data.is_empty(), "a closed cursor keeps no bytes");
+            assert_eq!(account.owner, solana_sdk_ids::system_program::ID);
+        }
+    }
+    let actor_after = observed(&mut context, fixture.actor.pubkey())
+        .await
+        .lamports;
+    assert_eq!(
+        actor_after - actor_before,
+        stranded,
+        "the actor is credited EXACTLY the cursor's rent -- no split, no reward, no residue"
+    );
+    eprintln!(
+        "Rational V2 replay close: reclaimed={stranded} lamports to the actor, CU={:?}",
+        closed.compute_units
     );
 }
 

@@ -435,10 +435,34 @@ mod tests {
         validate_selected_manifest_v1(&manifest, entry, index).expect("validated manifest");
 
         // Every record the Registry must hold is enumerated with its schema
-        // read off the release's own artifacts: 2 shared + 9 per action x 7,
-        // then the three the activation route reads (account profile, effect,
-        // and the V1 descriptor that carries the transition inside it).
-        assert_eq!(closure.records.len(), 2 + 9 * 7 + 3);
+        // read off the release's own artifacts: 2 shared + 9 per action, then
+        // the three the activation route reads (account profile, effect, and
+        // the V1 descriptor that carries the transition inside it).
+        //
+        // THE ACTION COUNT IS READ, NOT WRITTEN. This assertion said `7` for as
+        // long as General had seven actions and went stale the moment it grew
+        // to fifteen, failing at 140 against an expectation of 68 -- while the
+        // CI job for this tier, named "the journey campaign compiles", stayed
+        // green because compiling is all it does. The count is a property of
+        // the family and belongs to the release contract; a test that copies it
+        // is a second author who never gets told when the first one changes.
+        let actions =
+            dclutch_operator::general_selected_release_v1::GENERAL_SELECTED_ACTION_COUNT_V1;
+        // Pins the per-action multiplicity independently of the total, so a
+        // drift in what each action contributes cannot hide inside an arithmetic
+        // that still balances. `effect` is the per-action record; the
+        // activation route's own is labelled `activation-effect` and is counted
+        // separately below.
+        assert_eq!(
+            closure
+                .records
+                .iter()
+                .filter(|record| record.label == "effect")
+                .count(),
+            actions,
+            "exactly one effect record per action",
+        );
+        assert_eq!(closure.records.len(), 2 + 9 * actions + 3);
         for label in [
             "activation-account-profile",
             "activation-effect",

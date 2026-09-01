@@ -64,9 +64,12 @@ use crate::{
 };
 
 pub use dclutch_rational_representation_v2_contract::{
-    RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_SEED_V2,
+    RATIONAL_REPLAY_BYTES_V2, RATIONAL_REPLAY_CLOSE_ACCOUNT_COUNT_V1,
+    RATIONAL_REPLAY_CLOSE_ACTOR_ACCOUNT_V1, RATIONAL_REPLAY_CLOSE_CURSOR_ACCOUNT_V1,
+    RATIONAL_REPLAY_CLOSE_MAGIC_V1, RATIONAL_REPLAY_CLOSE_REQUEST_BYTES_V1,
+    RATIONAL_REPLAY_CLOSE_VERSION_V1, RATIONAL_REPLAY_MAGIC_V2, RATIONAL_REPLAY_SEED_V2,
     RATIONAL_REPLAY_VERSION_V2, RATIONAL_REPRESENTATION_AUTHORITY_SEED_V2,
-    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
+    RATIONAL_SHARD_MINT_SEED_V2, RATIONAL_STRUCTURED_CUSTODY_SEED_V2, RationalReplayCloseRequestV1,
 };
 const CALLER_AUTHORITY: usize = 0;
 const CALLER_PROGRAM: usize = 1;
@@ -265,6 +268,193 @@ struct ClaimsEvidence {
     receipt: Option<AffineBatchReceiptV2>,
     signed_delta_receipt: Option<SignedDeltaReceiptV3>,
     custody: Option<Box<CustodyEvidence>>,
+}
+
+/// Stable Rational replay-close refusal.
+///
+/// Its own sub-band rather than a fold into [`ClaimsSbfError`], for the reason
+/// decision 0007 gives generally and one specific to this route: it is the only
+/// act in this family that moves lamports and touches no Claims economics, so a
+/// reader who saw the family's generic `Accounts` or `Identity` here would go
+/// looking for a representation bug that is not there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum RationalReplayCloseSbfErrorV1 {
+    /// The fixed two-account frame, ownership, writability or length refused.
+    Accounts = 0x5680,
+    /// The actor named by the cursor did not sign, or a second signer appeared.
+    Authority = 0x5681,
+    /// The cursor address did not derive from the coordinates the request named.
+    Identity = 0x5682,
+    /// The cursor did not decode, or named another descriptor or actor.
+    Replay = 0x5683,
+}
+
+impl RationalReplayCloseSbfErrorV1 {
+    /// Every refusal this route can raise, in discriminant order.
+    pub const ALL: [Self; 4] = [
+        Self::Accounts,
+        Self::Authority,
+        Self::Identity,
+        Self::Replay,
+    ];
+
+    /// This refusal's position in [`RationalReplayCloseSbfErrorV1::ALL`].
+    ///
+    /// Exhaustive on purpose: a fifth variant is a compile error here rather
+    /// than a discriminant no assertion ever looks at.
+    const fn ordinal(self) -> usize {
+        match self {
+            Self::Accounts => 0,
+            Self::Authority => 1,
+            Self::Identity => 2,
+            Self::Replay => 3,
+        }
+    }
+}
+
+// Registered refusal band (`docs/decisions/0007-namespaced-refusal-codes.md`),
+// checked element by element over `ALL` rather than at two hand-named
+// endpoints, which is the form `fractional_claim_check_v1` arrived at after a
+// hand-named ceiling went stale silently.
+const _: () = {
+    const SUB_BAND: u32 = dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x680;
+    assert!(
+        RationalReplayCloseSbfErrorV1::ALL[0] as u32 == SUB_BAND,
+        "RationalReplayCloseSbfErrorV1 must start at its registered sub-band offset"
+    );
+    let mut index = 0;
+    while index < RationalReplayCloseSbfErrorV1::ALL.len() {
+        let variant = RationalReplayCloseSbfErrorV1::ALL[index];
+        assert!(
+            variant.ordinal() == index,
+            "RationalReplayCloseSbfErrorV1::ALL repeats a variant, skips one, or is out of order"
+        );
+        assert!(
+            variant as u32 == SUB_BAND + index as u32,
+            "RationalReplayCloseSbfErrorV1 discriminants are not the contiguous run from its offset"
+        );
+        assert!(
+            (variant as u32)
+                < dclutch_refusal_registry::CLAIMS_REFUSAL_BASE
+                    + dclutch_refusal_registry::BAND_SPAN,
+            "RationalReplayCloseSbfErrorV1 must not run past its registered refusal band"
+        );
+        index += 1;
+    }
+};
+
+impl From<RationalReplayCloseSbfErrorV1> for ProgramError {
+    fn from(value: RationalReplayCloseSbfErrorV1) -> Self {
+        Self::Custom(value as u32)
+    }
+}
+
+/// Close one spent Rational replay cursor and return its rent to the actor.
+///
+/// # The account class this closes
+///
+/// [`authenticate_or_allocate_replay`] creates one cursor per
+/// `(descriptor, actor)`, and until this route the seed constant
+/// `RATIONAL_REPLAY_SEED_V2` had exactly one on-chain use: that derivation.
+/// `rational_lifecycle_v2::retire_coordinate` and `retire_receipt` close the
+/// receipt Mint, every shard Mint, every structured custody account, every
+/// Position and every admission, and neither reaches this account. Its
+/// population grows with the number of actors who ever represented, so the
+/// stranded total grows with adoption -- which is the shape of C-10 violation
+/// worth naming even when each instance is small.
+///
+/// # What is deliberately NOT checked, and why that is safe
+///
+/// Nothing about the descriptor's lifecycle. A cursor is optimistic replay
+/// state and nothing else: it carries a revision and two identities, no
+/// balance, no entitlement and no claim. Closing it at revision `n` costs its
+/// actor exactly one thing -- the next act they submit must expect revision `0`
+/// again, because `authenticate_or_allocate_replay` refuses a fresh allocation
+/// at any other expectation. That is a fact about their own next transaction,
+/// which they signed for, and it cannot replay a completed act: the Claims,
+/// Token and Custody postconditions of every action are checked against chain
+/// state that has already moved. So this route needs no phase, no retirement
+/// evidence and no market at all, and requiring any of them would make the
+/// rent unreclaimable for exactly the actors whose markets never retire.
+#[inline(never)]
+pub(crate) fn process_replay_close(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> Result<(), ProgramError> {
+    if accounts.len() != RATIONAL_REPLAY_CLOSE_ACCOUNT_COUNT_V1 {
+        return Err(RationalReplayCloseSbfErrorV1::Accounts.into());
+    }
+    let request = RationalReplayCloseRequestV1::decode(instruction_data)
+        .map_err(|_| RationalReplayCloseSbfErrorV1::Replay)?;
+    let actor = accounts
+        .get(RATIONAL_REPLAY_CLOSE_ACTOR_ACCOUNT_V1)
+        .ok_or(RationalReplayCloseSbfErrorV1::Accounts)?;
+    let cursor = accounts
+        .get(RATIONAL_REPLAY_CLOSE_CURSOR_ACCOUNT_V1)
+        .ok_or(RationalReplayCloseSbfErrorV1::Accounts)?;
+
+    // EVERY SIGNER IN THE FRAME IS NAMED. One, and it is the actor the cursor
+    // itself names. A presented signature this route does not read is a
+    // privilege somebody can be induced to grant, so the cursor arriving as a
+    // signer is refused rather than ignored.
+    if !actor.is_signer || cursor.is_signer || actor.key.to_bytes() != request.actor() {
+        return Err(RationalReplayCloseSbfErrorV1::Authority.into());
+    }
+    if !actor.is_writable || !cursor.is_writable || cursor.executable {
+        return Err(RationalReplayCloseSbfErrorV1::Accounts.into());
+    }
+
+    let descriptor = request.descriptor();
+    let actor_id = request.actor();
+    let seeds = [
+        RATIONAL_REPLAY_SEED_V2,
+        descriptor.as_slice(),
+        actor_id.as_slice(),
+    ];
+    if cursor.key != &Pubkey::find_program_address(&seeds, program_id).0 {
+        return Err(RationalReplayCloseSbfErrorV1::Identity.into());
+    }
+    if cursor.owner != program_id || cursor.data_len() != RATIONAL_REPLAY_BYTES_V2 {
+        return Err(RationalReplayCloseSbfErrorV1::Accounts.into());
+    }
+    // The derivation above already pins both coordinates, so this join can only
+    // fail on bytes that do not belong at the address they are sitting at.
+    // Checked anyway, because a checked invariant is one an implementer cannot
+    // silently delete, and because it is what makes the refusal say `Replay`
+    // rather than leave a reader guessing at an address that derived fine.
+    {
+        let data = cursor
+            .try_borrow_data()
+            .map_err(|_| RationalReplayCloseSbfErrorV1::Accounts)?;
+        RationalReplayV2::decode(&data)
+            .and_then(|replay| replay.authenticate(request.descriptor(), request.actor()))
+            .map_err(|_| RationalReplayCloseSbfErrorV1::Replay)?;
+    }
+
+    // The whole balance, to the account the record names. No split, no reward
+    // and no residue: one owner means one destination, and a route that paid
+    // anybody else a cut would be charging an actor for reclaiming their own
+    // rent.
+    let reclaimed = cursor.lamports();
+    {
+        let mut cursor_lamports = cursor
+            .try_borrow_mut_lamports()
+            .map_err(|_| RationalReplayCloseSbfErrorV1::Accounts)?;
+        let mut actor_lamports = actor
+            .try_borrow_mut_lamports()
+            .map_err(|_| RationalReplayCloseSbfErrorV1::Accounts)?;
+        **cursor_lamports = 0;
+        **actor_lamports = actor_lamports
+            .checked_add(reclaimed)
+            .ok_or(RationalReplayCloseSbfErrorV1::Accounts)?;
+    }
+    cursor
+        .resize(0)
+        .map_err(|_| RationalReplayCloseSbfErrorV1::Accounts)?;
+    cursor.assign(&system_program::ID);
+    Ok(())
 }
 
 /// Execute one exact RationalRepresentationV2 request.

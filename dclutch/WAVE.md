@@ -2631,3 +2631,62 @@ differential oracle) each carried a **private little-endian id encoding**, and
 nothing compared them. 576-comparison join added, proved red by flipping one
 `<`. Two authors for one law is the same class as two implementations of one
 constant — and nobody noticed, because both were right.
+
+## 2026-09-01 — a CU delta with no control is not a measurement
+
+A lane was asked to own +6,010 CU its two new security guards appeared to cost.
+It measured instead, on a terminal route that **calls neither guard**:
+
+| claims ELF | change | CU |
+|---|---|---|
+| `84866d9c` | HEAD before the guards | 1,236,375 |
+| `7a8af549` | + two compaction guards | 1,242,385 (+6,010) |
+| `958e4d34` | + guards + an entire new replay-close route | **1,228,897 (−7,478 vs HEAD)** |
+
+**Adding *more* unreachable code moved it DOWN, below the original.** A ±13,000
+CU swing under changes that cannot execute on that route is compiler layout and
+inlining noise. The guards' true cost is on the route they guard: inner Claims
+compaction 544,064 → 562,805, **+18,741 CU**, on a transaction finishing at
+605,326 of 1,400,000.
+
+> **A CU number without a control on a route the change cannot reach is not a
+> measurement.**
+
+This project has already paid for the general form once: a compute figure
+published this session was read out of an interleaved parallel test log, belonged
+to a *passing* test, and had to be withdrawn. Same disease, different vector —
+a number attributed to the nearest recent change rather than to a control.
+
+The pre-existing ceiling stays red at 1,228,897 against `< 1_120_000` — **7,478
+CU better than when the lane found it**, and owned elsewhere.
+
+## 2026-09-01 — the check's name was true, and that was the problem
+
+The journey tier ran `cargo check`, and its CI job was called *"the journey
+campaign compiles."* It did compile — every day, while the runner called a
+subcommand the binary refuses (it still *dispatches* it, so it builds) and while
+281 of 282 tests passed and one failed.
+
+The tier now runs `cargo test --bins`, and the job is *"…compiles and its tests
+pass."* The original author's reasoning was right about the **campaign** — a
+real journey needs a validator and tens of minutes, which belongs to the cut —
+and wrong about the crate's own **host tests**, which need no validator and cost
+seconds on a build the tier already pays for. Both hidden defects lived in
+exactly that gap. It still does **not** claim the campaign passes against a
+chain, and the tier says so.
+
+### The stale number that was not General's
+
+The failing seam assertion measured `left: 140, right: 68`. 68 is the test's own
+hand-carried `2 + 9*7 + 3`; 140 is `2 + 9*15 + 3`, and fifteen is not a
+coincidence — `GENERAL_ACTION_PROGRAM_COUNT_V5 = 15`, and the builder emits nine
+records per action. **The builder was self-consistent and correct; the test's
+`7` was stale.** So it belonged to the bootstrap, not to General's semantics —
+settled by measurement rather than routed on a guess.
+
+The repair is a **derivation, not a new number**: the count now comes from the
+release contract's own constant that the builder is typed against, plus a second
+assertion pinning per-action multiplicity independently, so a drift in what each
+action contributes cannot hide inside a total that still balances.
+**Writing `15` would have bought exactly what `7` bought and rotted the same
+way.**

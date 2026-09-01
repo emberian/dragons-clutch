@@ -495,6 +495,18 @@ fn process_remaining_instruction(
     {
         return rational_representation_v2::process(program_id, accounts, instruction_data);
     }
+    if instruction_data
+        .get(..dclutch_rational_representation_v2_contract::RATIONAL_REPLAY_CLOSE_MAGIC_V1.len())
+        == Some(
+            dclutch_rational_representation_v2_contract::RATIONAL_REPLAY_CLOSE_MAGIC_V1.as_slice(),
+        )
+    {
+        return rational_representation_v2::process_replay_close(
+            program_id,
+            accounts,
+            instruction_data,
+        );
+    }
     if instruction_data.get(
         ..dclutch_rational_representation_v2_lifecycle_contract::LIFECYCLE_REQUEST_MAGIC_V2.len(),
     ) == Some(
