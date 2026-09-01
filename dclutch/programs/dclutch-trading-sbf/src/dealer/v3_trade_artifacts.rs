@@ -52,8 +52,8 @@ use dclutch_request_profile_contract::{
     },
 };
 use dclutch_transition_vm::v3::{
-    InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3, ScalarRegisterV3,
-    encode_program_atomic,
+    IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3,
+    ScalarRegisterV3, encode_program_atomic,
 };
 use solana_program::hash::hash;
 
@@ -138,7 +138,24 @@ pub const DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4: u16 = 101;
 pub const DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4: u16 = 102;
 /// Parent digest precedes six exact 19-identity Custody blocks, the trusted
 /// current-Trading owner, and the request-bound obligation key.
-pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 117;
+pub const DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4: u16 = 118;
+/// Obligation account key as the ACCOUNT pass observed it.
+///
+/// A second register for one fact, and it is not redundancy.
+/// `DEALER_SCENARIO_OBLIGATION_IDENTITY_V4` is written by the REQUEST profile;
+/// the account pass runs first and its guards read the INPUT identity bank, so
+/// an account-pass `RequireKey` against that register compared 32 unwritten
+/// zero bytes and could never hold -- selector 9 was unsatisfiable by any
+/// account list at all. The account pass projects what it OBSERVES here, and
+/// the transition, which runs after both passes over the bank that holds both
+/// values, carries `identity_eq` between the two.
+///
+/// The bank was exactly full at 117. Widening to 118 re-pins every selector-9
+/// artifact, which the standing full-redeploy grant makes free.
+pub const DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4: u16 = 117;
+const _: () = assert!(
+    DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4 < DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4
+);
 /// AccountProfile-owned current Trading identity used to authenticate the
 /// sole writable obligation account independently of optional child routes.
 pub const DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4: u16 = 115;
@@ -178,7 +195,7 @@ const REQUEST_PROFILE_V1_BYTES_V4: usize = dclutch_request_profile_contract::HEA
 /// Exact selector-9 RequestProfile V3 bytes.
 pub const DEALER_SCENARIO_REQUEST_PROFILE_BYTES_V4: usize =
     REQUEST_PROFILE_V3_HEADER_BYTES + REQUEST_PROFILE_V1_BYTES_V4;
-const TRANSITION_OPERATIONS_V4: usize = 10;
+const TRANSITION_OPERATIONS_V4: usize = 11;
 /// Exact selector-9 TransitionVM bytes.
 pub const DEALER_SCENARIO_TRANSITION_BYTES_V4: usize = dclutch_transition_vm::v3::HEADER_BYTES
     + TRANSITION_OPERATIONS_V4 * dclutch_transition_vm::v3::INSTRUCTION_BYTES;
@@ -372,6 +389,15 @@ pub fn encode_dealer_scenario_transition_v4(
         InstructionV3::scalar_le(
             ScalarRegisterV3::common(DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4),
             ScalarRegisterV3::common(DEALER_SCENARIO_EXPIRY_SCALAR_V4),
+        ),
+        // The obligation account the caller PASSED is the obligation account
+        // the request NAMES. This was an account-pass `RequireKey`, which reads
+        // the input identity bank while the request profile writes a separate
+        // output bank, so it compared against zeros. The law is unchanged; it
+        // is re-proven here, after both passes, over the bank that holds both.
+        InstructionV3::identity_eq(
+            IdentityRegisterV3::common(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
+            IdentityRegisterV3::common(DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4),
         ),
     ];
     encode_program_atomic(
@@ -2293,6 +2319,14 @@ mod tests {
         *output_scalars
             .get_mut(usize::from(DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4))
             .expect("current-slot register inside the scalar frame") = 98;
+        // This test drives only the REQUEST profile, which authors register
+        // `DEALER_SCENARIO_OBLIGATION_IDENTITY_V4`. The ACCOUNT pass authors
+        // `DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4` from the account it
+        // was actually handed; stage it here as that pass would. The transition
+        // is the only place both exist, which is the whole point of the move.
+        *output_identities
+            .get_mut(usize::from(DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4))
+            .expect("observed-obligation register inside the identity frame") = [7; 32];
         execute_fold_atomic(
             transition_program,
             2,
@@ -2322,6 +2356,36 @@ mod tests {
                 .copied(),
             Some(3)
         );
+        // Teeth: hand the account pass a DIFFERENT obligation account and the
+        // transition must refuse. Without this the staging above would make the
+        // join look satisfied by construction.
+        let mut substituted = output_identities.clone();
+        *substituted
+            .get_mut(usize::from(DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4))
+            .expect("observed-obligation register inside the identity frame") = [8; 32];
+        let untouched_identities = executed_identities.clone();
+        assert!(
+            execute_fold_atomic(
+                transition_program,
+                2,
+                RegisterInput {
+                    scalars: &output_scalars,
+                    identities: &substituted,
+                },
+                RegisterOutput {
+                    scalars: &mut execution_scratch_scalars,
+                    identities: &mut execution_scratch_identities,
+                },
+                RegisterOutput {
+                    scalars: &mut executed_scalars,
+                    identities: &mut executed_identities,
+                },
+            )
+            .is_err(),
+            "a substituted obligation account must not satisfy the transition",
+        );
+        assert_eq!(executed_identities, untouched_identities);
+
         let mut hostile_scalars = output_scalars.clone();
         *hostile_scalars
             .get_mut(usize::from(DEALER_SCENARIO_DEALER_EVIDENCE_COUNT_SCALAR_V4))

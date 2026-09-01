@@ -718,7 +718,17 @@ pub fn program_heap_capacity_v1() -> usize {
     PROGRAM_HEAP_V1.bytes_capacity()
 }
 
-/// Refuse a route that needs the extended heap and was not granted it.
+/// Refuse a route that needs the extended heap when the ceiling this adapter
+/// lifted from the transaction's own sanitized `RequestHeapFrame` is still the
+/// protocol default.
+///
+/// **The name is the whole point.** This function says the declared ceiling is
+/// sanitized and above the default. It does NOT say the runtime granted it, and
+/// it cannot: see "What this CANNOT tell you" below, where a request the runtime
+/// accepted and did not apply faults at `0x30000fcf8` -- 776 bytes below the
+/// REQUESTED ceiling -- while this check reports the extended heap present. It
+/// was called `require_declared_heap_ceiling_above_default_v1` until 2026-09-01, and
+/// `admitted` promised an observation no Solana program can make.
 ///
 /// [`lift_declared_heap_profile_v1`] is best-effort BY CONSTRUCTION: a
 /// transaction that declares the profile but carries no `RequestHeapFrame`, or
@@ -772,18 +782,27 @@ pub fn program_heap_capacity_v1() -> usize {
 /// (65,536). What the two faults show is the case where the ceiling and the
 /// mapping DISAGREE, which this function is structurally unable to detect.
 ///
-/// Naming it `admitted` therefore promises more than the platform can deliver.
-/// Whether the fix is to cap the scratch region at the default -- which makes an
-/// unhonoured request a named refusal and the extended heap useless to the
-/// routes that need it -- or to keep the ceiling and accept that a dishonoured
-/// request is an abort rather than a refusal, is a ruling about what a program
-/// may trust from its own instructions sysvar, and it is not made here.
+/// Naming it `admitted` promised more than the platform can deliver, so as of
+/// 2026-09-01 it does not. Whether the ceiling itself should change -- cap the
+/// scratch region at the default, which makes an unhonoured request a named
+/// refusal instead of an access violation, or keep 64 KiB and accept that a
+/// dishonoured request is an abort -- is a ruling about what a program may
+/// trust from its own instructions sysvar, and it is not made here.
+///
+/// What that ruling turns on is one measurement, and the capability-loss half
+/// of it is now in doubt: `DCLTHOT3` was put on
+/// [`declares_extended_heap_profile_v1`]'s list for two Registry
+/// reauthentication CPIs that decision 0017 option B deleted the same day
+/// (`hot_v3.rs`, `reauthenticate_top_level_root_roles_v3`: *"It stopped."*),
+/// and the continuation route that never made them peaks at 29,895 of 32,768.
+/// If the top-level route's peak now fits the default too, capping costs the
+/// trade path nothing.
 #[cfg(all(
     target_os = "solana",
     not(feature = "custom-heap"),
     not(feature = "no-entrypoint")
 ))]
-pub fn require_extended_heap_admitted_v1() -> Result<(), ProgramError> {
+pub fn require_declared_heap_ceiling_above_default_v1() -> Result<(), ProgramError> {
     if PROGRAM_HEAP_V1.bytes_capacity() > ADAPTER_DEFAULT_HEAP_BYTES {
         return Ok(());
     }
@@ -797,7 +816,7 @@ pub fn require_extended_heap_admitted_v1() -> Result<(), ProgramError> {
     not(feature = "custom-heap"),
     not(feature = "no-entrypoint")
 )))]
-pub fn require_extended_heap_admitted_v1() -> Result<(), ProgramError> {
+pub fn require_declared_heap_ceiling_above_default_v1() -> Result<(), ProgramError> {
     Ok(())
 }
 
@@ -1304,7 +1323,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     // carries no grant; its packet has four spare bytes and could not carry one
     // anyway. Declaring here is what makes a grant ADMISSIBLE, not required:
     // the route that needs it asks for it, and asks
-    // `require_extended_heap_admitted_v1` to refuse by name if it did not
+    // `require_declared_heap_ceiling_above_default_v1` to refuse by name if it did not
     // arrive.
     if instruction_data.get(..HOT_EXECUTION_MAGIC_BYTES_V1)
         == Some(dclutch_capability_program_contract::hot_v3::HOT_EXECUTION_MAGIC_V3.as_slice())
@@ -1316,7 +1335,7 @@ pub fn declares_extended_heap_profile_v1(instruction_data: &[u8]) -> bool {
     //
     // `process_capability_seal_v1` authenticates its Market and root exactly as a
     // hot action does, through `reauthenticate_top_level_root_roles_v3` -- and
-    // that function's first act is `require_extended_heap_admitted_v1`. The Hot
+    // that function's first act is `require_declared_heap_ceiling_above_default_v1`. The Hot
     // arm was declared here; the seal outer, which is the same prologue, was not.
     // So every seal write refused `TradingSbfError::HeapFrame` unconditionally,
     // and no NEW capability seal could be written on chain by this release: a

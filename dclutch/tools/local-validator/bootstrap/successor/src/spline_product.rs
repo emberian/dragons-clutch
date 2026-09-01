@@ -18,8 +18,8 @@ use dclutch_product_runtime_v2_operator::spline_basis_v3::{
     compile_spline_product_records_v3, spline_basis_output_bytes_v3,
 };
 use dclutch_product_runtime_v2_operator::{
-    FoundingBandV1, PartitionQualityModelV1, PartitionQualityReportV1,
-    require_interesting_partition_v1,
+    FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, PartitionQualityModelV1,
+    PartitionQualityReportV1, require_interesting_partition_v1,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -122,10 +122,9 @@ struct ParsedInputV1 {
     founding_band: ParsedFoundingBandV1,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ParsedFoundingBandV1 {
-    band: FoundingBandV1,
-    model: PartitionQualityModelV1,
+    belief: FoundingBeliefV1,
     max_cell_share_bps: u32,
 }
 
@@ -232,17 +231,29 @@ struct PartitionQualityReportOutV1 {
 }
 
 impl PartitionQualityReportOutV1 {
-    fn measured(parsed: ParsedFoundingBandV1, report: &PartitionQualityReportV1) -> Self {
+    fn measured(parsed: &ParsedFoundingBandV1, report: &PartitionQualityReportV1) -> Self {
         // Exhaustive on purpose: a second model variant must name itself here
-        // rather than be reported under this one's name.
-        let PartitionQualityModelV1::TriangularPlausibleBand { .. } = report.model;
+        // rather than be reported under this one's name. This tool compiles
+        // SPLINE price products, whose belief is a spot band by construction --
+        // `parse_founding_band` builds no other kind -- so a stated prior here
+        // would be a defect rather than a shape to render.
+        let (model, band) = match (&report.model, &parsed.belief) {
+            (
+                PartitionQualityModelV1::TriangularPlausibleBand,
+                FoundingBeliefV1::SpotBand { band, .. },
+            ) => ("triangular-plausible-band-v1", *band),
+            _ => unreachable!("a spline price product's belief is a spot band"),
+        };
+        let render = |value: Option<i128>| {
+            value.map_or_else(|| "none".to_string(), |measured| measured.to_string())
+        };
         Self {
-            model: "triangular-plausible-band-v1",
-            anchor: parsed.band.anchor.to_string(),
-            volatility_bps: parsed.band.volatility_bps,
-            window_slots: parsed.band.window_slots.to_string(),
-            characteristic_displacement: report.characteristic_displacement.to_string(),
-            plausible_half_width: report.plausible_half_width.to_string(),
+            model,
+            anchor: band.anchor.to_string(),
+            volatility_bps: band.volatility_bps,
+            window_slots: band.window_slots.to_string(),
+            characteristic_displacement: render(report.characteristic_displacement),
+            plausible_half_width: render(report.plausible_half_width),
             dominant_cell: report.dominant_cell,
             dominant_share_bps: report.dominant_share_bps,
             max_cell_share_bps: parsed.max_cell_share_bps,
@@ -484,19 +495,23 @@ fn parse_founding_band(
             "input/founding_band/plausible_half_widths: expected at least one",
         ));
     }
-    if band.max_cell_share_bps == 0 || u64::from(band.max_cell_share_bps) > 10_000 {
-        return Err(Error::new(
-            "input/founding_band/max_cell_share_bps: expected 1..=10000",
-        ));
+    // The upper bound is the compiler's own MAX_CELL_EX_ANTE_SHARE_BPS_V1, read
+    // rather than restated: an author states the ceiling their product wants,
+    // at or below the one this release will enforce. It was `10_000` here until
+    // 2026-09-01, which let an author disable the gate by stating it.
+    if band.max_cell_share_bps == 0 || band.max_cell_share_bps > MAX_CELL_EX_ANTE_SHARE_BPS_V1 {
+        return Err(Error::new(format!(
+            "input/founding_band/max_cell_share_bps: expected 1..={MAX_CELL_EX_ANTE_SHARE_BPS_V1}"
+        )));
     }
     Ok(ParsedFoundingBandV1 {
-        band: FoundingBandV1 {
-            anchor,
-            denominator: cut_denominator,
-            volatility_bps: band.volatility_bps,
-            window_slots,
-        },
-        model: PartitionQualityModelV1::TriangularPlausibleBand {
+        belief: FoundingBeliefV1::SpotBand {
+            band: FoundingBandV1 {
+                anchor,
+                denominator: cut_denominator,
+                volatility_bps: band.volatility_bps,
+                window_slots,
+            },
             plausible_half_widths: band.plausible_half_widths,
         },
         max_cell_share_bps: band.max_cell_share_bps,
@@ -563,11 +578,10 @@ fn compile(input: &ParsedInputV1) -> Result<CompiledFilesV1> {
     let operator = input.operator_input();
     // Before any record is built. A degenerate partition must not leave a
     // compiled graph on disk that somebody founds later without the report.
-    let parsed_band = input.founding_band;
+    let parsed_band = &input.founding_band;
     let quality = require_interesting_partition_v1(
         &input.cuts,
-        &parsed_band.band,
-        parsed_band.model,
+        &parsed_band.belief,
         parsed_band.max_cell_share_bps,
     )
     .map_err(|error| {
@@ -652,7 +666,7 @@ fn report(input: &ParsedInputV1, input_bytes: &[u8], files: &CompiledFilesV1) ->
             prices: gate.active_prices().iter().map(u64::to_string).collect(),
         },
         partition_quality: PartitionQualityReportOutV1::measured(
-            input.founding_band,
+            &input.founding_band,
             &files.quality,
         ),
     })

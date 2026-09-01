@@ -1564,7 +1564,7 @@ fn direct_action() -> u32 {
 /// The heap grant is REQUIRED, not decoration.
 /// `process_capability_seal_v1` authenticates its Market and root through
 /// `reauthenticate_top_level_root_roles_v3`, whose first act is
-/// `require_extended_heap_admitted_v1`, so a seal transaction carrying no
+/// `require_declared_heap_ceiling_above_default_v1`, so a seal transaction carrying no
 /// `RequestHeapFrame` refuses `TradingSbfError::HeapFrame` before it reads an
 /// artifact. These cases ran without one until 2026-08-31 and went red the
 /// moment the Hot arm's heap declaration landed (2026-08-30) -- the seal outer

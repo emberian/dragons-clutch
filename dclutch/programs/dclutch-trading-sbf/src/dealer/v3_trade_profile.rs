@@ -50,6 +50,7 @@ use super::{
         DEALER_SCENARIO_CURRENT_SLOT_SCALAR_V4, DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4,
         DEALER_SCENARIO_EVIDENCE_SPAN_COUNT_SCALAR_V4, DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
         DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4, DEALER_SCENARIO_OBLIGATION_IDENTITY_V4,
+        DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4,
         DEALER_SCENARIO_POSITION_COUNT_SCALAR_V4, DEALER_SCENARIO_ROUTE_SPAN_SCALAR_BASE_V4,
         DEALER_SCENARIO_SCRATCH_PAGE_COUNT_SCALAR_V4,
     },
@@ -267,9 +268,21 @@ pub fn encode_dealer_scenario_account_profile_v4_atomic(
             account: AccountCoordinateV2::fixed(OBLIGATION_V4),
             expected: IdentityCoordinateV2::common(DEALER_SCENARIO_CURRENT_TRADING_IDENTITY_V4),
         },
-        AccountOperationInputV2::RequireKey {
+        // NOT a `RequireKey` against DEALER_SCENARIO_OBLIGATION_IDENTITY_V4.
+        // `OP_REQUIRE_*` reads the INPUT identity bank; `OP_PROJECT_*` writes a
+        // separate output bank; and that register is written by the REQUEST
+        // profile, which runs after this pass (`project_accounts_atomic` ->
+        // swap -> `request_profile.project_atomic`). The guard that stood here
+        // compared the obligation key against 32 unwritten zero bytes, so
+        // selector 9 was unsatisfiable by any account list at all. The law it
+        // stated is real and moves to the bank that can hold both values: the
+        // emitted transition carries
+        // `identity_eq(OBLIGATION, OBSERVED_OBLIGATION)`.
+        AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(OBLIGATION_V4),
-            expected: IdentityCoordinateV2::common(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
+            destination: IdentityCoordinateV2::common(
+                DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4,
+            ),
         },
     ];
     encode_account_profile_with_dynamic_fixed_span_v2_atomic(
@@ -776,5 +789,107 @@ mod tests {
                 Err(DealerScenarioAccountProfileErrorV4::Geometry)
             );
         }
+    }
+
+    /// The account pass writes the obligation key into a register it OWNS.
+    ///
+    /// This reads the ENCODED artifact, not the builder's input array. A test
+    /// against the builder's own array would be the builder as its own witness,
+    /// which is the hazard this class is made of; `writes_register` is a static
+    /// inspection of the bytes that ship.
+    ///
+    /// What stood here was `RequireKey` against
+    /// `DEALER_SCENARIO_OBLIGATION_IDENTITY_V4`. `OP_REQUIRE_*` reads the INPUT
+    /// identity bank; `OP_PROJECT_*` writes a separate output bank; and that
+    /// register is written by the REQUEST profile, which runs after this pass
+    /// (`project_accounts_atomic` -> swap -> `request_profile.project_atomic`).
+    /// The guard therefore compared the obligation key against 32 unwritten
+    /// zero bytes, and selector 9 was unsatisfiable by any account list at all.
+    ///
+    /// Convicted class, second instance: `4923625a` removed General's three.
+    #[test]
+    fn the_account_pass_projects_the_obligation_key_into_a_register_it_owns() {
+        use dclutch_account_profile_contract::v2::{
+            ProjectionRegisterKindV2, ProjectionRegisterSpaceV2, ProjectionTargetV2,
+        };
+        let bytes = profile();
+        let decoded = AccountProfileV2::decode(&bytes).expect("decode");
+        let identity = |index| ProjectionTargetV2 {
+            kind: ProjectionRegisterKindV2::Identity,
+            space: ProjectionRegisterSpaceV2::Common,
+            index,
+        };
+        assert!(
+            decoded
+                .writes_register(identity(DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4))
+                .expect("writes_register"),
+            "the account pass must project the obligation key it observes",
+        );
+        // And it must NOT claim to author the register the request profile owns:
+        // one fact, two observers, two registers, joined in the transition.
+        assert!(
+            !decoded
+                .writes_register(identity(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4))
+                .expect("writes_register"),
+            "the request profile is the sole author of the requested obligation",
+        );
+    }
+
+    /// The comparison the guard used to state now runs where both values exist.
+    ///
+    /// A projection with no comparison is worse than a guard that cannot hold:
+    /// it is a fact nobody checks. `ProgramV3` exposes no instruction accessor,
+    /// so this compares the ENCODED instruction record -- taken from a
+    /// one-instruction reference program at the same geometry -- against the
+    /// shipped transition's instruction region. Artifact against artifact.
+    #[test]
+    fn the_transition_compares_the_observed_obligation_to_the_requested_one() {
+        use dclutch_transition_vm::v3::{
+            HEADER_BYTES, INSTRUCTION_BYTES, IdentityRegisterV3, InstructionV3, ProgramGeometryV3,
+            encode_program_atomic,
+        };
+
+        use crate::dealer::v3_trade_artifacts::{
+            DEALER_SCENARIO_TRANSITION_BYTES_V4, encode_dealer_scenario_transition_v4,
+        };
+        let geometry = ProgramGeometryV3 {
+            common_scalars: DEALER_SCENARIO_COMMON_SCALAR_COUNT_V4,
+            item_scalar_stride: DEALER_SCENARIO_ITEM_SCALAR_STRIDE_V4,
+            common_identities: DEALER_SCENARIO_COMMON_IDENTITY_COUNT_V4,
+            item_identity_stride: DEALER_SCENARIO_ITEM_IDENTITY_STRIDE_V4,
+        };
+        let reference_bytes = HEADER_BYTES + INSTRUCTION_BYTES;
+        let mut reference_scratch = vec![0_u8; reference_bytes];
+        let mut reference = vec![0_u8; reference_bytes];
+        encode_program_atomic(
+            geometry,
+            &[InstructionV3::identity_eq(
+                IdentityRegisterV3::common(DEALER_SCENARIO_OBLIGATION_IDENTITY_V4),
+                IdentityRegisterV3::common(DEALER_SCENARIO_OBSERVED_OBLIGATION_IDENTITY_V4),
+            )],
+            &[],
+            &[],
+            &mut reference_scratch,
+            &mut reference,
+        )
+        .expect("reference program");
+        let wanted = reference
+            .get(HEADER_BYTES..reference_bytes)
+            .expect("reference instruction")
+            .to_vec();
+        assert_eq!(wanted.len(), INSTRUCTION_BYTES);
+
+        let mut scratch = vec![0_u8; DEALER_SCENARIO_TRANSITION_BYTES_V4];
+        let mut output = vec![0_u8; DEALER_SCENARIO_TRANSITION_BYTES_V4];
+        encode_dealer_scenario_transition_v4(&mut scratch, &mut output).expect("transition");
+        let found = output
+            .get(HEADER_BYTES..)
+            .expect("instruction region")
+            .chunks_exact(INSTRUCTION_BYTES)
+            .any(|instruction| instruction == wanted.as_slice());
+        assert!(
+            found,
+            "the transition must compare the observed obligation to the one the request names",
+        );
     }
 }

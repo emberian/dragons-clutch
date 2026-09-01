@@ -17,14 +17,19 @@
 //! coefficients and a quality report, and nothing else in the entrance gets to
 //! choose a cut by hand.
 //!
-//! Every question here places its cuts from [`FoundingBandV1`] — spot at
+//! Every SPOT question here places its cuts from [`FoundingBandV1`] — spot at
 //! founding and the market's own window — so "centred on spot, width scaled to
 //! volatility times window" is a property of construction rather than of the
 //! author's arithmetic.
+//!
+//! [`MarketQuestionV1::Proposition`] is the member that does not name spot,
+//! because its coordinate does not have one. It places no cuts at all: a
+//! proposition is one ordinary cell and the Product's own disclosed failure
+//! outcome, and its belief is the prior the author stated rather than a walk.
 
 use dclutch_product_compiler::partition_quality::{
-    BandProfileV1, FoundingBandV1, PartitionQualityModelV1, PartitionQualityReportV1,
-    centred_cuts_v1, require_interesting_partition_v1,
+    BandProfileV1, FoundingBandV1, FoundingBeliefV1, PartitionQualityReportV1, centred_cuts_v1,
+    require_interesting_partition_v1,
 };
 use dclutch_product_runtime_v2::ContentId;
 use solana_program::pubkey::Pubkey;
@@ -78,6 +83,21 @@ pub enum MarketQuestionV1 {
         /// What the single most central band pays; outer bands pay less.
         peak_payout: u64,
     },
+    /// "Is this proposition proved inside the window?"
+    ///
+    /// NO cuts: one ordinary cell for the proved observation, and the
+    /// Product's own disclosed failure outcome for a window that closes
+    /// unproved. This is the shape of the relayed graduation market, and it is
+    /// the narrowest market the protocol can emit.
+    ///
+    /// The probability is deliberately NOT a field here. It is the belief, it
+    /// lives on [`FoundingBeliefV1::StatedProposition`], and stating it twice
+    /// would put two authors on one number and owe somebody a check that they
+    /// agreed. This variant carries only what a *payoff* needs.
+    Proposition {
+        /// What the proved cell pays.
+        payout: u64,
+    },
 }
 
 /// One authored partition, its payoff, and how the two look from spot.
@@ -122,13 +142,22 @@ pub struct AuthoredIdentitiesV1 {
 
 /// Turn one named question into cuts, coefficients and a quality report.
 pub fn author_product_v1(
-    band: FoundingBandV1,
-    model: PartitionQualityModelV1,
+    belief: &FoundingBeliefV1,
     ceiling_bps: u32,
     question: MarketQuestionV1,
 ) -> Result<AuthoredProductV1> {
+    // A spot question needs a spot; a proposition needs a prior. The pair is
+    // checked here rather than made unrepresentable because the question and
+    // the belief are two genuinely different authorings -- what the market
+    // pays, and what the author thinks will happen -- and a market may state
+    // either one first.
+    let spot: Option<FoundingBandV1> = match belief {
+        FoundingBeliefV1::SpotBand { band, .. } => Some(*band),
+        FoundingBeliefV1::StatedProposition(_) => None,
+    };
     let (cuts, coefficients) = match question {
         MarketQuestionV1::ThresholdFromSpot { ticks, payout } => {
+            let band = spot.ok_or(Error::BeliefKindMismatch)?;
             if payout == 0 {
                 return Err(Error::FoundingBand);
             }
@@ -136,6 +165,7 @@ pub fn author_product_v1(
             (vec![cut], vec![0, payout, 0])
         }
         MarketQuestionV1::CentredRangeProtection { profile, payout } => {
+            let band = spot.ok_or(Error::BeliefKindMismatch)?;
             if payout == 0 {
                 return Err(Error::FoundingBand);
             }
@@ -147,15 +177,29 @@ pub fn author_product_v1(
             profile,
             peak_payout,
         } => {
+            let band = spot.ok_or(Error::BeliefKindMismatch)?;
             if ordinary_cells < 3 || peak_payout == 0 {
                 return Err(Error::FoundingBand);
             }
             let cuts = centred_cuts_v1(&band, ordinary_cells, profile).map_err(quality_error)?;
             (cuts, tent_payouts(ordinary_cells, peak_payout)?)
         }
+        MarketQuestionV1::Proposition { payout } => {
+            if spot.is_some() {
+                // A proposition measured against a random walk around a
+                // positive spot is exactly the market this gate exists to
+                // refuse: its one ordinary cell takes 10,000 bps under every
+                // possible band.
+                return Err(Error::BeliefKindMismatch);
+            }
+            if payout == 0 {
+                return Err(Error::FoundingBand);
+            }
+            (Vec::new(), vec![payout, 0])
+        }
     };
-    let report = require_interesting_partition_v1(&cuts, &band, model, ceiling_bps)
-        .map_err(quality_error)?;
+    let report =
+        require_interesting_partition_v1(&cuts, belief, ceiling_bps).map_err(quality_error)?;
     let ordinary = coefficients
         .len()
         .checked_sub(1)
@@ -177,8 +221,7 @@ pub fn author_product_v1(
 /// Author one question and compile its live V2 record graph in one step.
 pub fn compile_authored_product_records_v2(
     registry_program: Pubkey,
-    band: FoundingBandV1,
-    model: PartitionQualityModelV1,
+    belief: &FoundingBeliefV1,
     ceiling_bps: u32,
     question: MarketQuestionV1,
     identities: AuthoredIdentitiesV1,
@@ -186,7 +229,7 @@ pub fn compile_authored_product_records_v2(
     domain_output: &mut [u8],
     portfolio_output: &mut [u8],
 ) -> Result<(CompiledProductRecordsV2, AuthoredProductV1)> {
-    let authored = author_product_v1(band, model, ceiling_bps, question)?;
+    let authored = author_product_v1(belief, ceiling_bps, question)?;
     let compiled = compile_product_records_v2(
         registry_program,
         ProductCompilationInputV2 {
@@ -197,7 +240,7 @@ pub fn compile_authored_product_records_v2(
             liability_basis_id: identities.liability_basis_id,
             representation_release_id: identities.representation_release_id,
             mapping_release_id: identities.mapping_release_id,
-            cut_denominator: band.denominator,
+            cut_denominator: belief.denominator(),
             cuts: &authored.cuts,
             portfolio_denominator: identities.portfolio_denominator,
             coefficients: &authored.coefficients,
@@ -242,25 +285,33 @@ mod tests {
     /// Raw signed price atoms at exponent -8, as the committed local Pyth
     /// fixture reports them.
     const SOL_USD_ANCHOR: i128 = 100_000_000;
-    const TWO_WIDE: PartitionQualityModelV1 = PartitionQualityModelV1::TriangularPlausibleBand {
-        plausible_half_widths: 2,
-    };
     const CEILING: u32 = dclutch_product_compiler::partition_quality::MAX_CELL_EX_ANTE_SHARE_BPS_V1;
 
-    fn band() -> FoundingBandV1 {
-        FoundingBandV1 {
-            anchor: SOL_USD_ANCHOR,
-            denominator: 1,
-            volatility_bps: 200,
-            window_slots: 10_000,
+    fn band() -> FoundingBeliefV1 {
+        FoundingBeliefV1::SpotBand {
+            band: FoundingBandV1 {
+                anchor: SOL_USD_ANCHOR,
+                denominator: 1,
+                volatility_bps: 200,
+                window_slots: 10_000,
+            },
+            plausible_half_widths: 2,
         }
+    }
+
+    fn proposition(cell_probability_bps: &[u32]) -> FoundingBeliefV1 {
+        FoundingBeliefV1::StatedProposition(
+            dclutch_product_compiler::partition_quality::StatedPropositionV1 {
+                denominator: 1,
+                cell_probability_bps: cell_probability_bps.to_vec(),
+            },
+        )
     }
 
     #[test]
     fn a_threshold_at_spot_is_the_even_money_question() {
         let authored = author_product_v1(
-            band(),
-            TWO_WIDE,
+            &band(),
             CEILING,
             MarketQuestionV1::ThresholdFromSpot {
                 ticks: 0,
@@ -280,8 +331,7 @@ mod tests {
         // Ten characteristic displacements out: the market has an answer
         // already, and this is exactly the shape ember named.
         let far = author_product_v1(
-            band(),
-            TWO_WIDE,
+            &band(),
             CEILING,
             MarketQuestionV1::ThresholdFromSpot {
                 ticks: 20_000_000,
@@ -292,8 +342,7 @@ mod tests {
         // POSITIVE CONTROL in the same run: one displacement out still founds,
         // so the refusal above is about placement and not about the checker.
         let near = author_product_v1(
-            band(),
-            TWO_WIDE,
+            &band(),
             CEILING,
             MarketQuestionV1::ThresholdFromSpot {
                 ticks: 2_000_000,
@@ -307,8 +356,7 @@ mod tests {
     #[test]
     fn centred_range_protection_replaces_a_hand_typed_band() {
         let authored = author_product_v1(
-            band(),
-            TWO_WIDE,
+            &band(),
             CEILING,
             MarketQuestionV1::CentredRangeProtection {
                 profile: BandProfileV1::Uniform,
@@ -329,8 +377,7 @@ mod tests {
     #[test]
     fn centred_bands_pay_across_the_partition_they_state() {
         let authored = author_product_v1(
-            band(),
-            TWO_WIDE,
+            &band(),
             CEILING,
             MarketQuestionV1::CentredBands {
                 ordinary_cells: 5,
@@ -370,7 +417,7 @@ mod tests {
             },
         ] {
             let authored =
-                author_product_v1(band(), TWO_WIDE, CEILING, question).expect("authored");
+                author_product_v1(&band(), CEILING, question).expect("authored");
             assert!(
                 authored.payoff_distinguishes_cells,
                 "{question:?} emitted a payoff its own partition cannot change"
@@ -383,12 +430,88 @@ mod tests {
         assert!(!inert[..3].iter().any(|payout| *payout != head));
     }
 
+    /// The market this whole unit exists for: zero cuts, one ordinary cell,
+    /// the Product's disclosed failure outcome, and a belief that is a stated
+    /// probability rather than a walk around a spot.
+    #[test]
+    fn a_proposition_is_authored_from_its_prior_and_not_from_a_spot() {
+        let authored = author_product_v1(
+            &proposition(&[3_500]),
+            CEILING,
+            MarketQuestionV1::Proposition { payout: 1 },
+        )
+        .expect("a stated proposition is a question");
+        assert!(authored.cuts.is_empty());
+        assert_eq!(authored.coefficients, vec![1, 0]);
+        assert_eq!(authored.report.cell_share_bps, vec![3_500]);
+        assert_eq!(authored.report.unresolved_share_bps, 6_500);
+        // One ordinary cell and the failure outcome: the payoff distinguishes
+        // nothing ACROSS ordinary cells because there is only one, and that is
+        // reported rather than refused, exactly as the flag's doc says.
+        assert!(!authored.payoff_distinguishes_cells);
+    }
+
+    /// The gate did not become an exemption. A proposition whose author states
+    /// a near-certain prior is refused, and so is one whose disclosed failure
+    /// outcome takes the market.
+    #[test]
+    fn a_foregone_proposition_is_refused_and_a_genuine_one_is_not() {
+        for prior in [vec![9_500_u32], vec![400]] {
+            assert_eq!(
+                author_product_v1(
+                    &proposition(&prior),
+                    CEILING,
+                    MarketQuestionV1::Proposition { payout: 1 }
+                ),
+                Err(Error::DegenerateOutcomePartition),
+                "prior {prior:?} is a foregone conclusion"
+            );
+        }
+        author_product_v1(
+            &proposition(&[4_200]),
+            CEILING,
+            MarketQuestionV1::Proposition { payout: 1 },
+        )
+        .expect("POSITIVE CONTROL: a 42% proposition is a question");
+    }
+
+    #[test]
+    fn a_question_and_a_belief_of_different_kinds_refuse_by_their_own_name() {
+        // A spot question against a prior: there is no spot to place cuts from.
+        for question in [
+            MarketQuestionV1::ThresholdFromSpot {
+                ticks: 0,
+                payout: 1,
+            },
+            MarketQuestionV1::CentredRangeProtection {
+                profile: BandProfileV1::Uniform,
+                payout: 1,
+            },
+            MarketQuestionV1::CentredBands {
+                ordinary_cells: 5,
+                profile: BandProfileV1::Uniform,
+                peak_payout: 1,
+            },
+        ] {
+            assert_eq!(
+                author_product_v1(&proposition(&[3_500]), CEILING, question),
+                Err(Error::BeliefKindMismatch),
+                "{question:?} names spot and the belief has none"
+            );
+        }
+        // And a proposition against a spot band, which is the exact market the
+        // partition gate exists to refuse.
+        assert_eq!(
+            author_product_v1(&band(), CEILING, MarketQuestionV1::Proposition { payout: 1 }),
+            Err(Error::BeliefKindMismatch)
+        );
+    }
+
     #[test]
     fn zero_payouts_and_impossible_widths_refuse_by_name() {
         assert_eq!(
             author_product_v1(
-                band(),
-                TWO_WIDE,
+                &band(),
                 CEILING,
                 MarketQuestionV1::ThresholdFromSpot {
                     ticks: 0,
@@ -399,14 +522,21 @@ mod tests {
         );
         assert_eq!(
             author_product_v1(
-                band(),
-                TWO_WIDE,
+                &band(),
                 CEILING,
                 MarketQuestionV1::CentredBands {
                     ordinary_cells: 2,
                     profile: BandProfileV1::Uniform,
                     peak_payout: 1
                 }
+            ),
+            Err(Error::FoundingBand)
+        );
+        assert_eq!(
+            author_product_v1(
+                &proposition(&[3_500]),
+                CEILING,
+                MarketQuestionV1::Proposition { payout: 0 }
             ),
             Err(Error::FoundingBand)
         );

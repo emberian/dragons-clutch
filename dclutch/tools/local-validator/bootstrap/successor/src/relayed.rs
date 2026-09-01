@@ -71,6 +71,21 @@ use crate::{Error, Result};
 /// lamport by the failure sibling.
 pub(crate) const WALK_BOUNTY_LAMPORTS: u64 = 250_000;
 
+/// This fixture's author's stated ex-ante probability that the pinned pool
+/// graduates inside the market's window, in basis points.
+///
+/// A declaration, not a derivation. The shortfall from 10,000 is the disclosed
+/// failure outcome's own stated share, which is why a zero-cut market is a
+/// question at all: its single ordinary cell does not take the whole market.
+pub(crate) const RELAYED_GRADUATION_PRIOR_BPS_V1: u32 = 3_500;
+
+/// Ceiling on any one outcome's share of this market's ex-ante mass.
+///
+/// The same 9,000 the price markets state. A graduation the author believed at
+/// 95%, or at 5%, is as much a foregone conclusion as a price partition whose
+/// middle cell takes everything, and refuses through the same gate.
+pub(crate) const RELAYED_GRADUATION_MAX_OUTCOME_SHARE_BPS_V1: u32 = 9_000;
+
 /// §12.6's conflation, disclosed where the founding input is compiled.
 pub(crate) const DISCLOSED_FAILURE_CONFLATION: &str = "For this v1 relayed graduation market, \
     'the relayer went silent', 'the venue was upgraded' and 'it never graduated' all land on the \
@@ -526,10 +541,27 @@ pub(crate) fn relayed_market_input(
 
     let mut input = MarketRunInput {
         // This market has NO CUTS -- one ordinary cell over the whole domain
-        // plus the failure outcome. It exists to drive relay transport, not to
-        // ask a question about an outcome, so it declares no belief rather
-        // than fabricating one it would never be measured against.
-        founding_band: None,
+        // plus the failure outcome -- and it DOES have a belief. It just is
+        // not a random walk around a positive spot: its coordinate is the
+        // discriminant of a four-state enum, and "volatility in basis points
+        // of spot" denotes nothing about it.
+        //
+        // The belief is `P(this pool graduates inside the window) = 35%`, and
+        // the other 6,500 bps are the disclosed failure outcome's own stated
+        // share -- the conflation DISCLOSED_FAILURE_CONFLATION names, priced
+        // ex ante instead of merely admitted. This is a DECLARATION and not a
+        // derivation, exactly as the SOL/USD fixture's volatility is: it is
+        // what this fixture's author believes, written down where the compiler
+        // can hold them to it.
+        //
+        // The earlier `None` here read "it declares no belief rather than
+        // fabricating one it would never be measured against". Right about the
+        // ethics, wrong about the mechanism: there was a belief to declare and
+        // no kind of belief to declare it in.
+        founding_band: Some(crate::model::FoundingBandInputV1::proposition(
+            vec![RELAYED_GRADUATION_PRIOR_BPS_V1],
+            RELAYED_GRADUATION_MAX_OUTCOME_SHARE_BPS_V1,
+        )),
         generation: 1,
         collateral_display_decimals: 6,
         local_participant_fixture_liquidity_atoms: 0,
@@ -718,6 +750,147 @@ mod tests {
                     .release_id()
                     .to_bytes(),
                 dclutch_resolution_codec::RESOLUTION_CONTROLLER_RELEASE_ID_V5,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod the_founding_path {
+    use super::*;
+    use crate::direct_market::{DirectDeploymentWidthsV1, DirectMarketCompilerOwnedV1};
+
+    fn graduation_input() -> (Pubkey, MarketRunInput) {
+        let registry = Pubkey::new_from_array([0x41; 32]);
+        let direct = DirectMarketCompilerOwnedV1::for_test(
+            registry,
+            DirectDeploymentWidthsV1::new(1_141_117, 971_053, 934_037).expect("widths"),
+        );
+        let facts = relayed_market_input(
+            registry,
+            [0x42; 32],
+            &WindowChoiceV1 {
+                start_unix_seconds: 1_800_000_000,
+                end_unix_seconds: 1_800_003_600,
+                max_age_seconds: 900,
+            },
+            &RelayedVenueFactsV1 {
+                program: [0x51; 32],
+                programdata: [0x52; 32],
+                pool: [0x53; 32],
+                elf_digest: [0x54; 32],
+                deployment_slot: 99,
+                upgrade_authority: [0x55; 32],
+            },
+            direct.compiler(),
+        )
+        .expect("relayed market input");
+        (registry, facts.input)
+    }
+
+    /// THE CONTROL THIS UNIT WAS BUILT AROUND. `compile_market_bodies` is the
+    /// first act of `publish_market_records`, before any RPC, so this reaches
+    /// the exact site the founding campaign reaches. Before the belief became
+    /// a family this refused with "founding_band is required to compile this
+    /// market's partition ... There is no default".
+    #[test]
+    fn the_graduation_market_compiles_through_the_gated_entrance() {
+        let (registry, input) = graduation_input();
+        let declared = input
+            .founding_band
+            .as_ref()
+            .expect("the graduation market states a belief");
+        assert_eq!(
+            declared.cell_probability_bps.as_deref(),
+            Some([RELAYED_GRADUATION_PRIOR_BPS_V1].as_slice()),
+            "and the belief it states is propositional"
+        );
+        crate::market::native_composition_bodies_for_test(registry, &input)
+            .expect("the gated founding path must compile the one non-price market");
+    }
+
+    /// The gate was not weakened to let this market through: an absent belief
+    /// still refuses by name, and so does a foregone one.
+    #[test]
+    fn an_absent_or_foregone_belief_still_refuses_on_the_same_path() {
+        let (registry, base) = graduation_input();
+
+        let mut absent = base.clone();
+        absent.founding_band = None;
+        let refusal = crate::market::native_composition_bodies_for_test(registry, &absent)
+            .expect_err("an absent belief must still refuse");
+        assert!(
+            format!("{refusal}").contains("founding_band is required"),
+            "the refusal must still name the field: {refusal}"
+        );
+
+        for foregone in [9_500_u32, 400] {
+            let mut certain = base.clone();
+            certain.founding_band = Some(crate::model::FoundingBandInputV1::proposition(
+                vec![foregone],
+                RELAYED_GRADUATION_MAX_OUTCOME_SHARE_BPS_V1,
+            ));
+            let refusal = crate::market::native_composition_bodies_for_test(registry, &certain)
+                .expect_err("a foregone proposition must refuse");
+            assert!(
+                format!("{refusal}").contains("DegenerateOutcomePartition"),
+                "a {foregone} bp prior must refuse as degenerate: {refusal}"
+            );
+        }
+
+        // A belief of the WRONG KIND for this market: a spot band over a
+        // four-state discriminant. Its one ordinary cell takes the whole
+        // plausible band under every possible band, which is the arithmetic
+        // certainty that bricked this path in the first place.
+        let mut spot = base.clone();
+        spot.founding_band = Some(crate::model::FoundingBandInputV1::spot_band(
+            3, 200, 10_000, 3, 9_000,
+        ));
+        let refusal = crate::market::native_composition_bodies_for_test(registry, &spot)
+            .expect_err("a zero-cut market under a spot band is still degenerate");
+        assert!(
+            format!("{refusal}").contains("DegenerateOutcomePartition"),
+            "a spot band over a proposition must refuse as degenerate: {refusal}"
+        );
+    }
+
+    /// A partial or double declaration refuses naming the field AND the kind --
+    /// strictly more than serde's requiredness said before.
+    #[test]
+    fn a_partial_or_double_declaration_refuses_by_field_and_kind() {
+        let (registry, base) = graduation_input();
+        let cases = [
+            (
+                crate::model::FoundingBandInputV1 {
+                    anchor: Some(15_000),
+                    volatility_bps: Some(200),
+                    window_slots: None,
+                    plausible_half_widths: Some(3),
+                    cell_probability_bps: None,
+                    max_cell_share_bps: 9_000,
+                },
+                "founding_band/window_slots",
+            ),
+            (
+                crate::model::FoundingBandInputV1 {
+                    anchor: Some(15_000),
+                    volatility_bps: Some(200),
+                    window_slots: Some(10_000),
+                    plausible_half_widths: Some(3),
+                    cell_probability_bps: Some(vec![3_500]),
+                    max_cell_share_bps: 9_000,
+                },
+                "states BOTH",
+            ),
+        ];
+        for (band, expected) in cases {
+            let mut input = base.clone();
+            input.founding_band = Some(band);
+            let refusal = crate::market::native_composition_bodies_for_test(registry, &input)
+                .expect_err("a malformed declaration must refuse");
+            assert!(
+                format!("{refusal}").contains(expected),
+                "expected {expected} in: {refusal}"
             );
         }
     }

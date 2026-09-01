@@ -43,7 +43,7 @@ use alloc::vec;
 #[cfg(not(target_os = "solana"))]
 use dclutch_account_profile_contract::{
     lifecycle_v3::StateLifecyclePolicyV4,
-    v2::{AccountPrestateV2, LIFECYCLE_PRESTATE_ARTIFACT_PROFILE},
+    v2::{AccountPrestateV2, DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE},
 };
 #[cfg(not(target_os = "solana"))]
 use dclutch_effect_kernel::v3::ProgramV3 as EffectProgramV3;
@@ -282,7 +282,17 @@ pub fn finalize_dealer_lp_descriptor_v3(
 
     let profile = AccountProfileV2::decode(artifacts.account_profile)
         .map_err(|_| DealerReleaseErrorV3::Artifact)?;
-    if profile.artifact_profile() != LIFECYCLE_PRESTATE_ARTIFACT_PROFILE
+    // The tag the LP encoder actually stamps. `encode_dealer_lp_account_profile_v3`
+    // emits Profile13's zero-span form -- deliberately, per its own comment: it
+    // is the canonical fixed topology that admits lifecycle-bound state and a
+    // readonly opaque native-program body under one semantic owner -- and that
+    // form stamps `DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE`. This gate still named
+    // `LIFECYCLE_PRESTATE_ARTIFACT_PROFILE`, a tag no LP artifact carries, so no
+    // LP descriptor could be finalized through this route at all. The teeth are
+    // unchanged and live below: the state coordinate must still carry
+    // `AccountPrestateV2::LifecycleBound`, which is what the old tag was
+    // standing in for.
+    if profile.artifact_profile() != DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE
         || profile.fixed_account_count() != dealer_lp_account_count_v3(artifacts.action)
         || profile.item_account_stride() != 0
         || profile.common_scalar_count() != DEALER_LP_SCALAR_COUNT_V3

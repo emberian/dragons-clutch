@@ -10,8 +10,9 @@
 
 use dclutch_product_compiler::CompileError;
 pub use dclutch_product_compiler::partition_quality::{
-    BandProfileV1, FoundingBandV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, PartitionQualityModelV1,
-    PartitionQualityReportV1, centred_cuts_v1, require_interesting_partition_v1,
+    BandProfileV1, FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+    PartitionQualityModelV1, PartitionQualityReportV1, StatedPropositionV1, centred_cuts_v1,
+    require_interesting_partition_v1,
 };
 use dclutch_product_runtime_v2::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
@@ -71,10 +72,19 @@ pub enum Error {
     SplineBasis,
     /// The offered DCLTPGT1 certificate did not admit the exact spline basis.
     PriceGate,
-    /// A founding band was absent, mismatched, or outside its stated bounds.
+    /// A founding belief was absent, mismatched, or outside its stated bounds.
     FoundingBand,
-    /// One ordinary cell holds the stated ceiling of ex-ante outcome mass, so
-    /// the partition is exhaustive, disjoint, ordered, canonical — and always
+    /// A named question and the stated belief are different KINDS: a
+    /// spot-relative question against a categorical prior, or a proposition
+    /// against a random walk around a positive spot.
+    ///
+    /// Distinct from [`Error::FoundingBand`] on purpose. "You stated no
+    /// belief" and "you stated the wrong kind of belief for this question" are
+    /// different things to have got wrong, and a test asserting "some error"
+    /// must not pass on either while meaning the other.
+    BeliefKindMismatch,
+    /// One outcome holds the stated ceiling of ex-ante outcome mass, so the
+    /// partition is exhaustive, disjoint, ordered, canonical — and always
     /// resolves the same way.
     DegenerateOutcomePartition,
 }
@@ -215,27 +225,30 @@ pub fn compile_product_records_v2(
 /// [`compile_product_records_v2`] takes cuts as caller authority and will
 /// happily commit a partition whose every cell sits outside the coordinate the
 /// source will report — exhaustive, disjoint, ordered, canonical, and always
-/// the same answer. This entrance measures the partition against the founding
-/// spot and window first and refuses
-/// [`Error::DegenerateOutcomePartition`] when one cell takes the market.
+/// the same answer. This entrance measures the partition against the market's
+/// own stated belief first and refuses [`Error::DegenerateOutcomePartition`]
+/// when one outcome takes the market.
+///
+/// The belief is a family, not a spot: a price market states a band and a
+/// volatility, a proposition market states a prior over its cells, and the
+/// requirement that SOME belief is stated is total in both kinds.
 ///
 /// The report comes back on the honest path so a caller and a client can
 /// explain the market's ex-ante shape from the operator's own numbers rather
 /// than re-deriving one.
 pub fn compile_interesting_product_records_v2(
     registry_program: Pubkey,
-    band: FoundingBandV1,
-    model: PartitionQualityModelV1,
+    belief: &FoundingBeliefV1,
     ceiling_bps: u32,
     input: ProductCompilationInputV2<'_>,
     product_output: &mut [u8],
     domain_output: &mut [u8],
     portfolio_output: &mut [u8],
 ) -> Result<(CompiledProductRecordsV2, PartitionQualityReportV1)> {
-    if band.denominator != input.cut_denominator {
+    if belief.denominator() != input.cut_denominator {
         return Err(Error::FoundingBand);
     }
-    let report = require_interesting_partition_v1(input.cuts, &band, model, ceiling_bps)
+    let report = require_interesting_partition_v1(input.cuts, belief, ceiling_bps)
         .map_err(quality_error)?;
     let compiled = compile_product_records_v2(
         registry_program,

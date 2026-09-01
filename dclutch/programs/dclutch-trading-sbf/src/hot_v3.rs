@@ -4903,7 +4903,7 @@ fn reauthenticate_top_level_root_roles_v3(
     // the protocol default heap and this is the first thing it spends that
     // budget on. Refusing here costs a caller who forgot the grant one
     // comparison instead of a million compute units and an unnamed abort.
-    crate::entrypoint_adapter::require_extended_heap_admitted_v1()?;
+    crate::entrypoint_adapter::require_declared_heap_ceiling_above_default_v1()?;
     // Owner, non-executability and the one exact width BEFORE a byte is read,
     // which is the ordering `dclutch-registry-activation-auth-v1` documents and
     // the reason a stranger's account can never contribute the bump seed the

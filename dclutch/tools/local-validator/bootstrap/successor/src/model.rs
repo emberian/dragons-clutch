@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{Error, Result};
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunProgramInput {
@@ -58,20 +60,33 @@ pub(crate) struct SuccessorRunSpec {
     pub(crate) record_publication: Option<String>,
 }
 
-/// The founding observation and belief a market's partition is measured
-/// against, as the AUTHOR states it.
+/// The founding belief a market's partition is measured against, as the AUTHOR
+/// states it. Named for its JSON key, `founding_band`, which predates the
+/// belief being a family and is not changed because live inputs carry it.
 ///
-/// Volatility is an authoring input, not a derived one: how uncertain the
+/// The belief is an authoring input, not a derived one: how uncertain the
 /// author believes the outcome is is part of the description being compiled,
 /// and the compiler holds them to it. That makes the refusal legible -- *you
 /// said 200 bp over this window and these cuts do not describe that belief* --
 /// rather than something to blame a derivation for.
 ///
-/// EVERY FIELD IS REQUIRED AND NOTHING HERE CARRIES A SERDE DEFAULT. An input
-/// that declines to declare refuses at parse naming `founding_band`; a partial
-/// band refuses naming the field it left out. A default would be this file
-/// inventing the author's belief for them, silently, which is the one outcome
-/// the whole gate exists to prevent.
+/// # Two kinds, and no default in either
+///
+/// A market whose coordinate MOVES states `anchor`, `volatility_bps`,
+/// `window_slots` and `plausible_half_widths`. A market that asks whether a
+/// PROPOSITION is proved states `cell_probability_bps`, one entry per ordinary
+/// cell -- its coordinate is a discriminant, and a volatility in basis points
+/// of spot denotes nothing about it. Both state `max_cell_share_bps`.
+///
+/// THE REQUIREMENT IS TOTAL AND NOTHING HERE CARRIES A DEFAULT. An input that
+/// declines to declare refuses naming `founding_band`; an input that states
+/// half of a kind refuses naming the field it left out; an input that states
+/// fields from both kinds refuses naming both. The check moved out of serde's
+/// requiredness and into [`FoundingBandInputV1::require_one_kind`] when the
+/// second kind landed, and it got STRONGER on the way: it names the kind as
+/// well as the field. A default would be this file inventing the author's
+/// belief for them, silently, which is the one outcome the whole gate exists
+/// to prevent.
 ///
 /// `anchor` is stated rather than read off the authenticated Pyth update
 /// because `FullPriceUpdateV2` exposes no accessor for its price and lives in
@@ -80,18 +95,131 @@ pub(crate) struct SuccessorRunSpec {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FoundingBandInputV1 {
-    /// Spot coordinate numerator at founding, over the partition's own
+    /// Spot-kind: coordinate numerator at founding, over the partition's own
     /// `cut_denominator`. A band on another denominator would measure a
     /// different market than the one being compiled.
-    pub(crate) anchor: i128,
-    /// Stated volatility in basis points of `anchor` over the window.
-    pub(crate) volatility_bps: u32,
-    /// This market's own window from founding to deadline, in slots.
-    pub(crate) window_slots: u64,
-    /// How many characteristic displacements the plausible band reaches.
-    pub(crate) plausible_half_widths: u32,
-    /// Ceiling on any one cell's share of ex-ante outcome mass, in bps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) anchor: Option<i128>,
+    /// Spot-kind: stated volatility in basis points of `anchor` over the window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) volatility_bps: Option<u32>,
+    /// Spot-kind: this market's own window from founding to deadline, in slots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) window_slots: Option<u64>,
+    /// Spot-kind: how many characteristic displacements the band reaches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) plausible_half_widths: Option<u32>,
+    /// Proposition-kind: the author's ex-ante probability for each ordinary
+    /// cell, in basis points, in canonical partition order. The shortfall from
+    /// 10,000 is the disclosed failure outcome's own stated share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cell_probability_bps: Option<Vec<u32>>,
+    /// Ceiling on any one outcome's share of ex-ante mass, in bps.
     pub(crate) max_cell_share_bps: u32,
+}
+
+/// Which kind of belief one input declared.
+#[derive(Clone, Debug)]
+pub(crate) enum DeclaredBeliefKindV1 {
+    /// `anchor`, `volatility_bps`, `window_slots`, `plausible_half_widths`.
+    SpotBand {
+        anchor: i128,
+        volatility_bps: u32,
+        window_slots: u64,
+        plausible_half_widths: u32,
+    },
+    /// `cell_probability_bps`.
+    StatedProposition { cell_probability_bps: Vec<u32> },
+}
+
+impl FoundingBandInputV1 {
+    /// A market whose coordinate moves: the historical shape, unchanged.
+    pub(crate) const fn spot_band(
+        anchor: i128,
+        volatility_bps: u32,
+        window_slots: u64,
+        plausible_half_widths: u32,
+        max_cell_share_bps: u32,
+    ) -> Self {
+        Self {
+            anchor: Some(anchor),
+            volatility_bps: Some(volatility_bps),
+            window_slots: Some(window_slots),
+            plausible_half_widths: Some(plausible_half_widths),
+            cell_probability_bps: None,
+            max_cell_share_bps,
+        }
+    }
+
+    /// A market that asks whether a proposition is proved in its window.
+    pub(crate) const fn proposition(
+        cell_probability_bps: Vec<u32>,
+        max_cell_share_bps: u32,
+    ) -> Self {
+        Self {
+            anchor: None,
+            volatility_bps: None,
+            window_slots: None,
+            plausible_half_widths: None,
+            cell_probability_bps: Some(cell_probability_bps),
+            max_cell_share_bps,
+        }
+    }
+
+    /// Read exactly one kind of belief out of this input, or refuse by name.
+    ///
+    /// Strictly stronger than the serde requiredness it replaced: it refuses a
+    /// partial declaration naming the missing field AND the kind it belongs
+    /// to, and it refuses a declaration that states both kinds -- which serde
+    /// could never have caught, because each kind's fields are individually
+    /// well-formed.
+    pub(crate) fn require_one_kind(&self, label: &str) -> Result<DeclaredBeliefKindV1> {
+        let spot_fields = [
+            ("anchor", self.anchor.is_some()),
+            ("volatility_bps", self.volatility_bps.is_some()),
+            ("window_slots", self.window_slots.is_some()),
+            ("plausible_half_widths", self.plausible_half_widths.is_some()),
+        ];
+        let any_spot = spot_fields.iter().any(|(_, present)| *present);
+        let proposition = self.cell_probability_bps.is_some();
+        if any_spot && proposition {
+            return Err(Error::new(format!(
+                "{label} founding_band: states BOTH a spot band and                  cell_probability_bps. A market has one belief, of one kind"
+            )));
+        }
+        if proposition {
+            let cell_probability_bps = self
+                .cell_probability_bps
+                .clone()
+                .unwrap_or_default();
+            if cell_probability_bps.is_empty() {
+                return Err(Error::new(format!(
+                    "{label} founding_band/cell_probability_bps: expected one                      probability per ordinary cell, and a partition has at least one"
+                )));
+            }
+            return Ok(DeclaredBeliefKindV1::StatedProposition {
+                cell_probability_bps,
+            });
+        }
+        if !any_spot {
+            return Err(Error::new(format!(
+                "{label} founding_band: declared no belief. State a spot band                  (anchor, volatility_bps, window_slots, plausible_half_widths)                  for a coordinate that moves, or cell_probability_bps for a                  proposition. There is no default in either kind"
+            )));
+        }
+        for (field, present) in spot_fields {
+            if !present {
+                return Err(Error::new(format!(
+                    "{label} founding_band/{field}: a spot band was declared                      and this field was left out. A partial belief is not a belief"
+                )));
+            }
+        }
+        Ok(DeclaredBeliefKindV1::SpotBand {
+            anchor: self.anchor.unwrap_or_default(),
+            volatility_bps: self.volatility_bps.unwrap_or_default(),
+            window_slots: self.window_slots.unwrap_or_default(),
+            plausible_half_widths: self.plausible_half_widths.unwrap_or_default(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

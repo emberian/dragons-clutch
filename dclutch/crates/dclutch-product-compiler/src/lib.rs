@@ -290,9 +290,29 @@ pub enum CompileError {
     UnsupportedFoundingBand,
     /// A founding band and its partition used different coordinate denominators.
     MismatchedFoundingDenominator,
-    /// One ordinary cell holds at least the whole stated ceiling of ex-ante
-    /// outcome mass, so the market has no genuine question in it.
+    /// One outcome holds at least the whole stated ceiling of ex-ante outcome
+    /// mass, so the market has no genuine question in it.
+    ///
+    /// The outcome may be an ordinary cell or the Product's own disclosed
+    /// failure outcome: a market almost certain not to resolve is as much a
+    /// foregone conclusion as one whose middle cell takes everything.
     DegenerateOutcomePartition,
+    /// A stated categorical prior named a different number of cells than the
+    /// partition it is meant to describe has.
+    MismatchedPriorWidth,
+    /// A stated categorical prior's probabilities sum past unity, so it does
+    /// not describe a probability at all.
+    PriorMassExceedsUnity,
+    /// A caller stated a cell-share ceiling above
+    /// [`partition_quality::MAX_CELL_EX_ANTE_SHARE_BPS_V1`], which would make
+    /// the partition gate weaker than this release admits.
+    ///
+    /// Distinct from `UnsupportedFoundingBand` on purpose: a ceiling of zero,
+    /// or a malformed volatility or window, is a parameter this compiler
+    /// cannot use. A ceiling ABOVE the maximum is a well-formed parameter
+    /// asking the gate to admit more than the release will, and a reader who
+    /// gets one code for both has to bisect to learn which.
+    CellShareCeilingAboveMaximum,
     /// A contract preimage rejected an emitted declaration.
     Contract(ContractError),
 }

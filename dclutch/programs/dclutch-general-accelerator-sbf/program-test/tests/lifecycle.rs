@@ -3281,15 +3281,15 @@ async fn real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_run
                     (TopLevelPreludeV3::HeapThenLimit, None),
                     (
                         TopLevelPreludeV3::Nothing,
-                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted),
+                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested),
                     ),
                     (
                         TopLevelPreludeV3::LimitOnly,
-                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted),
+                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested),
                     ),
                     (
                         TopLevelPreludeV3::WrongHeap,
-                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted),
+                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested),
                     ),
                     (
                         TopLevelPreludeV3::ForeignBefore,

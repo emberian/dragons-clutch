@@ -11,9 +11,9 @@
 use dclutch_product_runtime_v2::{ContentId, portfolio_record_bytes, result_domain_record_bytes};
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
-    BandProfileV1, Error, FoundingBandV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, PartitionQualityModelV1,
-    ProductCompilationInputV2, centred_cuts_v1, compile_interesting_product_records_v2,
-    compile_product_records_v2,
+    BandProfileV1, Error, FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+    ProductCompilationInputV2, StatedPropositionV1, centred_cuts_v1,
+    compile_interesting_product_records_v2, compile_product_records_v2,
 };
 use solana_program::pubkey::Pubkey;
 
@@ -21,10 +21,6 @@ use solana_program::pubkey::Pubkey;
 /// Pyth fixture reports, so one SOL is a hundred million.
 const SOL_USD_ANCHOR: i128 = 100_000_000;
 const REGISTRY: Pubkey = Pubkey::new_from_array([0xa2; 32]);
-const TWO_WIDE: PartitionQualityModelV1 = PartitionQualityModelV1::TriangularPlausibleBand {
-    plausible_half_widths: 2,
-};
-
 fn id(byte: u8) -> ContentId {
     ContentId::new([byte; 32]).expect("nonzero fixture identity")
 }
@@ -35,6 +31,13 @@ fn band() -> FoundingBandV1 {
         denominator: 1,
         volatility_bps: 200,
         window_slots: 10_000,
+    }
+}
+
+fn belief() -> FoundingBeliefV1 {
+    FoundingBeliefV1::SpotBand {
+        band: band(),
+        plausible_half_widths: 2,
     }
 }
 
@@ -90,8 +93,7 @@ fn the_ungated_entrance_admits_a_partition_that_always_resolves_the_same_way() {
     assert_eq!(
         compile_interesting_product_records_v2(
             REGISTRY,
-            band(),
-            TWO_WIDE,
+            &belief(),
             MAX_CELL_EX_ANTE_SHARE_BPS_V1,
             input(&cuts, &coefficients),
             &mut output.product,
@@ -114,8 +116,7 @@ fn a_centred_band_compiles_the_identical_records_and_carries_its_report() {
     let mut gated = buffers(cuts.len(), coefficients.len());
     let (compiled, report) = compile_interesting_product_records_v2(
         REGISTRY,
-        band(),
-        TWO_WIDE,
+        &belief(),
         MAX_CELL_EX_ANTE_SHARE_BPS_V1,
         input(&cuts, &coefficients),
         &mut gated.product,
@@ -124,8 +125,9 @@ fn a_centred_band_compiles_the_identical_records_and_carries_its_report() {
     )
     .expect("a centred band is a real question");
     assert_eq!(report.cell_share_bps, vec![3_612, 900, 975, 900, 3_612]);
-    assert_eq!(report.characteristic_displacement, 2_000_000);
-    assert_eq!(report.plausible_half_width, 4_000_000);
+    assert_eq!(report.characteristic_displacement, Some(2_000_000));
+    assert_eq!(report.plausible_half_width, Some(4_000_000));
+    assert_eq!(report.unresolved_share_bps, 0);
 
     // The gate adds a refusal and changes no byte of the record graph.
     let mut plain = buffers(cuts.len(), coefficients.len());
@@ -151,11 +153,13 @@ fn a_band_over_another_denominator_refuses_before_any_compilation() {
     assert_eq!(
         compile_interesting_product_records_v2(
             REGISTRY,
-            FoundingBandV1 {
-                denominator: 100,
-                ..band()
+            &FoundingBeliefV1::SpotBand {
+                band: FoundingBandV1 {
+                    denominator: 100,
+                    ..band()
+                },
+                plausible_half_widths: 2,
             },
-            TWO_WIDE,
             MAX_CELL_EX_ANTE_SHARE_BPS_V1,
             input(&cuts, &coefficients),
             &mut output.product,
@@ -166,4 +170,63 @@ fn a_band_over_another_denominator_refuses_before_any_compilation() {
         Some(Error::FoundingBand)
     );
     assert_eq!(output.product, [0; PRODUCT_RECORD_BYTES_V2]);
+}
+
+/// The zero-cut market, through the LIVE record compiler rather than through
+/// the measure alone: the narrowest partition the protocol emits is refused
+/// under a spot band and compiles under a stated prior, on real buffers.
+#[test]
+fn a_zero_cut_proposition_compiles_records_that_a_spot_band_refuses() {
+    let cuts: [i128; 0] = [];
+    let coefficients = [1_u64, 0];
+    let mut refused = buffers(cuts.len(), coefficients.len());
+    assert_eq!(
+        compile_interesting_product_records_v2(
+            REGISTRY,
+            &belief(),
+            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+            input(&cuts, &coefficients),
+            &mut refused.product,
+            &mut refused.domain,
+            &mut refused.portfolio,
+        )
+        .err(),
+        Some(Error::DegenerateOutcomePartition),
+        "one ordinary cell takes the whole plausible band under every spot band"
+    );
+    assert_eq!(refused.product, [0; PRODUCT_RECORD_BYTES_V2]);
+
+    let prior = FoundingBeliefV1::StatedProposition(StatedPropositionV1 {
+        denominator: 1,
+        cell_probability_bps: vec![3_500],
+    });
+    let mut gated = buffers(cuts.len(), coefficients.len());
+    let (compiled, report) = compile_interesting_product_records_v2(
+        REGISTRY,
+        &prior,
+        MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        input(&cuts, &coefficients),
+        &mut gated.product,
+        &mut gated.domain,
+        &mut gated.portfolio,
+    )
+    .expect("a stated proposition is a question the compiler will emit");
+    assert_eq!(compiled.outcome_count, 2);
+    assert_eq!(report.cell_share_bps, vec![3_500]);
+    assert_eq!(report.unresolved_share_bps, 6_500);
+
+    // And the gate still changes no byte of the graph it admits.
+    let mut plain = buffers(cuts.len(), coefficients.len());
+    let direct = compile_product_records_v2(
+        REGISTRY,
+        input(&cuts, &coefficients),
+        &mut plain.product,
+        &mut plain.domain,
+        &mut plain.portfolio,
+    )
+    .expect("ungated");
+    assert_eq!(compiled, direct);
+    assert_eq!(gated.product, plain.product);
+    assert_eq!(gated.domain, plain.domain);
+    assert_eq!(gated.portfolio, plain.portfolio);
 }

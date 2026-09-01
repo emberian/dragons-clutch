@@ -6,7 +6,7 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, AdmissionStateV2, BandProfileV1, FinalizedRecordObservationV2,
-    FoundingBandV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, PartitionQualityModelV1,
+    FoundingBandV1, FoundingBeliefV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1,
     ProductCompilationInputV2,
     authoring::{AuthoredIdentitiesV1, MarketQuestionV1, compile_authored_product_records_v2},
     build_admission_instruction_v2, compile_product_records_v2, derive_admission_receipt_v2,
@@ -385,8 +385,8 @@ async fn run_authored_sol_usd_market(prefer_real_elf: bool) {
     let mut portfolio = vec![0_u8; portfolio_record_bytes(outcomes).expect("portfolio width")];
     let (compiled, authored) = compile_authored_product_records_v2(
         REGISTRY_PROGRAM,
-        band,
-        PartitionQualityModelV1::TriangularPlausibleBand {
+        &FoundingBeliefV1::SpotBand {
+            band,
             plausible_half_widths: 2,
         },
         MAX_CELL_EX_ANTE_SHARE_BPS_V1,

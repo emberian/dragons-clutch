@@ -809,13 +809,15 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
         &band_max_cell_share,
     ) {
         (None, None, None, None, None) => None,
-        (Some(a), Some(v), Some(w), Some(h), Some(c)) => Some(crate::model::FoundingBandInputV1 {
-            anchor: decimal::<i128>(Some(a.clone()), "--band-anchor")?,
-            volatility_bps: decimal::<u32>(Some(v.clone()), "--band-volatility-bps")?,
-            window_slots: decimal::<u64>(Some(w.clone()), "--band-window-slots")?,
-            plausible_half_widths: decimal::<u32>(Some(h.clone()), "--band-plausible-half-widths")?,
-            max_cell_share_bps: decimal::<u32>(Some(c.clone()), "--band-max-cell-share-bps")?,
-        }),
+        (Some(a), Some(v), Some(w), Some(h), Some(c)) => {
+            Some(crate::model::FoundingBandInputV1::spot_band(
+                decimal::<i128>(Some(a.clone()), "--band-anchor")?,
+                decimal::<u32>(Some(v.clone()), "--band-volatility-bps")?,
+                decimal::<u64>(Some(w.clone()), "--band-window-slots")?,
+                decimal::<u32>(Some(h.clone()), "--band-plausible-half-widths")?,
+                decimal::<u32>(Some(c.clone()), "--band-max-cell-share-bps")?,
+            ))
+        }
         _ => {
             return Err(Error::new(
                 "an incomplete founding band was stated. --band-anchor, \

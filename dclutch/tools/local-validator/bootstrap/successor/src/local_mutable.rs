@@ -1689,13 +1689,13 @@ fn founding_band_from_arguments_v1(
     let max_cell_share_bps = number(max_cell_share_bps, "--band-max-cell-share-bps")?
         .parse::<u32>()
         .map_err(|_| Error::new("--band-max-cell-share-bps must be a decimal u32"))?;
-    Ok(Some(crate::model::FoundingBandInputV1 {
+    Ok(Some(crate::model::FoundingBandInputV1::spot_band(
         anchor,
         volatility_bps,
         window_slots,
         plausible_half_widths,
         max_cell_share_bps,
-    }))
+    )))
 }
 
 fn market_shape_from_arguments_v1(

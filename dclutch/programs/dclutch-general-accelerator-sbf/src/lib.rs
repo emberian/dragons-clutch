@@ -116,8 +116,18 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     InvalidAcknowledgement = 0xC004,
     /// An instruction ahead of this one did not belong to ComputeBudget.
     ForeignInstructionBeforeTrading = 0xC005,
-    /// No exact heap-frame grant preceded the current instruction.
-    HeapFrameNotGranted = 0xC006,
+    /// No exact `RequestHeapFrame` preceded the current instruction.
+    ///
+    /// The REQUEST, which is all a program can read. A program cannot observe
+    /// its granted heap -- `create_vm!` maps exactly the compute budget's
+    /// `heap_size` and every access above it faults -- so this code says the
+    /// caller did not ASK, never that the runtime did not give. It was called
+    /// `HeapFrameNotRequested` until 2026-09-01, and its numeric value is
+    /// unchanged, so a code already seen in a log still means what it meant.
+    /// Harmless here in a way it is not in Trading: this program runs on the
+    /// stock `solana_program::entrypoint!`, whose BumpAllocator never reads the
+    /// request, so it cannot use an extended heap either way.
+    HeapFrameNotRequested = 0xC006,
     /// The current top-level instruction was not the admitted Trading program's.
     TopLevelProgramNotTrading = 0xC007,
     /// The top-level data was not a canonical Hot execution envelope.
@@ -163,7 +173,7 @@ impl GeneralAcceleratorSbfErrorV3 {
         Self::InvalidScratchBank,
         Self::InvalidAcknowledgement,
         Self::ForeignInstructionBeforeTrading,
-        Self::HeapFrameNotGranted,
+        Self::HeapFrameNotRequested,
         Self::TopLevelProgramNotTrading,
         Self::InvalidHotEnvelope,
         Self::InvalidFamilyRequest,
@@ -191,7 +201,7 @@ impl GeneralAcceleratorSbfErrorV3 {
             Self::InvalidScratchBank => 3,
             Self::InvalidAcknowledgement => 4,
             Self::ForeignInstructionBeforeTrading => 5,
-            Self::HeapFrameNotGranted => 6,
+            Self::HeapFrameNotRequested => 6,
             Self::TopLevelProgramNotTrading => 7,
             Self::InvalidHotEnvelope => 8,
             Self::InvalidFamilyRequest => 9,
@@ -477,9 +487,9 @@ fn authenticate_top_level(
     }
     let index = load_current_index_checked(instructions)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::CurrentInstructionIndexUnreadable)?;
-    // Two laws live here: the heap was granted, and the caller is Trading. The
+    // Two laws live here: the heap was REQUESTED, and the caller is Trading. The
     // POSITION was never one of them. Pinning Trading to index 1 also forbade
-    // every instruction ahead of it except the heap grant -- and a General
+    // every instruction ahead of it except the heap request -- and a General
     // action needs more compute than the per-instruction default, measured at
     // 516,162 CU for OpenBatch at N=2, which takes a `set_compute_unit_limit`
     // instruction, which moves Trading to index 2. The two requirements were
@@ -491,11 +501,11 @@ fn authenticate_top_level(
     // the first is now STRICTER than the pinned index made it: every
     // instruction ahead of this one must belong to the ComputeBudget program,
     // which can only price a transaction and can neither move value nor touch
-    // an account, and one of them must be the exact heap grant. Every shape the
-    // pinned index admitted is still admitted -- index 1 with the grant at zero
+    // an account, and one of them must be the exact heap request. Every shape
+    // the pinned index admitted is still admitted -- index 1 with it at zero
     // satisfies both conjuncts -- and every newly admitted shape differs from
     // one of those only by additional ComputeBudget instructions.
-    let mut heap_granted = false;
+    let mut heap_frame_requested = false;
     let mut earlier_index = 0_u16;
     while earlier_index < index {
         let earlier = load_instruction_at_checked(usize::from(earlier_index), instructions)
@@ -504,18 +514,18 @@ fn authenticate_top_level(
             return Err(GeneralAcceleratorSbfErrorV3::ForeignInstructionBeforeTrading.into());
         }
         if earlier == ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1) {
-            heap_granted = true;
+            heap_frame_requested = true;
         }
         earlier_index = earlier_index
             .checked_add(1)
             .ok_or(GeneralAcceleratorSbfErrorV3::PrecedingInstructionUnreadable)?;
     }
-    // A caller that never granted the heap is refused here by its own name.
+    // A caller that never REQUESTED the heap is refused here by its own name.
     // It used to share `InvalidTopLevelInstruction` with seven other causes,
     // so the `declare_general_heap: false` hostile could not tell the heap it
     // was testing from the seven things it was not.
-    if !heap_granted {
-        return Err(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted.into());
+    if !heap_frame_requested {
+        return Err(GeneralAcceleratorSbfErrorV3::HeapFrameNotRequested.into());
     }
     let instruction = load_instruction_at_checked(usize::from(index), instructions)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;

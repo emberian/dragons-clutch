@@ -25,6 +25,33 @@
 //! coordinate is really distributed this way. Every arithmetic step is exact
 //! signed integer arithmetic and every overflow is refused.
 //!
+//! # The belief is a family, not a spot
+//!
+//! A spot and a volatility describe a coordinate that MOVES. Not every market
+//! has one. "Did this token graduate?" is a four-state discriminant over a
+//! terminal window; it has no spot, and a volatility in basis points *of spot*
+//! denotes nothing about it. That is not a market without a belief — the
+//! author believes `P(graduates) = x` as definitely as any price author
+//! believes 200 bp/hour — it is a market whose belief is a different KIND.
+//!
+//! So [`FoundingBeliefV1`] is the family: [`FoundingBeliefV1::SpotBand`] is
+//! the scalar member this module was born as, and
+//! [`FoundingBeliefV1::StatedProposition`] is the propositional one. The
+//! founding requirement is unchanged and total — **every market states a
+//! belief, and there is no default in either kind**. What a founding path may
+//! now do is match on the kind instead of assuming one.
+//!
+//! Two open holes close as consequences rather than as rulings. A zero-cut
+//! partition scores 10,000 bps in its single ordinary cell under EVERY
+//! possible spot band, because the triangular model assumes the coordinate
+//! always lands somewhere in the partition; a proposition does not, and its
+//! unproved mass lands on the Product's own disclosed failure outcome, which
+//! [`PartitionQualityReportV1::unresolved_share_bps`] states. And the
+//! narrowest market the protocol can emit — one ordinary cell plus that
+//! failure outcome — is therefore a real question when its belief is
+//! propositional and still a foregone conclusion when its belief is a spot the
+//! partition cannot separate.
+//!
 //! The same displacement also *constructs* good partitions:
 //! [`centred_cuts_v1`] places cells around spot at founding with the width the
 //! band implies, so the entrance can emit an interesting market rather than
@@ -66,9 +93,20 @@ pub const MAX_BAND_VOLATILITY_BPS_V1: u32 = 100_000;
 /// partition whose cells all sit outside the plausible band, where one cell
 /// takes the whole ten thousand — without refusing a legitimately lopsided
 /// binary threshold placed a displacement or so away from spot. Lifting plan:
-/// Ember rules the ceiling the product actually wants; until then callers
-/// state their own, because the ceiling is a product decision and this
-/// constant is only the one the entrance defaults to naming.
+/// Ember rules the ceiling the product actually wants.
+///
+/// **This is the ceiling on the author's ceiling.** A caller states its own
+/// number, because which lopsidedness a product wants to admit is a product
+/// decision — but it states it *at or below* this one, and
+/// [`require_interesting_partition_v1`] refuses
+/// [`CompileError::CellShareCeilingAboveMaximum`] above it.
+///
+/// It read as a default that bounded nothing until 2026-09-01: the author's
+/// number was compared verbatim and bounded only `1..=10_000`, so an author
+/// could state 10000 and admit every partition except an exactly-100% cell —
+/// the gate switching itself off at the caller's word, with nothing in the
+/// tree defending it. Every real caller already writes 9000, so making the
+/// constant a real ceiling refuses nothing that is authored today.
 pub const MAX_CELL_EX_ANTE_SHARE_BPS_V1: u32 = 9_000;
 
 /// How steeply a shaped profile's gaps grow, in tenths of the spacing, per
@@ -89,19 +127,104 @@ pub struct FoundingBandV1 {
     pub window_slots: u64,
 }
 
-/// Named ex-ante displacement model. Not a claim about the real distribution.
+/// The NAME of the model one report was measured under.
+///
+/// A name and nothing else. The model's parameters live on the belief that
+/// selects it ([`FoundingBeliefV1`]), because a belief and its model are one
+/// decision: carrying the parameters here too would make a spot band measured
+/// under a categorical prior representable, and then someone would have to
+/// check that the pair agreed. This enum exists so a report, a client and a
+/// serialized measurement can say which approximation produced a number.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PartitionQualityModelV1 {
-    /// Symmetric triangular mass over `±plausible_half_widths` characteristic
-    /// displacements, peaked at the founding coordinate and zero outside.
+    /// Symmetric triangular mass over the plausible band, peaked at the
+    /// founding coordinate and zero outside.
     ///
     /// Triangular rather than uniform on purpose: a uniform measure scores by
     /// interval *length*, which penalises exactly the shape a good market
     /// wants — fine cells near spot, coarse cells away from it.
-    TriangularPlausibleBand {
+    TriangularPlausibleBand,
+    /// The author's own stated probability per ordinary cell, used verbatim.
+    ///
+    /// The most explicit modelling boundary this module has: there is no
+    /// approximation in it at all, only the belief as written down.
+    StatedCategoricalPrior,
+}
+
+/// A stated categorical prior over a partition's ordinary cells.
+///
+/// The propositional member of the belief family. A proposition market's
+/// coordinate is a DISCRIMINANT rather than a scalar with a metric — the
+/// relayed family's only observable returns the discriminant of a four-state
+/// enum — so "volatility in basis points of spot" denotes nothing about it.
+/// What it does have is a belief, and that belief is exactly as authored,
+/// exactly as legible and exactly as bindable as a volatility is.
+///
+/// # The mass that lands on no ordinary cell
+///
+/// `cell_probability_bps` is NOT required to sum to unity, and the shortfall
+/// is the whole point rather than slack. A terminal-window proposition is only
+/// ever *proved* by becoming true; a market that is never proved walks its
+/// deadline to the Product's own disclosed failure outcome, which is not an
+/// ordinary cell of the partition. `10_000 - sum` is therefore real, stated,
+/// ex-ante mass on a real outcome, and it is measured for degeneracy beside
+/// the cells rather than discarded: a proposition the author believes at 500
+/// bps is a market about its own failure, and refuses.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatedPropositionV1 {
+    /// Shared coordinate denominator; must equal the partition's own.
+    pub denominator: u64,
+    /// Ex-ante probability of each ordinary cell in basis points, in canonical
+    /// partition order. Exactly `cuts.len() + 1` entries; sum at most 10,000.
+    pub cell_probability_bps: Vec<u32>,
+}
+
+/// What the author believes about the outcome, and the model that measures it.
+///
+/// A belief and its model are ONE decision. "Symmetric-triangular over three
+/// characteristic displacements of a 200 bp walk from spot 150.00" is a single
+/// distribution, and splitting it into a band and a model was tenable only
+/// while every market's belief was spot-shaped — it made the mismatched pair
+/// representable and then owed somebody a check that the two agreed.
+///
+/// **The founding requirement is unchanged and total: every market states a
+/// belief.** What changed is that they do not all state the same KIND of
+/// belief. An absent belief still refuses by name, and there is still no
+/// default — in either kind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FoundingBeliefV1 {
+    /// A coordinate that MOVES: spot at founding, a stated volatility over
+    /// this market's own window, and how far the band is taken to reach.
+    SpotBand {
+        /// Founding observation, denominator, volatility and window.
+        band: FoundingBandV1,
         /// How many characteristic displacements the band reaches each way.
         plausible_half_widths: u32,
     },
+    /// A proposition that RESOLVES: the author's prior over the cells.
+    StatedProposition(StatedPropositionV1),
+}
+
+impl FoundingBeliefV1 {
+    /// The named model this belief is measured under.
+    pub const fn model(&self) -> PartitionQualityModelV1 {
+        match self {
+            Self::SpotBand { .. } => PartitionQualityModelV1::TriangularPlausibleBand,
+            Self::StatedProposition(_) => PartitionQualityModelV1::StatedCategoricalPrior,
+        }
+    }
+
+    /// The coordinate denominator this belief is quoted over.
+    ///
+    /// A belief on another denominator would measure a different market than
+    /// the one being compiled, which is why every entrance compares this
+    /// against the partition's own rather than rescaling.
+    pub const fn denominator(&self) -> u64 {
+        match self {
+            Self::SpotBand { band, .. } => band.denominator,
+            Self::StatedProposition(prior) => prior.denominator,
+        }
+    }
 }
 
 /// How a stated shape distributes gap widths across a constructed band.
@@ -113,27 +236,52 @@ pub enum BandProfileV1 {
     TightCentre,
 }
 
-/// What a partition looks like from the founding coordinate.
+/// What a partition looks like from the belief that founds it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PartitionQualityReportV1 {
     /// The model the shares were measured under.
     pub model: PartitionQualityModelV1,
     /// Characteristic displacement in coordinate numerator units.
-    pub characteristic_displacement: i128,
+    ///
+    /// `None` under a stated prior: a proposition has no displacement, and a
+    /// zero here would read as one that was measured and came out zero.
+    pub characteristic_displacement: Option<i128>,
     /// Half-width of the plausible band in coordinate numerator units.
-    pub plausible_half_width: i128,
+    ///
+    /// `None` under a stated prior, for the same reason.
+    pub plausible_half_width: Option<i128>,
     /// Ordinary cell holding the most ex-ante mass.
     pub dominant_cell: u32,
-    /// That cell's share, in basis points of the whole band.
+    /// That cell's share, in basis points.
     pub dominant_share_bps: u32,
     /// Every ordinary cell's share, in canonical partition order.
     pub cell_share_bps: Vec<u32>,
+    /// Stated ex-ante mass that lands on NO ordinary cell, in basis points.
+    ///
+    /// Under the triangular spot model this is exactly zero, by construction
+    /// and not by arithmetic: the plausible band lies entirely inside the
+    /// partition, because the outermost cells are open tails. The cells' own
+    /// shares can still sum to slightly under 10,000 there, and that residue
+    /// is floor-rounding rather than mass on another outcome — attributing it
+    /// to the failure outcome would be this module inventing a belief.
+    ///
+    /// Under a stated prior it is the author's own `10_000 - sum`, and it is
+    /// the disclosed failure outcome's ex-ante share.
+    pub unresolved_share_bps: u32,
 }
 
 impl PartitionQualityReportV1 {
-    /// Whether one cell takes at least `ceiling_bps` of the band.
+    /// Whether one outcome takes at least `ceiling_bps` of the market.
+    ///
+    /// The second disjunct is not a second gate; it is the same gate applied
+    /// to the outcome the partition does not name. A proposition whose author
+    /// believes it 5% likely puts 9,500 bps on the disclosed failure outcome,
+    /// and a market that is almost certainly going to fail to resolve is
+    /// exactly as much a foregone conclusion as one whose middle cell takes
+    /// everything. It cannot fire under the spot model, where
+    /// `unresolved_share_bps` is zero.
     pub const fn is_degenerate(&self, ceiling_bps: u32) -> bool {
-        self.dominant_share_bps >= ceiling_bps
+        self.dominant_share_bps >= ceiling_bps || self.unresolved_share_bps >= ceiling_bps
     }
 }
 
@@ -171,19 +319,48 @@ pub fn characteristic_displacement_v1(band: &FoundingBandV1) -> Result<i128, Com
     i128::try_from(displacement).map_err(|_| CompileError::ArithmeticOverflow)
 }
 
+/// Refuse a cut vector that is not the strictly increasing canonical one.
+///
+/// Both members of the family need this and neither may skip it: a prior
+/// stated cell by cell is meaningless against boundaries that do not order.
+fn require_canonical_cuts(cuts: &[i128]) -> Result<(), CompileError> {
+    let mut previous = None;
+    for cut in cuts.iter().copied() {
+        if previous.is_some_and(|prior| cut <= prior) {
+            return Err(CompileError::NonCanonicalPartition);
+        }
+        previous = Some(cut);
+    }
+    Ok(())
+}
+
 /// Measure how one partition's ex-ante mass is spread across its cells.
 ///
 /// `cuts` are the strictly increasing interior boundaries over
-/// `band.denominator`; the partition has `cuts.len() + 1` ordinary cells.
+/// `belief.denominator()`; the partition has `cuts.len() + 1` ordinary cells.
+/// Which model runs is the belief's own to say — there is one author of that
+/// choice, [`FoundingBeliefV1::model`], and no caller passes a model in.
 pub fn assess_partition_quality_v1(
     cuts: &[i128],
+    belief: &FoundingBeliefV1,
+) -> Result<PartitionQualityReportV1, CompileError> {
+    require_canonical_cuts(cuts)?;
+    match belief {
+        FoundingBeliefV1::SpotBand {
+            band,
+            plausible_half_widths,
+        } => assess_triangular_plausible_band(cuts, band, *plausible_half_widths),
+        FoundingBeliefV1::StatedProposition(prior) => assess_stated_prior(cuts, prior),
+    }
+}
+
+/// The scalar member: symmetric triangular mass over the plausible band.
+fn assess_triangular_plausible_band(
+    cuts: &[i128],
     band: &FoundingBandV1,
-    model: PartitionQualityModelV1,
+    plausible_half_widths: u32,
 ) -> Result<PartitionQualityReportV1, CompileError> {
     let characteristic_displacement = characteristic_displacement_v1(band)?;
-    let PartitionQualityModelV1::TriangularPlausibleBand {
-        plausible_half_widths,
-    } = model;
     if plausible_half_widths == 0 {
         return Err(CompileError::UnsupportedFoundingBand);
     }
@@ -195,13 +372,8 @@ pub fn assess_partition_quality_v1(
         .and_then(|square| square.checked_mul(2))
         .ok_or(CompileError::ArithmeticOverflow)?;
 
-    let mut previous = None;
     let mut edges = Vec::with_capacity(cuts.len());
     for cut in cuts.iter().copied() {
-        if previous.is_some_and(|prior| cut <= prior) {
-            return Err(CompileError::NonCanonicalPartition);
-        }
-        previous = Some(cut);
         edges.push(
             cut.checked_sub(band.anchor)
                 .ok_or(CompileError::ArithmeticOverflow)?,
@@ -237,12 +409,60 @@ pub fn assess_partition_quality_v1(
         cell_share_bps.push(share);
     }
     Ok(PartitionQualityReportV1 {
-        model,
-        characteristic_displacement,
-        plausible_half_width: half_width,
+        model: PartitionQualityModelV1::TriangularPlausibleBand,
+        characteristic_displacement: Some(characteristic_displacement),
+        plausible_half_width: Some(half_width),
         dominant_cell,
         dominant_share_bps,
         cell_share_bps,
+        // Zero by CONSTRUCTION: the plausible band lies wholly inside the
+        // partition, whose outer cells are open tails. See the field's own doc
+        // for why the cells' floor-rounding residue is not put here.
+        unresolved_share_bps: 0,
+    })
+}
+
+/// The propositional member: the author's own stated prior, used verbatim.
+fn assess_stated_prior(
+    cuts: &[i128],
+    prior: &StatedPropositionV1,
+) -> Result<PartitionQualityReportV1, CompileError> {
+    let ordinary_cells = cuts.len().checked_add(1).ok_or(CompileError::CountOverflow)?;
+    if prior.denominator == 0 {
+        return Err(CompileError::ZeroCoordinateDenominator);
+    }
+    if prior.cell_probability_bps.len() != ordinary_cells {
+        return Err(CompileError::MismatchedPriorWidth);
+    }
+    let mut stated = 0_u32;
+    let mut dominant_cell = 0;
+    let mut dominant_share_bps = 0;
+    for (cell, share) in prior.cell_probability_bps.iter().copied().enumerate() {
+        stated = stated
+            .checked_add(share)
+            .ok_or(CompileError::ArithmeticOverflow)?;
+        if u64::from(stated) > BASIS_POINTS_PER_UNIT_V1 {
+            // A prior that sums past unity is not a shortfall onto the failure
+            // outcome; it is a belief that does not describe a probability.
+            return Err(CompileError::PriorMassExceedsUnity);
+        }
+        if share > dominant_share_bps {
+            dominant_share_bps = share;
+            dominant_cell = u32::try_from(cell).map_err(|_| CompileError::CountOverflow)?;
+        }
+    }
+    let unresolved_share_bps = u32::try_from(BASIS_POINTS_PER_UNIT_V1)
+        .map_err(|_| CompileError::ArithmeticOverflow)?
+        .checked_sub(stated)
+        .ok_or(CompileError::ArithmeticOverflow)?;
+    Ok(PartitionQualityReportV1 {
+        model: PartitionQualityModelV1::StatedCategoricalPrior,
+        characteristic_displacement: None,
+        plausible_half_width: None,
+        dominant_cell,
+        dominant_share_bps,
+        cell_share_bps: prior.cell_probability_bps.clone(),
+        unresolved_share_bps,
     })
 }
 
@@ -251,32 +471,40 @@ pub fn assess_partition_quality_v1(
 /// The ceiling is a caller argument on purpose. A default that admitted
 /// everything would be a check that never runs, and a hidden default would put
 /// a product ruling inside a library.
+///
+/// It is a caller argument WITHIN A BOUND. The caller may state any ceiling at
+/// or below [`MAX_CELL_EX_ANTE_SHARE_BPS_V1`]; above it the gate would be
+/// weaker than the release admits, which is `CellShareCeilingAboveMaximum` and
+/// not a band problem. Zero stays `UnsupportedFoundingBand`: a ceiling of zero
+/// refuses every partition, so it is a malformed parameter rather than an
+/// attempt to widen the gate.
 pub fn require_interesting_partition_v1(
     cuts: &[i128],
-    band: &FoundingBandV1,
-    model: PartitionQualityModelV1,
+    belief: &FoundingBeliefV1,
     ceiling_bps: u32,
 ) -> Result<PartitionQualityReportV1, CompileError> {
-    if ceiling_bps == 0 || u64::from(ceiling_bps) > BASIS_POINTS_PER_UNIT_V1 {
+    if ceiling_bps == 0 {
         return Err(CompileError::UnsupportedFoundingBand);
     }
-    let report = assess_partition_quality_v1(cuts, band, model)?;
+    if ceiling_bps > MAX_CELL_EX_ANTE_SHARE_BPS_V1 {
+        return Err(CompileError::CellShareCeilingAboveMaximum);
+    }
+    let report = assess_partition_quality_v1(cuts, belief)?;
     if report.is_degenerate(ceiling_bps) {
         return Err(CompileError::DegenerateOutcomePartition);
     }
     Ok(report)
 }
 
-/// Measure one [`CanonicalPartition`] against its own founding band.
+/// Measure one [`CanonicalPartition`] against its own founding belief.
 pub fn assess_canonical_partition_v1(
     partition: &CanonicalPartition,
-    band: &FoundingBandV1,
-    model: PartitionQualityModelV1,
+    belief: &FoundingBeliefV1,
 ) -> Result<PartitionQualityReportV1, CompileError> {
-    if partition.domain().denominator != band.denominator {
+    if partition.domain().denominator != belief.denominator() {
         return Err(CompileError::MismatchedFoundingDenominator);
     }
-    assess_partition_quality_v1(partition.cuts(), band, model)
+    assess_partition_quality_v1(partition.cuts(), belief)
 }
 
 /// Place `ordinary_cells` cells around spot at founding with the band's width.
@@ -421,16 +649,20 @@ mod tests {
     /// signed price atoms at exponent -8, so one SOL is 100,000,000.
     const LOCAL_PYTH_FIXTURE_COORDINATE: i128 = 100_000_000;
 
-    const TWO_WIDE: PartitionQualityModelV1 = PartitionQualityModelV1::TriangularPlausibleBand {
-        plausible_half_widths: 2,
-    };
-
     fn sol_usd_band(window_slots: u64, volatility_bps: u32) -> FoundingBandV1 {
         FoundingBandV1 {
             anchor: LOCAL_PYTH_FIXTURE_COORDINATE,
             denominator: 1,
             volatility_bps,
             window_slots,
+        }
+    }
+
+    /// The scalar belief these tests measure against: two displacements wide.
+    fn two_wide(band: FoundingBandV1) -> FoundingBeliefV1 {
+        FoundingBeliefV1::SpotBand {
+            band,
+            plausible_half_widths: 2,
         }
     }
 
@@ -467,15 +699,14 @@ mod tests {
         // coordinate. Every cut sits below the plausible band, so the top cell
         // takes the whole of it and the market resolves the same way forever.
         let historical = [4_000_i128, 12_000, 25_000, 40_000];
-        let report = assess_partition_quality_v1(&historical, &band, TWO_WIDE).expect("assessed");
+        let report = assess_partition_quality_v1(&historical, &two_wide(band)).expect("assessed");
         assert_eq!(report.cell_share_bps, vec![0, 0, 0, 0, 10_000]);
         assert_eq!(report.dominant_cell, 4);
         assert_eq!(report.dominant_share_bps, 10_000);
         assert_eq!(
             require_interesting_partition_v1(
                 &historical,
-                &band,
-                TWO_WIDE,
+                &two_wide(band),
                 MAX_CELL_EX_ANTE_SHARE_BPS_V1
             ),
             Err(CompileError::DegenerateOutcomePartition)
@@ -492,13 +723,9 @@ mod tests {
             vec![99_400_000, 99_800_000, 100_200_000, 100_600_000]
         );
         assert_eq!((centred[0] + centred[3]) / 2, LOCAL_PYTH_FIXTURE_COORDINATE);
-        let healthy = require_interesting_partition_v1(
-            &centred,
-            &band,
-            TWO_WIDE,
-            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
-        )
-        .expect("a centred band is not degenerate");
+        let healthy =
+            require_interesting_partition_v1(&centred, &two_wide(band), MAX_CELL_EX_ANTE_SHARE_BPS_V1)
+                .expect("a centred band is not degenerate");
         // The band states a width of one characteristic displacement, so under
         // a two-displacement plausible band the open tails legitimately hold
         // most of the mass. What matters is that no single cell takes the
@@ -519,7 +746,8 @@ mod tests {
                     cells.saturating_sub(1)
                 );
                 let report =
-                    assess_partition_quality_v1(&cuts, &band, TWO_WIDE).expect("assessed band");
+                    assess_partition_quality_v1(&cuts, &two_wide(band)).expect("assessed band");
+                assert_eq!(report.unresolved_share_bps, 0);
                 let total: u32 = report.cell_share_bps.iter().copied().sum();
                 // Floored shares, so the residue is bounded by the cell count.
                 assert!(
@@ -571,25 +799,25 @@ mod tests {
     fn hostile_partitions_bands_and_ceilings_refuse_by_name() {
         let band = sol_usd_band(10_000, 200);
         assert_eq!(
-            assess_partition_quality_v1(&[100, 100], &band, TWO_WIDE),
+            assess_partition_quality_v1(&[100, 100], &two_wide(band)),
             Err(CompileError::NonCanonicalPartition)
         );
         assert_eq!(
             assess_partition_quality_v1(
                 &[100],
-                &band,
-                PartitionQualityModelV1::TriangularPlausibleBand {
+                &FoundingBeliefV1::SpotBand {
+                    band,
                     plausible_half_widths: 0
                 }
             ),
             Err(CompileError::UnsupportedFoundingBand)
         );
         assert_eq!(
-            require_interesting_partition_v1(&[100_000_000], &band, TWO_WIDE, 0),
+            require_interesting_partition_v1(&[100_000_000], &two_wide(band), 0),
             Err(CompileError::UnsupportedFoundingBand)
         );
         assert_eq!(
-            require_interesting_partition_v1(&[100_000_000], &band, TWO_WIDE, 10_001),
+            require_interesting_partition_v1(&[100_000_000], &two_wide(band), 10_001),
             Err(CompileError::UnsupportedFoundingBand)
         );
         assert_eq!(
@@ -615,9 +843,9 @@ mod tests {
             denominator: 1,
         };
         let partition = CanonicalPartition::new(domain, cuts.clone()).expect("canonical");
-        let direct = assess_partition_quality_v1(&cuts, &band, TWO_WIDE).expect("direct");
+        let direct = assess_partition_quality_v1(&cuts, &two_wide(band)).expect("direct");
         assert_eq!(
-            assess_canonical_partition_v1(&partition, &band, TWO_WIDE),
+            assess_canonical_partition_v1(&partition, &two_wide(band)),
             Ok(direct)
         );
         let mismatched = CanonicalPartition::new(
@@ -629,8 +857,220 @@ mod tests {
         )
         .expect("canonical");
         assert_eq!(
-            assess_canonical_partition_v1(&mismatched, &band, TWO_WIDE),
+            assess_canonical_partition_v1(&mismatched, &two_wide(band)),
             Err(CompileError::MismatchedFoundingDenominator)
         );
+    }
+
+    /// One stated probability per ordinary cell, on the graduation market's
+    /// own denominator.
+    fn proposition(cell_probability_bps: &[u32]) -> FoundingBeliefV1 {
+        FoundingBeliefV1::StatedProposition(StatedPropositionV1 {
+            denominator: 1,
+            cell_probability_bps: cell_probability_bps.to_vec(),
+        })
+    }
+
+    /// THE ZERO-CUT HOLE, closed. The narrowest market the protocol can emit —
+    /// one ordinary cell and the Product's disclosed failure outcome — is the
+    /// shape of the tree's only non-price market, and it was refusable under
+    /// EVERY possible spot band because the triangular model assumes the
+    /// coordinate always lands in the partition.
+    #[test]
+    fn a_zero_cut_market_is_degenerate_under_a_spot_band_and_a_question_under_a_prior() {
+        let band = sol_usd_band(10_000, 200);
+        // The arithmetic certainty, restated as a test rather than as prose:
+        // no band, however wide or narrow, moves this off 10,000 bps.
+        for volatility_bps in [1_u32, 200, 5_000, MAX_BAND_VOLATILITY_BPS_V1] {
+            for plausible_half_widths in [1_u32, 2, 3, 40] {
+                let belief = FoundingBeliefV1::SpotBand {
+                    band: FoundingBandV1 {
+                        volatility_bps,
+                        ..band
+                    },
+                    plausible_half_widths,
+                };
+                let report = assess_partition_quality_v1(&[], &belief).expect("assessed");
+                assert_eq!(report.cell_share_bps, vec![10_000]);
+                assert_eq!(
+                    require_interesting_partition_v1(&[], &belief, MAX_CELL_EX_ANTE_SHARE_BPS_V1),
+                    Err(CompileError::DegenerateOutcomePartition)
+                );
+            }
+        }
+        // The same partition, under the belief a graduation market actually
+        // holds. P(graduates) = 35%: the cell takes 3,500 bps and the disclosed
+        // failure outcome takes the other 6,500. Neither takes the market.
+        let graduation = proposition(&[3_500]);
+        let report = require_interesting_partition_v1(
+            &[],
+            &graduation,
+            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        )
+        .expect("a stated proposition is a question");
+        assert_eq!(report.model, PartitionQualityModelV1::StatedCategoricalPrior);
+        assert_eq!(report.cell_share_bps, vec![3_500]);
+        assert_eq!(report.unresolved_share_bps, 6_500);
+        assert_eq!(report.dominant_share_bps, 3_500);
+        assert_eq!(report.characteristic_displacement, None);
+        assert_eq!(report.plausible_half_width, None);
+    }
+
+    /// The gate did not weaken to admit propositions; it grew a second kind
+    /// and kept its teeth in both directions.
+    #[test]
+    fn a_foregone_proposition_refuses_from_either_end() {
+        // Near-certain: the cell takes the market.
+        assert_eq!(
+            require_interesting_partition_v1(
+                &[],
+                &proposition(&[9_500]),
+                MAX_CELL_EX_ANTE_SHARE_BPS_V1
+            ),
+            Err(CompileError::DegenerateOutcomePartition)
+        );
+        // Near-hopeless: the DISCLOSED FAILURE OUTCOME takes the market, which
+        // no measure over ordinary cells alone could ever have seen.
+        let hopeless = assess_partition_quality_v1(&[], &proposition(&[500])).expect("assessed");
+        assert_eq!(hopeless.dominant_share_bps, 500);
+        assert_eq!(hopeless.unresolved_share_bps, 9_500);
+        assert_eq!(
+            require_interesting_partition_v1(
+                &[],
+                &proposition(&[500]),
+                MAX_CELL_EX_ANTE_SHARE_BPS_V1
+            ),
+            Err(CompileError::DegenerateOutcomePartition)
+        );
+        // POSITIVE CONTROL in the same run, so the two refusals above are
+        // about placement rather than about the checker.
+        require_interesting_partition_v1(&[], &proposition(&[3_500]), MAX_CELL_EX_ANTE_SHARE_BPS_V1)
+            .expect("a 35% proposition is a question");
+    }
+
+    /// The stated ceiling is bounded by the release's own ceiling.
+    ///
+    /// `MAX_CELL_EX_ANTE_SHARE_BPS_V1` had ZERO production readers until
+    /// 2026-09-01: the author's number was compared verbatim and bounded only
+    /// `1..=10_000`, at the compiler and at both author-side validators. So an
+    /// author could state 10000 and admit every partition except an
+    /// exactly-100% cell — the gate switching itself off at the caller's word,
+    /// with nothing in the tree defending it.
+    ///
+    /// The last two assertions are the ones that matter: they show the accused
+    /// shape being ADMITTED under the old bound, so the refusal above them is
+    /// about the ceiling and not about the checker.
+    #[test]
+    fn a_stated_ceiling_above_the_maximum_refuses_by_its_own_name() {
+        let question = proposition(&[3_500]);
+        // The number every real caller writes still admits.
+        require_interesting_partition_v1(&[], &question, MAX_CELL_EX_ANTE_SHARE_BPS_V1)
+            .expect("9000 is the release ceiling and admits");
+        // One basis point above it, same partition, refuses by a name that says
+        // which parameter is wrong rather than by the band's coarse code.
+        assert_eq!(
+            require_interesting_partition_v1(&[], &question, MAX_CELL_EX_ANTE_SHARE_BPS_V1 + 1),
+            Err(CompileError::CellShareCeilingAboveMaximum)
+        );
+        assert_eq!(
+            require_interesting_partition_v1(&[], &question, 10_000),
+            Err(CompileError::CellShareCeilingAboveMaximum)
+        );
+        // Zero is still a malformed parameter, not an attempt to widen: a
+        // ceiling of zero refuses every partition there is.
+        assert_eq!(
+            require_interesting_partition_v1(&[], &question, 0),
+            Err(CompileError::UnsupportedFoundingBand)
+        );
+        // What the old bound cost. A 95% proposition is a foregone conclusion
+        // this release refuses -- and a stated 10000 ADMITTED it.
+        let foregone = assess_partition_quality_v1(&[], &proposition(&[9_500])).expect("assessed");
+        assert!(foregone.is_degenerate(MAX_CELL_EX_ANTE_SHARE_BPS_V1));
+        assert!(
+            !foregone.is_degenerate(10_000),
+            "a stated 10000 admitted a 95% foregone conclusion; that is what the bound now refuses"
+        );
+    }
+
+    /// The B4/B6 tension: the narrowest EXECUTABLE Structured width is one
+    /// ordinary cell plus the failure outcome, and the partition gate refused
+    /// exactly that width. It is a real question when its belief is
+    /// propositional and a foregone conclusion when its belief is a spot the
+    /// partition cannot separate — which is a property of the market, not a
+    /// width exemption.
+    #[test]
+    fn width_two_is_answered_by_the_kind_of_belief_and_never_by_an_exemption() {
+        let spot = two_wide(sol_usd_band(10_000, 200));
+        assert_eq!(
+            require_interesting_partition_v1(&[], &spot, MAX_CELL_EX_ANTE_SHARE_BPS_V1),
+            Err(CompileError::DegenerateOutcomePartition),
+            "a width-two SPOT market is still degenerate, and no exemption saves it"
+        );
+        require_interesting_partition_v1(&[], &proposition(&[4_200]), MAX_CELL_EX_ANTE_SHARE_BPS_V1)
+            .expect("a width-two PROPOSITIONAL market states a belief and passes");
+        // And a width-three proposition splits across cells the same way.
+        let three = require_interesting_partition_v1(
+            &[7],
+            &proposition(&[2_500, 3_000]),
+            MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        )
+        .expect("two cells and a failure outcome");
+        assert_eq!(three.cell_share_bps, vec![2_500, 3_000]);
+        assert_eq!(three.unresolved_share_bps, 4_500);
+        assert_eq!(three.dominant_cell, 1);
+    }
+
+    #[test]
+    fn a_malformed_prior_refuses_by_name_rather_than_being_renormalized() {
+        // Rescaling a prior that does not describe a probability would answer
+        // a question nobody asked, exactly as rescaling a denominator would.
+        assert_eq!(
+            assess_partition_quality_v1(&[], &proposition(&[6_000, 6_000])),
+            Err(CompileError::MismatchedPriorWidth)
+        );
+        assert_eq!(
+            assess_partition_quality_v1(&[7], &proposition(&[6_000, 6_000])),
+            Err(CompileError::PriorMassExceedsUnity)
+        );
+        assert_eq!(
+            assess_partition_quality_v1(&[7, 7], &proposition(&[1, 1, 1])),
+            Err(CompileError::NonCanonicalPartition)
+        );
+        assert_eq!(
+            assess_partition_quality_v1(
+                &[],
+                &FoundingBeliefV1::StatedProposition(StatedPropositionV1 {
+                    denominator: 0,
+                    cell_probability_bps: vec![3_500],
+                })
+            ),
+            Err(CompileError::ZeroCoordinateDenominator)
+        );
+    }
+
+    /// THE RELEASE LANE'S CONTROL. The SOL/USD market the devnet ladder is
+    /// founding right now compiles to the same report it did before the belief
+    /// became a family. Measured before the change and pinned here after.
+    #[test]
+    fn the_shipped_sol_usd_market_still_measures_3024_3950_3024() {
+        let belief = FoundingBeliefV1::SpotBand {
+            band: FoundingBandV1 {
+                anchor: 15_000,
+                denominator: 100,
+                volatility_bps: 200,
+                window_slots: 10_000,
+            },
+            plausible_half_widths: 3,
+        };
+        let report = require_interesting_partition_v1(&[14_800, 15_200], &belief, 9_000)
+            .expect("the shipped SOL/USD band and cuts must compile");
+        assert_eq!(report.cell_share_bps, vec![3_024, 3_950, 3_024]);
+        assert_eq!(report.dominant_cell, 1);
+        assert_eq!(report.dominant_share_bps, 3_950);
+        assert_eq!(report.characteristic_displacement, Some(300));
+        assert_eq!(report.plausible_half_width, Some(900));
+        assert_eq!(report.model, PartitionQualityModelV1::TriangularPlausibleBand);
+        // The new disjunct in `is_degenerate` cannot reach the price path.
+        assert_eq!(report.unresolved_share_bps, 0);
     }
 }

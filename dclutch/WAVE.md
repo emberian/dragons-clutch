@@ -5377,3 +5377,155 @@ coordinate the Effect mutates.
 **`git commit -o <paths>` from here on.** And restoring `hot_v3.rs` from a snapshot
 to revert a probe can erase another lane's edit in the window — the affected lane
 was told to verify rather than left to discover it.
+
+## 2026-09-01 - the frame table was a design, and the producer never read it
+
+**`0xC00A InstructionsSysvarAccount` is repaired, and the repair was derivation,
+not adoption.** `admitted_v3.rs` wrote out an eighteen-account admitted CPI
+frame. Nothing has ever produced it. There is exactly one admitted-accelerator
+CPI site in the tree -- `admitted_composition_v3.rs:410`, family-neutral, reached
+by General like everyone else -- and it emits caller authority, the **whole**
+common Hot fixed frame, eight strategy-evidence accounts, then the runtime slice.
+
+**Which repair to write was established before either was written**, because the
+two are different acts. The eighteen coordinates are not a strict prefix of the
+forty-eight -- but every account the table *names* exists in the real frame, and
+the real frame carries one the table never named at all, the accelerator program
+itself at 46. **No contract gap: a second author for an offset.** So the fix is
+to derive from `HOT_*_ACCOUNT_V3`, not to adopt
+`authenticate_accelerator_invocation_v4` -- that is the Dealer accelerator's
+path and it re-derives certificates, admissions and deployments, which the
+General accelerator deliberately does not do because that authentication stays
+in the SVM adapter. **It needs coordinates, not a second verifier.**
+
+| | table said | producer sends |
+|---|---|---|
+| instructions sysvar | 4 | **30** |
+| Trading program | 5 | **26** |
+| runtime start | 18 | **48** |
+| accelerator program | *unnamed* | **46** |
+
+At index 4 the real frame carries a vacant CapabilityManifest staging cursor.
+
+### The A/B that attributes it exactly
+
+Same worktree, same six other ELFs, same bundle; **only the accelerator ELF
+swapped**, through the test's own `DCLUTCH_GENERAL_ACCELERATOR_ELF_PATH`:
+
+| accelerator | OpenBatch N=2 through real Trading ELFs |
+|---|---|
+| `e9544323` (literal table) | `InstructionError(2, Custom(49162))` = **`0xC00A`** |
+| `53ce2075` (derived table) | **past it** -- `Custom(16388)` = `0x4004 Transition` |
+
+And the next wall named itself on the first run, in the log line the previous
+commit added: **`general: refused, config rejects the bank's generation or
+basis`** -- `ConfigMarket`. The instrument built for the Freeze wall paid for
+itself on a wall in a different action, in a different workspace, the same day.
+
+### The harness had been under-loading the accelerator by thirty accounts
+
+**This is the finding underneath the finding.** With the real frame, three
+lifecycle rows at runtime width 258 die *inside* the accelerator on `Error:
+memory allocation failed, out of memory` --
+`hostile_n258_initializes_and_refuses_candidate_substitution`,
+`real_sbf_runs_full_settlement_at_runtime_widths_one_and_258`,
+`real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_runtime_widths`.
+InitializeSettlement at N=258 is 135 accounts where it was 105. Every one of
+those rows passed yesterday against a frame **thirty `AccountInfo`s smaller than
+the one Trading actually sends**, on a 64 KiB heap whose peak this program's own
+source already records as having been pushed past 32 KiB by the GEN-SEVEN
+register widening.
+
+> **The suite goes 25/0 to 22/3, and 22/3 is the truer number.** The three that
+> fail are failing at a width the old frame could never have exercised honestly.
+
+The frame is not free at width 1 either. Freeze, same test, before and after the
+frame correction: accelerator CPI **21,108 -> 27,045** CU at width 1 and
+**45,758 -> 51,695** at width 258; top level 35,693 -> 49,670 and 68,220 ->
+84,718. That is what the thirty accounts cost to deserialize, and it was never
+on any budget.
+
+**A probe that measured the wrong thing, recorded because it nearly convinced
+me.** To test the heap hypothesis I doubled the requested heap frame in
+`lifecycle.rs` -- and *all ten* rows failed rather than three, because
+`authenticate_top_level` requires the grant to be the **exact**
+`request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1)` and a doubled grant fails a
+different conjunct entirely. The probe touched the heap and measured the heap
+*rule*. Ledger's own line, earned again: **verify the instrument before
+believing the reading.**
+
+### Two restatements deleted, and the one that proves the point
+
+`lifecycle.rs` derived the runtime *start* under a comment explaining that
+restated constants stop agreeing silently -- and two lines below that comment
+wrote out `4` and `5` for the sysvar and the Trading program. `freeze.rs`, made
+to derive all three in `ecc43002` twelve hours earlier, **needed no edit at
+all.** That is the comparison that shows what derivation buys, and it is the
+same file, the same week, one commit apart.
+`family_hot_campaign.rs:141-147` restated `18`, `0`, `4`, `5` as its own consts
+and now imports them.
+
+The evidence suffix is the one span the contract still states rather than
+derives, so a `const` assertion pins its count to its last named coordinate: a
+ninth evidence account stops compiling instead of shifting every runtime
+coordinate by one.
+
+**Routed, not edited.** `crates/dclutch-operator/src/general_hot_v3.rs:4682`
+reads 78 where its recorded campaign frame says 48 -- exactly as predicted, and
+its own comment says re-run the campaign rather than move the number, so it is
+the operator lane's re-run. `admitted_composition_v3.rs:65-72` should make the
+four `ADMITTED_ACCELERATOR_*_V4` constants aliases of these, which removes the
+last restatement of this layout in the tree; Direct lane's file.
+
+## 2026-09-01 — a second author for an offset, and thirty accounts on nobody's budget
+
+**Derive, not adopt — established before writing either.** Every account the
+admitted-V3 table *names* exists in the real frame; the real frame carries one the
+table never named (`accelerator_program` at 46). **No contract gap — a second
+author for an offset.** Adopting the Dealer accelerator's
+`authenticate_accelerator_invocation_v4` would have been the wrong repair: that path
+re-derives certificates, admissions and deployments, and the General accelerator
+deliberately does not — that authentication stays in the SVM adapter. It needed
+coordinates, not a second verifier.
+
+| | table said | producer sends |
+|---|---|---|
+| instructions sysvar | 4 | **30** |
+| Trading program | 5 | **26** |
+| runtime start | 18 | **48** |
+| accelerator program | *unnamed* | **46** |
+
+All coordinates now derive from `HOT_*_ACCOUNT_V3` plus two offsets the contract
+owns and names once. The evidence suffix is the only stated span, pinned by a
+`const` assertion to its last named coordinate — **a ninth evidence account stops
+compiling instead of shifting every runtime coordinate.** `freeze.rs`, made to
+derive all three at `ecc43002` twelve hours earlier, **needed no edit at all** —
+which is the point of derivation.
+
+**Red then green with the variable isolated** — same six other ELFs, same bundle,
+only the accelerator swapped: literal table → `0xC00A`; derived table → past it, to
+`0x4004 Transition`. **And the next wall named itself on the first run**, through
+the log line the Freeze-wall commit had added: *`config rejects the bank's
+generation or basis`* — `ConfigMarket`. An instrument built for one action in one
+workspace paid for itself on a different action in a different workspace the same
+day.
+
+### The harness had been under-loading the accelerator by thirty accounts
+
+With the real frame, three lifecycle rows at width 258 die **inside** the
+accelerator on `memory allocation failed, out of memory` — InitializeSettlement
+N=258 is **135 accounts where it was 105**, on a 64 KiB heap the program's own
+source records as already past 32 KiB. Suite **25/0 → 22/3**, and 22/3 is the
+truer number: those rows had never run against the frame Trading sends. Not free at
+width 1 either — Freeze accelerator CPI **21,108 → 27,045** CU, top level
+35,693 → 49,670.
+
+> **That is what thirty `AccountInfo`s cost, and it was on nobody's budget.**
+
+**A probe that measured the wrong thing, kept because it nearly convinced:**
+doubling the heap grant to test the OOM hypothesis failed **ten** rows, not three —
+`authenticate_top_level` requires the **exact** grant, so the probe measured the
+heap *rule*, not the heap.
+
+Two shared-index collisions during commit were **waited out, never unlocked by
+hand.**

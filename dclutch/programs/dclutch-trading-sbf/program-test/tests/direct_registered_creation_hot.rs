@@ -751,7 +751,7 @@ async fn refusal(
 ///
 /// `DCLTHOT3` is on `declares_extended_heap_profile_v1`'s list, so the grant is
 /// ADMISSIBLE rather than assumed; a caller who omits it gets the protocol
-/// default ceiling and `require_extended_heap_admitted_v1` refuses BY NAME in
+/// default ceiling and `require_declared_heap_ceiling_above_default_v1` refuses BY NAME in
 /// the prologue rather than allocating until an out-of-memory abort that names
 /// nothing. This is that caller.
 #[tokio::test]

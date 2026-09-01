@@ -433,7 +433,7 @@ async fn submit_many(
 /// The heap grant is not optional decoration.
 /// `process_capability_seal_v1` authenticates its Market and root through
 /// `reauthenticate_top_level_root_roles_v3`, whose first act is
-/// `require_extended_heap_admitted_v1` -- so a seal transaction that carries no
+/// `require_declared_heap_ceiling_above_default_v1` -- so a seal transaction that carries no
 /// `RequestHeapFrame` refuses `HeapFrame` before it reads an artifact. That is
 /// the caller's half of the contract; `declares_extended_heap_profile_v1` is
 /// the program's, and until 2026-08-31 it named every route but this one.

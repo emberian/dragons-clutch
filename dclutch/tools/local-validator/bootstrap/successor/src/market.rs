@@ -73,7 +73,8 @@ use dclutch_product_runtime_v2::{
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, CompiledProductRecordsV2, FinalizedRecordObservationV2, FoundingBandV1,
-    PartitionQualityModelV1, ProductCompilationInputV2, compile_interesting_product_records_v2,
+    FoundingBeliefV1, ProductCompilationInputV2, StatedPropositionV1,
+    compile_interesting_product_records_v2,
     found::{
         FinalizedReferenceObservationV2, FoundProjectionStateV2, FoundStateV2,
         build_found_instruction_v2, project_found_v2,
@@ -3101,38 +3102,64 @@ fn authenticate_market_basis_v1(
     })
 }
 
-/// Turn one authored band into the compiler's, on the partition's denominator.
+/// Turn one authored belief into the compiler's, on the partition's denominator.
 ///
-/// The band is kept on the partition's own denominator rather than rescaled:
+/// The belief is kept on the partition's own denominator rather than rescaled:
 /// rescaling would silently measure a different market than the one being
 /// compiled, which is the whole failure mode this gate exists to catch.
-fn founding_band_for(
+///
+/// This is a MATCH ON KIND and never an exemption. A market that declares a
+/// spot band is measured against a random walk exactly as it always was; a
+/// market that declares a prior is measured against the prior it stated. There
+/// is no third branch in which a market is not measured.
+fn founding_belief_for(
     band: &crate::model::FoundingBandInputV1,
     cut_denominator: u64,
     label: &str,
-) -> Result<(FoundingBandV1, PartitionQualityModelV1, u32)> {
-    if band.plausible_half_widths == 0 {
+) -> Result<(FoundingBeliefV1, u32)> {
+    // Bounded by the compiler's own MAX_CELL_EX_ANTE_SHARE_BPS_V1, read rather
+    // than restated. An author states the ceiling their product wants, at or
+    // below the one this release enforces; `10_000` here until 2026-09-01 let
+    // an author state a ceiling that switched the gate off.
+    if band.max_cell_share_bps == 0
+        || band.max_cell_share_bps
+            > dclutch_product_runtime_v2_operator::MAX_CELL_EX_ANTE_SHARE_BPS_V1
+    {
         return Err(Error::new(format!(
-            "{label} founding_band/plausible_half_widths: expected at least one"
+            "{label} founding_band/max_cell_share_bps: expected 1..={}",
+            dclutch_product_runtime_v2_operator::MAX_CELL_EX_ANTE_SHARE_BPS_V1
         )));
     }
-    if band.max_cell_share_bps == 0 || u64::from(band.max_cell_share_bps) > 10_000 {
-        return Err(Error::new(format!(
-            "{label} founding_band/max_cell_share_bps: expected 1..=10000"
-        )));
-    }
-    Ok((
-        FoundingBandV1 {
-            anchor: band.anchor,
+    let belief = match band.require_one_kind(label)? {
+        crate::model::DeclaredBeliefKindV1::SpotBand {
+            anchor,
+            volatility_bps,
+            window_slots,
+            plausible_half_widths,
+        } => {
+            if plausible_half_widths == 0 {
+                return Err(Error::new(format!(
+                    "{label} founding_band/plausible_half_widths: expected at least one"
+                )));
+            }
+            FoundingBeliefV1::SpotBand {
+                band: FoundingBandV1 {
+                    anchor,
+                    denominator: cut_denominator,
+                    volatility_bps,
+                    window_slots,
+                },
+                plausible_half_widths,
+            }
+        }
+        crate::model::DeclaredBeliefKindV1::StatedProposition {
+            cell_probability_bps,
+        } => FoundingBeliefV1::StatedProposition(StatedPropositionV1 {
             denominator: cut_denominator,
-            volatility_bps: band.volatility_bps,
-            window_slots: band.window_slots,
-        },
-        PartitionQualityModelV1::TriangularPlausibleBand {
-            plausible_half_widths: band.plausible_half_widths,
-        },
-        band.max_cell_share_bps,
-    ))
+            cell_probability_bps,
+        }),
+    };
+    Ok((belief, band.max_cell_share_bps))
 }
 
 /// Compile one market input's record bodies, with no RPC and no side effects.
@@ -3169,21 +3196,27 @@ fn compile_market_bodies(
             format!("portfolio width: {error:?}")
         ))?
     ];
+    // THE REQUIREMENT IS UNCHANGED AND TOTAL: every market states a belief, and
+    // there is no default. What moved is that it is now a match on the KIND of
+    // belief rather than an assumption that every market's belief is a spot.
+    // The relayed graduation market states a proposition; the SOL/USD markets
+    // the release ladder founds state a spot band and take the identical path.
     let declared_band = input.founding_band.as_ref().ok_or_else(|| {
         Error::new(
             "founding_band is required to compile this market's partition: state \
-             anchor, volatility_bps, window_slots, plausible_half_widths and \
-             max_cell_share_bps. There is no default -- volatility is an authoring \
-             input, and a partition cannot be measured for degeneracy without the \
-             belief it is meant to describe",
+             max_cell_share_bps, and EITHER a spot band (anchor, volatility_bps, \
+             window_slots, plausible_half_widths) for a coordinate that moves OR \
+             cell_probability_bps for a proposition. There is no default in \
+             either kind -- the belief is an authoring input, and a partition \
+             cannot be measured for degeneracy without the belief it is meant \
+             to describe",
         )
     })?;
-    let (band, model, ceiling) =
-        founding_band_for(declared_band, input.cut_denominator, "market input")?;
+    let (belief, ceiling) =
+        founding_belief_for(declared_band, input.cut_denominator, "market input")?;
     let (compiled, _quality) = compile_interesting_product_records_v2(
         registry,
-        band,
-        model,
+        &belief,
         ceiling,
         ProductCompilationInputV2 {
             product_id: semantic_product_id,
@@ -12265,13 +12298,9 @@ impl Default for LocalMarketShapeV1 {
             // written down where the compiler can hold them to it, which is
             // exactly what makes the refusal legible when cuts stop describing
             // it. A caller that means something else states something else.
-            founding_band: Some(crate::model::FoundingBandInputV1 {
-                anchor: 15_000,
-                volatility_bps: 200,
-                window_slots: 10_000,
-                plausible_half_widths: 3,
-                max_cell_share_bps: 9_000,
-            }),
+            founding_band: Some(crate::model::FoundingBandInputV1::spot_band(
+                15_000, 200, 10_000, 3, 9_000,
+            )),
         }
     }
 }
@@ -12795,12 +12824,10 @@ fn pyth_market_input_base(
              degeneracy without the belief it is supposed to describe",
         )
     })?;
-    let (band, model, ceiling) =
-        founding_band_for(declared, params.cut_denominator, "pyth market")?;
+    let (belief, ceiling) = founding_belief_for(declared, params.cut_denominator, "pyth market")?;
     compile_interesting_product_records_v2(
         params.registry,
-        band,
-        model,
+        &belief,
         ceiling,
         product,
         &mut product_bytes,
@@ -12996,25 +13023,25 @@ mod tests {
     #[test]
     fn the_default_shape_is_refused_and_a_centred_partition_is_not() {
         use dclutch_product_runtime_v2_operator::{
-            FoundingBandV1, PartitionQualityModelV1, require_interesting_partition_v1,
+            FoundingBandV1, FoundingBeliefV1, require_interesting_partition_v1,
         };
 
         // 200 bp of $150 over a ten-thousand-slot window, three displacements
         // each way. A stated belief, not a derived one.
-        let band = FoundingBandV1 {
-            anchor: 15_000,
-            denominator: 100,
-            volatility_bps: 200,
-            window_slots: 10_000,
-        };
-        let model = PartitionQualityModelV1::TriangularPlausibleBand {
+        let band = FoundingBeliefV1::SpotBand {
+            band: FoundingBandV1 {
+                anchor: 15_000,
+                denominator: 100,
+                volatility_bps: 200,
+                window_slots: 10_000,
+            },
             plausible_half_widths: 3,
         };
 
         // The HISTORICAL partition, kept as a literal so this stays a test
         // about that market rather than about whatever the default is today.
         let historical = vec![12_000, 18_000];
-        let degenerate = require_interesting_partition_v1(&historical, &band, model, 9_000);
+        let degenerate = require_interesting_partition_v1(&historical, &band, 9_000);
         assert!(
             degenerate.is_err(),
             "the historical fixture partition must be refused: {degenerate:?}"
@@ -13027,24 +13054,15 @@ mod tests {
             "the degenerate default must be gone"
         );
         let declared = shape.founding_band.expect("the default states its band");
-        require_interesting_partition_v1(
-            &shape.cuts,
-            &FoundingBandV1 {
-                anchor: declared.anchor,
-                denominator: shape.cut_denominator,
-                volatility_bps: declared.volatility_bps,
-                window_slots: declared.window_slots,
-            },
-            PartitionQualityModelV1::TriangularPlausibleBand {
-                plausible_half_widths: declared.plausible_half_widths,
-            },
-            declared.max_cell_share_bps,
-        )
-        .expect("the default shape must compile against its own stated band");
+        let (declared_belief, declared_ceiling) =
+            founding_belief_for(&declared, shape.cut_denominator, "default shape")
+                .expect("the default shape's belief must parse");
+        require_interesting_partition_v1(&shape.cuts, &declared_belief, declared_ceiling)
+            .expect("the default shape must compile against its own stated band");
 
         // Cuts a displacement or so either side of spot: a real question.
         let centred = vec![14_800, 15_200];
-        let report = require_interesting_partition_v1(&centred, &band, model, 9_000)
+        let report = require_interesting_partition_v1(&centred, &band, 9_000)
             .expect("a centred partition around spot must be admitted");
         assert!(
             report.dominant_share_bps <= 9_000,

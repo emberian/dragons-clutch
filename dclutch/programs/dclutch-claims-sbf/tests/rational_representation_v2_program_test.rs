@@ -3966,7 +3966,7 @@ async fn submit_v0(
 /// campaign, which must carry a ComputeBudget heap grant: `DCLTHOT3` is on
 /// `declares_extended_heap_profile_v1`'s list, and that list makes a grant
 /// ADMISSIBLE rather than automatic -- the route asks
-/// `require_extended_heap_admitted_v1` to refuse `TradingSbfError::HeapFrame`
+/// `require_declared_heap_ceiling_above_default_v1` to refuse `TradingSbfError::HeapFrame`
 /// by name when it did not arrive. The remedy is the caller's, and in this
 /// family the caller is whoever assembles the transaction: the operator returns
 /// a bare `Instruction`, not a transaction, so nothing between it and the wire
