@@ -2690,3 +2690,107 @@ assertion pinning per-action multiplicity independently, so a drift in what each
 action contributes cannot hide inside a total that still balances.
 **Writing `15` would have bought exactly what `7` bought and rotted the same
 way.**
+
+## 2026-09-01 — sixty percent of a program's lib.rs was dead, and it lied
+
+Closing C-09's generic-header refactor turned up **fourteen `#[cfg(any())]`
+blocks — 775 of 1,253 lines** in one program's `lib.rs`: a superseded V1 path
+kept beside its successor, opening with a 248-line block named
+**`removed_legacy_v1_direct_instruction`** that was never removed.
+
+Two things make it a class rather than an anecdote:
+
+1. **One block stated a third, contradictory meaning for the very field being
+   fixed** (`transport_profile_id == release.adapter_id()`). Dead code that
+   disagrees with live code is worse than dead code — a reader cannot tell which
+   sentence is the specification.
+2. **It caused a misreport earlier the same day.** The lane read
+   `FailNext / Exhaust / CommitFailure` out of that dead dispatch and took them
+   for live vocabulary. *A deleted route's nouns outlive it* — and this is where
+   they live.
+
+**The control is the reusable part: the shipped ELF is byte-for-byte identical
+before and after** — `ee33f9e9…` across a 775-line deletion, a refactor and a
+rustfmt. Exact, cheap, and stronger than any suite, because it proves the
+deletion touched nothing that ships. Use it for every dead-code removal.
+
+### Measure before ruling, and the ruling gets cheaper
+
+`PROVIDER_EVIDENCE_DOMAIN_V3` was assumed expensive to change because it is
+baked into an on-chain content identity. Measured: **it is never a PDA seed** —
+nothing derives an address from `provider_evidence`. So the change is
+values-only. State, certificate, lifecycle and receipts re-digest; **no address
+moves and no market needs re-founding.** A scary wire change turned out cheap,
+and only checking could have shown that.
+
+Found while measuring and deliberately **not** fixed: the constant is declared
+**twice**, hand-mirrored across program and operator with nothing welding them.
+It **fails closed** — the operator would build a request the program refuses —
+so it is a hazard rather than a hole. **Hand-mirrored constants that fail closed
+are debt; ones that fail open are defects.**
+
+### The seam existed everywhere except in the type that needed it
+
+The argument for the refactor came from inside the family, not from a
+hypothetical second one: the sponsored-push release type had exposed its own
+`transport_profile_id()` all along, and `market.rs:12051` had **already
+hand-written the dispatch**. Four call sites were each restating "for the pull
+family the transport profile is the router ABI." A unit test now pins
+`transport_profile_id() == router_abi_id()`, so a later shape that gives it a
+real field announces itself at one assertion.
+
+## 2026-09-01 — the band is required, and a lane deleted its own work
+
+`founding_band` is now a **required** field of the spline authoring input —
+`{anchor, volatility_bps, window_slots, plausible_half_widths,
+max_cell_share_bps}`, every one required, **no serde default anywhere**
+(`c8356a5f`). An input that declines to declare refuses at parse naming
+`founding_band`; a *partial* band refuses naming the missing field. `compile()`
+runs `require_interesting_partition_v1` **before any record is built**, so a
+degenerate partition writes nothing.
+
+Red-proved the right way: moving spot onto the cut makes the **identical** input
+compile at `[5000, 5000]`, so the refusal tracks **placement**, not band
+machinery.
+
+**Premise corrected again**: spot and window are not available on the spline
+authoring path either — the other nineteen fields are pure geometry — so all
+three are author declarations there. On `market.rs` a Pyth observation and
+deadline slots do exist, so only `volatility_bps` is genuinely new.
+
+### A green that proved nothing about the branch that changed
+
+`tools/release/successor_campaign_pack.py:526` validates the report with **exact
+set equality**, so a new report key would have refused the release pack
+outright — on the very path cohort-9 is waiting on. Its own 13 tests pass, and
+**never construct a compiler report**, so green there said nothing about the
+branch being changed. Caught by running the real binary and diffing the two key
+sets directly.
+
+**A suite that passes without ever building the object under test is the same
+class as a job named "compiles."**
+
+### The partition and the payoff have to be fixed together
+
+Wall 1 closed by absorption, not deletion-by-preference: the successor
+(`MarketQuestionV1` — `ThresholdFromSpot`, `CentredRangeProtection`,
+`CentredBands`) fixes partition **and** payoff in one act, because a caller
+supplying coefficients separately can build beautifully centred bands **the
+payoff ignores.** Not hypothetical — the lane's own earlier real-ELF test paid
+one unit on every ordinary outcome. `payoff_distinguishes_cells` now reports it.
+Authored SOL/USD admits on the real ELF at 30,046 CU.
+
+### A lane deleted its own work because someone else had already done it
+
+Wall 5 was closed by another lane's `544a0feb` while this one was building a
+generator, a generated module and a verify test for the same property. It
+**removed its own version entirely** rather than ship both — *"two mechanisms
+for one property is the exact defect I am arguing against"* — and cross-checked
+the other lane's parser against its file instead.
+
+It also **weakened its own earlier claim**: "no record carries
+`{target, deadline, abort}`" was too strong. `PreMarketFundingRequestV2` is real
+and executes and has a target and an abort route — that target is a subset
+ledger's lamport rent shortfall, not market principal. What is genuinely absent
+is `FundingPlanV1`, now written down with its signature and its semantic owner
+named.

@@ -316,6 +316,34 @@ impl PythReleaseV1 {
     pub const fn router_abi_id(&self) -> [u8; 32] {
         self.router_abi_id
     }
+
+    /// Return this release's answer to the provider-neutral question
+    /// `ProviderReleaseV1::transport_profile_id` asks.
+    ///
+    /// **The neutral field means "which transport ABI does this provider's
+    /// evidence travel over", and each family answers it in its own release
+    /// type.** For the pull family the answer happens to be the Wormhole router
+    /// ABI, because that is the transport a Pyth update arrives on. That is a
+    /// fact about Pyth, not about the field, and it belongs here rather than at
+    /// every comparison site.
+    ///
+    /// It was at the comparison sites. `provider_v3.rs` read
+    /// `source_release.transport_profile_id() != pyth.router_abi_id()`, and so
+    /// did four operator call sites, each independently restating "for this
+    /// family the transport profile is the router ABI" — while the
+    /// sponsored-push release type next door already exposed a
+    /// `transport_profile_id()` of its own and its consumers compared like to
+    /// like. `tools/local-validator/bootstrap/successor/src/market.rs` had even
+    /// written the dispatch by hand: `Pull(release) => release.router_abi_id(),
+    /// Sponsored(release) => release.transport_profile_id()`. The seam existed;
+    /// only this type was missing from it.
+    ///
+    /// A provider with no router is not thereby excluded from the protocol: it
+    /// supplies its own transport identity through its own release type, and
+    /// the neutral record never learns what a router is.
+    pub const fn transport_profile_id(&self) -> [u8; 32] {
+        self.router_abi_id
+    }
     /// Return the price-update codec identifier.
     pub const fn price_update_codec_id(&self) -> [u8; 32] {
         self.price_update_codec_id
@@ -515,6 +543,11 @@ mod tests {
         assert_eq!(release.config_digest(), [7; 32]);
         assert_eq!(release.receiver_abi_id(), [8; 32]);
         assert_eq!(release.router_abi_id(), [9; 32]);
+        // The pull family's answer to the neutral transport question, pinned so
+        // the seam cannot drift silently. If a later release shape gives the
+        // transport profile its own field, this assertion is where the change
+        // announces itself rather than at five scattered comparison sites.
+        assert_eq!(release.transport_profile_id(), release.router_abi_id());
         assert_eq!(release.price_update_codec_id(), [10; 32]);
         assert_eq!(release.adapter_id(), [11; 32]);
         assert_eq!(release.receiver_deployment_slot(), 11);

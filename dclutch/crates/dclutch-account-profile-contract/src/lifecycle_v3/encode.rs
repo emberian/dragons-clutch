@@ -13,7 +13,8 @@ use super::{
     PROTECTED_OUTPUT_AUTHENTICATE_OR_CREATE, PROTECTED_OUTPUT_BYTES, RECIPE_BYTES, SCOPE_FIXED,
     SCOPE_ITEM, SEED_BYTES, SEED_CANONICAL_BUMP, SEED_COMMON_IDENTITY, SEED_COMMON_SCALAR_LE,
     SEED_ITEM_IDENTITY, SEED_ITEM_INDEX_LE, SEED_ITEM_SCALAR_LE, SEED_LITERAL,
-    SUCCESSOR_ARTIFACT_PROFILE, StateLifecyclePolicyV3, VERSION,
+    QUOTE_SCOPE_EVERY_ACTION_V5, QUOTE_SCOPE_ONE_ACTION_V5, SUCCESSOR_ARTIFACT_PROFILE,
+    StateLifecyclePolicyV3, VERSION,
 };
 
 /// Fixed-prefix or per-Product-item lifecycle coordinate.
@@ -219,6 +220,12 @@ pub struct LifecycleCurrentRentQuoteInputV5 {
     pub exact_data_len: u32,
     /// Protected common scalar receiving the adapter-authenticated minimum.
     pub scalar_destination: u16,
+    /// The executing action that projects this quote, or `None` for all of them.
+    ///
+    /// `None` is what every policy authored before this field existed means, and
+    /// it encodes as the zeros those bytes already held -- so adding the field
+    /// moved no existing artifact's bytes and no existing digest.
+    pub action: Option<u32>,
 }
 
 /// Encode one complete StateLifecyclePolicy V3 atomically.
@@ -452,7 +459,13 @@ fn encode_current_rent_quote(
         output,
         add(offset, 4)?,
         &quote.scalar_destination.to_le_bytes(),
-    )
+    )?;
+    let (scope, action) = match quote.action {
+        Some(action) => (QUOTE_SCOPE_ONE_ACTION_V5, action),
+        None => (QUOTE_SCOPE_EVERY_ACTION_V5, 0),
+    };
+    write_byte(output, add(offset, 6)?, scope)?;
+    write(output, add(offset, 7)?, &action.to_le_bytes())
 }
 
 fn encode_immutable_identity_binding(

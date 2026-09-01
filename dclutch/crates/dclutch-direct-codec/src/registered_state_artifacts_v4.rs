@@ -323,10 +323,12 @@ fn rent_quotes(
     let maker = LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: MAKER_BYTES_U32,
         scalar_destination: scalar(REGISTERED_SCALAR_MAKER_CURRENT_RENT_V4)?,
+        action: None,
     };
     let record = LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: RECORD_BYTES_U32,
         scalar_destination: scalar(REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4)?,
+        action: None,
     };
     match (action, child_widths) {
         (DirectExecutionActionV3::RegisterBuy, Some(widths)) if widths.custody_vault != 0 => Ok([
@@ -334,10 +336,12 @@ fn rent_quotes(
                 exact_data_len: u32::try_from(CUSTODY_REPLAY_BYTES_V1)
                     .map_err(|_| DirectRegisteredStateArtifactErrorV4::Coordinate)?,
                 scalar_destination: scalar(REGISTERED_SCALAR_REPLAY_RENT_V4)?,
+                action: None,
             },
             LifecycleCurrentRentQuoteInputV5 {
                 exact_data_len: widths.custody_vault,
                 scalar_destination: scalar(REGISTERED_SCALAR_VAULT_RENT_V4)?,
+                action: None,
             },
             maker,
             record,

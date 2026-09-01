@@ -198,6 +198,7 @@ pub fn encode_dealer_lp_lifecycle_v5(
         // written by the LP AccountProfile. V4 makes that unused coordinate
         // the protected current-Rent value without changing bank width.
         scalar_destination: LP_OBSERVED_LAMPORTS_SCALAR_V3,
+        action: None,
     }];
     encode_lifecycle_policy_v5_atomic(
         &recipes, &seeds, &plans, &protected, &bindings, &quotes, scratch, output,

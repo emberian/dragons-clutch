@@ -80,6 +80,15 @@ pub const MAX_SEED_BYTES: u8 = 32;
 const SCOPE_FIXED: u8 = 0;
 const SCOPE_ITEM: u8 = 1;
 
+/// A current-Rent quote every action of the policy projects.
+///
+/// Zero on purpose: it is the value the ten reserved bytes after a V5 quote's
+/// `scalar_destination` already held, so every policy authored before the tag
+/// existed decodes as unscoped and keeps its exact bytes and digest.
+pub const QUOTE_SCOPE_EVERY_ACTION_V5: u8 = 0;
+/// A current-Rent quote only one action projects.
+pub const QUOTE_SCOPE_ONE_ACTION_V5: u8 = 1;
+
 const SEED_LITERAL: u8 = 0;
 const SEED_COMMON_IDENTITY: u8 = 1;
 const SEED_ITEM_IDENTITY: u8 = 2;
@@ -214,6 +223,8 @@ pub struct LifecycleImmutableIdentityBindingV4 {
 pub struct LifecycleCurrentRentQuoteV5 {
     exact_data_len: u32,
     scalar_destination: u16,
+    scope: u8,
+    action: u32,
 }
 
 impl LifecycleCurrentRentQuoteV5 {
@@ -228,6 +239,26 @@ impl LifecycleCurrentRentQuoteV5 {
             kind: LifecycleRegisterKindV3::Scalar,
             scope: CoordinateScopeV3::Fixed,
             index: self.scalar_destination,
+        }
+    }
+
+    /// Whether this declaration is quoted for one executing action.
+    ///
+    /// The unscoped answer is `true` for every action, which is what every
+    /// policy written before this field existed says: the tag lives in bytes
+    /// that were canonical zeros, and `QUOTE_SCOPE_EVERY_ACTION_V5` is zero, so
+    /// their bytes and their digests are unchanged.
+    ///
+    /// The scoped answer is what a multi-action family needs. One manifest entry
+    /// pins one `derivation_policy`, so a root admits exactly one lifecycle
+    /// policy; before this, two actions that opened different children could not
+    /// share a root, because their rent quotes differed and the quote array was
+    /// walked flat. Scoping the DECLARATION lets one policy carry both without
+    /// either action projecting a scalar the other owns.
+    pub const fn applies_to(self, action: u32) -> bool {
+        match self.scope {
+            QUOTE_SCOPE_ONE_ACTION_V5 => self.action == action,
+            _ => true,
         }
     }
 }
@@ -958,6 +989,7 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         profile: AccountProfileV2<'_>,
         join: Option<ValidatedProfileJoinV3<'_>>,
         tail_count: u32,
+        action: u32,
         input_scalars: &[u64],
         quotes: &[AuthenticatedRentQuoteV5],
         buffers: LifecycleRentQuoteBuffersV5<'_>,
@@ -968,7 +1000,10 @@ impl<'a> StateLifecyclePolicyV5<'a> {
             profile.item_scalar_stride(),
             tail_count,
         )?;
-        if quotes.len() != usize::from(self.0.current_rent_quotes) {
+        // The caller supplies one authenticated quote per declaration THIS
+        // action projects, in declaration order -- not one per declaration in
+        // the policy. An action that quotes nothing supplies nothing.
+        if quotes.len() != usize::from(self.0.action_current_rent_quote_count(action)?) {
             return Err(Error::InvalidRentQuote);
         }
         if input_scalars.len() != expected_width
@@ -979,12 +1014,18 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         }
         buffers.scalar_scratch.copy_from_slice(input_scalars);
         let mut ordinal = 0_u16;
+        let mut supplied = 0_u16;
         while ordinal < self.0.current_rent_quotes {
             let declaration = self.0.current_rent_quote(ordinal)?;
+            ordinal = ordinal.checked_add(1).ok_or(Error::Arithmetic)?;
+            if !declaration.applies_to(action) {
+                continue;
+            }
             let quote = quotes
-                .get(usize::from(ordinal))
+                .get(usize::from(supplied))
                 .copied()
                 .ok_or(Error::InvalidRentQuote)?;
+            supplied = supplied.checked_add(1).ok_or(Error::Arithmetic)?;
             validate_authenticated_rent_quote(declaration, quote)?;
             let destination = usize::from(declaration.scalar_destination);
             let target = buffers
@@ -995,7 +1036,6 @@ impl<'a> StateLifecyclePolicyV5<'a> {
                 return Err(Error::ProfileMismatch);
             }
             *target = quote.current_minimum;
-            ordinal = ordinal.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         buffers
             .output_scalars
@@ -1013,11 +1053,12 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         profile: AccountProfileV2<'_>,
         join: Option<ValidatedProfileJoinV3<'_>>,
         tail_count: u32,
+        action: u32,
         projected_scalars: &[u64],
         quotes: &[AuthenticatedRentQuoteV5],
     ) -> Result<()> {
         self.0.require_join(join, profile)?;
-        if quotes.len() != usize::from(self.0.current_rent_quotes)
+        if quotes.len() != usize::from(self.0.action_current_rent_quote_count(action)?)
             || projected_scalars.len()
                 != affine_width(
                     profile.common_scalar_count(),
@@ -1028,12 +1069,23 @@ impl<'a> StateLifecyclePolicyV5<'a> {
             return Err(Error::InvalidRentQuote);
         }
         let mut ordinal = 0_u16;
+        let mut supplied = 0_u16;
         while ordinal < self.0.current_rent_quotes {
             let declaration = self.0.current_rent_quote(ordinal)?;
+            ordinal = ordinal.checked_add(1).ok_or(Error::Arithmetic)?;
+            // The postjoin walks the SAME subsequence the projection did. A
+            // declaration this action does not quote is not re-proved here
+            // because nothing projected it; its destination scalar belongs to
+            // whichever action does quote it, and that action's own postjoin is
+            // where it is answered for.
+            if !declaration.applies_to(action) {
+                continue;
+            }
             let quote = quotes
-                .get(usize::from(ordinal))
+                .get(usize::from(supplied))
                 .copied()
                 .ok_or(Error::InvalidRentQuote)?;
+            supplied = supplied.checked_add(1).ok_or(Error::Arithmetic)?;
             validate_authenticated_rent_quote(declaration, quote)?;
             if projected_scalars
                 .get(usize::from(declaration.scalar_destination))
@@ -1042,7 +1094,6 @@ impl<'a> StateLifecyclePolicyV5<'a> {
             {
                 return Err(Error::InvalidRentQuote);
             }
-            ordinal = ordinal.checked_add(1).ok_or(Error::Arithmetic)?;
         }
         Ok(())
     }
@@ -2136,12 +2187,46 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         let declaration = LifecycleCurrentRentQuoteV5 {
             exact_data_len: read_u32(self.bytes, offset)?,
             scalar_destination: read_u16(self.bytes, offset + 4)?,
+            scope: read_byte(self.bytes, offset + 6)?,
+            action: read_u32(self.bytes, offset + 7)?,
         };
-        require_zero(self.bytes, offset + 6, 10)?;
+        // Five reserved bytes, not ten: the action tag was taken out of the
+        // front of that run, which is why an unscoped quote is byte-identical to
+        // the same quote before the tag existed.
+        require_zero(self.bytes, offset + 11, 5)?;
         if declaration.exact_data_len == 0 {
             return Err(Error::InvalidRentQuote);
         }
+        // An unrecognised scope is refused rather than treated as unscoped.
+        // `applies_to` answers `true` for anything that is not
+        // `QUOTE_SCOPE_ONE_ACTION_V5`, which is the right default for a total
+        // function and the wrong one for admission: a policy carrying a tag this
+        // build does not understand must not silently widen its quotes to every
+        // action.
+        if declaration.scope != QUOTE_SCOPE_EVERY_ACTION_V5
+            && declaration.scope != QUOTE_SCOPE_ONE_ACTION_V5
+        {
+            return Err(Error::InvalidRentQuote);
+        }
+        // An unscoped quote carries no action, so there is exactly one encoding
+        // of "every action" and a digest cannot be forged by varying dead bytes.
+        if declaration.scope == QUOTE_SCOPE_EVERY_ACTION_V5 && declaration.action != 0 {
+            return Err(Error::InvalidRentQuote);
+        }
         Ok(declaration)
+    }
+
+    /// Number of current-Rent quotes one executing action projects.
+    fn action_current_rent_quote_count(self, action: u32) -> Result<u16> {
+        let mut found = 0_u16;
+        let mut index = 0_u16;
+        while index < self.current_rent_quotes {
+            if self.current_rent_quote(index)?.applies_to(action) {
+                found = found.checked_add(1).ok_or(Error::Arithmetic)?;
+            }
+            index = index.checked_add(1).ok_or(Error::Arithmetic)?;
+        }
+        Ok(found)
     }
 
     fn validate_seed_against_profile(
@@ -3735,6 +3820,13 @@ const fn operation_tag(operation: LifecycleOperationV3) -> u8 {
 
 fn read_u8(bytes: &[u8], offset: usize) -> Result<u8> {
     bytes.get(offset).copied().ok_or(Error::InvalidLength)
+}
+
+fn read_byte(bytes: &[u8], offset: usize) -> Result<u8> {
+    slice(bytes, offset, 1)?
+        .first()
+        .copied()
+        .ok_or(Error::InvalidLength)
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16> {

@@ -436,12 +436,13 @@ pub(crate) fn run_engine_with_admitted_candidate(
     core::mem::swap(&mut current_identities, &mut next_identities);
 
     // Phase 3: current-Rent quote projection.
-    let quotes = current_rent_quotes(lifecycle, input.rent)?;
+    let quotes = current_rent_quotes(lifecycle, input.rent, input.action)?;
     lifecycle
         .project_authenticated_current_rent_quotes_atomic(
             profile,
             Some(profile_join),
             tail_count,
+            input.action,
             &current_scalars,
             &quotes,
             LifecycleRentQuoteBuffersV5 {
@@ -563,7 +564,38 @@ pub(crate) fn run_engine_with_admitted_candidate(
                 identities: &mut next_identities,
             },
         )
-        .map_err(|_| BuilderError::Projection("transition"))?;
+        .map_err(|error| {
+            // THE SAME PROBE THE ACCOUNT PHASE ALREADY HAD, and it is here for
+            // the reason that phase's probe earned: `DataLengthMismatch` was a
+            // reading until its probe printed the offending coordinate's
+            // declared and observed widths, and then it was a measurement that
+            // named seven coordinates and closed six of them. This phase
+            // discarded its error entirely, so `Projection("transition")` was
+            // the whole of what a lane got. Declared-versus-observed is the
+            // shape that worked, so it is the shape printed: the fold's own
+            // header widths against the banks it was handed, and the tail count
+            // that scales them.
+            std::eprintln!(
+                "transition fold refused: {error:?} (tail_count={tail_count}, \
+                 declared common_scalars={} item_scalar_stride={} \
+                 common_identities={} item_identity_stride={}, \
+                 expected scalars={} identities={}, \
+                 observed scalars={} identities={})",
+                transition.common_scalar_count(),
+                transition.item_scalar_stride(),
+                transition.common_identity_count(),
+                transition.item_identity_stride(),
+                usize::from(transition.common_scalar_count())
+                    + usize::from(transition.item_scalar_stride())
+                        * usize::try_from(tail_count).unwrap_or(usize::MAX),
+                usize::from(transition.common_identity_count())
+                    + usize::from(transition.item_identity_stride())
+                        * usize::try_from(tail_count).unwrap_or(usize::MAX),
+                current_scalars.len(),
+                current_identities.len(),
+            );
+            BuilderError::Projection("transition")
+        })?;
     }
     let transition_scalars = next_scalars.clone();
     let transition_identities = next_identities.clone();
@@ -972,13 +1004,21 @@ fn seed_trusted_environment(
 fn current_rent_quotes(
     lifecycle: StateLifecyclePolicyV5<'_>,
     rent: &Rent,
+    action: u32,
 ) -> Result<Vec<AuthenticatedRentQuoteV5>, BuilderError> {
+    // The same subsequence the runtime builds: one quote per declaration this
+    // action projects, in declaration order. The builder already selects plans
+    // by action; quotes now select the same way.
     let mut quotes = Vec::with_capacity(usize::from(lifecycle.current_rent_quote_count()));
     let mut ordinal = 0_u16;
     while ordinal < lifecycle.current_rent_quote_count() {
         let declaration = lifecycle
             .current_rent_quote(ordinal)
             .map_err(|_| BuilderError::Projection("rent-quote-declaration"))?;
+        if !declaration.applies_to(action) {
+            ordinal = ordinal.checked_add(1).ok_or(BuilderError::Arithmetic)?;
+            continue;
+        }
         let exact_data_len = declaration.exact_data_len();
         quotes.push(AuthenticatedRentQuoteV5 {
             exact_data_len,

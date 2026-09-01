@@ -114,6 +114,25 @@ pub const CONTENT_ID_BYTES: usize = 32;
 /// Exact width of a provider-release preimage.
 pub const PROVIDER_RELEASE_BYTES: usize = 176;
 /// Exact width of the first Pyth provider adapter configuration.
+///
+/// **If you are adding a provider family, do not reuse this width.** These 64
+/// bytes carry [`PYTH_ADAPTER_CONFIG_MAGIC`] *inside* them, so a 64-byte raw
+/// record authored by another family lands in the same slot and decodes. The
+/// relayed family met this and paid for it: `RelayedAdapterConfigV1` was
+/// deliberately widened from the design document's 64 bytes to 80 so it could
+/// carry the house 16-byte magic-and-schema header, and its own doc says why —
+/// *"without that header a 64-byte raw record of another family decodes in the
+/// same slot, and content-ID binding alone does not catch a founder who pinned
+/// the wrong record kind."*
+///
+/// The V3 execute route has a second guard the founding path does not: it
+/// authenticates every record against `(schema_id, digest)` as PDA seeds, so a
+/// foreign config cannot be *presented* at the Pyth slot. That protects
+/// consumption. It does not protect **authoring** — a founder who pins the
+/// wrong record kind produces a Source whose graph is wrong from birth, and the
+/// only thing standing between them and that is this width and this magic.
+/// That is why the warning belongs here, next to the number an encoder author
+/// copies, and not only in the reviewing route.
 pub const PYTH_ADAPTER_CONFIG_BYTES: usize = 64;
 /// Exact width of a source-capacity profile preimage.
 pub const SOURCE_CAPACITY_PROFILE_BYTES: usize = 112;

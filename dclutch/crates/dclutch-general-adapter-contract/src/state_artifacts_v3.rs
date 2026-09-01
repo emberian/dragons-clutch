@@ -953,20 +953,24 @@ fn general_current_rent_quotes_v5(
                 } else {
                     scalar::POSITION_RENT_PRINCIPAL
                 })?,
+                action: None,
             },
             LifecycleCurrentRentQuoteInputV5 {
                 exact_data_len: u32::try_from(PROTOCOL_POSITION_ADMISSION_BYTES_V2)
                     .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
                 scalar_destination: scalar_u16(scalar::ADMISSION_RENT_PRINCIPAL)?,
+                action: None,
             },
             LifecycleCurrentRentQuoteInputV5 {
                 exact_data_len: u32::try_from(CUSTODY_REPLAY_BYTES_V1)
                     .map_err(|_| GeneralStateArtifactErrorV3::Geometry)?,
                 scalar_destination: scalar_u16(scalar::CUSTODY_REPLAY_RENT_LAMPORTS)?,
+                action: None,
             },
             LifecycleCurrentRentQuoteInputV5 {
                 exact_data_len: child_widths.custody_vault,
                 scalar_destination: scalar_u16(scalar::CUSTODY_VAULT_RENT_LAMPORTS)?,
+                action: None,
             },
         ],
     })

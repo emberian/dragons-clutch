@@ -325,7 +325,18 @@ fn placeholder_request(action: Action) -> ControllerRequestV2 {
         execution_index: 0,
         manifest_order_index: 0,
         state_bump: PLACEHOLDER_BUMP,
-        terminal_record_bump: PLACEHOLDER_BUMP,
+        // Only `Close` derives a terminal record, and `ControllerRequestV2`
+        // says so itself: `successor_request_v2.rs:118` refuses a nonzero
+        // terminal bump on any other action as `NonCanonicalPadding`. This
+        // was `PLACEHOLDER_BUMP` unconditionally, so every request this file
+        // built for `Freeze` was noncanonical and the builder refused it with
+        // `Artifact` before reading one byte of the frame -- which is why ten
+        // hostile tests below all "refused" without reaching their subjects.
+        terminal_record_bump: if action == Action::Close {
+            PLACEHOLDER_BUMP
+        } else {
+            0
+        },
     }
 }
 
@@ -1086,19 +1097,34 @@ fn the_builder_turns_one_finalized_general_snapshot_into_a_complete_hot_instruct
     assert_ne!(fixture.primary_state_bump, PLACEHOLDER_BUMP);
     assert_eq!(decoded.state_bump, fixture.primary_state_bump);
     assert_eq!(decoded.terminal_record_bump, 0);
+    // Restore exactly the two witnesses the caller supplied -- read off the
+    // request that was passed in, not restated -- so this compares the fields
+    // the builder must leave alone. Restating `PLACEHOLDER_BUMP` here was a
+    // second author for the caller's terminal bump, and it disagreed with the
+    // first the moment that bump became action-selected.
+    let supplied = placeholder_request(action);
     assert_eq!(
         ControllerRequestV2 {
-            state_bump: PLACEHOLDER_BUMP,
-            terminal_record_bump: PLACEHOLDER_BUMP,
+            state_bump: supplied.state_bump,
+            terminal_record_bump: supplied.terminal_record_bump,
             ..decoded
         },
-        placeholder_request(action),
+        supplied,
         "only the two bump witnesses may differ from the request that was passed in"
     );
     assert_eq!(report.lifecycle.primary.account, fixture.primary_state);
     assert_eq!(report.lifecycle.primary.bump, fixture.primary_state_bump);
     assert_eq!(report.lifecycle.primary.account_coordinate, 5);
-    assert!(report.lifecycle.primary.is_materialized);
+    // The fixture installs this coordinate VACANT for every action but Close
+    // -- "the honest prestate for an action that has not run yet", in its own
+    // words above -- and Freeze's Lifecycle V5 plan is AuthenticateOrCreate,
+    // so a vacant selection cursor is exactly what it must admit. Asserting
+    // materialized here contradicted the frame two hundred lines up; nothing
+    // caught it because no test in this file reached this line.
+    assert_eq!(
+        report.lifecycle.primary.is_materialized,
+        action == Action::Close,
+    );
     assert_eq!(report.lifecycle.secondary, None);
     assert_eq!(report.lifecycle.conditional_result, None);
     assert_eq!(report.lifecycle.terminal_coordinate, None);

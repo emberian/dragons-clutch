@@ -66,16 +66,21 @@ struct InputV1 {
     knots: Vec<String>,
     failure_payouts: Vec<String>,
     price_gate_certificate_hex: String,
-    /// Where spot was at founding, and over what window.
+    /// What the author believes about where this market's coordinate will go.
     ///
-    /// Optional, and its absence is REPORTED rather than defaulted: this
-    /// command also authors synthetic ABI examples for which no founding
-    /// observation exists, and manufacturing a spot for one of those would be
-    /// inventing the very fact the measure is supposed to check. When it is
-    /// absent the report says so in the place the numbers would be; when it is
-    /// present a degenerate partition refuses and nothing is written.
-    #[serde(default)]
-    founding_band: Option<FoundingBandInputV1>,
+    /// REQUIRED, and deliberately without a default. How uncertain the author
+    /// thinks the outcome is is part of the description C-02 compiles, not a
+    /// constant this file is entitled to pick: a market founded on a silently
+    /// defaulted volatility is exactly the failure the gate exists to catch,
+    /// and it would be founded with nobody having said anything false.
+    ///
+    /// All three quantities are declarations rather than observations, because
+    /// on THIS path none of them is available to derive — measured
+    /// 2026-09-01, the other nineteen input fields are pure geometry and carry
+    /// no spot, no window and no volatility. A declared band also makes the
+    /// refusal legible: you said 200 bp over an hour, and these cuts do not
+    /// describe that belief.
+    founding_band: FoundingBandInputV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -114,7 +119,7 @@ struct ParsedInputV1 {
     knots: Vec<i128>,
     failure_payouts: Vec<u64>,
     price_gate_certificate: [u8; PRICE_GATE_REQUEST_BYTES_V1],
-    founding_band: Option<ParsedFoundingBandV1>,
+    founding_band: ParsedFoundingBandV1,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -199,11 +204,12 @@ struct ReportV1 {
     partition_quality: PartitionQualityReportOutV1,
 }
 
-/// How much of the question each cell takes, or exactly why that is not known.
+/// How much of the ex-ante question each cell takes.
 ///
-/// Always emitted. A missing key would be indistinguishable from a producer
-/// that forgot, and the browser would have to guess which; `measured: false`
-/// plus a reason is a fact the page can render.
+/// Every field is unconditional because the founding band is a required input.
+/// There is no "not measured" state to render: an input that declines to say
+/// what the author believes refuses at parse time rather than producing a
+/// report with a hole in it.
 ///
 /// This exists because SHAPE WAS NEVER THE MISSING PROPERTY. The convicted
 /// SOL/USD market — cuts in USD cents against a source reporting price atoms —
@@ -213,47 +219,34 @@ struct ReportV1 {
 /// be observed, and that is what these numbers state.
 #[derive(Clone, Debug, Serialize)]
 struct PartitionQualityReportOutV1 {
-    measured: bool,
-    reason: Option<&'static str>,
-    model: Option<&'static str>,
-    anchor: Option<String>,
-    characteristic_displacement: Option<String>,
-    plausible_half_width: Option<String>,
-    dominant_cell: Option<u32>,
-    dominant_share_bps: Option<u32>,
-    max_cell_share_bps: Option<u32>,
-    cell_share_bps: Option<Vec<u32>>,
+    model: &'static str,
+    anchor: String,
+    volatility_bps: u32,
+    window_slots: String,
+    characteristic_displacement: String,
+    plausible_half_width: String,
+    dominant_cell: u32,
+    dominant_share_bps: u32,
+    max_cell_share_bps: u32,
+    cell_share_bps: Vec<u32>,
 }
 
 impl PartitionQualityReportOutV1 {
-    const fn unmeasured() -> Self {
-        Self {
-            measured: false,
-            reason: Some("input stated no founding_band, so no spot coordinate is known"),
-            model: None,
-            anchor: None,
-            characteristic_displacement: None,
-            plausible_half_width: None,
-            dominant_cell: None,
-            dominant_share_bps: None,
-            max_cell_share_bps: None,
-            cell_share_bps: None,
-        }
-    }
-
     fn measured(parsed: ParsedFoundingBandV1, report: &PartitionQualityReportV1) -> Self {
+        // Exhaustive on purpose: a second model variant must name itself here
+        // rather than be reported under this one's name.
         let PartitionQualityModelV1::TriangularPlausibleBand { .. } = report.model;
         Self {
-            measured: true,
-            reason: None,
-            model: Some("triangular-plausible-band-v1"),
-            anchor: Some(parsed.band.anchor.to_string()),
-            characteristic_displacement: Some(report.characteristic_displacement.to_string()),
-            plausible_half_width: Some(report.plausible_half_width.to_string()),
-            dominant_cell: Some(report.dominant_cell),
-            dominant_share_bps: Some(report.dominant_share_bps),
-            max_cell_share_bps: Some(parsed.max_cell_share_bps),
-            cell_share_bps: Some(report.cell_share_bps.clone()),
+            model: "triangular-plausible-band-v1",
+            anchor: parsed.band.anchor.to_string(),
+            volatility_bps: parsed.band.volatility_bps,
+            window_slots: parsed.band.window_slots.to_string(),
+            characteristic_displacement: report.characteristic_displacement.to_string(),
+            plausible_half_width: report.plausible_half_width.to_string(),
+            dominant_cell: report.dominant_cell,
+            dominant_share_bps: report.dominant_share_bps,
+            max_cell_share_bps: parsed.max_cell_share_bps,
+            cell_share_bps: report.cell_share_bps.clone(),
         }
     }
 }
@@ -266,7 +259,7 @@ struct CompiledFilesV1 {
     basis: Vec<u8>,
     gate: [u8; PRICE_GATE_REQUEST_BYTES_V1],
     compiled: CompiledSplineProductRecordsV3,
-    quality: Option<PartitionQualityReportV1>,
+    quality: PartitionQualityReportV1,
 }
 
 #[derive(Clone, Debug)]
@@ -441,11 +434,7 @@ fn parse_input(input: InputV1) -> Result<ParsedInputV1> {
         .map(|(index, value)| unsigned_decimal(value, &format!("failure_payouts[{index}]")))
         .collect::<Result<Vec<_>>>()?;
     let cut_denominator = unsigned_decimal(&input.cut_denominator, "cut_denominator")?;
-    let founding_band = input
-        .founding_band
-        .as_ref()
-        .map(|band| parse_founding_band(band, cut_denominator))
-        .transpose()?;
+    let founding_band = parse_founding_band(&input.founding_band, cut_denominator)?;
     Ok(ParsedInputV1 {
         registry_program,
         product_id: content_id(&input.product_id, "product_id")?,
@@ -574,23 +563,19 @@ fn compile(input: &ParsedInputV1) -> Result<CompiledFilesV1> {
     let operator = input.operator_input();
     // Before any record is built. A degenerate partition must not leave a
     // compiled graph on disk that somebody founds later without the report.
-    let quality = input
-        .founding_band
-        .map(|parsed| {
-            require_interesting_partition_v1(
-                &input.cuts,
-                &parsed.band,
-                parsed.model,
-                parsed.max_cell_share_bps,
-            )
-            .map_err(|error| {
-                Error::new(format!(
-                    "compile/partition-quality: {error:?} — the cuts are exhaustive, disjoint, \
-                     ordered and canonical, and one cell still takes the market"
-                ))
-            })
-        })
-        .transpose()?;
+    let parsed_band = input.founding_band;
+    let quality = require_interesting_partition_v1(
+        &input.cuts,
+        &parsed_band.band,
+        parsed_band.model,
+        parsed_band.max_cell_share_bps,
+    )
+    .map_err(|error| {
+        Error::new(format!(
+            "compile/partition-quality: {error:?} — the cuts are exhaustive, disjoint, \
+             ordered and canonical, and one cell still takes the market"
+        ))
+    })?;
     let domain_bytes = result_domain_record_bytes(input.cuts.len())
         .map_err(|_| Error::new("compile/result-domain-size"))?;
     let portfolio_bytes = portfolio_record_bytes(input.coefficients.len())
@@ -666,12 +651,10 @@ fn report(input: &ParsedInputV1, input_bytes: &[u8], files: &CompiledFilesV1) ->
             atom_count: gate.atom_count(),
             prices: gate.active_prices().iter().map(u64::to_string).collect(),
         },
-        partition_quality: match (input.founding_band, files.quality.as_ref()) {
-            (Some(parsed), Some(measured)) => {
-                PartitionQualityReportOutV1::measured(parsed, measured)
-            }
-            _ => PartitionQualityReportOutV1::unmeasured(),
-        },
+        partition_quality: PartitionQualityReportOutV1::measured(
+            input.founding_band,
+            &files.quality,
+        ),
     })
 }
 
@@ -819,11 +802,10 @@ mod tests {
                 .collect(),
             failure_payouts: ["0", "0", "7"].into_iter().map(str::to_owned).collect(),
             price_gate_certificate_hex: hex(certificate()),
-            // A synthetic degree-2 ABI example has no founding observation, so
-            // it states none rather than inventing one. The tests below cover
-            // both halves: what the report says without a band, and what the
-            // compile does with one.
-            founding_band: None,
+            // The band this example's single cut actually describes. It is a
+            // declaration, not an observation, so a synthetic fixture can make
+            // it honestly: the cut sits at 1 and the author says spot is there.
+            founding_band: band("1", 9_000),
         }
     }
 
@@ -879,35 +861,52 @@ mod tests {
     }
 
     #[test]
-    fn the_report_always_states_partition_quality_or_exactly_why_it_cannot() {
-        // WITHOUT a band. The page must be able to tell "not measured" from
-        // "the producer forgot", so the key is present and says which.
-        let parsed = parse_input(fixture()).expect("fixture input");
-        let compiled = compile(&parsed).expect("a synthetic example still compiles");
-        let decoded: Value = serde_json::from_slice(
-            &canonical_json(&report(&parsed, b"fixture", &compiled).expect("report"))
-                .expect("report bytes"),
-        )
-        .expect("report JSON");
-        assert_eq!(decoded["partition_quality"]["measured"], false);
-        assert_eq!(
-            decoded["partition_quality"]["reason"],
-            json!("input stated no founding_band, so no spot coordinate is known")
-        );
-        assert_eq!(decoded["partition_quality"]["cell_share_bps"], Value::Null);
+    fn an_input_that_declares_no_band_refuses_rather_than_assuming_one() {
+        // The whole point of the ruling: an author who will not say how
+        // uncertain they think the outcome is does not get a default. A market
+        // founded on an assumed volatility is founded with nobody having said
+        // anything false, which is the failure mode the gate exists to catch.
+        let mut absent = serde_json::to_value(fixture()).expect("fixture JSON");
+        absent
+            .as_object_mut()
+            .expect("object")
+            .remove("founding_band");
+        let error = serde_json::from_value::<InputV1>(absent)
+            .expect_err("an undeclared band must refuse")
+            .to_string();
+        assert!(error.contains("founding_band"), "{error}");
 
-        // WITH a band centred on the fixture's own cut. This is the number the
-        // browser renders, and it comes from the Rust that owns the model.
-        let mut centred = fixture();
-        centred.founding_band = Some(band("1", 9_000));
-        let parsed = parse_input(centred).expect("centred input");
+        // And each of its parts is required too, so a partial band cannot
+        // smuggle a default in through one field.
+        for field in [
+            "anchor",
+            "volatility_bps",
+            "window_slots",
+            "plausible_half_widths",
+            "max_cell_share_bps",
+        ] {
+            let mut partial = serde_json::to_value(fixture()).expect("fixture JSON");
+            partial["founding_band"]
+                .as_object_mut()
+                .expect("band object")
+                .remove(field);
+            let error = serde_json::from_value::<InputV1>(partial)
+                .expect_err("a partial band must refuse")
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn the_report_states_how_much_of_the_question_each_cell_takes() {
+        // The number the browser renders, from the Rust that owns the model.
+        let parsed = parse_input(fixture()).expect("centred input");
         let compiled = compile(&parsed).expect("a centred band compiles");
         let decoded: Value = serde_json::from_slice(
             &canonical_json(&report(&parsed, b"fixture", &compiled).expect("report"))
                 .expect("report bytes"),
         )
         .expect("report JSON");
-        assert_eq!(decoded["partition_quality"]["measured"], true);
         assert_eq!(
             decoded["partition_quality"]["model"],
             json!("triangular-plausible-band-v1")
@@ -919,6 +918,10 @@ mod tests {
         );
         assert_eq!(decoded["partition_quality"]["dominant_share_bps"], 5_000);
         assert_eq!(decoded["partition_quality"]["max_cell_share_bps"], 9_000);
+        // The author's own declaration is echoed back, so a reader can see the
+        // belief the shares were measured against and not just the shares.
+        assert_eq!(decoded["partition_quality"]["volatility_bps"], 2_000);
+        assert_eq!(decoded["partition_quality"]["window_slots"], json!("10000"));
     }
 
     #[test]
@@ -932,7 +935,7 @@ mod tests {
         fs::create_dir(&root).expect("test root");
         let output = root.join("output");
         let mut degenerate = fixture();
-        degenerate.founding_band = Some(band("1000", 9_000));
+        degenerate.founding_band = band("1000", 9_000);
         let parsed = parse_input(degenerate).expect("degenerate input");
         let error = compile(&parsed)
             .expect_err("a market with one answer must refuse")
@@ -948,7 +951,7 @@ mod tests {
         // shape, spot on the cut instead of far above it. If the refusal above
         // came from the band machinery rather than from placement, this fails.
         let mut centred = fixture();
-        centred.founding_band = Some(band("1", 9_000));
+        centred.founding_band = band("1", 9_000);
         let parsed = parse_input(centred).expect("centred input");
         compile(&parsed).expect("placement is what was wrong, not the band");
         fs::remove_dir_all(&root).expect("cleanup exact test root");

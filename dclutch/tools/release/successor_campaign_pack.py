@@ -541,6 +541,12 @@ def spline_product_handoff_value(
         "semantic_basis_id",
         "records",
         "verified_price_gate",
+        # Added 2026-09-01 with the founding-band gate: how much of the ex-ante
+        # question each cell takes, or `measured: false` and the reason. Always
+        # present in the report, so it is required here rather than tolerated —
+        # an archive produced before that commit will refuse, which is the
+        # correct answer for an archive whose markets were never measured.
+        "partition_quality",
     }
     if set(compiler_report) != compiler_report_fields or (
         compiler_report.get("schema") != "dclutch/product-spline-authoring-report/v1"
@@ -554,7 +560,15 @@ def spline_product_handoff_value(
         refuse("spline compiler report fields or source binding differ")
 
     inspection = read_json(inspection_path, "spline SDK inspection")
-    inspection_fields = compiler_report_fields - {"command"} | {"report", "found_records"}
+    # `partition_quality` is subtracted because the SDK inspection does not yet
+    # carry it: `packages/dclutch-cli/src/commands/product.ts:112` builds its
+    # document field by field and stops at `verified_price_gate`. Routed to the
+    # SDK/CLI lane; until it lands, requiring the key here would refuse a
+    # correct inspection for a field its producer never had.
+    inspection_fields = (
+        compiler_report_fields - {"command", "partition_quality"}
+        | {"report", "found_records"}
+    )
     found = smoke.get("found_records")
     if not isinstance(found, dict) or set(found) != {
         "productRecord",

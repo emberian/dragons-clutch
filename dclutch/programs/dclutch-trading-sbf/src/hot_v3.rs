@@ -3926,7 +3926,7 @@ fn execute_authenticated_hot_v3(
     {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
-    let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent)?;
+    let current_rent_quotes = authenticate_current_rent_quotes_v5(lifecycle, &rent, selected_action)?;
     hot_heap_mark!("rent-quotes");
     hot_cu_checkpoint!("p5-geometry-rent");
 
@@ -3948,6 +3948,7 @@ fn execute_authenticated_hot_v3(
         request_profile,
         lifecycle,
         profile_join,
+        selected_action,
         &current_rent_quotes,
         &dynamic_spans.widths,
         tail_count,
@@ -4093,6 +4094,7 @@ fn execute_authenticated_hot_v3(
             account_profile,
             Some(profile_join),
             tail_count,
+            selected_action,
             &transition_output_scalars,
             &current_rent_quotes,
         )
@@ -7480,13 +7482,22 @@ fn lifecycle_transition_target_v4(target: LifecycleRegisterTargetV3) -> Register
 fn authenticate_current_rent_quotes_v5(
     policy: StateLifecyclePolicyV5<'_>,
     rent: &Rent,
+    action: u32,
 ) -> Result<Vec<AuthenticatedRentQuoteV5>, ProgramError> {
+    // One quote per declaration THIS action projects, in declaration order --
+    // the subsequence both lifecycle walkers expect. A declaration scoped to a
+    // sibling action is skipped here and never reaches the bank, which is what
+    // lets one policy serve a family whose actions open different children.
     let mut quotes = Vec::with_capacity(usize::from(policy.current_rent_quote_count()));
     let mut ordinal = 0_u16;
     while ordinal < policy.current_rent_quote_count() {
         let declaration = policy
             .current_rent_quote(ordinal)
             .map_err(|_| TradingSbfError::Content)?;
+        if !declaration.applies_to(action) {
+            ordinal = ordinal.checked_add(1).ok_or(TradingSbfError::Content)?;
+            continue;
+        }
         let exact_data_len = declaration.exact_data_len();
         quotes.push(AuthenticatedRentQuoteV5 {
             exact_data_len,
@@ -12504,6 +12515,7 @@ fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info
     request_profile: RequestProfileKindV3<'artifact>,
     lifecycle: StateLifecyclePolicyV5<'artifact>,
     profile_join: ValidatedProfileJoinV3<'artifact>,
+    action: u32,
     current_rent_quotes: &[AuthenticatedRentQuoteV5],
     span_counts: &[u32],
     tail_count: u32,
@@ -12593,6 +12605,7 @@ fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info
             account_profile,
             Some(profile_join),
             tail_count,
+            action,
             &current_scalars,
             current_rent_quotes,
             LifecycleRentQuoteBuffersV5 {
@@ -12653,6 +12666,7 @@ fn project_account_and_request_registers_v3<'region, 'artifact, 'accounts, 'info
             account_profile,
             Some(profile_join),
             tail_count,
+            action,
             &current_scalars,
             current_rent_quotes,
         )
@@ -15595,6 +15609,7 @@ mod tests {
             &[LifecycleCurrentRentQuoteInputV5 {
                 exact_data_len: 152,
                 scalar_destination: 64,
+                action: None,
             }],
             &mut scratch,
             &mut bytes,
@@ -15603,7 +15618,7 @@ mod tests {
         let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &bytes)
             .expect("selected lifecycle V5");
         let rent = Rent::default();
-        let quotes = authenticate_current_rent_quotes_v5(policy, &rent)
+        let quotes = authenticate_current_rent_quotes_v5(policy, &rent, 0)
             .expect("authenticated current Rent quote");
         assert_eq!(quotes.len(), 1);
         let quote = quotes.first().expect("exactly one quote");

@@ -66,6 +66,31 @@ All seven cohort-8 programs are closed and their ids can never be reused.
   conclusion: at 43.742834 on hand the deploy could not have proceeded without
   the reclaim, and it did not.
 
+## The attempt that failed first, and why it cost nothing
+
+The first deploy run died on the very first role with:
+
+```
+Error: Dynamic program error: missing signature for supplied pubkey:
+4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP
+```
+
+`solana program deploy --upgrade-authority` takes a **signer** — a keypair path
+— not a pubkey. Passing the authority's public key is accepted by the argument
+parser and then refused at signing time, after the deploy has otherwise been
+assembled.
+
+**Nothing was spent.** The balance was 74.794489826 SOL before the attempt and
+74.794489826 after it. The run stopped at role one because the runner verifies
+each role — dumping the on-chain image back and comparing it to the built ELF —
+and exits non-zero the moment a role fails either its deploy or its
+verification. A runner that deployed all seven and only then checked would have
+attempted the whole 6.6 MB against an unsatisfiable signature and burned the
+budget on the first attempt, with the reclaim already spent and nothing live.
+
+This is the argument for verify-after-each over verify-at-end on any sequence
+whose steps spend money. Keep it.
+
 ## What is NOT done
 
 The programs are live. The protocol is not yet founded on them:

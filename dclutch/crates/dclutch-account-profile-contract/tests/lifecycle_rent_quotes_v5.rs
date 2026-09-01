@@ -30,18 +30,22 @@ const QUOTES: [LifecycleCurrentRentQuoteInputV5; 4] = [
     LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: 1_152,
         scalar_destination: 38,
+        action: None,
     },
     LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: 512,
         scalar_destination: 39,
+        action: None,
     },
     LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: 256,
         scalar_destination: 47,
+        action: None,
     },
     LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: 182,
         scalar_destination: 48,
+        action: None,
     },
 ];
 
@@ -296,6 +300,7 @@ fn four_authenticated_quotes_project_atomically_to_protected_common_scalars() {
             profile,
             None,
             0,
+            0,
             &input,
             &quote_inputs(),
             LifecycleRentQuoteBuffersV5 {
@@ -311,12 +316,12 @@ fn four_authenticated_quotes_project_atomically_to_protected_common_scalars() {
     assert_eq!(output.get(37), Some(&0));
     assert_eq!(output.get(49), Some(&0));
     assert_eq!(
-        policy.validate_projected_current_rent_quotes(profile, None, 0, &output, &quote_inputs()),
+        policy.validate_projected_current_rent_quotes(profile, None, 0, 0, &output, &quote_inputs()),
         Ok(())
     );
     *output.get_mut(47).expect("protected quote") = 1;
     assert_eq!(
-        policy.validate_projected_current_rent_quotes(profile, None, 0, &output, &quote_inputs()),
+        policy.validate_projected_current_rent_quotes(profile, None, 0, 0, &output, &quote_inputs()),
         Err(Error::InvalidRentQuote)
     );
 }
@@ -354,6 +359,7 @@ fn quote_order_width_minimum_and_prefilled_destination_are_refused_atomically() 
                 profile,
                 None,
                 0,
+                0,
                 &input,
                 &hostile,
                 LifecycleRentQuoteBuffersV5 {
@@ -375,6 +381,7 @@ fn quote_order_width_minimum_and_prefilled_destination_are_refused_atomically() 
             profile,
             None,
             0,
+            0,
             &prefilled,
             &quote_inputs(),
             LifecycleRentQuoteBuffersV5 {
@@ -395,6 +402,7 @@ fn quote_order_width_minimum_and_prefilled_destination_are_refused_atomically() 
             profile,
             None,
             0,
+            0,
             &input,
             missing,
             LifecycleRentQuoteBuffersV5 {
@@ -414,6 +422,7 @@ fn duplicate_unordered_zero_and_excess_declarations_are_refused_atomically() {
             QUOTES[0],
             LifecycleCurrentRentQuoteInputV5 {
                 scalar_destination: 38,
+                action: None,
                 ..QUOTES[1]
             },
             QUOTES[2],
@@ -436,6 +445,7 @@ fn duplicate_unordered_zero_and_excess_declarations_are_refused_atomically() {
     let excess = [LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: 1,
         scalar_destination: 1,
+        action: None,
     }; 17];
     assert_failed_policy_encode(&excess, Error::InvalidRentQuote);
 }
@@ -558,6 +568,7 @@ fn current_rent_destination_cannot_alias_lifecycle_protected_output() {
     let quote = [LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: 512,
         scalar_destination: 38,
+        action: None,
     }];
     let width = HEADER_BYTES
         + RECIPE_BYTES

@@ -44,6 +44,7 @@ fn policy_with_quote() -> Vec<u8> {
     let quotes = [LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: 512,
         scalar_destination: 39,
+        action: None,
     }];
     let width = HEADER_BYTES
         + RECIPE_BYTES
@@ -111,10 +112,18 @@ fn generated_constants_equal_the_live_safe_kernel() {
         [
             generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_EXACT_DATA_LEN_OFFSET,
             generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_SCALAR_DESTINATION_OFFSET,
+            generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_ACTION_SCOPE_OFFSET,
+            generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_ACTION_OFFSET,
             generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_RESERVED_OFFSET,
         ],
-        [0, 4, 6]
+        // The action tag came out of the front of the old ten-byte reserved run,
+        // which is why the quote is still 16 bytes wide and every artifact
+        // written before it existed is byte-identical: those two fields were
+        // already zeros. `Lean current_rent_quote_coordinates_are_canonical` is
+        // the authority for this row.
+        [0, 4, 6, 7, 11]
     );
+    assert_eq!(generated::STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_BYTES, 16);
 }
 
 #[test]

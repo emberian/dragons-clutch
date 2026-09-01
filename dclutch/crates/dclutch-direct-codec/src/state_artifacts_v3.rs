@@ -171,6 +171,7 @@ pub fn encode_direct_inline_ordinary_lifecycle_v5_atomic(
     let rent_quotes = [LifecycleCurrentRentQuoteInputV5 {
         exact_data_len: DIRECT_MAKER_REPLAY_BYTES_U32_V1,
         scalar_destination: scalar(SCALAR_MAKER_CURRENT_RENT_MINIMUM_V5)?,
+        action: None,
     }];
     encode_lifecycle_policy_v5_atomic(
         &recipes,

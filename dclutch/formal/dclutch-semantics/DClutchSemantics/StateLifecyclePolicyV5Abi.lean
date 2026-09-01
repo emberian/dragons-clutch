@@ -72,13 +72,19 @@ def offset (field : HeaderField) : Nat :=
 end HeaderField
 
 inductive CurrentRentQuoteField where
-  | exactDataLen | scalarDestination | reserved
+  | exactDataLen | scalarDestination | actionScope | action | reserved
   deriving DecidableEq, Repr
 
+-- The action tag is carved out of the FRONT of what used to be ten reserved
+-- bytes, so an unscoped quote -- scope 0, action 0 -- is byte-identical to the
+-- same quote before the tag existed. No artifact this schema has ever emitted
+-- moves, and no pinned digest moves with it.
 def currentRentQuoteSchema : List (FieldSpec CurrentRentQuoteField) := [
   ⟨.exactDataLen, .u32⟩,
   ⟨.scalarDestination, .u16⟩,
-  ⟨.reserved, .reserved 10⟩
+  ⟨.actionScope, .u8⟩,
+  ⟨.action, .u32⟩,
+  ⟨.reserved, .reserved 5⟩
 ]
 
 def currentRentQuoteLayout : List (PlacedField CurrentRentQuoteField) :=
@@ -91,6 +97,8 @@ def rustName : CurrentRentQuoteField → String
   | .exactDataLen => "STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_EXACT_DATA_LEN_OFFSET"
   | .scalarDestination =>
       "STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_SCALAR_DESTINATION_OFFSET"
+  | .actionScope => "STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_ACTION_SCOPE_OFFSET"
+  | .action => "STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_ACTION_OFFSET"
   | .reserved => "STATE_LIFECYCLE_V5_CURRENT_RENT_QUOTE_RESERVED_OFFSET"
 
 def offset (field : CurrentRentQuoteField) : Nat :=
@@ -105,10 +113,16 @@ def canonicalEmptyHeader : List UInt8 :=
   List.replicate 12 0 ++
   List.replicate 16 0
 
-def encodeCurrentRentQuote (exactDataLen scalarDestination : Nat) : List UInt8 :=
+def encodeCurrentRentQuoteScoped
+    (exactDataLen scalarDestination : Nat) (action : Option Nat) : List UInt8 :=
   DClutch.Codec.encodeLE 4 exactDataLen ++
   DClutch.Codec.encodeLE 2 scalarDestination ++
-  List.replicate 10 0
+  DClutch.Codec.encodeLE 1 (match action with | some _ => 1 | none => 0) ++
+  DClutch.Codec.encodeLE 4 (action.getD 0) ++
+  List.replicate 5 0
+
+def encodeCurrentRentQuote (exactDataLen scalarDestination : Nat) : List UInt8 :=
+  encodeCurrentRentQuoteScoped exactDataLen scalarDestination none
 
 def currentRentQuoteAgreement : List UInt8 := encodeCurrentRentQuote 512 39
 
@@ -116,13 +130,33 @@ def currentRentQuoteCanonical (bytes : List UInt8) : Bool :=
   bytes.length == currentRentQuoteBytes &&
   DClutch.Codec.decodeLE
       ((bytes.drop (CurrentRentQuoteField.offset .exactDataLen)).take 4) != 0 &&
-  (bytes.drop (CurrentRentQuoteField.offset .reserved)).take 10 == List.replicate 10 0
+  -- Exactly one encoding of "every action": an unscoped quote carries no action,
+  -- so a digest cannot be varied through bytes the decoder ignores.
+  (DClutch.Codec.decodeLE
+      ((bytes.drop (CurrentRentQuoteField.offset .actionScope)).take 1) == 0 ||
+   DClutch.Codec.decodeLE
+      ((bytes.drop (CurrentRentQuoteField.offset .actionScope)).take 1) == 1) &&
+  (DClutch.Codec.decodeLE
+      ((bytes.drop (CurrentRentQuoteField.offset .actionScope)).take 1) == 1 ||
+   DClutch.Codec.decodeLE
+      ((bytes.drop (CurrentRentQuoteField.offset .action)).take 4) == 0) &&
+  (bytes.drop (CurrentRentQuoteField.offset .reserved)).take 5 == List.replicate 5 0
 
 def currentRentQuoteRefusalCorpus : List (List UInt8) := [
   currentRentQuoteAgreement.drop 1,
   encodeCurrentRentQuote 0 39,
+  -- Probes the NEW reserved run. The old third hostile set byte 6, which is now
+  -- the action scope and is legal there; the non-canonical-reserved probe has to
+  -- move with the field it probes.
   List.set currentRentQuoteAgreement
-    (CurrentRentQuoteField.offset .reserved) 1
+    (CurrentRentQuoteField.offset .reserved) 1,
+  -- An unrecognised scope tag, refused rather than read as unscoped.
+  List.set currentRentQuoteAgreement
+    (CurrentRentQuoteField.offset .actionScope) 2,
+  -- An unscoped quote carrying an action: the second encoding of "every action"
+  -- that must not exist.
+  List.set currentRentQuoteAgreement
+    (CurrentRentQuoteField.offset .action) 1
 ]
 
 theorem header_width_is_exact : headerBytes = 40 := by native_decide
@@ -137,7 +171,8 @@ theorem header_coordinates_are_canonical : coordinates headerLayout = [
   ] := by native_decide
 theorem current_rent_quote_coordinates_are_canonical :
     coordinates currentRentQuoteLayout = [
-      (.exactDataLen, 0, 4), (.scalarDestination, 4, 2), (.reserved, 6, 10)
+      (.exactDataLen, 0, 4), (.scalarDestination, 4, 2), (.actionScope, 6, 1),
+      (.action, 7, 4), (.reserved, 11, 5)
     ] := by native_decide
 theorem layouts_are_disjoint :
     headerLayout.Pairwise Before ∧ currentRentQuoteLayout.Pairwise Before := by

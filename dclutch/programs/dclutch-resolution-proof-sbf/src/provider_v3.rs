@@ -369,7 +369,7 @@ fn authenticate_provider_release(
         || source_release.provider_deployment_release_id().to_bytes() != observation.pyth_release_id
         || source_release.adapter_release_id().to_bytes() != pyth.adapter_id()
         || source_release.decoding_rules_id().to_bytes() != pyth.price_update_codec_id()
-        || source_release.transport_profile_id().to_bytes() != pyth.router_abi_id()
+        || source_release.transport_profile_id().to_bytes() != pyth.transport_profile_id()
         || pyth.activation_time() > observation.current_unix_seconds
     {
         Err(ProviderJoinErrorV3::Provider)

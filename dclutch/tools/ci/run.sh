@@ -576,7 +576,8 @@ tier_programs() {
 }
 
 # ---------------------------------------------------------------------------
-# journey -- does the journey campaign still COMPILE. Minutes, cargo only.
+# journey -- does the journey campaign compile AND do its host tests pass.
+# Minutes, cargo only, no validator.
 #
 # THE CLASS THIS EXISTS FOR, and it is not hypothetical: on 2026-08-30 this
 # binary had not built on main for about two days, and nobody knew.
@@ -589,14 +590,32 @@ tier_programs() {
 # it has exactly one requirement: SOMETHING HAS TO PULL THE TRIPWIRE. Nothing
 # did, so a deliberate alarm rang into an empty room for two days.
 #
-# WHY `cargo check` AND NOT A CAMPAIGN RUN, said plainly because the cheaper
-# thing is the one that gets to run often. A full journey campaign needs a real
+# WHY NOT A CAMPAIGN RUN, said plainly because the cheaper thing is the one
+# that gets to run often. A full journey campaign needs a real
 # `solana-test-validator`, stages a whole founding through open, and is tens of
-# minutes -- that belongs to the cut, not to a push. `cargo check` catches the
-# entire two-day class (a moved or reshaped upstream module) for the price of a
-# type-check, and it is the only part of the journey that a push can afford. It
-# does NOT tell you the campaign still passes; those are different claims and
-# this tier only makes the first one.
+# minutes -- that belongs to the cut, not to a push.
+#
+# WHY `cargo test` AND NOT `cargo check`, which is what this was until
+# 2026-09-01 and why it changed. The reasoning above is right about the
+# CAMPAIGN and was wrong about the crate's own TESTS, which need no validator
+# and cost seconds on a build this tier already pays for. Two defects hid
+# behind the difference, both of them host tests:
+#
+#   - `run-journey.sh` called `demo-market`, a subcommand the binary now
+#     refuses unconditionally, so the tier could not run at all. It still
+#     COMPILED, because the subcommand is still dispatched.
+#   - `general_market::tests::the_neutral_seam_derives_the_entry_the_general_
+#     publication_authors` asserted seven General actions while General had
+#     grown to fifteen: 281 passed, 1 FAILED, behind a green check.
+#
+# Neither is reachable by a type-check, and a job named "the journey campaign
+# compiles" was true and useless throughout. Compiling was never the property
+# anyone wanted from this tier.
+#
+# `--bins` keeps it to the campaign binary's own tests, so this stays a push-
+# affordable gate. It still does NOT tell you the campaign PASSES against a
+# chain; that claim needs a validator and belongs to the cut. What it now tells
+# you is that the binary compiles and everything it asserts about itself holds.
 # `--commit` REACHES THIS TIER, and the author needed teaching twice.
 #
 # I built the archive machinery below for the `programs` tier and framed it as
@@ -612,7 +631,7 @@ tier_programs() {
 # REVISION. A red that belongs to a colleague's half-written file is worse than
 # no gate, because it is a gate that cries wolf at whoever runs it next.
 tier_journey() {
-  say "journey -- the journey campaign still compiles"
+  say "journey -- the journey campaign compiles and its host tests pass"
   if ! have cargo; then
     record journey $EXIT_PREREQ_MISSING "cargo not on PATH"
     return
@@ -649,12 +668,13 @@ tier_journey() {
   # workspace and gets its own target directory whether we ask or not.
   local code=0
   (cd "$root" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
-    cargo check --manifest-path "$manifest") || code=$?
+    cargo test --manifest-path "$manifest" --bins) || code=$?
   [ -n "$archive_root" ] && rm -rf -- "$archive_root"
   if [ "$code" = 0 ]; then
     record journey $EXIT_PASS
   else
-    note "The journey campaign does not compile. Most often this is the"
+    note "The journey campaign does not compile, or one of its host tests"
+    note "failed. If it is a compile error, most often this is the"
     note "\`#[path]\` tripwire doing its job: a module under"
     note "tools/local-validator/bootstrap/successor/src/ moved or changed"
     note "shape, and the journey links those files verbatim rather than"
@@ -1256,6 +1276,7 @@ tier_release() {
     devnet-flight/test_devnet_flight.py
     devnet_upgrade_dryplan/test_dryplan.py
     lifecycle-chaos/test_lifecycle_chaos.py
+    test_usage_parity.py
   )
   local py_present=() py_missing=() suite
   for suite in "${py_suites[@]}"; do
@@ -1280,6 +1301,28 @@ tier_release() {
   done
   if [ "${#py_missing[@]}" -gt 0 ]; then
     for suite in "${py_missing[@]}"; do missing+=("$suite"); done
+  fi
+
+  # The usage/parser parity GATE itself, distinct from its tests above. A tool
+  # that teaches a flag its parser rejects is a runbook for a command that
+  # cannot run, which is C-13's "runbooks contain only commands actually
+  # replayed" one layer down -- and nothing goes red when it drifts.
+  local parity="$dir/usage_parity.py"
+  local successor="$repo_root/tools/local-validator/bootstrap/successor/src"
+  if [ -f "$parity" ] && [ -d "$successor" ]; then
+    note "usage/parser parity"
+    code=0
+    (cd "$repo_root" && python3 "$parity" --crate-src "$successor") || code=$?
+    case "$code" in
+    0) ;;
+    2)
+      note "the parity checker could not run; nothing was proven either way"
+      missing+=("usage_parity.py could not run")
+      ;;
+    *) failed+=("usage_parity.py") ;;
+    esac
+  else
+    missing+=("usage_parity.py or the successor crate")
   fi
   if [ "${#failed[@]}" -gt 0 ]; then
     note "a release-tooling refusal suite FAILED:"

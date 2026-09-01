@@ -469,6 +469,29 @@ semantic_release_for() {
 # (docs/evidence/LOCAL_CAMPAIGN_SERIES_2026_08_30.md). Until that lands, this
 # tier accepts a market someone else compiled, so the campaign is runnable by
 # anyone holding one rather than runnable by nobody.
+#
+# TWO THINGS ABOUT THE MARKET YOU SUPPLY, one relayed and one measured.
+#
+# RELAYED, from the lane that owns the compiler and NOT independently verified
+# here: `local-private-validator-market-v1` wants its `--plan` from
+# `local-mutable-prepare-v1` behind a checked-release gate rather than from a
+# standalone call, and its shape defaults are said to resolve into a single
+# bucket -- a market nobody could lose. Treat a market compiled with bare
+# defaults as economically degenerate until that lane says otherwise.
+#
+# MEASURED HERE, so it is not the same claim: the compiler's default shape is
+# `cuts = [12_000, 18_000]` over `cut_denominator = 100` with coefficients
+# `[1, 0, 1, 0]` (`bootstrap/successor/src/market.rs`, `LocalMarketShapeV1::
+# default`), which is a FOUR-outcome market, not a one-outcome one. Whatever
+# "one bucket" refers to, it is not the width.
+#
+# AND IT IS NOT WHAT LIMITS THE CONSERVATION LEDGER ANYWAY, which is worth
+# saying so nobody holds a market back on this tier's account. The ledger's
+# per-class law (L8) is bounded by how many Custody COMPARTMENTS the market
+# opens, not by how its outcomes resolve, and this journey opens
+# `HoardPrincipal` and nothing else whatever shape it is founded with. A
+# non-degenerate market makes the campaign economically interesting; it does
+# not turn a two-class ledger into an eight-class one.
 [ -n "$MARKET_ARG" ] || die "no Market run-spec: pass --market PATH.
 
 Direct is deployment-bound, so this runner cannot mint one and the retired
