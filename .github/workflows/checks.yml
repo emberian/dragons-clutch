@@ -360,6 +360,18 @@ jobs:
         if: matrix.name == 'web'
         run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
 
+      # Build the parity binary BEFORE the suite, not inside it. The test
+      # shells out to `cargo run`, and its 30s timeout is sized for running the
+      # binary, not for compiling it and its dependency tree from cold — which
+      # is what the runner was doing, so the suite timed out at exactly 30000ms
+      # even after the toolchain conflict above was fixed. Prebuilding keeps the
+      # timeout meaningful: it still fails if the parity itself hangs, which is
+      # the thing the timeout is actually there to catch.
+      - name: Prebuild the Source readiness parity binary
+        if: matrix.name == 'web'
+        working-directory: dclutch
+        run: cargo build -p dclutch-source-readiness-operator --bin source-readiness-parity
+
       - name: Test
         working-directory: ${{ matrix.directory }}
         run: |
