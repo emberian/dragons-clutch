@@ -28,7 +28,7 @@
 //!
 //! Because the whole tail is Template-derived, the one thing that could go
 //! wrong is composing it from a DIFFERENT Template than the release binds.
-//! `super::release_v5::encode_descriptor` stores the exact Template content
+//! `super::release_v5::encode_series_action_descriptor_v5` stores the Template content
 //! identity in each action descriptor's `capacity_profile` coordinate, and
 //! `CapabilityProgramV1::validate_selection` requires that same value to equal
 //! the manifest entry's `capacity_profile_id`. So [`template_input`] requires
@@ -58,10 +58,12 @@
 //! to `template.close_rent()` (see [`series_activation_funding_plan_v1`]) and
 //! sets `delivers_creation_principal`, which makes the family-neutral effect
 //! transfer the checked sum of the two compartments. `outer.rs` requires the
-//! activated root to hold exactly `rent_lamports + creation_lamports`, with
-//! `rent_lamports` independently pinned to the live Rent sysvar's exemption
-//! minimum. The amount is authenticated by the Market's own manifest entry —
-//! the outer's stated refusal to decode a family config record is untouched.
+//! activated root's POSTSTATE to be exactly
+//! `rent.minimum_balance(root_account_bytes) + creation_lamports`. The rent
+//! quote itself is deliberately not compared to the sysvar: it is a top-up, and
+//! a vacant root may already carry dust that flows into the same sum. The
+//! principal is authenticated by the Market's own manifest entry — the outer's
+//! stated refusal to decode a family config record is untouched.
 
 extern crate alloc;
 
@@ -588,7 +590,7 @@ mod tests {
     };
 
     use super::{
-        super::release_v5::{SeriesActionArtifactIdsV5, encode_descriptor},
+        super::release_v5::{SeriesActionArtifactIdsV5, encode_series_action_descriptor_v5},
         *,
     };
 
@@ -631,7 +633,7 @@ mod tests {
     /// A real production V4 action descriptor bound to this exact Template.
     fn action_descriptor(template: &[u8], seed: u8) -> Vec<u8> {
         let template_id = template_content_id(template).expect("Template ID");
-        encode_descriptor(template_id, ids(seed))
+        encode_series_action_descriptor_v5(template_id, ids(seed))
             .expect("action descriptor")
             .to_vec()
     }

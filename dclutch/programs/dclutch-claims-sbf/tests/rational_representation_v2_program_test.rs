@@ -93,7 +93,7 @@ use dclutch_rational_representation_v2_kernel::{
 use dclutch_realm_contract::{
     FreezeAuthorityPolicy, MintAuthorityPolicy, REALM_SCHEMA_RELEASE_ID_V1, RealmV1, RealmV1Input,
 };
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry_contract::{
     ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
     ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
@@ -644,18 +644,31 @@ mod common_hot_open {
         pub(super) manifest: ManifestSelection,
     }
 
+    /// Both bumps derive through `RecordKeyV1`, the constructor the Record
+    /// contract exports for exactly this, rather than respelling the seed
+    /// tuple here. A test that spells the tuple becomes a second author for
+    /// the address, and the seam register's own rule is that a NEW file
+    /// restating an existing domain is corrected rather than filed beside the
+    /// existing debt.
     fn record_bumps(schema: [u8; 32], digest: [u8; 32]) -> (u8, u8) {
+        let key = RecordKeyV1::new(
+            SchemaReleaseId::new(schema).expect("schema release id"),
+            ContentDigest::new(digest).expect("content digest"),
+        );
+        let bump = |seeds: RecordPdaSeedsV1| {
+            Pubkey::find_program_address(
+                &[
+                    seeds.domain(),
+                    seeds.schema_release_id().as_bytes(),
+                    seeds.expected_digest().as_bytes(),
+                ],
+                &REGISTRY_PROGRAM_ID,
+            )
+            .1
+        };
         (
-            Pubkey::find_program_address(
-                &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
-                &REGISTRY_PROGRAM_ID,
-            )
-            .1,
-            Pubkey::find_program_address(
-                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
-                &REGISTRY_PROGRAM_ID,
-            )
-            .1,
+            bump(key.raw_record_pda_seeds()),
+            bump(key.staging_cursor_pda_seeds()),
         )
     }
 
@@ -1582,21 +1595,25 @@ fn activation_cache_for_upstream(
 }
 
 fn finalized_record_keys(schema: [u8; 32], digest: [u8; 32]) -> (Pubkey, Pubkey) {
-    let raw = Pubkey::find_program_address(
-        &[RAW_RECORD_PDA_SEED_V1, schema.as_slice(), digest.as_slice()],
-        &REGISTRY_PROGRAM_ID,
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(schema).expect("schema release id"),
+        ContentDigest::new(digest).expect("content digest"),
+    );
+    let address = |seeds: RecordPdaSeedsV1| {
+        Pubkey::find_program_address(
+            &[
+                seeds.domain(),
+                seeds.schema_release_id().as_bytes(),
+                seeds.expected_digest().as_bytes(),
+            ],
+            &REGISTRY_PROGRAM_ID,
+        )
+        .0
+    };
+    (
+        address(key.raw_record_pda_seeds()),
+        address(key.staging_cursor_pda_seeds()),
     )
-    .0;
-    let staging = Pubkey::find_program_address(
-        &[
-            STAGING_CURSOR_PDA_SEED_V1,
-            schema.as_slice(),
-            digest.as_slice(),
-        ],
-        &REGISTRY_PROGRAM_ID,
-    )
-    .0;
-    (raw, staging)
 }
 
 fn add_finalized_record(

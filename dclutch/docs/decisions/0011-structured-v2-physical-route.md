@@ -526,6 +526,77 @@ the dead legacy-graph path and the live exposure path. Collapsing that moves
 every live `descriptor_id`, hence every shard Mint, custody account, Position and
 replay record of every representation.
 
+#### Amendment, 2026-09-01: the tolerability premise holds for one route of two
+
+The reasoning above is kept exactly as it was written, because it was right
+about the mechanism and it is the reason the gap was survivable for as long as
+it was. What it did not say is which routes it covers. Measured:
+
+> "a wrong recipe is a wrong founding rather than a forgeable request"
+
+**This holds for `rational_terminal_v3`.** That route takes the exposure's
+identity from an authenticated `RepresentationDescriptorV2` —
+`selected_id: authenticated.admission.graph_id()`,
+`finalized_digest: authenticated.admission.graph_digest()`
+(`programs/dclutch-claims-sbf/src/rational_terminal_v3.rs:206-209`) — and the
+descriptor anchors the record's BYTES
+(`crates/dclutch-rational-representation-v2-kernel/src/product_v3.rs:530-533`).
+A redeemer cannot substitute a recipe there; founding really is the last moment
+it could go wrong.
+
+**It does not hold for `terminal_settlement_v3`.** On that route `exposure_id`
+and `exposure_digest` are ordinary instruction fields
+(`crates/dclutch-claims-svm/src/terminal_settlement_v3.rs:151-154`);
+`authenticate_finalized_record` proves only that some finalized record hashes to
+the digest the caller named, reading no Market and no Product
+(`programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs:808-840`);
+`verify_execution_for` joins five header fields the record's own author writes
+plus two widths
+(`crates/dclutch-representation-composition-v3-kernel/src/exposure.rs:383-401`);
+Registry publication is permissionless
+(`programs/dclutch-registry-sbf/src/record_v1.rs:1`); and `generic_founding_v1.rs`
+pins no exposure, graph, composition or descriptor identity at all. There was
+never a founding-time recipe for a redeemer's choice to be measured against, so
+"a wrong founding rather than a forgeable request" was not available as a
+defence on this route. It WAS a forgeable request.
+
+The conjunct a reader would have believed was catching this could not:
+`exposure.bundle_id() != admission.exposure_id()`
+(`crates/dclutch-claims-svm/src/product_basis_terminal_v3.rs`) compared
+`admission.selected_id` — which is where `bundle_id` is assigned from
+(`exposure.rs:274`) — against a second copy of the same caller-supplied value.
+A comparison of a value with itself, on both routes. It has been **deleted**,
+because a comparison that cannot refuse is not a guard and the next reader
+would believe it was one. Deleting it weakens nothing: it never refused.
+
+It was NOT replaced, and the attempt is worth recording because it measured
+false. The obvious repair — read the record's own `graph_id()` instead of the
+injected `bundle_id` — reddened four fixtures in
+`product_basis_terminal_v3.rs`, because the exposure record's `graph_id` header
+and the descriptor's `graph_id` are **not the same identity in this tree**.
+That is precisely the double-booking this same section already filed as a
+RECORDS-MIGRATE row, two paragraphs up. Repointing the conjunct needs that
+resolved first, and resolving it moves every live `descriptor_id`. So the row
+is no longer only a tidiness item: it is the blocker on giving generic
+settlement a real exposure identity join.
+
+The generic route additionally now requires the exposure to be the identity
+embedding outright (`terminal_settlement_v3::require_identity_exposure_v3`),
+which is admissible there because that route cannot express `N != K`: the
+Product's own `basis_width` is forced equal to `market.claim_count` at
+settlement (`product_basis_terminal_v3.rs:542-546`) and again at founding
+(`founding_v5.rs:1032` → `affine_batch_v2.rs:697-706`), and the canonical
+publisher already emits exactly the identity and says so
+(`crates/dclutch-representation-composition-v3-operator/src/native_categorical_v1.rs:1-8`).
+
+**What is still owed, and is a wire change rather than a validation change.**
+The generic route has no upstream anchor for the exposure — only a shape
+requirement. Pinning an exposure digest at founding, the way the descriptor pins
+it for Rational, needs a new persisted field in the LBV2 aggregate. That is a
+release event, not a patch, and it is Ember's call. Until it lands, the
+invariant protecting generic settlement is "the only admissible matrix is the
+identity", not "the matrix was chosen by someone other than the redeemer".
+
 ### The campaign is a lane, not a project
 
 `programs/dclutch-claims-sbf/tests/rational_representation_v2_program_test.rs`

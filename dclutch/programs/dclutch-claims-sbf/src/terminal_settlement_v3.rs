@@ -90,7 +90,7 @@ use dclutch_realm_contract::REALM_SCHEMA_RELEASE_ID_V1;
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_representation_composition_v3_kernel::{
-    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, RecordAdmissionV3,
+    COMPOSITION_EXPOSURE_SCHEMA_ID_V3, CompositionExposureBundleV3, RecordAdmissionV3,
 };
 use dclutch_token_svm::TokenAccount;
 use solana_program::{
@@ -387,18 +387,22 @@ fn authenticate_and_prepare(
         input.collateral_mint,
         accounts[CUSTODY_AUTHORITY].key.to_bytes(),
     )?;
+    let exposure_admission = RecordAdmissionV3 {
+        selected_id: input.exposure_id,
+        finalized_id: input.exposure_id,
+        recomputed_digest: hash(&exposure_bytes).to_bytes(),
+        finalized_digest: input.exposure_digest,
+        record_authenticated: true,
+    };
+    // BEFORE any payout is derived and before any byte is written. See
+    // `require_identity_exposure_v3`.
+    require_identity_exposure_v3(&exposure_bytes, exposure_admission)?;
     let payout = encode_product_claims_terminal_signed_delta_v3(
         ProductClaimsTerminalInputV3 {
             product_basis_bytes: &basis_bytes,
             admission,
             composition_exposure_bytes: &exposure_bytes,
-            composition_exposure_admission: RecordAdmissionV3 {
-                selected_id: input.exposure_id,
-                finalized_id: input.exposure_id,
-                recomputed_digest: hash(&exposure_bytes).to_bytes(),
-                finalized_digest: input.exposure_digest,
-                record_authenticated: true,
-            },
+            composition_exposure_admission: exposure_admission,
             product_record_digest: input.product_record_digest,
             market_account: accounts[1].key.to_bytes(),
             market_bytes: &market_bytes,
@@ -677,6 +681,133 @@ fn authenticate_core(
     Ok(core)
 }
 
+/// Refuse any Product-to-Claims exposure that is not the identity embedding.
+///
+/// # The hole this closes
+///
+/// The exposure is the matrix that decides WHICH claim a terminal payout goes
+/// to. Until this check, the redeemer chose it. `exposure_id` and
+/// `exposure_digest` are ordinary instruction fields
+/// (`crates/dclutch-claims-svm/src/terminal_settlement_v3.rs:151-154`);
+/// [`authenticate_finalized_record`] proves only that some finalized record
+/// hashes to that digest -- it reads no Market and no Product; and
+/// `verify_execution_for`
+/// (`crates/dclutch-representation-composition-v3-kernel/src/exposure.rs:383-401`)
+/// joins five header fields the record's own author writes, plus two widths.
+/// Registry publication is permissionless
+/// (`programs/dclutch-registry-sbf/src/record_v1.rs:1`), and founding pins no
+/// exposure identity at all -- `generic_founding_v1.rs` contains no occurrence
+/// of exposure, graph, composition or descriptor. So nothing upstream ever
+/// fixed a recipe for the redeemer's choice to be measured against.
+///
+/// The conjunct that looked like it would have caught a substitution never
+/// could: `exposure.bundle_id() != admission.exposure_id()` compared
+/// `composition_exposure_admission.selected_id` -- which is where `bundle_id`
+/// was assigned from (`exposure.rs:274`) -- against a second copy of the same
+/// caller-supplied value. **It was a comparison of a value with itself, on both
+/// this route and the Rational one**, and it has been deleted
+/// (`product_basis_terminal_v3.rs`, `decode_exposure`). It is not replaced: the
+/// obvious repair, reading the record's own `graph_id()`, measured false
+/// against four fixtures because that field and the descriptor's `graph_id` are
+/// different identities in this tree -- decision 0011's RECORDS-MIGRATE row.
+/// The Rational route is sound regardless, because it anchors the record's
+/// BYTES to an authenticated descriptor's `graph_digest`
+/// (`crates/dclutch-rational-representation-v2-kernel/src/product_v3.rs:530-533`);
+/// that anchor is what does the work there, not the identity conjunct.
+///
+/// # Why the identity, and why that is not a new policy
+///
+/// The Claims coordinates ARE the Product's own outcome coordinates, and that
+/// is established twice over — once when the aggregate is created and again
+/// here, by two independent conjuncts:
+///
+/// - **At founding.** `founding_v5.rs:1032` is the sole creator of every LBV2
+///   aggregate, and it runs `authenticate_runtime_product_basis_core_with_rent_v3`,
+///   which refuses unless `product.semantic_basis_id == market.basis_id`,
+///   `product.runtime.outcome_count == market.claim_count` and
+///   `product.basis_width == market.claim_count`
+///   (`affine_batch_v2.rs:697-706`). So the Market's representation basis IS
+///   the Product's own liability basis, at equal width.
+/// - **At settlement.** This route passes the Product's OWN `runtime.basis_width`
+///   into the admission (`:366`), and `validate_joins` then refuses with
+///   `WidthMismatch` unless `market.claim_count == admission.basis_width()`
+///   (`crates/dclutch-claims-svm/src/product_basis_terminal_v3.rs:542-546`).
+///   `N == K` is therefore re-forced at redemption without trusting founding.
+///
+/// A representation whose basis IS the Product's own liability basis, at equal
+/// width, is the identity by definition; any other square matrix claims to be
+/// that basis while paying a different coordinate.
+///
+/// Note this route does NOT itself run the three founding conjuncts: it enters
+/// `signed_delta_v3` with `parent_authenticated = true`
+/// (`:448`, and `signed_delta_v3.rs:401-403,412-421`), which takes the
+/// digest-rejoin branch instead. An earlier draft of this comment cited that
+/// check as if it
+/// ran here. It does not, and the corrected chain above is what actually holds.
+///
+/// The canonical publisher already emits exactly this and says so: "Native
+/// Claims positions already carry one coordinate per categorical Product
+/// outcome. Their execution exposure is therefore the identity map `K = N`, at
+/// exact denominator one"
+/// (`crates/dclutch-representation-composition-v3-operator/src/native_categorical_v1.rs:1-8`,
+/// built at `:523-558` with `denominator: 1` and one term
+/// `{ product_coordinate: coordinate, numerator: 1 }`). Non-identity
+/// compositions belong to the representation families, which redeem through
+/// `rational_terminal_v3` and its descriptor pin. This function moves an
+/// invariant the tree already states in prose into a place the chain enforces.
+///
+/// # What it does and does not buy
+///
+/// Two records that both pass this check compute the same translation, so the
+/// redeemer's remaining freedom -- which record, of several with different
+/// `graph_id` or node ids -- is economically inert. That is the sense in which
+/// the payout matrix is no longer chosen by the party being paid.
+///
+/// It does NOT give this route an upstream anchor. Pinning an exposure digest
+/// at founding, the way the descriptor pins it for Rational, would need a new
+/// persisted field in the LBV2 aggregate: a wire change, and a release event.
+/// Named, not attempted here.
+fn require_identity_exposure_v3(
+    exposure_bytes: &[u8],
+    admission: RecordAdmissionV3,
+) -> Result<(), ProgramError> {
+    let exposure = CompositionExposureBundleV3::decode(exposure_bytes, admission)
+        .map_err(|_| ClaimsSbfError::ExposureNotIdentity)?;
+    let width = exposure.representation_width();
+    if exposure.product_width() != width || exposure.term_count() != width {
+        return Err(ClaimsSbfError::ExposureNotIdentity.into());
+    }
+    let mut index = 0_u32;
+    while index < width {
+        let row = exposure
+            .row(index)
+            .map_err(|_| ClaimsSbfError::ExposureNotIdentity)?;
+        // `row.term_count() != 1` is IMPLIED and is kept as depth, not as a
+        // live guard: the kernel's own `validate` refuses a row with zero terms
+        // (`exposure.rs:556-562`), so `K` rows summing to the `term_count ==
+        // width` checked above forces exactly one term each. Deleting it kills
+        // no test, and that is recorded rather than hidden -- it is here so the
+        // shape of the identity reads completely in one place, and so a future
+        // relaxation of either neighbour cannot silently widen this.
+        if row.representation_coordinate() != index
+            || row.term_count() != 1
+            || row.denominator() != 1
+        {
+            return Err(ClaimsSbfError::ExposureNotIdentity.into());
+        }
+        let term = exposure
+            .row_term(row, 0)
+            .map_err(|_| ClaimsSbfError::ExposureNotIdentity)?;
+        if term.product_coordinate != index || term.numerator != 1 {
+            return Err(ClaimsSbfError::ExposureNotIdentity.into());
+        }
+        index = index
+            .checked_add(1)
+            .ok_or(ClaimsSbfError::ExposureNotIdentity)?;
+    }
+    Ok(())
+}
+
 fn authenticate_finalized_record(
     raw: &AccountInfo<'_>,
     staging: &AccountInfo<'_>,
@@ -904,4 +1035,255 @@ const fn record<'accounts, 'info>(
     staging: &'accounts AccountInfo<'info>,
 ) -> FinalizedRecordFrameV2<'accounts, 'info> {
     FinalizedRecordFrameV2 { raw, staging }
+}
+
+#[cfg(test)]
+mod exposure_identity_tests {
+    use super::*;
+
+    use dclutch_representation_composition_v3_kernel::{
+        CompositionExposureInputV3, CompositionExposureRowInputV3, CompositionExposureTermV3,
+        composition_exposure_bytes_v3, encode_composition_exposure_v3_atomic,
+    };
+
+    const WIDTH: u32 = 3;
+
+    fn id(value: u8) -> [u8; 32] {
+        [value; 32]
+    }
+
+    /// Encode a real exposure record from real kernel bytes.
+    ///
+    /// Every hostile below is a CANONICAL record: it round-trips the kernel's
+    /// own encoder and passes its own `validate`. That is the whole point --
+    /// the attack was never a malformed record, it was a well-formed one
+    /// stating a different recipe.
+    fn encode(rows: &[CompositionExposureRowInputV3<'_>]) -> Vec<u8> {
+        let terms: u32 = rows
+            .iter()
+            .map(|row| u32::try_from(row.terms.len()).expect("terms"))
+            .sum();
+        let width = composition_exposure_bytes_v3(u32::try_from(rows.len()).expect("rows"), terms)
+            .expect("width");
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_composition_exposure_v3_atomic(
+            CompositionExposureInputV3 {
+                market: id(2),
+                result_domain: id(3),
+                release_set: id(4),
+                product_basis: id(5),
+                representation_basis: id(6),
+                graph_id: id(7),
+                product_width: WIDTH,
+                rows,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("encode exposure");
+        output
+    }
+
+    fn admission_for(bytes: &[u8]) -> RecordAdmissionV3 {
+        let digest = hash(bytes).to_bytes();
+        RecordAdmissionV3 {
+            selected_id: id(7),
+            finalized_id: id(7),
+            recomputed_digest: digest,
+            finalized_digest: digest,
+            record_authenticated: true,
+        }
+    }
+
+    fn check(rows: &[CompositionExposureRowInputV3<'_>]) -> Result<(), ProgramError> {
+        let bytes = encode(rows);
+        require_identity_exposure_v3(&bytes, admission_for(&bytes))
+    }
+
+    fn identity_terms() -> Vec<[CompositionExposureTermV3; 1]> {
+        (0..WIDTH)
+            .map(|coordinate| {
+                [CompositionExposureTermV3 {
+                    product_coordinate: coordinate,
+                    numerator: 1,
+                }]
+            })
+            .collect()
+    }
+
+    fn rows_from<'a>(
+        terms: &'a [[CompositionExposureTermV3; 1]],
+        denominator: u64,
+    ) -> Vec<CompositionExposureRowInputV3<'a>> {
+        terms
+            .iter()
+            .enumerate()
+            .map(|(index, row)| CompositionExposureRowInputV3 {
+                node_id: id(u8::try_from(index).expect("node") + 0x40),
+                denominator,
+                terms: row,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_canonical_identity_embedding_is_admitted() {
+        let terms = identity_terms();
+        assert_eq!(check(&rows_from(&terms, 1)), Ok(()));
+    }
+
+    /// The attack the solvency refusal cannot see.
+    ///
+    /// Swapping which Product coordinate each Claims row reads keeps the
+    /// translated vector a permutation of the original, so its sum is still
+    /// exactly `payout_scale` and `liability_before == hoard_before` holds on
+    /// the nose. The holder of a LOSING coordinate redeems at full value.
+    #[test]
+    fn a_sum_preserving_permutation_is_refused() {
+        let terms = [
+            [CompositionExposureTermV3 {
+                product_coordinate: 1,
+                numerator: 1,
+            }],
+            [CompositionExposureTermV3 {
+                product_coordinate: 0,
+                numerator: 1,
+            }],
+            [CompositionExposureTermV3 {
+                product_coordinate: 2,
+                numerator: 1,
+            }],
+        ];
+        assert_eq!(
+            check(&rows_from(&terms, 1)),
+            Err(ClaimsSbfError::ExposureNotIdentity.into())
+        );
+    }
+
+    /// Every row reading one coordinate: the winner is robbed, losers paid.
+    #[test]
+    fn a_socializing_exposure_is_refused() {
+        let terms: Vec<[CompositionExposureTermV3; 1]> = (0..WIDTH)
+            .map(|_| {
+                [CompositionExposureTermV3 {
+                    product_coordinate: 0,
+                    numerator: 1,
+                }]
+            })
+            .collect();
+        assert_eq!(
+            check(&rows_from(&terms, 1)),
+            Err(ClaimsSbfError::ExposureNotIdentity.into())
+        );
+    }
+
+    /// Under-payment, which solvency admits because it only bounds from above.
+    #[test]
+    fn a_scaled_denominator_that_underpays_is_refused() {
+        let terms = identity_terms();
+        assert_eq!(
+            check(&rows_from(&terms, 2)),
+            Err(ClaimsSbfError::ExposureNotIdentity.into())
+        );
+    }
+
+    #[test]
+    fn an_inflated_numerator_is_refused() {
+        let terms: Vec<[CompositionExposureTermV3; 1]> = (0..WIDTH)
+            .map(|coordinate| {
+                [CompositionExposureTermV3 {
+                    product_coordinate: coordinate,
+                    numerator: 2,
+                }]
+            })
+            .collect();
+        assert_eq!(
+            check(&rows_from(&terms, 1)),
+            Err(ClaimsSbfError::ExposureNotIdentity.into())
+        );
+    }
+
+    /// A canonical row that reads two Product coordinates at once.
+    ///
+    /// The conjunct that OWNS this is the aggregate `term_count != width`, not
+    /// the per-row `term_count() != 1`: with every row required to carry at
+    /// least one term, a blend anywhere pushes the total above `K`. Named that
+    /// way because a mutation deleting the per-row check leaves this test green,
+    /// and a test whose stated owner cannot fail it is a test that teaches the
+    /// next reader something false.
+    #[test]
+    fn a_row_that_blends_two_coordinates_is_refused() {
+        let blended = [
+            CompositionExposureTermV3 {
+                product_coordinate: 0,
+                numerator: 1,
+            },
+            CompositionExposureTermV3 {
+                product_coordinate: 1,
+                numerator: 1,
+            },
+        ];
+        let single_one = [CompositionExposureTermV3 {
+            product_coordinate: 1,
+            numerator: 1,
+        }];
+        let single_two = [CompositionExposureTermV3 {
+            product_coordinate: 2,
+            numerator: 1,
+        }];
+        let rows = [
+            CompositionExposureRowInputV3 {
+                node_id: id(0x40),
+                denominator: 1,
+                terms: &blended,
+            },
+            CompositionExposureRowInputV3 {
+                node_id: id(0x41),
+                denominator: 1,
+                terms: &single_one,
+            },
+            CompositionExposureRowInputV3 {
+                node_id: id(0x42),
+                denominator: 1,
+                terms: &single_two,
+            },
+        ];
+        assert_eq!(
+            check(&rows),
+            Err(ClaimsSbfError::ExposureNotIdentity.into())
+        );
+    }
+
+    /// `K != N` never reaches the payout either.
+    #[test]
+    fn a_narrower_representation_than_the_product_is_refused() {
+        let terms = [
+            [CompositionExposureTermV3 {
+                product_coordinate: 0,
+                numerator: 1,
+            }],
+            [CompositionExposureTermV3 {
+                product_coordinate: 1,
+                numerator: 1,
+            }],
+        ];
+        assert_eq!(
+            check(&rows_from(&terms, 1)),
+            Err(ClaimsSbfError::ExposureNotIdentity.into())
+        );
+    }
+
+    /// The refusal is the one the registry allocated, not a neighbour.
+    #[test]
+    fn the_refusal_is_the_registered_claims_band_code() {
+        assert_eq!(
+            ClaimsSbfError::ExposureNotIdentity as u32,
+            dclutch_refusal_registry::CLAIMS_REFUSAL_BASE + 0x00E
+        );
+        assert_ne!(
+            ClaimsSbfError::ExposureNotIdentity as u32,
+            ClaimsSbfError::Economic as u32
+        );
+    }
 }

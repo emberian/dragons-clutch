@@ -429,6 +429,95 @@ const KEY_VARYING_SEARCH_SITES_V1: u64 = 7;
 /// would weaken per-use authentication rather than hoist a founding conjunct.
 /// The gate keeps its one-search-attempt slack, so the pin is measured floor
 /// 1,266,559 + 1,500.
+///
+/// # 2026-09-01: measured 1,293,025, and DELIBERATELY NOT PINNED
+///
+/// The overnight completion wave -- 296 commits, `5b6a5849..371409f4` -- moved
+/// this statistic **+26,466 CU**. Not one commit in it measured this gate and
+/// `docs/evidence/` holds no CU record for the wave. The constant stays where
+/// it is, RED, because every entry above records margin spent on a purchase it
+/// can name, and raising it here would file an unmeasured wave as a settled
+/// cost. This entry is the conviction the tier's own message asks for --
+/// "find what got more expensive before touching its constant" -- not a
+/// re-pin request.
+///
+/// Method, identical at both ends and the one this file already asserts: five
+/// role ELFs built from the revision under test, 32 seeds, default substrate,
+/// `min over seeds of (CU - 1500 * modelled attempts)`. `5b6a5849` reproduces
+/// its own 1,266,559 TO THE UNIT and is green there, which is what makes the
+/// far end of the comparison worth reading.
+///
+/// ## The commit, bisected by measurement
+///
+/// `6e91863c` *"trading: execute authenticated funding lifecycle"* --
+/// **1,268,000 -> 1,278,367, +10,367 CU in one commit**, its parent `7783c31a`
+/// green at 1,268,000 and it red. 1,176 inserted lines into `hot_v3.rs` under a
+/// one-line message.
+///
+/// The remaining +14,276 is NOT convicted to a commit, and the reason is worth
+/// more than the number. Above `bacd69ee` this gate cannot be run at all.
+/// NINE revisions were sampled between `48d1f449` (08-31 23:40) and
+/// `e0ece22e` (09-01 03:07) and every one of them failed: seven refuse the
+/// public trade on **32 of 32 seeds** with `Custom(16387)`
+/// (`TradingSbfError::Content`) -- `48d1f449`, `fd5d20ea`, `7ef13bd4`,
+/// `a82316a8`, `5fbe0bd8`, `4f3d275e`, `7fe577e2`, `e0ece22e` -- and two do not
+/// compile at all (`89bd7df2`, `E0432` in `dclutch-direct-codec`; `2d871068`
+/// and its two neighbours will not build the program-test harness). The route
+/// executes again only at `371409f4`. So for most of the wave the public Direct
+/// trade was not expensive, it was BROKEN, and this gate's silence over that
+/// span is the absence of a measurement rather than the absence of a change.
+///
+/// ```text
+///   5b6a5849  1,266,559  green      7783c31a  1,268,000  green
+///   7ca0210b  1,267,449  green      6e91863c  1,278,367  RED  <- +10,367
+///   aca13a76  1,267,839  green      bacd69ee  1,278,749  RED
+///   9031a8df  1,268,000  green      371409f4  1,293,025  RED  <- +14,276 more
+/// ```
+///
+/// ## Where it went, by phase
+///
+/// This file's residual statistic taken PER PHASE over the `hot-cu-profile`
+/// checkpoints: the minimum over the 32 seeds of each checkpoint interval, so a
+/// phase's own bump draws cancel the way the total's do. One seed will not do
+/// it -- on a single draw `commit-lifecycle-closes` reads -5,041 and
+/// `request-lifecycle-preplan` +3,028, and both are the lottery, not the code.
+/// The per-phase floors sum to +26,452, this gate's +26,466 to within 14 CU:
+///
+/// ```text
+///   commit-non-root            117,212 -> 125,514   +8,302
+///   p7-effect-projection       165,777 -> 172,731   +6,954
+///   p5r-account-projection     138,583 -> 142,274   +3,691
+///   artifacts-strategy-effect   56,480 ->  59,730   +3,250
+///   commit-lifecycle-closes    351,380 -> 353,841   +2,460
+///   twenty-nine other phases                        +1,795
+/// ```
+///
+/// `6e91863c` is the only commit in its window to touch either of the top two:
+/// it threaded a funding-V5 arm through `project_hot_effects_v3` and
+/// `commit_non_root_effects_into_v3`. The obvious mechanism is REFUTED --
+/// `SelectedEffectProgramV4::funding` is a `const fn` field read, not the
+/// repeated decode the `basis:` entry above convicted -- so what is left is the
+/// widened value threaded through the shared projection and commit walks, and
+/// naming it exactly needs its own measurement that this lane did not take.
+///
+/// Profiling overhead is subtracted, not assumed: the instrumented ELF's own
+/// floor sits 20,170 CU above the clean one at `371409f4` and 20,546 at
+/// `5b6a5849`, over 35 checkpoints and 34 heap marks. The arithmetic checks
+/// against the route -- `p7-local-effect-discipline` brackets no code, as its
+/// own comment at `hot_v3.rs` says, and measures -2 CU net.
+///
+/// ## What it cost
+///
+/// Worst swept seed's margin 100,437 -> 75,472; analytic worst-case headroom
+/// 59,941 -> 46,975. `direct_hot_fee_bearing_margin_gate` moved by the SAME
+/// +26,466 (1,266,429 -> 1,292,895) with the two arms' 130 CU gap intact to the
+/// unit, which is that file's own stated test for a cause upstream of fee work.
+///
+/// And it took the Hot continuation down:
+/// `registry_hot_continuation::real_registry_executes_profile14_direct_hot_under_protocol_limit`
+/// executes at `5b6a5849` with 8,492 CU to spare -- 1,391,358 of 1,399,850 --
+/// and exhausts the meter at `371409f4`. That red is DOWNSTREAM of this one and
+/// is not a second defect: +26,466 is three times the headroom it had.
 const TOP_LEVEL_KEY_INDEPENDENT_CU_V1: u64 = 1_268_059;
 
 /// The protocol maximum a transaction may consume.

@@ -904,4 +904,16 @@ const FEE_BEARING_FLOOR_CU_V1: u64 = FEE_BEARING_MEASURED_FLOOR_CU_V1 + ATTEMPT_
 /// floor moved **1,269,919 -> 1,266,429** (-3,490), while the zero-fee arm read
 /// 1,266,559. Both arms executed 32/32; their 130-CU gap remains less than a
 /// tenth of one bump attempt and the saving is upstream of fee work.
+///
+/// # 2026-09-01: measured 1,292,895, and DELIBERATELY NOT PINNED
+///
+/// The assertion above predicted its own diagnosis for the second time. Over
+/// the overnight completion wave (`5b6a5849..371409f4`) this arm moved
+/// 1,266,429 -> 1,292,895 and the zero-fee arm of the same run moved
+/// 1,266,559 -> 1,293,025: **the same +26,466 on both**, with the 130 CU
+/// between them intact to the unit. So the cause is upstream of fee work
+/// again, and by this file's rule the measurement lives in one place --
+/// `direct_hot_top_level_margin_gate.rs` on `TOP_LEVEL_KEY_INDEPENDENT_CU_V1`,
+/// which carries the bisected commit, the per-phase attribution and the reason
+/// neither constant moves. Both arms still executed 32/32.
 const FEE_BEARING_MEASURED_FLOOR_CU_V1: u64 = 1_266_429;

@@ -198,15 +198,14 @@ pub const SERIES_EXPIRE_CLOSE_REPLAY_ACCOUNT_COUNT_V3: u16 = 10;
 pub const SERIES_EXPIRE_PROJECTED_ABORT_ACCOUNT_COUNT_V3: u16 = 11;
 /// Exact Core permissionless permit-refund child frame.
 pub const SERIES_EXPIRE_PERMIT_ACCOUNT_COUNT_V3: u16 = 25;
-/// Semantic kind label for recurring Series V3 capability programs.
-pub const SERIES_SUCCESSOR_KIND_PREIMAGE_V3: &[u8] = b"dclutch/kind/series-v3";
-/// Family request schema covers the fixed semantic header, not its proof witness.
-pub const SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3: &[u8] =
-    b"dclutch/schema/series-action-header-v3";
-/// Mutable Series root-tail schema label.
-pub const SERIES_ROOT_SCHEMA_PREIMAGE_V3: &[u8] = b"dclutch/schema/series-root-v3";
-/// Ticket replay-account derivation-policy label.
-pub const SERIES_TICKET_DERIVATION_PREIMAGE_V3: &[u8] = b"dclutch/derivation/series-ticket-v3";
+// The four capability labels are owned by the kernel so the family-neutral Hot
+// outer can reach them without importing this feature-gated module. Re-exported
+// here so every Series-side user keeps its existing path and there is still
+// exactly one definition of each byte string.
+pub use dclutch_series_v3_kernel::{
+    SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
+    SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TICKET_DERIVATION_PREIMAGE_V3,
+};
 
 /// Exact descriptor-selected raw finalized artifacts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -56,10 +56,12 @@ Blast radius was 10 of 27, not the 1 CI reported (the runner stops at its
 first named case). After the repair: **24 passed, 2 failed**; no hostile
 flipped red->green.
 
-**The refusal was MASKING a compute regression.** With it gone, Trading runs
-to 1,330,239 of 1,399,700 CU and dies `ProgramFailedToComplete` — which is why
-`SBF programs and the Direct compute margin` is red beside it. Two stacked
-defects; the second is the next unit.
+**The refusal was MASKING a compute regression** — that held, but the numbers
+I first attached to it were WRONG; see the correction section below. The real
+failure is Trading as a CHILD of the Registry continuation,
+`consumed 1303334 of 1303334 … exceeded CUs meter`, and the moved gates are
+`TOP_LEVEL_KEY_INDEPENDENT_CU_V1` / `FEE_BEARING_MEASURED_FLOOR_CU_V1`, not the
+continuation floor I named.
 
 Correction to my own earlier hypothesis: Direct's and Dealer's `Content` are
 NOT one class. Dealer refuses at `validate_selection` conjunct 5
@@ -97,7 +99,70 @@ expectation must be DERIVED or GENERATED rather than hand-carried — and a
 declaration must be EXECUTED before it can be believed, because a component
 test over encodings and digests passes forever above an unreachable route.
 
-## TREE IS GREEN — all five workspaces, verified
+## CORRECTION: I MISREAD THE COMPUTE FAILURE, AND PUBLISHED THE WRONG NUMBER
+
+I reported repeatedly — here, in `WAVE.md`, and in a published cut message —
+that Direct Hot "runs to 1,330,239 of 1,399,700 CU and dies of exhaustion".
+**That attribution was wrong.** The COMPUTE-MARGIN lane established that the
+1,330,239 line belongs to `the_family_trades_every_geometry_it_is_given`, which
+PASSED; parallel test output had interleaved and I read one test's number as
+another's. The real failure is Trading as a CHILD of the Registry continuation:
+`consumed 1303334 of 1303334 … exceeded CUs meter at BPF instruction`.
+
+Second thing I got wrong: I pointed the lane at
+`CONTINUATION_ROUTE_DELTA_FLOOR_V1`. That test PASSES at HEAD and prints that
+its route was demoted to harness-only by a decision packet. The gates that
+actually moved are `TOP_LEVEL_KEY_INDEPENDENT_CU_V1` (1,268,059) and
+`FEE_BEARING_MEASURED_FLOOR_CU_V1` (1,266,429).
+
+What survived: my phase-table ROW ALIGNMENT was right (deltas belong to the
+later label) — it was just truncated at the exhaustion point and taken on the
+wrong route. The lesson is the cheap one: never read a CU figure out of an
+interleaved parallel test log without `--test-threads=1`.
+
+**The conviction that replaced it** is `6e91863c` "trading: execute
+authenticated funding lifecycle" — +10,367 CU in ONE commit, 1,176 inserted
+lines into `hot_v3.rs` under a one-line message and no measurement. Bisected at
+CI parity, 32 seeds, five role ELFs per revision, with the method validated by
+reproducing a known-good revision's recorded floor TO THE UNIT. Total +26,466
+on the public route; per-phase attribution sums to +26,452, fourteen CU apart.
+The lane REFUSED to re-pin either constant, both commits comment-only: "raising
+it IS the act of spending margin", and margin has gone 100,437 -> 75,472.
+
+**And the finding behind the finding:** of nine revisions sampled across the
+overnight wave, EVERY ONE failed — seven refuse the public trade on 32 of 32
+seeds, two do not compile. The route only executes again at `371409f4`. So most
+of that wave was never measurable, and the remaining +14,276 cannot be bisected
+until the refuse-all band is understood. CI never reported any of it because
+the published programs tier dies earlier at
+`error[E0433]: could not find 'series' in the crate root` — so the margin gate
+has not been running at all.
+
+## LIMIT OF THE UMBRELLA CHECK — feature combinations are not covered
+
+`cargo check --workspace --all-targets` builds DEFAULT features. A lane found a
+break it structurally cannot see: `hot_v3/series_expiry_v1.rs:28` gained an
+ungated `use crate::series::...`, which is fine by default but E0433 under the
+`outer-only` feature that `trading-outer` builds with — and that runner is the
+only way to execute the activation suite at all. Unrunnable since `0afa24a5`
+landed the same day; repaired in `fd88f013` by moving the four byte-string
+capability labels into the kernel that already owns Series schema preimages, so
+no lane's file gained a mirror. When a crate has meaningful feature gates, the
+umbrella must be run per gate, or a whole suite can go dark while every default
+build stays green.
+
+## CORRECTION: there were more than five lockfiles
+
+I repaired four stale workspace locks (`90e45b29`) and reported "all five
+workspaces". A lane then found a FIFTH stale lock I had missed —
+`crates/dclutch-svm-harness/Cargo.lock`, never regenerated after
+`dclutch-provider-transport-v3-operator` took `solana-system-interface 2.0.0`,
+which made every harness campaign refuse `--locked` (`9514ca71`). So "five
+workspaces" was my count of the locks I happened to look at, not a fact about
+the tree. Anyone auditing this should enumerate `Cargo.lock` files rather than
+trust the number.
+
+## TREE IS GREEN — the five workspaces I check, verified
 
 `cargo check --workspace --all-targets` clean at the root (4m08s), and the four
 SEPARATE workspaces the root check does not cover — trading program-test,

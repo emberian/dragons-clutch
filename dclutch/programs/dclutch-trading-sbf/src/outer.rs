@@ -1647,9 +1647,12 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
         // The root's opening balance is the manifest's own activation debit, and
         // that debit has exactly two native halves.
         //
-        // `Rent` funds exemption and is checked against the live Rent sysvar, so
-        // a manifest can neither underfund the root below exemption nor inflate
-        // its reserve. `Creation` is the family-declared principal the root is
+        // `Rent` funds exemption, but it is a TOP-UP and not the exemption
+        // itself: a vacant root may already carry dust, those lamports flow into
+        // `account_inputs`, and the quote covers only the remainder. So the
+        // quote is deliberately NOT compared to the sysvar -- what is pinned is
+        // the root's POSTSTATE, exactly as before this change.
+        // `Creation` is the family-declared principal the root is
         // to hold BEYOND its reserve -- a prepaid amount the founding already
         // parked and `validate_native_custody` already required to be present,
         // which `FundingLedgerV2::activate_in_place` releases in the same
@@ -1668,9 +1671,6 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
                 .root_account_bytes()
                 .map_err(|_| TradingSbfError::Root)?,
         );
-        if debit.rent_lamports() != exact_root_rent {
-            return Err(TradingSbfError::Root.into());
-        }
         let expected_root_lamports = exact_root_rent
             .checked_add(debit.creation_lamports())
             .ok_or(TradingSbfError::Root)?;

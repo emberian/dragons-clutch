@@ -581,7 +581,8 @@ pub fn compile_series_release_v5(source: SeriesReleaseSourceV5<'_>) -> Result<Se
             strategy: hash(&strategies[index]).to_bytes(),
             ..validated.ids
         };
-        descriptors[index] = encode_descriptor(source.template, artifact_ids[index])?;
+        descriptors[index] =
+            encode_series_action_descriptor_v5(source.template, artifact_ids[index])?;
     }
     let entries: [CapabilityProgramSetEntryV2; SERIES_RELEASE_ACTION_COUNT_V5] =
         core::array::from_fn(|index| {
@@ -946,10 +947,14 @@ fn validate_action_authority(
 
 /// Encode one exact V4 action descriptor.
 ///
-/// Visible to the Series module so `activation_bundle_v1` inherits its five
-/// manifest-selected coordinates from the production encoder rather than from a
-/// test-authored mirror of it.
-pub(super) fn encode_descriptor(
+/// Public because a descriptor is a PUBLICATION artifact and this is the only
+/// encoder that may author one. `activation_bundle_v1` inherits its five
+/// manifest-selected coordinates from here, and the real-ELF activation
+/// evidence needs a genuine Series descriptor to bind its bundle to; both would
+/// otherwise have to restate the coordinates, which is precisely the mirror the
+/// completeness gate exists to catch. This module is already host-only
+/// (`#[cfg(not(target_os = "solana"))]`), so nothing here reaches the ELF.
+pub fn encode_series_action_descriptor_v5(
     template: ContentId,
     ids: SeriesActionArtifactIdsV5,
 ) -> Result<[u8; CAPABILITY_PROGRAM_V4_BYTES]> {

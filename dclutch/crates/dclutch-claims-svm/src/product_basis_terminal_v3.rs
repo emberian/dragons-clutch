@@ -574,10 +574,43 @@ fn decode_exposure<'a>(
         representation_width: market.claim_count,
     })
     .map_err(|_| Error::Composition)?;
-    if exposure.bundle_id() != input.admission.exposure_id()
-        || input.composition_exposure_admission.finalized_digest
-            != input.admission.exposure_digest()
-    {
+    // THE IDENTITY CONJUNCT THAT USED TO STAND HERE WAS A COMPARISON OF A
+    // VALUE WITH ITSELF, AND IS DELETED RATHER THAN LEFT TO MISLEAD.
+    //
+    // It read `exposure.bundle_id() != input.admission.exposure_id()`.
+    // `CompositionExposureBundleV3::decode` ASSIGNS `bundle_id` from
+    // `admission.selected_id`
+    // (`representation-composition-v3-kernel/src/exposure.rs:274`) -- injected
+    // by the caller, never read from the record -- and both in-tree callers
+    // then hand the same value in on the other side:
+    // `rational_terminal_v3.rs:206-209` passes `authenticated.admission
+    // .graph_id()` while `encode_product_basis_terminal_signed_delta_v3`
+    // (`:314-316`) builds `input.admission` from `representation.graph_id()`;
+    // `terminal_settlement_v3.rs` passes `input.exposure_id` while its adapter
+    // builds `input.admission` from `input.exposure_id`. It could not refuse
+    // anything on either route, and deleting it is therefore not a weakening --
+    // nothing was ever being refused. What is removed is the impression that
+    // something was.
+    //
+    // IT IS NOT REPLACED HERE, AND THAT IS DELIBERATE. The obvious repair --
+    // read the record's own `graph_id()` instead -- was tried and MEASURED
+    // FALSE: it reddened four fixtures in this file, because the exposure
+    // record's `graph_id` header and the descriptor's `graph_id` are not the
+    // same identity in this tree. That is exactly the double-booking decision
+    // 0011 already filed as a RECORDS-MIGRATE row ("`graph_id`/`graph_digest`
+    // are double-booked between the dead legacy-graph path and the live
+    // exposure path"). Repointing this conjunct needs that resolved first, and
+    // it moves every live `descriptor_id`. Not a two-character change, and not
+    // this lane's to make.
+    //
+    // What actually holds the two routes up meanwhile:
+    //   - the digest conjunct below, which anchors the record's BYTES, and on
+    //     the Rational route reaches an authenticated descriptor's
+    //     `graph_digest` (`rational-representation-v2-kernel/src/product_v3.rs:530-533`);
+    //   - on generic settlement, `require_identity_exposure_v3`
+    //     (`programs/dclutch-claims-sbf/src/terminal_settlement_v3.rs`), which
+    //     refuses any matrix but the identity outright.
+    if input.composition_exposure_admission.finalized_digest != input.admission.exposure_digest() {
         return Err(Error::Composition);
     }
     Ok(exposure)

@@ -25,7 +25,9 @@ use dclutch_series_v3_kernel::{
 use dclutch_transition_vm::v3::SCHEMA_RELEASE_ID as TRANSITION_SCHEMA_ID_V3;
 use solana_program::hash::hash;
 
-use crate::series::artifacts_v3::{
+// The kernel, not `crate::series`: this route is compiled into links that do
+// not select the `series-family` feature, and `pub mod series` is gated on it.
+use dclutch_series_v3_kernel::{
     SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
     SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TICKET_DERIVATION_PREIMAGE_V3,
 };

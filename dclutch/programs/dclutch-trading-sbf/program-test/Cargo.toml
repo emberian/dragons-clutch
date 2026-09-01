@@ -24,6 +24,8 @@ dclutch-custody-contract = { path = "../../../crates/dclutch-custody-contract" }
 dclutch-custody-sbf = { path = "../../dclutch-custody-sbf", features = [
     "no-entrypoint",
 ] }
+dclutch-capability-activation-codec = { path = "../../../crates/dclutch-capability-activation-codec" }
+dclutch-series-v3-kernel = { path = "../../../crates/dclutch-series-v3-kernel" }
 dclutch-direct-codec = { path = "../../../crates/dclutch-direct-codec" }
 dclutch-direct-hot-program-test-support = { path = "direct-hot" }
 dclutch-effect-kernel = { path = "../../../crates/dclutch-effect-kernel" }

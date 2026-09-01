@@ -53,7 +53,9 @@ mainnet authority — those require ember naming the act.
 > (`d728d6ff`); and the postjoin control's real cause — an unsatisfiable
 > lifecycle-credit owner conjunct (`ff8ca269`), which took 10 of 27 cases down
 > while CI reported 1. **Still open:** the compute regression that refusal was
-> masking (1,330,239 of 1,399,700 CU), and the Dealer `Content` wall, which is
+> masking (+26,466 CU on the public route, convicted to `6e91863c`; an earlier
+> "1,330,239 of 1,399,700" figure here was misread from an interleaved parallel
+> test log and is withdrawn), and the Dealer `Content` wall, which is
 > a DIFFERENT defect from the Direct one despite sharing the code.
 
 ## Public CI at the cut — read before you touch anything

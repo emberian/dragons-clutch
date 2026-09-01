@@ -229,6 +229,29 @@ pub enum ClaimsSbfError {
     /// refusal this protocol exists to make -- a reader who cannot separate
     /// them cannot tell a broken mint from a bounded one.
     PrincipalCapacity = 0x500D,
+    /// The supplied Product-to-Claims exposure is not the identity embedding.
+    ///
+    /// Generic terminal settlement authenticates that the Claims coordinates
+    /// ARE the Product's own outcome coordinates: `semantic_basis_id ==
+    /// market.basis_id`, `outcome_count == claim_count` and `basis_width ==
+    /// claim_count` (`affine_batch_v2.rs:697-706`). Under those joins the only
+    /// faithful translation is the identity map, which is what the canonical
+    /// publisher emits -- "their execution exposure is therefore the identity
+    /// map `K = N`, at exact denominator one"
+    /// (`crates/dclutch-representation-composition-v3-operator/src/native_categorical_v1.rs:1-8`).
+    ///
+    /// Distinct from [`ClaimsSbfError::Representation`], which means a record
+    /// was substituted or failed to authenticate, and from
+    /// [`ClaimsSbfError::Economic`], which is arithmetic that does not add up.
+    /// This one is a record that authenticates perfectly and adds up perfectly
+    /// and still states the wrong recipe: every coefficient is canonical, the
+    /// digest matches, the header names this Market -- and the matrix pays a
+    /// coordinate other than the one the holder owns. It needs its own code
+    /// because it is the only refusal on this route that a well-formed,
+    /// permissionlessly published record can trigger, and a reader who saw
+    /// `Economic` here would go looking for a conservation bug that is not
+    /// there.
+    ExposureNotIdentity = 0x500E,
 }
 
 impl ClaimsSbfError {
@@ -239,7 +262,7 @@ impl ClaimsSbfError {
     /// to the enum does not compile until its author writes an arm here, and
     /// the only arm that satisfies the assertions is its own index in this
     /// array.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Instruction,
         Self::Accounts,
         Self::Identity,
@@ -254,12 +277,13 @@ impl ClaimsSbfError {
         Self::SelectionConfig,
         Self::BasisEvaluatorAbsent,
         Self::PrincipalCapacity,
+        Self::ExposureNotIdentity,
     ];
 
     /// This refusal's position in [`ClaimsSbfError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism: a
-    /// fifteenth variant is a COMPILE ERROR here rather than a discriminant no
+    /// sixteenth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -277,6 +301,7 @@ impl ClaimsSbfError {
             Self::SelectionConfig => 11,
             Self::BasisEvaluatorAbsent => 12,
             Self::PrincipalCapacity => 13,
+            Self::ExposureNotIdentity => 14,
         }
     }
 }

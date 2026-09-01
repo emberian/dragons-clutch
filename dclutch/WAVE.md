@@ -1687,6 +1687,32 @@ a task rather than a disclaimer.* When a report says "likely", "candidate" or
 "probably", that is the sentence to go back and settle before anyone builds on
 it — most cheaply by the lane that wrote it, while the evidence is still warm.
 
+## THE SECOND CLASS: guards whose two sides move together
+
+Three instances tonight, in three unrelated layers. Each looks like a check and
+proves only self-consistency:
+
+1. **Claims terminal settlement** — `bundle_id` is assigned from
+   `admission.selected_id`, which the adapter sets from `input.exposure_id`.
+   The comparison that appears to prevent exposure substitution compares the
+   instruction to itself.
+2. **The Series activation validator** — it rebuilt the profile with the same
+   builder it was validating, and the projection helper EMULATED the
+   compartment reads instead of running a real observation. A mutation deleting
+   the projection stayed green; on chain that bundle would have stranded a
+   principal nothing could release. Fixed by reading the DECODED operation list.
+3. **The browser's capability board** — `implementation` was a string someone
+   typed, and `operatorSurface.test.ts:207` asserted the same string back
+   (`toMatchObject({ implementation: 'browser-wallet' })`). So changing what the
+   browser CLAIMED was a two-line edit, while changing what it DID changed
+   nothing at all. Replaced by derivation from the app's own import graph, with
+   no status field remaining (`d71113e4`).
+
+The test for this class is one question: **could this assertion fail if the
+subject were wrong?** If both sides are computed from the same source, the
+answer is no, and the check is decoration. It is the same defect as a vacuous
+`P -> P` theorem — green, and about nothing.
+
 **A related test hazard, worth its own name: THE BUILDER AS ITS OWN WITNESS.**
 While mutation-proving that repair, one mutation ("the profile never projects
 `Creation`") stayed GREEN — because the validator rebuilds the profile with the

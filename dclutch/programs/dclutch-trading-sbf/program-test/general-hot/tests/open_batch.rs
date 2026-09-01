@@ -62,7 +62,7 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_product_runtime_v2_operator::{ProductCompilationInputV2, compile_product_records_v2};
 use dclutch_realm_contract::{REALM_BYTES, REALM_SCHEMA_RELEASE_ID_V1};
-use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
+use dclutch_record_contract::{ContentDigest, RecordKeyV1, RecordPdaSeedsV1, SchemaReleaseId};
 use dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
 use dclutch_release_set_contract::{ArtifactReleaseIdV1, CapabilityExecutionSelectionV1};
 use dclutch_rent_contract::{
@@ -185,18 +185,30 @@ fn load_accelerator_elf() -> Vec<u8> {
     fs::read(path).expect("current General accelerator ELF")
 }
 
+/// Both bumps derive through `RecordKeyV1`, the constructor the Record
+/// contract exports for exactly this, rather than respelling the seed tuple
+/// here. A test that spells the tuple becomes a second author for the address,
+/// and the seam register's rule is that a NEW file restating an existing
+/// domain is corrected rather than filed beside the existing debt.
 fn record_bumps(schema: [u8; 32], content: [u8; 32]) -> (u8, u8) {
+    let key = RecordKeyV1::new(
+        SchemaReleaseId::new(schema).expect("schema release id"),
+        ContentDigest::new(content).expect("content digest"),
+    );
+    let bump = |seeds: RecordPdaSeedsV1| {
+        Pubkey::find_program_address(
+            &[
+                seeds.domain(),
+                seeds.schema_release_id().as_bytes(),
+                seeds.expected_digest().as_bytes(),
+            ],
+            &waist::REGISTRY_PROGRAM_ID,
+        )
+        .1
+    };
     (
-        Pubkey::find_program_address(
-            &[RAW_RECORD_PDA_SEED_V1, &schema, &content],
-            &waist::REGISTRY_PROGRAM_ID,
-        )
-        .1,
-        Pubkey::find_program_address(
-            &[STAGING_CURSOR_PDA_SEED_V1, &schema, &content],
-            &waist::REGISTRY_PROGRAM_ID,
-        )
-        .1,
+        bump(key.raw_record_pda_seeds()),
+        bump(key.staging_cursor_pda_seeds()),
     )
 }
 

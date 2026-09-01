@@ -10,6 +10,9 @@ use dclutch_account_profile_contract::{
         encode_account_profile_v1_atomic,
     },
 };
+use dclutch_capability_activation_codec::{
+    ActivationBundleInputV1, ActivationTailFieldV1, build_activation_bundle_v1,
+};
 use dclutch_capability_contract::{
     ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1,
     CapabilityFundingLedgerDerivationV2, CapabilityManifestV1, CompartmentFundingV1, ContentId,
@@ -77,8 +80,23 @@ use dclutch_rent_contract::{
         LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2, LifecycleAccountIdV2, LifecycleRentCreditV2,
     },
 };
+use dclutch_series_v3_kernel::{
+    SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3, SERIES_ROOT_SCHEMA_PREIMAGE_V3,
+    SERIES_SUCCESSOR_KIND_PREIMAGE_V3, SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3,
+    SERIES_TICKET_DERIVATION_PREIMAGE_V3, TemplateV3, generated as series_generated,
+    replay::{SERIES_STATE_BYTES_V3, SeriesStateV3},
+    template_content_id,
+};
 use dclutch_trading_sbf::TradingSbfError;
 use dclutch_trading_sbf::dispatch::TRADING_CLOSE_RENT_CREDIT_IDENTITY_V2;
+use dclutch_trading_sbf::series::{
+    activation_bundle_v1::{
+        SeriesActivationBundleInputV1, build_series_activation_bundle_v1,
+        build_series_activation_capable_program_set_v1, series_activation_funding_plan_v1,
+        series_activation_request_v1,
+    },
+    release_v5::{SeriesActionArtifactIdsV5, encode_series_action_descriptor_v5},
+};
 use dclutch_transition_vm::v2::encode::{
     RegisterGeometryV2 as TransitionRegisterGeometryV2, TransitionInstructionV2,
     encode_transition_program_v2_atomic, transition_program_v2_bytes,
@@ -150,6 +168,11 @@ const CLOSE_SCALAR_COUNT: u16 = 11;
 const CLOSE_IDENTITY_COUNT: u16 = 13;
 const CLOSE_PROFILE_ACCOUNT_COUNT: u16 = 3;
 const CLOSE_REMAINING_NATIVE_PRINCIPAL: u64 = 17;
+/// Manifest-declared `FundingCompartment::Creation` principal, delivered into
+/// the root by activation rather than left parked in the ledger.
+const CREATION_PRINCIPAL: u64 = 4_321;
+/// Template-authenticated close principal for the Series campaign.
+const SERIES_CLOSE_RENT: u64 = 5_000;
 
 /// Scalar bank a General activation declares.
 ///
@@ -177,6 +200,13 @@ enum Family {
     Fixture,
     /// General: a real `GeneralRootV2` composed from its published coordinates.
     General,
+    /// Series: a real `SeriesStateV3` composed from its own Template.
+    ///
+    /// Series never reaches the hand-built artifact builders below — it
+    /// publishes its own profile, transition and effect through
+    /// `series::activation_bundle_v1` — so where those builders match on the
+    /// family, the Series arm exists only for exhaustiveness.
+    Series,
 }
 
 impl Family {
@@ -185,6 +215,7 @@ impl Family {
         match self {
             Self::Fixture => ROOT_TAIL_BYTES,
             Self::General => GENERAL_ROOT_BYTES_V2,
+            Self::Series => SERIES_STATE_BYTES_V3,
         }
     }
 
@@ -193,6 +224,8 @@ impl Family {
         match self {
             Self::Fixture => SCALAR_COUNT,
             Self::General => GENERAL_SCALAR_COUNT,
+            // Series publishes codec-built artifacts which carry their own bank.
+            Self::Series => SCALAR_COUNT,
         }
     }
 }
@@ -228,6 +261,10 @@ struct Fixture {
     rent_credit: Pubkey,
     /// Native principal intentionally left in the ledger after activation.
     close_principal: u64,
+    /// Manifest-declared Creation principal the activation must deliver.
+    creation_principal: u64,
+    /// Exact config record the selection named; for Series this is its Template.
+    config: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
@@ -250,6 +287,19 @@ enum Campaign {
     GeneralUnwrittenMagic,
     /// ProgramSet with separate activation and native close descriptors.
     NativeClose,
+    /// A manifest declaring a nonzero `Creation` compartment, with artifacts
+    /// built by the real family-neutral codec that deliver it into the root.
+    CreationPrincipal,
+    /// Series' own activation bundle, against its own Template as the config
+    /// record, published through the six-entry activation-capable release set
+    /// its compiler emits. The prepaid close principal rides the Creation
+    /// compartment, and the root must open decodable as `SeriesStateV3`.
+    Series,
+    /// The same manifest, with rent-only artifacts that never move it. The
+    /// compartment is released by `activate_in_place` and `release_in_place`
+    /// refuses it forever, so an activation that does not deliver it strands
+    /// it: the seam must refuse rather than create that root.
+    CreationPrincipalNotDelivered,
 }
 
 impl Campaign {
@@ -263,13 +313,26 @@ impl Campaign {
                 | Self::General
                 | Self::GeneralUnwrittenMagic
                 | Self::NativeClose
+                | Self::Series
         )
+    }
+
+    /// Manifest-declared Creation compartment for this campaign.
+    const fn creation_principal(self) -> u64 {
+        match self {
+            Self::CreationPrincipal | Self::CreationPrincipalNotDelivered => CREATION_PRINCIPAL,
+            // Series' principal is not a fixture number: it is whatever its
+            // Template says, and the same value the root must persist.
+            Self::Series => SERIES_CLOSE_RENT,
+            _ => 0,
+        }
     }
 
     /// Which family's artifacts this campaign publishes.
     const fn family(self) -> Family {
         match self {
             Self::General | Self::GeneralUnwrittenMagic => Family::General,
+            Self::Series => Family::Series,
             _ => Family::Fixture,
         }
     }
@@ -432,7 +495,7 @@ fn account_profile(family: Family) -> Vec<u8> {
         )
         .expect("rent quote offset"),
         destination: match family {
-            Family::Fixture => FUNDING_RENT_SCALAR_REGISTER,
+            Family::Fixture | Family::Series => FUNDING_RENT_SCALAR_REGISTER,
             Family::General => GENERAL_FUNDING_RENT_SCALAR,
         },
     });
@@ -531,7 +594,7 @@ fn close_account_profile(family: Family) -> Vec<u8> {
 fn transition_program(family: Family) -> Vec<u8> {
     let instructions = match family {
         // loadConst scalar[0] = activation action. Other projected registers survive.
-        Family::Fixture => vec![TransitionInstructionV2::load_const(
+        Family::Fixture | Family::Series => vec![TransitionInstructionV2::load_const(
             ACTIVATION_ACTION_SCALAR_V2,
             CoreEffectActionV1::ActivateCapability as u64,
         )],
@@ -624,7 +687,7 @@ fn tail_writes(campaign: Campaign) -> Vec<EffectInstructionV2> {
     // one tail check cannot see it: the seam owns no family decoder by design.
     let constant_words = !matches!(campaign, Campaign::GeneralUnwrittenMagic);
     match campaign.family() {
-        Family::Fixture => vec![
+        Family::Fixture | Family::Series => vec![
             EffectInstructionV2::write_request_u64(
                 TAIL_GENERATION_OFFSET,
                 ACTIVATION_GENERATION_SCALAR_V2,
@@ -683,7 +746,7 @@ fn effect_program(campaign: Campaign) -> Vec<u8> {
         ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
         ACTIVATION_ROOT_ACCOUNT_V2,
         match family {
-            Family::Fixture => FUNDING_RENT_SCALAR_REGISTER,
+            Family::Fixture | Family::Series => FUNDING_RENT_SCALAR_REGISTER,
             Family::General => GENERAL_FUNDING_RENT_SCALAR,
         },
     )];
@@ -1037,16 +1100,44 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     // fixture bytes: `require_entry` in `root_v3.rs` refuses a manifest entry
     // that names anything else, so a General campaign that invented them could
     // not be checked against General's own activation function.
+    let mut series_template = series_generated::SERIES_EXAMPLE_TEMPLATE_V3;
+    put(
+        &mut series_template,
+        series_generated::SERIES_TEMPLATE_CLOSE_RENT_OFFSET_V3,
+        &SERIES_CLOSE_RENT.to_le_bytes(),
+    );
+    let series_template_id = template_content_id(&series_template).expect("Template ID");
     let (kind, root_schema) = match family {
         Family::Fixture => (id(0x11), id(0x13)),
+        Family::Series => (
+            ContentId::new(hash(SERIES_SUCCESSOR_KIND_PREIMAGE_V3).to_bytes())
+                .expect("Series kind"),
+            ContentId::new(hash(SERIES_ROOT_SCHEMA_PREIMAGE_V3).to_bytes())
+                .expect("Series root schema"),
+        ),
         Family::General => (
             ContentId::new(GENERAL_CAPABILITY_KIND_ID_V1).expect("General kind"),
             ContentId::new(GENERAL_ROOT_SCHEMA_ID_V2).expect("General root schema"),
         ),
     };
-    let capacity = id(0x12);
-    let derivation = id(0x14);
-    let config_schema = id(0x15);
+    // Series stores its exact Template identity in `capacity_profile`; that is
+    // what `validate_selection` joins against the manifest entry, and what the
+    // activation bundle's completeness gate requires.
+    let capacity = match family {
+        Family::Series => series_template_id,
+        _ => id(0x12),
+    };
+    let derivation = match family {
+        Family::Series => ContentId::new(hash(SERIES_TICKET_DERIVATION_PREIMAGE_V3).to_bytes())
+            .expect("Series derivation"),
+        _ => id(0x14),
+    };
+    let config_schema = match family {
+        Family::Series => {
+            ContentId::new(SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3).expect("Template schema")
+        }
+        _ => id(0x15),
+    };
     let descriptor = descriptor(
         family,
         hash(&profile).to_bytes(),
@@ -1057,6 +1148,97 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         derivation,
         config_schema,
     );
+    // The creation-principal campaign publishes the REAL artifacts the
+    // family-neutral codec builds, so what the chain executes is production
+    // code rather than this fixture's imitation of it. The Fixture tail is
+    // exactly a generation word then a Market identity, which is two seam
+    // fields over an all-zero constant tail -- so the SAME expected-tail
+    // assertion the hand-built campaigns use still applies, and any divergence
+    // between the two constructions shows up as a failed root decode.
+    let series_action_descriptors: Vec<Vec<u8>> = (0..5_u8)
+        .map(|index| {
+            encode_series_action_descriptor_v5(
+                series_template_id,
+                SeriesActionArtifactIdsV5 {
+                    account_profile: [index.wrapping_add(0x20); 32],
+                    request_profile: [index.wrapping_add(0x30); 32],
+                    lifecycle: [index.wrapping_add(0x40); 32],
+                    strategy: [index.wrapping_add(0x50); 32],
+                    transition: [index.wrapping_add(0x60); 32],
+                    effect: [index.wrapping_add(0x70); 32],
+                },
+            )
+            .expect("Series action descriptor")
+            .to_vec()
+        })
+        .collect();
+    let (profile, effect, descriptor) = if matches!(campaign, Campaign::Series) {
+        // Series' own published triple, bound to a real Series action descriptor
+        // so the bundle's completeness gate joins against the Template this
+        // release actually carries.
+        let bundle = build_series_activation_bundle_v1(SeriesActivationBundleInputV1 {
+            action_descriptor: series_action_descriptors
+                .first()
+                .expect("Prepare descriptor"),
+            template: &series_template,
+            funding_ledger_slot_count: 1,
+        })
+        .expect("Series activation bundle");
+        (bundle.account_profile, bundle.effect, bundle.descriptor)
+    } else if matches!(
+        campaign,
+        Campaign::CreationPrincipal | Campaign::CreationPrincipalNotDelivered
+    ) {
+        let mut constant_tail = [0_u8; ROOT_TAIL_BYTES];
+        if !matches!(campaign, Campaign::CreationPrincipal) {
+            put(
+                &mut constant_tail,
+                0,
+                &0x4443_4c54_4649_5831_u64.to_le_bytes(),
+            );
+        }
+        let bundle = build_activation_bundle_v1(ActivationBundleInputV1 {
+            kind,
+            config_schema,
+            request_schema: id(0x16),
+            root_schema,
+            derivation_policy: derivation,
+            capacity_profile: capacity,
+            root_state_bytes: u32::try_from(ROOT_TAIL_BYTES).expect("tail width"),
+            // The delivering campaign's tail is exactly the Fixture tail, so the
+            // shared expected-tail assertion still applies to it. The hostile
+            // carries one constant word instead of the generation seam field:
+            // a tail composed ENTIRELY of seam fields has no constant writes,
+            // and the codec will not emit an instructionless transition. The
+            // seam never compares tail CONTENT -- it owns no family decoder --
+            // so this difference cannot be what refuses the hostile.
+            constant_root_tail: &constant_tail,
+            seam_fields: if matches!(campaign, Campaign::CreationPrincipal) {
+                &[
+                    ActivationTailFieldV1::SeamScalar {
+                        offset: 0,
+                        register: ACTIVATION_GENERATION_SCALAR_V2,
+                    },
+                    ActivationTailFieldV1::SeamIdentity {
+                        offset: 8,
+                        register: ACTIVATION_MARKET_IDENTITY_V2,
+                    },
+                ][..]
+            } else {
+                &[ActivationTailFieldV1::SeamIdentity {
+                    offset: 8,
+                    register: ACTIVATION_MARKET_IDENTITY_V2,
+                }][..]
+            },
+            funding_ledger_slot_count: 1,
+            // The ONLY difference between the two creation campaigns.
+            delivers_creation_principal: matches!(campaign, Campaign::CreationPrincipal),
+        })
+        .expect("real activation bundle");
+        (bundle.account_profile, bundle.effect, bundle.descriptor)
+    } else {
+        (profile, effect, descriptor)
+    };
     let descriptor_id = ContentId::new(hash(&descriptor).to_bytes()).expect("descriptor ID");
     let close_profile =
         matches!(campaign, Campaign::NativeClose).then(|| close_account_profile(family));
@@ -1084,9 +1266,20 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         .map(|bytes| ContentId::new(hash(bytes).to_bytes()).expect("close descriptor ID"));
     // For a set release the selection names the SET, and the descriptor is one of
     // its entries; for a flat release the two identities are the same record.
-    let program_set_bytes = campaign
-        .program_set()
-        .then(|| program_set(descriptor_id, close_descriptor_id, campaign));
+    let program_set_bytes = if matches!(campaign, Campaign::Series) {
+        let action_ids: Vec<[u8; 32]> = series_action_descriptors
+            .iter()
+            .map(|bytes| hash(bytes).to_bytes())
+            .collect();
+        Some(
+            build_series_activation_capable_program_set_v1(&action_ids, descriptor_id.to_bytes())
+                .expect("activation-capable Series release set"),
+        )
+    } else {
+        campaign
+            .program_set()
+            .then(|| program_set(descriptor_id, close_descriptor_id, campaign))
+    };
     let release_id = match &program_set_bytes {
         Some(bytes) => ContentId::new(hash(bytes).to_bytes()).expect("release ID"),
         None => descriptor_id,
@@ -1096,6 +1289,10 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     // it is activated under, which is why it is built after the set identity.
     let config = match family {
         Family::Fixture => vec![0x61; 32],
+        // Not fixture bytes: the config record a Series capability selects is
+        // its own finalized Template, and every byte of the root tail below is
+        // derived from it.
+        Family::Series => series_template.to_vec(),
         Family::General => {
             let config = general_config(capacity.to_bytes(), release_id.to_bytes());
             config.to_bytes().to_vec()
@@ -1107,10 +1304,15 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
     } else {
         0
     };
+    let creation_principal = campaign.creation_principal();
     let amounts = FundingAmountsV1::new(
         CompartmentFundingV1::native_lamports(root_rent - ROOT_INITIAL_DUST)
             .expect("root rent quote"),
-        CompartmentFundingV1::not_applicable(),
+        if creation_principal == 0 {
+            CompartmentFundingV1::not_applicable()
+        } else {
+            CompartmentFundingV1::native_lamports(creation_principal).expect("creation principal")
+        },
         if close_principal == 0 {
             CompartmentFundingV1::not_applicable()
         } else {
@@ -1268,7 +1470,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         &mut test,
         funding,
         TRADING_PROGRAM_ID,
-        funding_rent + root_rent - ROOT_INITIAL_DUST + close_principal,
+        funding_rent + root_rent - ROOT_INITIAL_DUST + close_principal + creation_principal,
         funding_state.clone(),
     );
 
@@ -1285,7 +1487,7 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
         ),
         None => descriptor_record,
     };
-    let config_record = add_record(&mut test, config_schema.to_bytes(), config);
+    let config_record = add_record(&mut test, config_schema.to_bytes(), config.clone());
     let profile_record = add_record(&mut test, ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, profile);
     let effect_record = add_record(&mut test, EFFECT_PROGRAM_SCHEMA, effect);
     let close_records = close_descriptor.zip(close_profile).zip(close_effect).map(
@@ -1338,7 +1540,14 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             .expect("funding header")
             .encode(),
     );
-    role_request.push(1);
+    match campaign {
+        // Selector 255 at offset twelve: the coordinate no Series action request
+        // can produce, carried by the only request that selects the activation
+        // descriptor.
+        Campaign::Series => role_request
+            .extend_from_slice(&series_activation_request_v1().expect("Series activation request")),
+        _ => role_request.push(1),
+    }
     let role_digest = hash(&role_request).to_bytes();
     let context = [0x81; 32];
     let authority_seeds = dclutch_release_set_contract::CallerAuthoritySeedsV1::from_bytes(
@@ -1511,6 +1720,8 @@ fn build_fixture(campaign: Campaign) -> (ProgramTest, Fixture) {
             close_instruction,
             rent_credit,
             close_principal,
+            creation_principal,
+            config,
         },
     )
 }
@@ -1589,7 +1800,12 @@ async fn assert_activation_succeeds(
         .expect("activation succeeds");
     let root = account(context, fixture.root).await;
     assert_eq!(root.owner, TRADING_PROGRAM_ID);
-    assert_eq!(root.lamports, fixture.root_rent);
+    // The root's opening balance, read back off the chain: its exact Rent
+    // reserve PLUS whatever Creation principal the manifest declared.
+    assert_eq!(
+        root.lamports,
+        fixture.root_rent + fixture.creation_principal
+    );
     let descriptor_account = account(context, fixture.activation_descriptor_raw).await;
     let descriptor = CapabilityProgramV1::decode(&descriptor_account.data).expect("descriptor");
     let decoded = CapabilityRootAccountV1::decode(&root.data, descriptor).expect("root account");
@@ -1608,6 +1824,17 @@ async fn assert_activation_succeeds(
         // General's own oracle, from the type that owns the layout. Whatever the
         // artifacts projected has to equal this or the capability the seam
         // created is one no General action can authenticate.
+        // Series' own creation oracle. Whatever the published artifacts
+        // projected has to equal this, or the root the seam created is one no
+        // Series action can authenticate and terminal Close can never open.
+        Family::Series => SeriesStateV3::new(SERIES_CLOSE_RENT)
+            .encode(
+                TemplateV3::decode(&fixture.config)
+                    .expect("Series Template")
+                    .occurrence_count(),
+            )
+            .expect("Series initial state")
+            .to_vec(),
         Family::General => general_root_creation_tail_v2(
             fixture.market.to_bytes(),
             fixture.config_id.to_bytes(),
@@ -1631,6 +1858,9 @@ async fn assert_activation_succeeds(
     assert_eq!(slot.status(), FundingLedgerStatusV2::Active);
     assert!(slot.activation_slot() > 0);
     assert_eq!(slot.remaining().rent().amount(), 0);
+    // Both native compartments are released by `activate_in_place`; the seam is
+    // what makes the second one arrive somewhere instead of vanishing.
+    assert_eq!(slot.remaining().creation().amount(), 0);
     (decoded.state().to_vec(), funding.data)
 }
 
@@ -1751,6 +1981,152 @@ async fn native_close_refunds_principal_rent_and_surplus_then_replay_refuses() {
 /// independent authorities -- three data artifacts run by a family-neutral seam,
 /// and a Rust function that knows what a General root is -- produce the same
 /// hundred and twenty-eight bytes.
+/// Series activates: its own bundle, its own Template, a decodable root.
+///
+/// This is the difference between "the seam arithmetic executes" and "Series
+/// activates". Everything here is Series' own published truth rather than a
+/// fixture's imitation of it:
+///
+/// - the config record is a real `TemplateV3`, the kernel's own example record
+///   with this campaign's close principal written into it;
+/// - the descriptor, profile and effect are the triple
+///   `build_series_activation_bundle_v1` publishes, bound to a real Series V4
+///   action descriptor through `capacity_profile`, which is the completeness
+///   gate that refuses a substituted Template;
+/// - the release is the six-entry set `build_series_activation_capable_program_set_v1`
+///   emits, and the request that reaches the V1 coordinate is the canonical
+///   Series activation request carrying selector 255 at offset twelve — the one
+///   coordinate `SeriesActionV3::decode` can never produce;
+/// - the prepaid close principal rides `FundingCompartment::Creation` and is
+///   whatever the Template says, not a fixture constant.
+///
+/// The root that comes back is decoded with `SeriesStateV3::decode` under the
+/// Template's own occurrence count and compared to `SeriesStateV3::new`. Before
+/// this lane, the Series ProgramSet carried five V4 action descriptors and no
+/// activation coordinate at all, so `authenticate_set_descriptor` refused every
+/// entry it could select and no Series Market could ever create its root.
+#[tokio::test]
+async fn series_activates_its_own_root_from_its_own_template_on_chain() {
+    let (test, fixture) = build_fixture(Campaign::Series);
+    let mut context = test.start_with_context().await;
+    let template = TemplateV3::decode(&fixture.config).expect("Series Template");
+    assert_eq!(template.close_rent(), SERIES_CLOSE_RENT);
+    assert_eq!(fixture.creation_principal, SERIES_CLOSE_RENT);
+
+    // The founding parks exactly the two compartments the Series funding plan
+    // names, and the plan is derived from the kernel rather than restated.
+    let plan = series_activation_funding_plan_v1(template, fixture.root_rent)
+        .expect("Series funding plan");
+    assert_eq!(plan.creation_compartment(), SERIES_CLOSE_RENT);
+    assert_eq!(
+        plan.parked_quote().expect("parked"),
+        fixture.root_rent + SERIES_CLOSE_RENT
+    );
+
+    let (tail, _) = assert_activation_succeeds(&mut context, &fixture).await;
+
+    // The root the chain created is one Series' own decoder accepts, in its
+    // initial state, holding the principal terminal Close will classify.
+    let state = SeriesStateV3::decode(&tail, template.occurrence_count())
+        .expect("the activated root decodes as SeriesStateV3");
+    assert_eq!(state, SeriesStateV3::new(SERIES_CLOSE_RENT));
+    assert_eq!(state.close_rent_remaining(), SERIES_CLOSE_RENT);
+    assert_eq!(state.revision(), 0);
+    assert_eq!(state.outstanding_ticket_accounts(), 0);
+
+    // And the balance the terminal contract will require, read off the bank.
+    let root = account(&mut context, fixture.root).await;
+    assert_eq!(root.lamports, fixture.root_rent + SERIES_CLOSE_RENT);
+}
+
+/// A manifest-declared Creation principal reaches the root, on chain.
+///
+/// This is the executing witness for the seam rule. `outer.rs` requires the
+/// activated root to hold `debit.rent_lamports() + debit.creation_lamports()`,
+/// both halves read off the manifest entry this Market's own selection names,
+/// with the rent half independently pinned to the live Rent sysvar. Nothing
+/// here reads a family config record, and nothing asserts the rule from the
+/// fixture's own arithmetic: the balance is fetched back off the bank.
+///
+/// Before the seam captured the debit, this campaign could not have existed.
+/// `activate_in_place` releases Rent AND Creation in one statement while the
+/// activation moved only the rent, so the ledger poststate check refused; and
+/// `release_in_place` refuses both compartments forever after, so the principal
+/// had no later route either. It was a declared, authenticated, wire-visible
+/// compartment with no transport and no reader.
+#[tokio::test]
+async fn a_declared_creation_principal_is_delivered_into_the_root_on_chain() {
+    let (test, fixture) = build_fixture(Campaign::CreationPrincipal);
+    let mut context = test.start_with_context().await;
+    assert_eq!(fixture.creation_principal, CREATION_PRINCIPAL);
+
+    // The ledger really is carrying the principal before activation runs.
+    let funding_before = account(&mut context, fixture.funding).await;
+    assert_eq!(
+        funding_before.lamports,
+        fixture.funding_rent + fixture.root_rent - ROOT_INITIAL_DUST + CREATION_PRINCIPAL
+    );
+
+    // Root balance, tail, and ledger poststate are all checked against the bank
+    // inside this helper, including root == rent + creation.
+    let (tail, _) = assert_activation_succeeds(&mut context, &fixture).await;
+
+    // The delivered principal funds the root; it composes no byte of the tail.
+    let mut expected = vec![0_u8; ROOT_TAIL_BYTES];
+    put(&mut expected, 0, &GENERATION.to_le_bytes());
+    put(&mut expected, 8, &fixture.market.to_bytes());
+    assert_eq!(tail, expected);
+
+    // And the lamports are conserved across the two accounts the seam touched.
+    let root_after = account(&mut context, fixture.root).await;
+    let funding_after = account(&mut context, fixture.funding).await;
+    assert_eq!(
+        root_after.lamports + funding_after.lamports,
+        funding_before.lamports + ROOT_INITIAL_DUST
+    );
+    assert_eq!(root_after.lamports, fixture.root_rent + CREATION_PRINCIPAL);
+}
+
+/// A principal the manifest declares and the artifacts never move refuses.
+///
+/// The fail-closed half. These are the ordinary rent-only artifacts against a
+/// manifest that declares a Creation compartment, which is exactly the shape
+/// every release in the tree had before this seam was finished. It must not
+/// create a root, because the compartment it stranded can never be released.
+#[tokio::test]
+async fn a_declared_principal_the_artifacts_never_deliver_refuses_atomically() {
+    let (test, fixture) = build_fixture(Campaign::CreationPrincipalNotDelivered);
+    let mut context = test.start_with_context().await;
+    let error = submit(&mut context, fixture.instruction.clone())
+        .await
+        .expect_err("an undelivered creation principal must refuse");
+    // The exact conjunct that owns it, taken from the chain rather than chosen.
+    //
+    // It is the LEDGER conservation check, not the root-balance rule. Both would
+    // refuse, and the ledger one comes first: `activate_in_place` has already
+    // zeroed the Creation compartment's remaining, so the outer requires the row
+    // to hold `ledger_rent + remaining_native_lamports_total()` while the
+    // undelivered principal is still sitting in it. The root rule never gets to
+    // speak. That ordering is worth pinning -- it is why an undelivered
+    // principal cannot strand silently even for a family that gets its root
+    // arithmetic right.
+    assert_eq!(refusal_code(&error), Some(TRADING_CONTENT_REFUSAL_CODE));
+    // The root was never created: it is still the vacant, System-owned dust
+    // account the fixture staged, not a Trading-owned capability root.
+    let root_after = maybe_account(&mut context, fixture.root)
+        .await
+        .expect("the staged vacant root survives");
+    assert_ne!(root_after.owner, TRADING_PROGRAM_ID);
+    assert_eq!(root_after.lamports, ROOT_INITIAL_DUST);
+    assert!(root_after.data.is_empty());
+    let funding_after = account(&mut context, fixture.funding).await;
+    assert_eq!(
+        funding_after.lamports,
+        fixture.funding_rent + fixture.root_rent - ROOT_INITIAL_DUST + CREATION_PRINCIPAL
+    );
+    assert_eq!(funding_after.data, fixture.funding_prestate);
+}
+
 #[tokio::test]
 async fn general_activation_artifacts_create_a_real_general_root() {
     let (test, fixture) = build_fixture(Campaign::General);

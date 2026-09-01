@@ -46,6 +46,30 @@ pub use generated::{
     SERIES_TICKET_SCHEMA_RELEASE_ID_V3, SERIES_TICKET_SCHEMA_RELEASE_PREIMAGE_V3,
 };
 
+/// Semantic kind label for recurring Series V3 capability programs.
+///
+/// # Why the four capability labels live in the kernel
+///
+/// These are protocol facts about the Series capability, not adapter code, and
+/// two callers need them who cannot both reach the adapter: the Series family
+/// module, and the family-neutral Hot outer's Series expiry route. The Trading
+/// crate gates `pub mod series` behind its `series-family` feature, so an
+/// ungated `crate::series::...` import breaks every link that does not select
+/// that feature -- which is exactly what the `outer-only` profile exists to be
+/// (`programs/dclutch-trading-sbf/Cargo.toml` calls it a "real-SBF profile that
+/// measures the common Hot outer without linking the Series, Dealer, or Direct
+/// family adapters"). Owning the labels here lets both reach the same bytes
+/// unconditionally instead of one of them mirroring the other.
+pub const SERIES_SUCCESSOR_KIND_PREIMAGE_V3: &[u8] = b"dclutch/kind/series-v3";
+/// Family request schema label; covers the fixed semantic header, not its proof
+/// witness.
+pub const SERIES_ACTION_HEADER_SCHEMA_PREIMAGE_V3: &[u8] =
+    b"dclutch/schema/series-action-header-v3";
+/// Mutable Series root-tail schema label.
+pub const SERIES_ROOT_SCHEMA_PREIMAGE_V3: &[u8] = b"dclutch/schema/series-root-v3";
+/// Ticket replay-account derivation-policy label.
+pub const SERIES_TICKET_DERIVATION_PREIMAGE_V3: &[u8] = b"dclutch/derivation/series-ticket-v3";
+
 const HEADER_VERSION_OFFSET: usize = 8;
 const HEADER_PROFILE_OFFSET: usize = 10;
 const HASH_SEPARATOR: [u8; 1] = [0];
