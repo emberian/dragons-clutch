@@ -4574,3 +4574,44 @@ than left latent.
 trading-sbf lib **446/6 → 448/4**, none of the four remaining being the
 validator and none newly broken. The LP frame reusing slot 7 for two roles is
 **legal but load-bearing** — it is what made a shared policy unvalidatable.
+
+## 2026-09-01 — extracted, and it compiles for the target that matters
+
+`crates/dclutch-wallet-terminal-payout-operator` (`3853fb6e`): **2,068 lines
+lifted verbatim** out of the binary's `wallet_terminal.rs`, which goes from
+**2,130 lines to 144** — argument parsing, two file reads, RPC, stdout. Every
+moved item is **re-exported at its old path**, so the eight modules reaching it
+still resolve. **Additive, not a merge**: the binary keeps its own
+`[workspace]`, the boundary the lane had declined to dissolve.
+
+**The finding it rests on, enumerated rather than assumed:** every `plan.*`
+access in the producer is one of **six coordinates** — five program ids and a
+release-set id. The browser holds five from its deployment and reads the sixth
+from the Market's own Core state. `--evidence` contributes a routing table and a
+`plan_sha256` binding the CLI's two files **to each other**. *A deployment table
+and an address book.*
+
+**One semantic change, and it is the boundary itself:** `from_rpc` →
+`from_observed`, taking a four-field observed value instead of an `RpcAccount` —
+**removing the crate's last tie to a socket** — with a four-field adapter kept in
+the binary so its call sites read unchanged. That is the difference between
+moving code and extracting a library.
+
+**And it compiles for the target that matters, on the real code:**
+`cargo build --target wasm32-unknown-unknown --release` on the extracted
+derivation, **not a stub**. It declares **no SBF program crate** — proved by
+construction rather than argued — with the 64-bit layout assertions untouched.
+
+Two details nobody asked for: **`solana-sdk` is gone**, because it was there for
+one type on one production line and that type has its own crate; and **one
+shared fixture under a `test-fixtures` feature rather than two copies**, because
+*two copies of a fixture drift, which is what an extraction exists to prevent.*
+
+**Stopped deliberately at a clean point.** The WASM boundary and the browser's
+snapshot acquisition both remain, both unblocked, both with the technique proven
+twice — and *"landing a half-wired boundary at the end of a session is the
+failure mode this project fears."* A boundary that compiles and is not yet
+called is a clean state; one half-wired to a snapshot is not.
+
+> **C-12: one capability, not three — and the third one's wall is now a code
+> path rather than an unknown.**

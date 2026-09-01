@@ -26,6 +26,11 @@ dclutch-direct-codec = { path = "../../../../crates/dclutch-direct-codec" }
 # and is now shared with the released `dclutch` CLI. `direct_ticket.rs` is the
 # adapter that keeps this binary's subcommand and error type over it.
 dclutch-direct-ticket = { path = "../../../../crates/dclutch-direct-ticket" }
+# The wallet-terminal payout derivation this binary used to carry inline. It
+# moved to a workspace crate so a browser can compile the same code; this
+# binary keeps the shell and consumes it.
+dclutch-wallet-terminal-payout-operator = { path = "../../../../crates/dclutch-wallet-terminal-payout-operator", features = ["test-fixtures"] }
+
 dclutch-execution-strategy-contract = { path = "../../../../crates/dclutch-execution-strategy-contract" }
 dclutch-fractional-claim-kernel = { path = "../../../../crates/dclutch-fractional-claim-kernel" }
 dclutch-fractional-claim-operator = { path = "../../../../crates/dclutch-fractional-claim-operator" }
@@ -77,3 +82,5 @@ solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[dev-dependencies]

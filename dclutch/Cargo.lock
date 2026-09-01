@@ -1687,6 +1687,7 @@ dependencies = [
  "dclutch-trading-sbf",
  "solana-account 4.6.0",
  "solana-address-lookup-table-interface",
+ "solana-compute-budget-interface",
  "solana-message 4.5.0",
  "solana-program",
  "solana-program-option",
@@ -2974,6 +2975,40 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-message 3.1.0",
  "solana-program",
+]
+
+[[package]]
+name = "dclutch-wallet-terminal-payout-operator"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "dclutch-capability-contract",
+ "dclutch-claims-svm",
+ "dclutch-custody-contract",
+ "dclutch-market-core-codec",
+ "dclutch-operator",
+ "dclutch-product-payoff-v2-codec",
+ "dclutch-product-runtime-v2-admission",
+ "dclutch-rational-representation-v2-kernel",
+ "dclutch-realm-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-activation-auth-v1",
+ "dclutch-release-set-contract",
+ "dclutch-representation-composition-v3-kernel",
+ "dclutch-representation-composition-v3-operator",
+ "dclutch-resolution-codec",
+ "dclutch-token-svm",
+ "dclutch-versioned-message-operator",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "solana-address-lookup-table-interface",
+ "solana-hash 4.6.0",
+ "solana-program",
+ "solana-sdk-ids",
 ]
 
 [[package]]

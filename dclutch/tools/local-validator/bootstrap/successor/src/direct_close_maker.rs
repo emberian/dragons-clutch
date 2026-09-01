@@ -769,7 +769,9 @@ fn gather(
     let snapshot = finalized_snapshot(rpc, &keys)?;
     let at = |index: usize| -> Result<dclutch_operator::ObservedAccount> {
         let key = keys[index];
-        snapshot.account(key).cloned()
+        // The snapshot's refusals now come from the extracted payout crate;
+        // carry them into this binary's error type unchanged.
+        snapshot.account(key).cloned().map_err(Into::into)
     };
     Ok(DirectCloseMakerSnapshotV1 {
         cluster,

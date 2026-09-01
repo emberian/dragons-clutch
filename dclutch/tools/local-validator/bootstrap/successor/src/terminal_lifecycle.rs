@@ -18,6 +18,7 @@ use dclutch_operator::ObservedAccount;
 use sha2::{Digest, Sha256};
 use solana_program::{hash::hashv, pubkey::Pubkey};
 
+use crate::wallet_terminal::snapshot_from_rpc;
 use crate::{
     Error, Result,
     campaign::{
@@ -184,7 +185,7 @@ fn produce_wallet_terminal_input_v1(
     let addresses = routed.addresses();
     let floor = receipt_snapshot.observation.slot;
     let (slot, values) = rpc.finalized_accounts(&addresses, floor)?;
-    let snapshot = FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &addresses, values)?;
+    let snapshot = snapshot_from_rpc(slot, rpc.block_time(slot)?, &addresses, values)?;
     let receipt_meaning = authenticate_core_terminal_receipt_meaning_v1(&routed, &snapshot)?;
 
     let position_account = snapshot.required(routed.position, "Claims Position")?;
@@ -327,7 +328,7 @@ pub(crate) fn finalized_snapshot(rpc: &mut Rpc, keys: &[Pubkey]) -> Result<Final
     keys.dedup();
     let floor = rpc.finalized_slot()?;
     let (slot, values) = rpc.finalized_accounts(&keys, floor)?;
-    FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &keys, values)
+    snapshot_from_rpc(slot, rpc.block_time(slot)?, &keys, values)
 }
 
 /// The Market's Custody namespace, read from the account that owns it.

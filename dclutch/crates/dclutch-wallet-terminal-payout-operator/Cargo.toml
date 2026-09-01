@@ -1,0 +1,65 @@
+[package]
+name = "dclutch-wallet-terminal-payout-operator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# The one fixture the extracted-from binary's own tests build on. Shared under
+# a feature rather than copied, because two copies of a fixture drift and an
+# extraction exists to stop exactly that.
+test-fixtures = []
+
+[dependencies]
+base64 = "0.22.1"
+# Decoding the Rent sysvar, which is a pure decode of observed bytes.
+bincode = "=1.3.3"
+# Used by the shared fixture module, which compiles under `test-fixtures`.
+dclutch-capability-contract = { path = "../dclutch-capability-contract" }
+dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+dclutch-custody-contract = { path = "../dclutch-custody-contract" }
+dclutch-market-core-codec = { path = "../dclutch-market-core-codec" }
+# `default-features = false` drops `dealer-series`, and with it the Trading
+# PROGRAM, whose 64-bit `size_of` layout assertions cannot hold on a 32-bit
+# target. Those assertions are right; this derivation simply does not need the
+# program. The payout builder it does need already lives here.
+dclutch-operator = { path = "../dclutch-operator", default-features = false }
+dclutch-product-payoff-v2-codec = { path = "../dclutch-product-payoff-v2-codec" }
+dclutch-product-runtime-v2-admission = { path = "../dclutch-product-runtime-v2-admission" }
+dclutch-rational-representation-v2-kernel = { path = "../dclutch-rational-representation-v2-kernel" }
+dclutch-realm-contract = { path = "../dclutch-realm-contract" }
+dclutch-record-contract = { path = "../dclutch-record-contract" }
+dclutch-registry-activation-auth-v1 = { path = "../dclutch-registry-activation-auth-v1" }
+dclutch-release-set-contract = { path = "../dclutch-release-set-contract" }
+dclutch-representation-composition-v3-kernel = { path = "../dclutch-representation-composition-v3-kernel" }
+dclutch-representation-composition-v3-operator = { path = "../dclutch-representation-composition-v3-operator" }
+dclutch-resolution-codec = { path = "../dclutch-resolution-codec" }
+dclutch-token-svm = { path = "../dclutch-token-svm" }
+dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+# `solana-hash` rather than `solana-sdk`: the host SDK was pulled in for one
+# type on one production line, and this is that type's own crate.
+solana-hash = "=4.6.0"
+solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
+solana-program = { version = "=3.0.0", default-features = false }
+solana-sdk-ids = "=3.1.0"
+
+# Two getrandom majors reach wasm32 and each refuses it until told which
+# browser backend to use. 0.4 arrives through
+# `dclutch-direct-ticket -> solana-signature[verify] -> solana-ed25519 -> rand`,
+# and that `verify` feature is deliberate and unconditional -- the ticket
+# reader verifies every detached signature it parses -- so the edge is told
+# about the browser rather than dropped.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2.17", features = ["js"] }
+getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
+
+[lints]
+workspace = true

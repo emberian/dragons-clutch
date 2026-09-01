@@ -98,6 +98,13 @@ impl fmt::Display for Error {
 
 impl StdError for Error {}
 
+/// The extracted payout derivation's refusals, carried through unchanged.
+impl From<dclutch_wallet_terminal_payout_operator::Error> for Error {
+    fn from(error: dclutch_wallet_terminal_payout_operator::Error) -> Self {
+        Self(error.to_string())
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
         Self::new(error.to_string())

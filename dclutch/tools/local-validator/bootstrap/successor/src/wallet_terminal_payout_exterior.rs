@@ -43,6 +43,7 @@ use solana_sdk::{
     transaction::VersionedTransaction,
 };
 
+use crate::wallet_terminal::snapshot_from_rpc;
 use crate::{
     Error, Result, campaign, chaos_fault,
     cluster::{ClusterOriginV1, ExpectedClusterV1},
@@ -1410,7 +1411,7 @@ fn snapshot(rpc: &mut Rpc, selected: &SelectedInputV1) -> Result<FinalizedSnapsh
     let addresses = selected.addresses();
     let floor = rpc.finalized_slot()?;
     let (slot, values) = rpc.finalized_accounts(&addresses, floor)?;
-    FinalizedSnapshotV1::from_rpc(slot, rpc.block_time(slot)?, &addresses, values)
+    snapshot_from_rpc(slot, rpc.block_time(slot)?, &addresses, values)
 }
 
 fn finalized_account(rpc: &mut Rpc, key: Pubkey, floor: u64) -> Result<ObservedAccount> {

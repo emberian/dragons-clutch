@@ -1146,6 +1146,7 @@ fn authenticate_resolution_role(
         &snapshot.observed(keys.resolution_program, "Resolution program")?,
         &snapshot.observed(keys.resolution_programdata, "Resolution ProgramData")?,
     )
+    .map_err(Into::into)
 }
 
 fn authenticate_source_provider_join(
