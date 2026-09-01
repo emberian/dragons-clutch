@@ -2318,3 +2318,35 @@ Scholar's one hedge, as a task: it traced the founding refusal by reading and
 corroborated it by commit date and the band-free fixture, but **did not run a
 founding and watch it refuse.** That is the build lane's red control before R2.
 | `acbf4b5b36cee638f` | NON-PRICE build | red control (found the relayed market, watch it refuse) → R1 decompose the observable → R2 quality model as a family → R3 observable #2 |
+
+## Cohort-9: complete through activation; the founding wall is ruling 9's fifth door
+
+Re-observed from chain at HEAD `4b9bb468` by the relaunched release lane, spending
+nothing: **substrate 7/7 · publication 9/9 · profile initialized (144-byte V1) ·
+succession NOT executed — proven by reading the V2 PDA as a System-owned vacancy,
+with a positive control · activation 5/5.** The 2.022449584 SOL is accounted to
+**zero residue**: records + profile + activations, one fee, and a 2.000 SOL System
+transfer to the campaign payer. Founder-key custody proven; keys moved out of
+`/private/tmp` to `~/jobs/dclutch-cohort9-20260901/` (a reboot would have
+reproduced the founder-nobody-holds defect on a delay).
+
+**Founding: two stranded attempts, no market**, convicted in the pure planner for
+zero lamports: `found.rs:548` requires a 224-byte V2 profile; this cohort committed a
+healthy 144-byte V1; `2951b226` flipped that line, and cohort-9 is the first cohort
+deployed after it. A genesis cannot construct a V2 — `ProtocolInfrastructureProfileV2::new`
+refuses equal predecessor ids and `ArtifactReleaseIdV1::new` refuses zero.
+
+**The lane called it "a release-identity change, ember's to schedule." It is not.**
+It is the same defect ruling 9 was withdrawn for — *the release tooling cannot
+express a real cohort with no predecessor* — one layer down, at the founding path,
+after four doors were already opened today (`61817d7a` `6b2257b6` `9d66c498`
+`35a94fba`). Applied the withdrawal rather than re-escalating: **build a genesis arm on
+the founding path**, matching the manifest's schema-3 pattern. Both of the lane's
+declined workarounds stay declined.
+
+**New landmine, found by that lane and nobody before:** a cohort that revokes
+authority on Registry and Rent before committing its V1 profile is **permanently
+unfoundable, silently**, with no diagnostic until a founding fails sixty transactions
+in. Cohort-9 retained `ExactAuthority` on all seven, so it is not trapped — the
+"mutable is deliberate" argument was load-bearing for a reason nobody had stated. A
+planning-time refusal is being added.
