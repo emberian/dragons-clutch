@@ -1,7 +1,18 @@
 # seam-audit
 
 A standing gate for the six mechanical seam-defect classes that
-`docs/evidence/SEAM_AUDIT_2026_08_29.md` found by hand.
+`docs/evidence/SEAM_AUDIT_2026_08_29.md` found by hand, plus a seventh —
+`AUTHORITY` — added 2026-09-01 for C-16's *unexplained authority* clause, which
+no reader here answered.
+
+`AUTHORITY` is worth distinguishing from `PRIVILEGE` because they look alike and
+point opposite ways. `PRIVILEGE` reads an exact-privilege census as
+**over-constraint**: privileges merge across a transaction, so a blanket signer
+refusal makes a frame unsatisfiable for a legitimate builder, and the class
+finds routes that refuse what they should admit. `AUTHORITY` asks the
+**under-constraint** question — does the act establish who may perform it, or
+read an answer somebody else supplied? `PRIVILEGE` never asks whether a signer
+is the *right* signer.
 
 That sweep found nine always-refuses routes and one always-admits across six
 seams, **none of which had a failing test**, and its closing paragraph says why:
@@ -66,7 +77,7 @@ network. It never builds, signs, submits or contacts a cluster.
 this repo in which today's fixed defects still stand. A checker pointed there
 reports them as live. Gate on `~/dev/dclutch`.
 
-## The six classes
+## The seven classes
 
 | class | reads | its negative control |
 |---|---|---|
@@ -76,6 +87,7 @@ reports them as live. Gate on `~/dev/dclutch`.
 | `UNSET_PIN` | a wire pubkey used as an identity with no guard against the all-zero one; plus a ratchet on every existing guard | *synthetic* — see below |
 | `DOMAIN_DUP` | two names carrying one byte string, or a name whose bytes carry none of what it claims. Matched on **bytes**, never on identifier | *live* — two unfixed collisions |
 | `PRIVILEGE` | an exact-privilege census that constrains the whole transaction rather than this instruction's frame | `16351a13`, and `#13b` live |
+| `AUTHORITY` | a cached role read out of an account whose provenance this function never established — no delegation to the blessed authenticator, no derived address, no owner check | *synthetic* — delete Custody's delegation and the reader must name it |
 
 ## Negative controls
 

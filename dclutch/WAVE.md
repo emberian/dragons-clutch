@@ -3236,3 +3236,109 @@ explicit authorization"* now asserts its **absence**, because `market.join` was
 the only listed act that asked a reader for their own key. A test flipping from
 asserting a thing to asserting its absence is the cleanest record that a
 capability changed.
+
+## 2026-09-01 — a declined citation is not a passing citation
+
+`tools/doc-citations/` (`bc3c7556`), sibling of `tools/seam-audit`: static, no
+build, **~7s over 1,143 files**. It instruments the category that made a lane
+misreport this morning — **live prose citing deleted symbols**.
+
+**11,875 spans · 1,032 judged · 10,843 DECLINED · 11 unresolved.** The declined
+count is *printed*, and that is the design:
+
+> **A declined citation is not a passing citation.** Letting 10,843 read as a
+> result would be the same failure the category is about.
+
+Judged: a namespaced path whose leading segment belongs to this workspace,
+resolved if its final segment is declared anywhere here. Declined: prose in
+backticks, file paths, code fragments, anything rooted in a crate whose items
+are not visible. The index covers items, **enum variants and struct fields** —
+adding fields alone took the report from 24 findings to 11, because *a report
+that is mostly noise is one nobody reads twice.*
+
+**The trade is stated, not hidden:** precision about half, deliberately, because
+**a false positive costs a second to dismiss; a false negative cost this tree a
+day.** Both false-positive classes are named in the README with examples. A
+third is deliberately *not* suppressed — a comment correctly reporting a symbol
+as missing still cites it, and **the tool cannot tell a warning from a claim.**
+
+**Results:** all five `process_funded_transition` citations fire, plus a second
+true dangle nobody was looking for — `ClusterOriginV1::may_use_seeded_keys`, a
+rustdoc intra-doc link naming a method that does not exist, where the live
+function is the free `seeded_keys_admissible`.
+
+### Widening an index, checked the honest way round
+
+Three controls, because *a checker that cannot fail is indistinguishable from a
+clean tree, and a tripwire that cannot fire is worse than none*: it still
+reports the citation it was built from; a synthetic tree resolves items,
+variants and fields and refuses the absent one; `--check` exits nonzero on a new
+dangle, proven by injection. The synthetic control runs in a **temp dir**,
+because a shared checkout must not have a control injecting doc comments into
+another lane's file.
+
+It earned its keep immediately, catching the indexer missing members of
+single-line `enum E { A }` and `struct S { a: u8 }`. And the widening was
+verified the right way: **the real tree's count held at 11**, so a more
+permissive index did not quietly resolve the signal away. Most people widen an
+index and check the controls still pass; the check that matters is that the
+*findings* survived.
+
+Exit code zero unless `--check`: **the category is worth watching before it is
+worth gating, and a reporter nobody can turn off is one everybody routes
+around.**
+
+**Coverage boundary, flagged rather than left implicit:** Rust doc comments
+only. Ordinary `//` comments — where four of the five original citations
+actually live — are not scanned yet.
+
+## 2026-09-01 — the tree does not ask who you are
+
+**95 of 120 lamport destinations classified. Zero class 4.** And the population
+shrank a *third* time, for a third distinct reason: **32 of the 152 "set-sites"
+were not lamport destinations at all** — `LifecycleRegisterCoordinateV3`
+register-slot indices in artifact builders, `identity_u16` register ids,
+`.to_string()` display code, a function signature.
+
+> **A field named `beneficiary` in a lifecycle-artifact builder names a
+> register, not a recipient.**
+
+391 → 152 → **120**. A census that never questioned its own matcher would have
+reported 391 owned flows and been wrong three times over, sounding more thorough
+at every step.
+
+| class | count |
+|---|---|
+| **1** owned by the code at the site | **63** (25 canonical zero/absent, 29 derived from a frame account, 9 literal or named constant) |
+| **2** read from persisted authenticated state | **27** |
+| **3** caller-supplied, bound to a persisted value | **5**, each carried to a verdict individually |
+| **4** caller-supplied, only self-consistent | **0** |
+| *unresolved* | *25*, stays enumerated |
+
+### The architectural fact underneath it
+
+Every caller-supplied lamport destination carried to a verdict is owned the same
+way: **named once when a record is created, then compared against that record
+forever after.** Not one is owned by an authority check at time of use.
+
+> **The tree does not ask who you are, it asks whether you match what was
+> written down.**
+
+That is why class 4 keeps coming up empty — and it says exactly where such a
+defect would have to live: **a flow whose destination is named at *use* time
+rather than at *creation* time.** A 120-site grind becomes a narrow hunt.
+
+The new `CustodyRequestV1.rent_refund` verdict is the pattern in miniature:
+refused unless it matches the `CustodyReplayV1` record written at
+`InitializeReplay`, with `custody-sbf` separately requiring the frame account to
+be that key and refusing it being the payer or the replay itself. **Frame ==
+request == persisted-at-initialize**, three independent bindings.
+
+### The rule the three corrections earned
+
+> **When a filter makes a number move the way you wanted, name something that
+> must survive it and check that it did.**
+
+The generalisation of the positive control — and what caught the worst of the
+three, when the custody contract's own decoders vanished from a production set
+they had no business leaving.

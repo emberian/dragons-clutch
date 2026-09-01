@@ -972,3 +972,52 @@ Worth noting what the pair actually were, since the register no longer will:
 both were findings **about code that never compiled.** A `cfg(any())` block
 cannot execute, so a privilege pin or signer census inside one describes a
 hazard no transaction could ever reach. They were true statements about text.
+
+### benign-cache-authenticated-by-admission-token
+
+`AUTHORITY_CACHE_UNDERIVED`, two sites, both `programs/dclutch-custody-sbf/src/lib.rs`:
+`authenticate_realm` and `authenticate_premarket_realm`.
+
+Both decode the Registry activation cache and read a role out of it without
+deriving the cache address or checking its owner in their own bodies. The
+provenance is established one call earlier and carried in the TYPE, which a
+single-function reader cannot see: `authenticate_market_admission` resolves the
+cache exactly once and returns `AuthenticatedMarketAdmissionV1`, whose two
+variants are the two authenticated outcomes —
+`Live(authenticate_market(..))`, which delegates to
+`authenticate_activation_cache_bump_v1`, and `Premarket { cache_bump }` from
+`try_authenticate_premarket_market`. Both arms carry a `cache_bump`, which is
+the derived-address token. The realm functions are reachable only by matching on
+that value (`lib.rs:301-308`), so the authentication is a precondition of
+constructing the scrutinee rather than a convention.
+
+Verified by reading both arms, not inferred from one. This is a *good* pattern —
+authenticate once, prove it in the type — and the finding is an artefact of the
+reader's one-function horizon, recorded rather than suppressed so that the day
+someone calls these functions from a third path with no token, the tag is a
+claim that has to be re-checked.
+
+**What this tag does not assert:** that the role read is the *right* role for
+the act. Provenance and correctness are different questions; this reader answers
+the first.
+
+### hazard-cache-provenance-unverified
+
+`AUTHORITY_CACHE_UNDERIVED`, one site:
+`programs/dclutch-trading-sbf/src/hot_v3.rs` `selected_role_programs_v3`.
+
+Reads `frame.activation_cache`, decodes the view and selects Claims, Custody and
+Resolution role programs from it, with no derivation, no owner check and no
+delegation in its own body. The same admission-token argument that clears the
+two Custody sites is *plausible* here — `HotFrameV3` is built upstream and the
+route is long — **but this lane did not establish it**, and a tag is a claim.
+
+Recorded as a hazard rather than as benign for exactly that reason: the honest
+difference between the Custody sites and this one is that the Custody chain was
+read end to end and this one was not. `AGENTS.md`'s rule about absent signals
+applies to verdicts too — "not shown to be wrong" is not "shown to be right".
+
+Owner: the Trading lane. Closing it means one of two things, both cheap:
+show that every path reaching `selected_role_programs_v3` authenticates
+`frame.activation_cache` first and retag it, or route the read through
+`authenticate_activated_role*` so the question stops needing an argument.

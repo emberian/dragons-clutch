@@ -1272,12 +1272,80 @@ fn real_sbf_fixture_v3_chunk(
     )
 }
 
+/// What a transaction puts AHEAD of the Trading instruction.
+///
+/// The accelerator's `authenticate_top_level` used to pin Trading to index 1
+/// with the heap grant at index 0, which admitted exactly `HeapOnly` and
+/// forbade `HeapThenLimit` -- the only shape a real caller can send, because a
+/// General action needs more compute than the per-instruction default. It now
+/// requires instead that every instruction ahead of Trading belong to the
+/// ComputeBudget program and that one of them be the exact heap grant, so the
+/// two accepting rows below are the point of the change and the four refusing
+/// rows are what keeps it from being a relaxation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TopLevelPreludeV3 {
+    /// The exact heap grant alone: the only shape the pinned index admitted.
+    HeapOnly,
+    /// The heap grant then a compute-unit limit: what a real caller must send.
+    HeapThenLimit,
+    /// Nothing ahead of Trading at all, so no heap was ever granted.
+    Nothing,
+    /// ComputeBudget instructions, but never the heap grant.
+    LimitOnly,
+    /// A heap grant, for the wrong number of bytes.
+    WrongHeap,
+    /// The heap grant, and then a non-ComputeBudget instruction ahead of
+    /// Trading. The grant is present deliberately: without it this row would
+    /// refuse on the missing heap and prove nothing about the ComputeBudget
+    /// conjunct it exists to exercise.
+    ForeignBefore,
+}
+
+impl TopLevelPreludeV3 {
+    /// Instructions this prelude puts ahead of Trading.
+    fn instructions(self, payer: Pubkey) -> Vec<Instruction> {
+        let heap = ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1);
+        let limit = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+        match self {
+            Self::HeapOnly => vec![heap],
+            Self::HeapThenLimit => vec![heap, limit],
+            Self::Nothing => Vec::new(),
+            Self::LimitOnly => vec![limit],
+            Self::WrongHeap => vec![ComputeBudgetInstruction::request_heap_frame(
+                DIRECT_HOT_HEAP_FRAME_BYTES_V1 - 1024,
+            )],
+            // A zero-lamport System transfer: it succeeds, so the refusal this
+            // row asserts is the accelerator's own and not this instruction's.
+            Self::ForeignBefore => {
+                let mut data = vec![2_u8, 0, 0, 0];
+                data.extend_from_slice(&0_u64.to_le_bytes());
+                vec![
+                    heap,
+                    Instruction {
+                        program_id: system_program::ID,
+                        accounts: vec![
+                            AccountMeta::new(payer, true),
+                            AccountMeta::new(payer, false),
+                        ],
+                        data,
+                    },
+                ]
+            }
+        }
+    }
+
+    /// The index the Trading instruction lands at under this prelude.
+    fn trading_index(self) -> usize {
+        self.instructions(Pubkey::new_unique()).len()
+    }
+}
+
 async fn submit(
     context: &mut ProgramTestContext,
     instruction: Instruction,
     label: &str,
     recorded: bool,
-    declare_general_heap: bool,
+    prelude: TopLevelPreludeV3,
 ) -> Result<
     (
         solana_program_test::BanksTransactionResultWithMetadata,
@@ -1288,12 +1356,8 @@ async fn submit(
 > {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let instruction_accounts = instruction.accounts.len();
-    let heap_frame = ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1);
-    let instructions = if declare_general_heap {
-        vec![heap_frame, instruction]
-    } else {
-        vec![instruction]
-    };
+    let mut instructions = prelude.instructions(context.payer.pubkey());
+    instructions.push(instruction);
     let transaction = Transaction::new_signed_with_payer(
         &instructions,
         Some(&context.payer.pubkey()),
@@ -1372,7 +1436,7 @@ async fn execute(
         fixture.instruction,
         &fixture.label,
         fixture.recorded,
-        true,
+        TopLevelPreludeV3::HeapOnly,
     )
     .await
     .expect("ProgramTest processing");
@@ -3191,25 +3255,43 @@ async fn real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_run
                 result_state_bump: 1,
             };
             if width == 258 && index == 0 {
-                let without_heap =
-                    real_sbf_fixture_v3(width, controller, bank.clone(), runtime.clone());
-                let mut context = without_heap.test.start_with_context().await;
-                let (processed, _, _) = submit(
-                    &mut context,
-                    without_heap.instruction,
-                    &without_heap.label,
-                    false,
-                    false,
-                )
-                .await
-                .expect("default-heap hostile processes");
-                assert_eq!(
-                    format!("{:?}", processed.result),
-                    format!(
-                        "Err(InstructionError(0, Custom({})))",
-                        GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction as u32
-                    )
-                );
+                // Every top-level shape, on the real ELF. The two accepting
+                // rows are what the pinned-index rule made impossible; the four
+                // refusing rows are why dropping it is not a relaxation. Each
+                // refusal names the exact discriminant, derived from the enum.
+                for (prelude, accepts) in [
+                    (TopLevelPreludeV3::HeapOnly, true),
+                    (TopLevelPreludeV3::HeapThenLimit, true),
+                    (TopLevelPreludeV3::Nothing, false),
+                    (TopLevelPreludeV3::LimitOnly, false),
+                    (TopLevelPreludeV3::WrongHeap, false),
+                    (TopLevelPreludeV3::ForeignBefore, false),
+                ] {
+                    let case =
+                        real_sbf_fixture_v3(width, controller, bank.clone(), runtime.clone());
+                    let mut context = case.test.start_with_context().await;
+                    let (processed, _, _) =
+                        submit(&mut context, case.instruction, &case.label, false, prelude)
+                            .await
+                            .expect("top-level prelude hostile processes");
+                    if accepts {
+                        assert!(
+                            processed.result.is_ok(),
+                            "{prelude:?} must execute: {:?}",
+                            processed.result,
+                        );
+                    } else {
+                        assert_eq!(
+                            format!("{:?}", processed.result),
+                            format!(
+                                "Err(InstructionError({}, Custom({})))",
+                                prelude.trading_index(),
+                                GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction as u32
+                            ),
+                            "{prelude:?}",
+                        );
+                    }
+                }
             }
             let (ack, _, evidence) = execute(real_sbf_fixture_v3(
                 width,

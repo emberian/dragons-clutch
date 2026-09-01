@@ -2,7 +2,9 @@
 
 use std::{vec, vec::Vec};
 
-use dclutch_capability_program_contract::hot_v3::HotExecutionEnvelopeV3;
+use dclutch_capability_program_contract::hot_v3::{
+    DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
@@ -32,6 +34,7 @@ use dclutch_general_codec::{
 use dclutch_general_config_contract::v3::{GeneralConfigV3, GeneralConfigV3Input};
 use dclutch_program_test_evidence::{TransactionEvidence, record};
 use solana_account::Account;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_program::{
     hash::hash,
     instruction::{AccountMeta, Instruction},
@@ -360,8 +363,17 @@ async fn submit(
     recorded: bool,
 ) -> Result<solana_program_test::BanksTransactionResultWithMetadata, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
+    // The accelerator authenticates that the heap it runs in was actually
+    // granted, so a transaction that never asks for one is refused with
+    // `InvalidTopLevelInstruction` -- correctly. This file used to send the
+    // Trading instruction alone and then assert the execution committed, which
+    // is two contradictory claims; it grants the heap now, as every real caller
+    // and `lifecycle.rs` already did.
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[
+            ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1),
+            instruction,
+        ],
         Some(&context.payer.pubkey()),
         &[&context.payer],
         blockhash,

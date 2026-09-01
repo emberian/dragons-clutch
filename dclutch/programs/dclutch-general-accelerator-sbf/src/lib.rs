@@ -83,7 +83,7 @@ use solana_program::{
     account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
     program_error::ProgramError, pubkey::Pubkey,
 };
-use solana_sdk_ids::sysvar;
+use solana_sdk_ids::{compute_budget, sysvar};
 
 /// Stable physical refusal from the General accelerator boundary.
 #[repr(u32)]
@@ -341,12 +341,44 @@ fn authenticate_top_level(
     }
     let index = load_current_index_checked(instructions)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
-    if index != 1 {
-        return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+    // Two laws live here: the heap was granted, and the caller is Trading. The
+    // POSITION was never one of them. Pinning Trading to index 1 also forbade
+    // every instruction ahead of it except the heap grant -- and a General
+    // action needs more compute than the per-instruction default, measured at
+    // 516,162 CU for OpenBatch at N=2, which takes a `set_compute_unit_limit`
+    // instruction, which moves Trading to index 2. The two requirements were
+    // jointly unsatisfiable, so NO transaction could execute a General action
+    // through this program: with the limit instruction removed to satisfy the
+    // position, the transaction is granted 202,850 CU and dies at 202,842.
+    //
+    // The position is the accident and it is dropped. Both laws are kept, and
+    // the first is now STRICTER than the pinned index made it: every
+    // instruction ahead of this one must belong to the ComputeBudget program,
+    // which can only price a transaction and can neither move value nor touch
+    // an account, and one of them must be the exact heap grant. Every shape the
+    // pinned index admitted is still admitted -- index 1 with the grant at zero
+    // satisfies both conjuncts -- and every newly admitted shape differs from
+    // one of those only by additional ComputeBudget instructions.
+    let mut heap_granted = false;
+    let mut earlier_index = 0_u16;
+    while earlier_index < index {
+        let earlier = load_instruction_at_checked(usize::from(earlier_index), instructions)
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+        if earlier.program_id != compute_budget::ID {
+            return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+        }
+        if earlier == ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1) {
+            heap_granted = true;
+        }
+        earlier_index = earlier_index
+            .checked_add(1)
+            .ok_or(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
     }
-    let heap_frame = load_instruction_at_checked(0, instructions)
-        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
-    if heap_frame != ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1) {
+    // A caller that never granted the heap is refused here, by name, with the
+    // same `InvalidTopLevelInstruction` the pinned-index rule gave it -- which
+    // is what the `declare_general_heap: false` hostile in the program-test
+    // asserts, and it keeps asserting it.
+    if !heap_granted {
         return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
     }
     let instruction = load_instruction_at_checked(usize::from(index), instructions)
