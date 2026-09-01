@@ -78,11 +78,17 @@
 //! # What IS live here, measured on the current ELF pack
 //!
 //! ```text
-//! release substitution      Content            0x4003     39,034 CU
-//! heap grant omitted        HeapFrame          0x4008     41,113 CU
+//! release substitution      Content            0x4003     39,036 CU
+//! heap grant omitted        HeapFrame          0x4008     41,115 CU
 //! Buy without its Sell      Root               0x4002     42,159 CU
-//! WALL A: registered Sell   UnsupportedContent 0x4000    323,523 CU
+//! WALL A: registered Sell   UnsupportedContent 0x4000    329,791 CU
 //! ```
+//!
+//! Re-measured 2026-09-01 at `66566cd4` on ELFs built from that commit. Three
+//! of the four moved by single-digit or low-thousand CU against the figures
+//! this table carried before, which is the artifact band doing what ledger
+//! `M-61` says it does: the registered creation artifacts changed, so every
+//! fixture seed did.
 //!
 //! The ordering is the evidence, not the absolute figures. Three refusals that
 //! belong in the prologue cost about 40,000 CU each; wall A costs 7.8 times

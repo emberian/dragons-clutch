@@ -5235,3 +5235,145 @@ removed from `freeze.rs`, alive in another file.
 **Correction to this ledger**: "the sysvar is at instruction index 29" — that 29 is
 `HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3`, an *account coordinate*, off by the authority
 prefix from its real position at 30. Not an instruction index.
+
+## 2026-09-01 — the registered Buy reaches the end of its own execution
+
+Four defects, all convicted by MEASUREMENT rather than reading, each one hidden
+behind the last. Behind the wall-A probe (`hot_v3.rs:5413` relaxed to `Ok(None)`
+in a throwaway worktree, never committed) the registered Buy moved:
+
+```
+308,354 CU  Content 0x4003       account projection, no child CPI      <- was here
+571,047 CU  Release 0x4001       Custody preflight, no child CPI
+776,043 CU  AccountFrame 0x6001  inside the FIRST Custody CPI
+1,205,519 CU Commit 0x4005       after all THREE Custody children succeed
+```
+
+`InitializeReplay` 123,796 CU, `OpenVault` 141,105 CU, delegated deposit
+136,253 CU — a registered Buy now creates its maker replay and record, opens a
+Custody replay and a TradingPrincipal vault, and moves the maker's collateral
+into it, on real Core/Claims/Custody/Registry/Rent ELFs. None of that had ever
+happened.
+
+### The four, and what each one teaches
+
+1. **Two `require_key`s that no transaction could satisfy.** `OP_REQUIRE_KEY`
+   reads the INPUT identity bank; `project_identity` writes the OUTPUT bank. The
+   Buy required its frame mint and token program against registers it projected
+   *in the same pass*, so both compared a real key against thirty-two zeros.
+   `ordinary_account_artifacts_v3` had the whole argument written out at length,
+   twenty lines, and the registered family did the opposite anyway.
+   **A comment in the sibling file is not a check.**
+
+2. **A content digest written as an address.** `project_key(REALM_ACCOUNT, ..)`
+   put the Realm record's ADDRESS in `CustodyRequestLayoutV1::REALM`, where
+   Custody re-derives the record address FROM that field and requires
+   `hash(realm_account.data)` to equal it. The Core Market's `identity.realm_id`
+   is where the digest lives, and it is the value Custody cross-checks anyway.
+   The inline family projects it from the Custody replay — which a creation
+   cannot, because it is the instruction that CREATES the replay.
+
+3. **A rent refund that Custody explicitly forbids.** The Effect wrote the
+   record beneficiary into `RENT_REFUND`; `initialize_replay` requires the
+   frame's refund account to equal `request.rent_refund` AND to DIFFER from the
+   payer, and this family's record beneficiary IS the payer. The profile's own
+   `ROUTE_ALIASES` already said the coordinate holds the lifecycle RentCredit.
+   **I got this one backwards first** — moved the fixture to match the Effect,
+   committed it, and the next wall said the Effect was wrong. The mirror was
+   right and the reason was a Custody conjunct neither side had read.
+
+4. **WALL C, open: the commit's lamport plan has no word for "a child made
+   this."** `output_lamports` is seeded from the OBSERVED prestate; the Custody
+   replay is vacant then, so the plan says zero, and `commit_output_lamports_v3`
+   writes that zero back over the rent the child deposited —
+   `require_committed_rent_exemption_v3` then refuses on coordinate 20 at 0
+   lamports against 288 bytes needing 2,895,360. The commit skips only
+   coordinates an `EffectProgramV5` FUNDING ACTION names, and funding actions
+   describe accounts *Trading* creates through the rent lifecycle. Declaring a
+   local `TransferLamports` is not the repair:
+   `require_child_disjoint_from_local` refuses a child invocation that reaches a
+   coordinate the Effect's own operations mutate, and coordinate 20 is in the
+   child's frame. **The missing thing is an exemption, it is family-neutral
+   machinery, and registered creation is the first route in the protocol that
+   opens a Custody account — which is why no family needed it before.**
+
+### The instrument that found three of them
+
+Decoding the 672-byte `CustodyRequestV1` the runtime actually assembles
+(`sol_log_data(&[request_bytes])`) and diffing it field by field against the
+fixture's host mirror. Both defects 2 and 3 were ONE 32-byte field, and the
+symptom was identical and useless: the request's hash is the sixth seed of the
+Trading caller authority, and `require_custody_frame_shape_v3` requires the
+frame's coordinate 0 to BE that PDA — so any wrong byte anywhere produces
+`Release` with two PDAs and no clue which field disagreed. **A digest-seeded
+identity turns every content defect into the same refusal. Diff the content.**
+
+### Reproducing
+
+```text
+git worktree add /private/tmp/wt <commit>          # never the shared tree
+# relax hot_v3.rs's `selected_action != InlineOrdinary` arm to `return Ok(None)`
+for p in registry trading core claims custody rent; do
+  cargo build-sbf --manifest-path programs/dclutch-$p-sbf/Cargo.toml \
+    --sbf-out-dir <elves> --features hot-cu-profile   # trading only for the feature
+done
+SBF_OUT_DIR=<elves> cargo test \
+  --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
+  --test direct_registered_creation_hot -- --ignored --test-threads=1 \
+  --exact registered_sell_then_buy_execute_on_current_elves --nocapture
+```
+
+`hot-cu-profile` prints the phase ladder, which is what turned "dies somewhere
+in Trading" into "dies between `pf-invocation-resolved` and the Custody arm" in
+one run. **Every figure above is diagnostic** — the checkpoint calls cost
+compute — and none is comparable with a production number.
+
+## 2026-09-01 — the registered Buy through four walls, and the first route to open a Custody account
+
+Behind a wall-A probe (worktree only, never committed), the registered Buy moved
+four walls in one session on real ELFs:
+
+| | code | CU | depth |
+|---|---|---|---|
+| start | `Content` 0x4003 | 308,354 | account projection, no child CPI |
+| after (1) | `Release` 0x4001 | 571,047 | Custody preflight, no child CPI |
+| after (2)+(3) | `AccountFrame` 0x6001 | 776,043 | inside the **first** Custody CPI |
+| after (4) | `Commit` 0x4005 | 1,205,519 | **all three Custody children succeed** |
+
+`InitializeReplay` 123,796 · `OpenVault` 141,105 · delegated deposit 136,253. A
+registered Buy now creates its maker replay and record, opens a Custody replay and
+a TradingPrincipal vault, and moves the maker's collateral into it. Diagnostic-build
+figures; not production-comparable. The Sell executed end to end at **every** step
+— no fix moved a refusal backwards.
+
+**The four defects.** (1) `require_key` read the **input** bank while
+`project_identity` wrote the **output** bank in the same pass — unsatisfiable by
+any transaction; `ordinary_account_artifacts_v3.rs:589-617` had the whole argument
+written out and the registered family did the opposite. (2) the Realm record's
+**address** was projected into `CustodyRequestLayoutV1::REALM`, a **content
+digest** field. (3) the Effect wrote the record beneficiary into `RENT_REFUND`,
+which `initialize_replay` requires to differ from the payer — and this family's
+beneficiary *is* the payer. **The lane got (3) backwards first**: moved the fixture
+to match the Effect and committed it; the next wall said the Effect was wrong.
+Reverted in the same commit.
+
+### Wall C — an exemption nobody needed until now
+
+`require_committed_rent_exemption_v3` refuses on the Custody replay: **0 lamports,
+288 bytes, needs 2,895,360.** `output_lamports` is seeded from the **observed**
+prestate (vacant), and `commit_output_lamports_v3` writes that zero back over the
+rent the child deposited. It exempts only coordinates an `EffectProgramV5` funding
+action names — accounts *Trading* creates. A local `TransferLamports` is not the
+repair: `require_child_disjoint_from_local` correctly refuses a child reaching a
+coordinate the Effect mutates.
+
+> **Registered creation is the first route in the protocol that opens a Custody
+> account.** The missing exemption — a coordinate funded by a child CPI — is
+> family-neutral machinery in `hot_v3.rs`, and nothing ever needed it before.
+
+### Two shared-index lessons, reported against the lane itself
+
+`git add` + `git commit` on the shared index swept in another lane's staged rename.
+**`git commit -o <paths>` from here on.** And restoring `hot_v3.rs` from a snapshot
+to revert a probe can erase another lane's edit in the window — the affected lane
+was told to verify rather than left to discover it.
