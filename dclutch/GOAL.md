@@ -2269,3 +2269,4 @@ resumed. Relaunched from this file's tail block:
 | `a00611258f691f981` | S3 Direct | Buy `MINT_ACCOUNT` mismatch → registered crosscheck → C-04 clauses |
 | `aa481a3dcafc5b3f2` | S7 Structured | Content/Route repair in `encode_effect` → walls behind it → coefficient guard LAST; two red witnesses |
 | `af0d560c200fa8218` | S4 General | the width-1 `Refused` disposition; 258 has never run |
+| `adefc90f75702203a` | S5 Dealer | authenticated `basis_scale` from `ProductBasisV3::payout_scale` (turns `468f66b3` green by the right owner) → register 116 → the 591,781 CU Add wall |
