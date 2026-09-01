@@ -341,11 +341,90 @@ exploitable today; a wrong-handler bug the moment either side's shape moves.
 `DCLTPCA1` is the same bare-8-byte shape (`:1347-1348`), which is the shape
 where this goes wrong most easily.
 
-**Not fixed by re-lettering.** Some of these are shipped instruction
-discriminants, where a change is a wire event needing its own decision record
-exactly as a refusal-band renumbering does; others are fixtures that should
-import the canonical constant. Which is which is an adjudication, and the gate's
-job is to force it rather than guess it. → §10 row R-11.
+### 2.4.1 The adjudication: two are hazards, eight are naming smells
+
+Ember's standing devnet-deploy authority (`AGENTS.md`, `6a68c9c1`) requires a
+**full** redeploy with fresh identities, so a wire change costs nothing right
+now — no durable state to migrate, and every mirror is generated. Re-lettering
+was authorized on that basis and done ahead of the cohort.
+
+The hazard is **same-ELF collision**, where one program dispatches on both
+constants and only data length and branch order separate them. A magic shared
+across *different* programs' ELFs cannot be mis-dispatched: the two constants
+never meet a single dispatcher, so it is a naming smell, not a safety defect.
+Adjudicated by tracing each constant to the `is_*` predicate that reads it and
+then to the program `src/` that calls that predicate:
+
+**Same-ELF dispatch hazards — 2 of 10.**
+
+1. **`DCLTDRS1`, Trading — FIXED (`b64ecbb5`).** The dealer reserve arm is now
+   `DCLTDRV1`; `DCLTDRS1` belongs solely to Direct's replay setup. Re-lettered
+   rather than separated by length, because a length test is itself a guard
+   whose two sides move together. Landed with a regression test,
+   `the_reserve_arm_does_not_answer_to_directs_replay_setup_magic`, which
+   asserts the two constants differ *and* that a bare Direct prefix selects
+   nothing here. The suite proved the channel live before the fix: the existing
+   `selectors_are_exact_…` test failed on `b"DCLTDRS1"` exactly as it should.
+2. **`DCLTRIX1`, Registry — NOT re-lettered, and it is the sharper of the two.**
+   See §2.4.2. It is a *deliberate, documented* action-space partition, so
+   changing it is the owners' design decision, not a mechanical re-letter.
+
+**Cross-ELF or non-dispatch — 8 of 10, gate stays red.** `DCLLBM02`, `DCLLBP02`
+(test fixtures re-declaring a record magic under a local name — fix is to import
+the canonical constant), `DCLTARF1`, `DCLTDAC1`, `DCLTDCM1`, `DCLTDRR1`,
+`DCLTPRQ2`, `DCLTSA03`. None has two constants meeting one dispatcher; several
+pair a request with a receipt, which travel on different channels entirely
+(instruction data versus account data). Left red deliberately: they are real
+ambiguity for anyone reading a wire dump, and narrowing the gate to the subset
+already fixed would be the exact laundering this lane exists to prevent.
+
+### 2.4.2 `DCLTRIX1` — a documented partition whose own rule is already broken
+
+`crates/dclutch-registry-svm/src/lib.rs:103-106` states the design outright:
+
+> "Action `0` is reused, because this magic is shared with the record family
+> (`dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1`), which owns every
+> action from `2` upward; the Registry side of that split has exactly actions
+> `0` and `1` to spend."
+
+So one 8-byte discriminant, two request families, partitioned by an action byte
+at offset 10 — an offset both families deliberately share. **Record's own
+`RecordActionV1::Begin = 1` sits inside the half the document assigns to
+Registry** (`crates/dclutch-record-contract/src/lib.rs:1734-1739`), where
+Registry already spends `0 = ActivateRole` and `1 = Reauthenticate`.
+
+What keeps that from mis-dispatching today is the second clause of the guard at
+`programs/dclutch-registry-sbf/src/lib.rs:282-290`:
+
+```rust
+if instruction_data.get(..8) == Some(RECORD_INSTRUCTION_MAGIC_V1.as_slice())
+    && (instruction_data.get(10).is_some_and(|action| *action >= 2)
+        || instruction_data.len() != REGISTRY_INSTRUCTION_BYTES_V1)
+```
+
+and the arithmetic accident that `BEGIN_RECORD_BYTES_V1 == 176` while
+`REGISTRY_INSTRUCTION_BYTES_V1 == 16`. Record's other actions are safe by the
+first clause: `AppendPage = 2`, `Finalize = 3`, `Abort = 4`, and its two
+16-byte unit requests are Finalize and Abort, both `>= 2`.
+
+**So a Record `Begin` is separated from a Registry `Reauthenticate` — same
+magic, same action byte `1` — by nothing but 176 ≠ 16, and no assertion anywhere
+ties those two widths together.** Narrow the Begin request to 16 bytes, or give
+Registry an action `2`, and valid traffic silently executes as the other
+family's instruction. This is the project's own named defect class, "guards
+whose two sides move together", one wire object over from where it was first
+found.
+
+The minimum honest repair is not a re-letter: it is a compile-time assertion
+binding the two sides (`BEGIN_RECORD_BYTES_V1 != REGISTRY_INSTRUCTION_BYTES_V1`,
+and that no `RecordActionV1` below `2` exists other than `Begin`). Moving
+`Begin` to `5` removes the exception entirely and makes the documented rule
+true. Either is a Registry+Record decision. → §10 row R-13.
+
+**Not fixed by re-lettering, for the remaining eight.** Some are shipped
+instruction discriminants, where a change is a wire event needing its own
+decision record exactly as a refusal-band renumbering does; others are fixtures
+that should import the canonical constant. → §10 row R-11.
 
 **Same-name mirrors are counted, not failed** — three of them (`DCLTCF1A`,
 `DCLTCF2A`, `DCLTPCA1`, each re-declared under its own name in a second
@@ -749,8 +828,12 @@ Named as debt, not disclaimed.
 - **The 19 user-inaccessible selectors are not individually enumerated here.**
   I verified the two sharpest (§2.6) against the tree; the other 17 are S9's
   hand-resolved count, carried forward as theirs, not re-derived.
-- **The magic gate's red is not adjudicated.** I made the collisions visible and
-  refused to re-letter any of them; deciding each one needs the owners in R-11.
+- **Eight of the ten magic collisions are adjudicated but unfixed.** I traced all
+  ten to dispatch (§2.4.1), fixed the one same-ELF hazard that was a mechanical
+  re-letter, and deliberately did not touch `DCLTRIX1` — it is a designed
+  partition, and redesigning another lane's wire split is not a census lane's
+  call. The remaining eight are cross-ELF naming smells; the gate stays red on
+  them on purpose.
 - **The 32 request-shaped magics of §2 are not individually traced** past
   `DCLCNS01`. Most are reached through codec constructors; the count is an upper
   bound on the orphan population, not the population.
@@ -783,7 +866,8 @@ One line each. These are the rows this lane cannot close by engineering.
 | **R-7** | `TicketAuthorship`'s payer and RentCredit arms are unreachable defense-in-depth after `73ffb010`. Document in place, or fold? *(small; listed so it is not re-discovered)* | Series |
 | **R-8** | **C-15, the actual question:** does the accepted final public project include the original FHE/MPC/specialized-batch/energy objective? The 2026-08-27 horizon ruling is explicitly not this answer. If retained → a from-zero capability charter (no foundation exists). If ruled out → a dated ruling plus removal of contradictory claims. | Ember |
 | **R-9** | Whichever way R-8 goes: record "the batch relation is small and specialized on purpose" as a named `O-*` invariant with its reason, so the option is not closed silently by a future simplification. | Ember / OMISSION_INDEX |
-| **R-11** | **Ten magic collisions, gate now red (`7bf75057`).** One wire value claimed by two or more constants, ten times. `DCLTDRS1` is the one that matters: two live top-level selectors of the same Trading ELF separated only by instruction length and dispatch order, so a mis-sized Direct request routes into the Dealer family instead of refusing. Adjudicate each — import the canonical constant, or renumber under a decision record. Renumbering a shipped discriminant is a release event. **Do not re-letter to make the gate green.** | Direct + Dealer + Registry/Record/Relay owners; decision record needed |
+| **R-11** | **Eight magic collisions remain, gate red (`7bf75057`).** Ten found; `DCLTDRS1` fixed at `b64ecbb5`, `DCLTRIX1` promoted to R-13. The other eight are cross-ELF or non-dispatch — real wire-reading ambiguity, no mis-dispatch path. Adjudicate each: fixtures import the canonical constant; genuine sharers renumber under a decision record while the deploy window makes it free. **Do not re-letter to make the gate green.** | Claims fixtures, Dealer/Direct codecs, Registry/Record/Relay |
+| **R-13** | **`DCLTRIX1`: the Registry/Record action-space partition is documented, and Record already violates it.** The doc says Record owns actions `2` upward; `RecordActionV1::Begin = 1` sits in Registry's half, and a Record `Begin` is separated from a Registry `Reauthenticate` — same magic, same action byte — by nothing but `BEGIN_RECORD_BYTES_V1 == 176 != 16`, tied by no assertion. Add the compile-time binding, or move `Begin` to `5` and make the stated rule true. **This is the last live same-ELF ambiguity; it should close before the cohort deploys.** | Registry + Record |
 | **R-12** | **19 of ≈57 top-level selectors are reachable from neither CLI nor SDK — C-16 forbids exactly this.** Two are sharp enough to name: `DCLTDFS1`, C-04's permissionless third-party fee completion, *designed for a stranger* and callable only from our own campaign harness; and `DCLTPCA1`, the sole way out of collateral stranded by an expired projection, with no client at all. Build the client surfaces, or rule the capabilities out with a date. | Direct (C-04), Trading (recovery), SDK/CLI |
 | **R-10** | **Re-routed — answerable, not rulable.** Six guides disagree on whether the first market is open on devnet and `deployments.ts` pins no market address. S1/S10 is standing up a fresh cohort under Ember's disposability ruling, so a measurement settles it and no ruling is owed. | S1/S10 |
 

@@ -25,9 +25,18 @@ is not a source tree to copy wholesale.
   evidence, which C-14 forbids and which no amount of devnet success repairs.
   Record the commit, every ELF hash, every program id, every transaction
   signature and the resulting poststates.
-  **Still NOT authorized**: mainnet anything, `git push`, tags, releases, and
-  reading wallet or private-key material outside the devnet keypair this work
-  requires.
+- **PUBLICATION CUTS ARE AUTHORIZED, standing, from 2026-09-01.** Ember:
+  *"mind cutting fresh to ~/dev/dragons-clutch anyway, and keeping that fresh?"*
+  Run `tools/cut.sh`, which is the only sanctioned way to do it: it cuts from
+  **HEAD, never the working tree** (the tree is dirty on purpose, and
+  publishing a state no commit names is unreproducible evidence), runs a
+  credential sweep as a **value test** that must find zero, and gates on the
+  published `dclutch/` tree object being **identical** to the live HEAD tree
+  before it pushes. Keep the public repo fresh — cut whenever a batch of lane
+  work lands, not once.
+  **Still NOT authorized**: mainnet anything, tags, releases, force-pushes,
+  pushing any branch other than the cut to `main`, and reading wallet or
+  private-key material outside the devnet keypair this work requires.
 - Local commits are ordinary work. Add named files explicitly while parallel
   work is live.
 - **The live tree is `/Users/ember/dev/dclutch`. There is a STALE NESTED COPY

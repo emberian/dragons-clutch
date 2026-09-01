@@ -2,10 +2,19 @@
 //!
 //! Posting, terminal consumption, and reclaim are deliberately separate
 //! transitions. The Receiver update's write authority is a Resolution PDA so
-//! no submitter can reclaim evidence before dClutch has consumed it, while any
-//! resolver may trigger reclaim after the persisted lifecycle becomes
-//! `Consumed`. Update rent always returns to the immutable submitter-selected
-//! refund recipient.
+//! no submitter can reclaim evidence before dClutch is done with it, while any
+//! resolver may trigger reclaim once it is. Update rent always returns to the
+//! immutable submitter-selected refund recipient.
+//!
+//! "Done with it" is a partition, not a single state, and the wire says which
+//! half it is in. A submission that became truth carries a positive
+//! `terminal_sequence` and a certificate, and reclaims through
+//! [`ProviderReclaimRequestV3`]. A submission that never can — the loser of a
+//! first-valid race, or any submission on a market that ended on its failure
+//! walk — carries zero in `terminal_sequence`, `certificate` and
+//! `provider_evidence`, which this wire's own decoder refuses, and reclaims
+//! through [`ProviderAbandonRequestV3`] instead. Neither route can decode the
+//! other's bytes, and no submission is outside both.
 
 use crate::{Error, Result};
 
@@ -15,6 +24,10 @@ pub const PROVIDER_UPDATE_LIFECYCLE_BYTES_V3: usize = 528;
 pub const PROVIDER_SUBMIT_REQUEST_BYTES_V3: usize = 416;
 /// Exact permissionless reclaim request width.
 pub const PROVIDER_RECLAIM_REQUEST_BYTES_V3: usize = 288;
+/// Exact abandoned-submission reclaim request width.
+pub const PROVIDER_ABANDON_REQUEST_BYTES_V3: usize = 256;
+/// Exact abandoned-submission reclaim return receipt width.
+pub const PROVIDER_ABANDON_RECEIPT_BYTES_V3: usize = 272;
 /// Exact provider submission return receipt width.
 pub const PROVIDER_SUBMIT_RECEIPT_BYTES_V3: usize = 400;
 /// Exact provider reclaim return receipt width.
@@ -25,6 +38,10 @@ pub const PROVIDER_UPDATE_LIFECYCLE_MAGIC_V3: [u8; 8] = *b"DCLTPUL3";
 pub const PROVIDER_SUBMIT_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLTPSB3";
 /// Reclaim request magic.
 pub const PROVIDER_RECLAIM_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLTPRL3";
+/// Abandoned-submission reclaim request magic.
+pub const PROVIDER_ABANDON_REQUEST_MAGIC_V3: [u8; 8] = *b"DCLTPAB3";
+/// Abandoned-submission reclaim receipt magic.
+pub const PROVIDER_ABANDON_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLTPAR3";
 /// Submission receipt magic.
 pub const PROVIDER_SUBMIT_RECEIPT_MAGIC_V3: [u8; 8] = *b"DCLTPSR3";
 /// Reclaim receipt magic.
@@ -257,6 +274,190 @@ impl ProviderReclaimRequestV3 {
             self.resolver,
             self.refund_recipient,
             self.release_set,
+        ]
+    }
+}
+
+/// Permissionless reclaim of a submission no Source can consume any more.
+///
+/// [`ProviderReclaimRequestV3`] is the route for the submission that WON: it
+/// names a terminal certificate and a positive terminal sequence, and its
+/// decoder refuses both as zero. A submission that lost the first-valid race,
+/// or that was posted to a market which ended on its failure walk, carries
+/// neither — its lifecycle stays `Submitted` with `certificate` and
+/// `terminal_sequence` still zero — so it cannot be expressed in that wire at
+/// all, which is why it needed this one rather than a relaxed conjunct in the
+/// existing gate.
+///
+/// The two routes discharge the same lamports to the same persisted
+/// `refund_recipient`. They differ only in what they must prove first: the
+/// consumed route proves the submission became truth, and this route proves it
+/// never can.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderAbandonRequestV3 {
+    /// Immutable Market generation.
+    pub generation: u64,
+    /// Core Market.
+    pub market: [u8; 32],
+    /// Source state this submission was posted against.
+    pub source_state: [u8; 32],
+    /// Submitted, never-consumed lifecycle account.
+    pub lifecycle: [u8; 32],
+    /// Receiver update to close.
+    pub update_account: [u8; 32],
+    /// Permissionless reclaim transaction signer.
+    pub resolver: [u8; 32],
+    /// Immutable lifecycle refund recipient.
+    pub refund_recipient: [u8; 32],
+    /// Market-selected release set.
+    pub release_set: [u8; 32],
+}
+
+impl ProviderAbandonRequestV3 {
+    /// Decode one exact canonical abandoned-submission reclaim request.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        require_header(
+            bytes,
+            PROVIDER_ABANDON_REQUEST_BYTES_V3,
+            PROVIDER_ABANDON_REQUEST_MAGIC_V3,
+            3,
+        )?;
+        require_zero(bytes, 24, 8)?;
+        let value = Self {
+            generation: read_u64(bytes, 16)?,
+            market: array(bytes, 32)?,
+            source_state: array(bytes, 64)?,
+            lifecycle: array(bytes, 96)?,
+            update_account: array(bytes, 128)?,
+            resolver: array(bytes, 160)?,
+            refund_recipient: array(bytes, 192)?,
+            release_set: array(bytes, 224)?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode one exact canonical abandoned-submission reclaim request.
+    pub fn to_bytes(self) -> Result<[u8; PROVIDER_ABANDON_REQUEST_BYTES_V3]> {
+        self.validate()?;
+        let mut bytes = [0; PROVIDER_ABANDON_REQUEST_BYTES_V3];
+        write_header(&mut bytes, PROVIDER_ABANDON_REQUEST_MAGIC_V3, 3)?;
+        put(&mut bytes, 16, &self.generation.to_le_bytes())?;
+        for (index, identity) in self.identities().iter().enumerate() {
+            put(&mut bytes, 32 + index * 32, identity)?;
+        }
+        Ok(bytes)
+    }
+
+    fn validate(self) -> Result<()> {
+        if self.generation == 0
+            || self.identities().iter().any(is_zero)
+            || self.resolver == self.update_account
+        {
+            return Err(Error::ZeroCoordinate);
+        }
+        Ok(())
+    }
+
+    fn identities(self) -> [[u8; 32]; 7] {
+        [
+            self.market,
+            self.source_state,
+            self.lifecycle,
+            self.update_account,
+            self.resolver,
+            self.refund_recipient,
+            self.release_set,
+        ]
+    }
+}
+
+/// Return receipt for one abandoned-submission reclaim.
+///
+/// It carries no certificate, provider evidence or terminal sequence, because
+/// the fact it attests is that this submission produced none. What it binds is
+/// the exact request, the two accounts that were closed, the Source that can no
+/// longer consume them, and the total that reached the refund recipient.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProviderAbandonReceiptV3 {
+    /// Exact abandon request digest.
+    pub request_digest: [u8; 32],
+    /// Closed lifecycle account.
+    pub lifecycle: [u8; 32],
+    /// Closed update account.
+    pub update_account: [u8; 32],
+    /// Source state that can no longer consume this submission.
+    pub source_state: [u8; 32],
+    /// Permissionless resolver.
+    pub resolver: [u8; 32],
+    /// Refund recipient.
+    pub refund_recipient: [u8; 32],
+    /// Digest of the update bytes that were never consumed.
+    pub update_digest: [u8; 32],
+    /// Generation.
+    pub generation: u64,
+    /// Exact total discharged to the refund recipient.
+    pub refunded_lamports: u64,
+}
+
+impl ProviderAbandonReceiptV3 {
+    /// Decode one exact abandoned-submission reclaim receipt.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        require_header(
+            bytes,
+            PROVIDER_ABANDON_RECEIPT_BYTES_V3,
+            PROVIDER_ABANDON_RECEIPT_MAGIC_V3,
+            3,
+        )?;
+        require_zero(bytes, 24, 8)?;
+        require_zero(bytes, 264, 8)?;
+        let value = Self {
+            generation: read_u64(bytes, 16)?,
+            request_digest: array(bytes, 32)?,
+            lifecycle: array(bytes, 64)?,
+            update_account: array(bytes, 96)?,
+            source_state: array(bytes, 128)?,
+            resolver: array(bytes, 160)?,
+            refund_recipient: array(bytes, 192)?,
+            update_digest: array(bytes, 224)?,
+            refunded_lamports: read_u64(bytes, 256)?,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    /// Encode one exact abandoned-submission reclaim receipt.
+    pub fn to_bytes(self) -> Result<[u8; PROVIDER_ABANDON_RECEIPT_BYTES_V3]> {
+        self.validate()?;
+        let mut bytes = [0; PROVIDER_ABANDON_RECEIPT_BYTES_V3];
+        write_header(&mut bytes, PROVIDER_ABANDON_RECEIPT_MAGIC_V3, 3)?;
+        put(&mut bytes, 16, &self.generation.to_le_bytes())?;
+        for (index, identity) in self.identities().iter().enumerate() {
+            put(&mut bytes, 32 + index * 32, identity)?;
+        }
+        put(&mut bytes, 256, &self.refunded_lamports.to_le_bytes())?;
+        Ok(bytes)
+    }
+
+    fn validate(self) -> Result<()> {
+        if self.generation == 0
+            || self.refunded_lamports == 0
+            || self.identities().iter().any(is_zero)
+        {
+            return Err(Error::InvalidReceiptShape);
+        }
+        Ok(())
+    }
+
+    fn identities(self) -> [[u8; 32]; 7] {
+        [
+            self.request_digest,
+            self.lifecycle,
+            self.update_account,
+            self.source_state,
+            self.resolver,
+            self.refund_recipient,
+            self.update_digest,
         ]
     }
 }
@@ -818,6 +1019,76 @@ mod tests {
             Ok(lifecycle)
         );
         assert!(lifecycle.consume(11, [16; 32], [17; 32]).is_err());
+    }
+
+    fn abandon() -> ProviderAbandonRequestV3 {
+        ProviderAbandonRequestV3 {
+            generation: 7,
+            market: [1; 32],
+            source_state: [2; 32],
+            lifecycle: [3; 32],
+            update_account: [6; 32],
+            resolver: [21; 32],
+            refund_recipient: [8; 32],
+            release_set: [9; 32],
+        }
+    }
+
+    #[test]
+    fn abandon_request_and_receipt_round_trip() {
+        let request = abandon();
+        let bytes = request.to_bytes().expect("abandon request");
+        assert_eq!(bytes.len(), PROVIDER_ABANDON_REQUEST_BYTES_V3);
+        assert_eq!(ProviderAbandonRequestV3::decode(&bytes), Ok(request));
+        let receipt = ProviderAbandonReceiptV3 {
+            request_digest: [30; 32],
+            lifecycle: request.lifecycle,
+            update_account: request.update_account,
+            source_state: request.source_state,
+            resolver: request.resolver,
+            refund_recipient: request.refund_recipient,
+            update_digest: [31; 32],
+            generation: request.generation,
+            refunded_lamports: 6_389_280,
+        };
+        let receipt_bytes = receipt.to_bytes().expect("abandon receipt");
+        assert_eq!(receipt_bytes.len(), PROVIDER_ABANDON_RECEIPT_BYTES_V3);
+        assert_eq!(
+            ProviderAbandonReceiptV3::decode(&receipt_bytes),
+            Ok(receipt)
+        );
+    }
+
+    /// The abandon wire must not be reachable through the consumed wire's
+    /// magic or action byte, in either direction. Two routes that discharge the
+    /// same lamports under different proofs are exactly where a decoder that
+    /// tolerates the neighbour's header becomes a way to skip the proof.
+    #[test]
+    fn the_two_reclaim_routes_do_not_decode_each_others_wires() {
+        let abandon_bytes = abandon().to_bytes().expect("abandon request");
+        assert_eq!(
+            ProviderReclaimRequestV3::decode(&abandon_bytes),
+            Err(Error::InvalidLength)
+        );
+        let mut widened = [0_u8; PROVIDER_RECLAIM_REQUEST_BYTES_V3];
+        widened
+            .get_mut(..PROVIDER_ABANDON_REQUEST_BYTES_V3)
+            .expect("abandon prefix")
+            .copy_from_slice(&abandon_bytes);
+        assert_eq!(
+            ProviderReclaimRequestV3::decode(&widened),
+            Err(Error::InvalidLength),
+            "the reclaim decoder must reject the abandon magic, not merely its width"
+        );
+        let mut action_swapped = abandon_bytes;
+        *action_swapped.get_mut(10).expect("action byte") = 2;
+        assert_eq!(
+            ProviderAbandonRequestV3::decode(&action_swapped),
+            Err(Error::UnknownAction)
+        );
+        let mut zero_source = abandon();
+        zero_source.source_state = [0; 32];
+        assert_eq!(zero_source.to_bytes(), Err(Error::ZeroCoordinate));
     }
 
     #[test]

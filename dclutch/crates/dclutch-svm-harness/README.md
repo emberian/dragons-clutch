@@ -90,18 +90,31 @@ This is local real-SVM evidence. The captured update is synthetic-local, and
 the campaign is not provider availability, devnet, deployment, or mainnet
 evidence.
 
-**THAT CAMPAIGN DOES NOT RUN TODAY, AND THE TABLE ABOVE IS HISTORICAL.**
-Measured 2026-09-01, at HEAD, with all eight ELFs freshly built:
+**THAT CAMPAIGN HAS NO INSTRUCTION BUILDERS, AND THE TABLE ABOVE IS
+HISTORICAL.** Measured 2026-09-01 at HEAD with all eight ELFs freshly built,
+by removing each layer of cover in turn and rerunning:
 
-- `compiled_resolution_executes_primary_recovery_failure_and_atomic_refusal`
-  has carried `#[ignore = "requires canonical Core infrastructure init and
-  31-account Found request"]` since `583e5bfa` (2026-08-26). The command above
-  runs zero tests without `-- --ignored`.
-- With `--ignored` it panics at `resolution_successor.rs:297` on
-  `DCLUTCH_REGISTRY_SEMANTIC_RELEASE_ID is required`. Six such variables are
-  read (`:678`, `:683`, `:688`, `:693`, `:703`, `:708`) and **nothing in this
-  repository sets any of them** — no script, no CI row, no runbook. So the
-  campaign is not merely disabled, it has no runner.
+1. `#[ignore]` since `583e5bfa` (2026-08-26 01:06). The command above runs zero
+   tests without `-- --ignored`.
+2. With `--ignored`, six `DCLUTCH_*_SEMANTIC_RELEASE_ID` environment variables
+   **nothing in this repository set** — no script, no CI row, no runbook. Now
+   derived from the tree, with the operator override kept.
+3. The pinned Resolution identity was `RESOLUTION_CONTROLLER_RELEASE_ID_V4`
+   while the program authenticates V7. Corrected.
+4. The activation cache address was derived and the account never seeded, so
+   the first instruction refused `RegistryError::ActivationCache` (`0x1005`).
+   Seeded, through the contract's own writer, as the lifecycle campaign does.
+5. Past all four it stops at `resolution_successor.rs:1225`:
+   **`primary_instruction` and `funded_caller_instruction` are `panic!` stubs.**
+   `d1325c7f` replaced both at 2026-08-26 00:19, and the `#[ignore]` landed 47
+   minutes later. The body of this campaign has been unreachable ever since,
+   while this README went on quoting its compute table as evidence.
+
+The disposition is convergence, not repair: rebuilding those two builders means
+porting the current Core-effect and funded ABIs into a second fixture, and
+`resolution_core_v3_lifecycle.rs` already carries them against the current Core,
+Custody, Registry and Resolution ELFs. The funded walk belongs there. This
+file's remaining value is its captured provider projection.
 
 The consequence is specific and belongs to C-09: the Pyth **funded fallback
 walk** — `FundedTransitionActionV3::{FailNext, Exhaust, CommitFailure}`, the

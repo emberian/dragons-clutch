@@ -121,7 +121,10 @@ fn rule(index: usize, lengths: &[u32]) -> Result<AccountRuleWithPrestateInputV2>
         53 => AccountAliasInputV2::Fixed(27),
         _ => AccountAliasInputV2::SelfCoordinate,
     };
-    let opaque = matches!(index, 6 | 7 | 19 | 20 | 21 | 23 | 24 | 25 | 27 | 38..=40 | 42..=52);
+    // 15 is the System program: the sole `executable` coordinate this frame did
+    // not also declare opaque, and a builtin's data is its name, which is a
+    // cluster fact. See `open_structured_v3.rs` for the measurement.
+    let opaque = matches!(index, 6 | 7 | 15 | 19 | 20 | 21 | 23 | 24 | 25 | 27 | 38..=40 | 42..=52);
     let prestate = if index == 4 {
         AccountPrestateV2::AdapterAuthenticatedVariableData
     } else if alias != AccountAliasInputV2::SelfCoordinate {

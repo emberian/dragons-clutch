@@ -134,6 +134,21 @@ pub enum ResolutionError {
     /// party's help, and once `terminal_receipt` is `Some` every phase retires
     /// exactly as it always did. No rent is stranded, only deferred.
     RecordStillConsumable = 0x8016,
+    /// `AbandonSubmission` was aimed at a submission a Source could still consume.
+    ///
+    /// The mirror of [`ResolutionError::RecordStillConsumable`] on the provider
+    /// transport, and it exists for the same reason: closing evidence that is
+    /// still live would let anyone delete a market's answer for a transaction
+    /// fee. Abandonment requires BOTH that the submitter's own
+    /// `reclaim_after_unix_seconds` has passed AND that the Source can no
+    /// longer consume this update — it has left `Primary`, or its account has
+    /// already been discharged by `CloseFund`.
+    ///
+    /// It needs its own code because it is the only refusal on this route a
+    /// perfectly well-formed request from an honest party can trigger, and it
+    /// means "right route, wrong moment". A reader who saw `OutputState` would
+    /// go hunting a malformed account that is not there.
+    SubmissionStillConsumable = 0x8017,
 }
 
 impl ResolutionError {
@@ -143,7 +158,7 @@ impl ResolutionError {
     /// [`ResolutionError::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::AccountFrame,
         Self::Instruction,
         Self::OutputState,
@@ -167,12 +182,13 @@ impl ResolutionError {
         Self::ReleaseSuperseded,
         Self::SponsoredPush,
         Self::RecordStillConsumable,
+        Self::SubmissionStillConsumable,
     ];
 
     /// This refusal's position in [`ResolutionError::ALL`].
     ///
     /// The match is exhaustive on purpose, and that is the whole mechanism:
-    /// a twenty-fourth variant is a COMPILE ERROR here rather than a discriminant no
+    /// a twenty-fifth variant is a COMPILE ERROR here rather than a discriminant no
     /// assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
@@ -199,6 +215,7 @@ impl ResolutionError {
             Self::ReleaseSuperseded => 20,
             Self::SponsoredPush => 21,
             Self::RecordStillConsumable => 22,
+            Self::SubmissionStillConsumable => 23,
         }
     }
 }

@@ -2170,3 +2170,54 @@ selector nine executes. The order is **unblock selector nine → mount the ledge
 → then the table.** Building the instrument first is building it for a room
 nobody can enter — the same error, one level up, as writing L2 for the only
 compartment in the room.
+
+## 2026-09-01 — the class stopped being theoretical
+
+Every prior instance of *guards whose two sides move together* was
+unexploitable: a check that could not fail, on a route where something else
+already bound the value. **One was not.** `bf362312`.
+
+`coordinates.terms` was unpinned on the **permissionless fractional compaction
+crank** — the one route in the protocol that requires no permission at all.
+Registry publication is permissionless, and the only joins were fields the
+record's own author writes. So a cranker could publish terms with **D = 40,
+rate = 16**, satisfy the conservation law **exactly**, and write a record under
+which a holder of 20 of the 40 shards redeems **zero, forever**.
+
+Conservation held. The holder was robbed. That is the whole lesson of the
+class in one sentence: **a law that checks a value against its own author
+proves nothing, and conservation is not integrity.**
+
+Repaired the way the three sibling routes already did it —
+`authenticate_selected_config` derives the config identity from the
+*authenticated* terms and pins it to the Market's manifest — with a new named
+refusal `SelectionConfig = 0x565C`. **The hostile was measured ACCEPTED before
+the fix**, which is what separates this from a theory.
+
+**A second instance of the same shape is live in Trading**,
+`claims_composition_v3.rs:1151`: on the current V2 root both sides are read
+from the same account in one function and the caller's `terms` is never
+consulted; only the historical V1 arm pins it. Routed with the patch. Note the
+lane's own caveat: Claims closing its side makes Trading's arm no longer
+load-bearing *for that route*, which is not the same as correct.
+
+### A routing of mine that was wrong, corrected by the lane
+
+I relayed `0x5644` as a **missing guard**. It was not. The invariant *was*
+enforced by the wrapped settlement and refused as `TerminalIdentity`, so the
+published `0x5644` code was merely unreachable and my accusation was wrong.
+Settled by measurement — the phase hostile returned 22095 where 22084 was
+asserted. A dead refusal code has at least three causes (route never built,
+guard removed, guard present under another name) and only measurement
+distinguishes them.
+
+### Owed, and now costed
+
+- **The Rational replay cursor strands rent.** `RATIONAL_REPLAY_SEED_V2` has
+  exactly one on-chain use — its own derivation. No close, no drain, no resize
+  anywhere, while `rational_lifecycle_v2.rs` retirement closes everything else
+  and never touches it. **One per `(descriptor, actor)`, so it grows with
+  holders.** An account class with no route home that scales with adoption.
+- **`the_terminal_settlement_has_headroom_…` is RED at HEAD**: 1,236,375 CU
+  against `< 1_120_000`. The two new security guards add **+6,010**, reported
+  rather than absorbed into the pre-existing red.

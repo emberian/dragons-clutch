@@ -622,7 +622,16 @@ fn encode_account_profile(
             35 => AccountAliasInputV2::Fixed(3),
             _ => AccountAliasInputV2::SelfCoordinate,
         };
-        let opaque = matches!(index, 6 | 7 | 19 | 20 | 21 | 23 | 24 | 25 | 26 | 27);
+        // 15 is the System program, and it is here for a measured reason. It is
+        // the only coordinate this frame declares `executable` that was not
+        // also declared opaque, so a release pinned its data length at exactly
+        // zero -- and a builtin program account's data is its NAME, a cluster
+        // fact no release can know. On the Agave 4.x line the account holds
+        // `solana_system_program`, 21 bytes, which is what the account
+        // projection kernel refused as `DataLengthMismatch` and what kept the
+        // physical Trading common-Hot campaign from reaching submission. Every
+        // other program in the frame was already opaque; this closes the set.
+        let opaque = matches!(index, 6 | 7 | 15 | 19 | 20 | 21 | 23 | 24 | 25 | 26 | 27);
         let prestate = if index == 4 {
             AccountPrestateV2::AdapterAuthenticatedVariableData
         } else if alias != AccountAliasInputV2::SelfCoordinate {
@@ -1398,7 +1407,7 @@ mod tests {
                 account.rule(false, 29).expect("basis alias").prestate(),
                 AccountPrestateV2::AuthenticatedRouteAlias
             );
-            for coordinate in [6_u16, 7, 19, 20, 21, 23, 24, 25, 26, 27, 38, 39, 40] {
+            for coordinate in [6_u16, 7, 15, 19, 20, 21, 23, 24, 25, 26, 27, 38, 39, 40] {
                 assert_eq!(
                     account.rule(false, coordinate).expect("opaque").prestate(),
                     AccountPrestateV2::AuthenticatedOpaqueReadonlyData

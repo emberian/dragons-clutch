@@ -5,9 +5,25 @@ relation. It handles a primary, terminal, already-posted Pyth `PriceUpdateV2`
 whose Receiver verification level is `Full`, exactly funded ordered recovery,
 the final funded exhaustion transition, and explicit Product-owned failure.
 
-The program does not post or reclaim provider accounts and performs no
-provider CPI. The Pyth update is read-only. Before producing any mutation it
-authenticates:
+**The program does not verify a provider signature, and must never be described
+as doing so.** There is no ed25519, secp256k1 or keccak in this program or in
+`dclutch-pyth-svm`; `FullPriceUpdateV2::parse` reads a `VerificationLevel` tag
+byte and nothing more. Soundness is DELEGATED: the update account must be owned
+by the Receiver program named in a Registry-finalized `PythReleaseV1` reached
+from the Market's own `identity.resolution_policy`, pinned by ProgramData,
+deployment slot, upgrade policy and whole-body config digest, and the Receiver
+verified the Wormhole VAA's guardian signatures before it ever wrote those
+bytes. That is a real root of trust and a checkable one —
+`crates/dclutch-svm-harness/tests/support/pyth_provider.rs` runs the captured
+router ELF's `verify_encoded_vaa_v1` on a genuinely signed 13-of-19 VAA — but
+it is delegation, not first-party cryptography, and the difference is the whole
+security argument.
+
+The *execution* route performs no provider CPI and reads the Pyth update
+read-only. The *transport* route (`provider_transport_v3.rs`) does CPI the
+Receiver, in exactly three places: `PostUpdate` at submission, and
+`ReclaimRent` on each of the two reclaim routes below. Before producing any
+mutation the execution route authenticates:
 
 - the exact rent-exempt 352-byte Core Market PDA in `Open`/`Consumed` state
   and the Market-bound Source state;
@@ -111,6 +127,41 @@ immediate acknowledgment check; Resolution owns Source, the three action-specifi
 funding ledgers, certificates, and closure receipt. Registry/Core account
 mutation, Loader/System behavior, Pyth program correctness, Clock correctness,
 SHA-256 syscall correctness, and SVM rollback are not Lean proofs.
+
+## Two reclaim routes, and why there are two
+
+A provider submission owns two rent-bearing accounts: its program-owned
+lifecycle PDA and the Receiver-owned `PriceUpdateV2` it posted. Every one of
+them has a route home, and which route depends on what the submission became.
+
+`process_reclaim` (`DCLTPRL3`, 18 accounts) serves the submission that WON. It
+requires `ProviderUpdateStatusV3::Consumed` and a program-owned certificate
+carrying that lifecycle's own `provider_evidence`.
+
+`process_abandon` (`DCLTPAB3`, 18 accounts) serves every other outcome: the
+loser of a first-valid race, and every submission on a market that ended on its
+funded failure walk. Their lifecycles stay `Submitted` with `terminal_sequence`,
+`certificate` and `provider_evidence` all zero — the wire's own statement that
+they never became truth — so they cannot be expressed in the consumed wire at
+all. `ProviderReclaimRequestV3::decode` refuses a zero terminal sequence and any
+zero identity, `certificate` among them. **That is why this is a second route
+and not a relaxed conjunct in the first: the consumed gate did not move.**
+
+Abandonment requires BOTH that the submitter's own `reclaim_after_unix_seconds`
+has passed AND that the Source can no longer consume the update — it has left
+`Primary`, or its account has already been discharged by `CloseFund`. Both,
+never either. The deadline alone would let a stranger delete a live market's
+answer for a transaction fee, which is the failure `RecordStillConsumable`
+(`0x8016`) was allocated for one transport over; the mirrored refusal here is
+`SubmissionStillConsumable` (`0x8017`). The frame is the same eighteen
+coordinates in the same order with the same privileges; index 5 carries the
+Source resolution state instead of the terminal certificate, because the Source
+is what proves consumption can never happen.
+
+The gap this closes was named in
+`docs/evidence/LIVENESS_CENSUS_2026_08_29.md` row Q8a, which reached the same
+construction — new magic, new request type, new terminality conjunct — and
+stopped at the analysis.
 
 ## Optimized SBF checkpoint
 

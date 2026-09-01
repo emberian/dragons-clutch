@@ -519,14 +519,23 @@ fixed rather than dropped.\n\n` +
 Every instruction the programs accept, with its selector and where it
 stands:
 
-- **witnessed** -- an in-tree test campaign has actually run this route
-  (that is test coverage, not a proof about every input). The campaign is
-  named in the row.
+- **witnessed** -- a campaign binding in \`tools/gauntlet/*/bindings.json\`
+  claims this route, and names the campaign. Read that as *bound*, not as
+  *corroborated*: this page is generated from the bindings alone, so it
+  cannot tell a route whose evidence was folded from one whose campaign has
+  never been run. Corroboration against the chain's own logs -- signatures,
+  slots, refusal codes, \`Program <address> invoke\` lines -- is a separate
+  pipeline, \`dclutch-route-census observe\`, and its output is CENSUS.md.
+  Where the two disagree, CENSUS.md is the evidence and this page is the
+  claim. And even a corroborated row is test coverage, never a proof about
+  every input.
 - **blocked** -- the route cannot be driven yet, and the reason is written
   down in \`tools/gauntlet/blocked.json\` (rows show the first sentence;
-  the file has the rest).
-- **NEVER-EXECUTED** -- no campaign has run it and no reason is recorded
-  yet.
+  the file has the rest). A campaign that exists and passes but emits no
+  census evidence is recorded here too, with its owner, rather than being
+  left to look like a route nobody ever wrote.
+- **NEVER-EXECUTED** -- no campaign binding names it and no reason is
+  recorded yet.
 
 Currently **${neverExecuted.length}** of **${inventoryRouteIds.size}**
 routes are in that last group.

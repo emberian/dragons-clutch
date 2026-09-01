@@ -33,7 +33,10 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_pyth_svm::{FullPriceUpdateV2, local_validator_release_v1};
 use dclutch_record_contract::{RAW_RECORD_PDA_SEED_V1, STAGING_CURSOR_PDA_SEED_V1};
 use dclutch_registry_contract::{
-    ACTIVATION_PDA_DOMAIN_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
+    ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1, ACTIVATION_PDA_DOMAIN_V1,
+    ActivatedExecutionReleaseSetV1, ArtifactActivationInputV1, ArtifactReleaseV1,
+    ArtifactUpgradePolicyV1, DeploymentObservationV1, activate_execution_role_into_v1,
+    initialize_activation_cache_v1,
 };
 use dclutch_registry_svm::RegistryInstructionV1;
 use dclutch_release_set_contract::{
@@ -44,7 +47,7 @@ use dclutch_release_set_contract::{
 use dclutch_resolution_codec::{
     FundedTransitionActionV3, PRIMARY_CERTIFICATE_SEQUENCE_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
     RESOLUTION_CERTIFICATE_BYTES_V2, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V4, ResolutionCertificateKindV2, ResolutionCertificateV2,
+    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateKindV2, ResolutionCertificateV2,
 };
 use dclutch_resolution_proof_sbf::ResolutionError;
 use dclutch_resolution_receipt_test_caller_sbf::TestReceiptCallerError;
@@ -289,12 +292,59 @@ fn artifact(program: Pubkey, semantic_release: [u8; 32], elf: &[u8]) -> Artifact
     .expect("exact local artifact release")
 }
 
+fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
+    ArtifactActivationInputV1::new(
+        artifact_id(release),
+        release,
+        DeploymentObservationV1::new(
+            release.program().to_bytes(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            true,
+            release.programdata(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            false,
+            release.programdata(),
+            bpf_loader_upgradeable::ID.to_bytes(),
+            release.deployment_slot(),
+            release.elf_digest(),
+            release.upgrade_authority(),
+        )
+        .expect("current deployment observation"),
+    )
+}
+
 fn artifact_id(release: ArtifactReleaseV1) -> ArtifactReleaseIdV1 {
     ArtifactReleaseIdV1::new(hash(&release.to_bytes()).to_bytes()).expect("artifact ID")
 }
 
-fn required_semantic_release(variable: &str) -> [u8; 32] {
-    let value = env::var(variable).unwrap_or_else(|_| panic!("{variable} is required"));
+/// The semantic release identity this campaign gives one non-Resolution role.
+///
+/// These six are FIXTURE-LOCAL identities, not protocol facts. The Resolution
+/// role's identity is the pinned constant below and the program authenticates
+/// it; the others only have to be nonzero, distinct, and the same value in the
+/// release set and in the activation this campaign builds around it. The
+/// gauntlet derives exactly this class of value from a domain plus the role
+/// name (`tools/gauntlet/run.sh`, `semantic_release_for`), so this does the
+/// same, minus the commit -- a fixture that re-derives its activation digests
+/// on every commit would be a fixture that never has a stable prestate.
+///
+/// It used to demand six environment variables, and NOTHING IN THE REPOSITORY
+/// SET ANY OF THEM: no script, no CI row, no runbook. A campaign whose inputs
+/// cannot be produced from its own tree is not a strict campaign, it is an
+/// unreachable one, and it protected nothing while it sat behind `#[ignore]`.
+/// The override survives for an operator driving a real release set.
+fn semantic_release(role: &str) -> [u8; 32] {
+    let variable = format!("DCLUTCH_{}_SEMANTIC_RELEASE_ID", role.to_uppercase());
+    match env::var(&variable) {
+        Ok(value) => parse_semantic_release(&variable, &value),
+        Err(_) => {
+            hash(format!("dclutch/svm-harness/semantic-release/v1\nrole={role}\n").as_bytes())
+                .to_bytes()
+        }
+    }
+}
+
+fn parse_semantic_release(variable: &str, value: &str) -> [u8; 32] {
     assert_eq!(value.len(), 64, "{variable} must be 32-byte lowercase hex");
     assert!(
         value
@@ -675,39 +725,27 @@ impl Fixture {
 
         let registry_release = artifact(
             REGISTRY_PROGRAM_ID,
-            required_semantic_release("DCLUTCH_REGISTRY_SEMANTIC_RELEASE_ID"),
+            semantic_release("registry"),
             &elves.registry,
         );
-        let core_release = artifact(
-            CORE_PROGRAM_ID,
-            required_semantic_release("DCLUTCH_CORE_SEMANTIC_RELEASE_ID"),
-            &elves.core,
-        );
-        let claims_release = artifact(
-            CLAIMS_PROGRAM_ID,
-            required_semantic_release("DCLUTCH_CLAIMS_SEMANTIC_RELEASE_ID"),
-            &elves.claims,
-        );
+        let core_release = artifact(CORE_PROGRAM_ID, semantic_release("core"), &elves.core);
+        let claims_release = artifact(CLAIMS_PROGRAM_ID, semantic_release("claims"), &elves.claims);
         let trading_release = artifact(
             TRADING_PROGRAM_ID,
-            required_semantic_release("DCLUTCH_TRADING_SEMANTIC_RELEASE_ID"),
+            semantic_release("trading"),
             &elves.trading,
         );
         let resolution_release = artifact(
             RESOLUTION_PROGRAM_ID,
-            RESOLUTION_CONTROLLER_RELEASE_ID_V4,
+            RESOLUTION_CONTROLLER_RELEASE_ID_V7,
             &elves.resolution,
         );
         let custody_release = artifact(
             CUSTODY_PROGRAM_ID,
-            required_semantic_release("DCLUTCH_CUSTODY_SEMANTIC_RELEASE_ID"),
+            semantic_release("custody"),
             &elves.custody,
         );
-        let rent_release = artifact(
-            RENT_PROGRAM_ID,
-            required_semantic_release("DCLUTCH_RENT_SEMANTIC_RELEASE_ID"),
-            &elves.rent,
-        );
+        let rent_release = artifact(RENT_PROGRAM_ID, semantic_release("rent"), &elves.rent);
         // Registry moved across the succession and Rent did not: the
         // predecessor Registry id names the distinct release this profile
         // succeeded, while Rent holds the same id on both sides of it.
@@ -745,6 +783,36 @@ impl Fixture {
             &REGISTRY_PROGRAM_ID,
         )
         .0;
+        // The activation cache this campaign reads was DERIVED and never
+        // SEEDED, so its first instruction -- `Reauthenticate(Resolution)` --
+        // read an empty account and refused `RegistryError::ActivationCache`
+        // (0x1005). Seed it exactly as the lifecycle campaign does: every role
+        // written through the contract's own writer, against this release set.
+        let mut activation_bytes = vec![0; ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1];
+        initialize_activation_cache_v1(&mut activation_bytes, release_set_id)
+            .expect("activation cache header");
+        for (role, selected) in [
+            (ExecutionRoleV1::Core, core_release),
+            (ExecutionRoleV1::Claims, claims_release),
+            (ExecutionRoleV1::Trading, trading_release),
+            (ExecutionRoleV1::Resolution, resolution_release),
+            (ExecutionRoleV1::Custody, custody_release),
+        ] {
+            activate_execution_role_into_v1(
+                &mut activation_bytes,
+                release_set_id,
+                &release_set,
+                role,
+                &activation_input(selected),
+            )
+            .expect("activate execution role");
+        }
+        ActivatedExecutionReleaseSetV1::decode(&activation_bytes)
+            .expect("complete activation cache");
+        test.add_account(
+            activation,
+            protocol_account(REGISTRY_PROGRAM_ID, activation_bytes),
+        );
 
         let synthetic =
             local_validator_release_v1().expect("pinned local-validator Pyth release projection");
@@ -975,7 +1043,7 @@ impl Fixture {
         let entries = [
             CapabilityEntryV1::new(
                 core_id([0xd3; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
                 core_id(recovery_allocation_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),
@@ -989,7 +1057,7 @@ impl Fixture {
             .expect("recovery funding entry"),
             CapabilityEntryV1::new(
                 core_id([0xd4; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
                 core_id(exhaust_allocation_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),
@@ -1003,7 +1071,7 @@ impl Fixture {
             .expect("exhaustion funding entry"),
             CapabilityEntryV1::new(
                 core_id([0xd8; 32]),
-                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V4),
+                core_id(RESOLUTION_CONTROLLER_RELEASE_ID_V7),
                 core_id(material_id),
                 core_id([0xd5; 32]),
                 core_id([0xd6; 32]),
@@ -1242,7 +1310,31 @@ fn assert_exact_bounty_compartments(account: &Account, exact_funding_rent: u64) 
 }
 
 #[tokio::test]
-#[ignore = "requires canonical Core infrastructure init and 31-account Found request"]
+// THE TWO INSTRUCTION BUILDERS THIS CAMPAIGN NEEDS DO NOT EXIST.
+// `primary_instruction` and `funded_caller_instruction` were replaced with
+// `panic!` stubs by `d1325c7f` (2026-08-26 00:19) and `583e5bfa` added this
+// attribute 47 minutes later, so the body below has been unreachable ever
+// since -- while the harness README went on quoting its ten-row compute table
+// as evidence. Reaching that panic now takes a full fixture start, which is why
+// this attribute stays: an un-ignored permanently-red test in a shared checkout
+// makes every other lane's run red for a cause they did not create.
+//
+// Three layers of cover have been removed and the honest reason is recorded:
+// the six semantic-release environment variables nothing in this repository set
+// are now derived from the tree; the pinned Resolution identity was
+// `RESOLUTION_CONTROLLER_RELEASE_ID_V4` while the program authenticates V7; and
+// the activation cache was derived but never seeded, so the first instruction
+// refused `RegistryError::ActivationCache` (0x1005). Past all three, the
+// campaign stops at `resolution_successor.rs:1225`.
+//
+// DO NOT REPAIR THIS IN PLACE. Rebuilding the two builders means porting the
+// current Core-effect and funded ABIs into a second fixture, and
+// `resolution_core_v3_lifecycle.rs` already carries them against the current
+// Core, Custody, Registry and Resolution ELFs. The funded walk belongs there;
+// this file's remaining value is its captured provider projection. Retiring it
+// INTO that campaign is the convergence, not a parallel repair.
+#[ignore = "primary_instruction and funded_caller_instruction are panic! stubs since d1325c7f; \
+            the funded walk belongs in resolution_core_v3_lifecycle.rs"]
 async fn compiled_resolution_executes_primary_recovery_failure_and_atomic_refusal() {
     let mut fixture = Fixture::new();
     let mut context = fixture

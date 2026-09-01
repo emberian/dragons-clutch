@@ -466,9 +466,12 @@ fn encode_account_profile(logical_data_lengths: &[u32], product_basis: &[u8]) ->
             35 => AccountAliasInputV2::Fixed(3),
             _ => AccountAliasInputV2::SelfCoordinate,
         };
+        // 15 is the System program: the sole `executable` coordinate this frame
+        // did not also declare opaque, and a builtin's data is its name, which
+        // is a cluster fact. See `open_structured_v3.rs` for the measurement.
         let opaque = matches!(
             index,
-            6 | 7 | 19 | 20 | 21 | 23 | 24 | 25 | 27 | 38 | 39 | 40
+            6 | 7 | 15 | 19 | 20 | 21 | 23 | 24 | 25 | 27 | 38 | 39 | 40
         );
         let prestate = if index == 4 {
             AccountPrestateV2::AdapterAuthenticatedVariableData
@@ -1027,7 +1030,7 @@ mod tests {
                 account.physical_account_count_with_dynamic_spans(0, &[]),
                 Ok(37)
             );
-            for coordinate in [6_u16, 7, 19, 20, 21, 23, 24, 25, 27, 38, 39, 40] {
+            for coordinate in [6_u16, 7, 15, 19, 20, 21, 23, 24, 25, 27, 38, 39, 40] {
                 assert_eq!(
                     account
                         .rule(false, coordinate)

@@ -1554,3 +1554,20 @@ HEAD rather than inherit it.
 
 **This closes "the one act still awaiting ember."** The only remaining external
 acts requiring ember are mainnet, push and tags.
+
+### Two more for your queue, both from the Structured lane
+
+11. **Materialize / Dematerialize / RedeemMaterializedTerminal: delete or
+    drive.** Constructed nowhere, driven by no test, route labelled
+    `ECONOMIC_SLICE_MIGRATION_ONLY`, and the 1,444-LOC
+    `dclutch-claims-representation-codec` has **zero dependents**. The lane's
+    phrase is the right one: **live, unexercised supply-moving code.** C-08's
+    clause is already carried by Reconstitute/UnwrapStructured, so nothing is
+    lost by cutting it — but unexercised code that can move supply is a risk
+    surface, not neutral debt.
+12. **Is a K = 2 product useful?** Executable full width is **K = 2**: at K = 3
+    `IssueStructured`/`UnwrapStructured` measure 1,357 v0 bytes with a live ALT
+    against a 1,232-byte packet. Selected actions fit at any K. The handoff
+    letter says "use a proven K=2 route" — **no K=2 route exists**; every
+    campaign in the tree is K=3. So C-08's "useful exact-denominator products"
+    turns on whether two-outcome structured products are a product you want.

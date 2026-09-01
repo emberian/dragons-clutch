@@ -24,9 +24,10 @@ use dclutch_resolution_codec::{
 };
 use dclutch_resolution_codec::{
     PROVIDER_RESOLUTION_CORE_ACCOUNT_COUNT_V3, PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
-    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1, ProviderCallerV3,
-    ProviderExecutionRequestV3, ProviderReclaimRequestV3, ProviderSubmitRequestV3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
+    PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+    ProviderAbandonRequestV3, ProviderCallerV3, ProviderExecutionRequestV3,
+    ProviderReclaimRequestV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV3,
+    ProviderUpdateStatusV3, RESOLUTION_CERTIFICATE_PDA_DOMAIN_V3,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_SCHEMA_ID_V1, PYTH_ADAPTER_CONFIG_SCHEMA_ID_V1,
@@ -1264,6 +1265,144 @@ pub fn build_provider_reclaim_v3(
         lifecycle: lifecycle_account.key,
         update_authority,
     })
+}
+
+/// Build permissionless reclaim of a submission no Source can consume any more.
+///
+/// [`build_provider_reclaim_v3`] serves the submission that WON: it requires
+/// `Consumed` and derives its frame around a terminal certificate. This one
+/// serves every other outcome — the loser of a first-valid race, and every
+/// submission on a market that ended on its failure walk — whose lifecycle
+/// stays `Submitted` with no certificate and therefore had no route home at
+/// all.
+///
+/// The frame is the same eighteen coordinates in the same order; index 5
+/// carries the Source resolution state instead of the certificate, because the
+/// Source is what proves consumption can never happen. The deadline is NOT
+/// checked here: the operator has a slot, not a wall clock, so
+/// `reclaim_after_unix_seconds` is the chain's to judge and it answers
+/// `ResolutionError::SubmissionStillConsumable` when it is early.
+pub fn build_provider_abandon_v3(
+    lifecycle_account: &ObservedAccount,
+    source_state: &ObservedAccount,
+    pyth_release: &ObservedAccount,
+    deployment: ProviderReclaimDeploymentV3,
+) -> Result<ProviderTransportReportV3, ProviderTransportOperatorErrorV3> {
+    let observation =
+        require_same_finalized_observation(&[lifecycle_account, source_state, pyth_release])?;
+    let lifecycle = ProviderUpdateLifecycleV3::decode(&lifecycle_account.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?;
+    if lifecycle.status != ProviderUpdateStatusV3::Submitted
+        || lifecycle.terminal_sequence != 0
+        || lifecycle.certificate != [0; 32]
+        || lifecycle.provider_evidence != [0; 32]
+        || lifecycle_account.owner != deployment.resolution_program
+    {
+        return Err(ProviderTransportOperatorErrorV3::Lifecycle);
+    }
+    if source_state.key.to_bytes() != lifecycle.source_state
+        || !source_is_past_primary(source_state, deployment.resolution_program, lifecycle)?
+    {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    let registry = Pubkey::new_from_array(lifecycle.registry_program);
+    authenticate_raw(
+        registry,
+        pyth_release,
+        PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+        lifecycle.provider_release,
+    )?;
+    let release = PythReleaseV1::decode(&pyth_release.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::Provider)?;
+    let request = ProviderAbandonRequestV3 {
+        generation: lifecycle.generation,
+        market: lifecycle.market,
+        source_state: lifecycle.source_state,
+        lifecycle: lifecycle_account.key.to_bytes(),
+        update_account: lifecycle.update_account,
+        resolver: deployment.resolver.to_bytes(),
+        refund_recipient: lifecycle.refund_recipient,
+        release_set: lifecycle.release_set,
+    };
+    let data = request
+        .to_bytes()
+        .map_err(|_| ProviderTransportOperatorErrorV3::Lifecycle)?
+        .to_vec();
+    let activation = Pubkey::find_program_address(
+        &[ACTIVATION_PDA_DOMAIN_V1, &lifecycle.release_set],
+        &registry,
+    )
+    .0;
+    let update_authority = Pubkey::new_from_array(lifecycle.update_authority);
+    let pyth_staging = staging(
+        registry,
+        PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
+        lifecycle.provider_release,
+    );
+    let accounts = vec![
+        AccountMeta::new_readonly(deployment.resolver, true),
+        AccountMeta::new(lifecycle_account.key, false),
+        AccountMeta::new(Pubkey::new_from_array(lifecycle.update_account), false),
+        AccountMeta::new(update_authority, false),
+        AccountMeta::new(Pubkey::new_from_array(lifecycle.refund_recipient), false),
+        AccountMeta::new_readonly(source_state.key, false),
+        AccountMeta::new_readonly(activation, false),
+        AccountMeta::new_readonly(registry, false),
+        AccountMeta::new_readonly(deployment.registry_programdata, false),
+        AccountMeta::new_readonly(deployment.resolution_program, false),
+        AccountMeta::new_readonly(deployment.resolution_programdata, false),
+        AccountMeta::new_readonly(pyth_release.key, false),
+        AccountMeta::new_readonly(pyth_staging, false),
+        AccountMeta::new_readonly(Pubkey::new_from_array(release.receiver_program()), false),
+        AccountMeta::new_readonly(
+            Pubkey::new_from_array(release.receiver_programdata()),
+            false,
+        ),
+        AccountMeta::new_readonly(sysvar::clock::ID, false),
+        AccountMeta::new_readonly(sysvar::rent::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ];
+    if accounts.len() != PROVIDER_RECLAIM_ACCOUNT_COUNT_V3 || !distinct(&accounts) {
+        return Err(ProviderTransportOperatorErrorV3::Address);
+    }
+    Ok(ProviderTransportReportV3 {
+        instruction: Instruction {
+            program_id: deployment.resolution_program,
+            accounts,
+            data,
+        },
+        observation,
+        lifecycle: lifecycle_account.key,
+        update_authority,
+    })
+}
+
+/// Whether the observed Source has left the only phase that could consume.
+///
+/// Two admissible shapes, matching the chain: still program-owned with a phase
+/// past `Primary`, or already discharged to a vacant System account by
+/// `CloseFund`. Anything else is not an answer about consumability, so it is an
+/// error rather than a `false`.
+fn source_is_past_primary(
+    source_state: &ObservedAccount,
+    resolution_program: Pubkey,
+    lifecycle: ProviderUpdateLifecycleV3,
+) -> Result<bool, ProviderTransportOperatorErrorV3> {
+    if source_state.executable {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    if source_state.owner == system_program::ID {
+        return Ok(source_state.data.is_empty());
+    }
+    if source_state.owner != resolution_program {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    let state = SourceResolutionStateV2::decode(&source_state.data)
+        .map_err(|_| ProviderTransportOperatorErrorV3::State)?;
+    if state.market() != lifecycle.market || state.generation() != lifecycle.generation {
+        return Err(ProviderTransportOperatorErrorV3::State);
+    }
+    Ok(state.phase() != SourceResolutionPhaseV1::Primary)
 }
 
 /// Compile one exact provider submission into an unsigned v0 message.

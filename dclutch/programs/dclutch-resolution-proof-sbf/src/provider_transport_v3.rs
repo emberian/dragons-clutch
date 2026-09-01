@@ -20,13 +20,15 @@ use dclutch_release_set_contract::{
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV2,
 };
 use dclutch_resolution_codec::{
+    PROVIDER_ABANDON_REQUEST_BYTES_V3, PROVIDER_ABANDON_REQUEST_MAGIC_V3,
     PROVIDER_RECLAIM_REQUEST_BYTES_V3, PROVIDER_RECLAIM_REQUEST_MAGIC_V3,
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PROVIDER_SUBMIT_REQUEST_MAGIC_V3,
     PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
     PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderReclaimReceiptV3, ProviderReclaimRequestV3, ProviderSubmitReceiptV3,
-    ProviderSubmitRequestV3, ProviderUpdateLifecycleV3, ProviderUpdateStatusV3,
-    RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateV2,
+    ProviderAbandonReceiptV3, ProviderAbandonRequestV3, ProviderReclaimReceiptV3,
+    ProviderReclaimRequestV3, ProviderSubmitReceiptV3, ProviderSubmitRequestV3,
+    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
+    ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -57,13 +59,23 @@ use crate::{
 pub const PROVIDER_SUBMIT_ACCOUNT_COUNT_V3: usize = 38;
 /// Frozen permissionless provider reclaim account count.
 pub const PROVIDER_RECLAIM_ACCOUNT_COUNT_V3: usize = 18;
+/// Frozen permissionless abandoned-submission reclaim account count.
+///
+/// Deliberately the same eighteen coordinates, in the same order and with the
+/// same privileges, as [`PROVIDER_RECLAIM_ACCOUNT_COUNT_V3`]. Exactly one slot
+/// carries a different account: index 5 is the Source resolution state rather
+/// than the terminal certificate, because an abandoned submission has no
+/// certificate and the Source is what proves it never will.
+pub const PROVIDER_ABANDON_ACCOUNT_COUNT_V3: usize = 18;
 
 const POST_UPDATE_DISCRIMINATOR: [u8; 8] = [133, 95, 207, 175, 11, 79, 118, 44];
 const RECLAIM_RENT_DISCRIMINATOR: [u8; 8] = [218, 200, 19, 197, 227, 89, 192, 22];
 
 /// Return whether bytes select one real provider transport route.
 pub(crate) fn is_provider_transport_v3(bytes: &[u8]) -> bool {
-    matches!(bytes.get(..8), Some(magic) if magic == PROVIDER_SUBMIT_REQUEST_MAGIC_V3 || magic == PROVIDER_RECLAIM_REQUEST_MAGIC_V3)
+    matches!(bytes.get(..8), Some(magic) if magic == PROVIDER_SUBMIT_REQUEST_MAGIC_V3
+        || magic == PROVIDER_RECLAIM_REQUEST_MAGIC_V3
+        || magic == PROVIDER_ABANDON_REQUEST_MAGIC_V3)
 }
 
 /// Dispatch exact provider submission or permissionless reclaim.
@@ -79,6 +91,9 @@ pub(crate) fn process_provider_transport_v3(
         }
         Some(magic) if magic == PROVIDER_RECLAIM_REQUEST_MAGIC_V3 => {
             process_reclaim(program_id, accounts, instruction_data)
+        }
+        Some(magic) if magic == PROVIDER_ABANDON_REQUEST_MAGIC_V3 => {
+            process_abandon(program_id, accounts, instruction_data)
         }
         _ => Err(ResolutionError::Instruction.into()),
     }
@@ -230,7 +245,7 @@ fn process_reclaim(
     let clock = authenticate_clock(frame.account(15))?;
     let lifecycle =
         authenticate_reclaim_state(program_id, &request, frame, &rent, clock.unix_timestamp)?;
-    authenticate_reclaim_release(program_id, &request, frame, &rent, lifecycle)?;
+    authenticate_reclaim_release(program_id, request.release_set, frame, &rent, lifecycle)?;
 
     let authority_before = frame.account(3).lamports();
     let refund_before = frame.account(4).lamports();
@@ -280,6 +295,211 @@ fn process_reclaim(
     .map_err(|_| ResolutionError::Transition)?;
     set_return_data(&receipt);
     Ok(())
+}
+
+/// Reclaim the rent of a submission no Source can consume any more.
+///
+/// The consumed route ([`process_reclaim`]) proves a submission became truth
+/// and then discharges it. Nothing proved the opposite case, so a valid
+/// submission that lost the first-valid race — or one posted to a market that
+/// ended on its failure walk — held its lifecycle PDA and its Receiver update
+/// forever: `authenticate_reclaim_state` requires `Consumed` and a certificate
+/// carrying that lifecycle's own `provider_evidence`, and a loser has neither.
+/// `reclaim_after_unix_seconds`, the field whose whole purpose is to bound that
+/// wait, was unreachable for exactly the submissions that needed it.
+///
+/// This route is the missing half, and it is additive: the consumed gate did
+/// not move. What this one must prove instead is that consumption can never
+/// happen — the submitter's own deadline has passed AND the Source has left
+/// `Primary` or has already been discharged by `CloseFund`. Both, not either:
+/// the deadline alone would let a stranger delete a live market's answer for a
+/// transaction fee, which is the failure `RecordStillConsumable` was allocated
+/// for on the relay transport.
+#[inline(never)]
+fn process_abandon(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo<'_>],
+    instruction_data: &[u8],
+) -> ProgramResult {
+    if accounts.len() != PROVIDER_ABANDON_ACCOUNT_COUNT_V3
+        || instruction_data.len() != PROVIDER_ABANDON_REQUEST_BYTES_V3
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    let request = Box::new(
+        ProviderAbandonRequestV3::decode(instruction_data)
+            .map_err(|_| ResolutionError::Instruction)?,
+    );
+    authenticate_reclaim_privileges(program_id, accounts)?;
+    let frame = ReclaimFrameV3 { accounts };
+    if frame.account(0).key.to_bytes() != request.resolver
+        || frame.account(1).key.to_bytes() != request.lifecycle
+        || frame.account(2).key.to_bytes() != request.update_account
+        || frame.account(4).key.to_bytes() != request.refund_recipient
+        || frame.account(5).key.to_bytes() != request.source_state
+    {
+        return Err(ResolutionError::AccountFrame.into());
+    }
+    let rent = authenticate_rent(frame.account(16))?;
+    let clock = authenticate_clock(frame.account(15))?;
+    let lifecycle =
+        authenticate_abandon_state(program_id, &request, frame, &rent, clock.unix_timestamp)?;
+    authenticate_reclaim_release(program_id, request.release_set, frame, &rent, lifecycle)?;
+
+    let authority_before = frame.account(3).lamports();
+    let refund_before = frame.account(4).lamports();
+    if authority_before != 0
+        || frame.account(3).owner != &system_program::ID
+        || frame.account(3).data_len() != 0
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    invoke_reclaim(program_id, frame, lifecycle)?;
+    if frame.account(2).lamports() != 0
+        || frame.account(2).owner != &system_program::ID
+        || frame.account(2).data_len() != 0
+        || frame.account(3).lamports() != lifecycle.update_rent_lamports
+    {
+        return Err(ResolutionError::ProviderObservation.into());
+    }
+    transfer_reclaimed_rent(program_id, frame, lifecycle)?;
+    let lifecycle_lamports = frame.account(1).lamports();
+    let total_refund = lifecycle
+        .update_rent_lamports
+        .checked_add(lifecycle_lamports)
+        .ok_or(ResolutionError::Arithmetic)?;
+    close_lifecycle(frame.account(1), frame.account(4), lifecycle_lamports)?;
+    if frame.account(3).lamports() != 0
+        || frame.account(4).lamports()
+            != refund_before
+                .checked_add(total_refund)
+                .ok_or(ResolutionError::Arithmetic)?
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let receipt = ProviderAbandonReceiptV3 {
+        request_digest: hash(instruction_data).to_bytes(),
+        lifecycle: request.lifecycle,
+        update_account: request.update_account,
+        source_state: request.source_state,
+        resolver: request.resolver,
+        refund_recipient: request.refund_recipient,
+        update_digest: lifecycle.update_digest,
+        generation: request.generation,
+        refunded_lamports: total_refund,
+    }
+    .to_bytes()
+    .map_err(|_| ResolutionError::Transition)?;
+    set_return_data(&receipt);
+    Ok(())
+}
+
+/// Authenticate one never-consumed lifecycle and prove it can never be consumed.
+fn authenticate_abandon_state(
+    program_id: &Pubkey,
+    request: &ProviderAbandonRequestV3,
+    frame: ReclaimFrameV3<'_, '_>,
+    rent: &Rent,
+    current_unix_seconds: i64,
+) -> Result<ProviderUpdateLifecycleV3, ProgramError> {
+    let data = frame
+        .account(1)
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let lifecycle =
+        ProviderUpdateLifecycleV3::decode(&data).map_err(|_| ResolutionError::OutputState)?;
+    let (expected_lifecycle, bump) = Pubkey::find_program_address(
+        &[
+            PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3,
+            frame.account(2).key.as_ref(),
+        ],
+        program_id,
+    );
+    let authority = Pubkey::find_program_address(
+        &[
+            PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3,
+            &request.market,
+            &request.source_state,
+            &request.update_account,
+        ],
+        program_id,
+    )
+    .0;
+    // The never-consumed shape. `terminal_sequence`, `certificate` and
+    // `provider_evidence` are the three fields `consume` writes, so all three
+    // zero is the wire's own statement that this submission never became truth.
+    // They are checked here rather than trusted from `status` because this
+    // route's entire admissibility rests on that statement.
+    if frame.account(1).key != &expected_lifecycle
+        || frame.account(1).owner != program_id
+        || !rent.is_exempt(frame.account(1).lamports(), data.len())
+        || lifecycle.status != ProviderUpdateStatusV3::Submitted
+        || lifecycle.terminal_sequence != 0
+        || lifecycle.certificate != [0; 32]
+        || lifecycle.provider_evidence != [0; 32]
+        || lifecycle.bump != bump
+        || lifecycle.generation != request.generation
+        || lifecycle.market != request.market
+        || lifecycle.source_state != request.source_state
+        || lifecycle.update_account != request.update_account
+        || lifecycle.refund_recipient != request.refund_recipient
+        || lifecycle.release_set != request.release_set
+        || lifecycle.update_authority != authority.to_bytes()
+        || frame.account(3).key != &authority
+    {
+        return Err(ResolutionError::OutputState.into());
+    }
+    if current_unix_seconds < lifecycle.reclaim_after_unix_seconds
+        || !source_can_no_longer_consume(program_id, frame.account(5), lifecycle)?
+    {
+        return Err(ResolutionError::SubmissionStillConsumable.into());
+    }
+    let update_data = frame
+        .account(2)
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::ProviderObservation)?;
+    let update =
+        FullPriceUpdateV2::parse(&update_data).map_err(|_| ResolutionError::ProviderObservation)?;
+    if frame.account(2).owner != frame.account(13).key
+        || hash(&update_data).to_bytes() != lifecycle.update_digest
+        || frame.account(2).lamports() != lifecycle.update_rent_lamports
+        || update.write_authority() != lifecycle.update_authority
+    {
+        return Err(ResolutionError::ProviderObservation.into());
+    }
+    Ok(lifecycle)
+}
+
+/// Whether this Source has passed the only phase that could consume the update.
+///
+/// Two arms, because the Source account has two admissible shapes once the race
+/// is over. Before `CloseFund` it is still program-owned and its phase has left
+/// `Primary`; after `CloseFund` it has been discharged to the persisted
+/// RentCredit and is a vacant System account. The address is not re-derived
+/// here: it was pinned at submission into `lifecycle.source_state`, and the
+/// caller has already bound this account to it.
+fn source_can_no_longer_consume(
+    program_id: &Pubkey,
+    source: &AccountInfo<'_>,
+    lifecycle: ProviderUpdateLifecycleV3,
+) -> Result<bool, ProgramError> {
+    if source.key.to_bytes() != lifecycle.source_state || source.executable {
+        return Err(ResolutionError::OutputState.into());
+    }
+    if source.owner == &system_program::ID {
+        return Ok(source.data_len() == 0);
+    }
+    if source.owner != program_id {
+        return Err(ResolutionError::OutputState.into());
+    }
+    let data = source
+        .try_borrow_data()
+        .map_err(|_| ResolutionError::OutputState)?;
+    let state = SourceResolutionStateV2::decode(&data).map_err(|_| ResolutionError::OutputState)?;
+    if state.market() != lifecycle.market || state.generation() != lifecycle.generation {
+        return Err(ResolutionError::OutputState.into());
+    }
+    Ok(state.phase() != SourceResolutionPhaseV1::Primary)
 }
 
 #[derive(Clone, Copy)]
@@ -987,7 +1207,7 @@ fn authenticate_reclaim_state(
 
 fn authenticate_reclaim_release(
     program_id: &Pubkey,
-    request: &ProviderReclaimRequestV3,
+    release_set: [u8; 32],
     frame: ReclaimFrameV3<'_, '_>,
     rent: &Rent,
     lifecycle: ProviderUpdateLifecycleV3,
@@ -1030,7 +1250,7 @@ fn authenticate_reclaim_release(
         || frame.account(6).data_len() != ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1
         || frame.account(6).key
             != &Pubkey::find_program_address(
-                &[ACTIVATION_PDA_DOMAIN_V1, &request.release_set],
+                &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
                 frame.account(7).key,
             )
             .0
@@ -1046,7 +1266,7 @@ fn authenticate_reclaim_release(
         .execution_release_set_id()
         .map_err(|_| ResolutionError::ResolutionRelease)?
         .to_bytes()
-        != request.release_set
+        != release_set
         || selected.release().program().to_bytes() != program_id.to_bytes()
         || selected.release().semantic_release_id().to_bytes()
             != RESOLUTION_CONTROLLER_RELEASE_ID_V7

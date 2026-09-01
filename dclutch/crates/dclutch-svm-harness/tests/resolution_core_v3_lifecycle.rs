@@ -45,8 +45,8 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_provider_transport_v3_operator::{
     ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
     ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3, ProviderSubmitIntentV3,
-    ProviderSubmitSnapshotV3, ProviderTransportOperatorErrorV3, build_provider_execute_v3,
-    build_provider_reclaim_v3, build_provider_submit_v3,
+    ProviderSubmitSnapshotV3, ProviderTransportOperatorErrorV3, build_provider_abandon_v3,
+    build_provider_execute_v3, build_provider_reclaim_v3, build_provider_submit_v3,
 };
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
@@ -2354,6 +2354,40 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         "the second submission is live evidence awaiting consumption, not a rejected one"
     );
 
+    // ABANDONMENT IS NOT AVAILABLE AGAINST A LIVE MARKET. Both submissions are
+    // `Submitted` and this Source is still `Primary`, so either could still
+    // become the answer. If abandonment needed only the submitter's deadline, a
+    // stranger could delete a market's answer for a transaction fee -- the
+    // `RecordStillConsumable` failure, one transport over. The builder refuses
+    // to derive it at all, before a transaction exists.
+    let live_market_deployment = ProviderReclaimDeploymentV3 {
+        resolver: payer,
+        registry_programdata: fixture.registry_programdata,
+        resolution_program: RESOLUTION_PROGRAM_ID,
+        resolution_programdata: fixture.resolution_programdata,
+    };
+    assert_eq!(
+        SourceResolutionStateV2::decode(
+            &observed(&mut context, fixture.source)
+                .await
+                .expect("live Source")
+                .data,
+        )
+        .expect("live Source state")
+        .phase(),
+        SourceResolutionPhaseV1::Primary
+    );
+    assert_eq!(
+        build_provider_abandon_v3(
+            &required_observed(&mut context, second_submit.lifecycle).await,
+            &required_observed(&mut context, fixture.source).await,
+            &required_observed(&mut context, fixture.pyth_release.raw).await,
+            live_market_deployment,
+        ),
+        Err(ProviderTransportOperatorErrorV3::State),
+        "a submission a Primary Source could still consume is not abandoned"
+    );
+
     let resolver = Keypair::new();
     let resolver_rent = context
         .banks_client
@@ -2755,26 +2789,20 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         "every lamport the winning submission held returns to the persisted refund recipient"
     );
 
-    // AND THE LOSER HAS NO ROUTE HOME. `authenticate_reclaim_state`
-    // (programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:941)
-    // requires `ProviderUpdateStatusV3::Consumed`, and :963-971 requires a
-    // program-owned certificate whose `provider_evidence` equals this
-    // lifecycle's. A submission that lost the first-valid race is `Submitted`
-    // forever and never had a certificate, so `reclaim_after_unix_seconds`
-    // -- the field that exists to bound exactly this wait -- is unreachable
-    // for it. The same shape strands every submission on a market that ends
-    // by failure walk instead of by provider evidence.
-    //
-    // This is an OPEN C-09 reclaim hole, recorded here as an executed
-    // measurement rather than a prose worry. It is asserted as the current
-    // behaviour so that the day a reclaim route for abandoned submissions
-    // lands, this assertion goes red and names itself.
+    // AND THE LOSER GOES HOME TOO. The consumed route cannot carry it:
+    // `authenticate_reclaim_state`
+    // (programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs)
+    // requires `Consumed` and a certificate carrying this lifecycle's own
+    // `provider_evidence`, and a submission that lost the first-valid race has
+    // neither. That gate did not move. `AbandonSubmission` is the other half of
+    // the partition, and it proves the opposite fact: that consumption can
+    // never happen.
     let stranded_lifecycle = observed(&mut context, second_submit.lifecycle)
         .await
-        .expect("the losing submission's lifecycle is still alive");
+        .expect("the losing submission's lifecycle survived the Source close");
     let stranded_update = observed(&mut context, second_update.pubkey())
         .await
-        .expect("the losing submission's posted update is still alive");
+        .expect("the losing submission's posted update survived the Source close");
     assert_eq!(stranded_lifecycle.owner, RESOLUTION_PROGRAM_ID);
     assert_eq!(stranded_update.owner, fixture.provider.receiver);
     assert_eq!(
@@ -2784,10 +2812,91 @@ async fn current_resolution_creates_and_activates_exact_funding() {
             reclaim_deployment,
         ),
         Err(ProviderTransportOperatorErrorV3::Lifecycle),
-        "no reclaim can be derived for a valid submission that lost the first-valid race; \
-         {} lamports of lifecycle rent and {} lamports of Receiver update rent strand",
-        stranded_lifecycle.lamports,
-        stranded_update.lamports,
+        "the consumed route still refuses a never-consumed lifecycle"
+    );
+
+    // The Source account is gone -- `CloseFund` discharged it above -- so the
+    // frame presents its address as the vacant System account the runtime
+    // materializes, which is the second of the two shapes that prove this
+    // submission can never be consumed.
+    let abandoned = build_provider_abandon_v3(
+        &required_observed(&mut context, second_submit.lifecycle).await,
+        &vacant_observed(fixture.source),
+        &required_observed(&mut context, fixture.pyth_release.raw).await,
+        reclaim_deployment,
+    )
+    .expect("chain-derived reclaim of the abandoned submission");
+
+    // Early by one second. The submitter's own `reclaim_after_unix_seconds` is
+    // the bound, and it is checked separately from the Source so that "not
+    // yet" and "still live" are the same refusal only when they are the same
+    // fact: both mean this submission is not abandoned.
+    let mut early_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    early_clock.unix_timestamp = TERMINAL_TIME + 19;
+    context.set_sysvar(&early_clock);
+    let before_early_abandon = (
+        observed(&mut context, second_submit.lifecycle).await,
+        observed(&mut context, second_update.pubkey()).await,
+        observed(&mut context, fixture.rent_credit).await,
+    );
+    let early = pyth_provider::submit(&mut context, &[abandoned.instruction.clone()], &[&resolver])
+        .await
+        .expect_err("abandonment before the submitter's own deadline must refuse");
+    assert!(
+        matches!(
+            early,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::SubmissionStillConsumable as u32
+        ),
+        "an early abandon must refuse as Resolution SubmissionStillConsumable, got {early:?}"
+    );
+    assert_eq!(
+        (
+            observed(&mut context, second_submit.lifecycle).await,
+            observed(&mut context, second_update.pubkey()).await,
+            observed(&mut context, fixture.rent_credit).await,
+        ),
+        before_early_abandon,
+        "the early refusal leaves the abandoned submission and the beneficiary untouched"
+    );
+
+    let mut abandon_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    abandon_clock.unix_timestamp = TERMINAL_TIME + 21;
+    context.set_sysvar(&abandon_clock);
+    let rent_credit_before_abandon = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    pyth_provider::submit(&mut context, &[abandoned.instruction], &[&resolver])
+        .await
+        .expect("a stranger reclaims the losing submission's provider rent");
+    assert!(
+        observed(&mut context, second_submit.lifecycle)
+            .await
+            .is_none()
+    );
+    assert!(
+        observed(&mut context, second_update.pubkey())
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        rent_credit_before_abandon + stranded_lifecycle.lamports + stranded_update.lamports,
+        "every lamport the LOSING submission held returns to the same persisted recipient"
     );
 }
 

@@ -7,18 +7,20 @@
 //! same kind of object -- a wire discriminant a program dispatches on -- and
 //! only one of them had a uniqueness rule.
 //!
-//! The measured consequence, and the reason this exists:
-//! `DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1`
+//! The measured consequence, and the reason this exists (now FIXED, and the
+//! gate is what keeps it fixed): `DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1`
 //! (`programs/dclutch-trading-sbf/src/dealer_scenario_checkpoint_v1.rs`) and
 //! `DIRECT_REPLAY_SETUP_REQUEST_MAGIC_V1`
-//! (`crates/dclutch-direct-codec/src/replay_setup_v1.rs`) are both `DCLTDRS1`,
-//! and both are TOP-LEVEL SELECTORS OF THE SAME TRADING ELF. Nothing separates
+//! (`crates/dclutch-direct-codec/src/replay_setup_v1.rs`) were both `DCLTDRS1`,
+//! and both are TOP-LEVEL SELECTORS OF THE SAME TRADING ELF. Nothing separated
 //! them but instruction length -- the dealer arm requires `data == MAGIC`,
 //! exactly 8 bytes; the Direct arm requires exactly 120 -- and dispatch order,
-//! `src/lib.rs:546` before `:601`. A mis-sized Direct replay-setup request does
-//! not refuse: it routes into the Dealer family. Any future widening of the
-//! bare dealer instruction collides silently, and the collision is a
-//! wrong-handler bug, not a decode error.
+//! `src/lib.rs:546` before `:601`. A mis-sized Direct replay-setup request did
+//! not refuse: it routed into the Dealer family. Any future widening of the
+//! bare dealer instruction would have collided silently, and the collision is a
+//! wrong-handler bug, not a decode error. The dealer side is now `DCLTDRV1`;
+//! the tests below keep the original pair as the worked example, because it is
+//! the case this rule exists to catch.
 //!
 //! # What counts as a collision
 //!

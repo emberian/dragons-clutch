@@ -85,7 +85,23 @@ pub const DEALER_SCENARIO_CHECKPOINT_EVALUATE_MAGIC_V1: [u8; 8] = *b"DCLTDEV1";
 /// Close an expired checkpoint to its immutable beneficiary.
 pub const DEALER_SCENARIO_CHECKPOINT_CLEANUP_MAGIC_V1: [u8; 8] = *b"DCLTDCL1";
 /// Append one Custody reservation receipt.
-pub const DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1: [u8; 8] = *b"DCLTDRS1";
+///
+/// `DCLTDRV1`, not `DCLTDRS1`. It carried `DCLTDRS1` until 2026-09-01, which is
+/// also `dclutch_direct_codec::replay_setup_v1::DIRECT_REPLAY_SETUP_REQUEST_MAGIC_V1`
+/// -- and BOTH are top-level selectors of this same Trading ELF. Nothing
+/// separated them but instruction length and dispatch order: this arm is
+/// `data == MAGIC`, exactly 8 bytes (`is_dealer_scenario_checkpoint_reserve_v1`),
+/// the Direct arm is `len == 120 && data[..8] == MAGIC`, and this one is tried
+/// first (`lib.rs:546` before `:601`). A mis-sized Direct replay-setup request
+/// therefore did not refuse -- it routed into the Dealer family -- and any
+/// future widening of this bare instruction would have collided silently.
+///
+/// Re-lettered rather than disambiguated by length, because a length test is a
+/// guard whose two sides move together: it stays correct only while nobody
+/// changes either width, and nothing would have failed if somebody did. The
+/// census gate now refuses a magic claimed by two constants
+/// (`tools/gauntlet/census/src/magics.rs`), so this cannot silently return.
+pub const DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1: [u8; 8] = *b"DCLTDRV1";
 /// Append one reverse-order Custody rollback receipt.
 pub const DEALER_SCENARIO_CHECKPOINT_ROLLBACK_MAGIC_V1: [u8; 8] = *b"DCLTDRB1";
 /// Atomically commit Claims and the exact candidate obligation against locked value.
@@ -1996,14 +2012,36 @@ mod tests {
         assert!(is_dealer_scenario_checkpoint_create_v1(b"DCLTDCP1"));
         assert!(is_dealer_scenario_checkpoint_page_v1(b"DCLTDPG1\x05"));
         assert!(is_dealer_scenario_checkpoint_evaluate_v1(b"DCLTDEV1"));
-        assert!(is_dealer_scenario_checkpoint_reserve_v1(b"DCLTDRS1"));
+        assert!(is_dealer_scenario_checkpoint_reserve_v1(b"DCLTDRV1"));
         assert!(is_dealer_scenario_checkpoint_rollback_v1(b"DCLTDRB1"));
         assert!(is_dealer_scenario_checkpoint_commit_v1(b"DCLTDCM1"));
         assert!(is_dealer_scenario_checkpoint_cleanup_v1(b"DCLTDCL1"));
         assert!(!is_dealer_scenario_checkpoint_page_v1(b"DCLTDPG1"));
         assert!(!is_dealer_scenario_checkpoint_create_v1(b"DCLTDCP1\x00"));
-        assert!(!is_dealer_scenario_checkpoint_reserve_v1(b"DCLTDRS1\x00"));
+        assert!(!is_dealer_scenario_checkpoint_reserve_v1(b"DCLTDRV1\x00"));
         assert!(!is_dealer_scenario_checkpoint_rollback_v1(b"DCLTDRB2"));
         assert!(!is_dealer_scenario_checkpoint_commit_v1(b"DCLTDCM1\x00"));
+    }
+
+    /// The reserve arm must not answer to Direct's replay-setup magic.
+    ///
+    /// Until 2026-09-01 it did: both were `DCLTDRS1`, both are top-level
+    /// selectors of this same ELF, and this arm is tried first, so a
+    /// mis-sized Direct replay-setup request routed HERE instead of refusing.
+    /// The bare 8-byte shape is what made it reachable -- `data == MAGIC`
+    /// admits exactly the prefix Direct's 120-byte request begins with.
+    #[test]
+    fn the_reserve_arm_does_not_answer_to_directs_replay_setup_magic() {
+        let direct = dclutch_direct_codec::replay_setup_v1::DIRECT_REPLAY_SETUP_REQUEST_MAGIC_V1;
+        assert_ne!(
+            DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1, direct,
+            "two top-level selectors of one ELF may not share a discriminant"
+        );
+        assert!(
+            !is_dealer_scenario_checkpoint_reserve_v1(&direct),
+            "a bare Direct replay-setup prefix must not select the Dealer reserve arm"
+        );
+        // And the historical value must select nothing here any more.
+        assert!(!is_dealer_scenario_checkpoint_reserve_v1(b"DCLTDRS1"));
     }
 }

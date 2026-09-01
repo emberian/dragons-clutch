@@ -21,6 +21,9 @@ pub use dclutch_resolution_core_v3_operator::{Finality, Observation, ObservedAcc
 pub mod capability_program_set_v2;
 /// What a holder needs to find and redeem a claim-check.
 pub mod claim_check_v1;
+
+/// Conservative complete-set split and merge planning.
+pub mod claims_conservation_v1;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
 pub mod dealer_equity_hot_v3;
 /// Chain-derived unsigned Dealer LP Open/Close Hot construction.

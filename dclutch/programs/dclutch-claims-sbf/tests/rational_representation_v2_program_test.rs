@@ -772,6 +772,46 @@ mod common_hot_open {
             u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation width");
         structured_lengths[22] =
             u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core market width");
+        // The five finalized-record coordinates and the Rent sysvar, each from
+        // the constant or the byte function that owns it. `d4cd3b27` declared
+        // the four widths a release can know off its own artifacts and stopped
+        // there; the account-projection kernel refuses `DataLengthMismatch` on
+        // every coordinate still left at zero, which is what kept the physical
+        // Trading common-Hot campaign from reaching submission. Logical
+        // coordinates are the child's own index plus five (`build_hot`), so
+        // these are `rational_representation_v2.rs`'s PRODUCT_RECORD,
+        // PORTFOLIO_RECORD, DESCRIPTOR_RAW, GRAPH_RAW, RENT_SYSVAR and
+        // RESULT_DOMAIN_RECORD in that order.
+        structured_lengths[2] =
+            u32::try_from(PRODUCT_RECORD_BYTES_V2).expect("Product record width");
+        structured_lengths[3] = u32::try_from(
+            dclutch_product_runtime_v2::portfolio_record_bytes(COEFFICIENTS.len())
+                .expect("Portfolio record width"),
+        )
+        .expect("Portfolio record width");
+        structured_lengths[10] = u32::try_from(
+            dclutch_rational_representation_v2_kernel::descriptor_v3::representation_descriptor_bytes_v3(K)
+                .expect("Rational descriptor width"),
+        )
+        .expect("Rational descriptor width");
+        structured_lengths[12] = u32::try_from(
+            dclutch_representation_composition_v3_kernel::composition_exposure_bytes_v3(
+                OUTCOME_COUNT,
+                OUTCOME_COUNT,
+            )
+            .expect("composition exposure width"),
+        )
+        .expect("composition exposure width");
+        structured_lengths[14] =
+            u32::try_from(<Rent as solana_sdk::sysvar::SysvarSerialize>::size_of())
+                .expect("Rent sysvar width");
+        structured_lengths[33] = u32::try_from(
+            dclutch_product_runtime_v2::result_domain_record_bytes(
+                K.checked_sub(2).expect("K >= 2"),
+            )
+            .expect("ResultDomain record width"),
+        )
+        .expect("ResultDomain record width");
         let mut terminal_lengths = [0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
         terminal_lengths[1] =
             u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection bytes");

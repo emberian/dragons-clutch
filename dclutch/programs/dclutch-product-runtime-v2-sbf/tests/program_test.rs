@@ -5,17 +5,19 @@ use dclutch_product_runtime_v2_admission::{
     ADMISSION_RECEIPT_BYTES_V2, AdmissionReceiptV2, PRODUCT_RECORD_BYTES_V2,
 };
 use dclutch_product_runtime_v2_operator::{
-    AccountObservationV2, AdmissionStateV2, FinalizedRecordObservationV2,
-    ProductCompilationInputV2, build_admission_instruction_v2, compile_product_records_v2,
+    AccountObservationV2, AdmissionStateV2, BandProfileV1, FinalizedRecordObservationV2,
+    FoundingBandV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, PartitionQualityModelV1,
+    ProductCompilationInputV2, build_admission_instruction_v2, centred_cuts_v1,
+    compile_interesting_product_records_v2, compile_product_records_v2,
     derive_admission_receipt_v2,
 };
-use dclutch_product_runtime_v2_sbf::process_instruction;
+use dclutch_product_runtime_v2_sbf::{AdmissionSbfErrorV2, process_instruction};
 use solana_account::Account;
-use solana_program::{pubkey::Pubkey, rent::Rent};
-use solana_program_test::{ProgramTest, ProgramTestContext, processor};
+use solana_program::{instruction::InstructionError, pubkey::Pubkey, rent::Rent};
+use solana_program_test::{BanksClientError, ProgramTest, ProgramTestContext, processor};
 use solana_sdk::signature::Signer;
 use solana_sdk_ids::{native_loader, system_program, sysvar};
-use solana_transaction::Transaction;
+use solana_transaction::{Transaction, TransactionError};
 
 const ADMISSION_PROGRAM: Pubkey = Pubkey::new_from_array([0xa1; 32]);
 const REGISTRY_PROGRAM: Pubkey = Pubkey::new_from_array([0xa2; 32]);
@@ -251,6 +253,26 @@ async fn submit(
     context.banks_client.process_transaction(transaction).await
 }
 
+/// The exact custom refusal code a submission carried, if any.
+///
+/// `is_err()` is not a refusal assertion: it passes on whatever the runtime
+/// refuses first, including a frame or signature failure reached before any
+/// record is read. These two substitutions are supposed to be caught by the
+/// record readers, and nothing but the discriminant says whether they were.
+fn custom_code(error: &BanksClientError) -> Option<u32> {
+    match error {
+        BanksClientError::TransactionError(TransactionError::InstructionError(
+            _,
+            InstructionError::Custom(code),
+        ))
+        | BanksClientError::SimulationError {
+            err: TransactionError::InstructionError(_, InstructionError::Custom(code)),
+            ..
+        } => Some(*code),
+        _ => None,
+    }
+}
+
 async fn receipt_bytes(context: &mut ProgramTestContext, key: Pubkey) -> Vec<u8> {
     context
         .banks_client
@@ -275,7 +297,14 @@ async fn run_runtime_width_campaign(fixture: Fixture) {
         .get_mut(5)
         .expect("domain staging meta");
     domain_staging_meta.pubkey = fixture.hostile_domain.staging;
-    assert!(submit(&mut context, domain_substitution).await.is_err());
+    let refused = submit(&mut context, domain_substitution)
+        .await
+        .expect_err("a same-width domain substitution must refuse");
+    assert_eq!(
+        custom_code(&refused),
+        Some(AdmissionSbfErrorV2::ResultDomainRecord as u32),
+        "domain substitution refused somewhere other than the domain reader: {refused:?}"
+    );
     assert!(
         receipt_bytes(&mut context, fixture.receipt)
             .await
@@ -295,7 +324,20 @@ async fn run_runtime_width_campaign(fixture: Fixture) {
         .get_mut(3)
         .expect("Product staging meta");
     product_staging_meta.pubkey = fixture.hostile_product.staging;
-    assert!(submit(&mut context, product_substitution).await.is_err());
+    let refused = submit(&mut context, product_substitution)
+        .await
+        .expect_err("a same-width Product substitution must refuse");
+    assert_eq!(
+        custom_code(&refused),
+        Some(AdmissionSbfErrorV2::ProductRecord as u32),
+        "Product substitution refused somewhere other than the Product reader: {refused:?}"
+    );
+    // The two substitutions must not share a discriminant, or one of them is
+    // being caught by the other's conjunct and proves nothing about its own.
+    assert_ne!(
+        AdmissionSbfErrorV2::ProductRecord as u32,
+        AdmissionSbfErrorV2::ResultDomainRecord as u32
+    );
     assert!(
         receipt_bytes(&mut context, fixture.receipt)
             .await
@@ -313,6 +355,149 @@ async fn run_runtime_width_campaign(fixture: Fixture) {
         admitted.product.content_digest,
         admitted.result_domain.content_digest
     );
+}
+
+/// One authored market, from a human sentence to an admitted record graph.
+///
+/// > *"Where does SOL/USD sit an hour from now? Five bands around today's
+/// > price, the winning band pays."*
+///
+/// Nothing here picks a cut by hand. The band comes from the founding spot the
+/// committed local Pyth fixture reports, the market's own hour-long window, and
+/// a stated volatility; the entrance refuses the partition if one cell would
+/// take the market. What the ELF then admits is the same record graph the
+/// ungated compiler builds — the gate adds a refusal, never a byte.
+async fn run_authored_sol_usd_market(prefer_real_elf: bool) {
+    const HOUR_OF_SLOTS: u64 = 10_000;
+    let band = FoundingBandV1 {
+        anchor: 100_000_000,
+        denominator: 1,
+        volatility_bps: 200,
+        window_slots: HOUR_OF_SLOTS,
+    };
+    let cuts = centred_cuts_v1(&band, 5, BandProfileV1::Uniform).expect("centred band");
+    assert_eq!(cuts, vec![99_400_000, 99_800_000, 100_200_000, 100_600_000]);
+    // Five ordinary bands plus the explicit failure outcome; only the band the
+    // coordinate lands in pays, and failure pays nothing.
+    let coefficients = vec![1_u64, 1, 1, 1, 1, 0];
+
+    let mut product = vec![0_u8; PRODUCT_RECORD_BYTES_V2];
+    let mut domain = vec![0_u8; result_domain_record_bytes(cuts.len()).expect("domain width")];
+    let mut portfolio =
+        vec![0_u8; portfolio_record_bytes(coefficients.len()).expect("portfolio width")];
+    let (compiled, report) = compile_interesting_product_records_v2(
+        REGISTRY_PROGRAM,
+        band,
+        PartitionQualityModelV1::TriangularPlausibleBand {
+            plausible_half_widths: 2,
+        },
+        MAX_CELL_EX_ANTE_SHARE_BPS_V1,
+        ProductCompilationInputV2 {
+            product_id: id(0x51),
+            coordinate_domain_id: id(2),
+            result_unit_id: id(3),
+            claim_basis_id: id(4),
+            liability_basis_id: id(5),
+            representation_release_id: id(6),
+            mapping_release_id: id(7),
+            cut_denominator: 1,
+            cuts: &cuts,
+            portfolio_denominator: 1,
+            coefficients: &coefficients,
+        },
+        &mut product,
+        &mut domain,
+        &mut portfolio,
+    )
+    .expect("an authored, centred SOL/USD market compiles");
+    assert_eq!(compiled.outcome_count, 6);
+    assert_eq!(report.cell_share_bps, vec![3_612, 900, 975, 900, 3_612]);
+
+    let mut test = if prefer_real_elf {
+        ProgramTest::new("dclutch_product_runtime_v2_sbf", ADMISSION_PROGRAM, None)
+    } else {
+        ProgramTest::new(
+            "dclutch_product_runtime_v2_sbf",
+            ADMISSION_PROGRAM,
+            processor!(process_instruction),
+        )
+    };
+    if prefer_real_elf {
+        test.prefer_bpf(true);
+    }
+    test.add_account(
+        REGISTRY_PROGRAM,
+        Account {
+            lamports: 1,
+            data: Vec::new(),
+            owner: native_loader::ID,
+            executable: true,
+            rent_epoch: 0,
+        },
+    );
+    let product = record(&mut test, compiled.receipt.product, product);
+    let domain = record(&mut test, compiled.receipt.result_domain, domain);
+    let portfolio = record(&mut test, compiled.receipt.portfolio, portfolio);
+    let receipt = derive_admission_receipt_v2(ADMISSION_PROGRAM, compiled.request);
+    let receipt_rent = Rent::default().minimum_balance(ADMISSION_RECEIPT_BYTES_V2);
+    add_account(
+        &mut test,
+        receipt,
+        ADMISSION_PROGRAM,
+        receipt_rent,
+        vec![0; ADMISSION_RECEIPT_BYTES_V2],
+    );
+    let state = AdmissionStateV2 {
+        registry: AccountObservationV2 {
+            slot: SLOT,
+            key: REGISTRY_PROGRAM,
+            owner: native_loader::ID,
+            lamports: 1,
+            executable: true,
+            data: &[],
+        },
+        receipt_output: AccountObservationV2 {
+            slot: SLOT,
+            key: receipt,
+            owner: ADMISSION_PROGRAM,
+            lamports: receipt_rent,
+            executable: false,
+            data: &[0; ADMISSION_RECEIPT_BYTES_V2],
+        },
+        rent: AccountObservationV2 {
+            slot: SLOT,
+            key: sysvar::rent::ID,
+            owner: sysvar::ID,
+            lamports: 1,
+            executable: false,
+            data: &[],
+        },
+        product: observe(compiled.receipt.product, &product.bytes),
+        result_domain: observe(compiled.receipt.result_domain, &domain.bytes),
+        portfolio: observe(compiled.receipt.portfolio, &portfolio.bytes),
+    };
+    let plan = build_admission_instruction_v2(ADMISSION_PROGRAM, compiled, state)
+        .expect("chain-derived unsigned admission");
+
+    let mut context = test.start_with_context().await;
+    submit(&mut context, plan.instruction)
+        .await
+        .expect("the authored market admits");
+    assert_eq!(
+        receipt_bytes(&mut context, receipt).await,
+        plan.receipt_bytes
+    );
+}
+
+#[tokio::test]
+async fn an_authored_sol_usd_market_admits_natively() {
+    run_authored_sol_usd_market(false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires cargo-build-sbf output via SBF_OUT_DIR"]
+async fn an_authored_sol_usd_market_admits_on_the_real_elf() {
+    run_authored_sol_usd_market(true).await;
 }
 
 #[tokio::test]
