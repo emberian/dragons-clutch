@@ -339,8 +339,16 @@ fn validate_generated_artifacts(
         artifacts.lifecycle_policy,
     )
     .map_err(|_| DealerLpReleaseErrorV4::Artifact)?;
+    // FOR THIS ACTION, because the LP AccountProfile is per-action and the LP
+    // lifecycle policy is not. `encode_dealer_lp_account_profile_v3` takes the
+    // action, and the frame it builds puts the Open payer and the Close
+    // RentCredit at the SAME fixed slot 7 -- a payer must be debitable, a
+    // RentCredit creditable, and no one permission set is both. Validating the
+    // whole policy against one action's profile therefore refused the Close plan
+    // against the Open frame with `ProfileMismatch`, which is a category error
+    // and not a finding about the artifacts.
     policy
-        .validate_account_profile(profile)
+        .validate_account_profile_for_action(profile, u32::from(action.selector()))
         .map_err(|_| DealerLpReleaseErrorV4::Geometry)?;
     if policy.action_plan_count(u32::from(action.selector())) != Ok(1)
         || policy.current_rent_quote_count() != 1

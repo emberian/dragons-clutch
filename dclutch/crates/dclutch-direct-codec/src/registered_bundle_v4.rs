@@ -290,8 +290,17 @@ pub fn validate_direct_register_buy_hot_bundle_v4(
         &bundle.lifecycle_policy,
     )
     .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
+    // FOR THIS ACTION. The registered AccountProfile is per-side -- a Sell and a
+    // Buy present different frames, which this crate's own bundle test asserts by
+    // requiring their digests to differ -- while the lifecycle policy has been
+    // ONE policy carrying both sides' plans since wall B was crossed. Validating
+    // every plan against one side's profile asks whether the Buy's plans fit the
+    // Sell's frame, which is a question with no correct answer. Direct's
+    // coordinates happen not to collide today, so this passed; the Dealer LP
+    // frame, where the Open payer and the Close RentCredit share fixed slot 7,
+    // is where the same shape refused a correct pairing.
     lifecycle
-        .validate_account_profile(account)
+        .validate_account_profile_for_action(account, action as u32)
         .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
     if lifecycle
         .action_plan_count(action as u32)
@@ -469,8 +478,17 @@ pub fn validate_direct_register_sell_hot_bundle_v4(
         &bundle.lifecycle_policy,
     )
     .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
+    // FOR THIS ACTION. The registered AccountProfile is per-side -- a Sell and a
+    // Buy present different frames, which this crate's own bundle test asserts by
+    // requiring their digests to differ -- while the lifecycle policy has been
+    // ONE policy carrying both sides' plans since wall B was crossed. Validating
+    // every plan against one side's profile asks whether the Buy's plans fit the
+    // Sell's frame, which is a question with no correct answer. Direct's
+    // coordinates happen not to collide today, so this passed; the Dealer LP
+    // frame, where the Open payer and the Close RentCredit share fixed slot 7,
+    // is where the same shape refused a correct pairing.
     lifecycle
-        .validate_account_profile(account)
+        .validate_account_profile_for_action(account, action as u32)
         .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::Lifecycle)?;
     if lifecycle
         .action_plan_count(action as u32)

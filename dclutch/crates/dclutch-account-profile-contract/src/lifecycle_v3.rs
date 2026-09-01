@@ -816,8 +816,24 @@ impl<'a> StateLifecyclePolicyV4<'a> {
     }
 
     /// Join the successor policy to the authenticated AccountProfile.
+    ///
+    /// Validates EVERY plan, which is correct when one profile describes the
+    /// account frame for every action the policy carries.
     pub fn validate_account_profile(self, profile: AccountProfileV2<'_>) -> Result<()> {
         self.0.validate_account_profile(profile)
+    }
+
+    /// The same join, for a profile that describes ONE action's frame.
+    ///
+    /// See [`StateLifecyclePolicyV5::validate_account_profile_for_action`]; the
+    /// Dealer LP family reaches this through V4 and has the same per-action
+    /// frame, so the same distinction applies and for the same reason.
+    pub fn validate_account_profile_for_action(
+        self,
+        profile: AccountProfileV2<'_>,
+        action: u32,
+    ) -> Result<()> {
+        self.0.validate_account_profile_for_action(profile, action)
     }
 }
 
@@ -950,8 +966,34 @@ impl<'a> StateLifecyclePolicyV5<'a> {
     }
 
     /// Join every lifecycle and quote coordinate to the authenticated AccountProfile.
+    ///
+    /// Validates EVERY plan, which is correct when one profile describes the
+    /// account frame for every action the policy carries.
     pub fn validate_account_profile(self, profile: AccountProfileV2<'_>) -> Result<()> {
         self.0.validate_account_profile(profile)
+    }
+
+    /// The same join, for a profile that describes ONE action's frame.
+    ///
+    /// Some families encode a different AccountProfile per action, and then the
+    /// same logical coordinate is a different account in each: the Dealer LP
+    /// frame puts the Open payer and the Close RentCredit both at fixed slot 7
+    /// (`DEALER_LP_OPEN_PAYER_ACCOUNT_V3`, `DEALER_LP_CLOSE_RENT_CREDIT_ACCOUNT_V3`).
+    /// A payer must be debitable and a RentCredit must be creditable, so no
+    /// single permission set satisfies both, and validating the whole policy
+    /// against one action's profile refuses a pairing that is correct.
+    ///
+    /// That is not strictness. `validate_account_profile` above is the right call
+    /// when one profile covers every action; this one is the right call when it
+    /// does not, and using it does not weaken the other -- each action's plans
+    /// are still fully validated, against the profile that actually describes
+    /// them.
+    pub fn validate_account_profile_for_action(
+        self,
+        profile: AccountProfileV2<'_>,
+        action: u32,
+    ) -> Result<()> {
+        self.0.validate_account_profile_for_action(profile, action)
     }
 
     /// Join to a mandatory funding-bound successor without sharing lifecycle authority.
@@ -1331,20 +1373,41 @@ impl<'a> StateLifecyclePolicyV3<'a> {
 
     /// Require every policy coordinate to fit the sole AccountProfile geometry.
     pub fn validate_account_profile(self, profile: AccountProfileV2<'_>) -> Result<()> {
-        self.validate_account_profile_inner(profile, None)
+        self.validate_account_profile_inner(profile, None, None)
+    }
+
+    fn validate_account_profile_for_action(
+        self,
+        profile: AccountProfileV2<'_>,
+        action: u32,
+    ) -> Result<()> {
+        // REFUSE an action this policy carries no plan for, or the filter below
+        // would skip every plan and the join would pass having checked nothing.
+        // Measured, not feared: without this, naming the wrong action made the
+        // Dealer LP join green while validating zero plans -- a check that cannot
+        // fail, arrived at while repairing one.
+        if self.action_plan_count(action)? == 0 {
+            return Err(Error::ProfileMismatch);
+        }
+        self.validate_account_profile_inner(profile, None, Some(action))
     }
 
     fn validate_account_profile_with_external_funding(
         self,
         profile: AccountProfileV3<'_>,
     ) -> Result<()> {
-        self.validate_account_profile_inner(profile.base(), Some(profile))
+        self.validate_account_profile_inner(profile.base(), Some(profile), None)
     }
 
     fn validate_account_profile_inner(
         self,
         profile: AccountProfileV2<'_>,
         external_funding: Option<AccountProfileV3<'_>>,
+        // `None` validates EVERY plan, which is right when one profile describes
+        // the frame for every action and is what every caller before this did.
+        // `Some(action)` validates only that action's plans, which is the only
+        // sound reading when the profile is itself per-action.
+        only_action: Option<u32>,
     ) -> Result<()> {
         let mut recipe_index = 0_u16;
         while recipe_index < self.recipes {
@@ -1368,6 +1431,16 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         let mut plan_index = 0_u16;
         while plan_index < self.plans {
             let plan = self.plan(plan_index)?;
+            // A plan belonging to a sibling action is not checkable against THIS
+            // action's profile, and checking it anyway is not strictness -- it is
+            // a category error. Four lines below,
+            // `validate_protected_output_uniqueness` already refuses to compare
+            // plans across actions for the same reason; this loop simply did not
+            // carry the same notion.
+            if only_action.is_some_and(|action| plan.action != action) {
+                plan_index = plan_index.checked_add(1).ok_or(Error::Arithmetic)?;
+                continue;
+            }
             let recipe = self.recipe(plan.recipe)?;
             if let Some(payer) = plan.payer {
                 validate_account_coordinate(profile, payer)?;

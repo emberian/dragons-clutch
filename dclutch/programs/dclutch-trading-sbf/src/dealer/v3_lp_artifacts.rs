@@ -912,8 +912,11 @@ mod tests {
             })
             .expect("profile");
             let profile = AccountProfileV2::decode(&profile).expect("decode profile");
+            // The join is per-action, because the profile is: this loop builds
+            // an Open frame and a Close frame, and asking whether the Close
+            // plan fits the Open frame has no correct answer.
             policy
-                .validate_account_profile(profile)
+                .validate_account_profile_for_action(profile, u32::from(action.selector()))
                 .expect("profile-policy join");
             assert_eq!(
                 profile.trusted_current_slot_scalar(),

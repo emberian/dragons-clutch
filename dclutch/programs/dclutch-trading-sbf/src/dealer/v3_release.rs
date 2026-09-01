@@ -306,8 +306,11 @@ pub fn finalize_dealer_lp_descriptor_v3(
         artifacts.derivation_policy,
     )
     .map_err(|_| DealerReleaseErrorV3::Artifact)?;
+    // FOR THIS ACTION: the LP AccountProfile is per-action and the policy is
+    // not, and slot 7 is the Open payer in one frame and the Close RentCredit in
+    // the other. See `v4_lp_release.rs` for the full account.
     lifecycle
-        .validate_account_profile(profile)
+        .validate_account_profile_for_action(profile, u32::from(selector))
         .map_err(|_| DealerReleaseErrorV3::Geometry)?;
     if lifecycle.action_plan_count(u32::from(selector)) != Ok(1) {
         return Err(DealerReleaseErrorV3::Geometry);

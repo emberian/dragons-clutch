@@ -4521,3 +4521,56 @@ behaved**: the runtime writes `custom program error: 0x4003` in the failure line
 and renders `Custom(N)` only in the transaction error, **which never reaches
 `logs`.** Measured under probe, the hostile refuses exactly `Content` — **the
 predicate was right all along and the format was unreachable.**
+
+## 2026-09-01 — a question with no correct answer
+
+The three LP `Geometry` failures were **neither** of the two candidates offered:
+not the action-scoping change, not the LP profile. **A category error in the
+validator**, convicted by instrumenting every stage and printing the comparison:
+
+```
+PERM FAIL: item=false index=7 granted=0b0001 required=0b0010
+```
+
+Fixed slot 7, granted `DEBIT_LAMPORTS`, required `CREDIT_LAMPORTS`. **The LP
+frame puts the Open payer and the Close RentCredit at the same slot 7.** A payer
+must be debitable and a RentCredit creditable, so **no single permission set
+satisfies both — and none has to**, because the encoder takes the *action* and
+builds a different frame for each. The lifecycle policy does not: it is **one
+policy carrying an Open plan and a Close plan.**
+
+So `validate_account_profile` was asking **whether the Close plan fits the Open
+frame.**
+
+> **That question has no correct answer, and its refusal was never a finding
+> about the artifacts.**
+
+**And the decoder already knew.** Four lines on,
+`validate_protected_output_uniqueness` **skips pairs whose plans carry different
+actions**, for exactly this reason. The plan loop simply never carried the same
+notion. Repaired by adding an action-aware form beside the whole-policy one,
+which stays correct for families whose single profile covers every action.
+
+**Exonerated by measurement:** the failure reproduces at `c8396b0b^` *and*
+`a153f08e^` — it predates both halves of the `derivation_policy` repair.
+
+### A check that cannot fail, arrived at while repairing one
+
+The new action-aware API was **vacuous on its first draft**: perturbing the call
+to name the wrong action left it **green**, because the filter skipped every plan
+and the join checked nothing. Now it refuses an action the policy carries no plan
+for, re-proven wrong-action-FAILS / right-action-passes.
+
+### The same shape, found latent and closed before it bit
+
+Since `6fed9720` the **registered Direct** policy carries both sides' plans while
+the account profiles differ per side — the crate's own test asserts it. Same
+shape, same exposure. **Direct's coordinates do not collide today, so it passed**
+— and both registered bundle joins were switched to the action-aware form rather
+than left latent.
+
+> **LP is where the shape had teeth; Direct is where it was waiting.**
+
+trading-sbf lib **446/6 → 448/4**, none of the four remaining being the
+validator and none newly broken. The LP frame reusing slot 7 for two roles is
+**legal but load-bearing** — it is what made a shared policy unvalidatable.
