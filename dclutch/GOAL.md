@@ -2256,3 +2256,16 @@ candidates, and the cheapest may already exist:
 
 Ember's queue is now **three**: recovery as a capability child, Claims split/merge
 veto, width-2 markets versus the partition gate.
+
+### Lane map after the trim — 2026-09-01, Fable
+
+The scroll took every prior subagent transcript; none of the ids above can be
+resumed. Relaunched from this file's tail block:
+
+| id | lane | unit |
+|---|---|---|
+| `a97f67b570a29df69` | S1+S10 release/devnet | observe cohort-9's ladder from chain (2.02 SOL unaccounted), then resume to founding + simulator |
+| `a5ec4792920591b66` | architect-scholar #2 | non-price resolution: is the relayed-observation payload price-bound? (`docs/evidence/NON_PRICE_RESOLUTION_DESIGN_2026_09_01.md`) |
+| `a00611258f691f981` | S3 Direct | Buy `MINT_ACCOUNT` mismatch → registered crosscheck → C-04 clauses |
+| `aa481a3dcafc5b3f2` | S7 Structured | Content/Route repair in `encode_effect` → walls behind it → coefficient guard LAST; two red witnesses |
+| `af0d560c200fa8218` | S4 General | the width-1 `Refused` disposition; 258 has never run |
