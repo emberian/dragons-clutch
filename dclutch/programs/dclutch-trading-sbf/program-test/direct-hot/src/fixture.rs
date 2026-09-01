@@ -1065,10 +1065,20 @@ fn registered_creation_artifacts_v4(
         .get_mut(usize::from(DIRECT_REGISTER_SELL_COLLATERAL_ACCOUNT_V4))
         .ok_or(DirectHotChainFixtureErrorV5::Profile)? =
         u32::try_from(SplAccount::LEN).map_err(|_| DirectHotChainFixtureErrorV5::Input)?;
+    // ONE width for both sides, because there is now one policy. The lifecycle
+    // policy belongs to the ROOT, not to an action, so it names the Buy's
+    // Custody quotes even when the Sell is the side being built -- and if these
+    // two ever disagreed the sides would emit different policy bytes and wall B
+    // would silently come back. Named once so they cannot.
+    let child_rent_widths = DirectRegisteredCreationChildRentWidthsV4 {
+        custody_vault: u32::try_from(SplAccount::LEN)
+            .map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
+    };
     let sell = build_direct_register_sell_hot_bundle_v4(DirectRegisterSellHotBundleInputV4 {
         account_profile: DirectRegisterBuyAccountProfileInputV4 {
             logical_data_lengths: &sell_lengths,
         },
+        child_rent_widths,
         capacity_profile: DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5,
     })
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;
@@ -1078,10 +1088,7 @@ fn registered_creation_artifacts_v4(
         account_profile: DirectRegisterBuyAccountProfileInputV4 {
             logical_data_lengths: &buy_lengths,
         },
-        child_rent_widths: DirectRegisteredCreationChildRentWidthsV4 {
-            custody_vault: u32::try_from(SplAccount::LEN)
-                .map_err(|_| DirectHotChainFixtureErrorV5::Input)?,
-        },
+        child_rent_widths,
         capacity_profile: DIRECT_HOT_FIXTURE_CAPACITY_PROFILE_V5,
     })
     .map_err(|_| DirectHotChainFixtureErrorV5::Encoding)?;

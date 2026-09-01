@@ -3917,11 +3917,64 @@ async fn submit_v0(
     addresses: &[Pubkey],
     label: &str,
 ) -> Result<Submission, BanksClientError> {
+    submit_v0_instructions(context, fixture, &[instruction], table, addresses, label).await
+}
+
+/// The same v0 submission over an explicit instruction list.
+///
+/// Split out rather than duplicated so the campaign keeps ONE submission path.
+/// The only caller that needs more than one instruction is the common-Hot
+/// campaign, which must carry a ComputeBudget heap grant: `DCLTHOT3` is on
+/// `declares_extended_heap_profile_v1`'s list, and that list makes a grant
+/// ADMISSIBLE rather than automatic -- the route asks
+/// `require_extended_heap_admitted_v1` to refuse `TradingSbfError::HeapFrame`
+/// by name when it did not arrive. The remedy is the caller's, and in this
+/// family the caller is whoever assembles the transaction: the operator returns
+/// a bare `Instruction`, not a transaction, so nothing between it and the wire
+/// was adding one.
+/// The common-Hot submission, carrying the ComputeBudget heap grant the route
+/// declares and refuses `HeapFrame` without.
+///
+/// Every other campaign in this file submits one bare instruction, because
+/// every other route fits the protocol-default 32 KiB. `DCLTHOT3` does not: a
+/// caller who invokes Trading directly makes two Registry reauthentication CPIs
+/// and holds their frames against an allocator that never frees. The grant is
+/// best-effort by construction, so the transaction has to ask.
+async fn submit_v0_with_heap(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    instruction: Instruction,
+    table: Pubkey,
+    addresses: &[Pubkey],
+    label: &str,
+) -> Result<Submission, BanksClientError> {
+    let heap = solana_compute_budget_interface::ComputeBudgetInstruction::request_heap_frame(
+        dclutch_capability_program_contract::hot_v3::DIRECT_HOT_HEAP_FRAME_BYTES_V1,
+    );
+    submit_v0_instructions(
+        context,
+        fixture,
+        &[heap, instruction],
+        table,
+        addresses,
+        label,
+    )
+    .await
+}
+
+async fn submit_v0_instructions(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    instructions: &[Instruction],
+    table: Pubkey,
+    addresses: &[Pubkey],
+    label: &str,
+) -> Result<Submission, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &context.payer.pubkey(),
-            &[instruction],
+            instructions,
             &[AddressLookupTableAccount {
                 key: table,
                 addresses: addresses.to_vec(),
@@ -4919,7 +4972,7 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
         .data
         .last_mut()
         .expect("nonempty family request") ^= 1;
-    let refused = submit_v0(
+    let refused = submit_v0_with_heap(
         &mut context,
         &fixture,
         substituted_digest,
@@ -4944,7 +4997,7 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
         "a substituted common-Hot request rolls back Claims and Token state"
     );
 
-    let issued = submit_v0(
+    let issued = submit_v0_with_heap(
         &mut context,
         &fixture,
         issue.clone(),
@@ -5039,7 +5092,7 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
         "Trading common-Hot Rational Denominate",
     )
     .await;
-    let denominated = submit_v0(
+    let denominated = submit_v0_with_heap(
         &mut context,
         &fixture,
         denominate.clone(),

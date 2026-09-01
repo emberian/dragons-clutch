@@ -3547,3 +3547,115 @@ a symbol in a `///` **and** a `//` comment and both must be reported.
 **Routed with owners:** `trading-sbf` owns `authenticate_hot_artifacts`; the
 local-validator lane owns `ClusterOriginV1::may_use_seeded_keys` and the second
 `market.rs` citation.
+
+## 2026-09-01 — one capability, not three
+
+**"The browser can sign but cannot originate" is now one capability.** Trade is
+stranger-operable; creation's authoring path is a transport question with a
+producer and a copy-out handoff already; **redemption is the one that still
+stops at an artifact only a Rust binary can author — and it now has a
+decomposition rather than a shrug.**
+
+### The impurity is not authority
+
+`produce_wallet_terminal_input_v1` is not a pure planner — file I/O, its own
+RPC, a cluster-origin policy. But *where* the impurity sits is the finding:
+
+- from `--plan` it takes **six values, nothing else** (enumerated by walking
+  every `plan.*` access): five program ids and a release-set id. The browser
+  holds five from the deployment and reads the sixth from the Market's own Core
+  state — which the admission snapshot module already does.
+- from `--evidence` it takes a routing table of addresses to observe, plus a
+  `plan_sha256` that binds **the CLI's two files to each other**. Not a
+  protocol check.
+- **SBF program crates the derivation touches: zero.**
+
+> Two artifacts that are a deployment table and an address book — and the
+> browser derives both.
+
+The blocker is structural, not semantic: the derivation is `pub(crate)` in a
+**binary** crate that declares its own `[workspace]` and depends on
+`dclutch-claims-sbf` for its *other* subcommands. Extraction is needed, exactly
+as `dclutch-operator` had to shed `dclutch-trading-sbf` — which turned out free.
+**The lane did not dissolve that architectural boundary unilaterally.**
+
+### Consent, not convenience
+
+`/found` asked a stranger to transcribe **their own public key**; the payer now
+fills from the connected wallet, with an edit still overriding, because the
+payer need not be the wallet reading the page.
+
+The refund wallet deliberately does **not** follow: it is **immutable once the
+Market-bound RentCredit embeds it**, so defaulting it silently would decide
+something permanent for a reader who never looked at the field. A test pins that
+it may still differ.
+
+### The model refused to be impressed
+
+The regenerated capability surface still reports `authority: "none"` for that
+page —
+
+> a page that grew a wallet directory and kept *"This browser · no key, no
+> signature"*, because reading an address reaches no wallet request. **The model
+> refusing to be fooled by the appearance of one.**
+
+A derivation earning its keep against its own author's expectation — the third
+time today an instrument has done that.
+
+## 2026-09-01 — the measurement declined to authorize the removal
+
+`coefficient == denominator` was to be settled by measurement: remove the
+emission, drive issue → denominate → redeem → retire, and see whether
+conservation still closes. **The removal did not break conservation.
+Conservation was never reached.**
+
+With the constraint removed the fold stopped refusing and the campaign advanced
+past `build_bundle` for the first time — into `TradingSbfError::HeapFrame`
+(`0x4008`), because the operator returns a bare `Instruction` and nothing was
+adding a `RequestHeapFrame`. Grant added (`a0bd979f`). Behind **that**:
+
+```
+admitted (not hostile, not corrupted) IssueStructured, 203,408 CU,
+inside a real Token-2022 PermissionedBurnExtension CPI:
+  request  65,536 -> Access violation writing 8 bytes at 0x30000fcf8
+  request 262,144 -> Access violation writing 8 bytes at 0x30003fcf8
+```
+
+### The third instance, and this one faults instead of refusing
+
+**`require_extended_heap_admitted_v1` — the check that says the grant arrived —
+reads the ComputeBudget *request* from the instructions sysvar.** What the
+program **asked for**, never what the runtime **gave**. Both sides of the check
+move together: the transaction asks for N, the check reads N, the check passes.
+
+The bump heap reserves 776 bytes at its floor and its scratch half bumps **down
+from that admitted ceiling** — so **both faults land exactly 776 bytes below the
+requested ceiling, and the fault tracks the request.** Raising it only moves the
+write further out.
+
+> **Guards whose two sides move together, third instance tonight — and the first
+> that ends in a memory fault rather than a refusal.**
+
+The crux, which is a ruling about what a program may trust from its own
+instructions sysvar: **a Solana program cannot directly observe the heap it was
+granted**, so any check claiming to verify the grant is necessarily reading the
+request, and the name promises what the mechanism cannot deliver.
+
+### Why the constraint went back
+
+The admitted path faults **identically to the hostile — same CU, same address**
+— so the fault is upstream of every economic step and **settles nothing** about
+the coefficient law. It also does not harden it: the constraint is not what was
+preventing the fault. **Restored**, `open_structured_v3.rs` byte-identical to
+HEAD, suite back to 44/45 with the identical
+`transition fold refused at operation 4`.
+
+Measure-then-remove worked exactly as intended: **the measurement declined to
+authorize the removal.** The ruling is now *blocked* rather than merely
+undecided — it cannot be settled until the heap fault is fixed, because nothing
+downstream of it executes.
+
+One more M-38 from the same episode: the hostile's `!accepted` half **passed
+while the reason was completely wrong** — an extended-heap refusal standing in
+for a substituted-digest refusal — and **only the discriminant assertion caught
+it.**

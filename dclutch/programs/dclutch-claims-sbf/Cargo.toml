@@ -75,6 +75,7 @@ solana-message = "=4.5.0"
 solana-program-option = "=3.1.0"
 solana-program-pack = "=3.1.0"
 solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-api"] }
+solana-compute-budget-interface = "=3.1.0"
 solana-sdk = "=3.0.0"
 solana-transaction = "=4.2.0"
 spl-token-interface = "=3.0.0"

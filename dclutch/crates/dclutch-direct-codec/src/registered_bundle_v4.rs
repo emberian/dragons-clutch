@@ -72,7 +72,8 @@ use crate::{
     registered_state_artifacts_v4::{
         DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5, DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5,
         DirectRegisteredCreationChildRentWidthsV4,
-        encode_direct_registered_creation_lifecycle_v5_atomic,
+        DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5,
+        encode_direct_registered_creation_unified_lifecycle_v5_atomic,
     },
     successor::{
         DIRECT_EXECUTION_CONFIG_SCHEMA_ID_V1, DIRECT_ROOT_SCHEMA_ID_V1, DIRECT_ROOT_STATE_BYTES_V1,
@@ -101,7 +102,7 @@ pub struct DirectRegisterBuyHotBundleV4 {
     /// Fixed-topology Profile14 bytes.
     pub account_profile: [u8; DIRECT_REGISTER_BUY_ACCOUNT_PROFILE_BYTES_V4],
     /// Maker/record LifecycleV5 bytes.
-    pub lifecycle_policy: [u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5],
+    pub lifecycle_policy: [u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5],
     /// One-maker signed RequestProfileV2 bytes.
     pub request_profile: [u8; DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V2_BYTES_V4],
     /// RegisterBuy TransitionVMV3 bytes.
@@ -128,6 +129,15 @@ pub const DIRECT_REGISTER_SELL_DESCRIPTOR_BYTES_V4: usize = CAPABILITY_PROGRAM_V
 pub struct DirectRegisterSellHotBundleInputV4<'a> {
     /// Exact logical account observations in Profile14 coordinate order.
     pub account_profile: DirectRegisteredCreationAccountProfileInputV4<'a>,
+    /// Exact observed widths of the Custody children a registered BUY opens.
+    ///
+    /// A Sell opens none of them, and this is still required, because the
+    /// lifecycle policy is a property of the ROOT rather than of one action: one
+    /// entry pins one policy, so the policy names both sides' quotes and cannot
+    /// be built without both sides' widths. The Sell's own projection still
+    /// never reads them -- they are tagged `RegisterBuy` and
+    /// `action_current_rent_quote_count(RegisterSell)` is two.
+    pub child_rent_widths: DirectRegisteredCreationChildRentWidthsV4,
     /// Manifest-selected physical capacity profile content identity.
     pub capacity_profile: [u8; 32],
 }
@@ -138,7 +148,7 @@ pub struct DirectRegisterSellHotBundleV4 {
     /// Fixed-topology Profile14 bytes.
     pub account_profile: [u8; DIRECT_REGISTER_SELL_ACCOUNT_PROFILE_BYTES_V4],
     /// Maker/record LifecycleV5 bytes.
-    pub lifecycle_policy: [u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5],
+    pub lifecycle_policy: [u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5],
     /// One-maker signed RequestProfileV2 bytes.
     pub request_profile: [u8; DIRECT_REGISTERED_CREATION_REQUEST_PROFILE_V2_BYTES_V4],
     /// RegisterSell TransitionVMV3 bytes.
@@ -193,11 +203,10 @@ pub fn build_direct_register_buy_hot_bundle_v4(
     )
     .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::AccountProfile)?;
 
-    let mut lifecycle_scratch = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
-    let mut lifecycle_policy = [0_u8; DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5];
-    encode_direct_registered_creation_lifecycle_v5_atomic(
-        action,
-        Some(input.child_rent_widths),
+    let mut lifecycle_scratch = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+    let mut lifecycle_policy = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+    encode_direct_registered_creation_unified_lifecycle_v5_atomic(
+        input.child_rent_widths,
         &mut lifecycle_scratch,
         &mut lifecycle_policy,
     )
@@ -374,11 +383,10 @@ pub fn build_direct_register_sell_hot_bundle_v4(
     )
     .map_err(|_| DirectRegisteredCreationHotBundleErrorV4::AccountProfile)?;
 
-    let mut lifecycle_scratch = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
-    let mut lifecycle_policy = [0_u8; DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5];
-    encode_direct_registered_creation_lifecycle_v5_atomic(
-        action,
-        None,
+    let mut lifecycle_scratch = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+    let mut lifecycle_policy = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+    encode_direct_registered_creation_unified_lifecycle_v5_atomic(
+        input.child_rent_widths,
         &mut lifecycle_scratch,
         &mut lifecycle_policy,
     )
@@ -651,6 +659,14 @@ fn artifact(
 
 #[cfg(test)]
 mod tests {
+    /// The observed Token-2022 vault width these builders quote against.
+    ///
+    /// An observation, never a protocol constant: the width belongs to the
+    /// selected token program and a Token-2022 account carrying extensions is
+    /// not 165 bytes. It is here because the ROOT's shared policy names the
+    /// Buy's quotes even when a Sell is the side being built.
+    const OBSERVED_VAULT_BYTES: u32 = 165;
+
     extern crate std;
 
     use dclutch_account_profile_contract::{
@@ -778,6 +794,9 @@ mod tests {
         build_direct_register_sell_hot_bundle_v4(DirectRegisterSellHotBundleInputV4 {
             account_profile: DirectRegisteredCreationAccountProfileInputV4 {
                 logical_data_lengths: &lengths,
+            },
+            child_rent_widths: DirectRegisteredCreationChildRentWidthsV4 {
+                custody_vault: OBSERVED_VAULT_BYTES,
             },
             capacity_profile: [0x44; 32],
         })
@@ -1124,12 +1143,31 @@ mod tests {
             &sell.lifecycle_policy,
         )
         .expect("lifecycle");
-        assert_eq!(lifecycle.current_rent_quote_count(), 2);
+        // FOUR declarations, of which a Sell projects TWO. The policy is the
+        // root's and carries both sides' quotes; the action tag is what keeps a
+        // Sell from projecting rent for a Custody child it never opens. Derived
+        // from the contract rather than restated as a literal subsequence.
+        assert_eq!(lifecycle.current_rent_quote_count(), 4);
+        assert_eq!(
+            lifecycle.action_current_rent_quote_count(DirectExecutionActionV3::RegisterSell as u32),
+            Ok(2),
+        );
+        assert_eq!(
+            lifecycle.action_current_rent_quote_count(DirectExecutionActionV3::RegisterBuy as u32),
+            Ok(4),
+        );
 
         assert_ne!(digest(&sell.account_profile), digest(&buy.account_profile));
-        assert_ne!(
+        // WALL B, INVERTED. This assertion was `assert_ne!`, and that inequality
+        // WAS the wall: one manifest entry pins one `derivation_policy`, so two
+        // policies with two digests meant no Direct root could admit both
+        // creation actions. They are one policy and one digest now, so a single
+        // entry serves both sides. The account profiles still differ, and should
+        // -- the two sides genuinely present different frames.
+        assert_eq!(
             digest(&sell.lifecycle_policy),
-            digest(&buy.lifecycle_policy)
+            digest(&buy.lifecycle_policy),
+            "one root, one entry, one lifecycle policy: this equality is wall B being crossed",
         );
         assert_ne!(digest(&sell.request_profile), digest(&buy.request_profile));
         assert_ne!(digest(&sell.transition), digest(&buy.transition));

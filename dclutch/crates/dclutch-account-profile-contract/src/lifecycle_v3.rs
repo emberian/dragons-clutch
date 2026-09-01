@@ -938,6 +938,17 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         self.0.current_rent_quote(ordinal)
     }
 
+    /// Current-Rent quotes ONE executing action projects.
+    ///
+    /// Not the same as [`Self::current_rent_quote_count`], and the difference is
+    /// the point of the action tag: a multi-action policy declares the union and
+    /// each action projects its own subsequence. This is the number the walkers
+    /// require the caller's authenticated quote slice to match, exposed so a test
+    /// or a builder derives it instead of counting the declarations itself.
+    pub fn action_current_rent_quote_count(self, action: u32) -> Result<u16> {
+        self.0.action_current_rent_quote_count(action)
+    }
+
     /// Join every lifecycle and quote coordinate to the authenticated AccountProfile.
     pub fn validate_account_profile(self, profile: AccountProfileV2<'_>) -> Result<()> {
         self.0.validate_account_profile(profile)

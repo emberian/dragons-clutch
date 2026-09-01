@@ -512,6 +512,14 @@ fn content(bytes: [u8; 32]) -> Result<ContentId> {
 
 #[cfg(test)]
 mod tests {
+    /// The observed Token-2022 vault width these builders quote against.
+    ///
+    /// An observation, never a protocol constant: the width belongs to the
+    /// selected token program and a Token-2022 account carrying extensions is
+    /// not 165 bytes. It is here because the ROOT's shared policy names the
+    /// Buy's quotes even when a Sell is the side being built.
+    const OBSERVED_VAULT_BYTES: u32 = 165;
+
     extern crate std;
 
     use dclutch_capability_program_contract::{
@@ -713,6 +721,12 @@ mod tests {
                     build_direct_register_sell_hot_bundle_v4(DirectRegisterSellHotBundleInputV4 {
                         account_profile: DirectRegisteredCreationAccountProfileInputV4 {
                             logical_data_lengths: &lengths,
+                        },
+                        // The Buy's vault width, because the policy is the
+                        // ROOT's and names both sides' quotes; the Sell's own
+                        // projection never reads it.
+                        child_rent_widths: DirectRegisteredCreationChildRentWidthsV4 {
+                            custody_vault: OBSERVED_VAULT_BYTES,
                         },
                         capacity_profile,
                     })
