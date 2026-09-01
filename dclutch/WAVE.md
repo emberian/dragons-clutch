@@ -3452,3 +3452,98 @@ object, `programs/` only, one hop.
 `AUTHORITY` and `PRIVILEGE` are distinguished in the README header because they
 look alike and **point opposite ways** — one hunts under-constraint, the other
 over-constraint.
+
+## 2026-09-01 — four families, one root
+
+**99 of 120 lamport destinations classified. Still zero class 4.** And the four
+strongest candidates — sorted by *named at use time vs at creation time* — all
+cleared to the **same root**.
+
+The real candidate was `ResolutionRoleRequestV1/V2.beneficiary`: required nonzero
+at `CreateFund`, zero at `AdmitTerminal`, and **nonzero again at `CloseFund`** —
+named at creation *and again at use*, which is class 4 unless close checks. It
+does: refused unless the request matches **both** `state.rent_beneficiary` **and**
+the frame's close-beneficiary account, with `VerifyFundReady` carrying the same
+double binding.
+
+### The structural result
+
+**Every caller-supplied lamport destination carried to a verdict roots in one
+value: the Market state's `rent_beneficiary`, written once at founding.**
+
+- Custody's `CustodyReplayV1.rent_refund` was itself seeded from
+  `state.rent_beneficiary` at open;
+- Direct replay setup and token setup are bound to / derived from
+  `market.rent_beneficiary`;
+- Resolution funding is bound to `state.rent_beneficiary`;
+- provider transport and sponsored push are bound to a lifecycle
+  `refund_recipient` persisted at creation.
+
+**Four independent families. One root.**
+
+> **The protocol's answer to "who may receive lamports" is nowhere an authority
+> check — it is a single founding-time value that everything else is compared
+> against.**
+
+Two consequences, and both narrow the search rather than widen it:
+
+1. **The founding is the only place this ownership can be got wrong** — a defect
+   at the root is a defect in all four families, and no downstream comparison
+   would notice, because they would all agree with each other perfectly.
+2. **A class-4 defect must therefore be a place where the comparison is
+   *missing*, not weak.** "Audit 120 sites for weak checks" becomes "find a path
+   with no check at all."
+
+| class | count |
+|---|---|
+| 1 — owned by the code at the site | 63 |
+| 2 — read from persisted authenticated state | 27 |
+| 3 — caller-supplied, bound to a persisted value | 9 |
+| **4 — unowned** | **0** |
+| unresolved | 21 |
+
+**The caveat, kept in the lane's own words:** *"I have not proven no unowned
+lamport flow exists. A hostile reviewer should read this as sweeping a
+well-defined population with a stated method — not as a proof."*
+
+## 2026-09-01 — the instrument indicted the reader who built it
+
+The doc-citation scanner's coverage boundary — *Rust doc comments only* — was
+closed by measurement rather than documented as a caution (`47edccea`).
+
+| corpus | spans | judged | resolved | **dangling** | declined |
+|---|---:|---:|---:|---:|---:|
+| `///` and `//!` | 11,878 | 1,032 | 1,021 | **11** | 10,846 |
+| ordinary `//` | 2,571 | 130 | 127 | **3** | 2,441 |
+
+**Not because the ratio is better — it is worse**, 95% declined against 91%.
+Because the signal filter is what handles a bad ratio: prose does not
+accidentally contain `crate::module::symbol`. Widening by 2,571 spans added
+**130 judged and 3 findings**. It did not explode, so the boundary closes,
+**stated with a number instead of an expectation.**
+
+### And the number indicted the hand count
+
+Four of the `process_funded_transition` citations live in `//` comments — and
+the total is **six, not five.** Two had been missed by eye: `core-sbf/tests.rs`
+and a second in `local-validator/.../market.rs`.
+
+> That is the whole argument for an instrument rather than a careful reader —
+> **made against the reader who had been careful about this exact symbol an hour
+> earlier.**
+
+**A third true dangle, visible only once `//` was in scope:**
+`hot_v3::authenticate_hot_artifacts` at
+`trading-sbf/src/dealer/v3_hot_artifact.rs:1346` has no definition anywhere; the
+nearest live names are `authenticate_hot_program_v3` and
+`authenticate_hot_invocation_v3`. A comment explaining what a refusal derives,
+naming a function that does not exist — **in a program the lane never touched.**
+
+The two corpora are reported **separately rather than summed**, because they
+have different ratios and *a future reader deciding whether to gate one of them
+needs the split, not a total.* Controls extended: the synthetic tree now dangles
+a symbol in a `///` **and** a `//` comment and both must be reported.
+
+**Routed with owners:** `trading-sbf` owns `authenticate_hot_artifacts`; the
+local-validator lane owns `ClusterOriginV1::may_use_seeded_keys` and the second
+`market.rs` citation.

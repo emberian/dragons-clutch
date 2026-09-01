@@ -39,7 +39,9 @@ describe('Core Found workspace: what each field is, and where its value comes fr
   it('gives every address a sentence saying where it comes from', () => {
     // OPERATOR_FORMS_V1 §0 -- `ArtifactInput`'s rule, generalised. Fourteen
     // addresses used to arrive with a label and nothing else.
-    expect(html).toContain('The wallet that funds both packets and signs them elsewhere.');
+    // The payer's sentence moved from a static line to the derived-provenance
+    // line, because the page reads it from the wallet now instead of asking.
+    expect(html).toContain('Connect a wallet above to fill this, or paste the payer address.');
     expect(html).toContain('Embedded once in the Market-bound RentCredit and immutable afterwards');
     // These two used to pin a byte range the browser had written down in its
     // own words. The coordinates now come from `lib/generated/coreFound.ts`,
@@ -121,5 +123,33 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     // renders at its field instead.
     expect(html).toContain('No transaction has been constructed');
     expect(html).not.toContain('role="alert"');
+  });
+});
+
+describe('the payer is read from the wallet, not asked for', () => {
+  const html = renderToStaticMarkup(<CoreFoundWorkspace />);
+
+  it('offers to read the payer from a connected wallet', () => {
+    // OPERATOR_FORMS_V1 §0 again: "if a console asks you to paste something and
+    // you don't know where it comes from, that's a bug in the console." The
+    // payer is the one address on this form whose answer is sitting in the
+    // reader's own browser — asking them to transcribe their own public key is
+    // the purest case of the rule.
+    expect(html).toContain('Connect a wallet to fill the payer');
+    expect(html).toContain('Connecting reads your address');
+  });
+
+  it('is explicit that connecting still signs nothing here', () => {
+    // This console's whole contract is that it exports unsigned bytes and asks
+    // for no key. Reading an address is not signing, and the page has to say
+    // which one it is doing.
+    expect(html).toContain('Nothing is signed on this page');
+  });
+
+  it('still lets the refund wallet differ from the payer', () => {
+    // It is immutable once embedded in the Market-bound RentCredit, so
+    // defaulting it silently to the payer would decide something permanent for
+    // a reader who never looked at the field.
+    expect(html).toContain('Often the payer, and it does not have to be');
   });
 });

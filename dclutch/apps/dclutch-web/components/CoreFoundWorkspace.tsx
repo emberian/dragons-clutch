@@ -18,6 +18,7 @@ import {
 } from '@/components/operator/OperatorFields';
 import { assignFoundRefusalV1 } from '@/components/operator/foundRefusals';
 import CommandRunbook from '@/components/operator/CommandRunbook';
+import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
 
 type AddressField = Exclude<keyof CoreFoundInputV2, 'generation' | 'lookupTable'>;
 type AddressValues = Record<AddressField, string>;
@@ -59,9 +60,9 @@ dclutch --rpc "$DEVNET_RPC" \\
  * constant for the ABI generator to emit and nothing to import instead of
  * restating it).
  */
-const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string; group: 'authority' | 'deployment' | 'records'; provenance: string; derived?: 'product' | 'source' }>> = Object.freeze([
-  { field: 'payer', label: 'Payer', group: 'authority',
-    provenance: 'The wallet that funds both packets and signs them elsewhere. It must be a plain System-owned wallet holding no account data.' },
+const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string; group: 'authority' | 'deployment' | 'records'; provenance: string; derived?: 'product' | 'source' | 'wallet' }>> = Object.freeze([
+  { field: 'payer', label: 'Payer', group: 'authority', derived: 'wallet',
+    provenance: 'The wallet that funds both packets and signs them elsewhere. It must be a plain System-owned wallet holding no account data. Connect a wallet above and this fills itself; an edit overrides it.' },
   { field: 'refundWallet', label: 'Immutable rent refund wallet', group: 'authority',
     provenance: 'Embedded once in the Market-bound RentCredit and immutable afterwards, so rent returns here rather than to the payer. Often the payer, and it does not have to be.' },
   { field: 'registryProgram', label: 'Registry program', group: 'deployment', provenance: '' },
@@ -124,12 +125,18 @@ function compact(value: string): string {
 export default function CoreFoundWorkspace() {
   const deployment = useDeploymentV1();
   const [endpoint, setEndpoint] = useDeploymentFieldV1((d) => d.endpoint);
+  const wallets = useWalletDirectoryV1();
   const [addresses, setAddresses] = useState<AddressValues>(emptyAddresses);
   // Deployment-derivable fields arrive filled; an operator's edit overrides.
   const effective: AddressValues = {
     ...addresses,
     registryProgram: addresses.registryProgram !== '' ? addresses.registryProgram : deployment.programs.registry,
     activationCache: addresses.activationCache !== '' ? addresses.activationCache : deployment.activationCache ?? '',
+    // The one address on this form whose answer is already in the reader's
+    // browser. Asking somebody to transcribe their own public key is the
+    // purest case of OPERATOR_FORMS_V1 §0, and an edit still overrides it —
+    // the payer does not have to be the wallet that reads this page.
+    payer: addresses.payer !== '' ? addresses.payer : wallets.address ?? '',
   };
   const [generation, setGeneration] = useState('1');
   const [state, setState] = useState<BuildState>({
@@ -215,7 +222,8 @@ export default function CoreFoundWorkspace() {
   function addressField(entry: (typeof ADDRESS_FIELDS)[number]) {
     const routed = refusalFor(entry.field);
     const derived = entry.field === 'registryProgram' ? deployment.programs.registry
-      : entry.field === 'activationCache' ? deployment.activationCache ?? '' : null;
+      : entry.field === 'activationCache' ? deployment.activationCache ?? ''
+      : entry.derived === 'wallet' ? wallets.address ?? '' : null;
     const read = derivedFrom[entry.field];
     return <div className="operator-field-slot" key={entry.field}>
       <PubkeyField
@@ -230,10 +238,12 @@ export default function CoreFoundWorkspace() {
           : <DerivedProvenance
             derived={derived === '' ? null : derived}
             value={effective[entry.field]}
-            source="the deployment this browser is pointed at"
             absent={entry.field === 'registryProgram'
               ? 'Pick a cluster in the header to fill this, or paste the Registry program address.'
-              : 'Pick a cluster in the header to fill this, or paste the activation cache this release derives.'} />}
+              : entry.field === 'activationCache'
+              ? 'Pick a cluster in the header to fill this, or paste the activation cache this release derives.'
+              : 'Connect a wallet above to fill this, or paste the payer address.'}
+            source={entry.derived === 'wallet' ? 'the wallet connected above' : 'the deployment this browser is pointed at'} />}
       />
       {routed === null ? null : <OperatorRefusal remedy={routed.remedy} detail={routed.detail} />}
     </div>;
@@ -276,6 +286,8 @@ export default function CoreFoundWorkspace() {
 
       <fieldset className="operator-act">
         <legend>Who pays, and who is refunded</legend>
+        <p>Connect a wallet to fill the payer from the browser instead of transcribing it. Connecting reads your address and nothing else. <strong>Nothing is signed on this page</strong>: it exports unsigned bytes and asks for no key, and the refund wallet stays yours to choose because it is immutable once the Market-bound RentCredit embeds it.</p>
+        <WalletDirectory directory={wallets} onConnected={(address) => update('payer', address)} />
         <div className="operator-act-grid">{group('authority').map(addressField)}</div>
       </fieldset>
 
