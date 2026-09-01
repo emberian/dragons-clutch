@@ -424,10 +424,26 @@ fn validate_v4_semantics(
     selector: u16,
     descriptor: CapabilityProgramV4,
 ) -> Result<(), DealerScenarioReleaseErrorV4> {
-    let expected_derivation = match selector {
-        1..=8 => descriptor.lifecycle().program(),
-        _ => content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?,
-    };
+    // `derivation_policy` is a PER-ROOT constant for every selector, never the
+    // selector's own lifecycle digest.
+    //
+    // The field has exactly one reader that decides anything:
+    // `CapabilityProgramV4::validate_selection` requires it to equal the
+    // manifest entry's `child_derivation_id`, and a `CapabilityManifestV1`
+    // carries ONE entry per root while a `CapabilityProgramSetV2` carries nine
+    // selectors. Pinning it per-action to `lifecycle().program()` therefore made
+    // the two requirements jointly unsatisfiable: whichever selector the
+    // manifest entry was built from executes and the other eight refuse
+    // `Content` at the entry join. Measured on the real accelerator link: LP
+    // Open (7) executed and the equity Add (1) refused there.
+    //
+    // Nothing is unbound by this. The descriptor still names its lifecycle by
+    // CONTENT DIGEST in `artifacts.lifecycle.program`, and the runtime refuses
+    // unless `hash(record) == that digest` and the record sits at the Registry
+    // PDA derived from it, then binds the bytes to the execution seal. Restating
+    // that identity through a third field added no authentication -- it only
+    // demanded one field be a per-action value and a per-root value at once.
+    let expected_derivation = content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?;
     if descriptor.kind() != content(digest(DEALER_KIND_PREIMAGE_V2))?
         || descriptor.config_schema() != content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4))?
         || descriptor.request_schema()
@@ -607,41 +623,57 @@ mod tests {
         .encode()
     }
 
+    /// Every live selector carries the SAME per-root derivation policy, and a
+    /// per-action lifecycle digest in that field is refused.
+    ///
+    /// This is the inverse of what this test asserted before, and the inversion
+    /// is the repair. `validate_selection` requires `derivation_policy` to equal
+    /// the manifest entry's `child_derivation_id`; a manifest carries one entry
+    /// per root and a program set carries nine selectors. So a per-action value
+    /// here admits exactly one selector per root and refuses the other eight --
+    /// which is what it did on the real accelerator link, executing LP Open and
+    /// refusing the equity Add.
+    ///
+    /// The direction that matters for a reader: this is not a relaxation. The
+    /// validator still refuses a wrong `derivation_policy`; it now requires the
+    /// only value that a single manifest entry can bind for every selector, and
+    /// the descriptor-to-lifecycle binding it used to restate is carried where
+    /// it always was -- `artifacts.lifecycle.program` is a content digest the
+    /// runtime verifies by hashing the record and by deriving its Registry PDA.
     #[test]
-    fn live_v4_records_use_the_exact_lifecycle_program_as_derivation_policy() {
+    fn every_live_v4_record_uses_the_per_root_derivation_policy() {
         let lifecycle_program = byte_id(83);
         let root_derivation = content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1).expect("root");
+        // Selector 9 carries the scenario request/effect shape, so it is built
+        // by `scenario_descriptor` and covered by
+        // `selector_nine_requires_v4_and_every_successor_schema`; it already
+        // declared this same per-root constant before this repair, which is why
+        // it was the one selector the old rule left coherent.
         for selector in 1..=8 {
-            let exact = lp_descriptor(selector, lifecycle_program);
+            let exact = lp_descriptor(selector, root_derivation);
             assert!(
                 DealerDescriptorRecordV4::new(
                     selector,
                     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
                     &exact,
                 )
-                .is_ok()
+                .is_ok(),
+                "selector {selector} must admit the per-root derivation policy"
             );
 
-            let substituted = lp_descriptor(selector, root_derivation);
+            // The old law, now refused: a per-action lifecycle digest in this
+            // field is exactly what made eight of nine selectors unexecutable.
+            let per_action = lp_descriptor(selector, lifecycle_program);
             assert_eq!(
                 DealerDescriptorRecordV4::new(
                     selector,
                     CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
-                    &substituted,
+                    &per_action,
                 ),
-                Err(DealerScenarioReleaseErrorV4::Descriptor)
+                Err(DealerScenarioReleaseErrorV4::Descriptor),
+                "selector {selector} must refuse a per-action derivation policy"
             );
         }
-
-        let scenario_with_lp_derivation = lp_descriptor(9, lifecycle_program);
-        assert_eq!(
-            DealerDescriptorRecordV4::new(
-                9,
-                CAPABILITY_PROGRAM_SCHEMA_RELEASE_ID_V4,
-                &scenario_with_lp_derivation,
-            ),
-            Err(DealerScenarioReleaseErrorV4::Descriptor)
-        );
     }
 
     #[test]

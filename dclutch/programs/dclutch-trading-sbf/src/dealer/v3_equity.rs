@@ -445,6 +445,119 @@ fn pro_rata_floor(residual: u64, burn: u64, supply: u64) -> PoolEquityResultV3<u
 mod tests {
     use super::*;
 
+    /// RED ON PURPOSE. The solvency gate adds atoms to claim units.
+    ///
+    /// `residual_at` computes `collateral + claims[s] - obligations[s]` in one
+    /// `u64`, and that scalar is the SOLE solvency gate (`Insolvent`). The field
+    /// docs name two different classes: `collateral` is "Present eligible
+    /// TradingPrincipal collateral" -- SPL atoms -- and `claims` is "Canonical
+    /// Dealer Claims inventory" -- claim units. The sum is legal only if one
+    /// claim unit IS one atom.
+    ///
+    /// Nothing pins that. `basis_scale` is a founding-time per-market `u64`
+    /// guarded only `!= 0` (`market-core-codec/src/generic_founding_v1.rs:210`)
+    /// and multiplied as a real scale (`generated.rs:1012`), and there are ZERO
+    /// occurrences of `basis_scale` or `payout_scale` anywhere in the dealer
+    /// stack. `PoolEquityInputV3` has no scale field, so this function cannot be
+    /// told. It authenticates the claim vector's WIDTH in eight-plus places and
+    /// never its SCALE. Every in-tree fixture uses 1, which is the only reason
+    /// this is invisible.
+    ///
+    /// The property asserted here is the weakest one a solvency gate must have:
+    /// its verdict is a fact about the POSITION, not about the units the claim
+    /// leg happens to be denominated in. Both cases below describe one physical
+    /// pool twice and demand one answer.
+    ///
+    /// Both directions are shown deliberately, because which one is live
+    /// depends on whether `obligations` is atom- or claim-denominated -- and the
+    /// type does not say. A gate whose SAFETY DIRECTION cannot be read off its
+    /// own types is not a gate, and that ambiguity is itself the defect.
+    ///
+    /// Owner: this is a C-10 conservation question and a change to a live
+    /// solvency gate, so it is named rather than silently patched. The repair is
+    /// to carry the market's `basis_scale` into `PoolEquityInputV3` and weigh
+    /// the claim leg by it, which also touches `v3_composer.rs:323-335`, where
+    /// complete-SET counts are handed to Custody as transfer ATOM amounts.
+    #[test]
+    fn the_solvency_gate_must_not_change_its_verdict_with_the_claim_unit() {
+        // Redeem a real slice: a zero burn refuses `InvalidShareSupply` before
+        // the solvency gate, and an earlier draft of this test compared two such
+        // refusals and passed while proving nothing.
+        let redeem = PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 { burned_shares: 10 });
+
+        // One pool described twice. The claim leg is worth 20 atoms either way:
+        // 20 units at scale 1, or 10 units at scale 2.
+        // Collateral is ample so the pro-rata payout is physically deliverable
+        // and the run reaches the solvency gate rather than `InsufficientAssets`.
+        let at_scale_one = preflight_pool_equity_v3(PoolEquityInputV3 {
+            collateral: 100,
+            claims: &[20],
+            obligations: &[0],
+            total_shares: 100,
+            locked_capital_floor: 100,
+            action: redeem,
+        });
+        let at_scale_two = preflight_pool_equity_v3(PoolEquityInputV3 {
+            collateral: 100,
+            claims: &[10],
+            obligations: &[0],
+            total_shares: 100,
+            locked_capital_floor: 100,
+            action: redeem,
+        });
+        reached_the_gate("scale one", at_scale_one);
+        reached_the_gate("scale two", at_scale_two);
+        assert_eq!(
+            at_scale_one.is_ok(),
+            at_scale_two.is_ok(),
+            "the same 20 atoms of claim value must give one solvency verdict, \
+             but the gate reads the unit count: {at_scale_one:?} vs {at_scale_two:?}"
+        );
+
+        // The dangerous direction, live if `obligations` is claim-denominated
+        // too: only the collateral leg is then misweighted and the gate reports
+        // MORE residual than exists. True residual 15 + 20 - 30 = 5 under a
+        // floor of 8; the scale-2 description computes 15 + 10 - 15 = 10 and
+        // passes. A pool declared able to pay when it cannot is exactly the hole
+        // "no cross-LP subsidy" has to exclude.
+        let truth = preflight_pool_equity_v3(PoolEquityInputV3 {
+            collateral: 15,
+            claims: &[20],
+            obligations: &[30],
+            total_shares: 100,
+            locked_capital_floor: 8,
+            action: redeem,
+        });
+        let same_pool_at_scale_two = preflight_pool_equity_v3(PoolEquityInputV3 {
+            collateral: 15,
+            claims: &[10],
+            obligations: &[15],
+            total_shares: 100,
+            locked_capital_floor: 8,
+            action: redeem,
+        });
+        reached_the_gate("atoms", truth);
+        reached_the_gate("scale two", same_pool_at_scale_two);
+        assert_eq!(
+            truth.is_ok(),
+            same_pool_at_scale_two.is_ok(),
+            "one pool, one verdict: {truth:?} vs {same_pool_at_scale_two:?}"
+        );
+    }
+
+    /// Refuse to draw a conclusion from a refusal that never reached the gate.
+    ///
+    /// Without this, two `InvalidShareSupply`s compare equal and the invariance
+    /// above "holds" vacuously. An absent signal is evidence only once something
+    /// present proves the channel works.
+    fn reached_the_gate(label: &str, outcome: PoolEquityResultV3<PoolEquityPlanV3>) {
+        assert!(
+            matches!(outcome, Ok(_) | Err(PoolEquityErrorV3::Insolvent)),
+            "{label}: this case must reach the solvency gate for the comparison \
+             to mean anything, got {outcome:?}"
+        );
+    }
+
     #[test]
     fn first_cash_contribution_creates_real_risk_capacity() {
         let mut before = [99; 3];

@@ -17,6 +17,7 @@ use dclutch_account_profile_contract::{
     },
     v2::{AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
+use dclutch_capability_program_contract::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
 use dclutch_capability_program_contract::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
@@ -212,7 +213,12 @@ pub fn finalize_dealer_equity_descriptor_v4(
         content(digest(DEALER_CONFIG_SCHEMA_PREIMAGE_V4))?,
         dealer_request_schema_v3(selector).map_err(|_| DealerEquityReleaseErrorV4::Descriptor)?,
         content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2))?,
-        lifecycle_program,
+        // Per-root constant, never this selector's lifecycle digest: a manifest
+        // carries ONE `child_derivation_id` per root and `validate_selection`
+        // requires this field to equal it, so a per-action value here admits
+        // exactly one selector per root. The descriptor still binds its own
+        // lifecycle by content digest in `artifacts.lifecycle` below.
+        content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?,
         content(digest(artifacts.capacity_profile))?,
         CapabilityArtifactsV4 {
             account_profile: reference(ACCOUNT_PROFILE_SCHEMA_ID_V2, artifacts.account_profile)?,

@@ -2221,3 +2221,69 @@ distinguishes them.
 - **`the_terminal_settlement_has_headroom_…` is RED at HEAD**: 1,236,375 CU
   against `< 1_120_000`. The two new security guards add **+6,010**, reported
   rather than absorbed into the pre-existing red.
+
+## 2026-09-01 — item 1 of the continuation order, and a half-landed repair
+
+The `derivation_policy` predicate is repaired on the branch that extends
+(`a153f08e`, host/builder half). Measured on real ELFs at the pinned tree with
+only these changes:
+
+| state | equity Add | LP Open |
+|---|---|---|
+| pinned | `0x4003` @ 145,093 CU | ok @ 1,030,550 |
+| host half only | `0xd001` @ 946,935 | **refuses** |
+| both halves | **`0x4003` @ 591,781 CU** | ok @ 1,057,494 |
+
+**145,093 → 591,781 CU**: the Add clears the entire immutable-artifact tranche
+and hits a further, different wall, not yet localized.
+
+**The gate question, answered in source rather than assumed.** What still binds
+the descriptor to its entry is unchanged — `validate_selection` still compares
+`kind`, `release_id`, `config_id`, `capacity_profile`, `root_schema`. What binds
+it to its own lifecycle is `artifacts.lifecycle.program`, which **is** the
+lifecycle content digest: `borrow_record_against` refuses unless
+`hash(&data) == digest` *and* the record sits at the Registry PDA derived from
+`[RAW_RECORD_PDA_SEED_V1, schema, digest]`, after which `sealed_token` binds the
+bytes to the execution seal. **R2 restated an identity already authenticated by
+digest and added no authentication of its own** — it only demanded one field be
+a per-action value and a per-root value simultaneously. Re-proof on the other
+side, not a weakening.
+
+### A half-landed repair is a regression
+
+R2 **spans two ELFs**. With the host half landed and the runtime half not, it
+fails for **all nine** Dealer selectors instead of eight of nine. Routed to S3:
+drop only the second conjunct at `hot_v3.rs:3370` **and** `:1235`, and rebuild
+the accelerator as well as Trading. Recorded because the lane said so plainly
+rather than reporting the improvement and omitting the cost.
+
+### Two ways a build lies
+
+- `cargo build-sbf` reported **`EXIT=0` with the ELF byte-identical after a real
+  source change.** Caught by hashing the artifact instead of reading the log.
+  (Legitimate there — those builders are `cfg(not(target_os = "solana"))`.) For
+  a genuine runtime change, a byte-identical ELF means the build did not happen.
+- `authenticate_and_execute_hot_v3` has **zero SBF frame headroom**: per-call-site
+  `.map_err` instrumentation produced 95 frame-overwrite diagnostics and an
+  abort rather than a refusal. Gated early-return probes only.
+
+### A lane convicting itself
+
+`468f66b3` is **red on purpose** — it pins the mixed-unit solvency gate:
+`residual_at` sums `collateral` (SPL atoms) and `claims[s]` (claim units) in one
+`u64`, and that scalar is the sole `Insolvent` verdict. Verified independently:
+**zero** occurrences of `basis_scale`/`payout_scale` in the entire dealer stack,
+while `basis_scale` is a live founding-time `u64` guarded only `!= 0`. The
+vector's *width* is authenticated eight-plus places; its *scale* never is. One
+pool described twice, claim leg worth 20 atoms either way: `Ok(residual 108)`
+versus `Err(Insolvent at 99)`. Both directions asserted, because which is live
+depends on whether `obligations` is atom- or claim-denominated and **the type
+does not say** — a gate whose safety direction cannot be read off its own types
+is not a gate.
+
+The lane reported against itself: **its first two drafts of that test passed
+while proving nothing** — all four calls returned `InvalidShareSupply`, then
+`InsufficientAssets`, never reaching the gate, so it was comparing two refusals.
+The same defect it had spent the session convicting in other people's tests. The
+anti-vacuity guard it then wrote caught the second draft, and is committed
+beside the test.

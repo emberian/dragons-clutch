@@ -979,11 +979,49 @@ for m in manifests:
         capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(4)
-    for p in json.loads(r.stdout)["packages"]:
+    md = json.loads(r.stdout)
+    pkgs = {p["id"]: p for p in md["packages"]}
+    nodes = {n["id"]: n for n in md["resolve"]["nodes"]}
+    rootid = md["resolve"].get("root")
+    stack = [rootid] if rootid else [
+        p["id"] for p in md["packages"] if p["manifest_path"] == str(m)]
+    seen = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen or cur not in nodes:
+            continue
+        seen.add(cur)
+        for dep in nodes[cur]["deps"]:
+            # NORMAL edges only. A dev- or build-dependency never reaches an ELF,
+            # and following those is what made an earlier version of this gate
+            # demand `getrandom` compile for SBF -- a red that said nothing.
+            if any(k.get("kind") is None for k in dep.get("dep_kinds", [])):
+                stack.append(dep["pkg"])
+    for pid in seen:
+        p = pkgs.get(pid)
+        if not p:
+            continue
         path = p.get("manifest_path", "")
         if path.startswith(str(root)) and "/programs/" not in path \
                 and p["name"].startswith("dclutch-"):
             reach.add(p["name"])
+# Plus every ROOT-WORKSPACE crate that declares it knows about this target.
+# A crate carrying `check-cfg = ['cfg(target_os, values("solana"))']` is stating
+# that it compiles differently on SBF, which is precisely the claim this gate
+# exists to test -- and the crate whose 176 errors motivated the gate is
+# reachable only as a dev-dependency, so the shipped closure alone would miss it.
+r = subprocess.run(["cargo", "metadata", "--format-version", "1", "--no-deps"],
+                   capture_output=True, text=True)
+if r.returncode == 0:
+    for p in json.loads(r.stdout)["packages"]:
+        mp = pathlib.Path(p["manifest_path"])
+        if "/programs/" in str(mp) or not p["name"].startswith("dclutch-"):
+            continue
+        try:
+            if 'cfg(target_os, values("solana"))' in mp.read_text():
+                reach.add(p["name"])
+        except OSError:
+            pass
 if not reach:
     sys.exit(5)
 print("\n".join(sorted(reach)))
@@ -999,15 +1037,38 @@ PY
 
   local count
   count="$(printf '%s\n' "$packages" | grep -c .)"
-  note "$count non-program crates reachable from a program manifest"
+  note "$count crates: the programs' normal-dependency closure, plus every
+         root-workspace crate declaring solana-target awareness"
 
   local args=() name
   while IFS= read -r name; do
     [ -n "$name" ] && args+=(-p "$name")
   done <<< "$packages"
 
+  # `cargo build-sbf` is the wrong instrument for LIBRARY crates: it compiles
+  # correctly and then its post-processing looks for a `.so` a lib never emits
+  # and exits 1 anyway. Measured: 52 crates, zero compile errors, exit 1. A gate
+  # that reports failure on a clean tree is worse than no gate.
+  #
+  # So this checks the same target without the link step. The toolchain name is
+  # DISCOVERED rather than pinned -- `1.89.0-sbpf-solana-v1.53` today -- because
+  # a hardcoded one silently stops matching on the next platform-tools bump and
+  # the gate would quietly become a prerequisite-missing that nobody reads.
+  local sbf_toolchain
+  sbf_toolchain="$(rustup toolchain list 2>/dev/null | awk '/sbpf-solana/{print $1; exit}')"
+  if [ -z "$sbf_toolchain" ]; then
+    note "cargo-build-sbf is present but its platform-tools rustup toolchain is"
+    note "not installed, so nothing was compiled for the SBF target. Run any"
+    note "\`cargo build-sbf\` once to provision it."
+    record sbfcontracts $EXIT_PREREQ_MISSING "no sbpf-solana rustup toolchain"
+    [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
+    return
+  fi
+  note "toolchain $sbf_toolchain, target sbpf-solana-solana"
+
   local code=0
-  (cd "$build_root" && cargo build-sbf -- --locked --offline "${args[@]}") || code=$?
+  (cd "$build_root" && cargo "+$sbf_toolchain" check --locked --offline \
+      --target sbpf-solana-solana "${args[@]}") || code=$?
   if [ "$code" != 0 ]; then
     note "a crate that ships to SBF does not COMPILE for target_os=solana."
     note "A host-green \`cargo check\` proves nothing about this: the targets"

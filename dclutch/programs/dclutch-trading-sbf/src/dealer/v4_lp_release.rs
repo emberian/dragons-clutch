@@ -24,6 +24,7 @@ use dclutch_account_profile_contract::{
     },
     v2::{AccountPrestateV2, AccountProfileV2, SCHEMA_RELEASE_ID as ACCOUNT_PROFILE_SCHEMA_ID_V2},
 };
+use dclutch_capability_program_contract::CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1;
 use dclutch_capability_program_contract::v4::{
     ArtifactReferenceV4, CAPABILITY_PROGRAM_V4_BYTES, CapabilityArtifactsV4, CapabilityProgramV4,
 };
@@ -267,7 +268,10 @@ pub fn finalize_dealer_lp_descriptor_v4(
         dealer_request_schema_v3(action.selector())
             .map_err(|_| DealerLpReleaseErrorV4::Descriptor)?,
         content(digest(DEALER_ROOT_SCHEMA_PREIMAGE_V2))?,
-        lifecycle_program,
+        // Per-root constant; see the twin in `v4_equity_release`. LP Open was
+        // the selector whose lifecycle digest the manifest entry happened to be
+        // built from, which is why it alone executed.
+        content(CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1)?,
         content(digest(artifacts.capacity_profile))?,
         CapabilityArtifactsV4 {
             account_profile: reference(ACCOUNT_PROFILE_SCHEMA_ID_V2, artifacts.account_profile)?,
@@ -528,8 +532,17 @@ mod tests {
                 dealer_request_schema_v3(action.selector()).expect("request schema")
             );
             assert_eq!(decoded.effect().schema().to_bytes(), EFFECT_SCHEMA_ID_V4);
-            assert_eq!(decoded.derivation_policy(), decoded.lifecycle().program());
-            assert_eq!(decoded.derivation_policy().to_bytes(), digest(&lifecycle));
+            // The per-root constant, NOT this selector's lifecycle digest. A
+            // manifest carries one `child_derivation_id` per root, so the old
+            // per-action law admitted exactly one selector per root.
+            assert_eq!(
+                decoded.derivation_policy().to_bytes(),
+                CAPABILITY_ROOT_DERIVATION_RELEASE_ID_V1
+            );
+            assert_ne!(decoded.derivation_policy().to_bytes(), digest(&lifecycle));
+            // The descriptor still binds its own lifecycle by content digest --
+            // that binding never lived in `derivation_policy`.
+            assert_eq!(decoded.lifecycle().program().to_bytes(), digest(&lifecycle));
 
             let last = effect.len().checked_sub(1).expect("effect byte");
             *effect.get_mut(last).expect("effect byte") ^= 1;

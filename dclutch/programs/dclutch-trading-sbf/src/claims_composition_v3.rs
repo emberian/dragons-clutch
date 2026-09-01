@@ -1148,6 +1148,50 @@ fn fractional_root_signer(
     let seeds = header.seeds();
     let (expected, bump) = Pubkey::find_program_address(&seeds.as_slices(), program_id);
     let selected_config = header.selection().config().to_bytes();
+    // THE TWO ARMS ARE NOT THE SAME KIND OF CHECK, and reading them as one has
+    // now cost two lanes a hostile hunt. Written down so it costs a third
+    // nothing.
+    //
+    // V1 binds the CALLER. `terms` is an ordinary wire field, and a historical
+    // root carries its own terms digest, so `historical_terms == terms` is a
+    // real refusal a caller can provoke.
+    //
+    // V2 CANNOT FAIL, and it is unsatisfiable-in-principle rather than merely
+    // unreached. Both sides descend from one value in one instruction:
+    // `outer.rs` seeds `ACTIVATION_CONFIG_IDENTITY_V2` from
+    // `request.selection().config()` (`outer.rs:2233`), the Fractional family
+    // projects THAT register into the root tail at the selection-config offset
+    // (`FRACTIONAL_ACTIVATION_TAIL_FIELDS_V1`, a `SeamIdentity`), and the header
+    // this reads persists the same `request.selection().config()`. So
+    // `current_config` is a copy of `selected_config`. The `find_program_address`
+    // re-derivation above -- from this header's OWN seeds, under this program's
+    // ownership -- is what makes that exhaustive: an account reaching this line
+    // was created by that seam or it was refused three predicates ago. Same
+    // shape as `ff8ca269`.
+    //
+    // WHAT IT LOOKS LIKE IT LOST, AND WHY THAT IS NOT A HOLE. V2 does not pin
+    // the caller's `terms` -- on this arm `terms` is decoded and never read.
+    // That is deliberate and the contract says so: the V2 root stores no terms
+    // digest because "storing their digest in the root would recreate the
+    // manifest fixed point V2 removes", and the terms "are joined against
+    // `selection_config` AT EXECUTION"
+    // (`dclutch-fractional-claim-contract/src/root.rs:138-141`). Execution is
+    // Claims, and Claims does it on all four kinds that reach here, deriving the
+    // config from the AUTHENTICATED terms record rather than from a digest:
+    // `fractional_atomic_v3.rs:253` and `:736`, `fractional_retirement_v3.rs:614`,
+    // `fractional_claim_check_v1.rs:1268` (the last added by `bf362312`, after a
+    // permissionless crank was shown to be able to choose its own denominator).
+    //
+    // So this seam MUST NOT "restore" the binding. It holds a 32-byte digest and
+    // no terms account -- `fractional_selection_config_from_terms_v1` needs the
+    // decoded record -- so it could only re-check the fixed point V2 deleted, at
+    // the cost of two frame accounts the Claims side explicitly declined
+    // (`fractional_atomic_v3.rs:150-154`).
+    //
+    // The conjunct stays because it is free and it is the tripwire for the one
+    // thing that could still break: a future seam that stops writing these two
+    // from a single source. It is not a caller-facing refusal and no hostile
+    // test should expect to provoke it.
     let state_binding_matches = match (state.terms_v1(), state.selection_config_v2()) {
         (Some(historical_terms), None) => historical_terms == terms && selected_config == terms,
         (None, Some(current_config)) => current_config == selected_config,
