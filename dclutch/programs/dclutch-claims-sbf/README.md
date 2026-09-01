@@ -61,3 +61,62 @@ onchain adapter share the SDK-free state layout from
 `dclutch-claims-svm::liability_basis_state_v2`; Core alone owns lifecycle and
 winner. The obsolete `ActionV1` representation wire, its parallel state
 adapter, and its terminal caller harness are not dispatched or built.
+
+## Running the Rational Representation V2 ProgramTest
+
+`run-rational-representation-v2-program-test.sh` builds seven SBF programs plus
+the audited Token-2022 v11 fixture and runs
+`tests/rational_representation_v2_program_test.rs` against them.
+
+**The claims row printing `DID NOT RUN` in public CI does not mean it cannot
+run. It means it did not run *on a CI runner*, and those are different
+sentences.** The row needs two things a developer machine usually has and a
+GitHub runner never does, so a lane reading the CI output alone will conclude
+the row is unreachable and be wrong.
+
+### The two prerequisites, and why CI lacks them
+
+1. **`cargo-build-sbf-<version>.crate` in the cargo registry cache.**
+   `fixtures/prepare-token-2022-v11.sh` authenticates the builder itself by
+   digest (`cargo_build_sbf_crate_sha256` in
+   `fixtures/token-2022-v11.provenance`), looking in
+   `${CARGO_HOME:-$HOME/.cargo}/registry/cache` and honouring an explicit
+   `CARGO_BUILD_SBF_CRATE`. A CI runner installs Agave from the anza release
+   tarball, which is not a cargo download, so nothing there ever populates that
+   cache entry. The script exits **2**, not 1, for exactly this: the archive
+   being absent is a fact about the host, not a defect in the fixture or in
+   Claims, and `tools/ci/run.sh` counts 2 as "did not run" rather than as a
+   failing suite. A digest *mismatch* still exits 1, and should.
+   Also checked and equally host-local: the platform-tools version manifest at
+   `$HOME/.cache/solana/v<platform_tools_version>/platform-tools/version.md`,
+   overridable with `SBF_PLATFORM_TOOLS_VERSION_MANIFEST`.
+
+2. **The canonical Token-2022 ELF.** It is host-bound (see
+   `fixtures/README.md`): Linux x86_64 reproduces `canonical_elf_sha256`, macOS
+   arm64 reproduces a different digest recorded as
+   `macos_arm64_audit_elf_sha256`, and only the former is accepted. The outer
+   runner therefore exits 2 on any non-Linux-x86_64 host **unless
+   `TOKEN_2022_V11_ELF` names a canonical artifact.**
+
+### Running it off the canonical host
+
+`TOKEN_2022_V11_ELF` is the supported escape hatch and it is safe to feed from
+another machine, because the fixture builder re-checks the artifact's SHA-256
+against `canonical_elf_sha256` and its length against `canonical_elf_bytes`
+locally before the test loads it. Copying the file transports no trust.
+
+```sh
+# Once: take the canonical artifact from a Linux x86_64 host that has built it.
+scp <linux-host>:/path/to/out/spl_token_2022.so /tmp/spl_token_2022_canonical.so
+shasum -a 256 /tmp/spl_token_2022_canonical.so   # must equal canonical_elf_sha256
+
+# Then, on any host with the builder archive in its registry cache:
+TOKEN_2022_V11_ELF=/tmp/spl_token_2022_canonical.so \
+  programs/dclutch-claims-sbf/run-rational-representation-v2-program-test.sh
+```
+
+Measured on macOS arm64 on 2026-09-01 with exactly this recipe: the suite
+reproduced the canonical Linux corpus row for row. Use it before recording any
+Rational representation claim as unverifiable — the difference between "no
+evidence" and "no evidence *here*" is the difference between an open question
+and a wrong one.

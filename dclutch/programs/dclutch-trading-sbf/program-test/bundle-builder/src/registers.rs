@@ -61,6 +61,7 @@ use dclutch_request_profile_contract::{
     },
 };
 use dclutch_transition_vm::v3::{
+    HEADER_BYTES as TRANSITION_HEADER_BYTES, INSTRUCTION_BYTES as TRANSITION_INSTRUCTION_BYTES,
     ProgramV3 as TransitionProgramV3, RegisterInput, RegisterOutput, execute_fold_atomic,
 };
 use sha2::{Digest, Sha256};
@@ -594,6 +595,32 @@ pub(crate) fn run_engine_with_admitted_candidate(
                 current_scalars.len(),
                 current_identities.len(),
             );
+            match first_refusing_transition_operation(
+                transition,
+                tail_count,
+                &current_scalars,
+                &current_identities,
+            ) {
+                Some((index, class, row)) => std::eprintln!(
+                    "transition fold refused at operation {index} ({class}), row={row}"
+                ),
+                None => std::eprintln!(
+                    "transition fold refusal could not be localized to one operation"
+                ),
+            }
+            std::eprintln!("transition scalars={current_scalars:?}");
+            std::eprintln!(
+                "transition identities={:?}",
+                current_identities
+                    .iter()
+                    .map(|value| std::format!(
+                        "{:02x}{:02x}..{:02x}",
+                        value[0],
+                        value[1],
+                        value[31]
+                    ))
+                    .collect::<Vec<_>>()
+            );
             BuilderError::Projection("transition")
         })?;
     }
@@ -999,6 +1026,97 @@ fn seed_trusted_environment(
             .ok_or(BuilderError::Spans("system-register"))? = system_program::ID.to_bytes();
     }
     Ok(())
+}
+
+/// Best-effort index of the first transition operation whose prefix refuses.
+///
+/// The VM reports a refusal CLASS and no position, which is enough to say
+/// `CheckFailed` and not enough to say which predicate. Rather than change a
+/// kernel crate for a diagnostic, this re-runs the same public
+/// `execute_fold_atomic` over successively longer prefixes of the same program
+/// and reports the first length that refuses -- so the answer is produced by
+/// the authority itself, not by a second interpreter written here.
+///
+/// The three region counts live at fixed header offsets and are read here
+/// because `ProgramV3` exports no accessor for them. That is a second speller
+/// of one layout and it is deliberately confined to this function: a probe may
+/// respell what it cannot ask for, a builder may not.
+///
+/// Returns `None` when no prefix refuses or none of them decodes -- truncation
+/// can legitimately produce a program the validator rejects, and reporting
+/// "could not localize" is the honest output when it does.
+fn first_refusing_transition_operation(
+    transition: TransitionProgramV3<'_>,
+    tail_count: u32,
+    scalars: &[u64],
+    identities: &[[u8; 32]],
+) -> Option<(usize, String, String)> {
+    let bytes = transition.bytes();
+    let body = bytes.len().checked_sub(TRANSITION_HEADER_BYTES)?;
+    let total = body.checked_div(TRANSITION_INSTRUCTION_BYTES)?;
+    let count_at = |offset: usize| -> Option<usize> {
+        let raw: [u8; 2] = bytes.get(offset..offset + 2)?.try_into().ok()?;
+        Some(usize::from(u16::from_le_bytes(raw)))
+    };
+    let (prelude, item) = (count_at(6)?, count_at(8)?);
+
+    for taken in 1..=total {
+        let in_prelude = taken.min(prelude);
+        let in_item = taken.saturating_sub(in_prelude).min(item);
+        let in_epilogue = taken - in_prelude - in_item;
+        let end = TRANSITION_HEADER_BYTES + taken * TRANSITION_INSTRUCTION_BYTES;
+        let mut prefix = bytes.get(..end)?.to_vec();
+        for (offset, value) in [(6, in_prelude), (8, in_item), (10, in_epilogue)] {
+            let encoded = u16::try_from(value).ok()?.to_le_bytes();
+            prefix
+                .get_mut(offset..offset + 2)?
+                .copy_from_slice(&encoded);
+        }
+        let Ok(program) = TransitionProgramV3::decode(&prefix) else {
+            continue;
+        };
+        let mut scratch_scalars = scalars.to_vec();
+        let mut scratch_identities = identities.to_vec();
+        let mut output_scalars = scalars.to_vec();
+        let mut output_identities = identities.to_vec();
+        if let Err(error) = execute_fold_atomic(
+            program,
+            tail_count,
+            RegisterInput {
+                scalars,
+                identities,
+            },
+            RegisterOutput {
+                scalars: &mut scratch_scalars,
+                identities: &mut scratch_identities,
+            },
+            RegisterOutput {
+                scalars: &mut output_scalars,
+                identities: &mut output_identities,
+            },
+        ) {
+            let start = TRANSITION_HEADER_BYTES + (taken - 1) * TRANSITION_INSTRUCTION_BYTES;
+            let row = bytes
+                .get(start..start + TRANSITION_INSTRUCTION_BYTES)
+                .map(|slice| {
+                    slice
+                        .iter()
+                        .map(|byte| std::format!("{byte:02x}"))
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .unwrap_or_default();
+            let region = if taken <= prelude {
+                "prelude"
+            } else if taken <= prelude + item {
+                "item"
+            } else {
+                "epilogue"
+            };
+            return Some((taken - 1, std::format!("{error:?} in {region}"), row));
+        }
+    }
+    None
 }
 
 fn current_rent_quotes(

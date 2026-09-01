@@ -912,6 +912,38 @@ because R-13 replaced its prose partition with compile-time assertions; its
 verdict says so and says to delete the entry if those assertions ever go. The
 same-name mirror split is untouched, still pinned by its named test.
 
+## 10.2b `HoardPrincipal -> FeeVault` is shape-admissible on the wire
+
+Contributed by the conservation lane, recorded here because it is this ledger's
+class in the economic dimension: **a rule that exists everywhere except where it
+is enforceable.**
+
+C-10 forbids the movement. Nothing in `dclutch-custody-contract` refuses it,
+because **every compartment rule lives in a *calling* program and the contract
+itself never enforced one.** Deliberate, and undocumented and unmeasured until
+2026-09-01. Nothing pins the pair; both FeeVault-funding sites take
+`TradingPrincipal`, so what exists is admissibility on the wire, not a live
+leak.
+
+The sweep that found it is the atom half of C-16's *unowned economic flow*: all
+81 ordered compartment pairs through `CustodyRequestV1::validate`, plus a census
+of every compartment-setting site — 54 source-side, 49 destination-side, **every
+one owned** by a pinned literal, a closed match with a catch-all `Err`, a
+direction accessor with literal arms, an in-contract pass-through, or the wire
+decoder, where the owner is the authenticated calling program.
+
+**Its qualifier travels with the number, and this ledger is where it must not be
+lost: *swept clean at the construction sites, correctness not asserted.*** A
+site pinning a wrong-but-literal pair reads as **owned** and still violates
+C-10. Ownership and correctness are different questions; the instrument answers
+the first. That distinction is the same one §10.3 draws for refusal codes — an
+instrument reports a property, never a verdict — and it is why "every
+compartment set has a named owner" must never be quoted as "every compartment
+set is right".
+
+The lamport half — rent beneficiaries, funding releases, closes, crank rewards
+— is a separate unit and is in flight.
+
 ## 10.3 A dead refusal code has at least three causes
 
 This session produced one of each, which is the argument for never treating the

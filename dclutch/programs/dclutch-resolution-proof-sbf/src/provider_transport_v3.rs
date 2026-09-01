@@ -25,10 +25,9 @@ use dclutch_resolution_codec::{
     PROVIDER_SUBMIT_REQUEST_BYTES_V3, PROVIDER_SUBMIT_REQUEST_MAGIC_V3,
     PROVIDER_UPDATE_AUTHORITY_PDA_DOMAIN_V3, PROVIDER_UPDATE_LIFECYCLE_BYTES_V3,
     PROVIDER_UPDATE_LIFECYCLE_PDA_DOMAIN_V3, PYTH_RELEASE_RECORD_SCHEMA_ID_V1,
-    ProviderAbandonReceiptV3, ProviderAbandonRequestV3, ProviderReclaimReceiptV3,
-    ProviderReclaimRequestV3, ProviderSubmitReceiptV3, ProviderSubmitRequestV3,
-    ProviderUpdateLifecycleV3, ProviderUpdateStatusV3, RESOLUTION_CONTROLLER_RELEASE_ID_V7,
-    ResolutionCertificateV2,
+    ProviderAbandonRequestV3, ProviderReclaimReceiptV3, ProviderReclaimRequestV3,
+    ProviderSubmitReceiptV3, ProviderSubmitRequestV3, ProviderUpdateLifecycleV3,
+    ProviderUpdateStatusV3, RESOLUTION_CONTROLLER_RELEASE_ID_V7, ResolutionCertificateV2,
 };
 use dclutch_source_contract::{
     PROVIDER_RELEASE_BYTES, PROVIDER_RELEASE_SCHEMA_ID_V1, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
@@ -377,20 +376,15 @@ fn process_abandon(
     {
         return Err(ResolutionError::OutputState.into());
     }
-    let receipt = ProviderAbandonReceiptV3 {
-        request_digest: hash(instruction_data).to_bytes(),
-        lifecycle: request.lifecycle,
-        update_account: request.update_account,
-        source_state: request.source_state,
-        resolver: request.resolver,
-        refund_recipient: request.refund_recipient,
-        update_digest: lifecycle.update_digest,
-        generation: request.generation,
-        refunded_lamports: total_refund,
-    }
-    .to_bytes()
-    .map_err(|_| ResolutionError::Transition)?;
-    set_return_data(&receipt);
+    // NO RETURN RECEIPT, deliberately. The consumed route emits one because it
+    // has a reader: `provider_finalized_projection_v3.rs` decodes
+    // `ProviderReclaimReceiptV3` out of return data. Nothing reads an abandon
+    // receipt, and everything one would have carried is already observable in
+    // the poststate this instruction leaves -- both accounts closed and the
+    // exact total on the persisted refund recipient. A type on a shipped
+    // program's wire surface that nothing consumes is surface a reviewer must
+    // reason about for free, so the symmetry with the consumed route is
+    // declined.
     Ok(())
 }
 

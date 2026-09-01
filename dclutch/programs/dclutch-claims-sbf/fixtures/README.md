@@ -22,3 +22,8 @@ upstream revision/path, cargo-build-sbf archive, platform-tools manifest,
 toolchain label, and final ELF digest. It never accepts the macOS audit digest
 as a substitute. Both ProgramTest launchers call the same checked fixture
 builder; neither test carries a separate accepted digest.
+
+Running the ProgramTest off the canonical host, including the second
+prerequisite this file does not cover — the `cargo-build-sbf` archive the
+builder authenticates itself against, which a CI runner never has — is in
+[`../README.md`](../README.md#running-the-rational-representation-v2-programtest).

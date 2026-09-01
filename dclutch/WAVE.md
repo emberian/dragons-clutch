@@ -2944,3 +2944,112 @@ releases, account closes, crank rewards — and it forks where the atom census d
 not: an atom's compartment tag is a PDA seed, so ownership is *derivable*, while
 a lamport's owner is often a caller-supplied `refund_recipient` and must be
 **authenticated rather than read**.
+
+## 2026-09-01 — a blob can match its digest and still come from a different tree
+
+The browser-side admission planner is **built, not specified** (`6bf8eba7`
+Rust + `c1676a1c` browser). Two walls, both measured rather than argued:
+
+1. **getrandom 0.4** arrives via `dclutch-direct-ticket → solana-signature[verify]
+   → solana-ed25519 → rand`. That `verify` feature is deliberate and
+   unconditional — the ticket reader verifies every detached signature it parses
+   — so the edge gets *told about the browser* rather than dropped.
+   **`RUSTFLAGS --cfg getrandom_backend` alone does not clear it; the cargo
+   feature is required.** One full build to learn it, and now nobody argues.
+2. **Structural.** `dclutch-operator` links `dclutch-trading-sbf`, which pins
+   layouts for a 64-bit target — `ExecutedReceiptV3` is 72 bytes on SBF and 60
+   on wasm32, `ChildExecutionStateV3` 216 and 140. **Those assertions are right
+   and were not relaxed.** The resolution: **the planner never needed the
+   program.** Trading belongs to 8 Dealer/Series modules of 37, behind a
+   default-on feature. Green with defaults, green on wasm32 without.
+
+Refusing to weaken a correct assertion and finding the decomposition instead is
+the "construction that extends" case, done properly.
+
+### The canary, and the threat model behind it
+
+Three `const _: () = assert!` read the frame width, the 8-byte magic and the
+owner coordinate from the contract **by constant name** — so a rename or resize
+fails the *build* rather than silently emitting a 26-account frame the runtime
+refuses unhelpfully. The snapshot DTO is field-for-field with the planner's, so
+**adding a field there fails to compile here until it is carried.**
+
+Then the browser re-checks: bytes length- and SHA-256-pinned before execution,
+and after loading, the loader asks the planner its own width and refuses if it
+disagrees with the contract's.
+
+> **A blob can match its digest and still come from a different tree.**
+
+### An instrument nobody could read
+
+`tsc --noEmit` was red app-wide on a pre-ES2020 target. ES2017 → ES2022 takes it
+from **1,794 errors to 31**, and `npm run build` is green on the raised target —
+**the reading changed, the application did not.** An unusable signal becomes a
+legible backlog.
+
+And the `operatorSurface` load-order bug was chased past the symptom: the real
+culprit was not the web copy but the **SDK twin** resolving its own nested
+`@solana/web3.js` through the barrel. Fixing it unblocked the landmark gate —
+all 28 page shells now gated, **none excused.**
+
+**One unit remains between a wallet and a trade**: the 25-account acquisition
+snapshot. Every address is already reachable from code that exists.
+
+## 2026-09-01 — a basket that may only be expressible when it is not a basket
+
+The 44th row — the last standing in the Structured campaign — is now localized
+to **one uncommented line** (`3932e396`).
+
+**Layer one ruled out the family everyone was primed to suspect.** The previous
+phase had failed on geometry, so geometry was the obvious answer. Declared
+against observed: `common_scalars=21 item_scalar_stride=0 common_identities=23
+item_identity_stride=0` against `observed scalars=21 identities=23`. **Every
+width agrees** — so the refusal is a predicate that evaluated false, not a shape
+that disagreed.
+
+**Layer two, because a class is not a position.** The VM reports no operation
+index. Rather than edit a kernel crate for a diagnostic, the probe re-runs the
+**same public `execute_fold_atomic`** over successively longer prefixes of the
+same program — so the answer comes from the authority itself rather than a
+second interpreter in the harness — and degrades honestly to *"could not be
+localized"* when truncation yields a program the validator rejects.
+
+```
+transition fold refused at operation 4 (CheckFailed in prelude)
+```
+
+Decoded: opcode `0x01` = `OP_SCALAR_EQ`, operands 9 and 3. Register 3 is
+`SCALAR_DENOMINATOR` = 7; register 9 is row 0's `ITEM_SCALAR_COEFFICIENT` = 2.
+Emitted at `open_structured_v3.rs:927`, once per row, **with no comment**:
+
+```
+scalar_eq(coefficient[row], denominator)
+```
+
+**The released Structured transition requires every coordinate's coefficient to
+equal the denominator** — which makes the family expressible only for degenerate
+products where every coefficient is identical. *The one shape a basket exists
+not to be.*
+
+**No kernel states this equality.** `prepare_issue` consumes
+`quantity * coefficient[i]` per coordinate and relates it to nothing but that
+coordinate's free shards; `prepare_denominate` uses the denominator as the
+shards-per-claim ratio; grepping the two words together across both kernels
+returns nothing.
+
+And the campaign's own basis **closes exactly** with coefficients `[2, 3, 5]`
+against denominator 7 — 14+14=28, 28+21=49, 21+35=56. So the arithmetic works
+with varying coefficients and the transition refuses the very basis that closes.
+
+**Not repaired, deliberately**: a gate moves only when the law it guards is
+re-proven on the other side, and *absent* is not the same as *nothing wanted it*.
+The settling measurement is queued — remove the emission in a probe build and
+drive issue → denominate → redeem → retire, checking conservation closes with
+zero remainder at every step. If it does, the constraint guards nothing and the
+gate may move. If it breaks, the constraint was load-bearing under a name nobody
+wrote down.
+
+**The blast-radius objection is gone**: the transition bytes digest into the
+descriptor and thence into every derived identity, which was the reason this
+looked like ember's call — and a standing full-redeploy grant with cohort-9
+already deployed from a named commit absorbs re-derived identities for free.

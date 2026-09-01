@@ -158,6 +158,15 @@ coordinates in the same order with the same privileges; index 5 carries the
 Source resolution state instead of the terminal certificate, because the Source
 is what proves consumption can never happen.
 
+`process_reclaim` returns a typed receipt and `process_abandon` deliberately
+returns nothing. That asymmetry is the point rather than an oversight: the
+consumed route has an actual reader — `provider_finalized_projection_v3.rs`
+decodes `ProviderReclaimReceiptV3` out of return data — and the abandon route
+has none. Everything an abandon receipt would have carried is already in the
+poststate: both accounts closed, the exact total on the persisted refund
+recipient. The receipt existed briefly, for symmetry, and was cut; do not
+restore it without a caller that decodes it.
+
 The gap this closes was named in
 `docs/evidence/LIVENESS_CENSUS_2026_08_29.md` row Q8a, which reached the same
 construction — new magic, new request type, new terminality conjunct — and
