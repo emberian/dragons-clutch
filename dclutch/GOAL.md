@@ -2387,3 +2387,4 @@ both Registry and RentCredit are observed already immutable — proved red, with
 own control (authority retained on one role must still prepare; it caught two
 wrong-reason refusals while being written) and a real-world control (cohort-9's own
 plan would not have been blocked). This lane submitted **zero transactions**.
+| `a84c8bf71f714d16c` | CLEANUPS | five verified-and-decided defects from the scholar: false npm comments + rename the TS binary; cut the Materialize route as the N-11 reject; make 9000 a real ceiling; rename the heap check + measure `DCLTHOT3`'s true peak; the settlement exposure check that compares the instruction to itself |

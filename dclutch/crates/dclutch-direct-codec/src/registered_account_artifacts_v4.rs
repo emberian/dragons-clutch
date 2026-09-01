@@ -37,7 +37,7 @@ use dclutch_custody_contract::{
     CustodyFrameDataV1, CustodyFrameRoleV1, CustodyFrameSpecV1, OperationV1,
     TRANSFER_ACCOUNT_COUNT_V1,
 };
-use dclutch_market_core_codec::STATE_BYTES as CORE_STATE_BYTES;
+use dclutch_market_core_codec::{CoreStateLayoutV2, STATE_BYTES as CORE_STATE_BYTES};
 use dclutch_product_payoff_v2_codec::runtime_v3::BASIS_WIDTH_OFFSET_V3;
 use dclutch_product_runtime_v2::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_HEADER_BYTES, PORTFOLIO_LIABILITY_BASIS_ID_OFFSET,
@@ -143,6 +143,9 @@ const CREATION_PREFIX_OPERATIONS: usize = 26;
 const SELL_FIXED_OPERATIONS: usize = CREATION_PREFIX_OPERATIONS + 1;
 const FIXED_DATA_PREDICATES: usize = 9;
 const SYSTEM_PROGRAM_ACCOUNT: u16 = 11;
+/// Custody common coordinate 1: the Core Market, and the only account in a
+/// registered Buy frame that carries the Realm CONTENT identity.
+const CORE_MARKET_ACCOUNT: u16 = 13;
 const REALM_ACCOUNT: u16 = 18;
 const REPLAY_ACCOUNT: u16 = 20;
 const MINT_ACCOUNT: u16 = 34;
@@ -635,7 +638,29 @@ fn operations()
     // TOKEN_PROGRAM}`, so the mint reaching the vault is the Realm's or the
     // child refuses.
     for operation in [
-        project_key(REALM_ACCOUNT, REGISTERED_IDENTITY_REALM_V4)?,
+        // `CustodyRequestLayoutV1::REALM` is a CONTENT digest, not an address.
+        // Custody's `authenticate_realm` re-derives the Registry raw-record
+        // address from `request.realm` and requires `hash(realm_account.data)`
+        // to equal it, so a request naming the record's ADDRESS names a digest
+        // no record has -- which is what `project_key(REALM_ACCOUNT, ..)` wrote
+        // here, and why every registered Buy refused `Release` at
+        // `require_custody_frame_shape_v3`: one wrong field in the 672-byte
+        // request moves its hash, and that hash is the sixth seed of the caller
+        // authority the frame's coordinate 0 must hold. Measured on real ELFs at
+        // 571,047 CU, before any child CPI.
+        //
+        // The Core Market is where the identity lives. `identity.realm_id` is
+        // the Market's own immutable selection, it is the value Custody
+        // independently cross-checks the request against, and coordinate 13 is
+        // the Custody frames' shared `CoreMarket` at exactly `CORE_STATE_BYTES`.
+        // The Custody replay -- which the inline family projects this from -- is
+        // not available to a creation: RegisterBuy is the instruction that
+        // CREATES it, so at projection time it is a vacant account.
+        project_identity(
+            CORE_MARKET_ACCOUNT,
+            CoreStateLayoutV2::REALM_ID,
+            REGISTERED_IDENTITY_REALM_V4,
+        )?,
         project_identity(
             REALM_ACCOUNT,
             RealmLayoutV1::COLLATERAL_MINT,

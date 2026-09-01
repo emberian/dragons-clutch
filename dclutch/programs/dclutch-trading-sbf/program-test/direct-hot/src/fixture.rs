@@ -2099,13 +2099,6 @@ fn registered_buy_child_requests_v4(
         .intents
         .get(1)
         .ok_or(DirectHotChainFixtureErrorV5::Input)?;
-    let rent_credit = lifecycle_rent_credit(
-        input.rent_program,
-        state.market,
-        input.release_set,
-        input.payer,
-    )?
-    .0;
     let parent = hash(
         requests
             .requests
@@ -2148,9 +2141,22 @@ fn registered_buy_child_requests_v4(
         amount: 0,
         rent_lamports: 0,
     };
+    // `rent_refund` is the RECORD BENEFICIARY, not the lifecycle RentCredit.
+    // `registered_effect_artifacts_v4::push_initialize_request` writes
+    // `CustodyRequestLayoutV1::RENT_REFUND` from
+    // `REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4`, the registered record's rent
+    // owner, which the same fixture stages as the payer and which the chain
+    // confirmed by accepting the Sell's record poststate byte for byte. This
+    // mirror named the RentCredit instead, and the disagreement was invisible
+    // for as long as nothing reached a Custody child: it moves ONE field of a
+    // 672-byte request, and the request's own hash is the sixth seed of the
+    // Trading caller authority the frame's coordinate 0 must hold -- so the
+    // whole Buy refused `Release` at `require_custody_frame_shape_v3` with the
+    // frame and the runtime naming two different PDAs. Measured on real ELFs at
+    // 571,047 CU behind the wall-A probe, before any child CPI.
     let initialize = CustodyRequestV1 {
         payer: input.payer.to_bytes(),
-        rent_refund: rent_credit.to_bytes(),
+        rent_refund: input.payer.to_bytes(),
         expected_revision: 0,
         resulting_revision: 1,
         rent_lamports: rent.minimum_balance(CUSTODY_REPLAY_BYTES_V1),
@@ -2166,7 +2172,7 @@ fn registered_buy_child_requests_v4(
         mint: realm.mint.to_bytes(),
         token_program: realm.token_program.to_bytes(),
         payer: input.payer.to_bytes(),
-        rent_refund: rent_credit.to_bytes(),
+        rent_refund: input.payer.to_bytes(),
         expected_revision: 1,
         resulting_revision: 2,
         rent_lamports: rent.minimum_balance(SplAccount::LEN),
