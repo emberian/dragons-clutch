@@ -1829,3 +1829,64 @@ router ABI id**, so a provider without a router cannot satisfy the neutral
 record. `PythReleaseV1` is 9 generic fields to 9 Pyth-shaped, and the two Pyth
 releases already disagree on shape, so the tree is arguing for the decomposition
 from inside the family with no second family needed.
+
+### Ruling 8 for you — what may a program trust from its own instructions sysvar?
+
+**The mechanism, proven at the runtime source.** `create_vm!` maps exactly
+`invoke_context.get_compute_budget().heap_size` bytes, and **every read *or*
+write above that is an access violation** (`solana-program-runtime-4.3.0-beta.2/
+src/vm.rs`). **A program cannot observe its granted heap** — so any check
+claiming to verify the grant is reading the *request*.
+
+`require_extended_heap_admitted_v1` reads the request and its name says
+`admitted`. The doctrine standing in for a guarantee — *"a request the runtime
+would reject fails the transaction before the program runs"* — covers a request
+the runtime **rejects**, not one it never **applied**.
+
+**Two repairs, and picking is yours because they trade different things:**
+
+1. **Cap the scratch at the default.** An unhonoured request degrades to a
+   **named refusal** instead of an access violation — and **the extended heap
+   becomes useless to the routes that need it**, `direct_hot_top_level` among
+   them.
+2. **Keep the ceiling.** Accept that a dishonoured request is an **abort**
+   rather than a refusal, and stop the function's name promising otherwise.
+
+Nobody picked. `f004904b` landed the honest half — the evidence, the fault
+addresses, the `vm.rs` citation and this owed ruling are in the doc rather than
+in a lane's memory, and the function no longer claims `admitted`.
+
+**Unresolved fact that bears on it:** the same harness **honoured** one route's
+65,536-byte request (`direct_hot_top_level`, 2/0, on a route documented to
+exhaust 32 KiB) and **did not honour** another's, whose faults landed 776 below
+the requested ceiling at both 65,536 and 262,144. Being chased before anyone
+acts — if the request never reached the second transaction, the finding collapses
+to a campaign defect.
+
+### The 57 has a number behind it now: **2 fall, 55 are real work**
+
+The never-executed block was assumed to be mostly an instrument hole — campaigns
+that pass against real ELFs and emit no census evidence. **Measured, it is not.**
+The register's own gap was the **10 already repaired** at `96ddf38f`, not a
+reservoir behind them.
+
+| campaign | reaches, of the 57 |
+|---|---|
+| `fractional-atomic` | **2** — escrow open and close, built as real Claims instructions |
+| `user-position-admission` | **0** — its three routes were already blocked-with-a-reason |
+| `general-hot` | **0** — drives `hot_v3` and the accelerator, both already witnessed |
+
+So 8 blocked-with-reason move to *witnessed* once folded, 2 more move from
+*never* to *witnessed*, and **55 routes have no campaign in the tree at all.**
+
+**That is protocol work, not instrument work** — and it is now the largest
+concrete thing C-00 and C-16 close against. A far more useful sentence than
+"57 never-executed" ever was.
+
+Two negative results recorded so nobody re-derives them hopefully:
+`fractional-atomic` drives `FractionalExposureActionV2` and **zero**
+`FractionalRetirementActionV3`, so those four routes are genuine gaps; and it
+drives the *fractional* compaction and redemption, not the *native* ones.
+
+`general-hot` was deliberately left unwired once tracing showed it reaches
+nothing in the 57 — *"wiring it would have been motion."*
