@@ -282,4 +282,104 @@ mod tests {
                 .contains("cannot authenticate the checked local Direct deployment")
         );
     }
+
+    /// Subcommands this binary still dispatches to a working implementation.
+    const LIVE: &[&str] = &["run"];
+    /// Subcommands that are dispatched and refuse unconditionally.
+    const RETIRED: &[&str] = &["demo-market"];
+
+    fn runner() -> String {
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/run-journey.sh"))
+            .expect("run-journey.sh sits beside this crate")
+    }
+
+    /// Every subcommand `run-journey.sh` invokes on the journey binary.
+    ///
+    /// Two call shapes exist and both are resolved: a literal
+    /// (`"$JOURNEY_BIN" demo-market …`) and an array whose first element is the
+    /// subcommand (`JOURNEY_ARGS=(run …)` then `"$JOURNEY_BIN" "${JOURNEY_ARGS[@]}"`).
+    fn invoked(script: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for line in script.lines() {
+            let Some(rest) = line.split_once("\"$JOURNEY_BIN\"").map(|(_, rest)| rest) else {
+                continue;
+            };
+            let Some(token) = rest.split_whitespace().next() else {
+                continue;
+            };
+            let token = token.trim_matches('"');
+            if let Some(name) = token.strip_prefix("${").and_then(|v| v.strip_suffix("[@]}")) {
+                // Resolve the array's first element from its assignment.
+                let needle = format!("{name}=(");
+                if let Some(assignment) = script.split(&needle).nth(1) {
+                    if let Some(first) = assignment.split_whitespace().next() {
+                        found.push(first.trim_matches('"').to_string());
+                    }
+                }
+            } else if !token.is_empty()
+                && token
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                && token.starts_with(|c: char| c.is_ascii_lowercase())
+            {
+                // Subcommand-shaped only. `run-journey.sh` also mentions the
+                // binary inside a `[ -x "$JOURNEY_BIN" ]` guard, whose next
+                // token is `]`; that is an existence test, not an invocation.
+                found.push(token.to_string());
+            }
+        }
+        found
+    }
+
+    /// THE GATE THIS TIER DID NOT HAVE.
+    ///
+    /// Public CI runs a job named "the journey campaign compiles". It does, and
+    /// it compiled every day for two days while its runner called a subcommand
+    /// the binary refuses unconditionally — because `demo-market` is still
+    /// DISPATCHED, so nothing about the build could notice. The test above
+    /// proves the refusal exists; this one proves the runner stopped calling
+    /// it, which is the half that was missing.
+    #[test]
+    fn the_runner_invokes_no_retired_subcommand() {
+        let script = runner();
+        let invoked = invoked(&script);
+        assert!(
+            !invoked.is_empty(),
+            "found no journey-binary invocation in run-journey.sh; the parser has drifted \
+             from the script and this gate would pass vacuously",
+        );
+        for command in &invoked {
+            assert!(
+                !RETIRED.contains(&command.as_str()),
+                "run-journey.sh invokes the retired subcommand `{command}`, which refuses \
+                 unconditionally, so the campaign cannot run however well it compiles",
+            );
+            assert!(
+                LIVE.contains(&command.as_str()),
+                "run-journey.sh invokes `{command}`, which this binary does not dispatch",
+            );
+        }
+    }
+
+    /// Keeps `RETIRED` from becoming a list someone edits to make the gate pass.
+    ///
+    /// Every name on it must actually refuse when dispatched. Un-retiring a
+    /// subcommand without removing it here turns this red.
+    #[test]
+    fn every_retired_subcommand_actually_refuses() {
+        for command in RETIRED {
+            assert_eq!(
+                *command, "demo-market",
+                "a retired subcommand was added without a refusal witness beside it",
+            );
+            assert!(
+                super::run_demo_market(vec![
+                    "--registry-program-id".into(),
+                    "11111111111111111111111111111111".into(),
+                ])
+                .is_err(),
+                "`{command}` is listed as retired but no longer refuses",
+            );
+        }
+    }
 }

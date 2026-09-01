@@ -395,6 +395,91 @@ mod tests {
         )
     }
 
+    fn sponsored_obligation(fixture: &Fixture) -> Result<PythProviderAdapterObligationV2> {
+        PythProviderAdapterObligationV2::from_authenticated_sponsored_push_records(
+            fixture.material,
+            fixture.product,
+            fixture.source_id,
+            fixture.source,
+            fixture.provider_id,
+            fixture.provider,
+            fixture.adapter_id,
+            fixture.adapter,
+            fixture.window_id,
+            fixture.window,
+            fixture.statistic_id,
+            fixture.statistic,
+            fixture.failure,
+        )
+    }
+
+    fn with_profile(base: &Fixture, profile: SourceAccessProfile) -> Fixture {
+        let mut next = fixture();
+        next.source = SourceSpecV1::new(
+            base.source.domain_id(),
+            base.source.unit_id(),
+            base.provider_id,
+            profile,
+            base.adapter_id,
+            base.source.capacity_profile_id(),
+        );
+        next
+    }
+
+    /// Two Pyth profiles reach the same provider through the same receiver, and
+    /// exactly one comparison keeps them from consuming each other's Sources.
+    ///
+    /// `SourceAccessProfile` is the tree's provider-extension discriminator —
+    /// the only one — and the two constructors above pin their own variant into
+    /// `from_authenticated_records_for_profile`, which refuses any Source that
+    /// declares the other. That comparison had NO test: neither this module nor
+    /// any campaign ever handed one profile's Source to the other's route, so
+    /// the seam that makes provider breadth safe was carried entirely by
+    /// inspection.
+    ///
+    /// It matters more the more profiles exist, not less. The direct route and
+    /// the sponsored-push route differ in when a candidate may be consumed
+    /// relative to the primary deadline; a Source admitted by the wrong one is
+    /// a market resolved on evidence it did not buy.
+    #[test]
+    fn neither_pyth_profile_will_consume_the_other_profiles_source() {
+        let base = fixture();
+        assert!(
+            obligation(&base).is_ok() && sponsored_obligation(&base).is_err(),
+            "the fixture's Source declares the direct profile, so only that route joins it"
+        );
+
+        let sponsored = with_profile(&base, SourceAccessProfile::PythSponsoredPushSnapshot);
+        assert_eq!(
+            obligation(&sponsored),
+            Err(Error::LinkageMismatch),
+            "the direct route refuses a sponsored-push Source"
+        );
+        assert!(
+            sponsored_obligation(&sponsored).is_ok(),
+            "and the sponsored-push route accepts exactly that Source"
+        );
+
+        assert_eq!(
+            sponsored_obligation(&base),
+            Err(Error::LinkageMismatch),
+            "the sponsored-push route refuses a direct Source"
+        );
+
+        // The two families this contract can express at all. Neither reaches a
+        // Pyth obligation, and the refusal is the same named one, so a Source
+        // that named a foreign family could not be laundered through either
+        // Pyth route by an operator who simply presented it.
+        for foreign in [
+            SourceAccessProfile::RelayedObservationRecord,
+            SourceAccessProfile::SharedObservationChild,
+        ] {
+            let other = with_profile(&base, foreign);
+            assert_eq!(obligation(&other), Err(Error::LinkageMismatch));
+            assert_eq!(sponsored_obligation(&other), Err(Error::LinkageMismatch));
+        }
+    }
+
     #[test]
     fn exact_runtime_graph_normalizes_real_adapter_facts() {
         let fixture = fixture();

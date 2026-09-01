@@ -4,6 +4,11 @@ Status: census output and ruling register. Not release evidence.
 Owner: lane S11 (`docs/LETTER_TO_CLAUDE_2026_09_01.md:827-867`), against
 `docs/MASTER_COMPLETION_CONTRACT.md` row **C-00** and rows C-15, C-16.
 
+**What this row terminates in:** `docs/evidence/C16_ENTRY_LIST_2026_09_01.md` —
+the list a hostile reviewer is handed, by C-16's own six categories, with every
+item in exactly one of two states and an owner for each. This file is the
+working material; that one is the gate. Read that first.
+
 C-00's hardest clause is *never-executed intended route*: the codebase declares
 a capability, allocates it an identity, and nothing ever reaches it. Contract
 vocabulary admits exactly two terminal states — implemented with evidence, or

@@ -2526,3 +2526,31 @@ finding caught by provenance discipline before leaving the lane, and the general
 form is the useful one: **most lanes check the repository's provenance and trust
 their own harness implicitly, and that asymmetry is exactly where a wrong number
 gets in.**
+
+## 2026-09-01 — one side tested, the other not
+
+The journey tier's own suite **already asserted that `demo-market`'s refusal
+exists.** Nobody asserted that the runner **stopped calling it.** One side of
+the contract tested, the other not — and that is the whole reason a CI job named
+*"the journey campaign compiles"* was true and useless for two days while the
+campaign's entry point refused unconditionally.
+
+> **Any tier whose runner and binary are separate artifacts wants this test.**
+
+The shape, worth copying: parse the runner for every subcommand it invokes on
+the binary — resolving *both* call shapes, the literal and the
+`JOURNEY_ARGS=(run …)` array — and refuse any that is retired or undispatched.
+Then a **second** test that keeps the retired-list honest by requiring every
+name on it to actually refuse when dispatched, so nobody can edit the list to
+make the gate pass.
+
+That second test is the part that matters. A gate whose allow-list can be
+edited to satisfy it is a gate that only tests the diligence of the person
+editing it — the same defect as an exemption register without a required
+verdict, and as a status field a guard asserts back at itself.
+
+Also landed in that shape: the runner now dies **immediately** with the exact
+bootstrap command when no market is supplied, instead of dying six minutes of
+SBF builds later inside the binary with a message that does not say what to do.
+**Runnable-by-supply beats runnable-by-nobody**, and it needed no edit to the
+producer another lane owns.

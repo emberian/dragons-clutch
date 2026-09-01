@@ -50,6 +50,10 @@ usage: tools/gauntlet/journey/run-journey.sh [options]
   --gauntlet-work PATH  the shared gauntlet root whose inventory and ledger this
                         tier reads and accumulates into
                         (default: /private/tmp/dclutch-gauntlet)
+  --market PATH         a Market run-spec compiled against a LIVE checked local
+                        deployment by `dclutch-local-successor-bootstrap
+                        local-private-validator-market-v1`. REQUIRED: Direct is
+                        deployment-bound, so no standalone compiler can mint one.
   --commit REV          source revision to archive and build (default: HEAD)
   --holders N           synthetic holder count, the load knob (default: 4)
   --keypair-seed HEX    64 lowercase hex passed to the producer's TEST-ONLY,
@@ -75,6 +79,7 @@ HOLDERS="4"
 ALLOW_STALE_PINS="false"
 RPC_PORT="${DCLUTCH_GAUNTLET_RPC_PORT:-20890}"
 LEDGER_ARG=""
+MARKET_ARG=""
 # A fixed, checked-in campaign seed. It is safe here and ONLY here: the producer
 # refuses the flag outright unless the RPC endpoint is loopback, and this tier
 # only ever names a 127.0.0.1 origin. Its value is the SHA-256 of the ASCII string
@@ -86,6 +91,7 @@ while [ "$#" -gt 0 ]; do
         --repo) REPO="${2:?--repo needs a value}"; shift 2 ;;
         --rpc-port) RPC_PORT="${2:?--rpc-port needs a value}"; shift 2 ;;
         --ledger) LEDGER_ARG="${2:?--ledger needs a value}"; shift 2 ;;
+        --market) MARKET_ARG="${2:?--market needs a value}"; shift 2 ;;
         --work) WORK="${2:?--work needs a value}"; shift 2 ;;
         --gauntlet-work) GAUNTLET_WORK="${2:?--gauntlet-work needs a value}"; shift 2 ;;
         --commit) COMMIT="${2:?--commit needs a value}"; shift 2 ;;
@@ -439,11 +445,45 @@ semantic_release_for() {
     fi
 }
 
-# The demo Market run-spec comes from the journey binary, which compiles the
-# producer's `market::demo_market_input` into itself. Shelling out to a second
-# binary for it would be a second build of the same function.
-"$JOURNEY_BIN" demo-market --registry-program-id "$(program_id_for registry)" \
-    > "$RUN/market.json"
+# The Market run-spec is SUPPLIED, not minted here.
+#
+# It used to come from `"$JOURNEY_BIN" demo-market`, on the reasoning that
+# shelling out to a second binary would be a second build of the same function.
+# That reasoning expired: Direct is deployment-bound now, `demo-market` refuses
+# unconditionally (`src/main.rs`, "a standalone registry address cannot
+# authenticate the checked local Direct deployment"), and this runner went on
+# calling it for two days because public CI gates that the campaign COMPILES and
+# nothing runs it. `the_runner_invokes_no_retired_subcommand` is the gate that
+# now fails instead.
+#
+# A market can only be compiled by `DirectMarketCompilerOwnedV1::load_local`,
+# which authenticates a checked local mutable plan against a gate on disk and
+# observes a LIVE loopback deployment first. That ordering --
+#
+#   prepare the checked-mutable substrate -> boot a validator over it ->
+#   run the administration campaign through activation -> compile the market
+#   against the LIVE deployment -> found -> keep going
+#
+# -- is what `tools/gauntlet/relayed-vertical/` already implements, and building
+# it into this runner is its own unit
+# (docs/evidence/LOCAL_CAMPAIGN_SERIES_2026_08_30.md). Until that lands, this
+# tier accepts a market someone else compiled, so the campaign is runnable by
+# anyone holding one rather than runnable by nobody.
+[ -n "$MARKET_ARG" ] || die "no Market run-spec: pass --market PATH.
+
+Direct is deployment-bound, so this runner cannot mint one and the retired
+demo-market compiler refuses by design. Compile one against a live checked
+local deployment:
+
+  dclutch-local-successor-bootstrap local-private-validator-market-v1 \\
+    --plan <substrate>/plan.json --rpc-url http://127.0.0.1:<port>/ \\
+    --fee-basis-points 50 --fee-recipient-keypair <keys>/fee-recipient.json \\
+    > market.json
+
+then re-run with --market market.json. The seven SBF roles this run already
+built are stamped and will be reused."
+[ -f "$MARKET_ARG" ] || die "--market is not a file: $MARKET_ARG"
+jq . "$MARKET_ARG" > "$RUN/market.json" || die "--market is not valid JSON: $MARKET_ARG"
 
 SPEC="$RUN/spec.json"
 {

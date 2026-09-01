@@ -783,6 +783,15 @@ impl ConservationLedgerV1 {
         declared_collateral_delta: i128,
         declared_hoard_delta: i128,
     ) -> Option<BTreeMap<String, i128>> {
+        // Without an admitted Custody namespace NOTHING can be classified: the
+        // Hoard itself reads as `unclassified`, and a derived split would then
+        // attribute the Hoard's movement to the wallets and report a violation
+        // that is the ledger's own arithmetic rather than the market's. A
+        // campaign that has not admitted a namespace gets `inapplicable`, which
+        // is what it has earned.
+        if self.vault_classes.is_empty() {
+            return None;
+        }
         let hoard = COMPARTMENTS
             .iter()
             .find(|(compartment, _)| matches!(compartment, CompartmentV1::HoardPrincipal))
@@ -1262,6 +1271,26 @@ mod tests {
         assert_eq!(derived.get("HoardPrincipal"), Some(&-120));
         // Everything the tracked total moved that the Hoard did not.
         assert_eq!(derived.get(UNCLASSIFIED), Some(&-180));
+    }
+
+    /// A campaign that never admitted a Custody namespace cannot classify its
+    /// own Hoard, so the derivation must refuse rather than attribute the
+    /// Hoard's movement to the wallets.
+    ///
+    /// `relayed-vertical` links this file by `#[path]` and calls
+    /// `admit_founding` without `admit_custody_namespace`; deriving a split for
+    /// it would have turned every boundary where the Hoard moves into an L8
+    /// violation produced by this arithmetic rather than by that market.
+    #[test]
+    fn a_campaign_with_no_admitted_namespace_derives_nothing() {
+        let mut ledger = ConservationLedgerV1::new(key(0xc1), key(0xd1));
+        ledger.admit_founding(vault(CompartmentV1::HoardPrincipal), key(0xa4), 10);
+        assert_eq!(
+            ledger.class_of(&vault(CompartmentV1::HoardPrincipal)),
+            UNCLASSIFIED
+        );
+        let classes = BTreeMap::from([(UNCLASSIFIED.to_string(), 1_500_u64)]);
+        assert_eq!(ledger.derive_class_claim(&classes, -300, -120), None);
     }
 
     /// THE TRIPWIRE, and the only thing the derivation independently asserts.

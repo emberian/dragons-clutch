@@ -924,3 +924,26 @@ the greening under a rewrite.
 
 Baseline edited **by hand**, never `--write`: the FRACCHECK-2 precedent holds,
 and `measured_commit` is left where `--write` last set it.
+
+## 2026-09-01 — `provider_transport_v3.rs`, one new `inventory-guard-present`
+
+**Not a finding. A capability arrived and brought a guard with it.**
+
+`programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs` newly
+refuses the unset pubkey at `:398`, because `AbandonSubmission` (`DCLTPAB3`)
+landed in that file — the route that lets a provider submission which **lost the
+first-valid race** reclaim its rent instead of stranding 6,389,280 lamports
+forever.
+
+That route's admissibility rests entirely on statements about zero: it checks
+the lifecycle's `terminal_sequence`, `certificate` and `provider_evidence` each
+as zero **rather than trusting `status`**, precisely because a `Submitted`
+lifecycle carries zero in all three by construction and that is what makes the
+consumed wire unable to express an abandoned submission. A guard refusing the
+unset pubkey is exactly the shape that argument needs.
+
+Filed `inventory-guard-present`, which is the true sentence here: this file does
+refuse the unset pubkey somewhere in it. The entry exists so **the gate fires if
+the last such guard in this file is ever deleted** — which, for a route whose
+whole safety case is "these identities are provably zero", is the entry most
+worth having.

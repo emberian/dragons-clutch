@@ -648,6 +648,7 @@
       "programs/dclutch-core-sbf/src/series_permit_expiry_precommit_v1.rs": "inventory-guard-present",
       "programs/dclutch-dealer-sbf/src/lib.rs": "inventory-guard-present",
       "programs/dclutch-resolution-proof-sbf/src/provider_instruction_v3.rs": "inventory-guard-present",
+      "programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs": "inventory-guard-present",
       "programs/dclutch-resolution-proof-sbf/src/relay_v1.rs": "inventory-guard-present",
       "programs/dclutch-trading-sbf/src/child_receipt_v3.rs": "inventory-guard-present",
       "programs/dclutch-trading-sbf/src/core_composition_v3.rs": "inventory-guard-present",

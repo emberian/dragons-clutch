@@ -79,7 +79,7 @@
     {
       "label": "publish record: Begin",
       "routes": [
-        "registry/process_begin#1",
+        "registry/process_begin#5",
         "registry/record_v1::dispatch",
         "registry/process_instruction"
       ],
@@ -124,7 +124,7 @@
     {
       "label": "publish Product graph: *Begin",
       "routes": [
-        "registry/process_begin#1",
+        "registry/process_begin#5",
         "registry/record_v1::dispatch",
         "registry/process_instruction"
       ],
