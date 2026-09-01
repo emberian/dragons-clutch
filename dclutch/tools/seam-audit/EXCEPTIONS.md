@@ -1021,3 +1021,15 @@ Owner: the Trading lane. Closing it means one of two things, both cheap:
 show that every path reaching `selected_role_programs_v3` authenticates
 `frame.activation_cache` first and retag it, or route the read through
 `authenticate_activated_role*` so the question stops needing an argument.
+
+**CLOSED `d211cd72`, hours after it was filed**, by the second of the two — the
+read now authenticates itself rather than assuming an upstream did. The baseline
+entry is deleted rather than retagged benign, because the rule for this register
+is the one at the top of this file: keep an entry only while it is true. The tag
+is kept here with no users, as the record of a hazard that was named and then
+answered; the next site to earn it will find the reasoning already written.
+
+Worth keeping for the method rather than the outcome: the honest verdict at
+filing time was *hazard*, not *benign-same-pattern*, purely because the Custody
+chain had been read end to end and this one had not. Had it been waved through
+on the resemblance, the fix would not have been written.

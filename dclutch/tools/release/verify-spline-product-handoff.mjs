@@ -42,7 +42,44 @@ exactKeys(inspection, [
   'schema', 'report', 'key_free', 'signs', 'submits', 'input_sha256', 'registry_program',
   'product_outcome_count', 'basis_width', 'degree', 'interior_multiplicity', 'payout_scale',
   'rounding_boundary', 'semantic_basis_id', 'records', 'verified_price_gate', 'found_records',
+  'partition_quality',
 ], 'SDK inspection');
+// The partition-quality report is CHECKED, not merely tolerated. Adding a key
+// to the accepted set and asserting nothing about it would turn an exact-set
+// gate into a spelling test -- which is how this field broke the gate in the
+// first place: the compiler grew it, and the only thing standing between the
+// two was a list of names.
+//
+// What is bound here is the part a handoff consumer would actually rely on:
+// the shares are a real distribution over the ordinary cells, the dominant
+// share is the largest of them and is reported honestly, and `degenerate`
+// agrees with the ceiling rather than being an independent opinion. A market
+// that resolves into one cell every time is the defect this whole field
+// exists to surface, so the gate refuses a report that contradicts itself
+// about whether it found one.
+const quality = inspection.partition_quality;
+exactKeys(quality, [
+  'model', 'anchor', 'volatilityBps', 'windowSlots', 'characteristicDisplacement',
+  'plausibleHalfWidth', 'dominantCell', 'dominantShareBps', 'maxCellShareBps',
+  'cellShareBps', 'degenerate',
+], 'partition quality report');
+if (!Array.isArray(quality.cellShareBps) || quality.cellShareBps.length === 0) {
+  throw new Error('partition quality report states no cell shares');
+}
+const largestShare = Math.max(...quality.cellShareBps);
+if (quality.dominantShareBps !== largestShare) {
+  throw new Error('partition quality dominant share is not the largest cell share');
+}
+if (quality.cellShareBps[quality.dominantCell] !== largestShare) {
+  throw new Error('partition quality dominant cell does not hold the dominant share');
+}
+if (quality.degenerate !== (largestShare >= quality.maxCellShareBps)) {
+  throw new Error('partition quality degeneracy disagrees with its own ceiling');
+}
+if (quality.degenerate) {
+  throw new Error('the handoff compiled a degenerate partition: one cell takes the market');
+}
+
 if (inspection.schema !== 'dclutch/product-spline-inspection/v1'
     || inspection.report !== reportPath
     || inspection.key_free !== true

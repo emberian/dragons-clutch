@@ -2,8 +2,7 @@
   "findings": {
     "AUTHORITY_CACHE_UNDERIVED": {
       "programs/dclutch-custody-sbf/src/lib.rs\tauthenticate_premarket_realm": "benign-cache-authenticated-by-admission-token",
-      "programs/dclutch-custody-sbf/src/lib.rs\tauthenticate_realm": "benign-cache-authenticated-by-admission-token",
-      "programs/dclutch-trading-sbf/src/hot_v3.rs\tselected_role_programs_v3": "hazard-cache-provenance-unverified"
+      "programs/dclutch-custody-sbf/src/lib.rs\tauthenticate_realm": "benign-cache-authenticated-by-admission-token"
     },
     "DOMAIN_BYTES_COLLIDE": {
       "CLAIMS_FOUNDING_AGGREGATE_SEED_V4\tCLAIMS_FOUNDING_AGGREGATE_SEED_V5\tCLAIMS_MARKET_SEED_V2\tLIABILITY_BASIS_MARKET_SEED_V2": "confirmed-defect",

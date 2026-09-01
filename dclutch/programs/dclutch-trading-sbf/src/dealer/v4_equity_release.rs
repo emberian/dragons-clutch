@@ -56,8 +56,8 @@ use super::{
     },
     v3_multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3},
     v3_profile::{
-        DealerEquityAccountProfileInputV3, LINKED_BASIS_CONTENT_ACCOUNT_V3,
-        dealer_equity_logical_account_count_v3, encode_dealer_equity_account_profile_v3,
+        DealerEquityAccountProfileInputV3, dealer_equity_logical_account_count_v3,
+        encode_dealer_equity_account_profile_v3,
     },
     v3_release::dealer_request_schema_v3,
 };
@@ -506,6 +506,7 @@ mod tests {
         EXECUTION_STRATEGY_ADMISSION_SCHEMA_ID_V2, EXECUTION_STRATEGY_CERTIFICATE_SCHEMA_ID_V2,
     };
 
+    use super::super::v3_profile::LINKED_BASIS_CONTENT_ACCOUNT_V3;
     use super::*;
 
     fn transfer(

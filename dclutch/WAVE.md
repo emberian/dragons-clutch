@@ -3952,3 +3952,53 @@ exists to find.
 And it is why the residual was worth doing rather than trusting the previous
 turn's answer: **the mechanism was real, but it was not uniform, and "four
 families agree" was never the thing that made it safe.**
+
+## 2026-09-01 — the lamport census closes, and its own arithmetic was wrong
+
+**Correction, and it invalidates two figures recorded above.** The tallies
+reported as *"99 of 120 classified, 21 enumerated"* were built from **different
+regex passes**, and 63 + 27 + 42 is **132, not 120**. Rebuilt as one
+authoritative pass:
+
+| class | count | |
+|---|---|---|
+| **1** owned by the code at the site | **54** | 25 canonical zero/absent · 16 frame-derived · 13 literal or named constant |
+| **2** read from persisted authenticated state | **40** | 30 by shape, incl. every record's own `rent_owner` · 10 decoders into state records or receipts |
+| **3** request-borne, bound to a value persisted earlier | **26** | |
+| **4** caller-supplied, only self-consistent | **0** | |
+| | **120** | |
+
+Of 152 raw set-sites, **32 are not lamport destinations at all** — register-slot
+coordinates, `identity_u16` register ids, display code, a function signature, a
+comparison, type positions. *Anyone who wrote down "99 of 120" should replace
+it — including this ledger, which did, twice.*
+
+The last two resolved by reading rather than pattern:
+`direct_inline_route_v3.rs:2022` is the branch where the maker replay is
+**vacant and about to be created**, so its `rent_beneficiary` is the
+creation-time naming — with the observation register zero precisely because
+there is nothing to observe yet. Class 3 at its creation event.
+`provider_finalized_projection_v3.rs:1872` builds a `CoreState` fixture with a
+literal. Class 1.
+
+### The result, stated as narrowly as it deserves
+
+> Every lamport destination in the production tree is owned, and the ownership is
+> always one of three things: **the code chose it, it was read out of a record
+> that already existed, or the caller named it and the chain refused unless it
+> matched something written down earlier.** Not once is it an authority check at
+> time of use.
+
+The same structural fact the atom half produced, reached from the other
+substance.
+
+**Not proven, verbatim:** *I have not proven no unowned lamport flow exists. I
+swept a well-defined population — five destination-naming fields, production
+code only, `cfg(test)` modules excluded by line position — with a stated method.
+A hostile reviewer should read this as sweeping a well-defined population with a
+stated method, not as a proof.*
+
+**Three gaps stay named:** General's registers are **good by naming** (not all
+eight projection sources read); **Direct inline is not separately traced**; and
+the **Series account-profile gate is decoration**, with Core carrying that
+binding alone.

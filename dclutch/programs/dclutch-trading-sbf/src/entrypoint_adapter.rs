@@ -730,9 +730,54 @@ pub fn program_heap_capacity_v1() -> usize {
 ///
 /// So the route that needs the frame asks here instead, and a caller who
 /// forgot is told exactly what to add. This is a question about THIS
-/// invocation's granted ceiling, not about the declaration: a route can be on
-/// the list and still arrive without a grant, which is precisely the case
+/// invocation's declared ceiling, not about the declaration list: a route can be
+/// on the list and still arrive without a request, which is precisely the case
 /// worth naming.
+///
+/// # What this CANNOT tell you, and the fault that proves it
+///
+/// It reads the ceiling this adapter lifted, and that ceiling came from the
+/// `RequestHeapFrame` in the instructions sysvar. **That is what the transaction
+/// ASKED FOR, never what the runtime GAVE**, and a Solana program cannot observe
+/// the difference: `create_vm!` maps exactly
+/// `invoke_context.get_compute_budget().heap_size` bytes
+/// (`solana-program-runtime/src/vm.rs`, `heap.as_slice_mut().get_mut(..heap_size)`),
+/// and every read or write above that is an access violation -- so there is no
+/// probe, in either direction, that survives being wrong. Both sides of the
+/// comparison here move together with the request.
+///
+/// The doctrine above this module says a request the runtime would reject fails
+/// the transaction before this program runs. That covers a request the runtime
+/// REJECTS. It does not cover a request the runtime never applied: such a
+/// transaction runs, with the protocol default mapped, while this function
+/// reports the extended ceiling as present.
+///
+/// The consequence is not a refusal a caller can handle. The scratch half bumps
+/// DOWN from the ceiling, so its first block is written near the top of the
+/// requested region -- above the mapped one -- and the Structured lane measured
+/// exactly that on an ADMITTED, non-hostile path, at 203,408 CU inside a
+/// Token-2022 `PermissionedBurnExtension` CPI:
+///
+/// ```text
+/// request  65,536 -> Access violation writing 8 bytes at 0x30000fcf8
+/// request 262,144 -> Access violation writing 8 bytes at 0x30003fcf8
+/// ```
+///
+/// Both are exactly 776 bytes below the REQUESTED ceiling, and the address
+/// tracks the request, so raising the request only moves the write further out.
+///
+/// MEASURED, so the mechanism itself is not broken: this harness does honour a
+/// well-formed request. `direct_hot_top_level` passes on a route documented to
+/// exhaust 32 KiB in finalization, carrying `DIRECT_HOT_HEAP_FRAME_BYTES_V1`
+/// (65,536). What the two faults show is the case where the ceiling and the
+/// mapping DISAGREE, which this function is structurally unable to detect.
+///
+/// Naming it `admitted` therefore promises more than the platform can deliver.
+/// Whether the fix is to cap the scratch region at the default -- which makes an
+/// unhonoured request a named refusal and the extended heap useless to the
+/// routes that need it -- or to keep the ceiling and accept that a dishonoured
+/// request is an abort rather than a refusal, is a ruling about what a program
+/// may trust from its own instructions sysvar, and it is not made here.
 #[cfg(all(
     target_os = "solana",
     not(feature = "custom-heap"),
