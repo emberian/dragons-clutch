@@ -194,6 +194,17 @@ construction belong outside the kernel in explicitly named adapters.
   never run while the summary reports one number: `run-postjoin-hostiles.sh`
   reported one failing case when the true figure was ten. Run every row, report
   every row, and keep "failed" distinct from "never ran".
+- **Program logs from one test binary interleave; isolate before attributing a
+  refusal.** `cargo test` runs a binary's tests concurrently, and every one of
+  them prints `Program log:` lines into the same stream. A refusal read out of
+  that stream belongs to whichever test emitted it, which is not necessarily
+  the one whose panic sits next to it. Measured 2026-09-01, by me, twice into
+  commit messages: `freeze.rs` was reported as "width 1 commits, width 258
+  refuses `0xC011 ScratchBankDigest`" when the `0xC011` came from
+  `corrupted_scratch_page_refuses_without_mutating_selection` running
+  alongside — a test that corrupts a page ON PURPOSE. Re-run with a name filter
+  AND `--test-threads=1` before believing which test refused, and before
+  believing a width, an ordering, or a count read from interleaved output.
 - **Never point a nested program-test workspace at the root `CARGO_TARGET_DIR`.**
   Each `program-test` is its own workspace with its own `target/`. Overriding
   `CARGO_TARGET_DIR` to the root's mixes rustc invocations made from two

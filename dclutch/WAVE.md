@@ -4615,3 +4615,66 @@ called is a clean state; one half-wired to a snapshot is not.
 
 > **C-12: one capability, not three — and the third one's wall is now a code
 > path rather than an unknown.**
+
+## 2026-09-01 — RETRACTION: the width-258 wall does not exist
+
+**Entries above are wrong and must be replaced.** This ledger recorded a
+`0xC011 ScratchBankDigest` wall at width 258 — twice — and recorded *"width 1
+commits for the first time."* Both came from **interleaved test output.**
+
+Isolated with a name filter and `--test-threads=1` on a restored ELF:
+`real_sbf_freeze_accepts_runtime_widths_one_and_258` commits at **width 1**, the
+accelerator CPI succeeds at 20,264 CU, and the returned ack carries disposition
+**`Refused`** rather than `Accepted`. The test fails **there**, at the
+disposition assertion — so **width 258 has never run.** The `0xC011` was emitted
+by `corrupted_scratch_page_refuses_without_mutating_selection`, which corrupts a
+page **on purpose**, running concurrently in the same binary with its
+`Program log:` lines interleaved into the same stream.
+
+**And "width 1 commits" was true only of the *transaction*. The action was never
+accepted.**
+
+### The on-chain probe is what caught it
+
+Logging `cursor`, output length and computed-against-declared digest inside
+`assemble_input_bank` printed **exactly once** per run — `pages=4, cursor=2696,
+outlen=2696`, digests equal — and never for a second width.
+
+> **One emission where two outcomes had been claimed is what a width-dependent
+> story cannot survive.**
+
+And the reason host reasoning could never have found it: *every host link was
+genuinely clean, which is exactly why the contradiction kept pointing somewhere
+that could not be seen.*
+
+### The second instance of this exact failure tonight
+
+**The first was mine**, early in the session: a compute figure published from an
+interleaved parallel test log, belonging to a *passing* test, withdrawn publicly.
+This is the same defect one layer up — **a refusal read out of a shared stream
+and attributed to the panic sitting next to it.**
+
+`AGENTS.md` now carries the rule: `cargo test` runs a binary's tests
+concurrently, **every one prints into the same stream**, and a refusal read from
+that stream belongs to whichever test emitted it — not to the one whose panic is
+adjacent. **Re-run with a name filter *and* `--test-threads=1` before believing
+a width, an ordering, or a count read from interleaved output.**
+
+### What survives, and it is better supported than before
+
+The transport was never the question and is clean: geometry tiles exactly at 1,
+2, 257 and 258; the page codec round-trips byte-for-byte under **nonzero,
+all-zero and zero-tail** banks (the last two added precisely because a non-zero
+filler could have masked a padding rule); the eighteen page keys are distinct and
+collide with no fixture constant; frame coordinates derive from the same
+constants the accelerator uses; the caller forwards the frame verbatim; and the
+accelerator's `content()` is the same `hash()` the fixture uses.
+
+The refusal-splitting in `4c90cdf5` stands on its own merits and its hostile
+assertion is still exactly right — **it simply did not make a 258 wall legible,
+because there was none.**
+
+**The real wall is one step earlier and semantic:** at width 1 the transaction
+commits and the accelerator **refuses the action**, returning a `Refused` ack
+rather than a program error. That is a General transition refusal, not a
+transport fault, and a fresh investigation rather than a continuation.
