@@ -36,4 +36,5 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [routeCensus](routeCensus.md) | by scripts/generate-route-census.mjs from `dclutch-route-census inventory`; do not edit. | npm run abi:route-census |
 | [sourceProviderWasmV1](sourceProviderWasmV1.md) | from the authoritative Rust Source-provider owner and WASM artifact; do not edit. |  |
 | [sourceReadinessWasmV1](sourceReadinessWasmV1.md) | from the authoritative Rust Source-readiness owner and WASM artifact; do not edit. |  |
+| [userPositionAdmissionWasmV1](userPositionAdmissionWasmV1.md) | from the authoritative Rust admission planner and WASM artifact; do not edit. | npm run abi:user-position-admission |
 | [walletTerminalPayoutV3](walletTerminalPayoutV3.md) | by scripts/generate-wallet-terminal-payout-v3.mjs; do not edit. |  |

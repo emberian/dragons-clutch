@@ -172,6 +172,7 @@ export const REFUSAL_CODES_V1: ReadonlyArray<RefusalCodeV1> = [
   { code: 0x500B, name: "ClaimsSbfError::SelectionConfig", meaning: "The execution terms disagree with the Market-selected config.", band: "claims" },
   { code: 0x500C, name: "ClaimsSbfError::BasisEvaluatorAbsent", meaning: "The Market's basis names the degree-2-to-3 spline family, for which this deployment carries no evaluator.", band: "claims" },
   { code: 0x500D, name: "ClaimsSbfError::PrincipalCapacity", meaning: "Minting a complete set would grow total principal past the Market's carried manipulation-capacity cap, or that cap was never stated.", band: "claims" },
+  { code: 0x500E, name: "ClaimsSbfError::ExposureNotIdentity", meaning: "The supplied Product-to-Claims exposure is not the identity embedding.", band: "claims" },
   { code: 0x5100, name: "LiabilityBasisSbfErrorV2::Instruction", meaning: "Instruction bytes were not the sole canonical V2 action.", band: "claims" },
   { code: 0x5101, name: "LiabilityBasisSbfErrorV2::Accounts", meaning: "Account count, order, privilege, owner, or alias checks refused.", band: "claims" },
   { code: 0x5102, name: "LiabilityBasisSbfErrorV2::ClaimsState", meaning: "Claims aggregate or Position bytes/PDA/revision refused.", band: "claims" },

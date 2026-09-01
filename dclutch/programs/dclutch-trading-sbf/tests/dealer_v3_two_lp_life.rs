@@ -291,3 +291,150 @@ fn two_lp_life_conserves_every_scenario_and_pays_equal_shares_equally() {
         );
     }
 }
+
+/// CONSENT, part one: another LP arriving cannot change what I can withdraw.
+///
+/// The question the row asks is whether an LP's position can be moved by an act
+/// it did not consent to. B joining is the purest such act: A is not asked. So
+/// A's extractable value, per scenario, must be identical before and after B
+/// arrives. Less would be dilution; more would be B funding A.
+///
+/// Both figures are the planner's own, taken from two independent runs.
+#[test]
+fn another_lp_arriving_cannot_change_what_i_can_withdraw() {
+    let mut checked = 0_usize;
+    for total_shares in [3_u64, 7, 11, 13, 100] {
+        for collateral in [1_u64, 5, 17, 40] {
+            for claims in [
+                vec![0_u64, 1, 2],
+                vec![2, 5, 8],
+                vec![13, 29, 47],
+                vec![100, 101, 103],
+            ] {
+                let pool = Pool {
+                    collateral,
+                    claims,
+                    obligations: vec![0, 0, 0],
+                    total_shares,
+                };
+                // A withdraws a slice, not the whole pool: redeeming 100% is
+                // often physically undeliverable (the complete sets cannot be
+                // split), which is a real constraint and not the question here.
+                let burn = core::cmp::max(1, total_shares / 2);
+
+                // What A could withdraw with nobody else in the pool.
+                let Some((alone, _, alone_claims)) = redeem(&pool, burn) else {
+                    continue;
+                };
+                let before = moved(alone.collateral_out, &alone_claims);
+                // A case where A withdraws nothing cannot distinguish anything.
+                if before.iter().all(|value| *value == 0) {
+                    continue;
+                }
+
+                // B arrives, proportionally, without asking A. The pool doubles
+                // and so does the supply, so A slice must be worth the same:
+                // floor(2R*b / 2S) is floor(R*b / S).
+                let Some((_, joined, _)) =
+                    contribute(&pool, pool.collateral, &pool.claims, total_shares)
+                else {
+                    continue;
+                };
+                let Some((after_join, _, after_claims)) = redeem(&joined, burn) else {
+                    continue;
+                };
+                let after = moved(after_join.collateral_out, &after_claims);
+
+                assert_eq!(
+                    before, after,
+                    "an LP that was not asked had its withdrawal moved by another LP arrival: \
+                     {before:?} -> {after:?} (pool={pool:?})"
+                );
+                checked += 1;
+            }
+        }
+    }
+    // TEETH, verified rather than assumed: minting `total_shares + 1` for the
+    // same proportional basket -- a one-share dilution of A -- makes this read
+    // ZERO, because the planner REFUSES every one of the 80 pools. Dilution by
+    // mis-minting is structurally impossible, not merely detected. The guard is
+    // what surfaces that: without it the mutation would pass on no executions.
+    //
+    // Measured, not guessed: 50 of the 80 corpus pools run both arms on a
+    // nonzero withdrawal. The other 30 skip for two legitimate physical
+    // reasons -- the slice rounds to nothing, or the complete sets backing it
+    // cannot be split -- and neither can distinguish a dilution. The guard
+    // exists to catch an all-`continue` sweep, which would read 0.
+    assert!(
+        checked >= 50,
+        "the corpus must actually execute both arms on a NONZERO withdrawal, \
+         only {checked} did"
+    );
+}
+
+/// CONSENT, part two: a policy floor raised AFTER I joined can strand my exit.
+///
+/// `locked_capital_floor` is a policy parameter carried by the selected
+/// immutable descriptor, and the planner applies it to the POSTSTATE of a
+/// redemption. So an LP who joined under one floor, and whose value has not
+/// moved at all, can be refused its exit by an evolution it never agreed to.
+///
+/// This test does not rule on whether that is correct -- protecting a pool from
+/// being drained below its floor is a real purpose. It measures the fact, in
+/// numbers, so the consent question is decided on evidence: the SAME redemption
+/// of the SAME pool succeeds under the floor in force when the LP joined and
+/// refuses under a floor raised afterwards.
+#[test]
+fn a_policy_floor_raised_after_i_joined_can_strand_my_exit() {
+    let pool = Pool {
+        collateral: 40,
+        claims: vec![0, 60, 120],
+        obligations: vec![0, 0, 0],
+        total_shares: 200,
+    };
+    assert_eq!(pool.residual(), vec![40, 100, 160]);
+
+    let exit = |floor: u64| {
+        let width = pool.claims.len();
+        let mut a = vec![0_u64; width];
+        let mut b = vec![0_u64; width];
+        let mut c = vec![0_u64; width];
+        let mut d = vec![0_u64; width];
+        plan_pool_equity_v3(
+            PoolEquityInputV3 {
+                collateral: pool.collateral,
+                claims: &pool.claims,
+                obligations: &pool.obligations,
+                total_shares: pool.total_shares,
+                locked_capital_floor: floor,
+                action: PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 {
+                    burned_shares: 100,
+                }),
+            },
+            &mut a,
+            &mut b,
+            &mut c,
+            &mut d,
+        )
+    };
+
+    // The floor in force when the LP joined: the exit is payable.
+    let joined_under = exit(0).expect("the exit is payable under the joining floor");
+    assert!(
+        joined_under.collateral_out > 0 || joined_under.shares_after == 100,
+        "the permitted arm must actually redeem, or this proves nothing"
+    );
+
+    // A floor raised afterwards, with the LP's value unmoved: the exit refuses.
+    let after_evolution = exit(60);
+    assert!(
+        after_evolution.is_err(),
+        "control: the raised floor must actually bind, got {after_evolution:?}"
+    );
+
+    // And the boundary is exact rather than slack: 20 is the largest scenario-0
+    // poststate this redemption leaves, so a floor at 20 still pays and 21 does
+    // not. If both passed, the floor would not be the thing doing the refusing.
+    assert!(exit(20).is_ok(), "floor 20 must still pay");
+    assert!(exit(21).is_err(), "floor 21 must refuse");
+}

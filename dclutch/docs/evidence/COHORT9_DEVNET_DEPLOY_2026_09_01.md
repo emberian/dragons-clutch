@@ -128,3 +128,59 @@ So markets are not founded, and the load simulator has not been run against
 this cohort. Founding a cohort of markets that all resolve into one bucket
 would satisfy the letter of "full redeploy including the load simulator" and
 fail its point.
+
+
+## The genesis checked release candidate, run for the first time
+
+`checked-release-candidate.sh --genesis-cohort` had never been executed end to
+end. It has now, four times, and each run moved the wall. The pinned Node
+v26.4.0 archive was fetched and its SHA-256 matched the script's own pin
+(`bef4c7e7…57dd`), which removes the "no Node archive" wall entirely.
+
+What the genesis path now does, from a clean archive of a named commit:
+
+1. builds all thirteen SBF links and passes the freshness gate, zero diagnostics;
+2. emits thirteen artifact-provenance descriptors;
+3. passes the public spline Product compiler/SDK handoff gate;
+4. checks all ten role artifacts and the five-role execution release set;
+5. derives the genesis infrastructure profile — `infrastructure/profile.bin`,
+   **exactly 144 bytes**, the write-once V1 a cohort that succeeds nothing
+   commits.
+
+Three walls were found by running it, each invisible to every existing suite:
+
+- **the sixteenth stale lockfile.** The successor `Cargo.lock` could not resolve
+  under `--locked` at committed HEAD, so the candidate died with no message at
+  all. Fixed.
+- **cargo package-cache contention.** Concurrent cargo work in the same session
+  put `Blocking waiting for file lock on package cache` into a build log, and
+  the provenance gate correctly refused a log it could not attribute. Not a
+  defect: a release build must be exclusive.
+- **an exact-key set that had gone stale.**
+  `verify-spline-product-handoff.mjs` validated the SDK inspection by exact key
+  equality, and the compiler had grown `partition_quality`. Fixed, and the
+  field is now checked rather than tolerated.
+
+### The remaining wall, and it is structural
+
+`create-infrastructure` refuses the genesis profile:
+
+```
+dclutch-release-tool: infrastructure profile refused: InvalidLength
+```
+
+`CheckedInfrastructureV1` structurally embeds a `ProtocolInfrastructureProfileV2`
+— `build_checked_infrastructure_v1(execution, profile: ProtocolInfrastructureProfileV2, …)`
+— and V2 exists precisely to pin the two predecessor artifact-release ids a
+succession copies forward. A cohort that succeeds nothing has none, and commits
+a V1.
+
+So the genesis half of the release candidate is complete through the execution
+release set and stops at the infrastructure manifest. Closing it means either a
+genesis manifest variant or a version-polymorphic profile field in
+`dclutch-release-set-contract`. That is a change to a release-identity-bearing
+structure, which is a release event and an Ember-scheduled one — not a
+lane-local fix, and not something to improvise underneath a live cohort.
+
+`bf5499da` closed the profile-derivation half of this gap. This is the manifest
+half, and it is named rather than worked around.

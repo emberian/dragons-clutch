@@ -4164,3 +4164,50 @@ the runtime **gave**.
 **And the positive control, fourth instance from this lane:** the filter must
 not lose `hot_v3.rs`, the route the whole question is about. It survived with 35
 scratch sites. *Had it vanished, the census would have been wrong.*
+
+## 2026-09-01 — the diagnostic build is a different program, by 15,682 CU
+
+Measured both ways: same route, same harness, **five role ELFs held
+byte-identical**, only the trading ELF's build flag differing.
+
+| build | `REGWALL sell action-wall refusal cost` |
+|---|---|
+| ordinary (ships) | **331,274 CU** |
+| `--features hot-cu-profile` | **346,956 CU** |
+| **delta** | **+15,682 CU (+4.7%)** |
+
+> **Any phase subtotal recorded from a `hot-cu-profile` run is not a measurement
+> of the program that ships**, and every such figure should carry that label.
+
+**The control could have failed.** The ordinary trading ELF was rebuilt *after*
+both runs and is byte-identical to the one used (`c5d5444…` both times), so the
+source did not move despite HEAD advancing ~6 times during the unit. And the two
+ELFs genuinely differ — `c5d5444…` vs `c90a82a…`, 2,288,328 vs 2,294,328 bytes —
+which is the precondition the experiment needs.
+
+**Not attributed, deliberately.** Two candidate causes this measurement cannot
+separate: the ~10 `hot_cu_checkpoint!` / `hot_heap_mark!` sites becoming real
+`sol_log` syscalls, and `hot_cu_profile_lifts_every_route_v1()` returning true so
+*every* route takes the extended-heap path. **The second is the one that matters
+for the heap question**, and guessing between them would have been the finding's
+only weak point.
+
+### Two corrections to figures recorded above
+
+1. **This ledger recorded 323,523 CU as a diagnostic-build figure. It is not** —
+   it is the *ordinary*-build measurement, and its diagnostic sibling is the
+   *451 CU past `preflight-children`* beside it. Corrected.
+2. **323,523 does not reproduce at HEAD.** The ordinary run today is **331,274**,
+   +7,751 higher. **The recorded figure is stale**, so a reader comparing against
+   it now would conclude something moved when what moved is the tree.
+
+### The fifth instance, and the first one that was its own
+
+The lane's first source-stability control hashed nothing and reported
+`d41d8cd98f00b204e9800998ecf8427e` **before and after — the md5 of the empty
+string.** It compared nothing to nothing and would have passed whatever
+happened. Caught by **recognising the constant**, and replaced with a
+rebuild-and-compare that can fail.
+
+> *Name something that must survive the filter and check that it did* —
+> **including when the filter is your own measurement harness.**

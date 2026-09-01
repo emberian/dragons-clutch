@@ -13,16 +13,16 @@ reachable inside an entry route's request.
 
 | program | package | refusal band | entry routes | action routes | refusal codes | entrypoint |
 | --- | --- | --- | --- | --- | --- | --- |
-| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 23 | 141 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:63) |
+| `claims` | `dclutch-claims-sbf` | 0x5 | 4 | 24 | 136 | `process_instruction` (programs/dclutch-claims-sbf/src/lib.rs:63) |
 | `core` | `dclutch-core-sbf` | 0x3 | 21 | 14 | 28 | `process_instruction` (programs/dclutch-core-sbf/src/lib.rs:366) |
 | `custody` | `dclutch-custody-sbf` | 0x6 | 10 | 11 | 13 | `process_instruction` (programs/dclutch-custody-sbf/src/lib.rs:245) |
 | `dealer` | `dclutch-dealer-sbf` | 0x7 | 1 | 0 | 11 | `process_instruction` (programs/dclutch-dealer-sbf/src/lib.rs:415) |
 | `dealer-accelerator` | `dclutch-dealer-accelerator-sbf` | 0xD | 1 | 0 | 3 | `program_entrypoint` (programs/dclutch-dealer-accelerator-sbf/src/lib.rs:130) |
 | `direct-aot` | `dclutch-direct-aot-sbf` | 0xA | 1 | 0 | 4 | `program_entrypoint` (programs/dclutch-direct-aot-sbf/src/lib.rs:136) |
-| `general-accelerator` | `dclutch-general-accelerator-sbf` | 0xC | 1 | 0 | 5 | `program_entrypoint` (programs/dclutch-general-accelerator-sbf/src/lib.rs:197) |
+| `general-accelerator` | `dclutch-general-accelerator-sbf` | 0xC | 1 | 0 | 19 | `program_entrypoint` (programs/dclutch-general-accelerator-sbf/src/lib.rs:273) |
 | `product-runtime-v2` | `dclutch-product-runtime-v2-sbf` | 0x9 | 1 | 0 | 9 | `process_instruction` (programs/dclutch-product-runtime-v2-sbf/src/lib.rs:149) |
 | `registry` | `dclutch-registry-sbf` | 0x1 | 7 | 4 | 19 | `process_instruction` (programs/dclutch-registry-sbf/src/lib.rs:268) |
 | `rent` | `dclutch-rent-sbf` | 0x2 | 4 | 0 | 12 | `process_instruction` (programs/dclutch-rent-sbf/src/lib.rs:201) |
-| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 10 | 17 | 23 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:261) |
+| `resolution` | `dclutch-resolution-proof-sbf` | 0x8 | 10 | 18 | 24 | `process_instruction` (programs/dclutch-resolution-proof-sbf/src/lib.rs:278) |
 | `series-shadow` | `dclutch-series-shadow-sbf` | 0xB | 1 | 0 | 5 | `program_entrypoint` (programs/dclutch-series-shadow-sbf/src/lib.rs:24) |
-| `trading` | `dclutch-trading-sbf` | 0x4 | 26 | 2 | 24 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1849) |
+| `trading` | `dclutch-trading-sbf` | 0x4 | 26 | 2 | 28 | `entrypoint` (programs/dclutch-trading-sbf/src/entrypoint_adapter.rs:1894) |

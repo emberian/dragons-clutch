@@ -1932,3 +1932,60 @@ onto wire-level CU limits, which is what a real caller does. ~10 sibling rows
 lean on it and every CU and packet number that campaign publishes will move —
 **numbers that move because the harness stopped lying to the program are the
 correct numbers.**
+
+## Your steer, answered in numbers — and ruling 9
+
+**The gated entrance is live on the founding path** (`550e581b`), and the
+numbers are:
+
+- The historical default `[12_000, 18_000]@100` — **$120/$180 against a ~$150
+  spot** — is **REFUSED, `DegenerateOutcomePartition`.**
+- Centred `[14_800, 15_200]` compiles to shares **[3024, 3950, 3024] bps** —
+  dominant cell **3,950 against the 9,000 ceiling**. Roughly **30/40/30**. *A
+  question.*
+- Width unchanged at 4 outcomes, so every coefficient vector still fits.
+
+**The gate caught 13 fixtures founding bandless markets and 3 more founding
+degenerate ones — including the sponsored devnet flagship, the same $120/$180.**
+
+One open product question the lane declined to settle: `relayed.rs` has **zero
+cuts** — degenerate by construction — and refusal lives where a partition is
+*compiled*, not at parse, so a market that declares no partition stays ungated.
+**Whether a zero-cut market is legal is yours.**
+
+### Ruling 9 — the genesis manifest variant
+
+**Markets are still not founded on cohort-9, and it is no longer the band.**
+Founding needs a `SuccessorPlan`, which needs the checked release gate, which
+stops here:
+
+`create-infrastructure` refuses `infrastructure profile refused: InvalidLength`.
+`CheckedInfrastructureV1` embeds a **`ProfileV2` by type**, and V2 exists to pin
+the predecessor ids a succession carries. **A genesis has none.**
+
+Closing it means either a genesis manifest variant or a version-polymorphic
+profile field in the release-set contract — **a release-identity change, so a
+release event and yours to schedule.** The lane closed the derivation half
+(`bf5499da`, `derive-genesis-infrastructure-profile`, refusal suite 26 → 30);
+this is the manifest half, and it declined to improvise it under a live cohort.
+
+**That chain is the one thing between here and condition (b) of your deploy
+grant.**
+
+### Also this round
+
+- **The genesis candidate now runs**, and found three walls by running: the
+  pinned Node archive fetched and its **SHA-256 matched the script's own pin**;
+  13 links built, freshness clean, 13 provenance descriptors, 10 role artifacts,
+  the five-role release set, and the genesis profile derived at **144 bytes**.
+- **A sixteenth stale lock** (`7de71e61`) — the successor lock could not resolve
+  under `--locked` *transitively*, its manifest never naming the crate, so the
+  candidate **died with no message at all.** The sbom tier then named it **and
+  six more**, reported rather than swept.
+- **`71a17ee5`**: `verify-spline-product-handoff.mjs` used exact key equality and
+  the compiler had grown `partition_quality` — **the same class swept out of the
+  campaign pack, unswept here, directly on the genesis path.** Found by diffing
+  real key sets. Made *checked* rather than tolerated, with three red controls.
+- **The CLI parity gate landed** (`06edd66e`) at a crate-wide true figure of
+  **zero**, after a per-file first cut reported 24 of 34 disagreeing — **every
+  one a false positive**, in three named shapes, all the lane's own.
