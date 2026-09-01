@@ -4781,3 +4781,63 @@ the stale-checkout hazard in its purest form. Resolved by writing
 `S5-TREE-HEAD.txt` into the directory rather than renaming it, **because
 renaming would invalidate cargo's absolute-path fingerprints and cost a cold
 rebuild.** Correct the record, not the name.
+
+## 2026-09-01 — look for a case where the accused shape is admitted
+
+**Correction to the entry above, made by the lane before it would accept the
+verdict.** *"The operator flattened, therefore the operator is wrong"* would have
+been **a wrong inference from a true observation.** The composition is **not**
+`AffineOnce`-only: its sibling arm `validate_rational_lifecycle_route` requires
+exactly the operator's shape — `Once`, `item_account_count: 0`, and a
+`coordinate_count`-scaled **flattened** fixed span. A flattened K span is not
+inherently rejected anywhere.
+
+> **The discipline: look for a case where the *accused* shape is admitted,
+> before concluding it never is.** The lifecycle arm nearly cost a wrong verdict,
+> and finding it is what saved it.
+
+The composition assigns a kind per family, and per **action** only for this one —
+`REPRESENTATION` selected-outcome takes `Once` + flat; **full-width takes
+`AffineOnce` + item span + `repeated_item_count == header.asset_count`.**
+
+**Verdict: the operator is wrong, on four grounds — and the strongest is not the
+obvious one.**
+
+1. **Request-bound versus artifact-bound.** The composition ties account
+   geometry to the **request's own** `asset_count` in *both* branches. The
+   operator's flattened `fixed_account_count` is a **release-time constant**
+   baked from `representation_outcome_count`; it **cannot track the request at
+   runtime.** *It coincides for a K=3 release and binds nothing.*
+2. **The kind's own definition is the frame** — `AffineOnce` *is* "fixed prefix
+   plus all authenticated item tails".
+3. **Precedent that executes**: `AFFINE_BATCH` is the tree's proven affine Claims
+   child, with its own real-ELF program-test, and it uses `AffineOnce`.
+4. Consumer beats declarer — **the weakest of the four on its own**, and the one
+   I had offered.
+
+**The repair is specified and deliberately unlanded**: it cannot be shown green
+while wall #1 stands, so it would land unverified — *and a restructure of a
+release artifact's route declaration is exactly the change that should arrive
+with evidence, not ahead of it.* The diagnosis is complete enough that landing it
+is **a short lane rather than a search.** `composition_v3.rs` untouched: the
+finding is that it is right.
+
+### The rule, landed beside the refusal-code law (`bafc289d`)
+
+> That law says a refusal must **name** what it refused. This one says a wrapper
+> **may not un-name it on the way out.**
+
+Three citations, the cheapest-first localization order that actually worked, and
+permission for a coarse code when the causes are genuinely one accusation. Plus
+the bullet the lane nearly got wrong itself: **a probe measures what it touches,
+not what you meant** — a heap probe that *allocates* measures `entrypoint!`'s
+hardcoded `HEAP_LENGTH` and reported the opposite answer until rewritten.
+
+### And the class, stated at its own scale
+
+*Both halves of the operator agree with each other, and neither agrees with the
+composition* is guards-whose-two-sides-move-together **at subsystem scale** —
+and:
+
+> **The only instrument that can catch it is one that crosses the boundary.
+> Every check confined to one side passes.**
