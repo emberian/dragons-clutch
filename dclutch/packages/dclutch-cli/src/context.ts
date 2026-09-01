@@ -16,10 +16,24 @@
  */
 import { readFileSync } from 'node:fs';
 
+import type { DeploymentV1 } from '@dclutch/sdk/deployments';
+import type { MutationClusterAdmissionV1 } from '@dclutch/sdk/rpc';
 import { SolanaRpcClient } from '@dclutch/sdk/rpc';
 import { Keypair } from '@solana/web3.js';
 
+import {
+  assertDeploymentIdentityV1,
+  deploymentProgramIdV1,
+  resolveClusterDeploymentV1,
+  type DeploymentIdentityClientV1,
+} from './deployment';
+
 export type ProgramRoleV1 = 'registry' | 'core' | 'claims' | 'trading' | 'resolution' | 'custody' | 'rentCredit';
+
+/** Every role a caller can name, in one place, so a new one cannot be missed. */
+export const PROGRAM_ROLES_V1: ReadonlyArray<ProgramRoleV1> = Object.freeze([
+  'registry', 'core', 'claims', 'trading', 'resolution', 'custody', 'rentCredit',
+]);
 
 export type SessionV1 = Readonly<{
   rpcUrl: string | null;
@@ -93,17 +107,49 @@ export type CliContext = Readonly<{
   session: SessionV1;
   flags: Readonly<Record<string, string | boolean | undefined>>;
   json: boolean;
+  /** The deployment `--cluster` named, or null when the caller named none. */
+  deployment: DeploymentV1 | null;
 }>;
 
 export function resolveContext(flags: Readonly<Record<string, string | boolean | undefined>>, env: NodeJS.ProcessEnv): CliContext {
   const sessionPath = typeof flags.session === 'string' ? flags.session : env.DCLUTCH_SESSION;
   const session = sessionPath !== undefined && sessionPath !== '' ? loadSession(sessionPath) : EMPTY_SESSION;
-  const rpcUrl = (typeof flags.rpc === 'string' ? flags.rpc : undefined) ?? env.DCLUTCH_RPC ?? session.rpcUrl ?? 'http://127.0.0.1:20890/';
-  return Object.freeze({ rpcUrl, session, flags, json: flags.json === true });
+  const deployment = resolveClusterDeploymentV1(flags.cluster);
+  // A named cluster carries its own endpoint, so `--cluster devnet` alone is a
+  // complete instruction. It is still the LAST word before the loopback
+  // default: an explicit `--rpc`, `$DCLUTCH_RPC`, or a session file's own URL
+  // is what the caller said out loud, and `assertDeploymentIdentityV1` is what
+  // proves whichever of them won is really the named chain.
+  const rpcUrl = (typeof flags.rpc === 'string' ? flags.rpc : undefined)
+    ?? env.DCLUTCH_RPC
+    ?? session.rpcUrl
+    ?? deployment?.endpoint
+    ?? 'http://127.0.0.1:20890/';
+  return Object.freeze({ rpcUrl, session, flags, json: flags.json === true, deployment });
 }
 
 export function rpcClient(context: CliContext): SolanaRpcClient {
   return new SolanaRpcClient(context.rpcUrl);
+}
+
+/**
+ * Prove the endpoint is the named chain when — and only when — a program id in
+ * this invocation would come from the shipped manifest rather than the caller.
+ *
+ * A caller who named every id explicitly gets no extra round trip and no new
+ * refusal; they already said what they meant, and this client is not the
+ * authority on their validator. This is the boundary that keeps "the manifest
+ * says these are the programs" from becoming a claim about an endpoint nobody
+ * checked. Call it before the first chain read of a command, not once per
+ * process: admissions are deliberately not cached.
+ */
+export async function bindDeploymentIdentity(
+  context: CliContext,
+  client: DeploymentIdentityClientV1,
+  boundary: string,
+): Promise<MutationClusterAdmissionV1 | null> {
+  if (context.deployment === null || !resolvesAnyProgramFromDeployment(context)) return null;
+  return assertDeploymentIdentityV1(client, context.deployment, boundary);
 }
 
 const FLAG_BY_ROLE: Readonly<Record<ProgramRoleV1, string>> = Object.freeze({
@@ -116,13 +162,32 @@ const FLAG_BY_ROLE: Readonly<Record<ProgramRoleV1, string>> = Object.freeze({
   rentCredit: 'rent-credit-program',
 });
 
-/** A program id, or an error that says every place it could have come from. */
-export function programId(context: CliContext, role: ProgramRoleV1): string {
+/**
+ * A program id the CALLER stated: an explicit role flag, or a session file.
+ *
+ * Separated from `programId` because the deployment manifest is a different
+ * kind of answer — one this client ships rather than one the invocation
+ * carries — and the identity boundary needs to know which kind it is about to
+ * use before it spends a round trip proving the endpoint.
+ */
+export function statedProgramId(context: CliContext, role: ProgramRoleV1): string | null {
   const flag = context.flags[FLAG_BY_ROLE[role]];
   if (typeof flag === 'string' && flag.length > 0) return flag;
-  const fromSession = context.session.programs[role];
-  if (fromSession !== undefined) return fromSession;
-  throw new Error(`the ${role} program id is not known: pass --${FLAG_BY_ROLE[role]} <address> or --session <spec/evidence/session json>`);
+  return context.session.programs[role] ?? null;
+}
+
+/** Whether any role in this invocation would come from the shipped manifest. */
+export function resolvesAnyProgramFromDeployment(context: CliContext): boolean {
+  if (context.deployment === null) return false;
+  return PROGRAM_ROLES_V1.some((role) => statedProgramId(context, role) === null);
+}
+
+/** A program id, or an error that says every place it could have come from. */
+export function programId(context: CliContext, role: ProgramRoleV1): string {
+  const stated = statedProgramId(context, role);
+  if (stated !== null) return stated;
+  if (context.deployment !== null) return deploymentProgramIdV1(context.deployment, role);
+  throw new Error(`the ${role} program id is not known: pass --cluster <devnet|local>, --${FLAG_BY_ROLE[role]} <address>, or --session <spec/evidence/session json>`);
 }
 
 export function optionalProgramId(context: CliContext, role: ProgramRoleV1): string | null {

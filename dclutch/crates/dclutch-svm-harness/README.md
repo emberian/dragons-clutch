@@ -90,6 +90,29 @@ This is local real-SVM evidence. The captured update is synthetic-local, and
 the campaign is not provider availability, devnet, deployment, or mainnet
 evidence.
 
+**THAT CAMPAIGN DOES NOT RUN TODAY, AND THE TABLE ABOVE IS HISTORICAL.**
+Measured 2026-09-01, at HEAD, with all eight ELFs freshly built:
+
+- `compiled_resolution_executes_primary_recovery_failure_and_atomic_refusal`
+  has carried `#[ignore = "requires canonical Core infrastructure init and
+  31-account Found request"]` since `583e5bfa` (2026-08-26). The command above
+  runs zero tests without `-- --ignored`.
+- With `--ignored` it panics at `resolution_successor.rs:297` on
+  `DCLUTCH_REGISTRY_SEMANTIC_RELEASE_ID is required`. Six such variables are
+  read (`:678`, `:683`, `:688`, `:693`, `:703`, `:708`) and **nothing in this
+  repository sets any of them** — no script, no CI row, no runbook. So the
+  campaign is not merely disabled, it has no runner.
+
+The consequence is specific and belongs to C-09: the Pyth **funded fallback
+walk** — `FundedTransitionActionV3::{FailNext, Exhaust, CommitFailure}`, the
+route a market takes when the provider goes silent — executes on a real ELF
+*only here*. `resolution_core_v3_lifecycle.rs` reaches a failure-terminal
+Market and closes its fund, but from a seeded `TerminalFailure` prestate; the
+walk that produces that prestate is not driven. The remaining coverage is
+`programs/dclutch-resolution-proof-sbf/src/tests.rs`, which calls
+`process_instruction` in-process against hand-forged `AccountInfo`s and whose
+funded cases exist to prove *removed* V1 dispatch stays removed.
+
 The experimental Direct successor's four-ELF physical campaign is GONE, with the
 three first-party ELFs it drove. `physical_direct_composition.rs`,
 `claims_proof_target.rs` and `registered_claims_proof_target.rs` were banished

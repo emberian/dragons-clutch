@@ -571,6 +571,7 @@ name = "dclutch-fractional-claim-operator"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",
@@ -1097,6 +1098,7 @@ name = "dclutch-trading-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",

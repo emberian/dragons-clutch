@@ -42,6 +42,7 @@ function context(): CliContext {
       'i-mean-devnet': SOLANA_DEVNET_GENESIS_HASH_V1,
     }),
     json: false,
+    deployment: null,
   });
 }
 

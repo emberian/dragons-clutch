@@ -8,12 +8,13 @@
 import { enumerateCoreMarketAddressesV1 } from '@dclutch/sdk/marketDiscovery';
 import { PORTFOLIO_MAX_MARKETS, inspectPortfolioV1 } from '@dclutch/sdk/portfolio';
 
-import { loadKeypair, optionalProgramId, programId, rpcClient, type CliContext } from '../context';
+import { bindDeploymentIdentity, loadKeypair, optionalProgramId, programId, rpcClient, type CliContext } from '../context';
 import { block, type Io } from '../output';
 
 export async function portfolio(context: CliContext, io: Io, ownerArgument: string | undefined, env: NodeJS.ProcessEnv): Promise<number> {
   const owner = ownerArgument ?? loadKeypair(context, env).publicKey.toBase58();
   const client = rpcClient(context);
+  await bindDeploymentIdentity(context, client, 'portfolio');
   const coreProgramId = programId(context, 'core');
   const enumeration = await enumerateCoreMarketAddressesV1(client, coreProgramId);
   const marketAddresses = [...new Set([...enumeration.addresses, ...context.session.markets])].slice(0, PORTFOLIO_MAX_MARKETS);

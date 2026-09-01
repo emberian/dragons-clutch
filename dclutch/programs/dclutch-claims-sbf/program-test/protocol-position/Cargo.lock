@@ -1525,6 +1525,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-capability-activation-codec"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-core-contract",
+ "dclutch-effect-kernel",
+ "dclutch-sha256-adapter",
+ "dclutch-transition-vm",
+]
+
+[[package]]
 name = "dclutch-capability-contract"
 version = "0.1.0"
 dependencies = [
@@ -1712,6 +1725,7 @@ name = "dclutch-fractional-claim-operator"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
  "dclutch-core-contract",

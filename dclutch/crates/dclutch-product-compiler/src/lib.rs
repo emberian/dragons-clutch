@@ -40,6 +40,8 @@ use sha2::{Digest, Sha256};
 pub mod graded;
 /// Runtime-width noncategorical Product basis compilation and certification.
 pub mod noncategorical_v3;
+/// Ex-ante outcome-mass quality of a partition, and centred construction.
+pub mod partition_quality;
 
 const CERTIFICATE_VERSION: u16 = 1;
 
@@ -282,6 +284,15 @@ pub enum CompileError {
     CertificateMismatch,
     /// A certificate release is unsupported.
     UnsupportedCertificate,
+    /// A founding band quoted a volatility of a nonpositive spot coordinate.
+    NonPositiveFoundingAnchor,
+    /// A founding band or quality model stated an unsupported parameter.
+    UnsupportedFoundingBand,
+    /// A founding band and its partition used different coordinate denominators.
+    MismatchedFoundingDenominator,
+    /// One ordinary cell holds at least the whole stated ceiling of ex-ante
+    /// outcome mass, so the market has no genuine question in it.
+    DegenerateOutcomePartition,
     /// A contract preimage rejected an emitted declaration.
     Contract(ContractError),
 }

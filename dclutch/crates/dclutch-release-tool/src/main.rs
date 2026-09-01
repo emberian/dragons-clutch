@@ -24,15 +24,16 @@ use dclutch_release_tool::{
     TranslationValidationEvidenceV1, build_checked_capability_execution_from_bytes_v1,
     build_checked_execution_release_set, build_checked_infrastructure_v1, build_checked_release,
     build_checked_translation_validation, derive_execution_release_set,
-    derive_protocol_infrastructure_profile_v2, loader_v3_program_account_data_v1,
-    loader_v3_programdata_account_data_v1, loader_v3_programdata_address_v1, probe_defunct_seal_v1,
+    derive_protocol_infrastructure_profile_v1, derive_protocol_infrastructure_profile_v2,
+    loader_v3_program_account_data_v1, loader_v3_programdata_account_data_v1,
+    loader_v3_programdata_address_v1, probe_defunct_seal_v1,
     verify_checked_capability_execution_v1, verify_checked_execution_release_set,
     verify_checked_infrastructure_v1, verify_checked_release,
     verify_checked_translation_validation,
 };
 use solana_program::pubkey::Pubkey;
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --predecessor-profile PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --predecessor-profile PATH --out PATH\n  dclutch-release-tool derive-genesis-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
 
 fn main() -> ExitCode {
     match run() {
@@ -63,6 +64,9 @@ fn run() -> Result<(), String> {
         "loader-accounts" => loader_accounts(&mut flags),
         "derive-set" => derive_set(&mut flags),
         "derive-infrastructure-profile" => derive_infrastructure_profile(&mut flags),
+        "derive-genesis-infrastructure-profile" => {
+            derive_genesis_infrastructure_profile(&mut flags)
+        }
         "create-set" => create_set(&mut flags),
         "verify-set" => verify_set(&mut flags),
         "inspect-set" => inspect_set(&mut flags),
@@ -353,15 +357,65 @@ fn derive_infrastructure_profile(flags: &mut BTreeMap<String, PathBuf>) -> Resul
     let registry = load_checked_release(required(flags, "--registry")?)?;
     let rent = load_checked_release(required(flags, "--rent")?)?;
     // The predecessor account is a chain fact, not a function of the successor
-    // manifests, so it is supplied rather than derived. It is required because
-    // the succession profile is the only one any redeployed consumer reads: a
-    // command that could still emit the predecessor's own shape would hand the
-    // pipeline bytes the chain has stopped answering to.
+    // manifests, so it is supplied rather than derived. It stays required on
+    // THIS command because a succession profile is the only one a succeeding
+    // cohort's consumers read: a succession command that could silently fall
+    // back to the predecessor's own shape would hand the pipeline bytes the
+    // chain has stopped answering to. A cohort that succeeds nothing is a
+    // different act with a different name -- see
+    // `derive-genesis-infrastructure-profile` -- so that danger is avoided by
+    // separating the two commands, never by relaxing this one.
     let predecessor_bytes = read_bytes(required(flags, "--predecessor-profile")?)?;
     require_no_flags(flags)?;
     let predecessor = ProtocolInfrastructureProfileV1::decode(&predecessor_bytes)
         .map_err(|error| format!("predecessor infrastructure profile refused: {error:?}"))?;
     let profile = derive_protocol_infrastructure_profile_v2(&registry, &rent, predecessor)
+        .map_err(format_release_error)?;
+    fs::write(&output, profile.to_bytes())
+        .map_err(|error| format!("failed writing {}: {error}", output.display()))
+}
+
+/// Derive the write-once V1 profile a cohort that succeeds NOTHING commits.
+///
+/// This is the profile `InitializeProtocolInfrastructureV1` writes at
+/// `dclutch:infrastructure:v1` when infrastructure is founded rather than
+/// succeeded. It takes no predecessor because there is none to read: a genesis
+/// cohort's two binding ids are wholly a function of its own Registry and Rent
+/// manifests, which is exactly why this derivation is offline and complete
+/// while the succession one is not.
+///
+/// `derive_protocol_infrastructure_profile_v1` has existed in this crate's
+/// library since the succession work landed, reachable only from its own unit
+/// tests. Ember's 2026-09-01 ruling that devnet is disposable -- redeploy a
+/// fresh cohort from exact current sources, abandon the previous one in place
+/// rather than migrating it -- makes the founding act the next one the project
+/// actually performs, so the derivation needs a route a cold operator can
+/// reach. Naming the command `genesis` rather than adding a mode to the
+/// succession command is deliberate: the two emit different profile versions
+/// for different chain acts, and a reader of either invocation can see which
+/// one they got without inspecting the output bytes.
+fn derive_genesis_infrastructure_profile(
+    flags: &mut BTreeMap<String, PathBuf>,
+) -> Result<(), String> {
+    // A predecessor is not merely unnecessary here, it is meaningless: if the
+    // caller has one, the act they intend is a succession and belongs to the
+    // other command. Refuse rather than silently discard the flag, so a
+    // mistyped command cannot quietly produce the wrong profile version. This
+    // is checked BEFORE any input is read, so an operator who typed the wrong
+    // command is told that, rather than being sent to debug whichever release
+    // manifest happened to fail to load first.
+    if flags.contains_key("--predecessor-profile") {
+        return Err(
+            "--predecessor-profile is not accepted by derive-genesis-infrastructure-profile: a \
+             genesis cohort succeeds nothing. Use derive-infrastructure-profile for a succession."
+                .to_owned(),
+        );
+    }
+    let output = required(flags, "--out")?;
+    let registry = load_checked_release(required(flags, "--registry")?)?;
+    let rent = load_checked_release(required(flags, "--rent")?)?;
+    require_no_flags(flags)?;
+    let profile = derive_protocol_infrastructure_profile_v1(&registry, &rent)
         .map_err(format_release_error)?;
     fs::write(&output, profile.to_bytes())
         .map_err(|error| format!("failed writing {}: {error}", output.display()))

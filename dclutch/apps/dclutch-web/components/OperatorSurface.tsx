@@ -19,7 +19,7 @@ import {
   type CapabilityFamily,
   type CapabilityStandingV1,
 } from '@/lib/capabilityModel';
-import { BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
+import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import { SolanaRpcClient } from '@/lib/rpc';
 import {
   acquireUnsignedTransactionDependenciesV1,
@@ -215,7 +215,8 @@ export default function OperatorSurface() {
     <section className="operator-wave"><header><span>03</span><div><h2>The whole census, including what has no venue</h2><p>Every protocol act, grouped by family. The venue line is derived from this application&rsquo;s own routes and the module that builds each act&rsquo;s bytes — nothing here is a status anyone typed. An act with no venue names its wall and where that wall is written down, rather than a date.</p></div></header><div className="operator-family-grid">{groups.map((group) => <article key={group.family}><h3>{group.family}</h3>{group.actions.map((standing) => {
       const contract = capabilityActContractV1(standing);
       const workspace = capabilityWorkspaceV1(standing.action, discovery.kind === 'ready' ? discovery.snapshot : null);
-      return <div className="operator-action" key={standing.action.id}><span className={`operator-status ${standing.venue}`}>{contract.venue}</span><strong>{standing.action.action}</strong><p>{standing.action.guarantee}</p>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{standing.unverifiedAbis.map((module) => <p className="operator-action-wall" key={module}><strong>No authority behind it</strong> {module} is generated and no <code>abi:*:verify</code> script checks it.</p>)}{workspace !== null
+      const needed = browserActPrerequisitesV1(standing);
+      return <div className="operator-action" key={standing.action.id}><span className={`operator-status ${standing.venue}`}>{contract.venue}</span><strong>{standing.action.action}</strong><p>{standing.action.guarantee}</p>{needed.length === 0 ? null : <p className="operator-action-need"><strong>Before you start</strong> {needed.map((entry) => entry.statement).join('; and ')}.</p>}{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{standing.unverifiedAbis.map((module) => <p className="operator-action-wall" key={module}><strong>No authority behind it</strong> {module} is generated and no <code>abi:*:verify</code> script checks it.</p>)}{workspace !== null
         ? <Anchor href={workspace}>{standing.venue === 'operator-cli' ? 'Open the exact runbook' : standing.authority === 'none' ? 'Open exact preflight' : standing.authority === 'wallet-message' ? 'Open offer authoring' : 'Open wallet flow'} →</Anchor>
         : standing.action.workspace === 'market-detail' && <small className="operator-action-remedy">Reacquire one Market above to open its exact participant flow.</small>}</div>;
     })}</article>)}</div></section>

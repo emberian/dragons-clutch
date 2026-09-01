@@ -904,3 +904,77 @@ explicitly alive even if no capacity reached them:
 Claude should never cite this overflow placement as deferral or a non-goal. It
 is the continuation queue under the same stopping condition: implement it, or
 obtain Ember's explicit ruling that the accepted project no longer wants it.
+
+---
+
+## Corrections to this letter — appended 2026-09-01, do not renumber above
+
+This letter is authority, not scripture. Where re-measurement contradicts it,
+the measurement wins and the contradiction is recorded here. **Corrections are
+appended at the end on purpose**: several lanes are routed to sections of this
+file by line number, so nothing above may be inserted or renumbered.
+
+### "Dealer physical life" — three statements re-measured, none survived
+
+Re-measured against this section's own pinned artifacts (Trading `af5d955e…`,
+accelerator `3f73d43c…`, profiled ELF `a2e62944…`, `accepted.rs` at
+`e1bac1e8…`, all re-verified before and after; the pinned tree was never
+rebuilt and nothing was built from ambient HEAD).
+
+1. **The pinned CU fingerprint is stale.** Same command, same artifacts: the
+   wall costs **149,593 CU**, not 148,093. What moved is not yet known, and it
+   is recorded as a corrected fingerprint rather than hedged.
+2. **"A substituted-position selector-1 Add refuses correctly" is not
+   established.** The hostile and the honest Add refuse at the *identical* CU
+   with the *identical* `0x4003` — both hit the same site, upstream of anything
+   that could examine a substituted identity. The control is vacuous and passes
+   only because the honest path is broken in the same place. Nothing about
+   substituted-position handling is currently known. Re-verify after the wall
+   moves.
+3. **The window is right; its implication is wrong.** All 19 direct raise sites
+   in `hot_v3.rs:3222-3525` were instrumented with distinct custom codes and
+   every one is excluded. No predicate written in that window refuses. **The
+   wall is inside a helper called from the tranche.**
+
+Refuted, so nobody re-chases it: this is **not** the manifest/derivation-policy
+defect already convicted, which raises `UnsupportedContent` 0x4000 at
+`hot_v3:3372`. This raises `Content` 0x4003.
+
+**The method that makes correction 3 admissible, and the rule it earns.** The
+first instrumentation used `sol_log_64` and produced nothing — and there were
+zero `Program log` lines anywhere in the run, *including on the successful
+path*. The channel was dead and its silence meant nothing. The negative result
+only counts because a positive control ran beside it: an ungated marker fails
+LP Open at `0x9063`/557,448 CU, proving the channel live and the window
+reachable, and the same marker gated to `selected_action == 1` lets LP Open
+succeed at 1,059,071 CU while the Add still refuses carrying no marker.
+
+> **An absent signal is evidence only if something present proves the channel
+> works.** "I instrumented it and nothing fired" and "my instrument was
+> disconnected" produce identical logs. Every negative result in this tree
+> needs a positive control in the same run, or it is not a result.
+
+### Correction 3 above is itself WITHDRAWN — 2026-09-01, later the same day
+
+Correction 3 said this wall was *not* the manifest/derivation-policy defect
+already convicted, because the codes and sites differ. The codes and sites do
+differ. **The predicate is the same one**, reached earlier on this path:
+
+`descriptor.derivation_policy != entry.child_derivation_id()` in
+`validate_selection` (`crates/dclutch-capability-program-contract/src/v4.rs`),
+reached from `authenticate_descriptor_root_selection` at `hot_v3.rs:3319`,
+which discards the reason with `.is_err()` and re-raises a bare `Content`.
+
+Convicted by gated early-return probes on the pinned evidence, then a two-branch
+conjunct split (`0x903c`), then a seven-way predicate split (`0x904c`). One
+predicate, not a range. **That `.is_err()` discard is the finding behind the
+finding: it made one defect look like two and cost a full bisect.**
+
+Corrections 1 and 2 stand — both were re-measured today.
+
+**Instrumenting this route:** `authenticate_and_execute_hot_v3` has **zero SBF
+frame headroom.** Fifteen per-call-site `.map_err` guards produced 95
+frame-overwrite diagnostics and an abort (`ProgramFailedToComplete`) rather
+than a refusal; eight out-of-line guards still produced 95; the clean tree
+measures 0. Use gated early-return probes only, and check `FRAMES` before
+believing any measurement from this function.

@@ -1,0 +1,13 @@
+{
+  "unnamedControls": {
+    "components/operator/OperatorFields.tsx": {
+      "sites": 6,
+      "reason": "Every control here is rendered as the children of FieldFrame, which wraps them in a real <label> carrying the field's name. The survey reads one file at a time and cannot see a wrapper supplied by an enclosing component, so these six are named at render and unnamed only in the source. Adding a seventh field type changes the count and reopens all six, which is the point: the excuse is for this shape, not for this file."
+    },
+    "components/ui/input.tsx": {
+      "sites": 1,
+      "reason": "The pass-through primitive itself, which forwards every prop and has no name of its own by construction. Its callers are the ones that owe a label, and the survey checks each of them where they render it."
+    }
+  },
+  "unreachableScrollers": {}
+}

@@ -2,7 +2,7 @@ import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import { Card, CardContent } from '@/components/ui/card';
 import { capabilityVenueTextV1, type CapabilityStage, type CapabilityStandingV1 } from '@/lib/capabilityModel';
-import { BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
+import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import { docsHrefV1 } from '@/lib/flags';
 
 /**
@@ -22,6 +22,16 @@ import { docsHrefV1 } from '@/lib/flags';
  * facts at once; an act with no venue at all is not listed here, because a
  * directory of things you can do is not the place to advertise things you
  * cannot. Those live on `/operate`, with the wall that holds them.
+ *
+ * Fourth, and last to arrive: what the reader must already hold. The venue
+ * line answers what an act DOES, and on that evidence alone this page
+ * advertised a redemption as one wallet signature sent from here — true of
+ * every clause, and useless to a stranger, because its second step opens a
+ * file picker for a payout plan a Rust binary under `tools/local-validator/`
+ * is the only thing that can author. A card that says what an act does and
+ * not what it cannot be begun without is a card that sends a reader into a
+ * dead end politely. Like the rest of the page it is derived, not written:
+ * see `browserActPrerequisitesV1`.
  */
 
 type SupportConsoleV1 = Readonly<{
@@ -112,11 +122,15 @@ export default function ConsoleDirectory() {
           <header><span>{String(index + 1).padStart(2, '0')}</span><div><h2>{band.title}</h2><p>{band.deck}</p></div></header>
           <CardContent className="console-index p-0">
             {standings.map((standing) => {
+              const needed = browserActPrerequisitesV1(standing);
               return <Anchor key={standing.action.id} className="console-entry" href={destinationV1(standing)}>
                 <strong>{standing.action.action}</strong>
                 <span className="console-entry-copy">
                   <b>{capabilityVenueTextV1(standing)}</b>
                   <small>{standing.action.guarantee}</small>
+                  {needed.length === 0 ? null : <small className="console-entry-need">
+                    Before you start · {needed.map((entry) => entry.statement).join('; and ')}
+                  </small>}
                   {standing.walls.map((held) => <small key={held.citation} className="console-entry-wall">Known wall · {held.statement}</small>)}
                 </span>
                 <em aria-hidden="true">→</em>

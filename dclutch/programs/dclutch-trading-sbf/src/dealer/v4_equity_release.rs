@@ -55,8 +55,8 @@ use super::{
     },
     v3_multi_lp::{MultiLpActionV3, MultiLpCustodyRequestV3},
     v3_profile::{
-        DealerEquityAccountProfileInputV3, dealer_equity_logical_account_count_v3,
-        encode_dealer_equity_account_profile_v3,
+        DealerEquityAccountProfileInputV3, LINKED_BASIS_CONTENT_ACCOUNT_V3,
+        dealer_equity_logical_account_count_v3, encode_dealer_equity_account_profile_v3,
     },
     v3_release::dealer_request_schema_v3,
 };
@@ -670,12 +670,22 @@ mod tests {
         let action = MultiLpActionV3::Add;
         let positions = 1;
         let custody = templates(action);
-        let lengths = vec![
+        let mut lengths = vec![
             0_u32;
             usize::from(
                 dealer_equity_logical_account_count_v3(action, positions).expect("account count"),
             )
         ];
+        // The linked-basis content coordinate is the topology's one
+        // `AdapterAuthenticatedVariableData` rule, and its declared width is a
+        // FLOOR the runtime enforces (`account.data().len() < exact_data_length`
+        // refuses), not a knowable exact width -- which is why the prestate is
+        // variable at all. A zero floor promises nothing and the encoder refuses
+        // it, so the minimum honest floor is one byte, exactly as `v3_profile`'s
+        // own `every_equity_shape_emits_exact_live_profile` declares it.
+        *lengths
+            .get_mut(usize::from(LINKED_BASIS_CONTENT_ACCOUNT_V3))
+            .expect("linked-basis content coordinate") = 1;
         let input = DealerEquityAccountProfileInputV3 {
             action,
             signed_position_count: positions,

@@ -23,6 +23,7 @@ function context(flags: Readonly<Record<string, string | boolean | undefined>>, 
     session: Object.freeze({ rpcUrl: null, programs: Object.freeze({}), markets: Object.freeze([]) }),
     flags: Object.freeze(flags),
     json,
+    deployment: null,
   });
 }
 

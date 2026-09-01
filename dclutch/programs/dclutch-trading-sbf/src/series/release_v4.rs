@@ -751,13 +751,10 @@ mod tests {
         );
     }
 
-    use crate::series::artifacts_v3::{
-        SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3, SERIES_CONSUME_CORE_REQUEST_BYTES_V3,
-        SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3,
-    };
     use crate::series::artifacts_v4::{
         SeriesArtifactErrorV4, SeriesConsumeArtifactBytesV4, SeriesConsumeArtifactRegistersV4,
         SeriesConsumeArtifactSelectionV4, authenticate_series_consume_artifacts_v4,
+        tests::{CONSUME_IDENTITIES, CONSUME_SCALARS},
     };
 
     const TEMPLATE: [u8; 32] = [1; 32];
@@ -771,10 +768,7 @@ mod tests {
     }
 
     fn canonical_release() -> SeriesConsumeSelectedReleaseV4 {
-        let lock = [0x11_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let core = [0x22_u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
-        let realize = [0x33_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let claims = [0x44_u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3];
+        let (lock, core, realize, claims) = crate::series::consume_artifacts_v4::tests::requests();
         let observed = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         series_consume_selected_release_v4(SeriesConsumeSelectedReleaseInputV4 {
             template: template(),
@@ -790,8 +784,14 @@ mod tests {
         .expect("canonical selected Series release")
     }
 
-    fn registers() -> ([u64; 7], [[u8; 32]; 6]) {
-        ([128, 64, 2, 32, 7, 9, 4], [[9_u8; 32]; 6])
+    /// The exact register banks the Consume artifacts declare.
+    ///
+    /// Both widths are typed by the emitter's own constants: the identity bank
+    /// has grown twice (1 -> 6 in `8f579821`, 6 -> 9 in `6121b131`) and a
+    /// hand-carried width silently became a `validate_request_coverage`
+    /// refusal rather than a compile error.
+    fn registers() -> ([u64; CONSUME_SCALARS], [[u8; 32]; CONSUME_IDENTITIES]) {
+        ([128, 64, 2, 32, 7, 9, 4], [[9_u8; 32]; CONSUME_IDENTITIES])
     }
 
     /// Authenticate the canonical release exactly as the on-chain join would,
@@ -921,10 +921,7 @@ mod tests {
     /// substituted byte, publication identities included.
     #[test]
     fn the_selected_release_rejoins_and_refuses_substitution() {
-        let lock = [0x11_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let core = [0x22_u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
-        let realize = [0x33_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-        let claims = [0x44_u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3];
+        let (lock, core, realize, claims) = crate::series::consume_artifacts_v4::tests::requests();
         let observed = [0_u32; SERIES_CONSUME_FIXED_ACCOUNT_COUNT_V4];
         let input = SeriesConsumeSelectedReleaseInputV4 {
             template: template(),

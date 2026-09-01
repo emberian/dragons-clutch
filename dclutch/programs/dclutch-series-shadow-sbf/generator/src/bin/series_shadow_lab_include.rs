@@ -28,12 +28,14 @@
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
 use dclutch_capability_program_contract::v4::CapabilityProgramV4;
+use dclutch_claims_svm::founding_v5::{ClaimsFoundingRequestInputV5, ClaimsFoundingRequestV5};
 use dclutch_core_contract::ContentId;
 use dclutch_series_shadow_bundle_generator::{
     SERIES_SHADOW_FIXED_ACCOUNT_COUNT_V4, SeriesShadowBundleSourceV4,
     SeriesShadowDescriptorSemanticsV4, SeriesShadowReleaseSourcesV4,
     compile_series_shadow_source_manifest_v1, emit_series_shadow_generated_include_v1,
 };
+use dclutch_series_v3_kernel::replay::SERIES_TICKET_STATE_BYTES_V3;
 use dclutch_trading_sbf::series::{
     account_profile_v4::stamp_series_release_owned_widths_v4,
     artifacts_v3::{
@@ -44,7 +46,6 @@ use dclutch_trading_sbf::series::{
     lifecycle_policy_v5::SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5,
     release_v4::{SeriesConsumeSelectedReleaseInputV4, series_consume_selected_release_v4},
 };
-use dclutch_series_v3_kernel::replay::SERIES_TICKET_STATE_BYTES_V3;
 use sha2::{Digest, Sha256};
 
 /// Exact reviewed semantic source the manifest commits to.
@@ -80,8 +81,8 @@ fn run() -> Result<(), String> {
         }
     };
     let certificate_bytes = decode_hex(&certificate_hex)?;
-    let certificate =
-        ContentId::new(certificate_bytes).map_err(|_| "certificate identity is zero".to_string())?;
+    let certificate = ContentId::new(certificate_bytes)
+        .map_err(|_| "certificate identity is zero".to_string())?;
 
     // The toolchain manifest is a real measurement of this build host, not a
     // label. It is still lab-scoped: a release toolchain manifest is pinned
@@ -93,10 +94,17 @@ fn run() -> Result<(), String> {
     );
 
     // Trading's own canonical release for this exact certificate.
+    //
+    // Lock, Core and Realize stay opaque lab filler: the Consume emitter only
+    // zeroes their root-dependent windows and copies the rest. The Claims
+    // request is not filler-shaped — `5fbe0bd8` made the emitter DECODE it and
+    // rebuild it as a root-independent transport template, so filler bytes now
+    // refuse the whole release with `Effect`. This driver therefore supplies a
+    // real, still lab-scoped, `ClaimsFoundingRequestV5`.
     let lock = [0x11_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
     let core = [0x22_u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3];
     let realize = [0x33_u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3];
-    let claims = [0x44_u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3];
+    let claims = lab_claims_request()?;
     let child_requests = SeriesConsumeChildRequestsV4 {
         lock: &lock,
         core: &core,
@@ -118,7 +126,8 @@ fn run() -> Result<(), String> {
     let mut lengths = observed;
     stamp_series_release_owned_widths_v4(
         &mut lengths,
-        u32::try_from(SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5).map_err(|_| "root width".to_string())?,
+        u32::try_from(SERIES_CONSUME_ROOT_ACCOUNT_BYTES_V5)
+            .map_err(|_| "root width".to_string())?,
         u32::try_from(SERIES_TICKET_STATE_BYTES_V3).map_err(|_| "ticket width".to_string())?,
     );
 
@@ -173,8 +182,14 @@ fn run() -> Result<(), String> {
 
     println!("certificate_id       {certificate_hex}");
     println!("descriptor_join      OK (generator == Trading, byte for byte)");
-    println!("trading_descriptor   {}", hex(&Sha256::digest(release.descriptor)));
-    println!("trading_strategy     {}", hex(&Sha256::digest(release.strategy)));
+    println!(
+        "trading_descriptor   {}",
+        hex(&Sha256::digest(release.descriptor))
+    );
+    println!(
+        "trading_strategy     {}",
+        hex(&Sha256::digest(release.strategy))
+    );
     println!("source_manifest      {}", hex(&Sha256::digest(&manifest)));
     println!("generated_include    {}", hex(&Sha256::digest(&include)));
     println!("include_path         {}", include_path.display());
@@ -221,4 +236,59 @@ fn hex(bytes: &[u8]) -> String {
         output.push_str(&format!("{byte:02x}"));
     }
     output
+}
+
+/// One real, lab-scoped `ClaimsFoundingRequestV5` for the Consume emitter.
+///
+/// Every field is lab filler in the same sense the toolchain manifest is: a
+/// distinct nonzero value, not a chain fact. What matters is that the bytes
+/// DECODE, because `encode_series_consume_effect_v4_from_requests_atomic`
+/// rebuilds this request as a root-independent transport template rather than
+/// copying it through. The template zeroes the root-derived coordinates, so
+/// the values chosen here do not reach the emitted Claims route bytes.
+fn lab_claims_request() -> Result<[u8; SERIES_CLAIMS_FOUNDING_REQUEST_BYTES_V3], String> {
+    Ok(ClaimsFoundingRequestV5::new(ClaimsFoundingRequestInputV5 {
+        release_set: [1; 32],
+        market: [2; 32],
+        product_record_digest: [3; 32],
+        product_instance_id: [4; 32],
+        linked_basis_record_digest: [5; 32],
+        semantic_basis_id: [6; 32],
+        founder: [7; 32],
+        founding_intent_digest: [40; 32],
+        aggregate: [9; 32],
+        position: [10; 32],
+        admission: [11; 32],
+        funding_source: [12; 32],
+        hoard: [13; 32],
+        custody_replay: [14; 32],
+        rent_credit: [15; 32],
+        rent_program: [16; 32],
+        claims_program: [17; 32],
+        trading_program: [18; 32],
+        custody_request_digest: [41; 32],
+        custody_receipt_digest: [42; 32],
+        generation: 8,
+        claim_count: 3,
+        quantity: 3,
+        basis_scale: 3,
+        pre_source_amount: 9,
+        post_source_amount: 0,
+        pre_hoard_amount: 0,
+        post_hoard_amount: 9,
+        pre_custody_revision: 2,
+        post_custody_revision: 3,
+        aggregate_rent_principal: 30,
+        position_rent_principal: 31,
+        admission_rent_principal: 32,
+        observed_aggregate_lamports: 33,
+        observed_position_lamports: 34,
+        observed_admission_lamports: 35,
+        pre_aggregate_revision: 0,
+        post_aggregate_revision: 1,
+        pre_position_revision: 0,
+        post_position_revision: 1,
+    })
+    .map_err(|error| format!("lab Claims founding request refused: {error:?}"))?
+    .to_bytes())
 }

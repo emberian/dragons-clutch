@@ -154,6 +154,36 @@ expect_refusal "ambient Node is never accepted for the Product handoff gate" \
     "$RUNNER" --work "$SCRATCH/node-required" \
         --predecessor-profile "$SCRATCH/predecessor.bin"
 
+# Infrastructure lineage is a stated choice, and both ways of failing to state
+# it refuse before any source or build work. Omission cannot silently select a
+# succession, and a genesis cannot silently carry a predecessor it does not
+# succeed -- the two candidates commit different profile VERSIONS to different
+# chain acts, so an ambiguous invocation must never reach a build.
+expect_refusal "a genesis candidate refuses a predecessor it does not succeed" \
+    "--genesis-cohort and --predecessor-profile are mutually exclusive" \
+    "$RUNNER" --work "$SCRATCH/lineage-both" --genesis-cohort \
+        --predecessor-profile "$SCRATCH/predecessor.bin"
+
+expect_refusal "stating no lineage at all refuses before source or build work" \
+    "For a cohort that succeeds nothing, pass --genesis-cohort instead" \
+    "$RUNNER" --work "$SCRATCH/lineage-neither"
+
+# A genesis candidate is the only one a cold machine can build, so its own
+# arguments must clear the lineage gate and stop at the NEXT honest wall (the
+# pinned Node runtime) rather than at a predecessor it will never have.
+expect_refusal "a genesis candidate needs no predecessor and reaches the Node gate" \
+    "--node is required for the source-pinned Product handoff gate" \
+    "$RUNNER" --work "$SCRATCH/lineage-genesis" --genesis-cohort
+
+if grep -Fq 'run_tool derive-genesis-infrastructure-profile' "$RUNNER" \
+    && grep -Fq 'infrastructure_lineage=genesis' "$RUNNER" \
+    && grep -Fq 'infrastructure_lineage=succession' "$RUNNER" \
+    && grep -Fq 'predecessor_infrastructure_profile=none' "$RUNNER"; then
+    ok "each lineage names itself in the summary and derives its own profile version"
+else
+    not_ok "each lineage names itself in the summary and derives its own profile version"
+fi
+
 if grep -Fq 'cargo build-sbf --manifest-path "programs/$package/Cargo.toml" -- --locked' "$RUNNER" \
     && grep -Fq "build_command=cargo build-sbf --manifest-path programs/%s/Cargo.toml -- --locked" "$RUNNER" \
     && grep -Fq 'cargo build --release --locked --offline -p dclutch-release-tool' "$RUNNER"; then

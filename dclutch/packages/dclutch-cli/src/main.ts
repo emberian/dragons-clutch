@@ -45,7 +45,11 @@ commands:
   refusal <code...>                name any custom program error via the band registry
 
 global flags:
-  --rpc <url>            JSON-RPC endpoint (default $DCLUTCH_RPC, then the session file, then http://127.0.0.1:20890/)
+  --cluster <name>       devnet | local: take the seven program ids (and, absent --rpc, the
+                         endpoint) from the SDK deployment manifest this client ships. The
+                         endpoint must then prove that chain's identity before any id is used.
+  --rpc <url>            JSON-RPC endpoint (default $DCLUTCH_RPC, then the session file, then
+                         the --cluster endpoint, then http://127.0.0.1:20890/)
   --session <json>       a run spec, run evidence, or dclutch session file carrying program ids + markets
   --keypair <path>       Solana JSON keypair; also $DCLUTCH_KEYPAIR (never a default wallet path)
   --json                 machine-readable output where a command supports it
@@ -85,10 +89,12 @@ global flags:
   --collateral-quantity-atoms <u64>
                          exact raw-atom quantity for that funding
 
-program ids come from --session or explicit --core-program/--claims-program/... flags.
+program ids come from --cluster, --session, or explicit --core-program/--claims-program/... flags,
+in that order of increasing explicitness; the most explicit wins.
 refusal codes: band = code >> 12; codes below 0x1000 are provably not dClutch's. See docs/guides/client-developers.md.`;
 
 const FLAG_OPTIONS = {
+  cluster: { type: 'string' },
   rpc: { type: 'string' },
   session: { type: 'string' },
   keypair: { type: 'string' },
@@ -167,6 +173,44 @@ const FLAG_OPTIONS = {
   help: { type: 'boolean' },
 } as const;
 
+/**
+ * The verbs of the OTHER program that also installs an executable named
+ * `dclutch`.
+ *
+ * This repository ships two. This one is `@dclutch/cli`
+ * (`packages/dclutch-cli`, npm); the other is the Rust reader/authoring binary
+ * `dclutch-cli` (`tools/dclutch-cli`, cargo). Both declare the executable name
+ * `dclutch`, both are documented under that bare name — `docs/guides/
+ * trencher.md` teaches `dclutch markets ls`, which is this client, while
+ * `docs/operators/author-a-ticket.md` teaches `dclutch ticket author` and
+ * `apps/dclutch-web`'s General workspace teaches `dclutch general plan`, which
+ * are not — and whichever comes first on `PATH` answers.
+ *
+ * Listing them here implements none of them and weakens nothing: an unlisted
+ * typo still gets the plain refusal plus usage. It turns one specific dead end
+ * into a sentence naming the program that owns the verb. The reciprocal list
+ * lives in `tools/dclutch-cli/src/main.rs`.
+ */
+export const RUST_READER_COMMANDS_V1: ReadonlyArray<string> = Object.freeze([
+  'market',
+  'capability',
+  'ticket',
+  'general',
+  'fractional-retirement-next',
+]);
+
+/** The refusal for a verb this client does not have. */
+export function unknownCommandV1(command: string): string {
+  if (RUST_READER_COMMANDS_V1.includes(command)) {
+    return `\`${command}\` is not a command of THIS \`dclutch\`. Two programs in this project install`
+      + ' an executable by that name, and whichever is first on PATH answers: this one is the terminal'
+      + ` client @dclutch/cli (packages/dclutch-cli), and \`${command}\` belongs to the Rust`
+      + ' reader/authoring binary in tools/dclutch-cli, whose commands are market, capability, ticket,'
+      + ' general and fractional-retirement-next. The usage below is this binary\'s.';
+  }
+  return `unknown command: ${command}`;
+}
+
 export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, io: Io): Promise<number> {
   let parsed: ReturnType<typeof parseArgs<{ options: typeof FLAG_OPTIONS; allowPositionals: true }>>;
   try {
@@ -223,7 +267,7 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
       case 'refusal':
         return refusal(io, rest);
       default:
-        io.err(`unknown command: ${command}`);
+        io.err(unknownCommandV1(command));
         io.err(USAGE);
         return 2;
     }

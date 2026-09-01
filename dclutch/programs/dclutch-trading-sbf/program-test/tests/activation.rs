@@ -123,6 +123,8 @@ const TRADING_ROOT_REFUSAL_CODE: u32 = TradingSbfError::Root as u32;
 const TRADING_CONTENT_REFUSAL_CODE: u32 = TradingSbfError::Content as u32;
 /// `TradingSbfError::UnsupportedContent`, the refusal an unadmitted schema carries.
 const TRADING_UNSUPPORTED_REFUSAL_CODE: u32 = TradingSbfError::UnsupportedContent as u32;
+/// `TradingSbfError::ActivationEffect`, raised only by the effect projection.
+const TRADING_ACTIVATION_EFFECT_REFUSAL_CODE: u32 = TradingSbfError::ActivationEffect as u32;
 /// Selector the family activation request carries, and the set entry's own.
 const FAMILY_ACTIVATION_SELECTOR: u32 = 1;
 /// Selector the same ProgramSet assigns to its distinct close descriptor.
@@ -149,10 +151,23 @@ const TAIL_GENERATION_OFFSET: u32 = 0;
 const TAIL_MARKET_OFFSET: u32 = 8;
 /// Scalar the profile projects the FundingLedger's remaining Rent quote into.
 ///
-/// It is past the eight common slots the seam seeds, so nothing the outer wrote
-/// is overwritten -- the register ABI's own boundary, not a coincidence.
+/// This is INSIDE the common bank, not past it: the ABI's boundary is
+/// `ACTIVATION_FIRST_FAMILY_SCALAR_V2` (8), and 6 and 7 are
+/// `ACTIVATION_RESOURCE_A_REVISION_SCALAR_V2` and its B sibling. This profile
+/// therefore overwrites both Core resource revisions the seam seeded, and no
+/// Fixture campaign can read them.
+///
+/// It stands because Fixture is the tree's only executed instance of the exact
+/// eight-scalar legacy V2 bank, and inside that bank there is nowhere else to
+/// project -- every scalar is a common one. So a FUNDED activation cannot be
+/// expressed in the legacy bank without destroying a seeded register, which is
+/// why every codec-built bundle declares nine or more. Moving these to 8/9 costs
+/// both the pinned artifact bytes below and the only eight-scalar coverage there
+/// is; whoever owns the ABI decides whether the legacy bank keeps a funded case.
 const FUNDING_RENT_SCALAR_REGISTER: u16 = 6;
 /// Scalar the profile projects the vacant root's prestate lamports into.
+///
+/// `ACTIVATION_RESOURCE_B_REVISION_SCALAR_V2`; see above.
 const ROOT_PRESTATE_SCALAR_REGISTER: u16 = 7;
 
 const PROFILE_ACCOUNT_COUNT: u16 = 2;
@@ -2287,11 +2302,28 @@ async fn substituted_registry_record_and_root_refuse_atomically() {
     }
 }
 
+/// The LATE effect refuses, and the test can now prove it was the late one.
+///
+/// This case was green through the whole `d969d8f7` baseline while refusing
+/// nine hundred lines upstream of its subject, at `seed_common_registers`, and
+/// nothing it could assert would have said so: the seam refusal and the
+/// projection refusal both carried `Content`, and so do roughly twenty other
+/// sites this route passes through first. `assert_rollback` alone is "some
+/// error, both accounts unchanged" -- true of every one of them.
+///
+/// So the refusal is named. `ActivationEffect` is raised at exactly one site,
+/// the effect kernel's own projection, which is what "late" means here: past
+/// admission, past seeding, past the funding transfer this campaign's
+/// `RequireLamportsEq` is written to falsify.
 #[tokio::test]
 async fn late_effect_refusal_rolls_back_the_projected_transfer() {
     let (test, fixture) = build_fixture(Campaign::LateEffectRefusal);
     let mut context = test.start_with_context().await;
-    assert_rollback(&mut context, &fixture, fixture.instruction.clone()).await;
+    let error = assert_rollback(&mut context, &fixture, fixture.instruction.clone()).await;
+    assert_eq!(
+        refusal_code(&error).expect("custom refusal code"),
+        TRADING_ACTIVATION_EFFECT_REFUSAL_CODE
+    );
 }
 
 /// Reversion control for the tail channel, both directions.

@@ -304,6 +304,28 @@ pub enum TradingSbfError {
     /// have not all closed. Close them first -- older ones are permissionlessly
     /// closable once `cancel-through` passes them -- then close the replay.
     CloseMakerLiveIntents = 0x4012,
+    /// The activation descriptor's own effect program refused its projection.
+    ///
+    /// Raised at exactly one site --
+    /// `outer::ActivationRuntimeV2::prepare_effects`' call to
+    /// `project_with_aliases_and_requests_atomic` -- and reachable only from
+    /// `process_activation`, which is the only caller of `prepare_effects`.
+    /// This is the family's DECLARED effect program executing against the
+    /// seeded register bank: a `RequireLamportsEq` that the transfer above it
+    /// falsified, an alias or permission the profile does not grant, a request
+    /// write outside the tail. The content was admitted; running it is what
+    /// refused.
+    ///
+    /// Split out of [`TradingSbfError::Content`] because it could not be
+    /// distinguished from it. `late_effect_refusal_rolls_back_the_projected_
+    /// transfer` spent the whole baseline refusing at `seed_common_registers`
+    /// -- nine hundred lines upstream, before the effect program ran at all --
+    /// and no assertion available to it could tell: both carried `Content`, and
+    /// so do roughly twenty other sites on this one route. The repair
+    /// (`d969d8f7`) moved its refusal 4,799 CU downstream into the projection,
+    /// which is a thing a test should be able to *say*, not a thing a lane has
+    /// to re-measure to believe.
+    ActivationEffect = 0x4013,
 }
 
 impl TradingSbfError {
@@ -313,7 +335,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -333,6 +355,7 @@ impl TradingSbfError {
         Self::CloseMakerReplayAccount,
         Self::CloseMakerFeeOutstanding,
         Self::CloseMakerLiveIntents,
+        Self::ActivationEffect,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -361,6 +384,7 @@ impl TradingSbfError {
             Self::CloseMakerReplayAccount => 16,
             Self::CloseMakerFeeOutstanding => 17,
             Self::CloseMakerLiveIntents => 18,
+            Self::ActivationEffect => 19,
         }
     }
 }

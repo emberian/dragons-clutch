@@ -192,7 +192,7 @@ export default function Sparkline({ lines, xLabels, caption, emptyReason, flatNo
 
     <details className="viz-table">
       <summary>Exact numbers</summary>
-      <div className="viz-table-scroll">
+      <div className="viz-table-scroll" tabIndex={0} role="region" aria-label={`Exact numbers · ${caption}`}>
         <table>
           <thead><tr><th>Line</th><th>Oldest{unit === undefined ? '' : ` · ${unit}`}</th><th>Newest</th><th>Lowest</th><th>Highest</th></tr></thead>
           <tbody>

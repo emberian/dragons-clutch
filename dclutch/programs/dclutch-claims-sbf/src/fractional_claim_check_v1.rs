@@ -59,10 +59,14 @@ use dclutch_claims_svm::protocol_position_v2::{
 use dclutch_claims_svm::terminal_settlement_v3::{
     TERMINAL_SETTLEMENT_HOARD_ACCOUNT_V3, TERMINAL_SETTLEMENT_RECIPIENT_ACCOUNT_V3,
 };
+use dclutch_fractional_claim_contract::decode_fractional_capability_root_v4;
 use dclutch_fractional_claim_kernel::{
-    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FractionalExposureTermsAdmissionV2,
-    FractionalExposureTermsV2,
+    FRACTIONAL_EXPOSURE_TERMS_SCHEMA_ID_V2, FRACTIONAL_SELECTION_CONFIG_BYTES_V1,
+    FractionalExposureTermsAdmissionV2, FractionalExposureTermsV2,
+    encode_fractional_selection_config_v1, fractional_selection_config_from_terms_v1,
 };
+use dclutch_market_core_codec::{CoreState, STATE_BYTES as CORE_STATE_BYTES};
+use dclutch_sha256_adapter::digest;
 use dclutch_token_svm::{
     TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2, Token2022BehaviorProfileV2, TokenBehaviorSelectionV2,
 };
@@ -83,6 +87,7 @@ use spl_token_2022_interface::{
 };
 
 use crate::ClaimsSbfError;
+use crate::affine_batch_v2::CorePhaseGateV3;
 use crate::claim_check_compaction_v1::{
     COMPACT_TERMINAL_POSITION_ACCOUNT_V1, allocate_and_assign, close_and_split, observation,
     token_balance,
@@ -168,6 +173,17 @@ pub enum FractionalClaimCheckCompactionSbfErrorV1 {
     SignedDeltaReceipt = 0x565A,
     /// A positive SignedDelta would exceed the Market's principal-capacity cap.
     SignedDeltaPrincipalCapacity = 0x565B,
+    /// The exposure terms are not the terms the founded Market's capability
+    /// manifest selected.
+    ///
+    /// Its own code, and the reason is the same one [`Self::Rent`] gives for
+    /// its own: `Terms` on this route means the record did not decode, was not
+    /// finalized, or named another Market -- an accusation about the account
+    /// passed. This one means the record is a perfectly good, permissionlessly
+    /// published set of terms for this Market that the Market never selected,
+    /// which is a different accusation with a different fix and the only one
+    /// here that can be raised by bytes nobody typed wrong.
+    SelectionConfig = 0x565C,
 }
 
 impl FractionalClaimCheckCompactionSbfErrorV1 {
@@ -177,7 +193,7 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
     /// [`FractionalClaimCheckCompactionSbfErrorV1::ordinal`], whose match is exhaustive: a variant
     /// added to the enum does not compile until its author writes an arm here, and the only arm
     /// that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 29] = [
         Self::Accounts,
         Self::Authority,
         Self::Identity,
@@ -206,6 +222,7 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
         Self::SignedDeltaCommit,
         Self::SignedDeltaReceipt,
         Self::SignedDeltaPrincipalCapacity,
+        Self::SelectionConfig,
     ];
 
     /// This refusal's position in [`FractionalClaimCheckCompactionSbfErrorV1::ALL`].
@@ -242,6 +259,7 @@ impl FractionalClaimCheckCompactionSbfErrorV1 {
             Self::SignedDeltaCommit => 25,
             Self::SignedDeltaReceipt => 26,
             Self::SignedDeltaPrincipalCapacity => 27,
+            Self::SelectionConfig => 28,
         }
     }
 }
@@ -947,6 +965,10 @@ mod terminal {
     pub(super) const RENT_SYSVAR: usize = 10;
     /// The Registry program owning every finalized record pair.
     pub(super) const REGISTRY: usize = 13;
+    /// The Core Market state whose phase entitles a compaction at all.
+    pub(super) const CORE_MARKET: usize = 11;
+    /// The Core program that must own and derive [`CORE_MARKET`].
+    pub(super) const CORE_PROGRAM: usize = 18;
     /// The collateral mint the escrow's vault is denominated in.
     pub(super) const COLLATERAL_MINT: usize = 31;
 }
@@ -1120,6 +1142,135 @@ fn decode_compaction_request(
         .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Identity.into())
 }
 
+/// Refuse a compaction on a Market that has not reached a terminal phase.
+///
+/// # Why this exists when the wrapped settlement already gates the phase
+///
+/// It does gate it -- `terminal_settlement_v3::authenticate_core` admits only
+/// `TerminalOrRetiring` and its caller requires `core.terminal_receipt` to be
+/// present. What it does NOT do is say so in this route's vocabulary: both of
+/// those refuse as `ClaimsSbfError::Identity`, which `fractional_terminal_refusal`
+/// folds to [`FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity`]. So
+/// before this function existed, `Phase = 0x5644` was a refusal this family
+/// PUBLISHES and nothing can raise, and a crank turned on an Open Market was
+/// accused of an identity mismatch.
+///
+/// The native twin makes both checks in its own code and says why
+/// (`claim_check_compaction_v1.rs:437-448`): *a checked invariant is one an
+/// implementer cannot silently delete*. The repair direction is fractional up
+/// to native, never native down to fractional, so this is the same pair of
+/// conjuncts in the same order, raising the code the enum already declared.
+///
+/// The identity joins are NOT restated. `authenticate_core` owns them and runs
+/// on the same account in the same instruction, so a substituted Core state
+/// with a convenient phase satisfies this and is refused there; what this
+/// function adds is that a GENUINE Core state in the wrong phase is refused
+/// here, by name, before a single byte moves.
+///
+/// `Terminal` and `Retiring` both, for the native twin's reason: `begin_retiring`
+/// is permissionless, and a route that refused in `Retiring` would leave exactly
+/// the markets a stranger pushed one phase further unrescuable.
+#[inline(never)]
+fn authenticate_core_phase(
+    accounts: &[AccountInfo<'_>],
+    market: [u8; 32],
+    release_set: [u8; 32],
+    generation: u64,
+) -> Result<(), ProgramError> {
+    let core_market = accounts
+        .get(terminal::CORE_MARKET)
+        .ok_or(FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let core_program = accounts
+        .get(terminal::CORE_PROGRAM)
+        .ok_or(FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let core_data = core_market
+        .try_borrow_data()
+        .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
+    if core_market.owner != core_program.key
+        || core_market.key.to_bytes() != market
+        || core_data.len() != CORE_STATE_BYTES
+    {
+        return Err(FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity.into());
+    }
+    let core = CoreState::decode(&core_data)
+        .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity)?;
+    if core.identity.selected_release_set.to_bytes() != release_set
+        || core.identity.generation != generation
+    {
+        return Err(FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity.into());
+    }
+    if !CorePhaseGateV3::TerminalOrRetiring.admits(core.phase) {
+        return Err(FractionalClaimCheckCompactionSbfErrorV1::Phase.into());
+    }
+    // Checked even though the phase invariant implies it, exactly as the native
+    // twin checks it: a checked invariant is one an implementer cannot silently
+    // delete.
+    if core.terminal_receipt.is_none() {
+        return Err(FractionalClaimCheckCompactionSbfErrorV1::Phase.into());
+    }
+    Ok(())
+}
+
+/// Refuse exposure terms the founded Market's capability manifest never selected.
+///
+/// # The hole this closes
+///
+/// The terms record is the SOLE author of the `denominator` this route persists
+/// into a fractional claim-check -- the divisor every returning holder's payout
+/// is computed with, forever. Before this check, `coordinates.terms` was an
+/// ordinary instruction field: `authenticate_finalized_rational_record` proves
+/// only that SOME finalized record hashes to the digest the caller named, and
+/// the two joins after it (`terms.market()`, `terms.release_set()`) are fields
+/// the record's own author writes. Registry publication is permissionless
+/// (`programs/dclutch-registry-sbf/src/record_v1.rs`), so a cranker could
+/// publish a second, perfectly well-formed `FractionalExposureTermsV2` naming
+/// this Market, this release set and this shard Mint with any denominator at
+/// all, and the conservation plan does not bound it: the plan requires
+/// `entitlement == (supply / D) * rate`, and choosing `D = supply` with
+/// `rate = entitlement` satisfies it exactly while making every holder short of
+/// the ENTIRE outstanding supply unable to form one whole claim. That is the
+/// `a968858c` shape -- the party turning the crank choosing the arithmetic the
+/// absent party is paid by -- reappearing on the one route in this family that
+/// is permissionless.
+///
+/// The other three Fractional routes already close it and this one did not:
+/// `fractional_atomic_v3.rs:253` and `:738` and `fractional_retirement_v3.rs:607`
+/// each derive the selection-config identity FROM the authenticated terms and
+/// require it to equal `header.selection().config()` -- the config the founded
+/// Market's capability manifest chose, which no caller can restate. This is the
+/// same conjunct, called through the same kernel constructor.
+///
+/// The outer Trading gate is not a substitute and that is why this belongs
+/// here. `claims_composition_v3.rs:1151` pins the terms only on a **historical
+/// V1 root** (`historical_terms == terms`); on the **current V2 root** its arm
+/// reads `current_config == selected_config`, where both halves are read out of
+/// the same root account and the caller's `terms` is not consulted at all.
+#[inline(never)]
+fn authenticate_selected_config(
+    accounts: &[AccountInfo<'_>],
+    terms: FractionalExposureTermsV2<'_>,
+) -> Result<(), ProgramError> {
+    let root_account = role_account(
+        accounts,
+        FractionalCompactionRoleV1::FractionalCapabilityRoot,
+    )?;
+    let root_data = root_account
+        .try_borrow_data()
+        .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::Accounts)?;
+    let root = decode_fractional_capability_root_v4(&root_data)
+        .ok_or(FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig)?;
+    let mut selection_config = [0_u8; FRACTIONAL_SELECTION_CONFIG_BYTES_V1];
+    encode_fractional_selection_config_v1(
+        fractional_selection_config_from_terms_v1(terms),
+        &mut selection_config,
+    )
+    .map_err(|_| FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig)?;
+    if root.header().selection().config().to_bytes() != digest(&selection_config) {
+        return Err(FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig.into());
+    }
+    Ok(())
+}
+
 #[inline(never)]
 fn authenticate_fractional_compaction(
     program_id: &Pubkey,
@@ -1210,6 +1361,8 @@ fn authenticate_fractional_compaction(
     if solana_program::clock::Clock::get()?.slot < horizon {
         return Err(FractionalClaimCheckCompactionSbfErrorV1::Deadline.into());
     }
+
+    authenticate_core_phase(accounts, input.market, input.release_set, input.generation)?;
 
     // THE RECIPIENT IS DERIVED, NEVER ACCEPTED. The single check separating a
     // crank from a theft, and fractionally the stake is larger than natively:
@@ -1344,6 +1497,10 @@ fn authenticate_fractional_compaction(
     if terms.market() != input.market || terms.release_set() != input.release_set {
         return Err(FractionalClaimCheckCompactionSbfErrorV1::Terms.into());
     }
+    // Both joins above are fields the terms record's own author writes, and
+    // Registry publication is permissionless. This is the conjunct that makes
+    // them the Market's terms rather than merely terms naming the Market.
+    authenticate_selected_config(accounts, terms)?;
     let denominator = terms.denominator();
     let expected_mint = terms
         .shard_mint(coordinates.representation_coordinate)

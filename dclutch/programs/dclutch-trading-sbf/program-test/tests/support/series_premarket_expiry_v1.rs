@@ -603,6 +603,21 @@ pub fn assert_series_premarket_expiry_success_v1(
     Ok(())
 }
 
+/// Refuse an unset or duplicated install coordinate.
+///
+/// The System program's canonical address IS the all-zero pubkey, so the
+/// `Pubkey::default()` rejection below has to be exempted for it explicitly —
+/// the sibling chain module wrote the same rule WITHOUT that exemption and was
+/// therefore unsatisfiable, refusing every list it could build until `1b8191f9`.
+///
+/// That repair carries the stronger formulation and this one should adopt it
+/// if either is ever touched again: see
+/// `series_premarket_expiry_chain_v1.rs::require_disjoint_install_accounts_v1`.
+/// It separates the two cases by the ACCOUNT rather than by consulting an
+/// external list — at the zero address only the System program is an
+/// executable owned by the native loader — so it needs no `externally_installed`
+/// argument to decide, and it caps the exemption at one entry so it covers a
+/// single builtin rather than a class.
 fn validate_install_identities(
     accounts: &[SeriesPremarketExpiryInstallAccountV1],
     externally_installed: &[Pubkey],
@@ -626,6 +641,33 @@ fn validate_install_identities(
     Ok(())
 }
 
+/// Join the selected release's account geometry to the Hot instruction's
+/// runtime account metas.
+///
+/// MEASURED 2026-09-01, and this is where the pre-Market Expire campaign now
+/// stops: `runtime=39 geometry.physical=44 bindings=81 geometry.logical=81`.
+/// The logical side agrees exactly and every one of the 44 declared physical
+/// ordinals IS bound by some logical coordinate — none is unreferenced — so
+/// `release_v5` does NOT over-declare. The instruction under-packs by five.
+///
+/// The five are named. Route 5 of the Expire profile is Core's
+/// permit-expiry precommit frame, and coordinate = 55 + local index into
+/// `ExpiryAccounts` (`core-sbf/src/series_permit_expiry.rs:46`), anchored by
+/// four independent agreements: local 1 -> 33 `rent_credit`, local 14 -> 0
+/// `root`, local 15 -> 70 aliasing the Ticket at 5, local 16 -> 71 aliasing the
+/// Template at 1. That makes the missing coordinates
+///
+///   72 `template_staging`, 73 `occurrence_raw`, 74 `occurrence_staging`,
+///   75 `ticket_raw`, 76 `ticket_staging`
+///
+/// — the finalized Series record raw/staging accounts Core needs to rebuild the
+/// Expire request. The chain fixture never constructs them: it contains no
+/// reference to any of those five names, so they are never created, installed
+/// or packed, and the instruction ends at the precommit caller PDA
+/// (`runtime[38] == input.precommit_caller`, verified) with the three builtins
+/// shifted five ordinals early into 72..75.
+///
+/// So the repair belongs to the fixture, not to the release compiler.
 fn validate_physical_bindings(
     selected: &SeriesSelectedActionV5,
     runtime: &[Pubkey],

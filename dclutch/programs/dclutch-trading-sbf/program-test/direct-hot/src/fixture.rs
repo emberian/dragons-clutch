@@ -4398,6 +4398,300 @@ mod tests {
             Err(DirectHotChainFixtureErrorV5::Input)
         );
     }
+
+    /// Execute both registered creation profiles against a real frame.
+    ///
+    /// The registered creation artifacts were proved to agree with themselves
+    /// and never RUN: an `AccountProfileV2` is a declaration, and a component
+    /// test that checks its encoding and digest passes forever over a conjunct
+    /// no account can satisfy. This runs the declaration.
+    ///
+    /// What it finds, and what the `#[ignore]`d chain campaign meets as its
+    /// fourth wall: the Buy profile's two Custody-window `require_key`
+    /// operations name identity registers 24 and 25, and those registers are
+    /// written by `project_identity` from the Realm record IN THE SAME PASS.
+    /// `apply_operations` evaluates every `require_*` against the INPUT bank
+    /// (`v2.rs::project_atomic` hands it `registers.input_identities`), so both
+    /// conjuncts compare a real key against thirty-two zero bytes and are
+    /// unsatisfiable by any transaction. The Sell profile carries neither, and
+    /// its three `require_*` operations all name trusted-environment registers
+    /// that ARE seeded before the pass -- which is exactly why a registered Sell
+    /// executes behind the action-gate probe and a Buy does not.
+    ///
+    /// The frame corrections below are not fixture repairs. Four coordinates
+    /// hold accounts the fixture deliberately defers to the harness
+    /// (`externally_installed_keys`), and its stubs for those elide width and
+    /// balance; `creation_case` and `add_release_waist` install the real ones.
+    /// A host run over the stubs would measure the stub, not the chain.
+    #[test]
+    #[allow(clippy::indexing_slicing, clippy::too_many_lines)]
+    fn both_registered_creation_profiles_project_a_real_frame() {
+        use dclutch_account_profile_contract::{
+            AccountObservationV1,
+            v2::{
+                Error as ProfileError, PhysicalAccountDataGeometryV2, ProjectionRegistersV2,
+                TrustedEnvironmentV2, project_atomic,
+            },
+        };
+        use dclutch_capability_program_contract::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
+        use dclutch_direct_codec::registered_creation_artifacts_v4::{
+            DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
+            DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4, REGISTERED_IDENTITY_MINT_V4,
+            REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
+        };
+
+        let input = input();
+        let rent = Rent::default();
+        let config_value =
+            DirectExecutionConfigV1::new(PRICE_SCALE, FEE_BPS, input.payer.to_bytes())
+                .expect("config");
+        let config = config_value.encode();
+        let product = product_fixture(input, &rent).expect("product");
+        let artifacts = registered_creation_artifacts_v4(input).expect("artifacts");
+        let manifest =
+            capability_manifest_selected(input, artifacts.sell(), &config).expect("manifest");
+        let state = market_and_claims(input, &product, &manifest, &rent).expect("state");
+        let capability = capability_fixture(input, manifest, state.market).expect("capability");
+        let requests = registered_creation_requests_v4(
+            input,
+            &rent,
+            config_value,
+            &state,
+            &product,
+            &capability,
+        )
+        .expect("requests");
+        let custody =
+            registered_buy_custody_v4(input, &rent, &product, &state, &requests).expect("custody");
+        let tail = input.geometry.outcome_count();
+        let projected_keys = [
+            hash(&config).to_bytes(),
+            product.product.digest,
+            product.portfolio.digest,
+            product.basis.digest,
+        ];
+
+        // Build one side's observation bank exactly as `hot_v3` presents it:
+        // the shared runtime prefix carries content digests as projection keys
+        // (`logical_projection_key_v3`), and coordinate 4 is the variable-width
+        // linked basis.
+        let observe = |accounts: &[ChainAccount]| {
+            accounts
+                .iter()
+                .enumerate()
+                .map(|(coordinate, account)| {
+                    let key = match coordinate {
+                        1..=4 => projected_keys[coordinate - 1],
+                        _ => account.key.to_bytes(),
+                    };
+                    (key, account.account.owner.to_bytes())
+                })
+                .collect::<Vec<_>>()
+        };
+        let project = |profile: AccountProfileV2<'_>,
+                       accounts: &[ChainAccount],
+                       views: &[([u8; 32], [u8; 32])],
+                       seed_mint: bool,
+                       seed_token: bool| {
+            // Privileges come from the profile, exactly as `pack_runtime`
+            // derives the packed AccountMetas the instruction carries: the two
+            // payer coordinates sign, and writability is the profile's.
+            let signers = [accounts[6].key, accounts[9].key];
+            let observations = views
+                .iter()
+                .zip(accounts)
+                .enumerate()
+                .map(|(coordinate, ((key, owner), account))| {
+                    let ordinal = profile
+                        .physical_account_ordinal_with_dynamic_spans(tail, &[], coordinate)
+                        .expect("ordinal");
+                    let writable = profile
+                        .physical_account_geometry_with_dynamic_spans(tail, &[], ordinal)
+                        .expect("geometry")
+                        .privileges()
+                        .writable();
+                    let signer = signers.contains(&account.key);
+                    if coordinate == 4 {
+                        AccountObservationV1::new_adapter_authenticated_variable_data(
+                            key,
+                            owner,
+                            account.account.lamports,
+                            &account.account.data,
+                            signer,
+                            writable,
+                            account.account.executable,
+                        )
+                    } else {
+                        AccountObservationV1::new(
+                            key,
+                            owner,
+                            account.account.lamports,
+                            account.account.data.as_slice(),
+                            signer,
+                            writable,
+                            account.account.executable,
+                        )
+                    }
+                })
+                .collect::<Vec<_>>();
+            let mut input_scalars = vec![0_u64; DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4];
+            let mut input_identities =
+                vec![[0_u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4];
+            input_identities[HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3] = [0x5a; 32];
+            if let TrustedEnvironmentV2::CurrentSlot { destination } = profile.trusted_environment()
+            {
+                input_scalars[usize::from(destination)] = input.clock_slot;
+            }
+            if let Some(destination) = profile.trusted_current_executing_program_identity() {
+                input_identities[usize::from(destination)] = input.trading_program.to_bytes();
+            }
+            if let Some(destination) = profile.trusted_system_program_identity() {
+                input_identities[usize::from(destination)] = system_program::ID.to_bytes();
+            }
+            // NOT a relaxation: the two registers stay declared and stay
+            // compared. Seeding them by hand only asks which conjunct the
+            // refusal belongs to, by supplying the value the pass itself is
+            // about to project.
+            if seed_mint {
+                input_identities[REGISTERED_IDENTITY_MINT_V4] = custody.realm.mint.to_bytes();
+            }
+            if seed_token {
+                input_identities[REGISTERED_IDENTITY_TOKEN_PROGRAM_V4] =
+                    custody.realm.token_program.to_bytes();
+            }
+            let mut scratch_scalars = vec![0_u64; DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4];
+            let mut scratch_identities =
+                vec![[0_u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4];
+            let mut output_scalars = vec![0_u64; DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4];
+            let mut output_identities =
+                vec![[0_u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4];
+            project_atomic(
+                profile,
+                tail,
+                &observations,
+                ProjectionRegistersV2 {
+                    input_scalars: &input_scalars,
+                    input_identities: &input_identities,
+                    scratch_scalars: &mut scratch_scalars,
+                    scratch_identities: &mut scratch_identities,
+                    output_scalars: &mut output_scalars,
+                    output_identities: &mut output_identities,
+                },
+            )
+        };
+
+        // The Sell: thirteen coordinates, three `require_*` operations, every
+        // one of them against a trusted-environment register. It projects.
+        let sell_profile =
+            AccountProfileV2::decode(&artifacts.sell.account_profile).expect("Sell profile");
+        let sell = registered_creation_logical_accounts_v4(
+            input,
+            &rent,
+            artifacts.sell(),
+            &config,
+            &product,
+            &state,
+            &capability,
+            &requests,
+            Some(&custody),
+        )
+        .expect("Sell logical accounts");
+        let sell_views = observe(&sell);
+        assert_eq!(
+            project(sell_profile, &sell, &sell_views, false, false),
+            Ok(()),
+            "the registered Sell profile must project its own frame",
+        );
+
+        // The Buy: fifty-six coordinates, and four of them are the harness's.
+        let mut buy = registered_creation_logical_accounts_v4(
+            input,
+            &rent,
+            artifacts.buy(),
+            &config,
+            &product,
+            &state,
+            &capability,
+            &requests,
+            Some(&custody),
+        )
+        .expect("Buy logical accounts");
+        let cache_bytes = dclutch_registry_contract::ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1;
+        let loader_bytes = dclutch_registry_svm::LOADER_V3_PROGRAM_BYTES;
+        for (coordinate, bytes) in [
+            (14_usize, cache_bytes),
+            (27, cache_bytes),
+            (43, cache_bytes),
+            (15, loader_bytes),
+            (28, loader_bytes),
+            (44, loader_bytes),
+            (16, loader_bytes),
+            (29, loader_bytes),
+            (45, loader_bytes),
+            (23, 17),
+            (40, 17),
+        ] {
+            let account = buy.get_mut(coordinate).expect("deferred coordinate");
+            account.account.data = vec![0_u8; bytes];
+            account.account.lamports = rent.minimum_balance(bytes);
+        }
+
+        // Every declared width is satisfied. There is no width defect on this
+        // side: the one convicted coordinate pair below is an identity.
+        let buy_profile =
+            AccountProfileV2::decode(&artifacts.buy.account_profile).expect("Buy profile");
+        for (coordinate, account) in buy.iter().enumerate() {
+            let ordinal = buy_profile
+                .physical_account_ordinal_with_dynamic_spans(tail, &[], coordinate)
+                .expect("ordinal");
+            let observed = account.account.data.len();
+            let satisfied = match buy_profile
+                .physical_account_geometry_with_dynamic_spans(tail, &[], ordinal)
+                .expect("geometry")
+                .data()
+            {
+                PhysicalAccountDataGeometryV2::Exact { bytes } => observed == bytes,
+                PhysicalAccountDataGeometryV2::VacantOrExact { live_bytes } => {
+                    observed == 0 || observed == live_bytes
+                }
+                PhysicalAccountDataGeometryV2::AdapterAuthenticatedVariable { minimum_bytes } => {
+                    observed >= minimum_bytes
+                }
+                PhysicalAccountDataGeometryV2::Opaque => true,
+            };
+            assert!(
+                satisfied,
+                "Buy coordinate {coordinate} observed {observed} bytes against its declaration",
+            );
+        }
+
+        // WALL #4, executed. Delete this assertion when the two conjuncts are
+        // repaired -- it exists to keep the wall named, not to keep it standing.
+        let buy_views = observe(&buy);
+        assert_eq!(
+            project(buy_profile, &buy, &buy_views, false, false),
+            Err(ProfileError::IdentityMismatch),
+            "the registered Buy profile refuses its own honest frame",
+        );
+        // And the localization: BOTH conjuncts are independently unsatisfiable,
+        // and there is no third. Register 24 is the Realm's collateral mint at
+        // coordinate 34, register 25 its token program at coordinate 37.
+        assert_eq!(
+            project(buy_profile, &buy, &buy_views, true, false),
+            Err(ProfileError::IdentityMismatch),
+            "seeding the mint register alone must leave the token-program conjunct refusing",
+        );
+        assert_eq!(
+            project(buy_profile, &buy, &buy_views, false, true),
+            Err(ProfileError::IdentityMismatch),
+            "seeding the token-program register alone must leave the mint conjunct refusing",
+        );
+        assert_eq!(
+            project(buy_profile, &buy, &buy_views, true, true),
+            Ok(()),
+            "nothing else in the Buy declaration refuses this frame",
+        );
+    }
 }
 
 fn finalized(owner: Pubkey, schema: [u8; 32], bytes: Vec<u8>) -> Finalized {

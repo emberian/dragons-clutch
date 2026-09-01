@@ -14,7 +14,6 @@ mod generated_registered_controller;
 mod generated_intent_v2;
 #[rustfmt::skip]
 mod generated_ordinary_v3;
-#[cfg(not(target_os = "solana"))]
 #[rustfmt::skip]
 mod generated_registered_fill_v4;
 #[cfg(not(target_os = "solana"))]

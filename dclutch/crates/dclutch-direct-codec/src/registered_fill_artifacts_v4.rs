@@ -36,7 +36,26 @@ use crate::execution_v3::{
     DIRECT_EXECUTION_REQUEST_MAGIC_V3, DIRECT_EXECUTION_REQUEST_VERSION_V3,
     DIRECT_REGISTERED_FILL_REQUEST_BYTES_V3, DirectExecutionActionV3,
 };
-#[cfg(not(target_os = "solana"))]
+// NOT host-only, and its six siblings never were. `generated_layout`,
+// `generated_lifecycle`, `generated_registered_controller`, `generated_intent_v2`,
+// `generated_ordinary_v3` and `generated_successor` are all visible to the SBF
+// target; this seventh one arrived gated in `572aa7da` and that commit -- which
+// documented the exact transcription, the one strengthening clause, the clause
+// that does NOT apply, and why the identity bank is forty registers wide -- says
+// nothing about why this emission alone would be different, because there was
+// nothing to say. The cfg came along with the module's host-only imports above
+// and nobody revisited it.
+//
+// It was not free. A gated register schema is a schema no PROGRAM can address,
+// so registered Direct could not be routed at the program boundary at all:
+// `dclutch-direct-aot-v3-contract` failed `cargo build-sbf` with 175 errors while
+// `cargo check` was green, and `src/direct/{sell,buy}_escrow.rs` sat unreachable.
+//
+// Measured before lifting, not argued: the shipped `dclutch_trading_sbf.so` is
+// BYTE-IDENTICAL across the change (2,285,824 bytes, `cmp` clean), so the size
+// cost is zero and the compute cost is zero by construction. 137 of the 138
+// emitted constants are `usize` register indices, and the one 2,408-byte program
+// array is a `const` nothing on chain references yet.
 pub use crate::generated_registered_fill_v4::*;
 
 #[cfg(not(target_os = "solana"))]

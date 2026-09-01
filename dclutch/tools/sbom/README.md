@@ -13,6 +13,26 @@ tools/sbom/sbom_check.py --verify   # check for drift; writes nothing; exit 1 on
 python3 -m unittest tools/sbom/test_sbom_check  # offline classification-logic tests
 ```
 
+## What runs this automatically
+
+Two things, and both are in this repository:
+
+- **`tools/ci/run.sh sbom`** — the `sbom` tier. It runs the classification
+  tests first and `--verify` second, so "the checker is broken" and "this tree
+  has a licence defect" arrive as different answers. It needs `cargo` (the
+  closure resolves every tracked workspace with `cargo metadata --locked
+  --offline`) and reports a missing one as exit 2, never as a pass. It is in
+  the `all` alias and, at about three minutes, deliberately not in `cheap`.
+- **`apps/dclutch-web`'s `npm test`**, via `lib/sbomVerify.test.ts`.
+
+`tools/ci/run.sh`'s `web` tier excludes that vitest case by name, because it
+needs a populated cargo registry that a Node-only job does not have. The `sbom`
+tier is where the assertion lives instead, with that prerequisite declared.
+
+Nothing in `tools/gauntlet` runs this. An earlier version of the generated
+`SBOM.md` header said otherwise; it was wrong, and it was wrong in a generated
+file, so it reprinted itself on every regeneration.
+
 ## Why this exists
 
 GITSCAN-2's G-4 (`docs/ASPIRATION_LEDGER.md`): gen-1 (`dragons-clutch`,

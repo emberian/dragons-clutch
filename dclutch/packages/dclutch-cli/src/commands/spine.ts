@@ -11,7 +11,7 @@
  */
 import { inspectDirectTradeSpineV1 } from '@dclutch/sdk/directTradeSpine';
 
-import { loadKeypair, optionalProgramId, programId, rpcClient, type CliContext } from '../context';
+import { bindDeploymentIdentity, loadKeypair, optionalProgramId, programId, rpcClient, type CliContext } from '../context';
 import { block, type Io } from '../output';
 
 export async function spine(context: CliContext, io: Io, ownerArgument: string | undefined, env: NodeJS.ProcessEnv): Promise<number> {
@@ -25,7 +25,9 @@ export async function spine(context: CliContext, io: Io, ownerArgument: string |
       owner = null; // ownerless inspection is still a complete market view
     }
   }
-  const view = await inspectDirectTradeSpineV1(rpcClient(context), {
+  const client = rpcClient(context);
+  await bindDeploymentIdentity(context, client, 'spine');
+  const view = await inspectDirectTradeSpineV1(client, {
     marketAddress,
     coreProgramId: programId(context, 'core'),
     registryProgramId: programId(context, 'registry'),

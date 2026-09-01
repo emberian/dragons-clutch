@@ -1151,8 +1151,10 @@ def write_sbom(
         "[Coverage](#coverage); it is "
         "discovered from tracked manifests rather than maintained as a "
         "separate count. Regenerate with `tools/sbom/sbom_check.py`; check "
-        "for drift with `tools/sbom/sbom_check.py --verify` (also wired into "
-        "`tools/gauntlet` — see `tools/sbom/README.md`)."
+        "for drift with `tools/sbom/sbom_check.py --verify`. Automatically, "
+        "that check is the `sbom` tier of `tools/ci/run.sh` and the "
+        "`lib/sbomVerify.test.ts` case in `apps/dclutch-web`'s `npm test` — "
+        "see `tools/sbom/README.md`."
     )
     lines.append("")
     allowed_total = sum(len(v) for v in allowed.values())

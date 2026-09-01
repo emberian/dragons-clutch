@@ -232,7 +232,7 @@ export default function LawBand({ rows, cycles, caption, emptyReason, glosses }:
 
     <details className="viz-table">
       <summary>Each check, and its latest result</summary>
-      <div className="viz-table-scroll">
+      <div className="viz-table-scroll" tabIndex={0} role="region" aria-label={`Each check, and its latest result · ${caption}`}>
         <table>
           <thead><tr><th>Law</th><th>Held</th><th>Did not apply</th><th>Broke</th><th>What it checked, at the newest cycle</th></tr></thead>
           <tbody>

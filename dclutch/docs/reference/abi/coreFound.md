@@ -29,6 +29,7 @@ Regenerate with: npm run abi:found
 | `SOURCE_CAPACITY_PROFILE_SCHEMA_ID_V1` | 32 | -- | `92 fa dd 2f 51 54 82 b7 6e 25 55 52 4d 57 75 3e 61 cd 42 de 40 a3 98 f9 6a 17 28 c6 4f 28 4e 01` |
 | `MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1` | 32 | -- | `9c 1d c9 00 e6 b6 bf 2c 7e f2 fe be be 2c 0a a0 85 29 af 8c 44 c4 fd 1d 22 ab b7 65 b1 da 16 00` |
 | `GRADED_BASIS_RECORD_SCHEMA_ID_V3` | 32 | -- | `df 28 9f 73 e2 e9 bc 91 c7 1d 5e 1b 2a d7 23 97 8c 1f e7 be 20 62 56 e7 db 10 4f 16 a9 c4 34 92` |
+| `PRICE_GATE_RECORD_SCHEMA_ID_V1` | 32 | -- | `88 8a f6 9e da e1 4f 8d 58 99 33 79 6e 39 4b e1 42 70 5a d9 00 be 96 8a fa 2a 03 bb d5 24 ae 47` |
 | `CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1` | 32 | -- | `6b ce f7 b2 83 67 cb 8d 08 97 10 ba 58 e6 84 31 2f 43 4c 4b c4 20 ee fd 0f 7a 15 0a 90 82 88 df` |
 | `EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1` | 32 | -- | `8b a3 bc 19 7f ea a1 87 a0 a3 92 7b 16 b2 5d 83 79 2c 5f 33 5a f2 43 39 a5 4c 38 cc 07 23 03 58` |
 | `ARTIFACT_RELEASE_SCHEMA_ID_V1` | 32 | -- | `ae 19 a6 0d b5 50 b1 a8 a5 1d 46 18 c7 7d ea 54 21 17 4a 2a 85 5e e6 77 89 4f a9 1b 3c fd 3b 6c` |
@@ -42,6 +43,8 @@ Regenerate with: npm run abi:found
 
 | name | value |
 | --- | --- |
+| `SPLINE_PRODUCT_AUTHORING_COMMAND_V1` | `product-spline-compile-v1` |
+| `SPLINE_PRODUCT_AUTHORING_REPORT_SCHEMA_V1` | `dclutch/product-spline-authoring-report/v1` |
 | `LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2` | `dclutch/rent-market/v2` |
 | `LIABILITY_BASIS_MARKET_SEED_V2` | `dclutch:lbv2:market` |
 | `LIABILITY_BASIS_POSITION_SEED_V2` | `dclutch:lbv2:position` |
@@ -60,6 +63,9 @@ Regenerate with: npm run abi:found
 | `CREATE_LIFECYCLE_RENT_CREDIT_BYTES_V2` | 128 |
 | `LIFECYCLE_RENT_SCHEMA_VERSION_V2` | 2 |
 | `CORE_FOUND_ACCOUNT_COUNT_V3` | 37 |
+| `CORE_FOUND_PRICE_GATE_RAW_INDEX_V3` | 37 |
+| `CORE_FOUND_PRICE_GATE_STAGING_INDEX_V3` | 38 |
+| `CORE_FOUND_PRICE_GATE_ACCOUNT_COUNT_V3` | 39 |
 | `LIFECYCLE_RENT_CREDIT_MAGIC_OFFSET_V2` | 0 |
 | `LIFECYCLE_RENT_INSTRUCTION_ACTION_OFFSET_V2` | 10 |
 | `LIFECYCLE_RENT_ACTION_CREATE_V2` | 1 |
@@ -150,3 +156,47 @@ Regenerate with: npm run abi:found
 | 34 | Rent artifact raw |  |  |
 | 35 | Rent artifact staging |  |  |
 | 36 | Rent ProgramData |  |  |
+
+## Account table: `CORE_FOUND_PRICE_GATE_ACCOUNT_LABELS_V3` / `CORE_FOUND_PRICE_GATE_ACCOUNT_ROLES_V3`
+
+| # | account | signer | writable |
+| --- | --- | --- | --- |
+| 0 | payer | signer | writable |
+| 1 | Market destination |  | writable |
+| 2 | RentCredit |  |  |
+| 3 | Rent program |  |  |
+| 4 | Realm raw |  |  |
+| 5 | Realm staging |  |  |
+| 6 | Product raw |  |  |
+| 7 | Product staging |  |  |
+| 8 | result domain raw |  |  |
+| 9 | result domain staging |  |  |
+| 10 | portfolio raw |  |  |
+| 11 | portfolio staging |  |  |
+| 12 | linked basis raw |  |  |
+| 13 | linked basis staging |  |  |
+| 14 | Source material raw |  |  |
+| 15 | Source staging |  |  |
+| 16 | Source spec raw |  |  |
+| 17 | Source spec staging |  |  |
+| 18 | capacity profile raw |  |  |
+| 19 | capacity profile staging |  |  |
+| 20 | manipulation floor raw |  |  |
+| 21 | manipulation floor staging |  |  |
+| 22 | capability manifest raw |  |  |
+| 23 | capability staging |  |  |
+| 24 | activation cache |  |  |
+| 25 | Core program |  |  |
+| 26 | Core ProgramData |  |  |
+| 27 | Registry program |  |  |
+| 28 | Rent sysvar |  |  |
+| 29 | System program |  |  |
+| 30 | infrastructure profile |  |  |
+| 31 | Registry artifact raw |  |  |
+| 32 | Registry artifact staging |  |  |
+| 33 | Registry ProgramData |  |  |
+| 34 | Rent artifact raw |  |  |
+| 35 | Rent artifact staging |  |  |
+| 36 | Rent ProgramData |  |  |
+| 37 | price-gate certificate raw |  |  |
+| 38 | price-gate certificate staging |  |  |

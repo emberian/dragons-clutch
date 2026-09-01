@@ -8,6 +8,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use dclutch_product_compiler::CompileError;
+pub use dclutch_product_compiler::partition_quality::{
+    BandProfileV1, FoundingBandV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, PartitionQualityModelV1,
+    PartitionQualityReportV1, centred_cuts_v1, require_interesting_partition_v1,
+};
 use dclutch_product_runtime_v2::{
     ContentId, PortfolioInputV2, ResultDomainInputV2, compile_portfolio_v2,
     compile_result_domain_v2, portfolio_record_bytes, result_domain_record_bytes,
@@ -64,6 +69,12 @@ pub enum Error {
     SplineBasis,
     /// The offered DCLTPGT1 certificate did not admit the exact spline basis.
     PriceGate,
+    /// A founding band was absent, mismatched, or outside its stated bounds.
+    FoundingBand,
+    /// One ordinary cell holds the stated ceiling of ex-ante outcome mass, so
+    /// the partition is exhaustive, disjoint, ordered, canonical — and always
+    /// resolves the same way.
+    DegenerateOutcomePartition,
 }
 
 /// Operator result alias.
@@ -195,6 +206,48 @@ pub fn compile_product_records_v2(
         },
         outcome_count,
     })
+}
+
+/// Compile the same records, but only for a partition that asks a question.
+///
+/// [`compile_product_records_v2`] takes cuts as caller authority and will
+/// happily commit a partition whose every cell sits outside the coordinate the
+/// source will report — exhaustive, disjoint, ordered, canonical, and always
+/// the same answer. This entrance measures the partition against the founding
+/// spot and window first and refuses
+/// [`Error::DegenerateOutcomePartition`] when one cell takes the market.
+///
+/// The report comes back on the honest path so a caller and a client can
+/// explain the market's ex-ante shape from the operator's own numbers rather
+/// than re-deriving one.
+pub fn compile_interesting_product_records_v2(
+    registry_program: Pubkey,
+    band: FoundingBandV1,
+    model: PartitionQualityModelV1,
+    ceiling_bps: u32,
+    input: ProductCompilationInputV2<'_>,
+    product_output: &mut [u8],
+    domain_output: &mut [u8],
+    portfolio_output: &mut [u8],
+) -> Result<(CompiledProductRecordsV2, PartitionQualityReportV1)> {
+    if band.denominator != input.cut_denominator {
+        return Err(Error::FoundingBand);
+    }
+    let report = require_interesting_partition_v1(input.cuts, &band, model, ceiling_bps).map_err(
+        |error| match error {
+            CompileError::DegenerateOutcomePartition => Error::DegenerateOutcomePartition,
+            CompileError::NonCanonicalPartition => Error::RuntimeProduct,
+            _ => Error::FoundingBand,
+        },
+    )?;
+    let compiled = compile_product_records_v2(
+        registry_program,
+        input,
+        product_output,
+        domain_output,
+        portfolio_output,
+    )?;
+    Ok((compiled, report))
 }
 
 /// One finalized account observation supplied by a bounded RPC reader.

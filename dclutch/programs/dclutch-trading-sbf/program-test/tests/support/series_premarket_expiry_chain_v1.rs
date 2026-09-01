@@ -2668,19 +2668,43 @@ fn install_account(
     }
 }
 
+/// Refuse a duplicated install coordinate, and refuse an UNSET one.
+///
+/// The second half cannot be spelled `key == Pubkey::default()`. The System
+/// program's canonical address IS the all-zero pubkey, and this chain always
+/// installs the System program, so that rejection is unsatisfiable by any list
+/// this fixture can build -- it refused every one of them, and the three
+/// on-chain tests in this file therefore never reached a bank. The System
+/// entry and this check landed in the same commit (`4185b871`), so they were
+/// contradictory from the moment they were written.
+///
+/// What was meant is "no account carries an unset key", and the account itself
+/// separates the two cases: at the zero address, only the System program is an
+/// executable owned by the native loader. An accidentally unset key belongs to
+/// some data account, which is not, and is still refused here.
 fn require_disjoint_install_accounts_v1(
     accounts: &[SeriesPremarketExpiryInstallAccountV1],
 ) -> Result<(), SeriesPremarketExpiryChainErrorV1> {
+    let mut system_entries = 0_usize;
     for (index, candidate) in accounts.iter().enumerate() {
-        if candidate.key == Pubkey::default()
-            || accounts
-                .get(..index)
-                .ok_or(SeriesPremarketExpiryChainErrorV1::Physical)?
-                .iter()
-                .any(|prior| prior.key == candidate.key)
+        if candidate.key == Pubkey::default() {
+            if !candidate.account.executable || candidate.account.owner != native_loader::ID {
+                return Err(SeriesPremarketExpiryChainErrorV1::Physical);
+            }
+            system_entries += 1;
+        }
+        if accounts
+            .get(..index)
+            .ok_or(SeriesPremarketExpiryChainErrorV1::Physical)?
+            .iter()
+            .any(|prior| prior.key == candidate.key)
         {
             return Err(SeriesPremarketExpiryChainErrorV1::Physical);
         }
+    }
+    // The exemption is for exactly one builtin, not for a class.
+    if system_entries > 1 {
+        return Err(SeriesPremarketExpiryChainErrorV1::Physical);
     }
     Ok(())
 }

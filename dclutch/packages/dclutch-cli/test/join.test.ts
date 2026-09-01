@@ -49,7 +49,7 @@ function key(byte: number): string {
 }
 
 function context(flags: Readonly<Record<string, string | boolean | undefined>>, rpcUrl: string): CliContext {
-  return Object.freeze({ rpcUrl, session: EMPTY_SESSION, flags: Object.freeze({ ...flags, rpc: rpcUrl }), json: flags.json === true });
+  return Object.freeze({ rpcUrl, session: EMPTY_SESSION, flags: Object.freeze({ ...flags, rpc: rpcUrl }), json: flags.json === true, deployment: null });
 }
 
 type Recorder = Readonly<{

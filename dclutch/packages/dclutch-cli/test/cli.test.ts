@@ -182,6 +182,7 @@ describe('public Direct mutation boundary', () => {
       rpcUrl: 'http://127.0.0.1:1/',
       session: Object.freeze({ rpcUrl: null, programs: Object.freeze({}), markets: Object.freeze([]) }),
       json: false,
+      deployment: null,
       flags: Object.freeze({
         maker,
         out: '/captured/portable-ticket.json',

@@ -11,8 +11,35 @@ is not a source tree to copy wholesale.
   sessions.
 - Never sign, submit, deploy, fund, publish, push, tag, or mutate an external
   system without explicit current authorization naming that act.
+- **DEVNET DEPLOY IS AUTHORIZED, standing, from 2026-09-01.** Ember: *"don't
+  defer to me, whenever and as often as you feel ready, please deploy to devnet
+  — just ensure that you do a full redeploy, including the load simulator."*
+  This is a durable grant, not a one-time approval: deploy devnet whenever the
+  tree is ready, and again whenever it is ready again. It carries three
+  conditions. **(a) Full redeploy only** — every program in the cohort from
+  exact current sources, fresh identities, the old cohort abandoned in place;
+  no partial or incremental program deploys. **(b) The load simulator runs
+  against the new cohort** and its population life is part of the deliverable,
+  not a follow-up. **(c) Deploy from a commit, never from the ambient dirty
+  tree** — a deployment whose sources cannot be named is unreproducible
+  evidence, which C-14 forbids and which no amount of devnet success repairs.
+  Record the commit, every ELF hash, every program id, every transaction
+  signature and the resulting poststates.
+  **Still NOT authorized**: mainnet anything, `git push`, tags, releases, and
+  reading wallet or private-key material outside the devnet keypair this work
+  requires.
 - Local commits are ordinary work. Add named files explicitly while parallel
   work is live.
+- **The live tree is `/Users/ember/dev/dclutch`. There is a STALE NESTED COPY
+  of it at `/Users/ember/dev/dragons-clutch/dclutch`** — the publication subtree
+  host, frozen at whatever the last cut was. The shell's working directory
+  **resets to `/Users/ember/dev/dragons-clutch` between commands**, so every
+  relative path is one step from measuring the compost host instead of the tree.
+  A lane lost a finding to this on 2026-09-01: it swept the nested copy at
+  `3d7ac6fa6`, produced a confident verdict, and had to retract it.
+  **Use absolute paths, and print `git rev-parse --show-toplevel` and
+  `git rev-parse HEAD` in the same command as any measurement you intend to
+  report.** A measurement whose tree root is not stated is not a measurement.
 - Public RPC reads require an explicit task and must remain bounded.
 - Never describe a deployment or frontend as official without a checked release
   manifest.

@@ -30,8 +30,7 @@
       "label": "claims position: admit",
       "routes": [
         "claims/process_instruction",
-        "claims/protocol_position_v2::process",
-        "claims/process_admit#Admit"
+        "claims/protocol_position_v2::process"
       ],
       "program": "claims",
       "outcome": "executed",
@@ -41,8 +40,7 @@
       "label": "claims position: caller refuses after a complete admission",
       "routes": [
         "claims/process_instruction",
-        "claims/protocol_position_v2::process",
-        "claims/process_admit#Admit"
+        "claims/protocol_position_v2::process"
       ],
       "program": "claims",
       "outcome": "refused",
@@ -66,8 +64,7 @@
       "label": "claims position: close a zero Position",
       "routes": [
         "claims/process_instruction",
-        "claims/protocol_position_v2::process",
-        "claims/process_close#Close"
+        "claims/protocol_position_v2::process"
       ],
       "program": "claims",
       "outcome": "executed",
@@ -92,7 +89,6 @@
       "routes": [
         "claims/process_instruction",
         "claims/protocol_position_v2::process",
-        "claims/process_admit#Admit",
         "claims/sparse_native_transfer_v1::process"
       ],
       "program": "claims",
@@ -105,7 +101,6 @@
       "routes": [
         "claims/process_instruction",
         "claims/protocol_position_v2::process",
-        "claims/process_admit#Admit",
         "claims/sparse_native_transfer_v1::process"
       ],
       "program": "claims",
@@ -118,9 +113,7 @@
       "routes": [
         "claims/process_instruction",
         "claims/protocol_position_v2::process",
-        "claims/process_admit#Admit",
-        "claims/sparse_native_transfer_v1::process",
-        "claims/process_close#Close"
+        "claims/sparse_native_transfer_v1::process"
       ],
       "program": "claims",
       "outcome": "refused",
@@ -135,9 +128,7 @@
       "routes": [
         "claims/process_instruction",
         "claims/protocol_position_v2::process",
-        "claims/process_admit#Admit",
-        "claims/sparse_native_transfer_v1::process",
-        "claims/process_close#Close"
+        "claims/sparse_native_transfer_v1::process"
       ],
       "program": "claims",
       "outcome": "executed",

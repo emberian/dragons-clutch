@@ -464,7 +464,7 @@ fn route<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     extern crate alloc;
 
     use alloc::vec;
@@ -476,7 +476,14 @@ mod tests {
 
     use super::*;
 
-    fn requests() -> (
+    /// The four canonical child requests every Consume emitter consumes.
+    ///
+    /// Lock, Core and Realize are opaque transport to the emitter, which only
+    /// zeroes their root-dependent windows; the Claims request is DECODED and
+    /// rebuilt as a root-independent template, so it must be a real
+    /// `ClaimsFoundingRequestV5` and not filler. Shared with `release_v4`,
+    /// whose selected-release compiler feeds the same emitter.
+    pub(crate) fn requests() -> (
         [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],
         [u8; SERIES_CONSUME_CORE_REQUEST_BYTES_V3],
         [u8; SERIES_PROJECTED_CUSTODY_REQUEST_BYTES_V3],

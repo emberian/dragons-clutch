@@ -48,7 +48,7 @@ use dclutch_capability_program_contract::{
         ACTIVATION_ROLE_REQUEST_BYTES_SCALAR_V2, ACTIVATION_ROOT_IDENTITY_V2,
         ACTIVATION_ROOT_STATE_BYTES_SCALAR_V2, ACTIVATION_TRADING_PROGRAM_IDENTITY_V2,
     },
-    activation_registers_v3::ACTIVATION_ROOT_BUMP_SCALAR_V3,
+    activation_registers_v3::{ACTIVATION_COMMON_SCALARS_V3, ACTIVATION_ROOT_BUMP_SCALAR_V3},
     initialize_root_account_v1,
     set_v2::{CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2, CapabilityProgramSetV2},
 };
@@ -1509,7 +1509,13 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             &mut scratch_request,
             &mut output_request,
         )
-        .map_err(|_| TradingSbfError::Content)?;
+        // Not `Content`: everything this route calls content has already been
+        // admitted by the time the kernel runs. This is the family's own
+        // declared effect program failing to execute against the bank the seam
+        // seeded, which is the one refusal on this route a test can neither
+        // reach by accident nor tell apart from the twenty upstream `Content`
+        // sites -- so it gets its own discriminant.
+        .map_err(|_| TradingSbfError::ActivationEffect)?;
         require_activation_local_effects(effect, scalars, identities, self.funding.len())?;
 
         let manifest =
@@ -2175,7 +2181,20 @@ fn seed_common_registers(
             .get_mut(usize::from(slot))
             .ok_or(TradingSbfError::Content)? = value;
     }
-    if let Some(bump) = root_bump {
+    // The ninth scalar is OPT-IN, and declaring it IS the opt-in.
+    // `activation_registers_v3` states that V2's exact 8/12 bank remains the
+    // complete legacy ABI and that a descriptor which does not declare the ninth
+    // scalar is seeded and executed exactly as before; `capability-activation-
+    // codec` derives the same thing, carrying `common_scalars` of 8 or 9 by
+    // whether the bundle has a `RootBumpWord` and seeding the bump only at 9.
+    //
+    // The width test is load-bearing, not defensive: the admission floor at the
+    // top of this function is `ACTIVATION_COMMON_SCALARS_V2`, so an
+    // unconditional write here refuses `Content` on exactly the banks this
+    // function just admitted.
+    if let Some(bump) = root_bump
+        && scalars.len() >= ACTIVATION_COMMON_SCALARS_V3
+    {
         *scalars
             .get_mut(usize::from(ACTIVATION_ROOT_BUMP_SCALAR_V3))
             .ok_or(TradingSbfError::Content)? = u64::from(bump);

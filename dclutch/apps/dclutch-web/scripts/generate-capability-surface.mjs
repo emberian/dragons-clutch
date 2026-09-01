@@ -74,6 +74,58 @@ const TRANSACTION_REQUESTS = [
 const SUBMISSION = 'submitSignedTransactionV1';
 
 /**
+ * A file picker: the browser reading bytes it did not and cannot author.
+ *
+ * WHAT THIS ADDS THAT THE WALLET SURVEY MISSED. Everything above answers what
+ * a workspace can DO. None of it answers what a workspace cannot START. That
+ * gap put `claims.redeem` on `/console` as "This browser · one wallet
+ * signature, sent from here" -- all three clauses true and derived -- over an
+ * act whose second step opens a file picker for a payout plan `RedeemFlow`
+ * says outright it will never author. The producer is a Rust binary under
+ * `tools/local-validator/`, so a reader holding a wallet and nothing else
+ * cannot begin. A derivation that has never been run against a prerequisite
+ * is the same species of claim as a status somebody typed.
+ *
+ * A file input is the exact syntactic mark of that dependency, in either of
+ * the two spellings the app uses -- the bare `<input type="file">` and the
+ * `<Input type="file">` primitive -- and it propagates over the closure
+ * exactly as wallet reach does. Granularity is therefore the workspace, which
+ * is the granularity a capability anchor already has and the one the reader
+ * needs: it is the page in front of them that will ask for the file.
+ */
+const FILE_INTAKE = /type=(?:"file"|'file'|\{'file'\}|\{"file"\})/;
+
+/**
+ * The second signal, because the first one alone is a guard with a hole in it.
+ *
+ * Every artifact intake in this app offers a paste box beside its picker --
+ * `ArtifactInput` calls it "the fallback for a machine where the file cannot
+ * be picked", and `RedeemFlow` has a textarea carrying the same bytes as its
+ * file input. Detecting only the picker means deleting one JSX line while
+ * keeping the paste path makes an act look self-contained again, and nothing
+ * goes red. That is the two-sides-move-together defect reappearing inside the
+ * fix for it.
+ *
+ * So a module also depends on outside bytes when it IMPORTS a producer-artifact
+ * parser. The naming is not a convention invented here: `walletTerminalPayoutV3`
+ * exports `importRustWalletTerminalPayoutArtifactV3` as a separate name from
+ * the parser it wraps for exactly this reason -- "keeping this as a separate
+ * name makes the browser handoff explicit: a file is imported, never authored
+ * or completed from partial chain state here."
+ */
+const ARTIFACT_IMPORT = /^import[A-Z][A-Za-z0-9]*Artifact[A-Za-z0-9]*$/;
+
+/**
+ * The two canaries for the signals above: the component whose entire contract
+ * is naming an artifact's producer, and the module that names the handoff in
+ * its own export. If either stops matching, the detector has silently gone
+ * blind and every act looks self-contained. Failing loudly beats surveying an
+ * absence.
+ */
+const ARTIFACT_INTAKE_CANARY = join(webRoot, 'components', 'ArtifactInput.tsx');
+const ARTIFACT_IMPORT_CANARY = join(webRoot, 'lib', 'walletTerminalPayoutV3.ts');
+
+/**
  * `packages/dclutch-sdk/package.json`'s exports map, honoured exactly.
  *
  * `@dclutch/sdk/walletHandoff` resolves to the INSPECTION-ONLY facade, not to
@@ -151,6 +203,15 @@ function sourceOf(file) {
       throw new Error(`${relative(repoRoot, WALLET_OWNER)} no longer exports ${symbol}; capability authority cannot be derived`);
     }
   }
+  if (!FILE_INTAKE.test(sourceOf(ARTIFACT_INTAKE_CANARY))) {
+    throw new Error(`${relative(repoRoot, ARTIFACT_INTAKE_CANARY)} no longer renders a file input; the external-artifact prerequisite cannot be derived`);
+  }
+  const parsers = [...sourceOf(ARTIFACT_IMPORT_CANARY).matchAll(/export function ([A-Za-z0-9]+)\(/g)]
+    .map((match) => match[1])
+    .filter((name) => ARTIFACT_IMPORT.test(name));
+  if (parsers.length === 0) {
+    throw new Error(`${relative(repoRoot, ARTIFACT_IMPORT_CANARY)} no longer exports a producer-artifact parser; the external-artifact prerequisite cannot be derived`);
+  }
 }
 
 /**
@@ -185,11 +246,16 @@ function localFacts(file) {
   let message = false;
   let transaction = false;
   let submits = false;
+  let readsExternalFile = FILE_INTAKE.test(source);
   const edges = [];
   for (const { specifier, bindings } of importsOf(source)) {
     const target = resolveSpecifier(file, specifier);
     if (target === null) continue;
     edges.push(target);
+    // A parser reached by name, not merely defined somewhere in the closure:
+    // `walletTerminalPayoutV3` declares the importer and is itself reached by
+    // modules that only decode payouts, which do not depend on a file.
+    if (bindings.some((name) => ARTIFACT_IMPORT.test(name))) readsExternalFile = true;
     // A wallet request counts only when the specifier really resolves to the
     // owning module. The SDK's public `walletHandoff` subpath is a different
     // file on purpose, and naming a symbol is not the same as reaching it.
@@ -198,7 +264,7 @@ function localFacts(file) {
     if (bindings.some((name) => TRANSACTION_REQUESTS.includes(name))) transaction = true;
     if (bindings.includes(SUBMISSION)) submits = true;
   }
-  return { edges, message, transaction, submits };
+  return { edges, message, transaction, submits, readsExternalFile };
 }
 
 const factsCache = new Map();
@@ -293,12 +359,14 @@ function surfaceRow(file) {
   let message = false;
   let transaction = false;
   let submits = false;
+  let readsExternalFile = false;
   const generated = new Set();
   for (const member of reachable) {
     const local = facts(member);
     message = message || local.message;
     transaction = transaction || local.transaction;
     submits = submits || local.submits;
+    readsExternalFile = readsExternalFile || local.readsExternalFile;
     if (inWeb(member) && web(member).startsWith('lib/generated/')) generated.add(web(member));
   }
   return {
@@ -306,6 +374,7 @@ function surfaceRow(file) {
     routes: routesReaching(file),
     authority: transaction ? 'wallet-transaction' : message ? 'wallet-message' : 'none',
     submits,
+    readsExternalFile,
     generatedAbis: [...generated].sort().map((module) => ({ module, verify: verifierFor(module) })),
   };
 }
@@ -402,6 +471,7 @@ let output = `// @generated by scripts/generate-capability-surface.mjs from the 
 //   apps/dclutch-web/package.json                       (the abi:*:verify pairing)
 //
 // ${rows.length} surveyed modules, ${routeList.length} routes, ${abiTable.length} generated authorities, ${runbooks().length} published runbooks.
+// ${rows.filter((row) => row.readsExternalFile).length} of those modules cannot start without a file produced outside this browser.
 
 /** What a module's transitive closure is able to ask a wallet for. */
 export type ClientAuthorityV1 = 'none' | 'wallet-message' | 'wallet-transaction';
@@ -419,6 +489,11 @@ export type ClientModuleSurfaceV1 = Readonly<{
   authority: ClientAuthorityV1;
   /** Whether the sole submission primitive is reachable from it. */
   submits: boolean;
+  /**
+   * Whether it opens a file picker somewhere in its closure -- the mark of an
+   * act that cannot be STARTED here, whatever it can do once it has the bytes.
+   */
+  readsExternalFile: boolean;
   /** Indices into \`GENERATED_ABI_AUTHORITIES_V1\` for the authorities it reaches. */
   generatedAbis: ReadonlyArray<number>;
 }>;
@@ -446,7 +521,7 @@ export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = O
 `;
 for (const row of rows) {
   const abis = row.generatedAbis.map((entry) => abiIndex.get(entry.module)).join(', ');
-  output += `  Object.freeze({ module: ${json(row.module)}, routes: Object.freeze(${list(row.routes)}), authority: ${json(row.authority)}, submits: ${row.submits}, generatedAbis: Object.freeze([${abis}]) }),\n`;
+  output += `  Object.freeze({ module: ${json(row.module)}, routes: Object.freeze(${list(row.routes)}), authority: ${json(row.authority)}, submits: ${row.submits}, readsExternalFile: ${row.readsExternalFile}, generatedAbis: Object.freeze([${abis}]) }),\n`;
 }
 output += `]);
 

@@ -1281,3 +1281,276 @@ mainnet, CFTC, assurance park, dead-market deletion, monolith benchmark.
   Routed: HYGIENE's f346ba81 broad add swept EXPLORER's file — warned.
   Known: 10 web test files red from other lanes' in-flight strings
   (mostly GRICE's surfaces); full-suite green is PUBLISH-4's gate.
+
+## Wave 3 — 2026-09-01 ~11:40, "swarm wide on protocol/frontend/etc completeness"
+
+CI triage first (run 33501820165, at cut bfcdc390d). `checks` GREEN for the
+first time. `rust` red in two jobs, and neither red is what its job title says:
+
+- **programs tier**: the margin gate is GREEN — margin intact, not a compute
+  finding. The red row is `--test activation`, 10 passed / 4 failed. Three die
+  at `assert_activation_succeeds` with `Custom(16387)` = `Content` 0x4003; the
+  fourth *correctly* expects `Root` 0x4002 and gets `Content` instead. One
+  over-eager Content conjunct firing ahead of the tail-width check explains all
+  four. → lane ACTIVATION-FOUR.
+- **suites tier**: 2 of 7. `dealer` ran ZERO tests — stale lock, `--locked`
+  refused to update it. That is the THIRTEENTH instance of the class, and it is
+  **already fixed locally in 2213d16e**, just not cut yet. `postjoin` control
+  still red = the known compute wall, ember's ruling.
+
+Eight lanes launched (three from wave 2 still live: FIXTURE-DRIFT, LEGACY-V4,
+BUY-PROJECTION):
+
+| lane | row | territory |
+|---|---|---|
+| WEB-C12 | C-12 | `apps/dclutch-web` |
+| SDK-CLI | C-12/13 | `packages/dclutch-{sdk,cli}`, `tools/dclutch-cli` |
+| DEAD-ROUTE | C-00 | census: unraisable codes, undispatched routes, stale guides |
+| RESOLUTION-C09 | C-09 | resolution-proof, pyth, source-* |
+| GENERAL-C05 | C-05 | general-accelerator + general-hot |
+| ACTIVATION-FOUR | C-04 | trading src (not dealer/) + `tests/activation.rs` |
+| STRUCT-FRAC | C-08 | structured-v2, fractional-*, claims-sbf |
+| RELEASE-DEVNET | C-13/14 | tools/release, ci, sbom, local-validator, devnet-* |
+
+Contract coverage after this wave: every row has a lane or an adjacent lane
+except **C-02** (compiler-shaped product entrance) and **C-11/C-15**, which the
+contract itself says need ember's rulings before implementation.
+
+### Wave 3 landings
+
+**S5/FIXTURE-DRIFT** — convicted and fixed the four `activation` reds before the
+lane I spawned for them arrived. My hypothesis (over-eager `Content` conjunct
+shadowing the tail-width check) was the right shape, wrong mechanism. Real
+cause, one line, `programs/dclutch-trading-sbf/src/outer.rs:2178` from
+`7c7ad184`: the root-bump write took `Some(bump)` unconditionally and did
+`scalars.get_mut(8).ok_or(Content)?`. A descriptor on the exact V2 8-scalar /
+12-identity legacy bank has no slot 8, so **every legacy-bank descriptor was
+unactivatable**, refused before the profile ever projected. Three authorities
+say the ninth scalar is opt-in and the code contradicted all three. Repair
+`d969d8f7` gates the write on `scalars.len() >= ACTIVATION_COMMON_SCALARS_V3`.
+`--test activation` 10/4 → **14/0**; pinned canonical artifacts byte-identical.
+Fifth red separately: the *test* was wrong, not the encoder (`04ad267d`).
+
+This is THE CLASS in mirror image — a documented compatibility promise
+("V2's exact 8/12 bank remains the complete legacy ABI") that had never once
+been executed against a real 8-scalar descriptor, so the code quietly stopped
+honouring it while every test stayed green.
+
+**S6/LEGACY-V4** — five reds, three separate causes, none of them a fixture
+drift: `Effect` ×3 (`5fbe0bd8` rebuilt the Consume effect as a root-independent
+template and updated V5 only, leaving `release_v4` and the lab generator with
+`[0x44; N]` filler), `Successor` ×1 (identity bank grew 1→6→9; two fixtures
+still passed six), `Lifecycle` ×1 (`73ffb010` added `validate_plan_permissions`,
+and the Series Consume profile grants no lamport permission to any coordinate
+but root and Ticket). Fixed in `91e7c2ba`, production code untouched; `series::`
+110/5 → **115/115**. The lab generator — not a test — was broken too and now
+runs end to end, byte-identical to Trading.
+
+### Open for ember, from these two
+
+1. **The legacy eight-scalar bank cannot express a funded activation.** In an
+   8-wide bank every scalar is common, so a funded activation must destroy a
+   seeded register — which is why every codec-built bundle declares ≥9. Widening
+   the one fixture that still exercises the legacy bank would change pinned
+   canonical artifact bytes *and* retire the tree's only executed instance of
+   that bank — the coverage that just caught the defect above. Whether V2 keeps
+   a funded case is an ABI decision, not a lane's.
+2. **`73ffb010`'s reach is wider than Series.** Any family whose AccountProfile
+   omits lamport permissions can no longer carry a `Create` or `Close` plan at
+   all. Already costs the `TicketAuthorship` pin its payer and RentCredit arms
+   (now defense-in-depth only). **No family sweep has been done.** → routed S11.
+3. **`Content` (0x4003) covers ~20 raise sites on one route**, which let a test
+   pass vacuously for days: the refusal it meant to catch and the one it caught
+   share a discriminant, so no assertion inside it could have caught the
+   vacuity. Granularity decision → routed S3 (the site) and S11 (the class).
+
+All 11 lanes re-routed to the letter's own S0–S11 briefs — I had been running
+paraphrases of contract rows instead of the written registry. C-02 (the only
+row with no lane) is queued for the next free subagent slot.
+
+## RULINGS AWAITING EMBER — consolidated, 2026-09-01
+
+Only decisions that are genuinely ember's. Two items that arrived as proposed
+rulings were sent back as engineering, and are recorded at the end so nobody
+re-escalates them.
+
+**From the activation work**
+1. **The legacy eight-scalar bank cannot express a funded activation.** In an
+   8-wide bank every scalar is common, so funding must destroy a seeded
+   register — which is why every codec-built bundle declares ≥9. Widening the
+   one fixture that still exercises the legacy bank changes pinned canonical
+   artifact bytes *and* retires the tree's only executed instance of that bank,
+   which is the coverage that caught the defect. Does V2 keep a funded case?
+
+**From the S11 debt/ownership census**
+(`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md`, commits `77ea7a6e`,
+`3e21c006`)
+
+2. **R-2** — `LiabilityBasisSbfErrorV2` keeps **10 unraisable discriminants**
+   after the `DCLLBX02` banishment. Shrink (a decision-0007 sub-band
+   renumbering touching every mirror), or annotate in place?
+3. **R-3** — **Claims split/merge as user acts.** `claims.conserve` /
+   `DCLCNS01` is the tree's one true orphan magic, and `CustodyRequired
+   = 0x5006` is dead for the same reason: the outer route was never built. The
+   owning crate says so itself and the SDK already publishes it as a wall, not
+   a claim — so this is honest, not a stale claim. Build the route, or rule it
+   out with a date.
+4. **R-6** — U-001's explicit deletion / non-authoritative-AOT ruling for
+   standalone family artifacts.
+5. **R-8 — C-15 proper.** Does the accepted final public project include the
+   FHE / MPC / specialized-batch / energy objective? **Nothing exists in code**
+   — zero of the letter's eight charter items has any foundation. The
+   2026-08-27 ruling ("dark-FHE is NOT a near/medium-term ambition") is a
+   *horizon* ruling, and the contract says at `:175` not to infer from the old
+   horizon park. Retained → a from-zero charter. Ruled out → a dated ruling
+   plus removal of the contradictory claims.
+6. **R-9** — either way: record *"the batch relation is small and specialized
+   **on purpose**"* (`INTENT.md:118-120`) as a named `O-*` invariant with its
+   reason. No invariant records it today, so a future "simplification" closes
+   that door silently whichever way R-8 goes.
+
+**Sent back as engineering, not ruled — do not re-escalate**
+- **R-5, refusal granularity.** `Content` 0x4003 carries **2,086 raise sites,
+  25.0% of the protocol total** (780 in `hot_v3.rs`; Trading 62.5% concentrated
+  on one code). But **Claims already solved this class in-tree**: 1,489 sites
+  over 141 codes, 15.2% max, via sub-bands. A policy with a working precedent
+  inside the same repository is a decision with a template. → S3 (the site),
+  S11 (the class).
+- **R-10, "is the first market open on devnet?"** Six guides disagree and
+  `deployments.ts` pins no market address. Answerable by measurement, not by
+  ruling — S1/S10 is standing up a fresh cohort under the disposability ruling.
+
+**Still open from earlier sessions**: the `derivation_policy` migration
+(release event, protocol-wide); registered-Direct routing; Structured account
+widths (proven, needs a release event); recovery ontology keep-or-cut; pinning
+an exposure digest at founding; and the C-11 economic rulings the contract
+itself says must precede implementation.
+
+## ACTED ON UNDER YOUR EXISTING RULING — reverse this if I read it wrong
+
+**`derivation_policy` is unblocked, and it was blocking item 1 of the letter's
+entire continuation order.**
+
+The Dealer wall is now convicted to exactly one predicate:
+`descriptor.derivation_policy != entry.child_derivation_id()` in
+`validate_selection`, reached from `authenticate_descriptor_root_selection`
+(`hot_v3.rs:3319`). WAVE had reserved that predicate — *"EMBER RULES THE SCOPE;
+no lane may start it"* — **because** changing it moves every capability-root
+PDA, so existing markets cannot be migrated in place and must be re-founded.
+Verified in source today, not inherited: the field is not a direct PDA seed,
+but the `manifest` seed carries `child_derivation_id` and the
+`capability_release` seed transitively covers the descriptor bytes at offset
+144.
+
+Migration cost was the whole reason for the reservation. Your 2026-09-01 ruling
+answers it: devnet is disposable, tear down and redeploy fresh, abandon the old
+cohort in place rather than migrating it. There are no mainnet markets. Under
+that ruling **"existing markets must be re-founded" is not a cost, it is the
+plan** — so the objection that reserved this predicate has been answered by the
+person who reserved it.
+
+So I gave the lane this authority and no more:
+- **implement it and prove it on real ELFs as code**, on the only branch that
+  extends (branch A is unrepresentable: `entry_index` is a write-once PDA seed
+  and `validate_manifest` needs entries strictly ascending by `kind_id` while
+  all nine Dealer selectors share one kind);
+- **state explicitly what still binds the descriptor to its entry** once that
+  comparison stops carrying the binding — if the answer is "nothing", it is a
+  weakening and the lane stops;
+- **no deploy, no push, no tag, no devnet SOL.** The release event stays your
+  named act.
+
+If that reading of your ruling is wrong, say so and the work is lost, not the
+tree.
+
+### Correction to something I told you
+
+My `652900b3` — *"sbom: PASS — 59 manifests, zero unresolvable"* — was **a green
+contingent on the dirty working tree, not on the committed state.** A
+**fourteenth** stale lock (`trading-outer/Cargo.lock`, seventh workspace missed
+by `2213d16e`'s sweep) was proven by detaching a worktree at HEAD and running
+`cargo metadata --locked --offline`, which refused with the exact
+`STALE_LOCK_MARKER` that `sbom_check.py:401` fails on. The manifest is in the
+census at `SBOM.md:2448`. Fixed in `1d04082f`.
+
+The general defect is worse than the instance: **the SBOM gate as run locally
+measures the tree; CI measures the commit.** That is not flakiness, it is a
+gate measuring the wrong object. Routed to S1/S10.
+
+Also corrected: `reserved_claims is a cap` — which I relayed from an earlier
+lane — is **refuted at two sites**. `direct-codec/src/successor.rs:1618` pins
+Sell's to exactly `maximum_fill - filled`, `:1631` pins Buy's to exactly `0`,
+and `registered_effect_artifacts_v4.rs:309` says so in prose. Exact equality.
+
+### Added to your ruling queue
+
+7. **Four vacuous guards on the sole production Resolution path**
+   (`provider_v3.rs:137`, `:139`, `:153`, `:211-212`) compare values against
+   things constructed from those same values moments earlier. **None is
+   exploitable** — the real binds are `source_material_v3.rs:244` and
+   `provider_v3.rs:368-369`. Deleting them changes the released ELF and
+   invalidates in-flight digest and compute measurements for zero security
+   gain. Keep-with-reason, or delete at the next release event? Precedent
+   `a968858c`.
+8. **Wall B, Direct.** Costed: an action tag on `LifecycleCurrentRentQuoteV5`
+   changes `CURRENT_RENT_QUOTE_BYTES_V5` and every pinned V5 artifact digest.
+   Strictly better than a per-action root entry, which would change the
+   persisted root header. A union policy is refuted — `current_rent_quote` is a
+   flat ordinal array, so a Sell would project the Buy's quotes.
+9. **Two binaries named `dclutch`** are real and load-bearing; both now name
+   the other for the other's verbs (`c018a9ba`). Merging or renaming a released
+   binary is a release event, hence yours.
+10. **Ten duplicated 8-byte magics tree-wide**, two of them live top-level
+    selectors of the *same* Trading ELF (`DCLTDRS1`, separated only by data
+    length and dispatch order). Renaming a released instruction is a release
+    event. `--check-unique`, which `AGENTS.md` names as *the* gate, checks
+    refusal bands only — **there is no magic-uniqueness gate.** Gate is being
+    built regardless; the renames are yours.
+
+### C-09: two clauses of one row are in tension
+
+Permissionless completion is closed **because** any stranger may execute — and
+every stranger who loses the first-valid race is `Submitted` forever, because
+reclaim requires `Consumed` plus a certificate a loser never had.
+**6,389,280 lamports stranded per loss**, and the clause that closes C-09's
+liveness half manufactures the victims of its closure half.
+`reclaim_after_unix_seconds` — the field that exists to bound exactly this
+wait — is unreachable. Being built as a new instruction, not ruled.
+
+## DEVNET DEPLOY AUTHORIZED — 2026-09-01, standing
+
+Ember: *"don't defer to me, whenever and as often as you feel ready, please
+deploy to devnet :) just ensure that you do a full redeploy 😂 including the
+load simulator"*
+
+Recorded in `AGENTS.md` (`6a68c9c1`), which previously told every lane it had no
+deploy authority. Conditions attached: **full redeploy only** (whole cohort,
+exact current sources, fresh identities, old cohort abandoned in place); **the
+load simulator runs against the new cohort**, named by ember, part of the
+deliverable not a follow-up; and **deploy from a commit, never the ambient
+dirty tree** — eleven lanes are mid-edit and a deployment whose sources cannot
+be named is unreproducible evidence, which C-14 forbids and which no amount of
+devnet success repairs. Still not authorized: mainnet, push, tags, releases.
+
+Groundwork established before handing it to S1/S10, so the lane spends its time
+deploying rather than looking:
+- deployer `~/jobs/dragons-clutch-devnet-20260819/keys/deployer.json` →
+  `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP`, verified;
+- **43.742833706 SOL** on devnet;
+- that key is the **retained upgrade authority on live cohort-8**, so those
+  programs are mutable and closable — core holds 7.76 SOL at 1.1 MB, and
+  Trading's ELF is 2,285,824 bytes, so seven roles may exceed the balance.
+  Reclaiming from the abandoned cohort is sanctioned: ember's ruling is
+  literally *"can't we tear everything down"*.
+- the default solana config points at a nonexistent local payer and
+  `~/.config/solana/id.json` holds 0 devnet SOL — pass `--keypair`/`--url`
+  explicitly.
+
+**One question the lane must settle rather than guess:** archived wall W1 says
+the real life may need all seven roles revoked **immutable**, and immutable rent
+can never be recycled — so recoverable-mutable and permanent-immutable may be
+mutually exclusive by protocol design. W1 dates from 2026-08-27; re-measure at
+HEAD rather than inherit it.
+
+**This closes "the one act still awaiting ember."** The only remaining external
+acts requiring ember are mainnet, push and tags.

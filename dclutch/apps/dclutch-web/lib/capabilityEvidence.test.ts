@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { CAPABILITY_ACTIONS_V1, capabilityStandingV1, type CapabilityActionV1 } from './capabilityModel';
-import { BROWSER_CAPABILITY_SURFACE_V1, BROWSER_CAPABILITY_STANDINGS_V1 } from './capabilitySurface';
+import {
+  browserActPrerequisitesV1,
+  BROWSER_CAPABILITY_SURFACE_V1,
+  BROWSER_CAPABILITY_STANDINGS_V1,
+} from './capabilitySurface';
 
 /**
  * The drift guard for capability claims.
@@ -226,6 +230,78 @@ describe('a guarantee may not outrun the derivation', () => {
         `${standing.action.id} decodes against a generated module no verify script checks, which is a surface with no authority behind it.`,
       ).toEqual([]);
     }
+  });
+});
+
+describe('what an act asks for before it can be started', () => {
+  /**
+   * THE DEFECT THIS CLOSES, and it is the first shape all over again.
+   *
+   * The derivation above answers what a workspace can DO — which wallet
+   * request it reaches, whether it can send — and that made `claims.redeem`
+   * a browser act with transaction authority that submits, which is all true.
+   * What none of it measured is what the act cannot START without.
+   * `RedeemFlow` opens with a file picker for a payout plan it says outright
+   * it will never author: "This browser never creates or completes a payout
+   * plan." The producer is `dclutch-local-successor-bootstrap
+   * wallet-terminal-payout-input`, a Rust binary under
+   * `tools/local-validator/`, and a reader holding a wallet and nothing else
+   * cannot get past step two of redemption.
+   *
+   * So the directory said "This browser · one wallet signature, sent from
+   * here" over an act a stranger cannot begin — a declaration standing on a
+   * derivation that had never been run against the prerequisite. The fix is
+   * the same species as the rest of this file: measure it, do not type it.
+   * A workspace that renders a file input reads bytes this browser cannot
+   * produce, and that is a syntactic fact about the module graph.
+   *
+   * Granularity is the workspace, deliberately and in both directions: an
+   * anchor names a component, so a page carrying two acts states the
+   * prerequisite for both. That is the same granularity the wallet authority
+   * already has, and it is the honest one — the reader is being told what the
+   * page in front of them needs.
+   */
+  const prerequisiteIds = (id: string): ReadonlyArray<string> => {
+    const standing = BROWSER_CAPABILITY_STANDINGS_V1.find((candidate) => candidate.action.id === id);
+    if (standing === undefined) throw new Error(`${id} is not catalogued`);
+    return browserActPrerequisitesV1(standing).map((entry) => entry.id);
+  };
+
+  it('says a file is needed exactly where a workspace reads one', () => {
+    // `/redeem` imports a Rust-authored payout plan; `/release` and `/operate`
+    // import checked artifacts and an unsigned packet. All three are true.
+    expect(prerequisiteIds('claims.redeem')).toContain('external-file');
+    expect(prerequisiteIds('release.activate')).toContain('external-file');
+    // `direct.author` composes an offer out of the market and the wallet, and
+    // reads no file at all. Marking it would be the mirror-image lie.
+    expect(prerequisiteIds('direct.author')).not.toContain('external-file');
+    expect(prerequisiteIds('market.inspect')).not.toContain('external-file');
+  });
+
+  it('names a Market exactly where the catalogue binds one', () => {
+    for (const standing of BROWSER_CAPABILITY_STANDINGS_V1) {
+      const ids = browserActPrerequisitesV1(standing).map((entry) => entry.id);
+      expect(ids.includes('market'), `${standing.action.id} disagrees with its own requiresMarket`)
+        .toBe(standing.action.requiresMarket);
+    }
+  });
+
+  it('writes every prerequisite as a sentence, never a bare label', () => {
+    for (const standing of BROWSER_CAPABILITY_STANDINGS_V1) {
+      for (const entry of browserActPrerequisitesV1(standing)) {
+        expect(entry.statement.length, `${standing.action.id}'s ${entry.id} prerequisite is too short to be one`)
+          .toBeGreaterThan(12);
+      }
+    }
+  });
+
+  it('has file-reading and file-free acts to tell apart at all', () => {
+    // Both sides must be populated or the join above is vacuous in one
+    // direction, which is exactly how a guard ends up agreeing with itself.
+    const reading = BROWSER_CAPABILITY_STANDINGS_V1
+      .filter((standing) => browserActPrerequisitesV1(standing).some((entry) => entry.id === 'external-file'));
+    expect(reading.length).toBeGreaterThan(0);
+    expect(reading.length).toBeLessThan(BROWSER_CAPABILITY_STANDINGS_V1.length);
   });
 });
 

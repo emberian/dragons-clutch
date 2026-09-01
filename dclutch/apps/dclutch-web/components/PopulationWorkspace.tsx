@@ -119,7 +119,7 @@ export function HonestyStrip({ series }: Readonly<{ series: SimulatorSeriesV1 }>
   const rows = honestyRowsV1(series);
   if (rows.length === 0) return <p className="market-empty">This capture carries no route tally.</p>;
   return <>
-    <div className="viz-table-scroll">
+    <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Planned against executed, per route">
       <table className="holders-table population-honesty">
         <thead>
           <tr>
@@ -158,7 +158,7 @@ export function ArchetypeCensus({ series }: Readonly<{ series: SimulatorSeriesV1
   const rows = archetypeCensusV1(series);
   const markets = marketRowsV1(series);
   return <>
-    <div className="viz-table-scroll">
+    <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="The population, by archetype">
       <table className="holders-table">
         <thead>
           <tr><th scope="col">archetype</th><th scope="col">basis</th><th scope="col">drawn</th><th scope="col">observed</th></tr>
@@ -173,7 +173,7 @@ export function ArchetypeCensus({ series }: Readonly<{ series: SimulatorSeriesV1
         </tbody>
       </table>
     </div>
-    <div className="viz-table-scroll">
+    <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="The markets in this population">
       <table className="holders-table">
         <thead>
           <tr>
@@ -233,7 +233,7 @@ export function OutcomeSpread({ series }: Readonly<{ series: SimulatorSeriesV1 }
       One position takes {spread.heaviestSharePercent}% of this world, over the{' '}
       {spread.degenerateThresholdPercent}% threshold.
     </p> : null}
-    <div className="viz-table-scroll">
+    <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Who holds this world, by position">
       <table className="holders-table">
         <thead>
           <tr>

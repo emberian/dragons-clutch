@@ -237,7 +237,7 @@ export function Settlement({ series }: Readonly<{ series: SimulatorSeriesV1 }>) 
     <p className="direct-status">
       The terminal certificate selected cell {series.settlement?.selectedCell}. One claim on that cell is worth {series.claimUnitAtoms} collateral atom{series.claimUnitAtoms === '1' ? '' : 's'}; one claim on every other cell is worth nothing. That is the whole of a settlement, and it is the only price move a market without fills ever makes.
     </p>
-    <div className="viz-table-scroll">
+    <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="What each outcome is owed at settlement">
       <table className="holders-table">
         <thead><tr><th>Outcome</th><th>Claims issued · raw u64</th><th>Collateral per claim</th><th>Owed in total</th></tr></thead>
         <tbody>

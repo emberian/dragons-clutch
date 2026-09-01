@@ -624,6 +624,14 @@ pub(super) mod tests {
         SERIES_CONSUME_ACCOUNT_PROFILE_BYTES_V4, SeriesConsumeAccountProfileInputV4,
         encode_series_consume_account_profile_v4_atomic,
     };
+    use crate::series::consume_artifacts_v4::{
+        SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4, SERIES_CONSUME_COMMON_SCALAR_COUNT_V4,
+    };
+
+    /// Exact common scalar bank width the Consume artifacts declare.
+    pub(crate) const CONSUME_SCALARS: usize = SERIES_CONSUME_COMMON_SCALAR_COUNT_V4 as usize;
+    /// Exact common identity bank width the Consume artifacts declare.
+    pub(crate) const CONSUME_IDENTITIES: usize = SERIES_CONSUME_COMMON_IDENTITY_COUNT_V4 as usize;
 
     fn id(bytes: [u8; 32]) -> ContentId {
         ContentId::new(bytes).expect("nonzero identity")
@@ -785,12 +793,28 @@ pub(super) mod tests {
     }
 
     /// A policy claiming the Ticket refuses at its own named wall — as the
-    /// plan's state, as its RentCredit, and through the route alias — while
-    /// the canonical root-only policy passes the same wall.
+    /// plan's state and through the route alias — while the canonical
+    /// root-only policy passes the same wall.
     ///
     /// The refusal CODE is asserted, not just failure: a hostile that only
     /// proved "something refused" would stay green if the policy died at the
     /// generic lifecycle join instead of at the second-author pin.
+    ///
+    /// **The RentCredit shape is no longer reachable against this profile,
+    /// and the third assertion below is what measures that rather than
+    /// assuming it.** `validate_plan_permissions` (added to the generic
+    /// profile join in `73ffb010`) requires a `Close` plan's state to carry
+    /// `DEBIT_LAMPORTS | WRITE_DATA` and its RentCredit to carry
+    /// `CREDIT_LAMPORTS`; `Create`/`AuthenticateOrCreate` want the mirrored
+    /// set. The Series Consume profile grants `WRITE_DATA` to the root and the
+    /// Ticket and nothing at all to every other coordinate
+    /// (`account_profile_v4::fixed_rule`), so **no** Consume policy can carry
+    /// a Create or Close plan, and the wire format already refuses `payer` and
+    /// `rent_credit` on an `Authenticate` plan. Only the state coordinate can
+    /// still name the Ticket. The pin's payer and RentCredit arms are
+    /// therefore defense in depth against a profile that does grant a lamport
+    /// permission; they are kept, and the control below records that today
+    /// they are shadowed by the generic wall rather than exercised by it.
     #[test]
     fn a_ticket_claiming_policy_refuses_at_the_ticket_authorship_wall() {
         let profile_bytes = decoded_profile();
@@ -805,10 +829,20 @@ pub(super) mod tests {
             wall(&hostile_policy(SeriesActionV3::Consume, 59, None)),
             Err(SeriesArtifactErrorV4::TicketAuthorship)
         );
-        // Claimed as the refund destination of a root plan.
+        // Claimed as the refund destination of a root plan: refused, but by
+        // the generic permission wall ahead of the pin. The two arms of this
+        // assertion are what keep it honest — the Ticket claim and a claim
+        // naming a coordinate the pin does not care about refuse IDENTICALLY,
+        // which is the measurement that this shape no longer discriminates.
+        // If the Consume profile ever grants a lamport permission, the first
+        // arm becomes `TicketAuthorship` and this assertion fails loudly.
         assert_eq!(
             wall(&hostile_policy(SeriesActionV3::Consume, 0, Some(59))),
-            Err(SeriesArtifactErrorV4::TicketAuthorship)
+            Err(SeriesArtifactErrorV4::Lifecycle)
+        );
+        assert_eq!(
+            wall(&hostile_policy(SeriesActionV3::Consume, 0, Some(1))),
+            Err(SeriesArtifactErrorV4::Lifecycle)
         );
         // Claimed through the authenticated route alias (140 -> 59).
         assert_eq!(
@@ -842,11 +876,15 @@ pub(super) mod tests {
         )
         .expect("Series Profile13");
         let exact = AccountProfileV2::decode(&bytes).expect("decode Profile13");
-        let scalars = [128, 64, 2, 32, 7, 9, 4];
+        // Both banks are typed by the emitter's own width constants, so a
+        // future widening is a compile error here rather than a runtime
+        // `Successor` refusal from `validate_request_coverage`.
+        let scalars: [u64; CONSUME_SCALARS] = [128, 64, 2, 32, 7, 9, 4];
+        let identities = [[9_u8; 32]; CONSUME_IDENTITIES];
         let registers = SeriesConsumeArtifactRegistersV4 {
             tail_count: 258,
             scalars: &scalars,
-            identities: &[[9_u8; 32]; 6],
+            identities: &identities,
             funding_count_hint: 7,
         };
         let effect_program = crate::series::effect_v4::tests::successor();

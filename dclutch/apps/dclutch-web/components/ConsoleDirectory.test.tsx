@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import ConsoleDirectory from './ConsoleDirectory';
-import { BROWSER_CAPABILITY_STANDINGS_V1 } from '@/lib/capabilitySurface';
+import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1 } from '@/lib/capabilitySurface';
 
 /**
  * The directory, held to the model it is generated from.
@@ -60,6 +60,36 @@ describe('the console index', () => {
     const walls = listed.flatMap((standing) => standing.walls);
     expect(walls.length).toBeGreaterThan(0);
     for (const held of walls) expect(html).toContain(held.statement);
+  });
+
+  it('says what a reader must already hold, in the card that asks for it', () => {
+    // The venue line says what an act DOES. It never said what an act cannot
+    // be STARTED without, and that is how a redemption whose second step
+    // opens a file picker for a Rust-authored payout plan came to be
+    // advertised as one wallet signature sent from here.
+    const needing = listed.filter((standing) =>
+      browserActPrerequisitesV1(standing).some((entry) => entry.id === 'external-file'));
+    expect(needing.length, 'no listed act reads a file, so this assertion proves nothing').toBeGreaterThan(0);
+    for (const standing of needing) {
+      const outcome = html.indexOf(standing.action.action);
+      expect(outcome, `${standing.action.id} has no outcome line`).toBeGreaterThanOrEqual(0);
+      const statement = browserActPrerequisitesV1(standing)
+        .filter((entry) => entry.id === 'external-file')
+        .map((entry) => entry.statement)[0]!;
+      expect(
+        html.indexOf(statement, outcome),
+        `${standing.action.id} needs a file this browser cannot produce and its card does not say so`,
+      ).toBeGreaterThan(outcome);
+    }
+  });
+
+  it('states no prerequisite on an act that does not have it', () => {
+    // The mirror-image failure, and the cheaper one to ship: a line every card
+    // carries says nothing, and a reader stops reading it.
+    const free = listed.filter((standing) => browserActPrerequisitesV1(standing).length === 0);
+    expect(free.length, 'every listed act has a prerequisite, so this assertion proves nothing').toBeGreaterThan(0);
+    const stated = (html.match(/Before you start/g) ?? []).length;
+    expect(stated).toBe(listed.length - free.length);
   });
 
   it('keeps product journeys on the product and names the provenance answer key', () => {

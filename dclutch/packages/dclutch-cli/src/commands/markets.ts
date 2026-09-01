@@ -14,7 +14,8 @@ import {
   type MarketDiscoveryCardV1,
 } from '@dclutch/sdk/marketDiscovery';
 
-import { optionalProgramId, programId, rpcClient, type CliContext } from '../context';
+import { bindDeploymentIdentity, optionalProgramId, programId, rpcClient, type CliContext } from '../context';
+import { deploymentProvenanceLineV1 } from '../deployment';
 import { block, type Io } from '../output';
 
 function cardLine(card: MarketDiscoveryCardV1): string {
@@ -25,6 +26,7 @@ function cardLine(card: MarketDiscoveryCardV1): string {
 
 export async function marketsLs(context: CliContext, io: Io): Promise<number> {
   const client = rpcClient(context);
+  const admission = await bindDeploymentIdentity(context, client, 'markets ls');
   const coreProgramId = programId(context, 'core');
   const enumeration = await enumerateCoreMarketAddressesV1(client, coreProgramId);
   if (enumeration.mode === 'refused') {
@@ -45,6 +47,9 @@ export async function marketsLs(context: CliContext, io: Io): Promise<number> {
     return 0;
   }
   io.out(`markets under Core ${coreProgramId} at finalized slot ${discovery.floorSlot} (${enumeration.note})`);
+  if (admission !== null && context.deployment !== null) {
+    io.out(`  ${deploymentProvenanceLineV1(context.deployment)}; endpoint proved genesis ${admission.genesisHash}`);
+  }
   if (discovery.cards.length === 0) io.out('  no market accounts found');
   for (const card of discovery.cards) io.out(`  ${cardLine(card)}`);
   return 0;
@@ -52,6 +57,7 @@ export async function marketsLs(context: CliContext, io: Io): Promise<number> {
 
 export async function marketsShow(context: CliContext, io: Io, address: string): Promise<number> {
   const client = rpcClient(context);
+  await bindDeploymentIdentity(context, client, 'markets show');
   const detail = await inspectMarketDetailV1(client, {
     address,
     coreProgramId: programId(context, 'core'),

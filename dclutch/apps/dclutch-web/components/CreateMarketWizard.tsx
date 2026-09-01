@@ -421,7 +421,12 @@ export default function CreateMarketWizard() {
           return <tr key={compartment.name} className={total && total.amount > 0n ? 'wizard-paying' : ''}>
             <td>{compartment.name}</td>
             <td>{compartment.assetPolicy}</td>
-            <td><input inputMode="numeric" className="wizard-inline-input" value={compartments[compartment.name]} onChange={(event) => setCompartments((current) => ({ ...current, [compartment.name]: event.target.value }))} /></td>
+            {/* The row's first cell names this box on screen and to nobody
+                else: a screen reader does not read the cell to the left, and
+                these `<th>`s carry no `scope`, so the field announced itself
+                as "edit, blank" once per compartment. The name says what the
+                number is as well as which service it belongs to. */}
+            <td><input inputMode="numeric" className="wizard-inline-input" aria-label={`${compartment.name} · lamports per service`} value={compartments[compartment.name]} onChange={(event) => setCompartments((current) => ({ ...current, [compartment.name]: event.target.value }))} /></td>
             <td>{total ? `${total.amount.toString()} · ${total.assetClass}` : '—'}</td>
           </tr>;
         })}</tbody>

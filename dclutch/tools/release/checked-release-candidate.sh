@@ -33,11 +33,23 @@ usage: checked-release-candidate.sh [options]
                  REQUIRED; its URL, SHA-256, Node, and sibling npm are pinned.
   --predecessor-profile PATH
                  the dumped 144-byte infrastructure profile account this
-                 candidate's succession succeeds. REQUIRED, and the one input
-                 that cannot be built from source: a succession is not a
-                 function of the successor alone, so the predecessor's own two
-                 binding ids -- which the ceremony copies into the profile it
-                 commits -- have to be read from the chain being succeeded.
+                 candidate's succession succeeds. Required for a SUCCESSION
+                 candidate, and the one input that cannot be built from source:
+                 a succession is not a function of the successor alone, so the
+                 predecessor's own two binding ids -- which the ceremony copies
+                 into the profile it commits -- have to be read from the chain
+                 being succeeded.
+  --genesis-cohort
+                 build a GENESIS candidate instead: one that succeeds nothing,
+                 founding infrastructure on a fresh cohort rather than moving
+                 an existing one. Mutually exclusive with --predecessor-profile
+                 and exactly one of the two is required, so the lineage is
+                 always a stated choice and never a default. A genesis
+                 candidate emits the write-once V1 profile that
+                 InitializeProtocolInfrastructureV1 commits, records
+                 infrastructure_lineage=genesis in its summary, and -- being a
+                 function of its own manifests alone -- is the only one of the
+                 two a COLD MACHINE with no network can build.
   --keep-elf     legacy option; refused because reused ELFs have no fresh-build proof
   --allow-build-diagnostics
                  admit artifacts whose SBF build emitted a stack-frame
@@ -56,6 +68,7 @@ PREBUILT_TOOL="false"
 COMMIT="HEAD"
 BUILDER="local"
 PREDECESSOR_PROFILE=""
+GENESIS_COHORT="false"
 NODE=""
 NODE_ARCHIVE=""
 KEEP_ELF="false"
@@ -70,6 +83,7 @@ while [ "$#" -gt 0 ]; do
         --node) NODE="${2:?--node needs a value}"; shift 2 ;;
         --node-archive) NODE_ARCHIVE="${2:?--node-archive needs a value}"; shift 2 ;;
         --predecessor-profile) PREDECESSOR_PROFILE="${2:?--predecessor-profile needs a value}"; shift 2 ;;
+        --genesis-cohort) GENESIS_COHORT="true"; shift ;;
         --keep-elf) KEEP_ELF="true"; shift ;;
         --allow-build-diagnostics) ALLOW_DIAGNOSTICS="true"; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -99,10 +113,22 @@ if [ "$KEEP_ELF" = "true" ]; then
     echo "refusing --keep-elf: a checked release requires a fresh top-package compile marker for every SBF link; use a new --work root" >&2
     exit 2
 fi
-if [ -z "$PREDECESSOR_PROFILE" ]; then
-    echo "--predecessor-profile is required: the checked infrastructure evidence describes a succession, and the predecessor account it succeeds cannot be derived from source" >&2
+# The candidate's infrastructure lineage is a stated choice, never a default,
+# and the two states are not interchangeable: a SUCCESSION emits the V2 profile
+# that pins the two predecessor artifact-release ids read from the chain being
+# succeeded, while a GENESIS emits the write-once V1 profile a cohort that
+# succeeds nothing commits. Requiring exactly one means neither can be reached
+# by omission, so no summary can describe a founding as a succession or the
+# reverse.
+if [ "$GENESIS_COHORT" = "true" ] && [ -n "$PREDECESSOR_PROFILE" ]; then
+    echo "--genesis-cohort and --predecessor-profile are mutually exclusive: a genesis cohort succeeds nothing, so it has no predecessor account to pin" >&2
     exit 2
 fi
+if [ "$GENESIS_COHORT" = "false" ] && [ -z "$PREDECESSOR_PROFILE" ]; then
+    echo "--predecessor-profile is required for a succession candidate: the checked infrastructure evidence describes a succession, and the predecessor account it succeeds cannot be derived from source. For a cohort that succeeds nothing, pass --genesis-cohort instead" >&2
+    exit 2
+fi
+if [ "$GENESIS_COHORT" = "false" ]; then
 case "$PREDECESSOR_PROFILE" in
     /*) ;;
     *) echo "--predecessor-profile must be an absolute canonical path" >&2; exit 2 ;;
@@ -118,6 +144,7 @@ PREDECESSOR_CANONICAL="$PREDECESSOR_PARENT/$(basename "$PREDECESSOR_PROFILE")"
 PREDECESSOR_PROFILE_BYTES="$(wc -c < "$PREDECESSOR_PROFILE" | tr -d ' ')"
 [ "$PREDECESSOR_PROFILE_BYTES" = "144" ] \
     || { echo "--predecessor-profile must be exactly 144 bytes, got $PREDECESSOR_PROFILE_BYTES" >&2; exit 2; }
+fi
 
 # The public Product handoff is a checked candidate gate, so its JS runtime is
 # an admitted build input rather than an ambient PATH choice. Both final Linux
@@ -324,10 +351,15 @@ cmp -s "$NODE_ARCHIVE" "$PINNED_NODE_ARCHIVE" \
 # Succession is a function of both the frozen source and the public predecessor
 # account state. Preserve that otherwise-external input inside the candidate
 # before deriving anything, then use only the preserved copy downstream.
+#
+# A genesis candidate has no such external input at all -- which is precisely
+# what makes it, and only it, buildable on a cold machine with no network.
 PINNED_PREDECESSOR_PROFILE="$INFRA_DIR/predecessor-profile.bin"
-cp "$PREDECESSOR_PROFILE" "$PINNED_PREDECESSOR_PROFILE"
-cmp -s "$PREDECESSOR_PROFILE" "$PINNED_PREDECESSOR_PROFILE" \
-    || { echo "copied predecessor profile differs from its admitted input" >&2; exit 1; }
+if [ "$GENESIS_COHORT" = "false" ]; then
+    cp "$PREDECESSOR_PROFILE" "$PINNED_PREDECESSOR_PROFILE"
+    cmp -s "$PREDECESSOR_PROFILE" "$PINNED_PREDECESSOR_PROFILE" \
+        || { echo "copied predecessor profile differs from its admitted input" >&2; exit 1; }
+fi
 
 # ---------------------------------------------------------------- source pin
 SOURCE_REVISION="$(git -C "$REPO" rev-parse "$COMMIT")"
@@ -877,11 +909,23 @@ cmp -s "$SET_DIR/multiprogram.txt" "$SET_DIR/inspect-set.txt" \
 echo "checked: five-role execution release set"
 
 # --------------------------------------------- immutable infrastructure join
-run_tool derive-infrastructure-profile \
-    --registry "$EVIDENCE/registry/checked.bin" \
-    --rent "$EVIDENCE/rent/checked.bin" \
-    --predecessor-profile "$PINNED_PREDECESSOR_PROFILE" \
-    --out "$INFRA_DIR/profile.bin"
+# Two different chain acts, two different profile versions, one stated choice.
+# The succession emits V2 and pins the predecessor's two artifact-release ids;
+# the genesis emits the write-once V1 that InitializeProtocolInfrastructureV1
+# commits at `dclutch:infrastructure:v1` on a cohort whose profile PDA is still
+# vacant. Neither command can produce the other's bytes.
+if [ "$GENESIS_COHORT" = "true" ]; then
+    run_tool derive-genesis-infrastructure-profile \
+        --registry "$EVIDENCE/registry/checked.bin" \
+        --rent "$EVIDENCE/rent/checked.bin" \
+        --out "$INFRA_DIR/profile.bin"
+else
+    run_tool derive-infrastructure-profile \
+        --registry "$EVIDENCE/registry/checked.bin" \
+        --rent "$EVIDENCE/rent/checked.bin" \
+        --predecessor-profile "$PINNED_PREDECESSOR_PROFILE" \
+        --out "$INFRA_DIR/profile.bin"
+fi
 # shellcheck disable=SC2086
 run_tool create-infrastructure \
     --execution "$SET_DIR/multiprogram.checked" \
@@ -976,7 +1020,19 @@ fi
     done
     printf 'execution_release_set_preimage_sha256=%s\n' "$(sha256 "$SET_DIR/execution-release-set.bin")"
     printf 'multiprogram_manifest_sha256=%s\n' "$(sha256 "$SET_DIR/multiprogram.checked")"
-    printf 'predecessor_infrastructure_profile_sha256=%s\n' "$(sha256 "$PINNED_PREDECESSOR_PROFILE")"
+    # The lineage is stated unconditionally so no reader has to infer it from
+    # the presence or absence of another line, and the two states never share a
+    # key: a genesis says `predecessor_infrastructure_profile=none` rather than
+    # putting the word "none" where a consumer expects 64 hex digits.
+    if [ "$GENESIS_COHORT" = "true" ]; then
+        printf 'infrastructure_lineage=genesis\n'
+        printf 'infrastructure_profile_version=1\n'
+        printf 'predecessor_infrastructure_profile=none\n'
+    else
+        printf 'infrastructure_lineage=succession\n'
+        printf 'infrastructure_profile_version=2\n'
+        printf 'predecessor_infrastructure_profile_sha256=%s\n' "$(sha256 "$PINNED_PREDECESSOR_PROFILE")"
+    fi
     printf 'infrastructure_profile_sha256=%s\n' "$(sha256 "$INFRA_DIR/profile.bin")"
     printf 'infrastructure_manifest_sha256=%s\n' "$(sha256 "$INFRA_DIR/infrastructure.checked")"
     sed -n 's/^/multiprogram./p' "$SET_DIR/multiprogram.txt"

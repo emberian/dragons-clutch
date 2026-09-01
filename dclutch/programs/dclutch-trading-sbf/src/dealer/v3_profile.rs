@@ -59,7 +59,14 @@ const CLAIMS_CORE_PROGRAM_ACCOUNT_V3: u16 = 18;
 // The shared Hot prefix projects this finalized record through its authenticated
 // content digest rather than pinning one adapter serialization. Claims borrows
 // that same semantic owner at its linked-basis route coordinate.
-const LINKED_BASIS_CONTENT_ACCOUNT_V3: u16 = 4;
+//
+// Visible module-wide because this is the topology's one
+// `AdapterAuthenticatedVariableData` coordinate, and that prestate requires a
+// NONZERO declared width (`v2.rs`: `rule.data_length == 0` refuses). Every
+// caller that builds a `logical_data_lengths` array has to know which
+// coordinate that is, and a caller who cannot name it writes `4` down a second
+// time.
+pub(super) const LINKED_BASIS_CONTENT_ACCOUNT_V3: u16 = 4;
 
 /// Stable construction refusal for one exact logical profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -224,7 +224,7 @@ export default function SplineProductArtifactInspector() {
           <article><span>Rounding</span><strong>cumulative-floor-v3</strong><p>Semantic basis <code>{result.semanticBasisId}</code></p></article>
         </div>
 
-        <div className="spline-artifact-table">
+        <div className="spline-artifact-table" tabIndex={0} role="region" aria-label="Compiler files, bytes and Registry coordinates">
           <Table>
             <TableHeader><TableRow><TableHead>Compiler file</TableHead><TableHead>Bytes and SHA-256</TableHead><TableHead>Registry coordinates</TableHead></TableRow></TableHeader>
             <TableBody>{Object.values(result.records).map((record) => <TableRow key={record.file}>

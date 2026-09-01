@@ -171,7 +171,7 @@ export default function ExposureBand({
     </p>
     <details className="viz-table">
       <summary>Exact numbers</summary>
-      <div className="viz-table-scroll">
+      <div className="viz-table-scroll" tabIndex={0} role="region" aria-label={`Exact numbers · ${caption}`}>
         <table>
           <thead><tr><th>Band</th><th>At least · raw u64</th><th>At most · raw u64</th><th>Decided by the outcome</th></tr></thead>
           <tbody>

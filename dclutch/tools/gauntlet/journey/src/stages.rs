@@ -202,6 +202,15 @@ pub(crate) fn admit_open_market(
         )));
     }
 
+    // The Custody namespace L8 classifies against, taken from the same
+    // authenticated aggregate the Hoard derivation above is taken from. Every
+    // compartment's vault address is DERIVED here; nothing declares a class.
+    ledger.admit_custody_namespace(
+        custody_program,
+        addresses.founding_market.to_bytes(),
+        aggregate.release_set,
+        aggregate.custody_context,
+    );
     ledger.track_token_account("founder_collateral_wallet", addresses.founder_wallet);
     ledger.admit_founding(addresses.hoard, addresses.aggregate, claim_unit_atoms);
     ledger.track_position("founder_position", addresses.founder_position);

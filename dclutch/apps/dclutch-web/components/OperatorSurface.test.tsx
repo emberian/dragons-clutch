@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import OperatorSurface, { packetExportReadyV1, type PacketExportStateV1 } from './OperatorSurface';
+import { browserActPrerequisitesV1, BROWSER_CAPABILITY_STANDINGS_V1 } from '@/lib/capabilitySurface';
 
 describe('operator surface presentation', () => {
   it('shows executable breadth and exact refusal boundaries without invented state', () => {
@@ -73,6 +74,27 @@ describe('operator surface presentation', () => {
     // The vocabulary of a roadmap, in every spelling this surface has used.
     for (const word of ['awaiting production', 'coming soon', 'unavailable', 'greyed-out', 'rust unsigned']) {
       expect(html.toLowerCase()).not.toContain(word);
+    }
+  });
+
+  it('names what an act cannot be started without, beside what it does', () => {
+    // The census says where each act runs and what it promises. Neither
+    // sentence could ever say that `claims.redeem` opens a file picker for a
+    // payout plan only a Rust binary authors, so a reader planning a session
+    // read "one wallet signature, sent from here" and planned a session that
+    // stops at step two. Derived in `browserActPrerequisitesV1`, rendered
+    // here beside the guarantee it qualifies.
+    const html = renderToStaticMarkup(<OperatorSurface />);
+    const needing = BROWSER_CAPABILITY_STANDINGS_V1
+      .filter((standing) => browserActPrerequisitesV1(standing).some((entry) => entry.id === 'external-file'));
+    expect(needing.length, 'no act reads a file, so this assertion proves nothing').toBeGreaterThan(0);
+    for (const standing of needing) {
+      const outcome = html.indexOf(standing.action.action);
+      expect(outcome, `${standing.action.id} is not on the census`).toBeGreaterThanOrEqual(0);
+      expect(
+        html.indexOf('a file this browser cannot produce', outcome),
+        `${standing.action.id} needs a file this browser cannot produce and the census does not say so`,
+      ).toBeGreaterThan(outcome);
     }
   });
 

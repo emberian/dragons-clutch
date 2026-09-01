@@ -41,9 +41,16 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     // addresses used to arrive with a label and nothing else.
     expect(html).toContain('The wallet that funds both packets and signs them elsewhere.');
     expect(html).toContain('Embedded once in the Market-bound RentCredit and immutable afterwards');
-    expect(html).toContain('at the Product record’s bytes 48..80');
-    expect(html).toContain('at its bytes 208..240');
+    // These two used to pin a byte range the browser had written down in its
+    // own words. The coordinates now come from `lib/generated/coreFound.ts`,
+    // so the sentence names the RECORD the value is read out of and the
+    // number is nowhere in this component to drift.
+    expect(html).toContain('Read it out of the Product record above rather than finding it');
+    expect(html).toContain('Read it out of the SourceMaterialV3 record above rather than finding it');
     expect(html).toContain('Its dependency graph must terminate; a cycle is refused.');
+    // The one place a byte range could come back: nowhere on this page.
+    expect(html).not.toContain('bytes 48..80');
+    expect(html).not.toContain('bytes 208..240');
   });
 
   it('is honest that the linked basis is never joined to the graph', () => {
@@ -52,11 +59,33 @@ describe('Core Found workspace: what each field is, and where its value comes fr
     expect(html).toContain('none of its bytes are joined to the semantic graph');
   });
 
-  it('names the five records another record already answers, as named debt', () => {
-    // §3.2: derivable, but only with a chain read this console does not make
-    // before submit. Recorded rather than smuggled in under a forms pass.
-    const derivable = html.split('Derivable from that record once this console reads it').length - 1;
-    expect(derivable).toBe(5);
+  it('derives four of the five records another record already answers', () => {
+    // WAS: five addresses carrying "Derivable from that record once this
+    // console reads it; today it is typed and then checked" -- named debt,
+    // recorded rather than paid. Four are now read out of the parent record
+    // that names them, so the console asks for ten addresses instead of
+    // fourteen and four fewer places exist for a reader to be silently wrong.
+    const stillTyped = html.split('Derivable from that record once this console reads it').length - 1;
+    expect(stillTyped, 'only the capacity profile should still be named debt').toBe(1);
+    // The one that remains says exactly why, and names the Rust that owes the
+    // constant: an unexplained leftover is how four become five again.
+    expect(html).toContain('SourceSpecV1 writes that coordinate as a bare number with no named constant');
+    // Four fields, each pointing at the parent it is read out of.
+    const product = html.split('Read it out of the Product record above').length - 1;
+    const source = html.split('Read it out of the SourceMaterialV3 record above').length - 1;
+    expect(product).toBe(2);
+    expect(source).toBe(2);
+  });
+
+  it('offers the derivation as an act, and never pretends it has already run', () => {
+    // A field that says "derived" before any chain read is the same claim as
+    // a status somebody typed. Until the button runs, the four say what they
+    // are and that they are waiting.
+    expect(html).toContain('Read the four dependent records');
+    expect(html).toContain('No dependent record has been read.');
+    // The post-read provenance line, which names a finalized slot, must not
+    // appear before a read has produced one.
+    expect(html).not.toContain('at finalized slot');
   });
 
   it('fills the deployment fields and says so, rather than filling them silently', () => {

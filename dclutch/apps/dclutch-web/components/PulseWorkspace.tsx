@@ -314,7 +314,7 @@ export function WhoIsHolding({ series }: Readonly<{ series: SimulatorSeriesV1 }>
   }
   return <>
     <p className="direct-status">{reading.sentence}</p>
-    {reading.positionCount > 0 && <div className="viz-table-scroll">
+    {reading.positionCount > 0 && <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="Claims held, per position and outcome">
       <table className="holders-table">
         <thead><tr><th>Position</th><th>Address</th><th>Claims held, per outcome · raw u64</th><th>Total claims</th></tr></thead>
         <tbody>
@@ -329,7 +329,7 @@ export function WhoIsHolding({ series }: Readonly<{ series: SimulatorSeriesV1 }>
     </div>}
     {series.collateralHolders.length > 0 && <>
       <h3 className="detail-subhead">The collateral, and who is holding it</h3>
-      <div className="viz-table-scroll">
+      <div className="viz-table-scroll" tabIndex={0} role="region" aria-label="The collateral, and who is holding it">
         <table className="holders-table">
           <thead><tr><th>Account</th><th>Address</th><th>Collateral atoms · raw u64</th></tr></thead>
           <tbody>

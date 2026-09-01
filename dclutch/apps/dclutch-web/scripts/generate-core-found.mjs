@@ -177,6 +177,30 @@ for (const [source, name] of [
   ['releaseSet', 'EXECUTION_RELEASE_SET_SCHEMA_RELEASE_ID_V1'],
   ['registry', 'ARTIFACT_RELEASE_SCHEMA_ID_V1'],
 ]) output += array(name, bytes(source, name));
+
+// ---------------------------------------- where a parent names its children
+// A Product record carries the digests of the result domain and the portfolio
+// it selects; a SourceMaterialV3 carries the digests of its source spec and
+// its manipulation floor. Each of those digests plus its schema id is the whole
+// input to the Registry's record PDA, so an address the `/found` console used
+// to ask a stranger to paste is a value the parent already contains.
+//
+// The coordinates come from the Rust that writes them and are never retyped:
+// `PRODUCT_DOMAIN_DIGEST_OFFSET` and its siblings are named constants in the
+// admission and source contracts, and `scalar()` fails loudly if one is
+// renamed. There is a FIFTH such address -- the capacity profile the source
+// spec selects -- and it is deliberately absent: `SourceSpecV1::decode` and
+// `to_bytes` write that coordinate as a bare `144`
+// (crates/dclutch-source-contract/src/lib.rs:911,927), so there is no named
+// constant to emit and nothing the browser could import instead of restating
+// it. Restating it is what this file exists to refuse, so that address stays
+// typed and the missing constant is a routed finding.
+output += `export const PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2 = ${scalar('product', 'PRODUCT_DOMAIN_DIGEST_OFFSET')} as const;\n`;
+output += `export const PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2 = ${scalar('product', 'PRODUCT_PORTFOLIO_DIGEST_OFFSET')} as const;\n`;
+output += `export const SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_PRIMARY_SOURCE_SPEC_OFFSET')} as const;\n`;
+output += `export const SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_MANIPULATION_FLOOR_OFFSET')} as const;\n`;
+output += `export const SOURCE_MATERIAL_PRODUCT_RECORD_DIGEST_OFFSET_V3 = ${scalar('source', 'SOURCE_MATERIAL_V3_PRODUCT_RECORD_DIGEST_OFFSET')} as const;\n`;
+
 output += `export const LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2 = new TextEncoder().encode('${byteString('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2')}');\n`;
 output += array('LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_INSTRUCTION_MAGIC_V2'));
 output += array('LIFECYCLE_RENT_CREDIT_MAGIC_V2', bytes('lifecycleRent', 'LIFECYCLE_RENT_CREDIT_MAGIC_V2'));

@@ -4,7 +4,7 @@ import Anchor from '@/components/Anchor';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
-import { prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
+import { deriveCoreFoundRecordsV2, prepareCoreFoundV2, type CoreFoundInputV2, type CoreFoundPlanV2 } from '@/lib/coreFound';
 import { CORE_FOUND_ACCOUNT_LABELS_V3, CORE_FOUND_ACCOUNT_ROLES_V3 } from '@/lib/generated/coreFound';
 import { useDeploymentFieldV1, useDeploymentV1 } from '@/lib/deploymentStore';
 import { SolanaRpcClient } from '@/lib/rpc';
@@ -48,12 +48,17 @@ dclutch --rpc "$DEVNET_RPC" \\
  * that's a bug in the console." Fourteen addresses arrived here with a label
  * and nothing else.
  *
- * `derivable` marks the five the SDK already CHECKS a join for and could
- * therefore compute -- see the note each one carries. Closing those needs a
- * chain read this console does not make before submit, so §3.2 records them
- * rather than smuggling a new RPC dependency into a forms pass.
+ * `derived` marks the four this console now READS rather than asks for. Each
+ * is a digest a parent record on this same list already carries at a named
+ * coordinate, and digest plus schema is the whole input to the Registry's raw
+ * PDA -- so asking a reader for it was asking them to be an oracle for a chain
+ * read this console can make itself. §3.2 recorded five of these as named
+ * debt; four are paid, and the fifth says in its own provenance line why it is
+ * not (`SourceSpecV1` writes that coordinate as a bare number, so there is no
+ * constant for the ABI generator to emit and nothing to import instead of
+ * restating it).
  */
-const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string; group: 'authority' | 'deployment' | 'records'; provenance: string }>> = Object.freeze([
+const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: string; group: 'authority' | 'deployment' | 'records'; provenance: string; derived?: 'product' | 'source' }>> = Object.freeze([
   { field: 'payer', label: 'Payer', group: 'authority',
     provenance: 'The wallet that funds both packets and signs them elsewhere. It must be a plain System-owned wallet holding no account data.' },
   { field: 'refundWallet', label: 'Immutable rent refund wallet', group: 'authority',
@@ -64,20 +69,20 @@ const ADDRESS_FIELDS: ReadonlyArray<Readonly<{ field: AddressField; label: strin
     provenance: 'The finalized Registry raw record holding this market\u2019s Realm. Its address is the PDA of the Realm schema and the record\u2019s own content digest.' },
   { field: 'productRecord', label: 'Product Runtime V2 raw', group: 'records',
     provenance: 'The finalized record holding the Product Runtime V2 root this market pays by. It names the result domain and the portfolio below.' },
-  { field: 'resultDomainRecord', label: 'Result domain raw', group: 'records',
-    provenance: 'The result domain the Product root selects, at the Product record\u2019s bytes 48..80. Derivable from that record once this console reads it; today it is typed and then checked.' },
-  { field: 'portfolioRecord', label: 'Portfolio raw', group: 'records',
-    provenance: 'The portfolio the Product root selects, at the Product record\u2019s bytes 80..112. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'resultDomainRecord', label: 'Result domain raw', group: 'records', derived: 'product',
+    provenance: 'The result domain the Product root selects. Read it out of the Product record above rather than finding it: the digest is at a named coordinate and the address is that digest under the result-domain schema.' },
+  { field: 'portfolioRecord', label: 'Portfolio raw', group: 'records', derived: 'product',
+    provenance: 'The portfolio the Product root selects. Read it out of the Product record above rather than finding it: the digest is at a named coordinate and the address is that digest under the portfolio schema.' },
   { field: 'linkedBasisRecord', label: 'Linked basis raw', group: 'records',
     provenance: 'A graded basis record. It is authenticated for PDA, owner and rent and placed in the Found37 frame \u2014 and unlike the other nine, none of its bytes are joined to the semantic graph.' },
   { field: 'sourceMaterialRecord', label: 'SourceMaterialV3 raw', group: 'records',
     provenance: 'The SourceMaterialV3 record. It names the Product digest, the source spec, and the manipulation floor, so three of the fields below are answers it already contains.' },
-  { field: 'sourceSpecRecord', label: 'Source spec raw', group: 'records',
-    provenance: 'The source spec SourceMaterialV3 selects, at its bytes 48..80. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'sourceSpecRecord', label: 'Source spec raw', group: 'records', derived: 'source',
+    provenance: 'The source spec SourceMaterialV3 selects. Read it out of the SourceMaterialV3 record above rather than finding it: the digest is at a named coordinate and the address is that digest under the source-spec schema.' },
   { field: 'capacityProfileRecord', label: 'Source capacity profile raw', group: 'records',
-    provenance: 'The capacity profile the source spec selects, at its bytes 144..176. Derivable from that record once this console reads it; today it is typed and then checked.' },
-  { field: 'manipulationFloorRecord', label: 'Manipulation floor raw', group: 'records',
-    provenance: 'The manipulation floor SourceMaterialV3 selects, at its bytes 208..240. Derivable from that record once this console reads it; today it is typed and then checked.' },
+    provenance: 'The capacity profile the source spec selects. It is the one address on this list that stays typed: SourceSpecV1 writes that coordinate as a bare number with no named constant, so there is nothing this browser could import instead of restating it. Derivable from that record once this console reads it; today it is typed and then checked.' },
+  { field: 'manipulationFloorRecord', label: 'Manipulation floor raw', group: 'records', derived: 'source',
+    provenance: 'The manipulation floor SourceMaterialV3 selects. Read it out of the SourceMaterialV3 record above rather than finding it: the digest is at a named coordinate and the address is that digest under the manipulation-floor schema.' },
   { field: 'capabilityManifestRecord', label: 'Capability manifest raw', group: 'records',
     provenance: 'The capability manifest this market founds with. Its dependency graph must terminate; a cycle is refused.' },
 ]);
@@ -130,9 +135,56 @@ export default function CoreFoundWorkspace() {
     kind: 'idle',
     message: 'No transaction has been constructed. Enter chain-derived record addresses to begin.',
   });
+  /**
+   * What the last dependent read produced, per field, or nothing yet.
+   *
+   * Held separately from the values so a field can say WHERE its value came
+   * from. A filled box that cannot say how it was filled is the same defect as
+   * an empty one somebody has to go and research; and a field whose provenance
+   * line claims a chain read before any read has run is a status typed in
+   * advance, which is why this starts empty and only the act fills it.
+   */
+  const [derivedFrom, setDerivedFrom] = useState<Partial<Record<AddressField, string>>>({});
+  const [derivation, setDerivation] = useState('No dependent record has been read.');
+  const [deriving, setDeriving] = useState(false);
 
   function update(field: AddressField, value: string): void {
     setAddresses((current) => ({ ...current, [field]: value.trim() }));
+    // An edited field is no longer what the chain said it was.
+    setDerivedFrom((current) => { const next = { ...current }; delete next[field]; return next; });
+  }
+
+  async function deriveDependents(): Promise<void> {
+    setDeriving(true);
+    setDerivation('Reading the Product and SourceMaterialV3 records at finalized commitment…');
+    try {
+      const read = await deriveCoreFoundRecordsV2(new SolanaRpcClient(endpoint), {
+        registryProgram: effective.registryProgram,
+        productRecord: effective.productRecord,
+        sourceMaterialRecord: effective.sourceMaterialRecord,
+      });
+      setAddresses((current) => ({
+        ...current,
+        resultDomainRecord: read.resultDomainRecord,
+        portfolioRecord: read.portfolioRecord,
+        sourceSpecRecord: read.sourceSpecRecord,
+        manipulationFloorRecord: read.manipulationFloorRecord,
+      }));
+      setDerivedFrom({
+        resultDomainRecord: read.provenance.resultDomainRecord,
+        portfolioRecord: read.provenance.portfolioRecord,
+        sourceSpecRecord: read.provenance.sourceSpecRecord,
+        manipulationFloorRecord: read.provenance.manipulationFloorRecord,
+      });
+      setDerivation(`Four addresses read from their parent records at finalized slot ${read.observedSlot}. The capacity profile is still yours to supply.`);
+    } catch (error) {
+      // A failed derivation must not leave four boxes holding a previous
+      // read's answers: the fields it owns are cleared with it.
+      setDerivedFrom({});
+      setDerivation(`Refused: ${failure(error)}`);
+    } finally {
+      setDeriving(false);
+    }
   }
 
   async function construct(event: FormEvent<HTMLFormElement>): Promise<void> {
@@ -163,13 +215,16 @@ export default function CoreFoundWorkspace() {
     const routed = refusalFor(entry.field);
     const derived = entry.field === 'registryProgram' ? deployment.programs.registry
       : entry.field === 'activationCache' ? deployment.activationCache ?? '' : null;
+    const read = derivedFrom[entry.field];
     return <div className="operator-field-slot" key={entry.field}>
       <PubkeyField
         label={entry.label}
         value={effective[entry.field]}
         onChange={(next) => update(entry.field, next)}
         required
-        provenance={derived === null
+        provenance={read !== undefined
+          ? read
+          : derived === null
           ? entry.provenance
           : <DerivedProvenance
             derived={derived === '' ? null : derived}
@@ -232,7 +287,13 @@ export default function CoreFoundWorkspace() {
 
       <fieldset className="operator-act">
         <legend>The ten finalized records this market is built from</legend>
-        <p>Every one is a Registry raw record, reauthenticated against the chain for owner, PDA, rent and exact ABI. Five of them are values another record on this list already names — those say so, and stay typed until this console reads that record before submitting.</p>
+        <p>Every one is a Registry raw record, reauthenticated against the chain for owner, PDA, rent and exact ABI. Four of them are values the Product and SourceMaterialV3 records above already carry — supply those two and this console reads the other four rather than asking you to find them.</p>
+        <div className="direct-actions">
+          <button type="button" disabled={deriving} onClick={() => void deriveDependents()}>
+            {deriving ? 'Reading the parent records…' : 'Read the four dependent records'}
+          </button>
+        </div>
+        <p className="direct-status" aria-live="polite">{derivation}</p>
         <div className="operator-act-grid">{group('records').map(addressField)}</div>
       </fieldset>
 

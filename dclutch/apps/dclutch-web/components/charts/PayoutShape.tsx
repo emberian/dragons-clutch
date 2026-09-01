@@ -178,7 +178,7 @@ export default function PayoutShape({
     <figcaption className="viz-caption">{caption}</figcaption>
     <details className="viz-table">
       <summary>Exact numbers</summary>
-      <div className="viz-table-scroll">
+      <div className="viz-table-scroll" tabIndex={0} role="region" aria-label={`Exact numbers · ${caption}`}>
         <table>
           <thead><tr><th>Coordinate</th><th>Pays · scaled payout atoms</th></tr></thead>
           <tbody>

@@ -129,10 +129,60 @@ fn run(arguments: Vec<String>) -> Result<()> {
         "fractional-retirement-next" => fractional::run(rest),
         "general" => general::run(rest),
         "ticket" => ticket::run(rest),
-        other => Err(Error::new(format!(
-            "unknown command `{other}`. Run `dclutch --help` for the commands it knows."
-        ))),
+        other => Err(Error::new(unknown_command_v1(other))),
     }
+}
+
+/// The verbs of the OTHER program that also installs an executable named
+/// `dclutch`.
+///
+/// This repository ships two of them: this binary (`tools/dclutch-cli`,
+/// installed by cargo) and the terminal client (`packages/dclutch-cli`,
+/// installed by npm as `@dclutch/cli`). Both declare the executable name
+/// `dclutch`, both are documented under that bare name — `docs/operators/
+/// author-a-ticket.md` teaches `dclutch ticket author`, which is this binary,
+/// while `docs/guides/trencher.md` teaches `dclutch markets ls`, which is not
+/// — and whichever comes first on `PATH` answers. A reader following either
+/// runbook with the other binary installed used to get
+/// "unknown command", which reads as a documentation error rather than as the
+/// PATH fact it is.
+///
+/// Listing the other binary's verbs here does not implement them and does not
+/// weaken anything: an unlisted typo still gets the plain refusal. It converts
+/// one specific dead end into a sentence naming the program that owns the verb.
+/// Keep it in step with `packages/dclutch-cli/src/main.ts`'s `USAGE`; the
+/// reciprocal list lives there.
+pub const TERMINAL_CLIENT_COMMANDS_V1: &[&str] = &[
+    "markets",
+    "portfolio",
+    "offer",
+    "intent",
+    "route",
+    "product",
+    "spine",
+    "redeem",
+    "found",
+    "join",
+    "walk",
+    "refusal",
+    "buy",
+    "sell",
+];
+
+/// The refusal for a verb this binary does not have.
+#[must_use]
+pub fn unknown_command_v1(command: &str) -> String {
+    if TERMINAL_CLIENT_COMMANDS_V1.contains(&command) {
+        return format!(
+            "`{command}` is not a command of THIS `dclutch`. Two programs in this project install \
+             an executable by that name, and whichever is first on PATH answers: this one is the \
+             Rust reader/authoring binary (`tools/dclutch-cli`), and `{command}` belongs to the \
+             terminal client `@dclutch/cli` (`packages/dclutch-cli`). Run `dclutch --help` to see \
+             which one you are running: this binary's commands are market, capability, ticket, \
+             general and fractional-retirement-next."
+        );
+    }
+    format!("unknown command `{command}`. Run `dclutch --help` for the commands it knows.")
 }
 
 /// The whole surface, in one screen, in the order a reader needs it.
@@ -389,6 +439,41 @@ mod tests {
     fn an_unknown_command_is_a_refusal_not_a_default() {
         let error = run(vec!["trade".to_owned()]).expect_err("must refuse");
         assert!(error.to_string().contains("unknown command `trade`"));
+    }
+
+    #[test]
+    fn the_other_dclutch_binarys_verbs_are_refused_by_naming_it() {
+        // Measured 2026-09-01: every one of these produced
+        // "unknown command `<verb>`" from this binary, which reads as a broken
+        // runbook instead of as the PATH collision it is.
+        for command in super::TERMINAL_CLIENT_COMMANDS_V1 {
+            let error = run(vec![(*command).to_owned()]).expect_err("must refuse");
+            let text = error.to_string();
+            assert!(
+                text.contains("@dclutch/cli") && text.contains("packages/dclutch-cli"),
+                "`{command}` refusal does not name the binary that owns it: {text}"
+            );
+            assert!(
+                !text.contains("unknown command"),
+                "`{command}` still reads as a typo: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_verb_this_binary_dispatches_is_claimed_by_the_other_one() {
+        for command in [
+            "market",
+            "capability",
+            "ticket",
+            "general",
+            "fractional-retirement-next",
+        ] {
+            assert!(
+                !super::TERMINAL_CLIENT_COMMANDS_V1.contains(&command),
+                "`{command}` is dispatched here and also listed as the other binary's"
+            );
+        }
     }
 
     #[test]

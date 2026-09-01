@@ -83,6 +83,7 @@ function context(): CliContext {
     session: EMPTY_SESSION,
     flags: Object.freeze({ 'bootstrap-bin': '/mock/successor' }),
     json: true,
+    deployment: null,
   });
 }
 

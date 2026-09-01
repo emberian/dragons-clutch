@@ -44,8 +44,9 @@ use dclutch_product_runtime_v2_admission::{
 };
 use dclutch_provider_transport_v3_operator::{
     ProviderExecuteDeploymentV3, ProviderExecuteIntentV3, ProviderExecuteSnapshotV3,
-    ProviderSubmitDeploymentV3, ProviderSubmitIntentV3, ProviderSubmitSnapshotV3,
-    build_provider_execute_v3, build_provider_submit_v3,
+    ProviderReclaimDeploymentV3, ProviderSubmitDeploymentV3, ProviderSubmitIntentV3,
+    ProviderSubmitSnapshotV3, ProviderTransportOperatorErrorV3, build_provider_execute_v3,
+    build_provider_reclaim_v3, build_provider_submit_v3,
 };
 use dclutch_pyth_svm::{
     FullPriceUpdateV2, PYTH_RELEASE_V1_ENCODED_LEN, PythReleaseV1, VerifiedEncodedVaaV1,
@@ -165,6 +166,12 @@ struct Fixture {
     provider_release: RecordPair,
     adapter_config: RecordPair,
     window: RecordPair,
+    /// A second, perfectly well-formed, finalized `WindowSpecV1` record whose
+    /// only difference is a later closing bound. Record publication is
+    /// permissionless, so this is a record anyone can put on chain; it exists
+    /// so a hostile can TRY to move this market's window rather than merely
+    /// assert that nothing does.
+    widened_window: RecordPair,
     statistic: RecordPair,
     pyth_release: RecordPair,
     capability_manifest: RecordPair,
@@ -947,6 +954,27 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         adapter_config_bytes.to_vec(),
     );
     let window = add_record(&mut test, WINDOW_SPEC_SCHEMA_ID_V1, window_bytes.to_vec());
+    // The same window with its closing bound pushed an hour out, published as
+    // its own finalized record. Nothing about it is malformed: same source
+    // spec, same kind, same skew, same schedule identity. It is exactly what
+    // an operator who wanted a later publication to count would author.
+    let widened_window_bytes = WindowSpecV1::new(
+        source_id(source_spec_id),
+        WindowKind::Terminal,
+        update_view.publish_time() - 300,
+        update_view.publish_time() + 3_600,
+        10,
+        1,
+        source_id([0x98; 32]),
+    )
+    .expect("widened terminal window")
+    .to_bytes();
+    assert_ne!(widened_window_bytes, window_bytes);
+    let widened_window = add_record(
+        &mut test,
+        WINDOW_SPEC_SCHEMA_ID_V1,
+        widened_window_bytes.to_vec(),
+    );
     let statistic = add_record(
         &mut test,
         STATISTIC_SPEC_SCHEMA_ID_V1,
@@ -1279,6 +1307,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         provider_release,
         adapter_config,
         window,
+        widened_window,
         statistic,
         pyth_release,
         capability_manifest,
@@ -1426,11 +1455,26 @@ async fn provider_execute_snapshot(
     fixture: &Fixture,
     lifecycle: Pubkey,
 ) -> ProviderExecuteSnapshotV3 {
+    let update = fixture.update.pubkey();
+    provider_execute_snapshot_for(context, fixture, lifecycle, update).await
+}
+
+/// The same observation against a named posted update, so a campaign can hold
+/// more than one live provider submission at a time. First-valid semantics is
+/// not observable with a single update account: the losing submission has to be
+/// as real as the winning one, posted through the same Receiver ELF, or the
+/// refusal under test is indistinguishable from a malformed-evidence refusal.
+async fn provider_execute_snapshot_for(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+    lifecycle: Pubkey,
+    update: Pubkey,
+) -> ProviderExecuteSnapshotV3 {
     ProviderExecuteSnapshotV3 {
         market: required_observed(context, fixture.market).await,
         source_state: required_observed(context, fixture.source).await,
         lifecycle: required_observed(context, lifecycle).await,
-        update: required_observed(context, fixture.update.pubkey()).await,
+        update: required_observed(context, update).await,
         source_material: required_observed(context, fixture.source_material.raw).await,
         source_spec: required_observed(context, fixture.source_spec.raw).await,
         source_provider_release: required_observed(context, fixture.provider_release.raw).await,
@@ -2258,6 +2302,58 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         fixture.provider.receiver
     );
 
+    // FIRST-VALID, HALF ONE. A SECOND update, posted through the same real
+    // Receiver ELF against the same VAA while this Source is still `Primary`.
+    // Both submissions are unimpeachably valid provider evidence at the moment
+    // they are made: same feed, same window, same release, same authenticated
+    // record graph, each with its own program-owned `Submitted` lifecycle. The
+    // only thing that will be different when the second one is consumed is that
+    // the first one already won.
+    let second_update = Keypair::new();
+    let second_post_update_body = post_update_body.clone();
+    let second_submit = build_provider_submit_v3(
+        &provider_submit_snapshot(&mut context, &fixture, encoded_vaa).await,
+        provider_submit_deployment(&fixture),
+        &ProviderSubmitIntentV3 {
+            submitter: payer,
+            refund_recipient: fixture.rent_credit,
+            update_account: second_update.pubkey(),
+            reclaim_after_unix_seconds: TERMINAL_TIME + 20,
+            post_update_body: second_post_update_body.clone(),
+        },
+    )
+    .expect("chain-derived second real-provider submission");
+    advance_provider_refusal_slot(&mut context).await;
+    pyth_provider::submit(
+        &mut context,
+        &[
+            transfer(&payer, &second_submit.lifecycle, provider_lifecycle_rent),
+            second_submit.instruction,
+        ],
+        &[&second_update],
+    )
+    .await
+    .expect("a Primary Source accepts a second real provider submission");
+    assert_eq!(
+        observed(&mut context, second_update.pubkey())
+            .await
+            .expect("second Receiver update")
+            .owner,
+        fixture.provider.receiver
+    );
+    assert_eq!(
+        ProviderUpdateLifecycleV3::decode(
+            &observed(&mut context, second_submit.lifecycle)
+                .await
+                .expect("second provider lifecycle")
+                .data,
+        )
+        .expect("second provider lifecycle")
+        .status,
+        ProviderUpdateStatusV3::Submitted,
+        "the second submission is live evidence awaiting consumption, not a rejected one"
+    );
+
     let resolver = Keypair::new();
     let resolver_rent = context
         .banks_client
@@ -2289,9 +2385,75 @@ async fn current_resolution_creates_and_activates_exact_funding() {
         &execute_intent,
     )
     .expect("chain-derived Core provider execution");
+    // FIRST-VALID, HALF TWO -- built here, submitted after the winner lands.
+    // Both executions are derived from the SAME `Primary` Source observation,
+    // so neither is privileged by construction; the host builder refuses to
+    // derive against a resolved Source at all, which is why the order matters.
+    let second_execute = build_provider_execute_v3(
+        &provider_execute_snapshot_for(
+            &mut context,
+            &fixture,
+            second_submit.lifecycle,
+            second_update.pubkey(),
+        )
+        .await,
+        provider_execute_deployment(&fixture),
+        &ProviderExecuteIntentV3 {
+            resolver: resolver.pubkey(),
+            terminal_sequence: TERMINAL_SEQUENCE,
+            post_update_body: second_post_update_body,
+        },
+    )
+    .expect("chain-derived second provider execution against the same Primary Source");
     assert!(
         build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await).is_err(),
         "before ExecuteProvider the Market is Open but Source is Primary and the standalone terminal-admission family must refuse"
+    );
+
+    // IMMUTABLE WINDOW. The market sold a question about a closed period, and
+    // the only thing that fixes that period is a digest inside this market's
+    // own `SourceMaterialV3` -- itself pinned by `identity.resolution_policy`
+    // in the Core Market PDA, whose address is derived from that identity. So
+    // there is no instruction anywhere that MOVES a window; the only attack
+    // available is to publish a wider one and present it instead, and record
+    // publication is permissionless, so that attack is always available.
+    //
+    // Both halves of the record pair are substituted, each derived correctly
+    // from the widened record's own digest, so the frame is internally
+    // consistent and only the join to the material can refuse it. That is the
+    // point: the refusal must come from the market's own authority, not from a
+    // mismatched staging cursor.
+    let before_widened_window =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    let mut widened_window_frame = provider_execute.instruction.clone();
+    widened_window_frame
+        .accounts
+        .get_mut(25)
+        .expect("WindowSpec raw record")
+        .pubkey = fixture.widened_window.raw;
+    widened_window_frame
+        .accounts
+        .get_mut(26)
+        .expect("WindowSpec staging cursor")
+        .pubkey = fixture.widened_window.staging;
+    advance_provider_refusal_slot(&mut context).await;
+    let widened = pyth_provider::submit(&mut context, &[widened_window_frame], &[&resolver])
+        .await
+        .expect_err("a wider window must not be substitutable for the one the market sold");
+    assert!(
+        matches!(
+            widened,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::FinalizedRecord as u32
+        ),
+        "a substituted WindowSpec must refuse as Resolution FinalizedRecord, got {widened:?}"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_widened_window,
+        "the widened-window refusal rolls back Market, Source, lifecycle, certificate, ledger and RentCredit"
     );
 
     let before_missing_caller_signature =
@@ -2366,6 +2528,54 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     .expect("post-provider Core state");
     assert_eq!(post_provider_market.phase, Phase::Open);
     assert!(post_provider_market.terminal_receipt.is_none());
+
+    // FIRST-VALID, HALF TWO. The Market is still `Open + Consumed` and the
+    // second lifecycle is still `Submitted`, so every frame, privilege,
+    // release, deployment, record, product-domain, provider and freshness
+    // check the winning execution passed still passes for this one. Exactly
+    // one fact changed: the Source is `Resolved`, and
+    // `SourceResolutionStateV2::resolve_primary_from_authenticated_domain`
+    // refuses anywhere but `Primary`.
+    //
+    // Named by discriminant. A bare `is_err()` here would also pass on an
+    // `AccountFrame`, `ProviderObservation` or `OutputState` refusal, and each
+    // of those would prove the OPPOSITE of first-valid -- that the losing
+    // submission was never admissible evidence in the first place, so nothing
+    // was ever ordered. `Transition` is the only code that means "this was
+    // good, and it lost".
+    let before_first_valid =
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await;
+    advance_provider_refusal_slot(&mut context).await;
+    let later = pyth_provider::submit(&mut context, &[second_execute.instruction], &[&resolver])
+        .await
+        .expect_err("a second valid provider result must not overwrite the first");
+    assert!(
+        matches!(
+            later,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Transition as u32
+        ),
+        "the later of two valid submissions must refuse as Resolution Transition, got {later:?}"
+    );
+    assert_eq!(
+        provider_rollback_snapshot(&mut context, &fixture, provider_submit.lifecycle).await,
+        before_first_valid,
+        "the first-valid refusal leaves the winning Source, certificate, ledger and lifecycle byte-identical"
+    );
+    assert_eq!(
+        ProviderUpdateLifecycleV3::decode(
+            &observed(&mut context, second_submit.lifecycle)
+                .await
+                .expect("losing provider lifecycle")
+                .data,
+        )
+        .expect("losing provider lifecycle")
+        .status,
+        ProviderUpdateStatusV3::Submitted,
+        "the losing submission is not consumed by its own refusal; its reclaim route stays open"
+    );
 
     let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
         .expect("chain-derived no-CPI terminal certificate Accept");
@@ -2486,6 +2696,99 @@ async fn current_resolution_creates_and_activates_exact_funding() {
     )
     .expect("Source closure receipt");
     assert_exhaustive_closure_receipt(closure, &close);
+
+    // RECLAIM. The Source fund is closed, but two provider-transport accounts
+    // are still alive and still holding rent: each submission's program-owned
+    // lifecycle PDA and the Receiver-owned `PriceUpdateV2` it posted. This is
+    // where the route home for those lamports is measured -- once for the
+    // submission that won, and once for the equally valid one that lost.
+    let mut reclaim_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    reclaim_clock.unix_timestamp = TERMINAL_TIME + 21;
+    context.set_sysvar(&reclaim_clock);
+    let reclaim_deployment = ProviderReclaimDeploymentV3 {
+        resolver: resolver.pubkey(),
+        registry_programdata: fixture.registry_programdata,
+        resolution_program: RESOLUTION_PROGRAM_ID,
+        resolution_programdata: fixture.resolution_programdata,
+    };
+    let winner_lifecycle_lamports = observed(&mut context, provider_submit.lifecycle)
+        .await
+        .expect("consumed winner lifecycle")
+        .lamports;
+    let winner_update_lamports = observed(&mut context, fixture.update.pubkey())
+        .await
+        .expect("winner posted update")
+        .lamports;
+    let rent_credit_before_reclaim = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    let winner_reclaim = build_provider_reclaim_v3(
+        &required_observed(&mut context, provider_submit.lifecycle).await,
+        &required_observed(&mut context, fixture.pyth_release.raw).await,
+        reclaim_deployment,
+    )
+    .expect("chain-derived permissionless reclaim of the consumed submission");
+    pyth_provider::submit(&mut context, &[winner_reclaim.instruction], &[&resolver])
+        .await
+        .expect("a stranger reclaims the winning submission's provider rent");
+    assert!(
+        observed(&mut context, provider_submit.lifecycle)
+            .await
+            .is_none()
+    );
+    assert!(
+        observed(&mut context, fixture.update.pubkey())
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        rent_credit_before_reclaim + winner_lifecycle_lamports + winner_update_lamports,
+        "every lamport the winning submission held returns to the persisted refund recipient"
+    );
+
+    // AND THE LOSER HAS NO ROUTE HOME. `authenticate_reclaim_state`
+    // (programs/dclutch-resolution-proof-sbf/src/provider_transport_v3.rs:941)
+    // requires `ProviderUpdateStatusV3::Consumed`, and :963-971 requires a
+    // program-owned certificate whose `provider_evidence` equals this
+    // lifecycle's. A submission that lost the first-valid race is `Submitted`
+    // forever and never had a certificate, so `reclaim_after_unix_seconds`
+    // -- the field that exists to bound exactly this wait -- is unreachable
+    // for it. The same shape strands every submission on a market that ends
+    // by failure walk instead of by provider evidence.
+    //
+    // This is an OPEN C-09 reclaim hole, recorded here as an executed
+    // measurement rather than a prose worry. It is asserted as the current
+    // behaviour so that the day a reclaim route for abandoned submissions
+    // lands, this assertion goes red and names itself.
+    let stranded_lifecycle = observed(&mut context, second_submit.lifecycle)
+        .await
+        .expect("the losing submission's lifecycle is still alive");
+    let stranded_update = observed(&mut context, second_update.pubkey())
+        .await
+        .expect("the losing submission's posted update is still alive");
+    assert_eq!(stranded_lifecycle.owner, RESOLUTION_PROGRAM_ID);
+    assert_eq!(stranded_update.owner, fixture.provider.receiver);
+    assert_eq!(
+        build_provider_reclaim_v3(
+            &required_observed(&mut context, second_submit.lifecycle).await,
+            &required_observed(&mut context, fixture.pyth_release.raw).await,
+            reclaim_deployment,
+        ),
+        Err(ProviderTransportOperatorErrorV3::Lifecycle),
+        "no reclaim can be derived for a valid submission that lost the first-valid race; \
+         {} lamports of lifecycle rent and {} lamports of Receiver update rent strand",
+        stranded_lifecycle.lamports,
+        stranded_update.lamports,
+    );
 }
 
 #[tokio::test]

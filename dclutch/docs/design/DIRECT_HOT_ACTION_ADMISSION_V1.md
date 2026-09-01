@@ -228,6 +228,81 @@ It is unknown whether this is a fixture defect or a profile defect. Both are
 plausible: 56 coordinates across three Custody frames have never been checked
 against a live account set.
 
+#### 6.1.1 ANSWERED, 2026-09-01 (lane BUY-PROJECTION, commit `f1da7cbe`)
+
+**It is a profile defect. The fixture is right, and it is exactly one defect.**
+
+`run_engine` names the stage `Projection("account-projection")`, and the kernel
+under it names `Error::IdentityMismatch`. Not a width: every one of the Buy's
+56 declared widths is satisfied by the frame, and that is now asserted.
+
+The two convicted coordinates are the Buy's only two identity conjuncts:
+
+```text
+require_key(MINT_ACCOUNT = 34,          REGISTERED_IDENTITY_MINT_V4 = 24)
+require_key(TOKEN_PROGRAM_ACCOUNT = 37, REGISTERED_IDENTITY_TOKEN_PROGRAM_V4 = 25)
+```
+
+Both registers are written by `project_identity(REALM_ACCOUNT = 18, ...)` **in
+the same operation table**, and `v2.rs::project_atomic` hands `apply_operations`
+`registers.input_identities` — the bank as it stood *before* this pass — while
+every `project_*` writes into `scratch_identities`. So each conjunct compares a
+real 32-byte key against 32 zero bytes. **Unsatisfiable by any transaction.**
+
+Measured, not inferred. Seeding register 24 alone still refuses; seeding 25
+alone still refuses; seeding both returns `Ok(())`; nothing else in the 56
+coordinates refuses. `both_registered_creation_profiles_project_a_real_frame`
+in `direct-hot/src/fixture.rs` pins all four.
+
+**The Sell is the control that names the axis.** Its three `require_*`
+operations — `require_owner(0, TRADING_PROGRAM)`, `require_key(11,
+SYSTEM_PROGRAM)`, `require_owner(6, SYSTEM_PROGRAM)` — all target
+trusted-environment registers, which *are* seeded before the pass. The Sell
+projects its own frame green. That is why a registered Sell executes behind the
+§4 probe at 374,455 CU and a Buy dies at 311,068.
+
+This is `WAVE.md`'s THE CLASS in its identity form rather than its width form:
+a declaration authored in one place, never executed against a real account,
+therefore unsatisfiable by anything. The remedy is the same — execute the
+declaration — and that is what landed.
+
+**Nothing is behind this wall.** Measured on an *uncommitted* probe that
+neutralizes only those two operations in a local copy of the profile bytes (a
+refusal relaxation; §9 keeps it out of the tree): the whole Buy pipeline
+completes host-side — account projection, rent quotes, native signatures,
+request projection, the lifecycle preplan (2 states: maker replay and record),
+the transition fold, and the effect projection yielding **3 child invocations**,
+the three Custody routes. Routes 1 (`OpenVault`) and 2 (`Transfer`) carry the
+Realm's collateral mint and token program in their projected child requests.
+
+**Proposed repair (not landed — it is a release event and ember's): delete the
+two operations, `FIXED_OPERATIONS` 34 → 32.** They are a redundant outer
+restatement of the child's own check, which is precisely the reason this same
+file already deleted the outer *width* restatements on these very coordinates
+("Custody — the semantic owner — already authenticates all three against the
+authenticated Realm, so the outer restatement was strictly weaker than the
+child's own check"). The binding survives deletion by a stronger route:
+`custody-sbf/src/lib.rs:1002-1010` refuses `Realm` for `OpenVault | Transfer |
+CloseVault` unless `request.mint == *realm.collateral_mint()` and
+`request.token_program == *realm.token_program()`, and
+`validate_token_program_and_mint` (`:1757-1768`) then requires the frame's mint
+and token-program *accounts* to equal the request's. The child request's fields
+are projected from registers 24 and 25, so the Realm remains the sole authority
+and the loop closes inside the semantic owner.
+
+The alternative — keep the checks and move them into the shared Transition,
+where the projected registers *are* visible — costs two more identity registers
+and a fork of the creation transition, and buys a second copy of a check Custody
+already makes. It is named here so the ruling is a choice rather than a default.
+
+**Separable / not separable.** Landed: the executable localizer, which relaxes
+nothing and asserts the wall by name (the assertion is written to be deleted by
+whoever lands the repair). Not separable: the repair itself. Removing two
+operations changes the emitted profile bytes, hence the account-profile record
+digest, hence the descriptor, hence the descriptor digest, hence the capability
+seal, the program set and the manifest entry — release identity. That is
+ember's, and it should land together with §7.5 rather than on its own.
+
 ### 6.2 The terminal draft, and why it stays unregistered
 
 `crates/dclutch-direct-codec/src/registered_terminal_artifacts_v4.rs` is 2,529
@@ -293,13 +368,15 @@ Each step is independently landable and independently falsifiable.
    plus host tests in `dclutch-account-profile-contract`. It decides whether
    the rest of this plan is a codec change or a contract ruling, so nothing
    else should start first.
-2. **Localize wall #4** (§6.1) via `run_engine`. Unblocked today, needs no
-   ruling, and it is the only way to know whether the Buy fixture is close or
-   wrong.
+2. ~~**Localize wall #4** (§6.1) via `run_engine`.~~ **DONE, `f1da7cbe`** —
+   §6.1.1. The Buy fixture is right; two profile operations are unsatisfiable,
+   and nothing is behind them. What remains is the repair, which is a release
+   event and belongs with step 5, not on its own.
 3. **Ruling on gate #2**, as the dispatch of §4 rather than a deletion.
 4. **Ruling on gate #3**, taking §5.1's shared action-keyed policy if step 1
    permits it, and the contract fallback otherwise.
-5. **Land creation.** Merge the Sell and Buy lifecycle policies, rebuild both
+5. **Land creation.** Delete the two unsatisfiable Buy conjuncts (§6.1.1),
+   merge the Sell and Buy lifecycle policies, rebuild both
    bundles, remove `#[ignore]` from
    `registered_sell_then_buy_execute_on_current_elves`. Acceptance is already
    written: exact root, maker-replay and record poststates for both sides,
@@ -342,6 +419,16 @@ Both are consistent with themselves; they are not consistent with each other.
 
 - Do not commit the wall-#2 probe. It is a refusal relaxation and it stays out
   of the tree until §7.3 is ruled.
+- Do not commit the wall-#4 probe either. Neutralizing the two Buy conjuncts to
+  see past them (§6.1.1) is a refusal relaxation like any other; the measurement
+  it produced is recorded there and the probe is not in the tree. The repair
+  when it comes is a deletion of the two operations, not a rewrite of them into
+  something that passes.
+- Do not "fix" §6.1.1 by seeding registers 24 and 25 from anywhere but the
+  Realm. The seeding in the landed test is a *localizer*, supplying the value
+  the pass is about to project so the refusal can be attributed; a profile or
+  executor that actually pre-seeded them would move the Realm's authority
+  outside the record that carries it.
 - Do not pad a Sell's lifecycle to match a Buy's (§5.2).
 - Do not relax `ExpireRegistered`'s strict `<` to `<=` (§6.2).
 - Do not move `CloseMakerReplay` or the retirement route onto Hot as part of

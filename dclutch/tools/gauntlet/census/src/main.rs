@@ -20,6 +20,7 @@
 mod bands;
 mod enumerate;
 mod ledger;
+mod magics;
 mod model;
 mod report;
 
@@ -210,12 +211,31 @@ fn command_inventory(options: &Options) -> Result<(), String> {
             present.len(),
             allocation.bands.len()
         );
+
+        // A refusal code and an instruction magic are the same kind of object:
+        // a wire discriminant a program dispatches on. Only one of them had a
+        // uniqueness rule until now. See `magics.rs` for why a same-name
+        // mirror is counted separately instead of failing here.
+        let declared_magics = magics::sweep(&root_path)?;
+        let (magic_problems, magic_summary) = magics::check(&declared_magics);
+        eprintln!(
+            "census: {} eight-byte magics declared, {} distinct values, {} mirrored under one name",
+            magic_summary.declared,
+            magic_summary.distinct,
+            magic_summary.mirrored.len()
+        );
+        for mirror in &magic_summary.mirrored {
+            eprintln!("census: magic mirrored across packages: {mirror}");
+        }
+        problems.extend(magic_problems);
         if !problems.is_empty() {
             for problem in &problems {
                 eprintln!("census COLLISION: {problem}");
             }
             return Err(format!(
-                "{} refusal-code problems; decision 0007 makes {} the allocation authority",
+                "{} refusal-code/magic problems; decision 0007 makes {} the refusal-band \
+                 allocation authority, and a duplicated instruction magic is the same class of \
+                 defect one wire object over",
                 problems.len(),
                 allocation.source
             ));

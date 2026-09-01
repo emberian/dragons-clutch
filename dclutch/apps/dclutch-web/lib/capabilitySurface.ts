@@ -52,6 +52,51 @@ export function browserCapabilityStandingsForStageV1(stage: CapabilityStage): Re
   return BROWSER_CAPABILITY_STANDINGS_V1.filter((candidate) => candidate.action.stage === stage);
 }
 
+/** One thing a reader must already hold before an act can begin. */
+export type ActPrerequisiteV1 = Readonly<{ id: 'market' | 'external-file'; statement: string }>;
+
+const NEEDS_MARKET_V1: ActPrerequisiteV1 = Object.freeze({
+  id: 'market',
+  statement: 'one Market, chosen first — this act has no address of its own',
+});
+
+const NEEDS_EXTERNAL_FILE_V1: ActPrerequisiteV1 = Object.freeze({
+  id: 'external-file',
+  statement: 'a file this browser cannot produce — the workspace opens a picker and reads bytes authored elsewhere',
+});
+
+/**
+ * What an act asks a reader to already have, as against what it can do.
+ *
+ * THE DEFECT THIS CLOSES. The standing above is honest about authority and
+ * submission and says nothing at all about whether a reader can BEGIN. On
+ * that evidence `/console` advertised `claims.redeem` as "This browser · one
+ * wallet signature, sent from here" — every clause derived, every clause
+ * true — over an act whose second step opens a file picker for a payout plan
+ * `RedeemFlow` states outright it will never author, produced by a Rust
+ * binary under `tools/local-validator/`. A stranger holding a wallet gets two
+ * steps in and stops. That is a declaration nothing had run against reality,
+ * and it is the failure this whole model exists to refuse.
+ *
+ * Neither fact is written down. `requiresMarket` is the catalogue's, and the
+ * file is read off the import graph by the surface generator, which marks any
+ * module whose closure renders a file input. So a workspace that stops
+ * needing a file stops saying it needs one on the next regeneration, and one
+ * that starts needing a file cannot stay quiet about it.
+ *
+ * Only what the card does not already carry is returned: the venue line
+ * states the key and where the act runs, so repeating it here would be the
+ * second description of one act this page exists to not have.
+ */
+export function browserActPrerequisitesV1(standing: CapabilityStandingV1): ReadonlyArray<ActPrerequisiteV1> {
+  const owner = standing.action.anchors.owner;
+  const surface = owner === null ? null : CLIENT_MODULE_SURFACES_V1.find((entry) => entry.module === owner) ?? null;
+  const held: ActPrerequisiteV1[] = [];
+  if (standing.action.requiresMarket) held.push(NEEDS_MARKET_V1);
+  if (surface?.readsExternalFile === true) held.push(NEEDS_EXTERNAL_FILE_V1);
+  return Object.freeze(held);
+}
+
 /**
  * The link that opens one act, resolved against the Market actually read.
  *

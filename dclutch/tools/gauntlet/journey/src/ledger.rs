@@ -67,6 +67,7 @@ use std::collections::BTreeMap;
 use dclutch_claims_svm::liability_basis_state_v2::{
     LiabilityBasisMarketViewV2, LiabilityBasisPositionViewV2,
 };
+use dclutch_custody_contract::{CompartmentV1, CustodyVaultSeedsV1};
 use dclutch_token_svm::{MINT_BYTES, Mint, TokenAccount};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
@@ -171,6 +172,32 @@ impl VerdictV1 {
     }
 }
 
+/// Every physical Custody compartment, with the label L8 reports it under.
+///
+/// All nine, deliberately. A per-class law that omitted `HoardPrincipal`
+/// because L2 already watches it would leave the same hole in mirror image:
+/// atoms could cross from the Hoard into a class L8 does not name, and the two
+/// laws would each see a movement the other was supposed to cover.
+const COMPARTMENTS: [(CompartmentV1, &str); 9] = [
+    (CompartmentV1::None, "None"),
+    (CompartmentV1::External, "External"),
+    (CompartmentV1::Settlement, "Settlement"),
+    (CompartmentV1::HoardPrincipal, "HoardPrincipal"),
+    (CompartmentV1::TradingPrincipal, "TradingPrincipal"),
+    (CompartmentV1::FeeVault, "FeeVault"),
+    (CompartmentV1::LivenessVault, "LivenessVault"),
+    (CompartmentV1::SeriesEscrow, "SeriesEscrow"),
+    (CompartmentV1::RecoveryReserve, "RecoveryReserve"),
+];
+
+/// The class of a tracked collateral account that is not a Custody vault under
+/// any namespace this ledger can derive — an ordinary wallet, or a vault under
+/// a context the journey has not admitted.
+///
+/// It is a CLASS, not a bucket to hide in: L8 holds it to a declared delta like
+/// every other, so atoms moving into or out of it must still be stated.
+const UNCLASSIFIED: &str = "unclassified";
+
 /// The exact state of one account the ledger tracks.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AccountStateV1 {
@@ -201,6 +228,14 @@ pub(crate) struct ObservationV1 {
     pub(crate) mint_supply: u64,
     /// label -> raw atoms, for every tracked collateral token account.
     pub(crate) token_atoms: BTreeMap<String, u64>,
+    /// compartment class -> raw atoms, summed by ADDRESS so an account tracked
+    /// under several labels is counted once. This is L8's census.
+    pub(crate) class_atoms: BTreeMap<String, u64>,
+    /// What the stage claims it moved per class, signed. `None` means the stage
+    /// has not stated a per-class claim at all, which makes L8 inapplicable
+    /// rather than green: a stage that has not accounted for its classes says
+    /// so, exactly as `LamportClaimV1::inapplicable` does for L7.
+    pub(crate) declared_class_deltas: Option<BTreeMap<String, i128>>,
     pub(crate) tracked_collateral: u64,
     pub(crate) hoard_atoms: u64,
     pub(crate) outcome_count: u32,
@@ -228,6 +263,14 @@ pub(crate) struct ConservationLedgerV1 {
     token_accounts: BTreeMap<String, Pubkey>,
     positions: BTreeMap<String, Pubkey>,
     watched: BTreeMap<String, Pubkey>,
+    /// Vault address -> compartment class, DERIVED from
+    /// [`CustodyVaultSeedsV1`], never declared by a caller. The compartment tag
+    /// is one of the PDA's own seeds, so an account's class is a fact about its
+    /// address: a mislabelled account cannot satisfy L8, and a law that read a
+    /// self-declared class would be a guard whose two sides move together.
+    vault_classes: BTreeMap<Pubkey, String>,
+    /// The per-class claim the next `observe` will evaluate L8 against.
+    pending_class_claim: Option<BTreeMap<String, i128>>,
     observations: Vec<ObservationV1>,
 }
 
@@ -247,6 +290,8 @@ impl ConservationLedgerV1 {
             token_accounts: BTreeMap::new(),
             positions: BTreeMap::new(),
             watched: BTreeMap::new(),
+            vault_classes: BTreeMap::new(),
+            pending_class_claim: None,
             observations: Vec::new(),
         }
     }
@@ -268,6 +313,53 @@ impl ConservationLedgerV1 {
     /// the collateral or supply laws — rent credits, replays, permits.
     pub(crate) fn watch(&mut self, label: &str, address: Pubkey) {
         self.watched.insert(label.into(), address);
+    }
+
+    /// Derive every Custody vault address under one namespace and record the
+    /// compartment each one IS.
+    ///
+    /// One call per `(market, release_set, context)` the journey can name from
+    /// authenticated chain state. Nine `find_program_address` derivations per
+    /// call, done once here rather than per census. A vault under a context the
+    /// journey has not admitted stays [`UNCLASSIFIED`], which is a class L8
+    /// holds to a declared delta like any other — never a hiding place.
+    pub(crate) fn admit_custody_namespace(
+        &mut self,
+        custody_program: Pubkey,
+        market: [u8; 32],
+        release_set: [u8; 32],
+        context: [u8; 32],
+    ) {
+        for (compartment, label) in COMPARTMENTS {
+            let vault = Pubkey::find_program_address(
+                &CustodyVaultSeedsV1::new(market, release_set, context, compartment).as_slices(),
+                &custody_program,
+            )
+            .0;
+            self.vault_classes.insert(vault, label.to_string());
+        }
+    }
+
+    /// State what the next census's stage moved per compartment class, signed.
+    ///
+    /// Unused so far: no stage states a per-class claim yet, so L8 reports
+    /// `inapplicable` and names the stage. Wiring the stages is the next unit,
+    /// and until it lands L8 never reports a green it did not earn.
+    #[allow(dead_code)]
+    ///
+    /// A class absent from `deltas` is a claim of zero, which is the strong
+    /// statement. Not calling this at all leaves L8 inapplicable for that
+    /// boundary and names the stage.
+    pub(crate) fn declare_class_deltas(&mut self, deltas: BTreeMap<String, i128>) {
+        self.pending_class_claim = Some(deltas);
+    }
+
+    /// The compartment an address IS, by derivation.
+    fn class_of(&self, address: &Pubkey) -> String {
+        self.vault_classes
+            .get(address)
+            .cloned()
+            .unwrap_or_else(|| UNCLASSIFIED.to_string())
     }
 
     /// Admit the founding's Hoard, aggregate, and per-claim collateral unit.
@@ -332,6 +424,24 @@ impl ConservationLedgerV1 {
             })?;
             token_atoms.insert(label.clone(), atoms);
         }
+        // L8's census. Summed by ADDRESS, for the same reason L7 is: the ledger
+        // legitimately watches one account under several labels, and summing per
+        // label would count a class twice.
+        let mut atoms_by_address: BTreeMap<Pubkey, u64> = BTreeMap::new();
+        for (label, address) in &self.token_accounts {
+            if let Some(atoms) = token_atoms.get(label) {
+                atoms_by_address.insert(*address, *atoms);
+            }
+        }
+        let mut class_atoms: BTreeMap<String, u64> = BTreeMap::new();
+        for (address, atoms) in &atoms_by_address {
+            let class = self.class_of(address);
+            let total = class_atoms.entry(class).or_insert(0);
+            *total = total.checked_add(*atoms).ok_or_else(|| {
+                Error::new("a compartment class overflowed u64, which no real supply can")
+            })?;
+        }
+
         let hoard_atoms = self
             .hoard
             .and_then(|_| token_atoms.get("hoard").copied())
@@ -418,6 +528,8 @@ impl ConservationLedgerV1 {
             payer_lamports,
             mint_supply: mint.supply,
             token_atoms,
+            class_atoms,
+            declared_class_deltas: self.pending_class_claim.take(),
             tracked_collateral,
             hoard_atoms,
             outcome_count,
@@ -632,9 +744,80 @@ impl ConservationLedgerV1 {
         });
 
         // L7 lamport accounting.
+        // L8 per-class conservation.
+        verdicts.push(self.evaluate_classes(now));
+
         verdicts.push(self.evaluate_lamports(now));
 
         verdicts
+    }
+
+    /// L8: every compartment class moved by exactly the amount its stage
+    /// declared.
+    ///
+    /// This is L2's argument made for all nine classes instead of one. L1 and
+    /// L5 are stated over a single total, so they balance for any transfer
+    /// between two tracked accounts; L2 closes that for the Hoard alone. A
+    /// transfer between any other pair of compartments passes every one of
+    /// L1..L7, which is the cross-subsidy C-10 exists to forbid.
+    ///
+    /// The class is DERIVED from the vault's own PDA seeds, so this law cannot
+    /// be satisfied by relabelling an account.
+    fn evaluate_classes(&self, now: &ObservationV1) -> VerdictV1 {
+        let Some(declared) = &now.declared_class_deltas else {
+            return VerdictV1::inapplicable(
+                "L8",
+                &format!(
+                    "stage `{}` has not stated a per-class claim; L8 resumes when it does",
+                    now.stage
+                ),
+            );
+        };
+        let Some(previous) = self.observations.last() else {
+            return VerdictV1::inapplicable("L8", "the first census has no predecessor");
+        };
+        let mut classes: Vec<&str> = previous
+            .class_atoms
+            .keys()
+            .chain(now.class_atoms.keys())
+            .map(String::as_str)
+            .collect();
+        classes.sort_unstable();
+        classes.dedup();
+        let mut breaches = Vec::new();
+        let mut held = Vec::new();
+        for class in classes {
+            let before = i128::from(previous.class_atoms.get(class).copied().unwrap_or(0));
+            let after = i128::from(now.class_atoms.get(class).copied().unwrap_or(0));
+            let observed = after - before;
+            let expected = declared.get(class).copied().unwrap_or(0);
+            if observed == expected {
+                held.push(format!("{class} {observed:+}"));
+            } else {
+                breaches.push(format!(
+                    "{class} moved {observed:+} atoms and the stage declared {expected:+}"
+                ));
+            }
+        }
+        if breaches.is_empty() {
+            VerdictV1::holds(
+                "L8",
+                format!(
+                    "every compartment moved exactly as declared since `{}`: {}",
+                    previous.stage,
+                    held.join(", ")
+                ),
+            )
+        } else {
+            VerdictV1::violated(
+                "L8",
+                format!(
+                    "{}. L1 and L5 cannot see this: a transfer between two tracked \
+                     compartments leaves the single total untouched, and L2 covers only the Hoard.",
+                    breaches.join("; ")
+                ),
+            )
+        }
     }
 
     /// L7: the payer's lamports moved by exactly its fees plus what landed in
@@ -781,5 +964,250 @@ impl ConservationLedgerV1 {
                     })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CUSTODY: u8 = 0xc5;
+    const MARKET: [u8; 32] = [0xc6; 32];
+    const RELEASE: [u8; 32] = [0xc7; 32];
+    const CONTEXT: [u8; 32] = [0xc8; 32];
+
+    fn key(value: u8) -> Pubkey {
+        Pubkey::new_from_array([value; 32])
+    }
+
+    /// The real vault address for one compartment, derived exactly as Custody
+    /// derives it. The tests therefore exercise the classifier, not a label.
+    fn vault(compartment: CompartmentV1) -> Pubkey {
+        Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new(MARKET, RELEASE, CONTEXT, compartment).as_slices(),
+            &key(CUSTODY),
+        )
+        .0
+    }
+
+    fn account(address: Pubkey, lamports: u64) -> AccountStateV1 {
+        AccountStateV1 {
+            address: address.to_string(),
+            exists: true,
+            owner: key(0xb0).to_string(),
+            lamports,
+            data_len: 165,
+        }
+    }
+
+    fn new_ledger() -> ConservationLedgerV1 {
+        let mut ledger = ConservationLedgerV1::new(key(0xc1), key(0xd1));
+        ledger.admit_custody_namespace(key(CUSTODY), MARKET, RELEASE, CONTEXT);
+        ledger.admit_founding(vault(CompartmentV1::HoardPrincipal), key(0xa4), 10);
+        ledger.track_token_account(
+            "trading_principal_vault",
+            vault(CompartmentV1::TradingPrincipal),
+        );
+        ledger.track_token_account("fee_vault", vault(CompartmentV1::FeeVault));
+        ledger
+    }
+
+    /// A census in which the market holds `hoard` principal, `trading` in a
+    /// TradingPrincipal vault and `fee` in a FeeVault, against one outcome of
+    /// `supply` claims worth ten atoms each. `class_atoms` is built through the
+    /// ledger's own derivation, so a wrong classifier fails these tests.
+    fn census(
+        ledger: &ConservationLedgerV1,
+        stage: &str,
+        hoard: u64,
+        trading: u64,
+        fee: u64,
+        supply: u64,
+        declared_class_deltas: Option<BTreeMap<String, i128>>,
+    ) -> ObservationV1 {
+        let tracked = hoard + trading + fee;
+        let balances = [
+            (vault(CompartmentV1::HoardPrincipal), "hoard", hoard),
+            (
+                vault(CompartmentV1::TradingPrincipal),
+                "trading_principal_vault",
+                trading,
+            ),
+            (vault(CompartmentV1::FeeVault), "fee_vault", fee),
+        ];
+        let mut token_atoms = BTreeMap::new();
+        let mut class_atoms: BTreeMap<String, u64> = BTreeMap::new();
+        let mut accounts = BTreeMap::new();
+        for (address, label, atoms) in balances {
+            token_atoms.insert(label.to_string(), atoms);
+            *class_atoms.entry(ledger.class_of(&address)).or_insert(0) += atoms;
+            accounts.insert(label.to_string(), account(address, 2_039_280));
+        }
+        ObservationV1 {
+            stage: stage.into(),
+            slot: 1,
+            declared_collateral_delta: 0,
+            declared_hoard_delta: 0,
+            lamports: LamportClaimV1::inapplicable("this census is synthetic"),
+            payer_lamports: 1_000_000,
+            mint_supply: tracked,
+            token_atoms,
+            class_atoms,
+            declared_class_deltas,
+            tracked_collateral: tracked,
+            hoard_atoms: hoard,
+            outcome_count: 1,
+            aggregate_supply: vec![supply],
+            position_balances: BTreeMap::from([("holder".into(), vec![supply])]),
+            position_totals: vec![supply],
+            accounts,
+            verdicts: Vec::new(),
+        }
+    }
+
+    fn moved(entries: &[(&str, i128)]) -> Option<BTreeMap<String, i128>> {
+        Some(
+            entries
+                .iter()
+                .map(|(class, delta)| ((*class).to_string(), *delta))
+                .collect(),
+        )
+    }
+
+    fn verdict<'a>(verdicts: &'a [VerdictV1], law: &str) -> &'a VerdictV1 {
+        verdicts
+            .iter()
+            .find(|value| value.law == law)
+            .unwrap_or_else(|| panic!("{law} must be evaluated"))
+    }
+
+    /// The classifier is a derivation, not a label: every one of the nine
+    /// compartments resolves to its own class, and an address that is not a
+    /// vault under an admitted namespace is `unclassified` rather than being
+    /// folded into one.
+    #[test]
+    fn every_compartment_is_recovered_from_its_own_pda_seeds() {
+        let ledger = new_ledger();
+        for (compartment, label) in COMPARTMENTS {
+            assert_eq!(ledger.class_of(&vault(compartment)), label);
+        }
+        assert_eq!(ledger.class_of(&key(0xee)), UNCLASSIFIED);
+        // A vault under a context the ledger has not admitted is not silently
+        // classified as one it has.
+        let foreign = Pubkey::find_program_address(
+            &CustodyVaultSeedsV1::new(MARKET, RELEASE, [0xfe; 32], CompartmentV1::FeeVault)
+                .as_slices(),
+            &key(CUSTODY),
+        )
+        .0;
+        assert_eq!(ledger.class_of(&foreign), UNCLASSIFIED);
+    }
+
+    /// THE DEFECT, unchanged: L1..L7 are blind to a cross-class transfer.
+    ///
+    /// This is the control for L8, and it is asserted law by law rather than in
+    /// aggregate, so a future change that alters one of the seven is caught here
+    /// rather than quietly rewriting what L8 is compared against.
+    #[test]
+    fn the_original_seven_laws_hold_while_atoms_cross_from_trading_principal_to_the_fee_vault() {
+        let mut ledger = new_ledger();
+        ledger.restore_observations(vec![census(
+            &new_ledger(),
+            "before",
+            1_000,
+            500,
+            0,
+            100,
+            None,
+        )]);
+        let after = census(&new_ledger(), "after", 1_000, 0, 500, 100, None);
+        let verdicts = ledger.evaluate(&after);
+
+        for law in ["L1", "L2", "L3", "L4", "L5", "L6"] {
+            assert_eq!(verdict(&verdicts, law).status, "holds", "{law}");
+        }
+        assert_eq!(verdict(&verdicts, "L7").status, "inapplicable");
+        // And L8 does not invent a green it did not earn: an undeclared stage is
+        // inapplicable and says which stage.
+        assert_eq!(verdict(&verdicts, "L8").status, "inapplicable");
+        assert!(verdict(&verdicts, "L8").detail.contains("after"));
+    }
+
+    /// L8 RED on exactly the transfer the seven laws could not see.
+    #[test]
+    fn l8_catches_the_cross_class_transfer_the_other_laws_cannot_see() {
+        let mut ledger = new_ledger();
+        ledger.restore_observations(vec![census(
+            &new_ledger(),
+            "before",
+            1_000,
+            500,
+            0,
+            100,
+            None,
+        )]);
+        // The stage claims it moved nothing at all.
+        let after = census(&new_ledger(), "after", 1_000, 0, 500, 100, moved(&[]));
+        let verdicts = ledger.evaluate(&after);
+
+        let l8 = verdict(&verdicts, "L8");
+        std::println!("L8 {} -- {}", l8.status, l8.detail);
+        assert_eq!(l8.status, "violated");
+        assert!(l8.detail.contains("TradingPrincipal moved -500"));
+        assert!(l8.detail.contains("FeeVault moved +500"));
+        // The other seven are unchanged by L8's arrival.
+        for law in ["L1", "L2", "L3", "L4", "L5", "L6"] {
+            assert_eq!(verdict(&verdicts, law).status, "holds", "{law}");
+        }
+    }
+
+    /// L8 GREEN when the stage states the movement it actually made.
+    #[test]
+    fn l8_admits_the_same_transfer_once_the_stage_declares_it() {
+        let mut ledger = new_ledger();
+        ledger.restore_observations(vec![census(
+            &new_ledger(),
+            "before",
+            1_000,
+            500,
+            0,
+            100,
+            None,
+        )]);
+        let after = census(
+            &new_ledger(),
+            "after",
+            1_000,
+            0,
+            500,
+            100,
+            moved(&[("TradingPrincipal", -500), ("FeeVault", 500)]),
+        );
+        let verdicts = ledger.evaluate(&after);
+        let l8 = verdict(&verdicts, "L8");
+        std::println!("L8 {} -- {}", l8.status, l8.detail);
+        assert_eq!(l8.status, "holds");
+    }
+
+    /// L8 covers the Hoard too. A law that omitted it because L2 exists would
+    /// leave the same hole in mirror image.
+    #[test]
+    fn l8_covers_the_hoard_and_does_not_defer_to_l2() {
+        let mut ledger = new_ledger();
+        ledger.restore_observations(vec![census(
+            &new_ledger(),
+            "before",
+            1_000,
+            500,
+            0,
+            100,
+            None,
+        )]);
+        let after = census(&new_ledger(), "after", 500, 500, 500, 50, moved(&[]));
+        let verdicts = ledger.evaluate(&after);
+        assert_eq!(verdict(&verdicts, "L2").status, "violated");
+        let l8 = verdict(&verdicts, "L8");
+        assert_eq!(l8.status, "violated");
+        assert!(l8.detail.contains("HoardPrincipal moved -500"));
     }
 }

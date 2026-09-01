@@ -13,14 +13,20 @@
 # the tree the gates live in, and the wrapper's workflows CALL THIS rather than
 # restating it. One definition, two callers.
 #
-#   tools/ci/run.sh census            the generated-file ratchet (milliseconds)
-#   tools/ci/run.sh seam              the seam register (~20s, needs ast-grep)
-#   tools/ci/run.sh web               web + SDK vitest suites (needs node)
-#   tools/ci/run.sh emission          Lean byte-identity guards (needs lake)
-#   tools/ci/run.sh frameguard        exact per-function SBF frame ratchet
-#   tools/ci/run.sh programs          SBF build + trading program-test (minutes)
-#   tools/ci/run.sh cheap             census + seam
-#   tools/ci/run.sh --list            the table, with costs and prerequisites
+#   tools/ci/run.sh <tier> [<tier> ...]   run those tiers
+#   tools/ci/run.sh --list                the table, with costs and prerequisites
+#
+# THE TIER TABLE IS NOT REPEATED HERE, and that is a repair rather than an
+# omission. It used to be, and it had drifted: this header listed six tiers
+# when the dispatch ran nine, and described `cheap` as `census + seam` when it
+# had become `census seam release`. `--list` was correct the whole time, which
+# is precisely why nobody noticed the other copy going stale -- and `--help`
+# PRINTS this header, so the stale copy was a runbook teaching commands the
+# tree does not have. That is this project's signature defect in its own CI
+# runner: a value duplicated instead of read agrees right up until it does not.
+# `--help` now prints this prose and then calls `list_tiers`, so there is one
+# table with two callers, exactly as this file's opening paragraph argues the
+# tiering itself should work.
 #
 # ---------------------------------------------------------------------------
 # EXIT CODES, and this is the load-bearing part.
@@ -898,6 +904,251 @@ tier_workspaces() {
 # that path, it prints its own note and two of its thirteen cases do not run.
 # It reports that itself. This tier deliberately does not restate the count,
 # because a second copy of it here would be one more number to get wrong.
+# ---------------------------------------------------------------------------
+# sbfcontracts -- every non-program first-party crate, compiled for the target
+# it actually ships to. Needs cargo-build-sbf's toolchain.
+#
+# THE HOLE THIS FILLS, and it is a hole with a measured casualty.
+#
+# The contract and codec crates are libraries, so nothing in this runner built
+# them for `target_os = "solana"`. `programs` and `frameguard` build the
+# thirteen SBF LINKS -- which reach these crates only through whatever surface
+# the links happen to use -- and every other cargo tier checks the HOST target.
+# A host `cargo check` on a crate destined for SBF is a check that cannot fail
+# in the way that matters, because the whole point of the defect class is that
+# the two targets compile different code.
+#
+# Measured 2026-09-01: `cargo check -p dclutch-direct-aot-v3-contract` was
+# green on the host while `cargo build-sbf` on the same crate produced 176
+# errors, every one of them in that crate's own `src/registered.rs`. The cause
+# was one `#[cfg(not(target_os = "solana"))]` in
+# `crates/dclutch-direct-codec/src/registered_fill_artifacts_v4.rs` hiding the
+# generated register schema on the only target that ships. Host-green,
+# SBF-impossible, and no gate anywhere disagreed.
+#
+# THE SET IS EVERY NON-PROGRAM FIRST-PARTY CRATE REACHABLE FROM A PROGRAM, and
+# it is derived here rather than listed. Measured from `cargo metadata` over
+# all thirteen program manifests, that set is currently all 88 of them -- so a
+# hand-written list would be a second author for a question the dependency
+# graph already answers, and would drift the moment a crate joined. Deriving it
+# also means the gate can never be quietly narrowed to the crates that already
+# pass, which is the failure mode this tier exists to prevent.
+# ---------------------------------------------------------------------------
+tier_sbfcontracts() {
+  say "sbfcontracts -- non-program crates built for target_os=solana"
+  if ! have cargo-build-sbf; then
+    note "cargo-build-sbf is not installed, so NO crate was compiled for the"
+    note "target it ships to. Install the Solana/Agave toolchain:"
+    note "    sh -c \"\$(curl -sSfL https://release.anza.xyz/stable/install)\""
+    record sbfcontracts $EXIT_PREREQ_MISSING "cargo-build-sbf not on PATH"
+    return
+  fi
+  if ! have python3; then
+    record sbfcontracts $EXIT_PREREQ_MISSING "python3 not on PATH"
+    return
+  fi
+
+  local build_root="$repo_root" archive_root=""
+  if [ -n "$commit_rev" ]; then
+    local resolved
+    resolved="$(cd "$repo_root" && git rev-parse --verify "$commit_rev^{commit}" 2>/dev/null)" || {
+      record sbfcontracts $EXIT_PREREQ_MISSING "--commit $commit_rev does not name a commit"
+      return
+    }
+    archive_root="${DCLUTCH_CI_BUILD_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/dclutch-ci-sbfc-src.XXXXXX")}"
+    note "measuring COMMIT $resolved (clean git archive)"
+    archive_revision "$resolved" "$archive_root"
+    build_root="$archive_root"
+  else
+    note "measuring the working tree; use --commit HEAD for a quoteable run"
+  fi
+
+  # Derived, never listed. An empty set is a BROKEN DERIVATION, not a clean
+  # tree, so it refuses rather than reporting a vacuous pass.
+  local packages
+  packages="$(cd "$build_root" && python3 - <<'PY'
+import json, pathlib, subprocess, sys
+root = pathlib.Path.cwd()
+reach = set()
+manifests = sorted(root.glob("programs/*/Cargo.toml"))
+if not manifests:
+    sys.exit(3)
+for m in manifests:
+    r = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--manifest-path", str(m)],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(4)
+    for p in json.loads(r.stdout)["packages"]:
+        path = p.get("manifest_path", "")
+        if path.startswith(str(root)) and "/programs/" not in path \
+                and p["name"].startswith("dclutch-"):
+            reach.add(p["name"])
+if not reach:
+    sys.exit(5)
+print("\n".join(sorted(reach)))
+PY
+  )" || {
+    note "the crate set could not be derived from cargo metadata. That is a"
+    note "prerequisite failure, never an empty pass -- a gate over zero crates"
+    note "is not a green gate."
+    record sbfcontracts $EXIT_PREREQ_MISSING "could not derive the SBF-reachable crate set"
+    [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
+    return
+  }
+
+  local count
+  count="$(printf '%s\n' "$packages" | grep -c .)"
+  note "$count non-program crates reachable from a program manifest"
+
+  local args=() name
+  while IFS= read -r name; do
+    [ -n "$name" ] && args+=(-p "$name")
+  done <<< "$packages"
+
+  local code=0
+  (cd "$build_root" && cargo build-sbf -- --locked --offline "${args[@]}") || code=$?
+  if [ "$code" != 0 ]; then
+    note "a crate that ships to SBF does not COMPILE for target_os=solana."
+    note "A host-green \`cargo check\` proves nothing about this: the targets"
+    note "compile different code, which is the whole defect class. Look for a"
+    note "\`#[cfg(not(target_os = \"solana\"))]\` hiding a surface the crate"
+    note "still uses. Do NOT narrow this gate to the crates that already pass."
+    record sbfcontracts $EXIT_GATE_FAILED "$count crates requested; the SBF build failed"
+  else
+    record sbfcontracts $EXIT_PASS
+  fi
+  [ -n "$archive_root" ] && [ -z "${DCLUTCH_CI_BUILD_ROOT:-}" ] && rm -rf -- "$archive_root"
+}
+
+# ---------------------------------------------------------------------------
+# sbom -- the dependency/licence closure, ~3 minutes, needs a populated cargo
+# registry.
+#
+# WHY THIS TIER HAD TO BE WRITTEN, and it is the same defect twice.
+#
+# C-14 wants SBOM/licences to reproduce on supported builders. The instrument
+# exists and passes: 59 manifests, 2,151 unique rows, zero failures, zero
+# unresolvable. It regenerates byte-identically. It was also, until this tier,
+# gated NOWHERE in this tree -- and two separate places said otherwise.
+#
+# `tools/sbom/SBOM.md` said the drift check was "also wired into
+# tools/gauntlet". `grep -rn sbom tools/gauntlet/` returns nothing at all, and
+# the README that line points the reader to never mentions CI either. Second,
+# `apps/dclutch-web/lib/sbomVerify.test.ts` IS a real automatic gate on
+# `npm test` -- and the `web` tier below excludes it by name, on the stated
+# grounds that "it is gated in the wrapper's hygiene job". That wrapper is a
+# different repository observing a VENDORED SNAPSHOT, which this file's opening
+# paragraph already names as the wrong place for the answer. So the one gate
+# that ran was switched off in the one runner that defines what runs.
+#
+# The exclusion in `web` is kept -- it is a real cost and prerequisite
+# difference, not an unwelcome assertion -- and this tier is where that
+# assertion goes instead, with the registry prerequisite it actually needs and
+# a 2 rather than a fake green when the registry is absent.
+#
+# Two things run: the classification-logic unit tests (hermetic, stdlib-only,
+# no registry) and then `--verify`, which writes nothing and exits 1 on drift
+# or on any classification failure. The unit tests run FIRST and separately so
+# that "the checker is broken" and "this tree has a licence defect" cannot
+# arrive as the same number.
+# ---------------------------------------------------------------------------
+tier_sbom() {
+  say "sbom -- dependency and licence closure"
+  local tool="$repo_root/tools/sbom/sbom_check.py"
+  local unit="$repo_root/tools/sbom/test_sbom_check.py"
+  if [ ! -f "$tool" ]; then
+    note "tools/sbom/sbom_check.py is not in this tree"
+    record sbom $EXIT_PREREQ_MISSING "sbom_check absent from this tree"
+    return
+  fi
+  if ! have python3; then
+    record sbom $EXIT_PREREQ_MISSING "python3 not on PATH"
+    return
+  fi
+  if ! have cargo; then
+    note "the closure resolves every tracked Cargo workspace with"
+    note "\`cargo metadata --locked --offline\`, so with no cargo NOTHING was"
+    note "checked. This says nothing about whether the closure would pass."
+    record sbom $EXIT_PREREQ_MISSING "cargo not on PATH"
+    return
+  fi
+  if [ -f "$unit" ]; then
+    if ! (cd "$repo_root/tools/sbom" && python3 "$unit" >/dev/null 2>&1); then
+      note "the classification-logic tests failed, so the CHECKER is suspect."
+      note "Fix those before reading anything into the closure below."
+      record sbom $EXIT_GATE_FAILED "sbom_check's own classification tests failed"
+      return
+    fi
+  else
+    note "tools/sbom/test_sbom_check.py is absent, so the checker ran with no"
+    note "control of its own."
+  fi
+  # WHICH TREE THE CLOSURE MEASURED, and on this gate it is not a detail.
+  #
+  # `sbom_check.py` reads each workspace's Cargo.lock OFF DISK. On this shared
+  # checkout that is a dozen lanes' uncommitted files, so the local answer and
+  # the CI answer are answers to different questions -- and they have already
+  # disagreed. Measured 2026-09-01: the working tree said `manifests=59
+  # unresolvable=0 drift=False PASS`, while the SAME checker in a clean
+  # worktree at the SAME commit said `manifests=58 unresolvable=1 drift=True
+  # STOP`. A lockfile that only exists uncommitted made the gate green for
+  # whoever held it and red for everybody else. That is not a flaky gate, it is
+  # a gate measuring the wrong object.
+  #
+  # So `--commit` is honoured here exactly as it is by frameguard, and for the
+  # same stated reason: any number you intend to QUOTE comes from a clean tree.
+  # `git archive` is not usable -- the closure discovers manifests with `git
+  # ls-files`, which needs a real checkout -- so this uses a detached worktree
+  # and removes it afterwards.
+  local measure_root="$repo_root" worktree_root=""
+  if [ -n "$commit_rev" ]; then
+    local resolved
+    resolved="$(cd "$repo_root" && git rev-parse --verify "$commit_rev^{commit}" 2>/dev/null)" || {
+      record sbom $EXIT_PREREQ_MISSING "--commit $commit_rev does not name a commit"
+      return
+    }
+    worktree_root="$(mktemp -d "${TMPDIR:-/tmp}/dclutch-ci-sbom-src.XXXXXX")"
+    rm -rf -- "$worktree_root"
+    if ! (cd "$repo_root" && git worktree add --detach "$worktree_root" "$resolved" >/dev/null 2>&1); then
+      record sbom $EXIT_PREREQ_MISSING "could not create a clean worktree at $resolved"
+      return
+    fi
+    note "measuring COMMIT $resolved (clean detached worktree)"
+    measure_root="$worktree_root"
+  else
+    note "measuring the WORKING TREE, which on this checkout is several lanes'"
+    note "uncommitted files. Use --commit HEAD for a quoteable answer -- an"
+    note "uncommitted lockfile makes this gate green only for whoever holds it."
+  fi
+
+  local code=0
+  (cd "$measure_root" && python3 "$measure_root/tools/sbom/sbom_check.py" --verify >/dev/null) || code=$?
+  if [ -n "$worktree_root" ]; then
+    (cd "$repo_root" && git worktree remove --force "$worktree_root" >/dev/null 2>&1) \
+      || rm -rf -- "$worktree_root"
+  fi
+  case "$code" in
+  0) record sbom $EXIT_PASS ;;
+  1)
+    note "SBOM drift, or a dependency this repository cannot license-classify."
+    note "Rerun it directly to see the offending rows -- and against the same"
+    note "tree this tier just measured, or you will chase a disagreement that"
+    note "is only your working copy:"
+    note "    python3 tools/sbom/sbom_check.py --verify"
+    note "A git-sourced or checksum-less dependency is a FAILURE by design."
+    note "Do not weaken a version constraint to make the closure proceed."
+    record sbom $EXIT_GATE_FAILED
+    ;;
+  *)
+    note "the closure could not run -- most often a Cargo workspace whose lock"
+    note "cannot resolve offline, which is a stale-lockfile defect wearing an"
+    note "SBOM costume. Check \`cargo metadata --locked --offline\` first."
+    record sbom $EXIT_PREREQ_MISSING "sbom_check exited $code"
+    ;;
+  esac
+}
+
 tier_release() {
   say "release -- the release-tooling refusal suites"
   local dir="$repo_root/tools/release"
@@ -970,6 +1221,19 @@ release   ~5s          python3            the four release-tooling REFUSAL
                                           wrappers, the sponsored-market-open
                                           stager. All hermetic -- stub binaries
                                           and an invalid RPC, never a chain
+sbfcontracts
+          minutes      cargo-build-sbf    every non-program first-party crate
+                                          compiled for target_os=solana, the
+                                          target it actually ships to. A host
+                                          `cargo check` cannot fail the way
+                                          this does: measured 176 SBF errors on
+                                          a crate that was host-green
+sbom      ~3 min       cargo, python3     the dependency/licence closure over
+                                          every tracked Cargo workspace and npm
+                                          package tree: 59 manifests, 2,151
+                                          rows. A git-sourced or checksum-less
+                                          dependency, or drift in the committed
+                                          SBOM/NOTICES, is a failure
 web       ~1 min       node               the web + SDK vitest suites
 emission  minutes      lake (Lean)        every generated file still byte-
                                           matches the emitter that printed it
@@ -1001,7 +1265,8 @@ workspaces  slow       cargo              EVERY tracked Cargo workspace checks
                                           is not in `all`
 
 aliases:  cheap = census seam release
-          all   = census seam release web emission frameguard journey programs suites
+          all   = census seam release sbom sbfcontracts web emission frameguard journey
+                  programs suites
           (`workspaces` is deliberately outside `all` -- it is the cut tier)
 
 environment:
@@ -1042,12 +1307,14 @@ main() {
       exit 0
       ;;
     -h | --help)
-      sed -n '2,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      # The prose, then the ONE tier table -- never a second copy of it.
+      sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      list_tiers
       exit 0
       ;;
     cheap) tiers+=(census seam release) ;;
-    all) tiers+=(census seam release web emission frameguard journey programs suites) ;;
-    census | seam | release | web | emission | frameguard | journey | programs | suites | workspaces)
+    all) tiers+=(census seam release sbom sbfcontracts web emission frameguard journey programs suites) ;;
+    census | seam | release | sbom | sbfcontracts | web | emission | frameguard | journey | programs | suites | workspaces)
       tiers+=("$1")
       ;;
     *)

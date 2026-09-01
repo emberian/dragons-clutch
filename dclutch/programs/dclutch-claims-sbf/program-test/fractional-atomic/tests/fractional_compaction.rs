@@ -451,6 +451,29 @@ enum CampaignPlantV1 {
     TerminalCertificateIdentityMismatch,
     /// SignedDelta's caller role coordinates name Trading under a Claims plan.
     SignedDeltaCallerReleaseMismatch,
+    /// The exposure terms are not the terms this Market's manifest selected.
+    ///
+    /// The faithful fixture derives the capability root header's selected
+    /// config FROM the terms it plants (`selection_config_digest`), so the two
+    /// agree by construction and there is exactly one field to move to make
+    /// them disagree. This plant moves the header's, which is the cheap half;
+    /// the ATTACK moves the other half, and they are the same disagreement.
+    ///
+    /// The attack, stated because a reader should not have to reconstruct it
+    /// from a plant name. Registry publication is permissionless, and before
+    /// `authenticate_selected_config` the route's only joins on the terms were
+    /// `market()` and `release_set()` -- fields the record's own author writes.
+    /// So a cranker publishes a second well-formed `FractionalExposureTermsV2`
+    /// naming this Market, this release set and this same shard Mint, with
+    /// `denominator = 40` instead of 10, and names a rate of 16 instead of 4.
+    /// The conservation plan is satisfied exactly -- `(40 / 40) * 16 == 16`, the
+    /// entitlement the terminal derivation actually moved -- and the record that
+    /// gets written promises every returning holder `floor(shards / 40) * 16`.
+    /// The sleeping holder's 40 shards still redeem 16. A holder who had been
+    /// transferred 20 of them redeems ZERO, forever, and the collateral stays in
+    /// the vault. That is the redeemer-chooses-the-matrix shape of `a968858c`,
+    /// on the one route in this family a stranger may turn.
+    UnselectedExposureTerms,
 }
 
 fn campaign_fixture() -> (ProgramTest, CampaignFixture) {
@@ -707,7 +730,8 @@ fn campaign_fixture_basis(
     let planted_bump = match plant {
         CampaignPlantV1::Faithful
         | CampaignPlantV1::TerminalCertificateIdentityMismatch
-        | CampaignPlantV1::SignedDeltaCallerReleaseMismatch => rent_bump,
+        | CampaignPlantV1::SignedDeltaCallerReleaseMismatch
+        | CampaignPlantV1::UnselectedExposureTerms => rent_bump,
         CampaignPlantV1::RentCreditAtANonDerivedAddress => rent_bump.wrapping_sub(1),
     };
     let rent_credit_bytes = LifecycleRentCreditV2::new(
@@ -769,13 +793,20 @@ fn campaign_fixture_basis(
         terms_bytes,
     );
 
+    // The Market's manifest-selected config. Derived from the terms it plants,
+    // so the faithful fixture agrees by construction and the hostile has one
+    // field to move.
+    let selected_config = match plant {
+        CampaignPlantV1::UnselectedExposureTerms => [0x9c; 32],
+        _ => selection_config_digest(&terms_record.bytes),
+    };
     let selection = CapabilityExecutionSelectionV1::new(
         0,
         ContentId::new([0x81; 32]).expect("manifest"),
         ContentId::new(dclutch_fractional_claim_contract::FRACTIONAL_CAPABILITY_KIND_ID_V1)
             .expect("kind"),
         ContentId::new([0x83; 32]).expect("capability release"),
-        ContentId::new(selection_config_digest(&terms_record.bytes)).expect("config"),
+        ContentId::new(selected_config).expect("config"),
     )
     .expect("capability execution selection");
     let header = CapabilityRootHeaderV1::new(
@@ -2913,6 +2944,33 @@ async fn run_to_the_crank(
     plant: CampaignPlantV1,
     action: dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1,
 ) -> Outcome {
+    run_to_the_crank_substituting(plant, action, CrankSubstitutionV1::None).await
+}
+
+/// What one hostile changes AFTER the escrow opened and the deadline elapsed.
+///
+/// Separate from [`CampaignPlantV1`] because a plant is a fact about how the
+/// market was founded and this is a fact about the frame the crank is handed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CrankSubstitutionV1 {
+    /// Nothing. The admitted run and every plant-driven hostile.
+    None,
+    /// The Core Market has not reached a terminal phase.
+    ///
+    /// Written at the Core state's own derived address, decoded and re-encoded
+    /// from the fixture's own bytes, so its identity, its owner, its length and
+    /// every seed it derives under are byte-identical to the admitted run and
+    /// the phase is the sole discriminator. `CoreState::encode` refuses a
+    /// non-terminal phase carrying a terminal receipt, so dropping the receipt
+    /// is not a second substitution -- it is what an Open Market IS.
+    CoreMarketBeforeTerminal,
+}
+
+async fn run_to_the_crank_substituting(
+    plant: CampaignPlantV1,
+    action: dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1,
+    substitution: CrankSubstitutionV1,
+) -> Outcome {
     use dclutch_claims_svm::{
         fractional_claim_check_compaction_request_v1::{
             FractionalCompactToClaimCheckRequestV1, FractionalCompactionCoordinatesV1,
@@ -2950,6 +3008,21 @@ async fn run_to_the_crank(
     context
         .warp_to_slot(escrow.opened_slot + COMPACTION_DEADLINE_SLOTS_V1)
         .expect("warp past the compaction deadline");
+    if substitution == CrankSubstitutionV1::CoreMarketBeforeTerminal {
+        use dclutch_market_core_codec::{CoreState, Phase as CorePhase};
+        let mut core = CoreState::decode(&fixture.shared.core_state).expect("Core state decodes");
+        core.phase = CorePhase::Open;
+        core.terminal_winner = 0;
+        core.terminal_receipt = None;
+        let mut account = account_at(&mut context, fixture.shared.core_market)
+            .await
+            .expect("Core Market");
+        account.data = core.encode().expect("open Core state").to_vec();
+        context.set_account(
+            &fixture.shared.core_market,
+            &solana_account::AccountSharedData::from(account),
+        );
+    }
     submit_as(
         &mut context,
         compaction_instruction(&fixture, &request, custody_caller, action),
@@ -3076,6 +3149,100 @@ async fn a_compaction_without_trading_is_refused_at_the_frame() {
                 as u32,
         ),
         "refused as Authority, at the frame"
+    );
+}
+
+/// **A stranger cannot choose the denominator every returning holder is paid
+/// by: exposure terms this Market never selected are refused BY NAME.**
+///
+/// The hole, measured rather than reasoned about. Before
+/// `authenticate_selected_config`, this route's only joins on the finalized
+/// terms were `terms.market()` and `terms.release_set()` -- two fields the
+/// record's own author writes -- plus a digest join against a value the caller
+/// supplies. Registry publication is permissionless. The terms record is the
+/// SOLE author of the `denominator` the route persists into a fractional
+/// claim-check, which is the divisor every returning holder's payout is
+/// computed with for the life of the record. The conservation plan does not
+/// bound it: it requires `entitlement == (supply / D) * rate`, and `D = supply`
+/// with `rate = entitlement` satisfies that exactly for any supply.
+///
+/// The three sibling Fractional routes -- `fractional_atomic_v3.rs:253` and
+/// `:738`, `fractional_retirement_v3.rs:607` -- each derive the selection-config
+/// identity from the authenticated terms and require it to equal the config the
+/// founded Market's capability manifest chose. The permissionless one did not.
+///
+/// **Proven red first.** Against the ELF before the guard this campaign is
+/// ACCEPTED: a Market whose manifest selected some other config still compacts
+/// against whatever terms the cranker presents. That is the whole finding, and
+/// it is why the assertion here is on the exact discriminant and not on
+/// `is_err()` -- a compaction can refuse for a dozen reasons and only one of
+/// them is this one.
+#[tokio::test]
+async fn exposure_terms_the_market_never_selected_are_refused_by_name() {
+    let outcome = run_to_the_crank(
+        CampaignPlantV1::UnselectedExposureTerms,
+        dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1::Signed,
+    )
+    .await;
+    assert!(
+        !outcome.accepted,
+        "terms the Market's manifest never selected must be refused"
+    );
+    assert_eq!(
+        custom_refusal(&outcome.result),
+        Some(
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig
+                as u32,
+        ),
+        "refused as SelectionConfig, by name -- not folded into Terms, because \
+         'these are not the terms this Market selected' is a different accusation \
+         from 'this record does not decode or names another Market'"
+    );
+}
+
+/// **`0x5644` stops being a refusal this family publishes and nothing can
+/// raise: a compaction before Terminal is refused as `Phase`.**
+///
+/// The asymmetry this closes. The native twin reads Core state itself and
+/// refuses `Phase` on both conjuncts (`claim_check_compaction_v1.rs:437-448`),
+/// saying why: *a checked invariant is one an implementer cannot silently
+/// delete*. The fractional twin declared the identical code and read no Core
+/// state at all, so `Phase` had ZERO raise sites in the whole program.
+///
+/// It was not an unguarded route, and that distinction is worth keeping exact:
+/// the wrapped `terminal_settlement_v3::authenticate_core` admits only
+/// `TerminalOrRetiring` and its caller requires `core.terminal_receipt`. What
+/// it does not do is say so in this family's vocabulary -- both refuse as
+/// `ClaimsSbfError::Identity`, which `fractional_terminal_refusal` folds to
+/// `TerminalIdentity`. So a crank turned on a Market that had not resolved was
+/// told its identities disagreed, and the code that names the real cause could
+/// never appear in a validator log.
+///
+/// **Proven red first**: before the guard this returns `TerminalIdentity`
+/// (`0x564F`), not `Phase` (`0x5644`).
+///
+/// The 180-day deadline is untouched: the campaign still warps past the real
+/// `COMPACTION_DEADLINE_SLOTS_V1` before it cranks, exactly as the admitted run
+/// does. The only thing this hostile changes is the Market's phase.
+#[tokio::test]
+async fn a_compaction_before_terminal_is_refused_as_phase() {
+    let outcome = run_to_the_crank_substituting(
+        CampaignPlantV1::Faithful,
+        dclutch_fractional_compaction_test_caller_sbf::FractionalCompactionCallerActionV1::Signed,
+        CrankSubstitutionV1::CoreMarketBeforeTerminal,
+    )
+    .await;
+    assert!(
+        !outcome.accepted,
+        "a compaction on a Market before Terminal must be refused"
+    );
+    assert_eq!(
+        custom_refusal(&outcome.result),
+        Some(
+            dclutch_claims_sbf::fractional_claim_check_v1::FractionalClaimCheckCompactionSbfErrorV1::Phase
+                as u32,
+        ),
+        "refused as Phase, by name -- the code this family already published"
     );
 }
 

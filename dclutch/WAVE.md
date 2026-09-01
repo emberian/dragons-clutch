@@ -1570,10 +1570,41 @@ caps the SUPPLY-WEIGHTED sum at the Hoard balance, so aggregate over-payment is
 caught. Under-payment, and paying the right total to the WRONG coordinate, are
 not — the inequality says nothing about which claim is paid.
 
-Fix belongs in `claims-sbf/src/terminal_settlement_v3.rs` and at founding; the
-lane stopped rather than race another lane for the file, and corrected its own
-earlier commit that had recorded this as an open question rather than leave the
-weaker claim standing.
+**CLOSED `a968858c`, as a VALIDATION change — no wire, no release event.**
+`require_identity_exposure_v3` refuses any exposure that is not the identity
+embedding, before a payout is derived or a byte written, and all four entries
+into the route funnel through `authenticate_and_prepare` so one check covers
+them. It is admissible precisely because this route CANNOT express `N != K`:
+the Product's `basis_width` is forced equal to `market.claim_count` both at
+settlement and at founding, which is the sole creator of every LBV2 aggregate.
+The canonical publisher already emits exactly the identity and says so in its
+module doc — so this moves an invariant the tree stated in PROSE into a place
+the chain enforces. New refusal `ClaimsSbfError::ExposureNotIdentity = 0x500E`,
+band 5, append-only; census green at 297 codes.
+
+**The tautology is deleted, and the obvious replacement was MEASURED FALSE.**
+Reading the record's own `graph_id()` reddens four fixtures, because the
+exposure record's `graph_id` header and the descriptor's `graph_id` are
+DIFFERENT IDENTITIES in this tree — the double-booking already filed as a
+RECORDS-MIGRATE row. The lane reverted rather than rewrite four tests to match
+semantics it could not prove. That row is now the blocker on giving generic
+settlement a real identity join, not a tidiness item.
+
+**What is still owed, and it is ember's:** pinning an exposure digest at
+founding, the way the descriptor pins it for Rational, needs a new persisted
+field in the LBV2 aggregate — a wire change and a release event. Until then the
+invariant is *"the only admissible matrix is the identity"*, NOT *"the matrix
+was chosen by someone other than the redeemer"*. Those are different
+guarantees and the weaker one is what currently holds.
+
+The hostiles are the right ones: every hostile is a CANONICAL record that
+round-trips the kernel's own encoder, because the attack was never a malformed
+record but a well-formed one stating a different recipe — sum-preserving
+permutation (the case solvency structurally cannot see) and scaled denominator
+(under-payment, which solvency also admits) among them. Eight mutations, six
+killed at the intended discriminant; two survivors documented rather than
+hidden, being two conjuncts redundant with each other, with the test renamed to
+name the conjunct that actually owns it.
 
 ## 2026-09-01 — THE CLASS: declarations never executed against reality
 
@@ -1937,3 +1968,205 @@ rather than parked. Recorded here so they are not lost if a lane dies.
   succession/migration EXECUTED before assurance at all, or whether
   "redeploy fresh" stands until a deployment exists that someone would
   lose something by abandoning. That one is ember's.
+
+## 2026-09-01 — three corrections to the handoff letter's Dealer evidence
+
+The letter's pinned Dealer wall was re-measured against its own pinned
+artifacts (Trading `af5d955e…`, accelerator `3f73d43c…`, profiled ELF
+`a2e62944…`, `accepted.rs` at `e1bac1e8…`, all re-verified before and after).
+Three of its statements do not survive the re-measurement.
+
+**1. The pinned CU fingerprint is stale.** Same command, same artifacts:
+**149,593 CU**, not 148,093. +1,500 unexplained. Recorded as a corrected
+fingerprint rather than hedged; what moved is not yet known.
+
+**2. "A substituted-position selector-1 Add refuses correctly" is not
+established.** The substituted-Position Add and the honest Add refuse at the
+*identical* 149,593 CU with the *identical* 0x4003 — both are hitting the same
+site, upstream of anything that could examine a substituted identity. The
+hostile control passes only because the honest path is broken in the same
+place. **This is the second class — a guard whose two sides move together —
+appearing in a control rather than in production code**, which is worse,
+because a vacuous control licenses everything downstream of it. Nothing about
+substituted-position handling is currently known. Re-verify after the wall
+moves.
+
+**3. The window is right; its implication is wrong.** All 19 direct raise sites
+in `hot_v3.rs:3222-3525` were instrumented with distinct custom codes and
+every one is excluded. No predicate written in that window refuses. The wall is
+inside a *helper called from* the tranche.
+
+That negative result is only admissible because it carries a positive control:
+an ungated marker fails LP Open at `0x9063`/557,448 CU (channel live, window
+reachable), and the same marker gated to `selected_action == 1` lets LP Open
+succeed at 1,059,071 CU while the Add still refuses with no marker. The first
+instrumentation attempt used `sol_log_64` and produced nothing — and there were
+**zero `Program log` lines anywhere in the run, including the successful path**.
+The channel was dead and its silence meant nothing.
+
+**THE RULE THIS EARNS: an absent signal is evidence only if something present
+proves the channel works.** "I instrumented it and nothing fired" and "my
+instrument was disconnected" produce identical logs. Every negative result in
+this tree needs a positive control in the same run, or it is not a result.
+
+Also refuted, so nobody re-chases it: this is **not** the manifest/derivation-
+policy defect already convicted (that raises `UnsupportedContent` 0x4000 at
+`hot_v3:3372`; this raises `Content` 0x4003).
+
+## 2026-09-01 — the Dealer wall is one predicate, and correction 3 is withdrawn
+
+**Convicted:** `descriptor.derivation_policy != entry.child_derivation_id()`,
+in `validate_selection` (`crates/dclutch-capability-program-contract/src/v4.rs`),
+reached from `authenticate_descriptor_root_selection` at `hot_v3.rs:3319`.
+
+Bisected on the pinned evidence with gated early-return probes — one build and
+run per row, every build reporting `FRAMES=0` and `S5-RECOMPILED=1`. Probes
+past `authenticate_capability_seal_v3` and `decode_capability_program_boxed_v3`
+fired (`0x9034`, `0x9035`); the probe after `authenticate_descriptor_root_
+selection` did not, so the refusal is inside it. Splitting its two-branch
+conjunct gave `0x903c` (branch A, `validate_selection`); splitting that into
+seven distinct variants gave `0x904c`. One predicate, not a range.
+
+**WITHDRAWN: correction 3 of the Dealer corrections above.** It asserted this
+was *not* the R2 manifest/derivation-policy defect, on the evidence that R2
+raises `UnsupportedContent` 0x4000 at `hot_v3:3372` while this raises `Content`
+0x4003 elsewhere. The site and the code do differ — but **the predicate is the
+same one already convicted**, reached earlier on this path.
+`authenticate_descriptor_root_selection` discards the reason with `.is_err()`
+and re-raises a bare `Content`.
+
+That discard is the finding behind the finding: **it made one defect look like
+two, and cost a full bisect to undo.** Same disease as `Content` carrying 2,086
+raise sites (25.0% of the protocol's total) — a refusal that drops its reason
+is a refusal that cannot be reasoned about. Corrections 1 and 2 stand; both
+were re-measured. Addendum offered without claiming it: the clean *instrumented*
+build refuses at 148,083 CU, ten from the letter's 148,093, which is suggestive
+that the pinned figure came from a lightly-instrumented ELF rather than the
+pristine one. `af5d955e` costs **149,593**, measured three times.
+
+**The release-event claim, verified in source rather than inherited.**
+`CAPABILITY_PROGRAM_V4_DERIVATION_POLICY_OFFSET = 144`. The field is *not* a
+direct PDA seed — the tuple is `[domain, market, generation, manifest,
+entry_index, kind, capability_release, config]` — but the `manifest` seed is the
+manifest digest whose entries carry `child_derivation_id`, the very field
+compared, and `capability_release` is the program-set digest, which
+transitively covers the descriptor bytes at offset 144. So changing
+`derivation_policy` **moves every capability-root PDA**: existing markets
+cannot be migrated in place and must be re-founded.
+
+### THE RESERVATION IS ANSWERED BY EMBER'S OWN LATER RULING
+
+`derivation_policy` was reserved ("EMBER RULES THE SCOPE; no lane may start
+it") **because** the change forces re-founding. On 2026-09-01 ember ruled devnet
+disposable: tear down, redeploy fresh from exact current sources, abandon the
+old cohort in place rather than migrating it. There are no mainnet markets.
+Under that ruling, "existing markets must be re-founded" is not a cost — it is
+the plan. The objection that reserved the predicate has been answered by the
+person who reserved it.
+
+Lane authority set accordingly: **implement and prove it as code; do not
+deploy.** The release event itself remains ember's named act. And the standing
+condition holds — if nothing else binds the descriptor to its entry once that
+comparison stops carrying the binding, this is a weakening and the lane stops.
+
+### A reusable constraint, paid for the hard way
+
+`authenticate_and_execute_hot_v3` has **zero SBF frame headroom**. Fifteen
+per-call-site `.map_err` guards produced **95 frame-overwrite diagnostics** and
+the program aborted `ProgramFailedToComplete` instead of refusing; eight
+out-of-line guards still produced 95; the clean tree measures 0. **Anyone
+instrumenting this function must use gated early-return probes only.** The
+aborts were nearly reported as measurements, and what caught them was checking
+the frame count — the same move that caught the dead `sol_log_64` channel.
+
+## 2026-09-01 — THE THIRD CLASS: the browser can sign, but it cannot originate
+
+Three of C-12's nine capabilities came back **"present, unreachable by a
+stranger"**, and they are one architectural fact wearing three hats. Each stops
+at a byte-exact artifact that only a Rust binary can author:
+
+- **maker/taker trade** — `components/JoinPanel.tsx:22-28`: admission "needs the
+  position owner's signature over a frame the browser cannot yet assemble
+  byte-exactly."
+- **redemption** — `components/RedeemFlow.tsx:332`: "This browser never creates
+  or completes a payout plan." The producer is
+  `dclutch-local-successor-bootstrap wallet-terminal-payout-input`.
+- **creation** — `components/CoreFoundWorkspace.tsx:56-83`: `/found` asks for
+  **14 pasted base58 addresses**, five of which the file's own comments call
+  derivable.
+
+Liquidity is the same shape one step further along: it signs and never submits,
+exporting to an external submitter. The browser is a signing surface bolted to
+a Rust authoring monopoly, and C-12 asks for a stranger-operable product.
+
+**The instrument that hid it, and the general lesson.** `/console` advertised
+`claims.redeem` as *"This browser · one wallet signature, sent from here"* —
+every clause derived from the import graph, every clause true — over an act
+whose step two opens a file picker for a plan only a Rust binary authors. The
+census asked what an act *does* and never asked what it cannot be *started*
+without.
+
+> **A derivation can be sound and still answer the wrong question.** Deriving
+> from executable truth removes the lying-status-string failure; it does not
+> remove the wrong-question failure. 12 of 218 modules cannot start without an
+> outside file.
+
+Fixed in `fba9a63e` by reading a second fact off the same import graph, each
+with a canary that throws when it stops matching.
+
+### An instrument that could not have failed
+
+Accessibility was ungated for a measured reason, not an oversight: 171 test
+files contain **zero** `getByRole`, **zero** `getByLabelText` and **zero** axe
+runs, because `vitest.config.ts:12` is `environment: 'node'`. **No assertion in
+the repository could observe a label association or a focus order.** That is
+how "28 of 29 files nest `<Nav>` inside `<main>`" — so *Skip to main content*
+lands inside the main it was meant to skip — stayed true indefinitely.
+
+Two classes are now gated (`c94f9684`): 13 scroll regions no keyboard could
+reach, and 1 unnamed control, both at zero. **The mobile repair had created the
+keyboard defect** — wide tables pushed into `overflow-x:auto` became
+keyboard-inert. Repairs here trade one class for another, so gate both before
+moving either.
+
+### Refused, correctly
+
+`abi:route-census:verify` and `abi:refusal-registry:verify` are stale at HEAD
+while 41 other-lane files are mid-edit. The lane refused to regenerate:
+that would commit another lane's uncommitted Rust into a browser mirror — the
+"browser becomes last authority" hazard running backwards. Mirror regeneration
+is a convergence step for after the Rust lanes settle, not a lane's to take.
+
+## 2026-09-01 — third instance: encode it, digest it, never run it
+
+WAVE's sentence — *a component test that checks encoding and digests will pass
+forever over a route no account can satisfy* — has a third instance, and it is
+the one that explains two other findings at once.
+
+`programs/dclutch-dealer-accelerator-sbf/program-test/tests/accepted.rs` builds
+six `MultiLpCustodyRequestV3` compartment pairs in `scenario_templates()`.
+**Slot 2 is literally `(TradingPrincipal, FeeVault)`** — the exact cross-class
+movement L8 was built to catch — with slots 3 and 4 `TradingPrincipal ↔
+HoardPrincipal`. They are constructed by `equity_transfer()`, the same
+`v3_equity` path whose `residual_at` sums collateral atoms and claim units in
+one `u64`.
+
+But they are **artifacts, not transactions**: they feed
+`encode_dealer_scenario_base_effect_program_v4`, baked into the emitted
+**selector-9** scenario `EffectProgramV4`. The only two on-chain tests in that
+module execute **selector one** and LP open/close. **Nothing in that file
+executes selector nine** — while the same file encodes the account profile
+convicted as unsatisfiable (`:115-116`, `:419-421`) and builds bundles from it.
+
+So the campaign encodes selector nine's artifacts, checks their digests, and
+never runs them. The cross-class route and the mixed-unit solvency kernel have
+never met a real account, **which is exactly why neither was caught.** Two
+independent findings — a C-10 conservation hole and a C-06 kernel defect —
+share one cause and one uncrossed boundary.
+
+**Dependency, recorded so nobody builds it backwards:** mounting a conservation
+ledger on the Dealer campaign cannot produce the eight-class table until
+selector nine executes. The order is **unblock selector nine → mount the ledger
+→ then the table.** Building the instrument first is building it for a room
+nobody can enter — the same error, one level up, as writing L2 for the only
+compartment in the room.

@@ -134,7 +134,7 @@ export default function SupplyShareStrip({ supplies, outcomes, caption, emptyRea
     </p>
     <details className="viz-table">
       <summary>Exact numbers</summary>
-      <div className="viz-table-scroll">
+      <div className="viz-table-scroll" tabIndex={0} role="region" aria-label={`Exact numbers · ${caption}`}>
         <table>
           <thead><tr><th>Outcome</th><th>Share</th><th>Claims issued</th></tr></thead>
           <tbody>

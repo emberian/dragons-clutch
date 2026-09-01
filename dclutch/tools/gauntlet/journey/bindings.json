@@ -70,7 +70,7 @@
     {
       "label": "journey: activate the three-ledger Resolution funding of an Open Market",
       "routes": [
-        "core/persist_state#VerifyFundReady",
+        "core/resolution::process#VerifyFundReady",
         "core/process_instruction",
         "resolution/process_verify#VerifyFundReady",
         "resolution/core_effect::process_core_effect"

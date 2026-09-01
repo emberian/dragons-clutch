@@ -18,6 +18,7 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | surface | module authority | regenerate |
 | --- | --- | --- |
 | [capabilityManifestV1](capabilityManifestV1.md) | by formal/dclutch-semantics/EmitCapabilityManifestV1AbiTs.lean; do not edit. | npm run abi:capability-manifest |
+| [capabilitySurfaceV1](capabilitySurfaceV1.md) | by scripts/generate-capability-surface.mjs from the browser's own import graph; do not edit. | npm run abi:capability-surface |
 | [claimsCustodyReplayV1](claimsCustodyReplayV1.md) | by scripts/generate-claims-custody-replay.mjs; do not edit. |  |
 | [coreFound](coreFound.md) | from canonical Rust/Lean-emitted Core Found ABIs; do not edit. | npm run abi:found |
 | [dealerEquityV3](dealerEquityV3.md) | from canonical Rust Dealer V3 ABIs; do not edit. | npm run abi:dealer-v3 |
@@ -33,4 +34,6 @@ byte-checked against the Rust or Lean source that defines its layout, and
 | [refusalRegistryV1](refusalRegistryV1.md) | from crates/dclutch-refusal-registry/src/lib.rs and docs/reference/refusals.md; do not edit. | npm run abi:refusal-registry |
 | [registeredDirect](registeredDirect.md) | from dclutch-direct-codec Lean-emitted Rust ABI; do not edit. | npm run abi:registered |
 | [routeCensus](routeCensus.md) | by scripts/generate-route-census.mjs from `dclutch-route-census inventory`; do not edit. | npm run abi:route-census |
+| [sourceProviderWasmV1](sourceProviderWasmV1.md) | from the authoritative Rust Source-provider owner and WASM artifact; do not edit. |  |
+| [sourceReadinessWasmV1](sourceReadinessWasmV1.md) | from the authoritative Rust Source-readiness owner and WASM artifact; do not edit. |  |
 | [walletTerminalPayoutV3](walletTerminalPayoutV3.md) | by scripts/generate-wallet-terminal-payout-v3.mjs; do not edit. |  |

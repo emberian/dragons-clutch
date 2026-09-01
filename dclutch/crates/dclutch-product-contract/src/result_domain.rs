@@ -410,6 +410,87 @@ mod tests {
         assert_ne!(left.to_bytes(), right.to_bytes());
     }
 
+    /// Restate the documented cell semantics without consulting [`map`].
+    ///
+    /// Region `0` is `x < c[0]/d`, interior region `i` is
+    /// `c[i-1]/d <= x < c[i]/d`, and region `R-1` is `x >= c[R-2]/d`. This
+    /// predicate is written from that sentence, not from the scan in `map`,
+    /// so agreement between the two is evidence instead of a function
+    /// compared with itself. `boundary_below` flips every comparison to the
+    /// opposite half-open convention and exists only as this test's control.
+    fn declared_owners(
+        cuts: &[i128],
+        cut_denominator: u64,
+        numerator: i128,
+        denominator: u64,
+        boundary_below: bool,
+    ) -> (u32, u8) {
+        let region_count = cuts.len().saturating_add(1);
+        let at_least = |cut: i128| {
+            let left = numerator
+                .checked_mul(i128::from(cut_denominator))
+                .expect("test fixture stays inside i128");
+            let right = cut
+                .checked_mul(i128::from(denominator))
+                .expect("test fixture stays inside i128");
+            if boundary_below {
+                left > right
+            } else {
+                left >= right
+            }
+        };
+        let mut owners = 0;
+        let mut first = 0;
+        for region in 0..region_count {
+            let lower_ok = region == 0 || at_least(cuts[region.saturating_sub(1)]);
+            let upper_ok = region == region_count - 1 || !at_least(cuts[region]);
+            if lower_ok && upper_ok {
+                if owners == 0 {
+                    first = u8::try_from(region).expect("test width");
+                }
+                owners += 1;
+            }
+        }
+        (owners, first)
+    }
+
+    #[test]
+    fn every_swept_coordinate_lands_in_exactly_one_declared_region() {
+        let cuts = [-10_i128, 0, 25];
+        let domain = FiniteResultDomainV1::new(id(1), id(2), 10, &cuts).expect("canonical domain");
+        let mut reached = [false; 4];
+        let mut mutant_disagreements = 0_u32;
+        let mut swept = 0_u32;
+        for denominator in [1_u64, 3, 7, 10] {
+            for numerator in -400_i128..=400 {
+                let (owners, owner) = declared_owners(&cuts, 10, numerator, denominator, false);
+                assert_eq!(
+                    owners, 1,
+                    "{numerator}/{denominator} is owned by {owners} regions, not exactly one"
+                );
+                assert_eq!(
+                    domain.map(numerator, denominator),
+                    Ok(owner),
+                    "map disagreed with the declared interval at {numerator}/{denominator}"
+                );
+                reached[usize::from(owner)] = true;
+                if declared_owners(&cuts, 10, numerator, denominator, true) != (owners, owner) {
+                    mutant_disagreements = mutant_disagreements.saturating_add(1);
+                }
+                swept = swept.saturating_add(1);
+            }
+        }
+        // The sweep is only evidence if it reaches every region and can see a
+        // one-boundary error. Both controls run in the same pass as the claim.
+        assert_eq!(swept, 3_204);
+        assert_eq!(reached, [true; 4]);
+        // Nine swept coordinates sit exactly on a cut: -1 and 0 are exact over
+        // every denominator, and 25/10 is exact only over ten. The opposite
+        // half-open convention moves each of them one region down, and the
+        // sweep sees all nine.
+        assert_eq!(mutant_disagreements, 9);
+    }
+
     #[test]
     fn exact_comparison_is_total_at_signed_extremes() {
         let domain =
