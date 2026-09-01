@@ -17,6 +17,8 @@ use dclutch_market_core_codec::{
 };
 use dclutch_sha256_adapter::digestv;
 
+/// Stateless capability-root activation credit and creation oracle.
+pub mod activation;
 /// Complete stateless Ticket-to-Found Consume composition.
 pub mod composition;
 /// Stateless pre-founding SeriesEscrow effect sequence.

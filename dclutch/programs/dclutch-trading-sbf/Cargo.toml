@@ -94,6 +94,12 @@ solana-instructions-sysvar = "=3.0.1"
 solana-sdk-ids = "=3.1.0"
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 
+# Off-chain only, exactly like the `series::activation_bundle_v1` module it
+# serves: an activation triple is authored by release tooling and never by a
+# program, and the SBF artifact must not be able to reach it even by accident.
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+dclutch-capability-activation-codec = { path = "../../crates/dclutch-capability-activation-codec" }
+
 [dev-dependencies]
 dclutch-rational-representation-v2-request-contract = { path = "../../crates/dclutch-rational-representation-v2-request-contract" }
 solana-hash = "=4.6.0"

@@ -1163,8 +1163,27 @@ fn authenticate_actor_receipt(common: CommonV2<'_>) -> Result<()> {
 /// here: this builder is what *discovers* the supply and stages it into
 /// `expected_receipt_supply`, which the program then pins. An expected supply
 /// at this call could only be the number just read from these same bytes.
-/// `decimals` stays pinned locally because the behavior profile admits the full
-/// display-decimal domain while this family's claim Mints are whole units.
+///
+/// `decimals` is read and not pinned, and the profile is the reason rather than
+/// an exception to it. The behavior profile treats the byte as display
+/// metadata over the whole `u8` domain — `display-decimals=0..255-no-conversion`
+/// is written into `TOKEN_2022_BEHAVIOR_PROFILE_PREIMAGE_V2`, so admitting the
+/// domain is part of the hashed profile identity and not a local choice. Every
+/// economic quantity on this path is a raw `u64` base unit: the plan and receipt
+/// arithmetic is `coefficient.checked_mul(quantity)`, no power of ten is raised
+/// anywhere in the family, and `rational_representation_v2::process` consumes
+/// the byte in exactly one way — it reads `display_decimals()` off the same Mint
+/// and hands it back to Token-2022 as the `*_checked` cross-check argument.
+///
+/// A local pin here would therefore have guarded no arithmetic while making the
+/// builder strictly stricter than the route it builds for, which is the same
+/// unreachability the paragraph above describes, one field further in. The
+/// whole-unit fact this family does hold is created and enforced where it
+/// belongs: `rational_lifecycle_v2` initializes both Mints at zero decimals and
+/// re-authenticates them through `Token2022CloseableMintProfileV2::check_mint`
+/// with an expected-decimals argument, refusing as `DecimalsMismatch`. Restating
+/// it here as `InvalidToken` would add no on-chain safety, because a Mint that
+/// somehow carried other decimals would still be accepted by the program.
 fn authenticate_mint(
     observed: ObservedAccountV2<'_>,
     expected_key: Pubkey,
@@ -1182,9 +1201,6 @@ fn authenticate_mint(
     )
     .map_err(|_| Error::InvalidToken)?
     .mint();
-    if mint.decimals != 0 {
-        return Err(Error::InvalidToken);
-    }
     Ok(mint)
 }
 

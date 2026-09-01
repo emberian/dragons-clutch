@@ -464,6 +464,10 @@ mod tests {
         },
     };
 
+    /// One past the last identity window: `lp_digest` ends here and
+    /// `obligation_revision` begins.
+    const IDENTITY_REGION_END: usize = 272;
+
     fn program_set(action: MultiLpRequestActionV3) -> std::vec::Vec<u8> {
         let mut bytes = std::vec![0; 72];
         bytes
@@ -648,6 +652,94 @@ mod tests {
         assert_eq!(
             authenticate_multi_lp_request_v3(substituted_rent, chain),
             Err(MultiLpOperatorErrorV3::InvalidProjection)
+        );
+    }
+
+    /// Every identity this wire carries as an identity refuses the unset
+    /// pubkey at the decoder, and the one identity allowed to be unset is not
+    /// swept up with them.
+    ///
+    /// Selector 7/8's physical route reads `request.child_root` and
+    /// `request.lp_owner` straight into a `find_program_address` — see
+    /// `v4_lp_accelerator_accounts::authenticate_position` — with no all-zero
+    /// refusal lexically inside that function. `decode` is the only way a
+    /// value of this type comes into existence, so this is the guard that
+    /// keeps an attacker-chosen zero out of that derivation, and until this
+    /// test landed nothing held it there.
+    ///
+    /// Stated over the whole identity region rather than over `lp_owner`
+    /// alone: a test naming one field goes on passing while a later edit moves
+    /// any of the other six from `read_identity` to `read_identity_or_zero`,
+    /// and that one-word difference is the entire guard.
+    #[test]
+    fn no_identity_on_this_wire_may_be_the_unset_pubkey() {
+        let trading_program = [1; 32];
+        let release_set = [6; 32];
+        let market = [2; 32];
+        let child_root = [7; 32];
+        let lp_owner = [8; 32];
+        let trading = Pubkey::new_from_array(trading_program);
+        let obligation_address =
+            Pubkey::find_program_address(&[DEALER_OBLIGATION_PDA_DOMAIN_V3, &child_root], &trading)
+                .0
+                .to_bytes();
+        let lp_position_address = Pubkey::find_program_address(
+            &[DEALER_LP_POSITION_PDA_DOMAIN_V3, &child_root, &lp_owner],
+            &trading,
+        )
+        .0
+        .to_bytes();
+        let obligation_bytes = obligation_bytes(child_root);
+        let obligation =
+            DealerObligationProjectionV3::decode(&obligation_bytes).expect("obligation");
+        let chain = MultiLpChainProjectionV3 {
+            trading_program,
+            release_set,
+            market,
+            child_root,
+            lp_position_address,
+            lp_position: None,
+            lp_position_bytes: None,
+            obligation,
+            obligation_address,
+            generation: 11,
+            now: 20,
+            expires_at: 25,
+            terminal: false,
+            lp_position_rent_principal: 50,
+        };
+        let set_bytes = program_set(MultiLpRequestActionV3::Open);
+        let set = CapabilityProgramSetV1::decode(&set_bytes).expect("set");
+        let canonical = *build_open_lp_v3(chain, lp_owner, set)
+            .expect("open")
+            .as_bytes();
+        DealerMultiLpRequestV3::decode(&canonical).expect("the unmutated wire decodes");
+
+        // The identity region is eight 32-byte windows starting at offset 16.
+        let mut refused = std::vec::Vec::new();
+        for offset in (16..IDENTITY_REGION_END).step_by(32) {
+            let mut zeroed = canonical;
+            zeroed
+                .get_mut(offset..offset + 32)
+                .expect("identity window inside the request")
+                .fill(0);
+            if DealerMultiLpRequestV3::decode(&zeroed)
+                == Err(MultiLpOperatorErrorV3::InvalidRequest)
+            {
+                refused.push(offset);
+            }
+        }
+        // release_set, market, child_root, lp_position, lp_owner, obligation,
+        // obligation_digest. Offset 240 is `lp_digest`, which Open requires to
+        // be unset already, so zeroing that window is not a mutation at all.
+        assert_eq!(refused, std::vec![16, 48, 80, 112, 144, 176, 208]);
+        assert_eq!(canonical.get(240..272), Some([0; 32].as_slice()));
+
+        // The same value is refused at the other end of the wire, so an unset
+        // owner is not something a builder can produce either.
+        assert_eq!(
+            build_open_lp_v3(chain, [0; 32], set),
+            Err(MultiLpOperatorErrorV3::InvalidChoice)
         );
     }
 

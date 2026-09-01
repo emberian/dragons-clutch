@@ -609,6 +609,7 @@ dependencies = [
  "dclutch-resolution-codec",
  "dclutch-resolution-core-v3-operator",
  "dclutch-source-contract",
+ "dclutch-source-readiness-operator",
  "dclutch-token-svm",
  "dclutch-versioned-message-operator",
  "reqwest",
@@ -807,6 +808,7 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface",
 ]
 
 [[package]]
@@ -1072,6 +1074,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-source-readiness-operator"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "dclutch-market-core-codec",
+ "dclutch-resolution-core-v3-operator",
+ "serde",
+ "serde_json",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-structured-v2-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1087,6 +1102,7 @@ name = "dclutch-trading-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",

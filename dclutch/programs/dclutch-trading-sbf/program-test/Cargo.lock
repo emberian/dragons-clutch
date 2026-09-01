@@ -1612,6 +1612,7 @@ dependencies = [
  "dclutch-market-core-codec",
  "dclutch-record-contract",
  "dclutch-registry-contract",
+ "dclutch-registry-svm",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",
  "dclutch-request-profile-contract",
@@ -2009,6 +2010,7 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
 ]
 
 [[package]]
@@ -2290,6 +2292,7 @@ dependencies = [
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",
+ "dclutch-chain-bundle-builder",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
@@ -2333,6 +2336,7 @@ name = "dclutch-trading-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",

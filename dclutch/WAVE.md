@@ -1527,6 +1527,42 @@ rather than taken from a lane's report.
   the flagged ones ("retiring a finding while the tuple stays spelled
   retires the finding, not the defect").
 
+## 2026-09-01 — open seams from the completion swarm
+
+Two jointly-unsatisfiable constraint pairs were convicted by measurement
+tonight. Neither is an economic ruling; both are architecture decisions with
+cross-family reach, and both are being analysed by their convicting lane
+rather than parked. Recorded here so they are not lost if a lane dies.
+
+- **SERIES activation funding seam.** Option B (Template-authenticated
+  `closeRent` is separately prepaid principal) is refused by the
+  family-neutral seam: `outer.rs:1639-1646` requires an activated root to end
+  at exactly `rent.minimum_balance(descriptor.root_account_bytes())`, a pure
+  function of declared width with no family-varying term, while
+  `series/terminal.rs:132-139` refuses Close unless the root holds
+  `root_rent + close_rent_remaining`. So a Template with nonzero `close_rent`
+  describes a root activation may not fund and Close can never open, and
+  nothing in between tops it up. QUESTION: does the activation seam gain a
+  family-declared prepaid principal (changing `outer.rs` plus the shared
+  activation codec, and requiring the outer to authenticate an amount against
+  a config record it deliberately never decodes), or does Series' prepaid
+  principal move out of the root? No zero-principal rule was imposed; the
+  bundle composes the honest tail either way and a verdict artifact reports
+  the wall instead of shipping roots that cannot be closed (`01e866b0`).
+
+- **DEALER manifest vs per-descriptor derivation policy.** `derivation_policy`
+  is pinned per-descriptor to that descriptor's own lifecycle digest
+  (`hot_v3.rs:3370`, `:1235`) but `validate_selection` pins it to the per-root
+  manifest entry (`crates/dclutch-capability-program-contract/src/v4.rs:201`),
+  and a `CapabilityManifestV1` carries ONE entry per root while a
+  `CapabilityProgramSetV2` carries many selectors whose lifecycle bodies have
+  necessarily different widths. Exactly one selector can ever satisfy it.
+  QUESTION: give each selector its own manifest entry (possibly the only
+  coherent answer, since a single-entry manifest may be structurally incapable
+  of describing a multi-selector set), or stop pinning `derivation_policy` to
+  the per-action lifecycle digest? A persisted-layout change is a much larger
+  act than a validation change; that asymmetry is the crux.
+
 ## 2026-09-01
 
 - **Codex's completion wave landed and handed back.** `AGENTS.md` +

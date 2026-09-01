@@ -1,3 +1,120 @@
+# GOAL — the completion campaign, swarmed (standing, from 2026-09-01 04:5x)
+
+Drive `docs/MASTER_COMPLETION_CONTRACT.md` C-00..C-16 to physical evidence.
+Queue is `docs/LETTER_TO_CLAUDE_2026_09_01.md` (five walls, lanes S0–S11,
+continuation order). Opus lanes only. Heavy Linux via hbox `swarm-build`.
+Dirty tree deliberate — named-path commits through `tools/lane.sh`, never
+stash/reset/clean/`add -A`, never delete under `~/dev`.
+
+Measure, refute the obvious suspect, only then move a constant or convict
+code. A named wall is a fine deliverable; a green fixture proving the wrong
+thing is not.
+
+## Current thrust
+
+Convict the two walls that are already located, in parallel with the
+letter's own first crossing (Dealer `Content`).
+
+## Next 3 moves
+
+1. POSTJOIN (orchestrator): `real_registry_executes_profile14_direct_hot_under_protocol_limit`
+   is the HONEST CONTROL for `registry_hot_continuation` — its 26 hostiles are
+   measured against it, so while it is red every one of them may be passing
+   for the wrong reason. Establish execute-failure vs compute-ceiling by
+   measurement before naming a cause.
+2. STRUCT-DEC: `crates/dclutch-rational-representation-v2-operator/src/lib.rs:1185`
+   pins `mint.decimals != 0` with a STATED reason ("this family's claim Mints
+   are whole units"). Refute or uphold that reason by reading whether any
+   arithmetic consumes `decimals`; only then remove and add hostiles.
+3. DEALER-CONTENT: convict the immutable-artifact tranche between Hot
+   checkpoints `root-product` and `artifacts-strategy-effect` on the pinned
+   `686bf2e5` Trading ELF. Do not weaken `Content`.
+
+## POSTJOIN — convicted and repaired (`ff8ca269`)
+
+`686bf2e5` pinned the lifecycle rent credit's owner to `frame.registry` on the
+stated premise "that owner is the already authenticated fixed Registry
+coordinate". Instrumented replay measured `owner_program=0x91` (Registry) vs
+`account.owner=0x97` (Rent) — the premise is FALSE; `programs/dclutch-rent-sbf`
+is the canonical lifecycle RentCredit contract and creates these accounts
+itself. The conjunct was unsatisfiable on every honest Direct Hot transaction.
+
+Conviction path (one line out of 2,132 `Content` raise sites): phase
+checkpoints bracketed it to `p5-sealed-ownership-arena` -> `request-lifecycle-preplan`,
+a single call; instrumenting all 708 raise sites in the file named
+`hot_v3.rs:8791`; splitting the ten-way conjunct named
+`owner_program.key != account.owner`; a `sol_log_64` byte probe named the two
+programs. A clean-HEAD worktree reproduced it identically, so no lane's dirty
+WIP is implicated.
+
+The repair REMOVES rather than weakens: `create_program_address` at
+`hot_v3.rs:8809` already re-derives the credit's key from its own seeds under
+`account.owner`, binding the owner to THIS credit — strictly stronger than
+pinning a coordinate. It predates `686bf2e5` and was untouched by it.
+
+Blast radius was 10 of 27, not the 1 CI reported (the runner stops at its
+first named case). After the repair: **24 passed, 2 failed**; no hostile
+flipped red->green.
+
+**The refusal was MASKING a compute regression.** With it gone, Trading runs
+to 1,330,239 of 1,399,700 CU and dies `ProgramFailedToComplete` — which is why
+`SBF programs and the Direct compute margin` is red beside it. Two stacked
+defects; the second is the next unit.
+
+Correction to my own earlier hypothesis: Direct's and Dealer's `Content` are
+NOT one class. Dealer refuses at `validate_selection` conjunct 5
+(`derivation_policy != child_derivation_id`) between `root-product` and
+`artifacts-strategy-effect`; Direct passes that bracket and dies later. Both
+lanes measured independently and the shared-class guess was refuted.
+
+## Wave 2 (goal: until 1pm) — seven lanes
+
+STRUCT-DEC (resumed, ATA derivation wall) - DEALER-CONTENT (resumed, manifest
+vs per-descriptor derivation policy) - SERIES (resumed, activation funding
+seam) - COMPUTE-MARGIN (the wall postjoin was hiding) - GENERAL-OPENBATCH -
+DIRECT-SELLBUY - CLAIMS-CONSERVE (new files only; `claims.conserve` is
+unimplemented and must not be truth-flipped). Orchestrator: tree-wide
+consistency and cuts.
+
+**Four of five workspace lockfiles could not resolve under `--locked` at
+committed HEAD** (`90e45b29`, plus `371409f4`/`7b8cafd9` for the journey).
+That fails any `--locked` CI job on its own and was invisible locally because
+nothing runs `--locked` by hand. Repaired as a union — 43 additions, zero
+deletions — so no lane lost a line, including the one SERIES asked to have
+carried. I caused part of it: the journey relink committed a `Cargo.toml`
+dependency without its lock.
+
+## Done-log
+
+- Published two cuts (`7509c998b`, `546288b8b`), tree-hash gated + swept.
+- `673fcb3e` journey relinked (9 errors -> 0); public CI red repaired.
+- `7dc20ad0` ember ruling recorded: devnet is disposable.
+- Source readiness native/WASM parity MEASURED INTACT in the live tree
+  (4/4, ~2s). The public web-suite red was rustup provisioning, never a
+  parity break; toolchain now installed explicitly (host repo `02bab0b84`).
+  The test stays UNEXCLUDED — an unproven parity is not a parity.
+- Lanes live: STRUCT-DEC (decimals gate), SEAM-VERDICT (hygiene red),
+  DEALER-CONTENT (immutable-artifact tranche, hbox), SERIES-ACTIVATION.
+  Orchestrator holds POSTJOIN.
+- **POSTJOIN reproduced, and the compute hypothesis is REFUTED.** The
+  control fails on a REFUSAL, not a ceiling: Registry invoke[1] -> Trading
+  invoke[2], Trading consumed 446,017 of 1,303,327 CU and raised
+  `custom program error: 0x4003` = `TradingError::Content`
+  (`programs/dclutch-trading-sbf/src/lib.rs:186`), surfacing as
+  `InstructionError(2, Custom(16387))`. Nowhere near a compute wall, so the
+  red `Direct compute margin` job is a SEPARATE story and must not be
+  narrated as this one.
+- **`Content` is one class in two families.** Dealer's honest LP Add refuses
+  the same 0x4003 at 148,093 CU. Direct Hot refuses it at 446,017. A
+  Dealer-local fix would retire an instance, not the defect. DEALER-CONTENT
+  told; both lanes now bracket with `hot_cu_checkpoint!` (gated behind the
+  `hot-cu-profile` feature, `hot_v3.rs:616-626`). Grep cannot convict this:
+  `Content` has 2,132 raise sites, 782 in `hot_v3.rs` alone. Instrument.
+
+---
+
+# Historical ledger (pre-2026-09-01)
+
 # GOAL — work until 11am: the protocol as good as it can be, all debt burned down
 
 ## CONVERGENCE (~17:3x): docs/HANDOFF_CODEX_2026_08_31.md is the

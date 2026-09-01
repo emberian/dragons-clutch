@@ -8,6 +8,12 @@
 
 /// Exact dynamic-span physical AccountProfile for global Consume execution.
 pub mod account_profile_v4;
+/// Host-only Series capability-activation descriptor, bundle, and release set.
+///
+/// The activation triple is authored by release tooling and authenticated on
+/// chain by the family-neutral `outer.rs`; the Trading ELF never builds one.
+#[cfg(not(target_os = "solana"))]
+pub mod activation_bundle_v1;
 /// Solana account authentication and commit-last physical persistence.
 pub mod accounts;
 /// Exact action-selected generic V3 interpreter artifacts.

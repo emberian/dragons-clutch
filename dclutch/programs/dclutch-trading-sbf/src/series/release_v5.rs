@@ -944,7 +944,12 @@ fn validate_action_authority(
     Ok(())
 }
 
-fn encode_descriptor(
+/// Encode one exact V4 action descriptor.
+///
+/// Visible to the Series module so `activation_bundle_v1` inherits its five
+/// manifest-selected coordinates from the production encoder rather than from a
+/// test-authored mirror of it.
+pub(super) fn encode_descriptor(
     template: ContentId,
     ids: SeriesActionArtifactIdsV5,
 ) -> Result<[u8; CAPABILITY_PROGRAM_V4_BYTES]> {

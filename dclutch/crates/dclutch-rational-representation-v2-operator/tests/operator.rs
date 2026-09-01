@@ -70,7 +70,7 @@ use dclutch_representation_composition_v3_kernel::{
     encode_composition_exposure_v3_atomic,
 };
 use dclutch_resolution_codec::{ResolutionCertificateKindV2, ResolutionCertificateV2};
-use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
+use dclutch_token_svm::{TOKEN_2022_PROGRAM_ID, state::MintLayoutV1};
 use solana_program::{
     hash::{hash, hashv},
     instruction::AccountMeta,
@@ -84,8 +84,7 @@ use spl_associated_token_account_interface::address::get_associated_token_addres
 use spl_token_2022_interface::{
     extension::{
         BaseStateWithExtensionsMut, ExtensionType, StateWithExtensionsMut,
-        mint_close_authority::MintCloseAuthority,
-        permissioned_burn::PermissionedBurnConfig,
+        mint_close_authority::MintCloseAuthority, permissioned_burn::PermissionedBurnConfig,
     },
     state::Mint as Token2022Mint,
 };
@@ -966,6 +965,28 @@ impl Fixture {
         std::array::from_fn(|index| self.assets.get(index).expect("asset").observe())
     }
 
+    /// Rewrite only the display-decimals byte of every claim Mint in place.
+    ///
+    /// [`MintLayoutV1::DECIMALS`] names the field rather than a number this
+    /// fixture typed, and it sits inside the base Mint ahead of the extension
+    /// storage `behavior_mint_data` allocates. Every other byte -- both
+    /// authorities, the supply, the account-type tag and both required lifecycle
+    /// extensions -- is left exactly as the whole-unit fixture wrote it, which is
+    /// what makes a pair of runs across this method a controlled experiment on
+    /// one field instead of a comparison of two different Mints.
+    fn set_display_decimals(&mut self, receipt: u8, shards: [u8; 2]) {
+        *self
+            .receipt_mint
+            .get_mut(MintLayoutV1::DECIMALS)
+            .expect("receipt Mint decimals") = receipt;
+        for (asset, decimals) in self.assets.iter_mut().zip(shards) {
+            *asset
+                .shard_mint
+                .get_mut(MintLayoutV1::DECIMALS)
+                .expect("shard Mint decimals") = decimals;
+        }
+    }
+
     fn observation<'a>(
         &'a self,
         assets: &'a [AssetObservationV2<'a>],
@@ -1176,7 +1197,10 @@ fn every_builder_refuses_the_82_byte_mint_shape_the_old_reader_required() {
     )
     .expect("the shape the chain actually holds builds a transaction");
     construct_denominate(
-        good.observation(good_assets.get(1..2).expect("selected asset"), Mode::Selected),
+        good.observation(
+            good_assets.get(1..2).expect("selected asset"),
+            Mode::Selected,
+        ),
         SelectedActionInputV2 {
             outcome: WINNER,
             quantity: 2,
@@ -1207,13 +1231,255 @@ fn every_builder_refuses_the_82_byte_mint_shape_the_old_reader_required() {
     let shard_assets = shard.asset_observations();
     assert_eq!(
         construct_denominate(
-            shard.observation(shard_assets.get(1..2).expect("selected asset"), Mode::Selected),
+            shard.observation(
+                shard_assets.get(1..2).expect("selected asset"),
+                Mode::Selected
+            ),
             SelectedActionInputV2 {
                 outcome: WINNER,
                 quantity: 2,
             },
         )
         .expect_err("82-byte shard Mint"),
+        Error::InvalidToken
+    );
+}
+
+/// Display decimals are metadata, so the whole `u8` domain builds the same bytes.
+///
+/// The receipt Mint carries 19 and the shard Mints 6 and 255 -- the exact values
+/// the real-ELF corpus fixture plants, chosen so that no two coordinates share a
+/// scale and one sits at the domain's ceiling. Only [`MintLayoutV1::DECIMALS`]
+/// differs from the whole-unit fixture.
+///
+/// The assertion is equality of the entire constructed result, not merely that
+/// construction succeeded. Success alone would still admit a builder that
+/// silently rescaled a quantity by a power of ten; equality is what proves the
+/// decimals byte reaches no header field, no quantity, no derived identity and
+/// no request digest. Every economic number here stays a raw `u64` base unit,
+/// which is what `TOKEN_2022_BEHAVIOR_PROFILE_PREIMAGE_V2` commits to when it
+/// writes `display-decimals=0..255-no-conversion` into a hashed profile id.
+#[test]
+fn display_decimals_across_the_whole_domain_build_byte_identical_requests() {
+    let whole = Fixture::new(false);
+    let whole_assets = whole.asset_observations();
+    let mut scaled = Fixture::new(false);
+    scaled.set_display_decimals(19, [6, u8::MAX]);
+    let scaled_assets = scaled.asset_observations();
+
+    assert_eq!(
+        construct_issue_structured(
+            scaled.observation(&scaled_assets, Mode::Structured),
+            StructuredActionInputV2 { quantity: 2 },
+        )
+        .expect("nonzero display decimals build IssueStructured"),
+        construct_issue_structured(
+            whole.observation(&whole_assets, Mode::Structured),
+            StructuredActionInputV2 { quantity: 2 },
+        )
+        .expect("whole-unit IssueStructured"),
+    );
+    assert_eq!(
+        construct_denominate(
+            scaled.observation(
+                scaled_assets.get(1..2).expect("selected asset"),
+                Mode::Selected,
+            ),
+            SelectedActionInputV2 {
+                outcome: WINNER,
+                quantity: 2,
+            },
+        )
+        .expect("nonzero display decimals build Denominate"),
+        construct_denominate(
+            whole.observation(
+                whole_assets.get(1..2).expect("selected asset"),
+                Mode::Selected,
+            ),
+            SelectedActionInputV2 {
+                outcome: WINNER,
+                quantity: 2,
+            },
+        )
+        .expect("whole-unit Denominate"),
+    );
+
+    // A second point of the domain, so the pair above cannot be read as a fact
+    // about the two specific values the corpus happens to plant.
+    let mut alternate = Fixture::new(false);
+    alternate.set_display_decimals(9, [u8::MAX, 1]);
+    let alternate_assets = alternate.asset_observations();
+    assert_eq!(
+        construct_unwrap_structured(
+            alternate.observation(&alternate_assets, Mode::Structured),
+            StructuredActionInputV2 { quantity: 2 },
+        )
+        .expect("alternate display decimals build UnwrapStructured"),
+        construct_unwrap_structured(
+            whole.observation(&whole_assets, Mode::Structured),
+            StructuredActionInputV2 { quantity: 2 },
+        )
+        .expect("whole-unit UnwrapStructured"),
+    );
+}
+
+/// Admitting the display-decimals domain admitted nothing else.
+///
+/// Every refusal `authenticate_mint` is actually responsible for is restaged on
+/// Mints whose decimals are nonzero, so that a later edit which weakened
+/// identity, ownership, executability or the Token-2022 behavior profile itself
+/// could not pass by hiding behind a decimals byte that no longer refuses first.
+/// Each case names the exact discriminant the enum defines rather than asserting
+/// that something, somewhere, said no.
+#[test]
+fn nonzero_display_decimals_still_refuse_every_mint_authentication_failure() {
+    let scaled = || {
+        let mut fixture = Fixture::new(false);
+        fixture.set_display_decimals(19, [6, u8::MAX]);
+        fixture
+    };
+    let issue = |observation| {
+        construct_issue_structured(observation, StructuredActionInputV2 { quantity: 2 })
+            .expect_err("hostile receipt Mint")
+    };
+    let denominate = |observation| {
+        construct_denominate(
+            observation,
+            SelectedActionInputV2 {
+                outcome: WINNER,
+                quantity: 2,
+            },
+        )
+        .expect_err("hostile shard Mint")
+    };
+
+    // The receipt Mint, one authentication coordinate at a time.
+    //
+    // Two of its three account coordinates never reach `authenticate_mint` at
+    // all, and the discriminants below say so rather than papering over it. The
+    // observed key and owner are handed to
+    // `authenticate_product_representation_v3` as the runtime context's
+    // `receipt_mint` and `token_program`, where they are authenticated against
+    // the immutable descriptor's own fields and refuse as
+    // `InvalidRepresentation` before any Mint byte is parsed. That is the
+    // stronger of the two checks -- it binds the account to a finalized record
+    // rather than to a locally derived expectation -- and `authenticate_mint`'s
+    // matching conjunct is the second line behind it.
+    let fixture = scaled();
+    let assets = fixture.asset_observations();
+    let mut wrong_owner = fixture.observation(&assets, Mode::Structured);
+    wrong_owner.receipt_mint.owner = CLAIMS;
+    assert_eq!(issue(wrong_owner), Error::InvalidRepresentation);
+
+    let mut wrong_key = fixture.observation(&assets, Mode::Structured);
+    wrong_key.receipt_mint.key = Pubkey::new_from_array([0x5a; 32]);
+    assert_eq!(issue(wrong_key), Error::InvalidRepresentation);
+
+    // Executability is carried by no record, so this one is `authenticate_mint`
+    // speaking for itself.
+    let mut executable = fixture.observation(&assets, Mode::Structured);
+    executable.receipt_mint.executable = true;
+    assert_eq!(issue(executable), Error::InvalidToken);
+
+    // The behavior-profile read itself: the 82-byte legacy shape, and a Mint
+    // whose authority is not the representation authority the profile is told to
+    // expect. Both are profile refusals mapped to `InvalidToken`, and both are
+    // staged on bytes that already carry decimals 19.
+    let mut truncated = scaled();
+    truncated.receipt_mint.truncate(SplMint::LEN);
+    let truncated_assets = truncated.asset_observations();
+    assert_eq!(
+        issue(truncated.observation(&truncated_assets, Mode::Structured)),
+        Error::InvalidToken
+    );
+
+    let mut foreign_authority = scaled();
+    put(
+        &mut foreign_authority.receipt_mint,
+        MintLayoutV1::AUTHORITY + 4,
+        Pubkey::new_from_array([0x5b; 32]).as_ref(),
+    );
+    let foreign_assets = foreign_authority.asset_observations();
+    assert_eq!(
+        issue(foreign_authority.observation(&foreign_assets, Mode::Structured)),
+        Error::InvalidToken
+    );
+
+    // The shard Mint reaches the same function through `resolve_assets`, so the
+    // same coordinates are restaged on the selected coordinate's Mint.
+    let mut shard_owner = fixture.asset_observations();
+    shard_owner
+        .get_mut(1)
+        .expect("selected asset")
+        .shard_mint
+        .owner = CLAIMS;
+    assert_eq!(
+        denominate(fixture.observation(
+            shard_owner.get(1..2).expect("selected asset"),
+            Mode::Selected
+        )),
+        Error::InvalidToken
+    );
+
+    let mut shard_executable = fixture.asset_observations();
+    shard_executable
+        .get_mut(1)
+        .expect("selected asset")
+        .shard_mint
+        .executable = true;
+    assert_eq!(
+        denominate(fixture.observation(
+            shard_executable.get(1..2).expect("selected asset"),
+            Mode::Selected
+        )),
+        Error::InvalidToken
+    );
+
+    // A shard Mint key is derived from the descriptor and the outcome rather
+    // than named by a record, so unlike the receipt Mint above this coordinate
+    // does belong to `authenticate_mint`.
+    let mut shard_key = fixture.asset_observations();
+    shard_key.get_mut(1).expect("selected asset").shard_mint.key =
+        Pubkey::new_from_array([0x5d; 32]);
+    assert_eq!(
+        denominate(
+            fixture.observation(shard_key.get(1..2).expect("selected asset"), Mode::Selected)
+        ),
+        Error::InvalidToken
+    );
+
+    let mut shard_truncated = scaled();
+    shard_truncated
+        .assets
+        .get_mut(1)
+        .expect("selected asset")
+        .shard_mint
+        .truncate(SplMint::LEN);
+    let shard_truncated_assets = shard_truncated.asset_observations();
+    assert_eq!(
+        denominate(shard_truncated.observation(
+            shard_truncated_assets.get(1..2).expect("selected asset"),
+            Mode::Selected
+        )),
+        Error::InvalidToken
+    );
+
+    let mut shard_authority = scaled();
+    put(
+        &mut shard_authority
+            .assets
+            .get_mut(1)
+            .expect("selected asset")
+            .shard_mint,
+        MintLayoutV1::AUTHORITY + 4,
+        Pubkey::new_from_array([0x5c; 32]).as_ref(),
+    );
+    let shard_authority_assets = shard_authority.asset_observations();
+    assert_eq!(
+        denominate(shard_authority.observation(
+            shard_authority_assets.get(1..2).expect("selected asset"),
+            Mode::Selected
+        )),
         Error::InvalidToken
     );
 }

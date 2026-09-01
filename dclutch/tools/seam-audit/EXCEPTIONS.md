@@ -566,3 +566,361 @@ the same seam, will retire all three.
 
 Baseline edited **by hand**, never `--write`: the FRACCHECK-2 precedent holds,
 and `measured_commit` is left where `--write` last set it.
+
+---
+
+## 2026-09-01 — cohort-9 SEAM-VERDICT: the completion wave's 46, and one guard that was never held
+
+The overnight completion wave took the gate red on **46** findings at
+`10f8e3e2` — not the eleven a first reading of the report suggested, because
+fifteen of them are `UNSET_GUARD_PRESENT` inventory rows and thirty are
+findings in four other classes. One fix landed, four tags are new, and every
+row below was read before it was written.
+
+### benign-decoder-refuses-unset
+
+**1 entry.** `programs/dclutch-trading-sbf/src/dealer/v4_lp_accelerator_accounts.rs` ·
+`authenticate_position` — and the test that was missing under it.
+
+**The question.** The function derives
+
+```rust
+let expected = Pubkey::find_program_address(
+    &[
+        DEALER_LP_POSITION_PDA_DOMAIN_V3,
+        &request.child_root,
+        &request.lp_owner,
+    ],
+    &trading,
+).0;
+```
+
+and pins `system.key == &system_program::ID`. `system_program::ID` **is** the
+all-zero pubkey — verified, `declare_id!("11111111111111111111111111111111")`
+decodes to 32 zero bytes — so the reader is looking at a function where the
+unset pubkey is legitimately meaningful, and it fires. The question it cannot
+answer is the one that matters: can an attacker put an all-zero `lp_owner` or
+`child_root` into that derivation?
+
+**The answer is no, and it is refused two independent ways.**
+
+*At the decoder.* `DealerMultiLpRequestV3::decode` reads `child_root` at offset
+80 and `lp_owner` at offset 144 through `read_identity`, which is
+`read_identity_or_zero` plus `if value == [0; 32] { Err(InvalidRequest) }`.
+Seven of the wire's eight identities go through it; only `lp_digest` at 240
+uses the permissive form, and Open *requires* that one unset. `decode` is the
+sole ingress: `evaluate_authenticated_dealer_lp_v4` builds its `request` at
+line 78 from `DealerMultiLpRequestV3::decode(invocation.family_request())` and
+nowhere else, and the off-chain builder
+`dclutch-operator/src/dealer_lp_hot_v4.rs:133` goes through the same call.
+
+*At the context join.* `authenticate_context` runs before
+`authenticate_position` and requires `request.child_root ==
+context.root.to_bytes()`, then `root.key.to_bytes() == request.child_root` with
+`root.owner == trading_program`. The child root is pinned to the authenticated
+invocation, not chosen at the wire.
+
+The collision half of the question is a non-question: a distinct `lp_owner`
+gives a distinct PDA, so a zero owner could only ever derive *its own* address,
+never substitute for a live one — and `position.key.to_bytes() ==
+request.lp_position` plus `LP_OWNER_IDENTITY_V3 == request.lp_owner` in the
+transition bank bind it three more times.
+
+**Why not `benign-typed-nonzero-wire`.** That tag's bar is *"the value cannot
+be zero, by type"* — its subject is a tuple struct with a **private** field
+whose only constructors run `nonzero`. `DealerMultiLpRequestV3` has **public**
+fields, so a struct literal is writable in principle and the guarantee is not
+type-enforced. It rests instead on `decode` being the only constructor, which
+is a **census** fact: the two `DealerMultiLpRequestV3 {` matches in the tree are
+the definition and the `impl`, there is no `Default` derive, and there is no
+struct-literal site anywhere. That is one honest notch weaker than the
+precedent, and it gets its own tag rather than borrowing that one's strength.
+Making it type-enforced would mean privatizing the fields — a visible codec
+change, and the right fix if this route ever grows a second constructor.
+
+**Not taken on argument.** The precedent's standard is a named, mutation-proven
+witness, and this route had none: `open_is_chain_derived_and_hostile_bytes_refuse`
+mutates the magic/version/reserved bytes, zeroes the rent, and substitutes
+`lp_position`/`obligation_digest` — it never zeroes an identity. So this lane
+wrote the witness rather than verdicting without one:
+
+`v3_operator::tests::no_identity_on_this_wire_may_be_the_unset_pubkey` sweeps
+every 32-byte identity window of a canonical Open encoding, zeroes it, and
+asserts the set of offsets that refuse is exactly `[16, 48, 80, 112, 144, 176,
+208]` — stated over all seven rather than over `lp_owner` alone, because a test
+naming one field goes on passing while a later edit moves any of the other six
+to `read_identity_or_zero`. It also pins that offset 240 is already zero, and
+that `build_open_lp_v3` refuses a zero owner at the other end of the wire.
+
+Mutation-proven: changing `lp_owner: read_identity(bytes, 144)` to
+`read_identity_or_zero` reds it at six offsets instead of seven. The change is
+test-only — 92 insertions, no production line touched.
+
+### inventory-nonzero-guard-not-pubkey
+
+**4 entries. Not findings.** `UNSET_GUARD_PRESENT` says *"this file refuses the unset pubkey somewhere in
+it"*. For eleven of the wave's fifteen that is true and they are filed
+`inventory-guard-present`. For these four it is **false**, and filing them as
+that tag would put a false sentence in the register:
+
+- `crates/dclutch-product-payoff-v2-codec/src/spline_eval_v3.rs` — the match is
+  `pub fn is_zero_at(&self, claim: usize) -> bool` over a `U256` B-spline weight
+  numerator. It returns a `bool`, refuses nothing, and **`grep -c Pubkey` on the
+  file is 0**: it is fixed-point spline arithmetic containing no address type.
+- `programs/dclutch-trading-sbf/src/series/retire_funding_artifacts_v5.rs` — the
+  match is `InstructionV3::nonzero(s(SERIES_RETIRE_OBSERVED_OUTSTANDING_SCALAR_V5))`,
+  a nonzero constraint emitted over a **u64 scalar register** in interpreter
+  bytecode. `grep -c Pubkey` is also 0 here.
+- `crates/dclutch-operator/src/series_current_acquisition_v5.rs` and
+  `programs/dclutch-trading-sbf/src/dealer/v4_lp_accelerator_accounts.rs` — both
+  genuinely refuse an all-zero value, but the operands are **content digests**
+  (`artifact_release`, `checked_manifest_digest`, `LP_PRESTATE_DIGEST_IDENTITY_V3`),
+  not addresses. Neither file contains `Pubkey::default()` at all.
+
+The tag records what these actually ratchet: a nonzero guard over something
+that is not a pubkey. The ratchet still turns — losing these guards still fails
+the gate — so nothing is weakened. What it stops is the register asserting an
+address check that is not there, and it leaves the next reader the exact
+statement of the matcher gap: the class's zero-comparison spellings
+(`is_zero()`, `nonzero`) are not pubkey-typed. **Tightening the matcher is not
+this lane's change** — it would re-measure all 271 existing inventory rows and
+mass-`GONE` the register, which is a lane of its own.
+
+### benign-sole-seed-no-helper
+
+**6 entries.** `PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1` ×2 and `_V2` ×4, across
+`successor/src/campaign.rs`, `market.rs`, `direct_market.rs` and
+`series_premarket_expiry_chain_v1.rs`.
+
+The reader reports these restate "the 1-seed tuple for a domain owned by
+`crates/dclutch-release-set-contract`, which exports `CallerAuthoritySeedsV1`
+for exactly this". **The second half is wrong.** `CallerAuthoritySeedsV1` is a
+*six*-seed projection over a *different* domain,
+`CALLER_AUTHORITY_PDA_DOMAIN_V1`. For the infrastructure-profile domains the
+owning crate exports the constant and its length assert and **no seed helper at
+all**.
+
+So there is no "one domain spelled two ways" here and no standing fix to apply:
+each site imports the domain constant from its owner and the only restated fact
+is *arity one*. All 56 such tuples in the tree are arity 1. Filed apart from
+`debt-derivation-restatement` because that tag promises an adoptable helper,
+and pointing a future reader at a helper that does not exist wastes exactly the
+work the register is supposed to save. If the owner ever grows one, these six
+become ordinary debt.
+
+### benign-fixed-width-array-seed
+
+**1 entry.** `crates/dclutch-resolution-codec` · `PYTH_RELEASE_RECORD_SCHEMA_ID_V1`.
+
+Reported as "32 bytes, within the maximum today, but no `const _: () =
+assert!(… .len() <= 32)` holds it there". The constant is
+`pub const PYTH_RELEASE_RECORD_SCHEMA_ID_V1: [u8; 32]` — a **fixed-width
+array**, not a `&[u8]`. Its `.len()` is a property of the type, so the proposed
+assert is trivially true and cannot be falsified by any edit preserving the
+type; and an edit that changes the type breaks the `[u8; 32]`-typed consumers
+(`staging`, `authenticate_raw`, `record_pair`, `SchemaReleaseId::new`) at
+compile time, not at derivation time. All 22 such asserts in the tree guard
+`&[u8]` domain constants and none guards a `[u8; N]`: the idiom deliberately
+does not reach this shape. Adding the assert to silence the reader would put a
+tautology in the source, which is the decoration this register exists to refuse.
+
+**One real thing was found under it, and it is not this class.** Every
+neighbouring release id (`RESOLUTION_CONTROLLER_RELEASE_ID_V3…V7`) pairs with a
+`..._PREIMAGE_...` constant and a doc-comment reading *"SHA-256 of […]"*.
+`PYTH_RELEASE_RECORD_SCHEMA_ID_V1` has no preimage, no derivation doc, and no
+test that recomputes it — an opaque literal in a row of reproducible ones, used
+as seed #2 of the record tuple. Not filed as a seam finding because it is not
+one; recorded here so it is not lost.
+
+### `debt-derivation-restatement`, +15
+
+Two `LIABILITY_BASIS_MARKET_SEED_V2`, one `LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2`,
+seven `RAW_RECORD_PDA_SEED_V1`, five `STAGING_CURSOR_PDA_SEED_V1`.
+
+All fifteen were checked seed-for-seed against the owning crate's helper —
+`LiabilityBasisMarketSeedsV2`, `LifecycleRentCreditPdaSeedsV2`,
+`RecordPdaSeedsV1` — and **all fifteen agree**: same domain bytes (every site
+imports the constant, none re-spells the literal), same arity, same order, same
+operand meaning. Ordinary debt of the known shape, not a live derivation
+defect. Two notes for whoever retires them:
+
+- The reader names the wrong helper for `LIABILITY_BASIS_MARKET_SEED_V2` — it
+  lists the `ClaimCheck*` exports; the real one is `LiabilityBasisMarketSeedsV2`
+  in `claims-svm/src/liability_basis_state_v2.rs`, whose own doc-comment names
+  this defect class and which is adopted at only 2 of ~23 sites.
+- `RecordPdaSeedsV1` has no `as_slices()`; callers must still author the ordered
+  array. "Call the helper" here means `RecordKeyV1` plus a local assembler,
+  which is weaker containment than the claims and rent helpers give.
+
+Not repaired in this lane: several of these files have owners still working in
+them, and the register's job here is to say the debt is known, agreed, and
+shaped, rather than to reach into four other lanes' files on a gate run.
+
+### benign-declared-privilege-census
+
+**3 entries.** `crates/dclutch-general-successor-operator/src/lib.rs` · `parse_route_v1`
+(both classes — class 6 sees the same code twice), and
+`programs/dclutch-trading-sbf/src/core_composition_v3.rs` · `prepare`.
+
+Both hazard notes rest on one premise: `is_signer` and `is_writable` are
+**transaction-level** properties of a runtime account, so a frame-wide refusal
+is dead for any builder that pays with an account the frame names. These three
+entries pin bits that are **not** that.
+
+`parse_route_v1` is a hostile decoder for an **operator-authored JSON
+document** — `pub fn parse_route_v1(bytes: &[u8])`, bounded at
+`MAX_ROUTE_BYTES_V1`, reached through `read_bounded_route_file_v1(--route
+<file>)`. The `is_signer` it refuses is a `"isSigner": false` field in that
+document, not a privilege the runtime assigned. Refusing it yields a parse
+error before any instruction exists. The fee payer is a **separate top-level
+field** (`route.payer`), never a member of either pinned vector, and the
+payer's own logical coordinate is declared `exact_rule(signer: true, writable:
+true, …)` in `general-adapter-contract/src/account_rules_v3.rs` — it lives in
+`runtime_suffix_accounts`, which this function does not pin at all.
+
+`prepare` does iterate a whole frame — `frame.iter().any(|account|
+account.is_signer)`, twice, over widths 25 and 26. But `frame` is not the
+incoming account array: it is filled by `gather_invocation_accounts` from a
+`DowngradedEffectAccountsV3`, whose `view()` **overwrites both privilege bits
+from the artifact's declared AccountProfile byte** before the account is ever
+seen here:
+
+```rust
+logical.is_signer = declared & DECLARED_SIGNER_V3 != 0;
+logical.is_writable = declared & DECLARED_WRITABLE_V3 != 0;
+```
+
+(`hot_v3.rs:6952-6953`, read directly.) `require_child_route_privileges_v3`
+confirms the separation from the other side: it compares `writable` and
+`executable` against the physical account and deliberately never compares
+`declared.signer()` to `account.is_signer`. So a fee payer reading `is_signer
+== true` at the transaction level does not set the declared bit and does not
+trip this census. What the check actually asserts is that the artifact's
+profile declares no signer for a permissionless verb.
+
+Not `hazard-*`, because those mean nobody has looked; the looking here found
+the class's premise absent rather than unexamined.
+
+**One thing to route onward, not filed here.** Core's parser for the same
+permit-expiry route (`core-sbf/src/series_permit_expiry.rs:124-134`) documents
+an exemption *by name* for its 26th coordinate — the funded-crank recipient,
+"usually the fee payer, who signs" — and calls refusing it "the live defect
+that keeps a cleanup's beneficiary from paying its own fee", citing
+`docs/design/FUNDED_CRANK_V1.md` §6. Trading's census and Core's exemption do
+not currently collide: Trading's 25-wide window excludes the crank, and the
+26-wide precommit slot holds a caller-authority PDA that
+`authenticate_precommit_caller_v1` separately pins non-signer. But that is the
+one place this class would bite if a crank recipient ever reached Trading's
+frame. It belongs to whoever owns FUNDED_CRANK_V1 §6, not to a gate run.
+
+### benign-payer-pinned-signer
+
+**1 entry.** `programs/dclutch-claims-sbf/src/fractional_claim_check_v1.rs` ·
+`process_fractional_redemption`.
+
+A real on-chain exact-privilege pin over all nine coordinates, both bits, from a
+table. It draws the class correctly and the harm still cannot occur, because the
+table **admits** the payer rather than excluding it:
+
+```rust
+Self::Holder => (true, true),
+```
+
+Coordinate 0 is pinned `is_signer == true, is_writable == true`, so a holder
+redeeming their own claim and paying their own fee satisfies the pin exactly —
+the transaction-level bits the class warns about are the bits this frame
+requires. The remaining eight are a mint, the Token-2022 program, two PDAs and
+three token accounts, none of which can be a fee payer. Builder and program
+read the same `role.privileges()` table, so the two sides cannot drift apart.
+
+Distinct from `checked-caller-excludes-payer`, and stronger: that tag records an
+exclusion made in a builder the reader cannot see, one crate away. This needs no
+exclusion and no cross-crate argument — the admission is in the pinned table
+itself, where any reader of the frame will find it.
+
+### benign-named-coordinates-only
+
+**1 entry.** `crates/dclutch-operator/src/series_hot_v3.rs` · `build_selected_series_hot_v5`.
+
+**The finding's premise is absent.** The class reports a refusal of "every
+signer across the whole frame". Over the function's whole body there are exactly
+three `is_signer` refusals and each names a single coordinate: the Trading
+program account and the capability root PDA, plus the shadow caller authority
+PDA on the Consume action. None of the three can be a fee payer. The only
+whole-frame iterations in the function are an observation/finality sweep and two
+membership searches; neither reads a privilege bit.
+
+The payer is not merely unexcluded here, it is **required present and left
+uncensused** — `roles.payer` is one of six keys the function requires to appear
+among the built accounts, with no signer refusal applied to it.
+
+The reader most likely paired a `.iter()` elsewhere in the function with the
+single-coordinate refusals. A genuine per-coordinate census does exist in this
+file, at `validate_runtime_profile`, but it is a different (V3) function and an
+exact profile-driven pin (`account.is_signer != (privileges & 1 != 0)`) rather
+than a blanket refusal.
+
+Recorded rather than departed because the register's ratchet is keyed on the
+finding set: silently dropping it would fail the gate as `GONE` on the next run.
+
+### The two that left: one rename, one real fix
+
+The ratchet turned the other way twice, and the two resolve **differently** —
+which is the whole reason `GONE` is not auto-cleared.
+
+**`execution_strategy_v2.rs · authenticate_common_frame_with_sealed_capability_alias`
+was renamed, not fixed.** Commit `1e5c8343` "trading: preserve authenticated
+sealed record pairs" renames it to `..._pair` in place, widening the signature
+with `capability_program_id: ContentId`, and renames its sole call site in the
+same hunk. The pinned block is unchanged context in that diff, and the pin was
+*strengthened* afterwards with a new `staging` coordinate. `_alias` exists
+nowhere at HEAD. So the `NEW ..._pair` row and the `GONE ..._alias` row are one
+finding wearing two keys: the entry is re-keyed and **carries its
+`hazard-privilege-pin` tag forward**, rather than being triaged as fresh.
+
+It is left as a hazard deliberately. A first reading says it is benign — all
+four pinned coordinates are a program, a sysvar, and two off-curve PDAs, none of
+which can sign a transaction — but `hazard-privilege-pin` means *nobody has
+enumerated the route's builders*, and this lane did not do that enumeration. A
+gate run is not the place to spend a hazard's standing question on a plausible
+argument. The lead is recorded; the question stays open.
+
+**`hot_v3.rs · authenticate_lifecycle_credit_v3` was genuinely fixed**, and its
+entry leaves the register. At the baseline the function ended with a frame walk
+whose predicate is exactly what the class matches:
+
+```rust
+|| !accounts.iter().any(|candidate| {
+    candidate.key == account.owner
+        && candidate.executable
+        && !candidate.is_signer
+        && !candidate.is_writable
+})
+```
+
+Commit `686bf2e5` "trading: bind lifecycle credit to fixed registry" deletes the
+walk outright and takes an already-authenticated `owner_program: &AccountInfo`
+as a parameter, pinning two named coordinates instead of searching the frame.
+The function and file both still exist and the key is unchanged — it is the
+pattern that stopped matching, which is the good reason for it to stop.
+
+### Scope, honestly
+
+The lane was briefed on eleven findings and the tree had **46**. The other
+thirty-five were measured at the same commit and are the same completion wave's;
+the gate is all-or-nothing, so taking CI green meant reading all of them. Four
+tags are new because four situations the register had no vocabulary for arrived
+at once, and the alternative — filing them under the nearest existing tag —
+would have put four false sentences in a register whose entire purpose is that
+its sentences are true.
+
+**Two matcher gaps are now named and neither is repaired here.** The
+`UNSET_PIN` inventory matcher is not pubkey-typed (see
+`inventory-nonzero-guard-not-pubkey`), and class 6 pairs frame iteration with
+single-coordinate refusals (see `benign-named-coordinates-only`). Both fixes
+re-measure hundreds of existing rows and mass-`GONE` the register; each is a
+lane of its own, and doing either inside a gate-greening run would have hidden
+the greening under a rewrite.
+
+Baseline edited **by hand**, never `--write`: the FRACCHECK-2 precedent holds,
+and `measured_commit` is left where `--write` last set it.

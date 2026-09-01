@@ -1593,6 +1593,32 @@ name = "dclutch-capability-seal-contract"
 version = "0.1.0"
 
 [[package]]
+name = "dclutch-chain-bundle-builder"
+version = "0.1.0"
+dependencies = [
+ "dclutch-account-profile-contract",
+ "dclutch-capability-contract",
+ "dclutch-capability-program-contract",
+ "dclutch-capability-seal-contract",
+ "dclutch-claims-svm",
+ "dclutch-core-contract",
+ "dclutch-custody-contract",
+ "dclutch-effect-kernel",
+ "dclutch-execution-strategy-contract",
+ "dclutch-record-contract",
+ "dclutch-registry-contract",
+ "dclutch-registry-svm",
+ "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-request-profile-contract",
+ "dclutch-transition-vm",
+ "sha2 0.10.9",
+ "solana-account 4.6.0",
+ "solana-program",
+ "solana-sdk-ids",
+]
+
+[[package]]
 name = "dclutch-claim-check-escrow-signer-test-sbf"
 version = "0.1.0"
 dependencies = [
@@ -1692,6 +1718,7 @@ dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
+ "dclutch-chain-bundle-builder",
  "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-custody-contract",
@@ -1711,11 +1738,16 @@ dependencies = [
  "dclutch-registry-contract",
  "dclutch-registry-svm",
  "dclutch-release-set-contract",
+ "dclutch-rent-contract",
+ "dclutch-request-profile-contract",
  "dclutch-resolution-core-v3-operator",
  "dclutch-token-svm",
  "dclutch-trading-sbf",
+ "dclutch-transition-vm",
  "solana-account 4.6.0",
  "solana-address-lookup-table-interface",
+ "solana-clock",
+ "solana-compute-budget-interface",
  "solana-message 3.1.0",
  "solana-message 4.5.0",
  "solana-program",
@@ -1900,6 +1932,7 @@ version = "0.1.0"
 dependencies = [
  "dclutch-capability-program-contract",
  "dclutch-claims-svm",
+ "dclutch-fractional-atomic-test-caller-sbf",
  "dclutch-fractional-claim-contract",
  "dclutch-refusal-registry",
  "solana-program",
@@ -2110,6 +2143,7 @@ dependencies = [
  "solana-hash 4.6.0",
  "solana-program",
  "solana-sdk-ids",
+ "solana-system-interface 2.0.0",
 ]
 
 [[package]]
@@ -2371,6 +2405,7 @@ name = "dclutch-trading-sbf"
 version = "0.1.0"
 dependencies = [
  "dclutch-account-profile-contract",
+ "dclutch-capability-activation-codec",
  "dclutch-capability-contract",
  "dclutch-capability-program-contract",
  "dclutch-capability-seal-contract",

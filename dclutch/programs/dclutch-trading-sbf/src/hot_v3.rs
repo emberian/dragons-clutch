@@ -8769,16 +8769,31 @@ fn authenticate_lifecycle_credit_v3(
     expected_key: [u8; 32],
 ) -> Result<AuthenticatedRentCreditV3, ProgramError> {
     let account = accounts.get(index).ok_or(TradingSbfError::Content)?;
-    // The credit's persisted owner, not a caller-selected family program,
-    // identifies the program whose PDA namespace owns this lifecycle credit.
-    // That owner is the already authenticated fixed Registry coordinate. It is
-    // deliberately not rediscovered in the selected lifecycle runtime frame:
-    // requiring a duplicate coordinate widens every profile and contradicts
-    // the fixed-prefix single-owner contract. Solana unions privileges for a
-    // repeated physical key, so any hostile runtime twin would also widen this
-    // fixed observation and refuse here (and earlier in `HotFrameV3::parse`).
+    // The credit's persisted owner identifies the program whose PDA namespace
+    // owns this lifecycle credit, and it is PROVEN BELOW, not pinned here: the
+    // `create_program_address` at the end of this function re-derives this
+    // account's own key from the credit's own seeds under `account.owner`, so
+    // an owner that did not mint this credit cannot reproduce its address.
+    //
+    // `686bf2e5` briefly pinned that owner to the fixed Registry coordinate
+    // instead, on the stated premise that "that owner is the already
+    // authenticated fixed Registry coordinate". MEASURED 2026-09-01, that
+    // premise is false: lifecycle rent credits are owned by the RENT program
+    // (`programs/dclutch-rent-sbf`, the canonical lifecycle RentCredit
+    // contract, which creates them itself). The instrumented Direct Hot
+    // control read `owner_program=0x91` (Registry) against `account.owner=0x97`
+    // (Rent), so the conjunct was unsatisfiable on every honest Direct Hot
+    // transaction -- the same defect class as a guard demanding a magic no
+    // account can carry, and it took ten of this file's twenty-seven cases
+    // down with it.
+    //
+    // There is no fixed rent-program coordinate to swap in: `frame.rent` is the
+    // rent SYSVAR (`sysvar::rent::ID`), and `ExecutionRoleV1` pins only Core,
+    // Claims, Trading, Resolution and Custody. Pinning Rent as a release role
+    // is the honest destination if this is ever wanted as a fixed coordinate;
+    // until then the derivation below is the stronger check anyway, because it
+    // binds the owner to THIS credit rather than to a list of admissible ones.
     if account.key.to_bytes() != expected_key
-        || owner_program.key != account.owner
         || owner_program.is_signer
         || owner_program.is_writable
         || !owner_program.executable
