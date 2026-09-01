@@ -23,7 +23,7 @@ python3 tools/doc-citations/doc_citations.py --root . \
 
 It is not name resolution. No rustc, no type information, no imports, no glob
 or macro expansion. It reads source text, needs no build, and runs in about
-seven seconds over 1,143 files — the same posture as `tools/seam-audit`. (It
+eight seconds over 1,143 files and two comment corpora — the same posture as `tools/seam-audit`. (It
 took two and a half minutes until the walk pruned `target/` instead of
 filtering it afterwards; a checker nobody will wait for is a checker nobody
 runs.)
@@ -40,7 +40,30 @@ It **judges the signal and declines the noise, and says which is which.**
 
 A declined citation is **not a passing citation.** It is one the tool refuses to
 have an opinion about, and the count is printed so nobody mistakes silence for
-coverage. Today: 11,862 backtick spans, 1,031 judged, 10,831 declined.
+coverage.
+
+## Two corpora, and why the boundary moved
+
+It scans `///` and `//!` **and ordinary `//` line comments**, reported
+separately because they are different corpora:
+
+| corpus | spans | judged | resolve | dangle | declined |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `///` and `//!` | 11,878 | 1,032 | 1,021 | 11 | 10,846 |
+| ordinary `//` | 2,571 | 130 | 127 | 3 | 2,441 |
+
+`//` was excluded at first on the assumption that its prose-to-citation ratio
+was too poor to be worth scanning. **That was measured and the assumption was
+wrong** — not because the ratio is better (it is worse: 95% declined against
+91%) but because *the signal filter is what handles a bad ratio*. Prose does not
+accidentally contain `crate::module::symbol`. Widening the corpus by 2,571 spans
+added **130** judged citations and **3** findings.
+
+It mattered: **four of the six `process_funded_transition` citations that
+started this were in `//` comments**, including the one in
+`core-sbf/src/tests.rs` and a second in the local-validator bootstrap that the
+original hand count missed. The corpus where the category was found was the
+corpus not being scanned.
 
 The index covers items, **enum variants and struct fields**. Variants and fields
 are in there because docs cite them constantly as `Type::Variant` and
@@ -73,9 +96,10 @@ from a claim, and should not guess.
 Both true findings are in the baseline so the tripwire works; **the baseline is a
 line, not an absolution.**
 
-- `funded::process_funded_transition` ×4 — `core-sbf/src/lib.rs:149`,
-  `resolution.rs:865`, `resolution.rs:880`, and the meta-note in
-  `resolution-proof-sbf/src/funded.rs:27`. `:880` is the lifting plan and
+- `funded::process_funded_transition` ×6 — `core-sbf/src/lib.rs:149`,
+  `resolution.rs:865`, `resolution.rs:880`, `core-sbf/src/tests.rs:306`,
+  `local-validator/bootstrap/successor/src/market.rs:12830`, and the meta-note
+  in `resolution-proof-sbf/src/funded.rs:27`. `:880` is the lifting plan and
   attaches to the open **"recovery ontology: keep or cut"** ruling rather than
   to an edit. The live half of what these justify still holds:
   `exhaust_after_primary_deadline` refuses `recovery_policy().is_some()`
@@ -85,6 +109,11 @@ line, not an absolution.**
   `tools/local-validator/bootstrap/successor/src/cluster.rs:49`. Written as a
   rustdoc intra-doc link. No such method; the live function is the free
   `seeded_keys_admissible` at `cluster.rs:457`.
+- `hot_v3::authenticate_hot_artifacts` —
+  `programs/dclutch-trading-sbf/src/dealer/v3_hot_artifact.rs:1346`. No such
+  function anywhere; the nearest live names are `authenticate_hot_program_v3`
+  (`dispatch_v3.rs:38`) and `authenticate_hot_invocation_v3`
+  (`hot_v3.rs:2168`). Found only once `//` comments were in scope.
 
 ## Controls
 
@@ -94,7 +123,7 @@ fire is worse than none:
 
 1. this tree still reports the citation the tool was built from;
 2. a synthetic tree resolves items, enum variants and struct fields, and
-   reports the one absent symbol;
+   reports the absent symbol in **both** a `///` and a `//` comment;
 3. `--check` exits nonzero on a citation absent from the baseline.
 
 Control 2 runs in a temp directory on purpose — a shared checkout must not have

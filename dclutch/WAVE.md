@@ -3342,3 +3342,113 @@ request == persisted-at-initialize**, three independent bindings.
 The generalisation of the positive control — and what caught the worst of the
 three, when the custody contract's own decoders vanished from a production set
 they had no business leaving.
+
+## 2026-09-01 — a strengthening wearing the costume of a relaxation
+
+The General accelerator's `authenticate_top_level` pinned Trading to instruction
+index 1 with the heap grant at index 0 — **two laws where only one was
+intended** — and the action provably needs ~516k CU, hence a
+`set_compute_unit_limit`, which puts Trading at index 2. Deadlock, proven
+jointly: remove the CU limit to satisfy the position and the transaction gets
+202,850 CU and dies at 202,842.
+
+**Repaired (`1db08a4e`), and the first guarantee is now *stricter* than the
+pinned index ever made it:** every instruction ahead of the current one must
+belong to the **ComputeBudget program — which can only price a transaction, and
+can neither move value nor touch an account** — and one of them must be the
+exact heap grant. Every shape the old rule admitted still is; every newly
+admitted shape differs only by additional ComputeBudget instructions.
+
+> **A strengthening wearing the costume of a relaxation.** "We removed a
+> positional check" reads as weakening to anyone who does not know the conjunct
+> that replaced it — so the conjunct goes in the record beside the removal.
+
+Six top-level shapes now execute against the real ELF. `HeapThenLimit` — the
+shape the old rule made impossible — accepts. `Nothing`, `LimitOnly`,
+`WrongHeap` and `ForeignBefore` refuse by exact discriminant.
+
+### Nearly shipping the defect you are auditing for
+
+The first red proof caught a defect in the lane's **own** hostile.
+`ForeignBefore` sent no heap grant, so deleting the ComputeBudget conjunct left
+it **still refusing — on the missing heap**, proving nothing about the conjunct
+it exists to exercise. That is M-38, committed by the lane that had spent the
+session removing M-38 from other people's tests. Second instance today of an
+author walking into their own finding.
+
+Fixed so that deleting the conjunct now yields `Ok(())` rather than a refusal,
+which is the only proof that counts.
+
+### What moved
+
+`freeze.rs` had been sending the Trading instruction alone **and then asserting
+the execution committed** — two contradictory claims, since the accelerator
+authenticates that the heap it runs in was granted. It grants the heap now, and
+**width 1 commits for the first time.** Width 258 refuses `0xC003
+InvalidScratchBank` — a real defect one layer deeper than the spurious top-level
+refusal that had been hiding it.
+
+**The next wall, named by the lane that hit it:** OpenBatch still refuses
+`0xC002` at N=2 from a *later* conjunct — and **eight distinct conjuncts share
+that one discriminant**, so the program cannot say which.
+
+> **A refusal that cannot name its own cause is how this one stayed hidden
+> behind the geometry wall for so long.**
+
+## 2026-09-01 — C-16 has no blanks left, and none of it is finished
+
+The `AUTHORITY` class landed as seam-audit's seventh (`9f9f943c`), closing the
+last unmeasured C-16 category. **Six categories, six instruments, none
+finished** — and that sentence is the deliverable, because a reviewer handed
+*"C-16 fully instrumented"* reads completeness while *instrumented, not
+finished* reads a starting line.
+
+**The question it asks:** does an act establish who may perform it, or read an
+answer somebody else supplied? Subject is the Registry activation cache, because
+**a cached role is where authority most easily goes unexplained** — the
+authentication happened once, in another program, and everything downstream
+reads the result.
+
+**7 → 3 findings across four refinement passes, every one by measurement, none
+by loosening.** Three scoping decisions carried it:
+
+- **One hop of intra-crate call resolution**, principled rather than convenient:
+  *a cross-crate helper is a seam, and seams are this tool's whole subject.* A
+  reader that could not see one hop called three functions unexplained when the
+  explanation was one call away — widened by exactly one, not until the noise
+  stopped.
+- **Scoped on `try_borrow_data`, not on the signature.** The first attempt
+  scoped on `AccountInfo` and **silently dropped a real candidate** that passes
+  accounts inside a typed frame. A scope rule that quietly removes true findings
+  is the worst kind, and it was caught by checking what *left* rather than what
+  remained.
+- **The blessed crate's real vocabulary**, discovered by reading it rather than
+  assuming it.
+
+### The difference between the two verdicts is the discipline
+
+**Custody: benign, verified.** Provenance is carried **in the type** —
+`authenticate_market_admission` resolves the cache once, both variants of
+`AuthenticatedMarketAdmissionV1` carry a `cache_bump`, and the realm functions
+are reachable **only by matching on it**. Authenticate once, prove it in the
+type.
+
+**Trading `selected_role_programs_v3`: hazard, open.** The same token argument is
+*plausible* and **was not established** — the lane read Custody's chain end to
+end and did not read Trading's.
+
+> **A tag is a claim, so it gets a hazard. *Not shown to be wrong* is not
+> *shown to be right*.**
+
+That is what separates a census from a scoreboard, and writing "benign, same
+pattern" would have been effortless.
+
+The class docstring carries both epistemics in the same words as the atom
+census: **silence means provenance, never correctness** — a function that
+derives the right address and reads the wrong role reads as derived and is still
+wrong. And the scope is stated because it bounds the claim: one authority
+object, `programs/` only, one hop.
+
+`AUTHORITY` and `PRIVILEGE` are distinguished in the README header because they
+look alike and **point opposite ways** — one hunts under-constraint, the other
+over-constraint.

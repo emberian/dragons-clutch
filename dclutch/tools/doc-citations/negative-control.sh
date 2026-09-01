@@ -43,20 +43,24 @@ pub enum Shape { Variant }
 pub struct Carrier { pub field: u8 }
 /// Dangles: `holder::vanished_item`.
 pub fn cite() {}
+// And an ordinary line comment dangles too: `holder::line_vanished_item`.
+pub fn cite_line() {}
 RS
 
 report="$(python3 "$tool" --root "$work")"
-printf '%s' "$report" | grep -q 'vanished_item' || {
-    echo "control FAILED: a citation of a missing symbol was not reported." >&2
-    exit 1
-}
+for missing in vanished_item line_vanished_item; do
+    printf '%s' "$report" | grep -q "$missing" || {
+        echo "control FAILED: $missing was not reported." >&2
+        exit 1
+    }
+done
 for resolved in live_item Variant field; do
     printf '%s' "$report" | grep -q "\`holder::$resolved\`\|\`Shape::$resolved\`\|\`Carrier::$resolved\`" && {
         echo "control FAILED: $resolved is declared and must not be reported." >&2
         exit 1
     }
 done
-echo "control 2/3: resolves items, enum variants and struct fields; refuses the absent one"
+echo "control 2/3: resolves items, variants and fields; refuses the absent one in /// and //"
 
 python3 "$tool" --root "$work" --baseline "$work/base.json" --write --quiet >/dev/null
 cat >> "$work/src/lib.rs" <<'RS'

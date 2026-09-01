@@ -68,6 +68,10 @@ VARIANT_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9_]*)\s*(?:[,({=]|$)")
 # of them reads as a dangling citation.
 FIELD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?([a-z_][a-z0-9_]*)\s*:\s*[^=]")
 DOC_RE = re.compile(r"^\s*(?://[/!])\s?(.*)$")
+# An ordinary `//` comment, including a trailing one.  The `(?:^|\s)` prefix is
+# what keeps `http://` out: a URL's slashes are preceded by a colon.  A `//`
+# inside a string literal can still slip through, and lands in declined-prose.
+LINE_RE = re.compile(r"(?:^|\s)//(?![/!])(.*)$")
 # Single- and double-backtick spans.
 SPAN_RE = re.compile(r"``([^`]+)``|`([^`\n]+)`")
 PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+(?:\(\))?$")
@@ -162,17 +166,31 @@ def symbol_index(files) -> tuple[set[str], dict[str, list[str]]]:
     return names, where
 
 
-def citations(path: pathlib.Path):
+def citations(path: pathlib.Path, include_line_comments: bool):
+    """Yield (line, span, kind) for every backtick span in a comment.
+
+    `kind` is "doc" for `///` and `//!`, "line" for an ordinary `//`.  They are
+    reported separately because they are different corpora with different
+    prose-to-citation ratios, and a boundary between them should be a measured
+    number rather than an inherited caution.
+    """
     try:
         lines = path.read_text(errors="replace").splitlines()
     except OSError:
         return
     for number, line in enumerate(lines, 1):
         doc = DOC_RE.match(line)
-        if not doc:
+        if doc:
+            body, kind = doc.group(1), "doc"
+        elif include_line_comments:
+            hit = LINE_RE.search(line)
+            if not hit:
+                continue
+            body, kind = hit.group(1), "line"
+        else:
             continue
-        for double, single in SPAN_RE.findall(doc.group(1)):
-            yield number, (double or single).strip()
+        for double, single in SPAN_RE.findall(body):
+            yield number, (double or single).strip(), kind
 
 
 def classify(span: str, crates: set[str], names: set[str]):
@@ -199,29 +217,41 @@ def main() -> int:
     ap.add_argument("--write", action="store_true", help="write the baseline and exit")
     ap.add_argument("--check", action="store_true", help="exit 1 on citations absent from the baseline")
     ap.add_argument("--quiet", action="store_true", help="totals only")
+    ap.add_argument(
+        "--comments",
+        choices=("doc", "line", "all"),
+        default="all",
+        help="which comment corpus to scan (default: all)",
+    )
     args = ap.parse_args()
 
     root = pathlib.Path(args.root).resolve()
     files, crates = survey(root)
     names, _ = symbol_index(files)
 
-    buckets = {"resolved": 0, "declined-prose": 0, "declined-external": 0}
+    kinds = ("doc", "line") if args.comments == "all" else (args.comments,)
+    tally = {k: {"resolved": 0, "declined-prose": 0, "declined-external": 0, "unresolved": 0}
+             for k in ("doc", "line")}
     unresolved: list[tuple[str, int, str, str]] = []
     for path in files:
         rel = str(path.relative_to(root))
-        for number, span in citations(path):
+        for number, span, kind in citations(path, include_line_comments="line" in kinds):
+            if kind not in kinds:
+                continue
             verdict, tail = classify(span, crates, names)
+            tally[kind][verdict] += 1
             if verdict == "unresolved":
                 unresolved.append((rel, number, span, tail or span))
-            else:
-                buckets[verdict] += 1
 
-    total = sum(buckets.values()) + len(unresolved)
-    print(f"doc citations: {total} backtick spans in doc comments across {len(files)} files")
-    print(f"  judged   : {buckets['resolved'] + len(unresolved)}  "
-          f"({buckets['resolved']} resolve, {len(unresolved)} do not)")
-    print(f"  declined : {buckets['declined-prose']} prose/fragments, "
-          f"{buckets['declined-external']} rooted outside this workspace")
+    label = {"doc": "/// and //!", "line": "ordinary //"}
+    print(f"doc citations: {len(files)} files, corpora = {args.comments}")
+    for kind in kinds:
+        t = tally[kind]
+        spans = sum(t.values())
+        judged = t["resolved"] + t["unresolved"]
+        print(f"  {label[kind]:<12} {spans:>6} spans   judged {judged:>5} "
+              f"({t['resolved']} resolve, {t['unresolved']} do not)   "
+              f"declined {t['declined-prose']} prose + {t['declined-external']} external")
     print("  declined is not passed: this tool has no opinion on those.")
 
     by_symbol: dict[str, list[tuple[str, int, str]]] = {}

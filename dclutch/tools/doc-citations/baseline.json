@@ -2,6 +2,7 @@
   "unresolved": [
     "INIT_SPACE\tcrates/dclutch-svm-harness/tests/relayed_mainnet_state.rs:158",
     "RequestHeapFrame\tprograms/dclutch-trading-sbf/src/entrypoint_adapter.rs:318",
+    "authenticate_hot_artifacts\tprograms/dclutch-trading-sbf/src/dealer/v3_hot_artifact.rs:1346",
     "expect_err\tprograms/dclutch-trading-sbf/program-test/tests/direct_begin_retiring_on_chain.rs:164",
     "expect_err\tprograms/dclutch-trading-sbf/program-test/tests/direct_hot_fee_second_transaction.rs:416",
     "from_account_info\tprograms/dclutch-dealer-accelerator-sbf/program-test/tests/frontier.rs:224",
@@ -10,6 +11,8 @@
     "process_funded_transition\tprograms/dclutch-core-sbf/src/lib.rs:149",
     "process_funded_transition\tprograms/dclutch-core-sbf/src/resolution.rs:865",
     "process_funded_transition\tprograms/dclutch-core-sbf/src/resolution.rs:880",
-    "process_funded_transition\tprograms/dclutch-resolution-proof-sbf/src/funded.rs:27"
+    "process_funded_transition\tprograms/dclutch-core-sbf/src/tests.rs:306",
+    "process_funded_transition\tprograms/dclutch-resolution-proof-sbf/src/funded.rs:27",
+    "process_funded_transition\ttools/local-validator/bootstrap/successor/src/market.rs:12830"
   ]
 }
