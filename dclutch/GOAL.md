@@ -2230,3 +2230,29 @@ check and the repair order I had not done.
   **non-price resolution sources** at all.
 - Claims split/merge: build unless vetoed.
 - **Width-2 markets versus the partition gate** (new, from B4 + B6).
+
+## RULING: non-price resolution sources — ember, 2026-09-01
+
+> *"non-price resolution seems awesome and great"*
+
+**C-09 wants non-price resolution sources.** That answers the provider-breadth
+question in the form the scholar reframed it — not "which oracle" but "does the
+project want resolution on things that are not a price." Yes.
+
+**What it does not yet decide, and is the next design unit:** *how*. Three
+candidates, and the cheapest may already exist:
+
+1. **The relayed-observation family already built** (19/19 on real ELFs) is a
+   quorum of ed25519 signatures over an *observation*. If the observation payload is
+   not price-shaped by construction, non-price resolution may be a **new relay
+   attestor**, not a new family. Check before spending a family.
+2. **Switchboard Surge / Oracle Quotes** — the scholar found its real differentiator
+   is arbitrary non-financial data (any HTTP endpoint, off-chain computation, other
+   contracts' state), and also that its current shape is a **same-transaction
+   quote**, structurally unlike dClutch's capture-before-deadline, consume-after
+   profile. A family here needs a design answer to that mismatch first, and costs
+   15,000–17,000 lines by the honest precedent.
+3. Something narrower than either.
+
+Ember's queue is now **three**: recovery as a capability child, Claims split/merge
+veto, width-2 markets versus the partition gate.
