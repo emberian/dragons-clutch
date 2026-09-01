@@ -1120,6 +1120,44 @@ fn prepare_inner(
     )
     .0;
 
+    // A cohort that commits its V1 profile with BOTH Registry and Rent already
+    // immutable can never found a market, and nothing downstream says so.
+    //
+    // The V1 profile is not itself the founding authority any more: since
+    // `2951b226` every Core route reads the V2 succession profile and nothing
+    // else (`programs/dclutch-core-sbf/src/infrastructure.rs`, "V2 only, and
+    // never a fallback"), so a cohort becomes foundable only once
+    // `InitializeProtocolInfrastructureV2` has run. That ceremony's consent
+    // conjunct requires the PREDECESSOR release's BOUND upgrade authority to
+    // sign (`infrastructure_v2.rs`), and an immutable release binds none — so
+    // if neither infrastructure role can ever move, the ceremony is
+    // unsatisfiable for this cohort forever.
+    //
+    // Measured on cohort-9 (2026-09-01): with authority retained the same gap
+    // still costs a founding, but it is recoverable. With authority revoked on
+    // both roles it would be permanent, and the first symptom would have been a
+    // coarse `AccountAuthority` sixty transactions into a founding, months
+    // later, with a collateral mint already stranded. That is a landmine; this
+    // makes it a wall, at the only moment the choice is still open.
+    // Scoped to `ObservedAccount`, which `DeploymentSourceV1` documents as the
+    // only source a devnet or mainnet deployment can have. A `GenesisInstall`
+    // fabricates its own account images for a local rehearsal and is not a
+    // cohort anyone can strand a real mint against.
+    if registry_deployment.source == DeploymentSourceV1::ObservedAccount
+        && rent_deployment.source == DeploymentSourceV1::ObservedAccount
+        && registry_deployment.upgrade_authority.is_none()
+        && rent_deployment.upgrade_authority.is_none()
+    {
+        return Err(Error::new(
+            "this plan would commit a genesis V1 infrastructure profile with BOTH Registry and \
+             RentCredit already immutable, which makes the cohort permanently unfoundable: Core \
+             founds only against the V2 succession profile, and the succession ceremony needs the \
+             predecessor release's bound upgrade authority to sign, which an immutable release \
+             does not have. Retain the upgrade authority on at least one infrastructure role \
+             until the succession has run.",
+        ));
+    }
+
     let infrastructure = ProtocolInfrastructureProfileV1::new(registry.binding(), rent.binding())
         .map_err(debug_error("protocol infrastructure profile"))?;
     let infrastructure_bytes = infrastructure.to_bytes();
@@ -2054,6 +2092,65 @@ mod tests {
         assert!(
             ProtocolInfrastructureProfileV1::new(registry.binding(), registry.binding()).is_err()
         );
+    }
+
+    /// A cohort that observes BOTH infrastructure roles already immutable can
+    /// never run the succession ceremony, so it can never found. Refused at
+    /// prepare, which is the last moment the choice is still open.
+    ///
+    /// The control is the point: the SAME fixture with the authority retained
+    /// on Registry must PREPARE. Without it this test would also pass if
+    /// `prepare` refused observed deployments for any unrelated reason.
+    #[test]
+    fn both_infrastructure_roles_immutable_is_refused_as_permanently_unfoundable() {
+        let authority = Pubkey::new_unique();
+        let observed = |tag: u8, slot: u64, upgrade_authority: Option<Pubkey>| {
+            let elf = [0x7f, b'E', b'L', b'F', tag];
+            RoleDeploymentInputV1 {
+                observed_programdata_bytes: Some(loader_programdata_bytes(
+                    &elf,
+                    slot,
+                    upgrade_authority,
+                )),
+                expected_live_elf_sha256: Some(hex(&sha256_bytes(&elf))),
+                expected_upgrade_authority: upgrade_authority,
+                ..RoleDeploymentInputV1::default()
+            }
+        };
+        let deployments = |registry_authority: Option<Pubkey>| RoleDeploymentsV1 {
+            registry: observed(1, 101, registry_authority),
+            claims: observed(3, 103, Some(authority)),
+            trading: observed(4, 104, Some(authority)),
+            resolution: observed(5, 105, Some(authority)),
+            custody: observed(6, 106, Some(authority)),
+            rent_credit: observed(7, 107, None),
+            ..RoleDeploymentsV1::default()
+        };
+
+        let (refused, refused_root) =
+            prepared_plan_with(RecordPublicationV1::Transaction, deployments(None));
+        let message = format!(
+            "{:?}",
+            refused.err().expect("both roles immutable is refused")
+        );
+        assert!(
+            message.contains("permanently unfoundable"),
+            "refusal must name the consequence, got: {message}"
+        );
+        let _ = fs::remove_dir_all(&refused_root);
+
+        // Control: retaining the authority on ONE infrastructure role is enough,
+        // because the ceremony needs only one predecessor consent signature.
+        let (admitted, admitted_root) = prepared_plan_with(
+            RecordPublicationV1::Transaction,
+            deployments(Some(authority)),
+        );
+        assert!(
+            admitted.is_ok(),
+            "one retained infrastructure authority must still prepare: {:?}",
+            admitted.err()
+        );
+        let _ = fs::remove_dir_all(&admitted_root);
     }
 
     #[test]

@@ -2350,3 +2350,40 @@ unfoundable, silently**, with no diagnostic until a founding fails sixty transac
 in. Cohort-9 retained `ExactAuthority` on all seven, so it is not trapped — the
 "mutable is deliberate" argument was load-bearing for a reason nobody had stated. A
 planning-time refusal is being added.
+
+## Cohort-9 cannot be founded by any host change; cohort-10 is the path
+
+The release lane read before building and found two things that overturn my
+instruction. **The founding wall is on chain**: `core-sbf/src/found.rs:289,311` route
+both Found paths through `authenticate_profile` — *"V2 only, and never a fallback"* —
+and `2951b226` is an ancestor of the deployed `5ba7f387`. The host `AccountAuthority`
+is a faithful mirror. A genesis arm on the host would have stranded a third mint to
+learn a fact already in hand. **And the shape I prescribed — try-V2-then-V1 — is
+refused by name in `PROFILE_UPGRADE_RULING_2026_08_31.md` §6** for the O-005
+parallel-authority smell. Its stated reason assumed the in-place cohort-8→9 upgrade
+and is stale; the failure mode it named is not. The lane declined to ship it. Third
+correct refusal from that lane today.
+
+**The shape that satisfies both**: a genesis-shaped V2 at the V2 PDA, written by
+initialize, with two distinct domain-separated sentinels as predecessor ids. One
+authentication path, vacancy still refuses, no layout change — the existing
+constructor already takes it.
+
+**The design unit, decided on a stated principle**: conjunct 6 ("one V2 per domain,
+ever") would leave a cohort born at V2 unable ever to succeed its Registry — P-008
+returning for exactly the clean-start cohorts. Of three shapes, a generation counter
+puts a mutable field on an immutable profile, and a V2→V3 hop is the
+one-more-layout-per-lifecycle-event pattern that produced this. **The vacancy rule
+reads the sentinels**: genesis sentinels as predecessors = born at V2, succession
+unspent; real release ids = succeeded, spent. Conjunct 6 becomes "one succession
+per domain." No new field. Overturnable in one line if the constructor disagrees.
+
+**This is a program change and reaches chain only by redeploy. Cohort-10, under
+condition (a)** — full redeploy from a named commit, cohort-9 abandoned and its rent
+reclaimed. Everything landed this round carries forward.
+
+**Landed meanwhile (`6155219a`)**: the landmine is a wall. `prepare` refuses when
+both Registry and RentCredit are observed already immutable — proved red, with its
+own control (authority retained on one role must still prepare; it caught two
+wrong-reason refusals while being written) and a real-world control (cohort-9's own
+plan would not have been blocked). This lane submitted **zero transactions**.
