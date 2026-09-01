@@ -1,0 +1,483 @@
+/**
+ * Emit `lib/generated/capabilitySurfaceV1.ts` from the browser's own import graph.
+ *
+ * THE MECHANISM THIS CLOSES. `/console` and `/operate` used to read their
+ * status from a hand-typed `implementation:` string on each row of
+ * `capabilityModel.ts`. Nothing anywhere connected that string to code. A lane
+ * could type `browser-wallet` beside an act no component could construct, or
+ * leave `rust-unsigned` beside one the browser had been signing for weeks, and
+ * every test stayed green because the tests asserted the string. Four
+ * capabilities changed state in a single night; the board changed for none of
+ * them, and it was wrong in BOTH directions at once.
+ *
+ * So the status is no longer written down. `capabilityModel.ts` names, per act,
+ * two anchors -- the component or module that OWNS the act, and the module that
+ * CONSTRUCTS its bytes -- and this generator answers, from the source tree
+ * itself, what that owner can actually do:
+ *
+ *   - which routes reach it, so an act cannot be `browser-*` unless a stranger
+ *     can open a page that reaches it (an unrouted workspace is not a
+ *     capability, however complete it is);
+ *   - the strongest wallet request in its transitive closure, by the SDK export
+ *     name that performs it -- `requestWalletMessageSignatureV1` is a detached
+ *     message and nothing else, the three transaction requests are transaction
+ *     authority, and their ABSENCE is the only thing that makes an act unsigned;
+ *   - whether `submitSignedTransactionV1` -- the single submission primitive --
+ *     is reachable, which is the whole difference between a browser that signs
+ *     and exports a packet and one that sends it and verifies the poststate;
+ *   - which `lib/generated/` modules it decodes against, each paired with the
+ *     `abi:*:verify` script that byte-checks it. A generated module without a
+ *     verify script is a surface with no authority behind it, so the pairing is
+ *     emitted rather than assumed.
+ *
+ * These are FACTS ABOUT THE WEB APP, which is why the surface is generated here
+ * and not in the SDK: the SDK owns the semantics of an act and cannot know what
+ * this application routes. `capabilityModel.ts` in the SDK consumes what this
+ * emits and derives the venue, authority and status from it.
+ *
+ * Gated like every other `lib/generated/` module: `--check` byte-compares and
+ * writes nothing, and `lib/abiVerification.test.ts` runs it inside `npm test`.
+ * When it goes red, the browser really did change what it can do -- regenerate
+ * and read the diff; never edit the output.
+ *
+ * Usage:
+ *   node scripts/generate-capability-surface.mjs           # regenerate
+ *   node scripts/generate-capability-surface.mjs --check   # verify only
+ */
+import { readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const webRoot = fileURLToPath(new URL('..', import.meta.url));
+const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
+const sdkRoot = join(repoRoot, 'packages', 'dclutch-sdk');
+const outputPath = join(webRoot, 'lib', 'generated', 'capabilitySurfaceV1.ts');
+const check = process.argv.includes('--check');
+
+/**
+ * The SDK module that owns every wallet request and the sole submission.
+ *
+ * Named as a file rather than by symbol so a rename cannot quietly make every
+ * act look unsigned: the assertion below fails instead.
+ */
+const WALLET_OWNER = join(sdkRoot, 'lib', 'walletHandoff.ts');
+
+/** Detached message signature: a portable artifact, never a transaction. */
+const MESSAGE_REQUESTS = ['requestWalletMessageSignatureV1'];
+/** The three ways a wallet is asked to sign a transaction. */
+const TRANSACTION_REQUESTS = [
+  'requestWalletTransactionSignatureV1',
+  'requestWalletCosignTransactionV1',
+  'requestWalletSubmitCosignTransactionV1',
+];
+/** The only function in the client tree that sends a packet to a cluster. */
+const SUBMISSION = 'submitSignedTransactionV1';
+
+/**
+ * `packages/dclutch-sdk/package.json`'s exports map, honoured exactly.
+ *
+ * `@dclutch/sdk/walletHandoff` resolves to the INSPECTION-ONLY facade, not to
+ * the module above, and several subpaths are `null` -- deliberately unreachable
+ * from outside the package. Resolving these by filename would credit a surface
+ * with authority the package refuses to hand it.
+ */
+const sdkExports = JSON.parse(readFileSync(join(sdkRoot, 'package.json'), 'utf8')).exports;
+
+/** Web `package.json` scripts, for pairing each generated module with its verifier. */
+const webScripts = JSON.parse(readFileSync(join(webRoot, 'package.json'), 'utf8')).scripts;
+
+function exists(path) {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve one extensionless module path the way the bundler does. */
+function resolveFile(base) {
+  for (const suffix of ['.ts', '.tsx', '/index.ts', '/index.tsx', '']) {
+    if (exists(`${base}${suffix}`)) return `${base}${suffix}`;
+  }
+  return null;
+}
+
+/**
+ * Resolve one import specifier to an absolute file, or null when it leaves the
+ * client trees (node builtins, react, @solana/web3.js, CSS).
+ */
+function resolveSpecifier(fromFile, specifier) {
+  if (specifier === '@dclutch/sdk') return resolveFile(join(sdkRoot, 'index'));
+  if (specifier.startsWith('@dclutch/sdk/')) {
+    const subpath = `./${specifier.slice('@dclutch/sdk/'.length)}`;
+    const exact = sdkExports[subpath];
+    if (exact === null) return null;
+    if (typeof exact === 'string') return resolveFile(join(sdkRoot, exact.replace(/\.tsx?$/, '')));
+    if (subpath.startsWith('./generated/')) return resolveFile(join(sdkRoot, 'lib', subpath.slice(2)));
+    return resolveFile(join(sdkRoot, 'lib', subpath.slice(2)));
+  }
+  if (specifier.startsWith('@/')) return resolveFile(join(webRoot, specifier.slice(2)));
+  if (specifier.startsWith('.')) return resolveFile(resolve(dirname(fromFile), specifier));
+  return null;
+}
+
+/** Every `import`/`export ... from '<specifier>'` in one module, with its named bindings. */
+function importsOf(source) {
+  const found = [];
+  const pattern = /(?:^|\n)\s*(?:import|export)\s+([\s\S]*?)\s*from\s*'([^']+)'/g;
+  for (const match of source.matchAll(pattern)) {
+    const bindings = [...match[1].matchAll(/[A-Za-z_$][\w$]*/g)].map((entry) => entry[0]);
+    found.push({ specifier: match[2], bindings });
+  }
+  for (const match of source.matchAll(/(?:^|\n)\s*import\s*'([^']+)'/g)) {
+    found.push({ specifier: match[1], bindings: [] });
+  }
+  return found;
+}
+
+const sourceCache = new Map();
+function sourceOf(file) {
+  if (!sourceCache.has(file)) sourceCache.set(file, readFileSync(file, 'utf8'));
+  return sourceCache.get(file);
+}
+
+// The wallet owner must define every symbol this generator recognizes. If a
+// rename lands, the failure is here rather than a board that quietly reports
+// every browser act as unsigned.
+{
+  const owner = sourceOf(WALLET_OWNER);
+  for (const symbol of [...MESSAGE_REQUESTS, ...TRANSACTION_REQUESTS, SUBMISSION]) {
+    if (!owner.includes(`export async function ${symbol}(`)) {
+      throw new Error(`${relative(repoRoot, WALLET_OWNER)} no longer exports ${symbol}; capability authority cannot be derived`);
+    }
+  }
+}
+
+/**
+ * Whether one module IS the wallet owner, or hands its whole surface on.
+ *
+ * `apps/dclutch-web/lib/walletHandoff.ts` is a single `export *` over the SDK
+ * module, so every browser act reaches the real primitives through the web
+ * path. Comparing filenames alone would have credited the entire application
+ * with no wallet authority at all -- which is exactly the shape of mistake this
+ * generator exists to make impossible.
+ */
+const ownerCache = new Map();
+function isWalletOwner(file) {
+  if (file === WALLET_OWNER) return true;
+  const held = ownerCache.get(file);
+  if (held !== undefined) return held;
+  // Set before recursing: a cycle of re-exports must not become a stack
+  // overflow, and a module cannot become the owner by way of itself.
+  ownerCache.set(file, false);
+  let owner = false;
+  for (const match of sourceOf(file).matchAll(/(?:^|\n)\s*export\s+\*\s+from\s*'([^']+)'/g)) {
+    const target = resolveSpecifier(file, match[1]);
+    if (target !== null && isWalletOwner(target)) owner = true;
+  }
+  ownerCache.set(file, owner);
+  return owner;
+}
+
+/** Direct facts about one module, before any propagation. */
+function localFacts(file) {
+  const source = sourceOf(file);
+  let message = false;
+  let transaction = false;
+  let submits = false;
+  const edges = [];
+  for (const { specifier, bindings } of importsOf(source)) {
+    const target = resolveSpecifier(file, specifier);
+    if (target === null) continue;
+    edges.push(target);
+    // A wallet request counts only when the specifier really resolves to the
+    // owning module. The SDK's public `walletHandoff` subpath is a different
+    // file on purpose, and naming a symbol is not the same as reaching it.
+    if (!isWalletOwner(target)) continue;
+    if (bindings.some((name) => MESSAGE_REQUESTS.includes(name))) message = true;
+    if (bindings.some((name) => TRANSACTION_REQUESTS.includes(name))) transaction = true;
+    if (bindings.includes(SUBMISSION)) submits = true;
+  }
+  return { edges, message, transaction, submits };
+}
+
+const factsCache = new Map();
+function facts(file) {
+  if (!factsCache.has(file)) factsCache.set(file, localFacts(file));
+  return factsCache.get(file);
+}
+
+/** Every module reachable from `entry`, including itself. */
+function closure(entry) {
+  const seen = new Set();
+  const stack = [entry];
+  while (stack.length > 0) {
+    const file = stack.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const edge of facts(file).edges) if (!seen.has(edge)) stack.push(edge);
+  }
+  return seen;
+}
+
+const closureCache = new Map();
+function closureOf(file) {
+  if (!closureCache.has(file)) closureCache.set(file, closure(file));
+  return closureCache.get(file);
+}
+
+/** Every `app/**\/page.tsx`, as the route a reader can actually open. */
+function routes() {
+  const found = [];
+  const walk = (absolute, path) => {
+    for (const entry of readdirSync(absolute, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.isDirectory()) walk(join(absolute, entry.name), `${path}/${entry.name}`);
+      else if (entry.name === 'page.tsx') found.push({ route: path === '' ? '/' : path, file: join(absolute, entry.name) });
+    }
+  };
+  walk(join(webRoot, 'app'), '');
+  return found;
+}
+
+/** The `abi:<name>:verify` script that byte-checks one generated module, if any. */
+function verifierFor(generatedModule) {
+  const target = generatedModule.replace(/^lib\/generated\//, '').replace(/\.ts$/, '');
+  for (const [name, command] of Object.entries(webScripts)) {
+    if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
+    if (command.includes(`lib/generated/${target}.ts`)) return name;
+  }
+  // Most generators name their output only inside the script file itself.
+  for (const [name, command] of Object.entries(webScripts)) {
+    if (!name.startsWith('abi:') || !name.endsWith(':verify')) continue;
+    const script = command.split(/\s+/)[1];
+    if (script === undefined || !script.startsWith('scripts/')) continue;
+    const path = join(webRoot, script);
+    if (exists(path) && sourceOf(path).includes(`lib/generated/${target}.ts`)) return name;
+  }
+  return null;
+}
+
+const web = (file) => relative(webRoot, file).split('\\').join('/');
+const inWeb = (file) => file.startsWith(webRoot);
+
+const routeEntries = routes();
+/** Route -> its own closure, so a module can be asked which routes reach it. */
+const routeClosures = routeEntries.map((entry) => ({ ...entry, files: closureOf(entry.file) }));
+
+function routesReaching(file) {
+  return routeClosures.filter((entry) => entry.files.has(file)).map((entry) => entry.route).sort();
+}
+
+/**
+ * The modules worth emitting a row for: every one a route can reach.
+ *
+ * An earlier draft emitted only modules carrying a fact DIRECTLY -- a wallet
+ * import, or a `lib/generated/` import of their own -- to keep the file small.
+ * That was wrong in the one way that matters here: `ProductV2Studio` reaches
+ * its generated authorities through `lib/productV2.ts` and carried no fact of
+ * its own, so it had no row, so an act anchored to it resolved to nothing and
+ * SILENTLY lost its browser venue. A survey a status can fall through is worse
+ * than a large survey. Every reachable module gets a row; a row changes only
+ * when its own closure changes.
+ */
+function surveyed() {
+  const found = new Set(routeEntries.map((entry) => entry.file));
+  for (const entry of routeClosures) {
+    for (const file of entry.files) if (inWeb(file)) found.add(file);
+  }
+  return [...found].sort((left, right) => web(left).localeCompare(web(right)));
+}
+
+function surfaceRow(file) {
+  const reachable = closureOf(file);
+  let message = false;
+  let transaction = false;
+  let submits = false;
+  const generated = new Set();
+  for (const member of reachable) {
+    const local = facts(member);
+    message = message || local.message;
+    transaction = transaction || local.transaction;
+    submits = submits || local.submits;
+    if (inWeb(member) && web(member).startsWith('lib/generated/')) generated.add(web(member));
+  }
+  return {
+    module: web(file),
+    routes: routesReaching(file),
+    authority: transaction ? 'wallet-transaction' : message ? 'wallet-message' : 'none',
+    submits,
+    generatedAbis: [...generated].sort().map((module) => ({ module, verify: verifierFor(module) })),
+  };
+}
+
+const rows = surveyed().map(surfaceRow);
+const routeList = routeEntries.map((entry) => entry.route).sort();
+
+/**
+ * The generated authorities, once.
+ *
+ * Modules name them by index rather than repeating the pairing: the same
+ * twenty rows appearing under two hundred modules was eighty kilobytes of
+ * client bundle saying one thing.
+ */
+const abiTable = [...new Map(rows.flatMap((row) => row.generatedAbis).map((entry) => [entry.module, entry])).values()]
+  .sort((left, right) => left.module.localeCompare(right.module));
+const abiIndex = new Map(abiTable.map((entry, index) => [entry.module, index]));
+
+/** The text of one `command={...}` attribute, brace-balanced from its opening. */
+function commandExpression(source, start) {
+  let depth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    if (source[index] === '{') depth += 1;
+    else if (source[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return source.slice(start + 1, index);
+    }
+  }
+  return '';
+}
+
+/**
+ * The CLI runbooks the browser publishes, with the page that publishes each.
+ *
+ * A runbook is `<CommandRunbook command={…}>`, not a constant with a particular
+ * name: `/found` holds its command in an exported constant and `market.join`
+ * builds one per market inside its component, and both are the same claim to a
+ * reader. The command TEXT is what is searched for `--execute`, never the
+ * page's prose -- a paragraph explaining that a campaign needs authorization is
+ * not itself a campaign.
+ */
+function runbooks() {
+  const found = [];
+  const seen = new Set();
+  for (const entry of routeClosures) {
+    for (const file of entry.files) {
+      if (!inWeb(file) || seen.has(file)) continue;
+      seen.add(file);
+      const source = sourceOf(file);
+      const constants = new Map(
+        [...source.matchAll(/const ([A-Za-z0-9_]+)\s*=\s*`([\s\S]*?)`;/g)].map((match) => [match[1], match[2]]),
+      );
+      const commands = [];
+      for (const match of source.matchAll(/<CommandRunbook\b[\s\S]*?command=\{/g)) {
+        const expression = commandExpression(source, match.index + match[0].length - 1);
+        const named = expression.trim().replace(/[`${}\s]/g, '');
+        commands.push(`${expression}\n${constants.get(named) ?? ''}`);
+      }
+      if (commands.length === 0) continue;
+      // A component may publish more than one command; the page carries
+      // execution authority if any of them does.
+      const text = commands.join('\n');
+      found.push({
+        module: web(file),
+        commands: commands.length,
+        routes: routesReaching(file),
+        // `--execute` is what a campaign command has and a read-only export
+        // does not: it is the flag that records devnet execution authority
+        // before any child may read a signing key.
+        namesExecutionAuthority: text.includes('--execute'),
+      });
+    }
+  }
+  return found.sort((left, right) => left.module.localeCompare(right.module));
+}
+
+/** Rust operator crates, so an act cannot name an owner the workspace lost. */
+function operatorCrates() {
+  return readdirSync(join(repoRoot, 'crates'), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && exists(join(repoRoot, 'crates', entry.name, 'Cargo.toml')))
+    .map((entry) => entry.name)
+    .sort();
+}
+
+const json = (value) => JSON.stringify(value);
+const list = (values) => `[${values.map(json).join(', ')}]`;
+
+let output = `// @generated by scripts/generate-capability-surface.mjs from the browser's own import graph; do not edit.
+// Regenerate with: npm run abi:capability-surface
+//
+// Sources:
+//   apps/dclutch-web/app/**/page.tsx                    (the routes a reader can open)
+//   packages/dclutch-sdk/lib/walletHandoff.ts           (every wallet request and the sole submission)
+//   apps/dclutch-web/package.json                       (the abi:*:verify pairing)
+//
+// ${rows.length} surveyed modules, ${routeList.length} routes, ${abiTable.length} generated authorities, ${runbooks().length} published runbooks.
+
+/** What a module's transitive closure is able to ask a wallet for. */
+export type ClientAuthorityV1 = 'none' | 'wallet-message' | 'wallet-transaction';
+
+/** One generated decode authority, and the script that byte-checks it. */
+export type GeneratedAbiReachV1 = Readonly<{ module: string; verify: string | null }>;
+
+/** What one client module can do, read off the import graph rather than stated. */
+export type ClientModuleSurfaceV1 = Readonly<{
+  /** Path inside \`apps/dclutch-web\`. */
+  module: string;
+  /** Routes whose page transitively imports it. Empty means unreachable. */
+  routes: ReadonlyArray<string>;
+  /** The strongest wallet request reachable from it. */
+  authority: ClientAuthorityV1;
+  /** Whether the sole submission primitive is reachable from it. */
+  submits: boolean;
+  /** Indices into \`GENERATED_ABI_AUTHORITIES_V1\` for the authorities it reaches. */
+  generatedAbis: ReadonlyArray<number>;
+}>;
+
+/** One page that publishes an exact CLI command a reader is meant to run. */
+export type OperatorRunbookReachV1 = Readonly<{
+  module: string;
+  /** How many exact commands that page publishes. */
+  commands: number;
+  routes: ReadonlyArray<string>;
+  /** Whether any command records explicit execution authority before it may sign. */
+  namesExecutionAuthority: boolean;
+}>;
+
+/** Every route this application serves. */
+export const CLIENT_ROUTES_V1: ReadonlyArray<string> = Object.freeze(${list(routeList)});
+
+/** Every generated decode authority any route reaches, and its verifier. */
+export const GENERATED_ABI_AUTHORITIES_V1: ReadonlyArray<GeneratedAbiReachV1> = Object.freeze([
+${abiTable.map((entry) => `  Object.freeze({ module: ${json(entry.module)}, verify: ${entry.verify === null ? 'null' : json(entry.verify)} }),`).join('\n')}
+]);
+
+/** Every module whose facts a capability status can depend on. */
+export const CLIENT_MODULE_SURFACES_V1: ReadonlyArray<ClientModuleSurfaceV1> = Object.freeze([
+`;
+for (const row of rows) {
+  const abis = row.generatedAbis.map((entry) => abiIndex.get(entry.module)).join(', ');
+  output += `  Object.freeze({ module: ${json(row.module)}, routes: Object.freeze(${list(row.routes)}), authority: ${json(row.authority)}, submits: ${row.submits}, generatedAbis: Object.freeze([${abis}]) }),\n`;
+}
+output += `]);
+
+/** Every CLI runbook the browser publishes, and where it is published. */
+export const OPERATOR_RUNBOOKS_V1: ReadonlyArray<OperatorRunbookReachV1> = Object.freeze([
+`;
+for (const entry of runbooks()) {
+  output += `  Object.freeze({ module: ${json(entry.module)}, commands: ${entry.commands}, routes: Object.freeze(${list(entry.routes)}), namesExecutionAuthority: ${entry.namesExecutionAuthority} }),\n`;
+}
+output += `]);
+
+/** Every Rust crate in the workspace, so an act cannot name an owner that is gone. */
+export const OPERATOR_CRATES_V1: ReadonlyArray<string> = Object.freeze(${list(operatorCrates())});
+`;
+
+if (check) {
+  const current = exists(outputPath) ? readFileSync(outputPath, 'utf8') : '';
+  if (current !== output) {
+    process.stderr.write('lib/generated/capabilitySurfaceV1.ts no longer matches the browser import graph.\n');
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+// Atomic replacement: a half-written surface would be a half-true board.
+const scratch = `${outputPath}.tmp`;
+writeFileSync(scratch, output);
+try {
+  renameSync(scratch, outputPath);
+} catch (error) {
+  unlinkSync(scratch);
+  throw error;
+}
+process.stdout.write(`wrote lib/generated/capabilitySurfaceV1.ts (${rows.length} modules, ${routeList.length} routes)\n`);

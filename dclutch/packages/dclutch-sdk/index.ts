@@ -32,6 +32,12 @@ export * from './lib/activity';
 export * from './lib/deployments';
 export * from './lib/operatorSurface';
 
+// The executable capability model: what each protocol act is, and the rules
+// that derive its venue, authority and walls from a client's own evidence.
+// A consumer supplies the evidence; nothing here carries a status a hand
+// could set.
+export * from './lib/capabilityModel';
+
 // Refusals by name: band arithmetic over the registered code space.
 export * from './lib/refusals';
 

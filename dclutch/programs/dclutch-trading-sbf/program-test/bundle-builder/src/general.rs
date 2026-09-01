@@ -1,123 +1,181 @@
-//! The General bundle, and the boundary as GEN-HOT measured it.
+//! General-specific construction over the family-neutral Hot bundle builder.
 //!
-//! This module was written as a sketch to the builder's boundary. GEN-HOT went
-//! to execute against it and found the boundary is in a different place, so
-//! what follows is the measured version, with the executed evidence named
-//! beside each claim (`tests/general_dynamic_spans_v1.rs`).
+//! This module owns no General arithmetic. It joins three current semantic
+//! owners into the exact pre-executable `OpenBatch` request:
 //!
-//! # What General already satisfies
+//! - [`GeneralRootV2`] supplies the active occurrence generation, revision and
+//!   next sequence;
+//! - [`GeneralConfigV3`] supplies the immutable price scale and order bound;
+//! - [`GeneralBatchOccurrenceTermsV1`] supplies the slot-independent occurrence
+//!   identity, while [`GeneralStateAddressSeedsV3`] supplies the published
+//!   lifecycle seed order for its Batch PDA.
 //!
-//! - **Descriptor generation**: General's V3 line descriptors are
-//!   `CapabilityProgramV4` (`general_activation_v3.rs` pins the equivalence
-//!   with `initialize_root_account_v1`), so [`crate::artifacts`] consumes the
-//!   set unchanged: ten byte strings in, records/action/seal out.
-//! - **Request profile**: `RequestProfileV1` (unsigned) — the engine's
-//!   simplest arm. No Ed25519 evidence in the scenario at all.
-//! - **Routes**: General's effect declares `Claims` and `Custody` roles
-//!   (`general-adapter-contract/src/effect_artifacts_v3.rs`), both already
-//!   dispatched by [`crate::routes`]; the Custody raw-layout context read and
-//!   the disabled-route shadow requests apply as-is.
-//! - **Root**: `CapabilityRootHeaderV1 || GeneralRootV2`, corpus content
-//!   exactly like Direct's, best produced by
-//!   `plan_general_capability_activation_v3` (which also fills the record
-//!   bumps the header now carries).
-//! - **Lifecycle**: the V5 current-rent-quote policy generation
-//!   (`encode_general_state_lifecycle_v5_atomic`), which the engine's preplan
-//!   already runs; General's created states (primary/terminal, payer and
-//!   RentCredit coordinates from `state_artifacts_v3`) arrive by adoption the
-//!   way Direct's maker replays do.
-//! - **The eighth-set-entry gap does not block the campaign**: like
-//!   `direct-hot`, a ProgramTest campaign encodes its own one-entry
-//!   `CapabilityProgramSetV2` selecting General's descriptor. The
-//!   exactly-seven rule gates *live release activation*, not a Hot bundle.
-//!
-//! # The boundary, measured
-//!
-//! 0. **The effect artifact is the wrong schema, and it is first.** General's
-//!    descriptor names `dclutch_effect_kernel::v3::SCHEMA_RELEASE_ID` for its
-//!    EffectProgram, and `process_hot_execution_v3` accepts exactly one effect
-//!    schema — `v4::SCHEMA_RELEASE_ID_V4` (`decode_sealed_effect_v4` /
-//!    `decode_selected_effect_v4` both refuse anything else with
-//!    `UnsupportedContent`). Nothing General emits today can enter the Hot
-//!    executor, and this refusal sits *ahead* of every seam below: the effect
-//!    is decoded to get the register geometry the span widths come from.
-//!    Executed as `the_general_effect_artifact_is_v3_and_the_v4_hot_path_refuses_it`.
-//!    The migration is an EffectV4 envelope (zero spans, zero borrowed ranges)
-//!    over the same V3 program — which moves the effect digest, so the
-//!    descriptor, the seal and the ProgramSet identity all move with it.
-//!
-//! 1. **Nonzero dynamic fixed spans — THREADED, and not the span this module
-//!    named.** General's AccountProfile is the spans generation with
-//!    `dynamic_fixed_span_count() == 1`, but that span is *not* a
-//!    "candidate-page span whose width is a request-owned common scalar". It is
-//!    the trailing Trading-owned **authenticated scratch-page** span
-//!    (`account_rules_v3::general_scratch_page_span_v3`), selector
-//!    `scalar::INPUT_SCRATCH_PAGE_COUNT`, and **no General RequestProfile
-//!    writes that register** — the seven of them are checked in
-//!    `the_sole_general_span_selector_is_not_request_owned`. So the width can
-//!    never come from projecting the family request. It comes from the
-//!    canonical register-bank geometry:
-//!    `classify_bank_transport_v2(general_hot_scalar_count_v3(N),
-//!    GENERAL_HOT_COMMON_IDENTITIES_V3)`.
-//!
-//!    [`crate::registers::derive_dynamic_span_widths`] is that rule, host-side,
-//!    phase for phase against `hot_v3::authenticate_dynamic_span_widths_v3`,
-//!    and the widths now thread through [`crate::profile_ops`], the engine's
-//!    projection and effect-permission arms, and `expand`-time packing. The
-//!    Direct reproduction is unmoved (it declares zero spans and still packs
-//!    byte-identically); General's real profile expands to
-//!    `general_account_profile_fixed_count_v3(action) + page_count` at N = 1, 4
-//!    and 258.
-//!
-//! 2. **Execution-strategy extras — NOT optional, and not a campaign's choice.**
-//!    This module said a first GEN bundle "can run interpreted; the extras seam
-//!    opens when a GEN campaign wants the accelerated disposition". It cannot.
-//!    An AccountProfile-only span — one no request writes — is admissible under
-//!    exactly one disposition: `StrategyDispositionV2::AdmittedAot`
-//!    (`authenticate_dynamic_span_widths_v3`, the `else` arm). General's
-//!    profile therefore *forces* the accelerated disposition, and the emitted
-//!    strategy is `AdmittedAot` accordingly. Executed as
-//!    `a_profile_only_span_refuses_every_disposition_but_admitted_aot`.
-//!
-//!    What that costs the builder, exactly. [`crate::bundle`] emits
-//!    `fixed(39) ++ runtime[5..]`. An admitted-AOT bundle is
-//!    `fixed(39) ++ extras(8) ++ admitted_caller_authorities(page_count)
-//!    ++ runtime[5..]`, where the eight extras are the Registry-authenticated
-//!    Strategy/Certificate/Admission/ArtifactRelease/Loader observation plus the
-//!    accelerator program and its ProgramData
-//!    (`admitted_composition_v3`, `execution_strategy_v2`), and the authority
-//!    count is `admitted_caller_authority_count_v3` — the same page count as the
-//!    span. The campaign must also deploy the real accelerator ELF, because
-//!    Trading CPIs into it as the sole candidate authority. None of that is
-//!    modelled here yet, and it is the next builder-side lane.
-//!
-//! 3. **Core/Resolution route authorities.** [`crate::routes`] derives no
-//!    authority for `FixedRole::Core`/`Resolution` frames. General's declared
-//!    routes do not need them; the seam matters for founding/resolution
-//!    families, and the rule to mirror lives in `core_composition_v3` /
-//!    `resolution_composition_v3::prepare`.
-//!
-//! 4. **Receipt dependencies at build time.** The engine resolves invocation
-//!    geometry including receipt dependencies but derives nothing from them
-//!    (they are execution-time verification). If a family's *frame content*
-//!    ever depends on a prior child's receipt, the builder cannot know it
-//!    statically — no current family does.
-//!
-//! # The GEN campaign, shaped
-//!
-//! ```text
-//! artifact set   = GeneralArtifactBytesV3 (descriptor, profile, request
-//!                  profile, transition, effect **in a V4 envelope**, lifecycle,
-//!                  admitted-AOT strategy) + one-entry ProgramSetV2 + manifest
-//!                  + GeneralConfigV3
-//! fixed corpus   = Market (CoreState), composite root, four Product records
-//! strategy frame = eight authenticated extras + one Trading caller authority
-//!                  per bank page + the deployed accelerator ELF
-//! bindings       = General's runtime self-coordinates: payer(s), RentCredit,
-//!                  claims aggregate + positions, realm + custody replay +
-//!                  vault/token rows, program/programdata restatements with
-//!                  chain views — the same classes Direct bound, at General's
-//!                  coordinates (state_artifacts_v3 names them)
-//! derived        = span widths, records, seal, packing, privileges, funding,
-//!                  created states, caller authorities — identical machinery
-//! ```
+//! The returned request is then consumed by [`build_general_open_batch_bundle_v1`],
+//! which selects the emitted `OpenBatch` descriptor through the published
+//! ProgramSet and executes the ordinary admitted-AOT builder. A campaign may
+//! supply semantic chain corpus, but it cannot type a batch identity, bump,
+//! accelerator request, caller authority, span width, or account topology.
+
+use dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1;
+use dclutch_execution_strategy_contract::{decode_register_bank_into, encode_register_bank_into};
+use dclutch_general_adapter_contract::{
+    collection_v1::{GeneralBatchOccurrenceTermsV1, GeneralBatchOpeningV1},
+    hot_candidate_v3::{
+        general_hot_candidate_bank_len_v3, general_hot_environment_from_bank_v3,
+        project_general_open_batch_candidate_in_place_v3,
+    },
+    state_seeds_v3::GeneralStateAddressSeedsV3,
+};
+use dclutch_general_codec::{
+    Action,
+    successor_request_v3::{ControllerActionV3, ControllerRequestV3},
+};
+use dclutch_general_config_contract::{GeneralRootV2, v3::GeneralConfigV3};
+use solana_program::pubkey::Pubkey;
+
+use crate::{
+    BuilderError,
+    admitted::AdmittedAotInputV1,
+    bundle::{BuiltAdmittedBundleV1, BundleInputV1, build_admitted_bundle_with_candidate_v1},
+};
+
+/// Chain-authenticated facts needed to derive one `OpenBatch` request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOpenBatchRequestInputV1<'a> {
+    /// Exact current General root tail decoded from the composite root.
+    pub root: GeneralRootV2,
+    /// Address of that composite root, used by the lifecycle seed program.
+    pub root_address: Pubkey,
+    /// Exact selected config bytes.
+    pub config: &'a [u8],
+    /// Product-authenticated runtime outcome count.
+    pub outcome_count: u32,
+    /// Content identity carried in the selected Product record's own
+    /// `product_id` field, which is what the OpenBatch AccountProfile projects
+    /// into `identity::SELECTION_PRODUCT` and what the batch occurrence
+    /// therefore commits to. It is NOT the finalized record digest.
+    pub product_id: [u8; 32],
+    /// Trading program that owns the root and Batch PDA.
+    pub trading_program: Pubkey,
+}
+
+/// Exact occurrence, lifecycle coordinate and V3 request derived for OpenBatch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GeneralOpenBatchRequestV1 {
+    /// Slot-independent occurrence identity carried as the request subject.
+    pub occurrence_id: [u8; 32],
+    /// Canonical Batch PDA selected by the published lifecycle recipe.
+    pub batch: Pubkey,
+    /// Canonical PDA bump encoded in the request.
+    pub batch_bump: u8,
+    /// Exact canonical 64-byte V3 request.
+    pub request: [u8; dclutch_general_codec::successor_request_v3::CONTROLLER_REQUEST_BYTES_V3],
+}
+
+/// Derive the exact pre-executable `OpenBatch` request from authenticated facts.
+pub fn derive_general_open_batch_request_v1(
+    input: GeneralOpenBatchRequestInputV1<'_>,
+) -> Result<GeneralOpenBatchRequestV1, BuilderError> {
+    let config = GeneralConfigV3::decode(input.config).map_err(|_| BuilderError::Artifact)?;
+    if input.root_address == Pubkey::default()
+        || input.trading_program == Pubkey::default()
+        || input.outcome_count == 0
+        || input.product_id == [0; 32]
+        || input.root.config_id() != solana_program::hash::hash(input.config).to_bytes()
+        || input.root.generation() != config.generation()
+    {
+        return Err(BuilderError::Binding(line!()));
+    }
+    let occurrence = GeneralBatchOccurrenceTermsV1::new(GeneralBatchOpeningV1 {
+        outcome_count: input.outcome_count,
+        sequence: input.root.next_batch_sequence(),
+        generation: input.root.generation(),
+        market: input.root.market(),
+        product_id: input.product_id,
+        config_id: input.root.config_id(),
+        price_scale: config.price_scale(),
+        collection_close_slot: 0,
+        settlement_close_slot: 0,
+        max_orders: config.max_orders_per_candidate(),
+    })
+    .map_err(|_| BuilderError::Artifact)?;
+    let occurrence_id = occurrence.occurrence_id();
+    let seeds = GeneralStateAddressSeedsV3::batch(input.root_address.to_bytes(), occurrence_id)
+        .map_err(|_| BuilderError::Artifact)?;
+    let seed_slices = seeds.as_slices().map_err(|_| BuilderError::Artifact)?;
+    let (batch, batch_bump) =
+        Pubkey::find_program_address(seed_slices.as_slice(), &input.trading_program);
+    let request = ControllerRequestV3 {
+        action: ControllerActionV3::OpenBatch,
+        expected_revision: input.root.revision(),
+        subject_id: Some(occurrence_id),
+        page_index: 0,
+        execution_index: 0,
+        manifest_order_index: 0,
+        primary_state_bump: batch_bump,
+        secondary_state_bump: 0,
+        result_state_bump: 0,
+    }
+    .to_bytes()
+    .map_err(|_| BuilderError::Artifact)?;
+    Ok(GeneralOpenBatchRequestV1 {
+        occurrence_id,
+        batch,
+        batch_bump,
+        request,
+    })
+}
+
+/// Build one admitted-AOT `OpenBatch` Hot instruction from current artifacts.
+///
+/// The caller must have obtained `input.scenario.family_request` from
+/// [`derive_general_open_batch_request_v1`]. The selected ProgramSet remains the
+/// authority for the descriptor/action join; this guard merely prevents a
+/// General campaign helper from silently being used for another catalogue row.
+pub fn build_general_open_batch_bundle_v1(
+    input: &BundleInputV1<'_>,
+    admitted: AdmittedAotInputV1<'_>,
+) -> Result<BuiltAdmittedBundleV1, BuilderError> {
+    let request = ControllerRequestV3::decode(input.scenario.family_request)
+        .map_err(|_| BuilderError::Artifact)?;
+    if request.action.legacy() != Some(Action::OpenBatch) {
+        return Err(BuilderError::Binding(line!()));
+    }
+    let config = GeneralConfigV3::decode(input.set.config).map_err(|_| BuilderError::Artifact)?;
+    let root_tail = input
+        .fixed
+        .root
+        .account
+        .data
+        .get(CAPABILITY_ROOT_HEADER_BYTES_V1..)
+        .ok_or(BuilderError::Binding(line!()))?;
+    GeneralRootV2::decode(root_tail).map_err(|_| BuilderError::Binding(line!()))?;
+    let outcome_count = input.scenario.tail_count;
+    let bank_len = general_hot_candidate_bank_len_v3(outcome_count)
+        .map_err(|_| BuilderError::Projection("general-bank-width"))?;
+    let projector =
+        |scalars: &mut [u64], identities: &mut [[u8; 32]]| -> Result<(), BuilderError> {
+            let mut bank = vec![0_u8; bank_len];
+            encode_register_bank_into(scalars, identities, &mut bank)
+                .map_err(|_| BuilderError::Projection("general-bank-encode"))?;
+            let environment = general_hot_environment_from_bank_v3(&bank, outcome_count)
+                .map_err(|_| BuilderError::Projection("general-environment"))?;
+            project_general_open_batch_candidate_in_place_v3(
+                root_tail,
+                config,
+                outcome_count,
+                environment,
+                request.expected_revision,
+                request.subject_id,
+                &mut bank,
+            )
+            .map_err(|_| BuilderError::Projection("general-open-batch"))?;
+            decode_register_bank_into(&bank, scalars, identities)
+                .map_err(|_| BuilderError::Projection("general-bank-decode"))
+        };
+    let built = build_admitted_bundle_with_candidate_v1(input, admitted, &projector)?;
+    if built.bundle.artifacts.action != u32::from(Action::OpenBatch as u8) {
+        return Err(BuilderError::Artifact);
+    }
+    Ok(built)
+}

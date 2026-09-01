@@ -1527,6 +1527,284 @@ rather than taken from a lane's report.
   the flagged ones ("retiring a finding while the tuple stays spelled
   retires the finding, not the defect").
 
+## 2026-09-01 — MOST SERIOUS FINDING: the redeemer chooses the payout matrix
+## on generic terminal settlement (unreached route, no loss, no PoC)
+
+**Scope first, so this is not overstated.** The route census reports **0 of 159
+routes ever executed**. This is a defect in an UNREACHED route, not evidence of
+any loss, and no proof-of-concept was built or run. The claim is strictly about
+what the code paths admit when read, verified line by line by the reporting
+lane and re-verified rather than taken on a subagent's word.
+
+On `terminal_settlement_v3` (dispatched at `claims-sbf/src/lib.rs:416`), the
+**redeemer supplies the Product-to-Claims exposure** — the matrix deciding
+which claim gets paid. `exposure_id` / `exposure_digest` are ordinary
+instruction fields (`claims-svm/src/terminal_settlement_v3.rs:151-154`).
+`authenticate_finalized_record` proves only PDA-from-(schema,digest), owner,
+non-signer/writable/executable, `hash(bytes) == digest`, rent exemption and
+vacant staging — **no market, no product**. `verify_execution_for` joins five
+32-byte fields that the record's own author writes, plus two widths. And
+Registry record publication is explicitly permissionless.
+
+**The check that looks like it would catch a substitution is a TAUTOLOGY:**
+`bundle_id` is assigned from `admission.selected_id` (`exposure.rs:274`), and
+the adapter sets that from `input.exposure_id`
+(`terminal_settlement_v3.rs:393-401`) — it compares the instruction to itself.
+Same family as "the builder as its own witness" below: a comparison whose two
+sides move together proves only that they move together.
+
+Founding pins nothing — `generic_founding_v1.rs` contains zero occurrences of
+exposure/graph/composition/descriptor — so there is no upstream recipe for the
+redeemer's choice to be measured against.
+
+**A written premise in a decision document is false for one of the two routes
+it governs.** Decision 0011 (`docs/decisions/0011-...:510-522`) recorded that
+the live route "checks the bundle's identity, digest and width and never the
+coefficients", and judged that tolerable because *"a wrong recipe is a wrong
+founding rather than a forgeable request."* True for `rational_terminal_v3`,
+which takes the exposure identity from an authenticated
+`RepresentationDescriptorV2`. **False for generic settlement.**
+
+What the solvency refusal does and does not cover: `product_basis_terminal_v3.rs:442-444`
+caps the SUPPLY-WEIGHTED sum at the Hoard balance, so aggregate over-payment is
+caught. Under-payment, and paying the right total to the WRONG coordinate, are
+not — the inequality says nothing about which claim is paid.
+
+Fix belongs in `claims-sbf/src/terminal_settlement_v3.rs` and at founding; the
+lane stopped rather than race another lane for the file, and corrected its own
+earlier commit that had recorded this as an open question rather than leave the
+weaker claim standing.
+
+## 2026-09-01 — THE CLASS: declarations never executed against reality
+
+Three separate lanes convicted the same shape tonight, in three families, none
+of them looking for it. A declaration or guard is authored in one place, is
+never run against a real account, and is therefore *unsatisfiable by anything*
+— which reads as strictness and is actually a route that cannot execute:
+
+1. **Direct Hot** — `authenticate_lifecycle_credit_v3` pinned the lifecycle
+   rent credit's owner to the fixed Registry coordinate on a written premise
+   ("that owner is the already authenticated fixed Registry coordinate") that
+   measurement falsified: the RENT program owns it. Unsatisfiable by every
+   honest transaction. Repaired `ff8ca269`.
+2. **Dealer** — `derivation_policy` is pinned per-descriptor to that
+   descriptor's own lifecycle digest AND per-root to the manifest entry, and a
+   multi-selector set cannot satisfy both. Selector 9 is unexecutable for ANY
+   manifest. Convicted on-chain; migration is ember's.
+3. **Structured** — the account profile declares `Exact{0}` for sixteen
+   coordinates including the RENT SYSVAR (17 bytes observed) and the SYSTEM
+   PROGRAM (21 bytes). Nothing can make a sysvar zero bytes.
+   `open_structured_v3.rs:617` vs `:625`: index 15 is in the `executable` set
+   but missing from the `opaque` set — every other executable index (6, 19,
+   21, 23, 27) is in both, so that lone asymmetry drops the System program to
+   `Exact{0}`. `:634-643` then takes `fixed_data_lengths[index]` verbatim for
+   everything not overridden, and that array is all zeros except [4] and [29].
+   **This ships**: production `structured_selected_release_v1.rs:646-656`
+   builds the same array, and the route reaches
+   `validate_accounts_with_dynamic_spans` from `hot_v3.rs:12531`. The lane
+   tried to falsify it and could not — the only other consumer checks encoding
+   and digests only. These widths had never been run against real accounts
+   anywhere; this campaign was the first to try.
+
+The common cause is not carelessness, it is that **an authored declaration and
+a real execution never met**. This is the canonical-generation mandate's
+sibling (WAVE `c2eb4f63`): there, an expectation must be derived or generated
+rather than hand-carried; here, a declaration must be EXECUTED before it can be
+believed. A component test that checks encoding and digests will pass forever
+over a route no account can satisfy.
+
+**The design principle the Structured lane extracted, which is the useful
+generalisation:** an account profile is part of a RELEASE ARTIFACT, authored
+before any market it will ever meet exists. So the correct split is not
+created-vs-read — it is **knowable at authoring time, or not**:
+
+- Knowable (a protocol constant, or a function of a release input like K) must
+  be declared EXACTLY. Coordinate 22 is `market_core_codec::STATE_BYTES`;
+  the Claims aggregate is `header + claim_count*8`; the capability root is
+  `header + root_state_bytes`, already an input. Typing these as literals, or
+  leaving them zero, is a promise the release cannot keep.
+- NOT knowable — a width that is a property of the market rather than the
+  release (raw product, portfolio, descriptor, graph, result-domain records) —
+  must be OPAQUE, which is exactly why coordinates 25 and 26 already are. Those
+  are authenticated by record digest instead, which is the stronger check.
+- Builtins (the Rent sysvar, the System program) are trivially not knowable as
+  zero and must be opaque too. The live defect was one asymmetry: index 15 sits
+  in the `executable` set but not the `opaque` set, while all five of its peers
+  (6, 19, 21, 23, 27) are in both.
+
+Stated as the lane put it: *a release is authored before the market it will
+meet — a promise about widths made by something that had not yet seen them.*
+
+**FOURTH INSTANCE, and the purest one — Series' `Creation` compartment.**
+`FundingCompartment` has exactly two `NativeLamportsOnly` members, `Rent` and
+`Creation` (`funding.rs:291-316`). A founding parks both; Core's
+`validate_native_custody` requires the exact declared total present;
+`activate_in_place` releases both and RETURNS
+`ActivationDebitV1 { rent_lamports, creation_lamports }`; `release_in_place`
+then refuses Rent and Creation forever. And `outer.rs:1606` **discarded that
+return value**, pinning the root to `rent.minimum_balance(...)`. So a nonzero
+`Creation` quote was simultaneously unactivatable (the ledger poststate wanted
+the lamports gone while the effect moved only rent) and unreleasable. A
+declared, authenticated, WIRE-VISIBLE compartment with no transport and no
+reader — General pins it to zero explicitly, which is why nothing had noticed.
+Repaired `e75b279c`, with the control that families declaring no creation
+principal keep byte-identical artifacts.
+
+**FIFTH INSTANCE — and it confirms the axis exactly.** The structured
+transition fold (`open_structured_v3.rs:918-921`, surfacing at
+`bundle-builder/registers.rs:566`, which only wraps the error) is `4 + K`
+instructions. Measured: it refuses at op index 4, the first per-row
+instruction, because that instruction is
+`scalar_eq(coefficient[row], DENOMINATOR)` — **every coefficient must EQUAL
+the denominator**. Corpus `COEFFICIENTS = [2, 3, 5]`, `DENOMINATOR = 7`, so
+`2 != 7` and it refuses. The kernel that owns the descriptor enforces only
+`denominator != 0` and not-all-coefficients-zero; there is no relation between
+a coefficient and the denominator anywhere in it. The check admits only a
+degenerate basket where every coordinate has exposure exactly 1.
+
+The axis predicts this precisely: the four instructions that DO pass are the
+structural ones — counts nonzero, asset count equals outcome count — which a
+release genuinely knows at authoring time. The fifth asks a MARKET's arithmetic
+(coefficients and denominator are lowered per market from the composition
+exposure) of an artifact authored before any market exists. Same file as the
+width defect, same absent test: the only other consumer builds the artifact and
+checks its encoding and digest, and contains no `execute_fold_atomic` at all.
+
+A LEAD, explicitly not a claim: three independent fixtures satisfy
+`sum == denominator` where none satisfies `each == denominator`, which is
+suggestive of an intended partition-of-unity authored as a per-row equality.
+But the kernel enforces no such rule either, and the corpus's `[2,3,5]` sums to
+10 rather than 7 — so a corrected sum check would still refuse it, and there is
+a fixture question immediately behind the route-owner question.
+
+**A HEDGE IN YOUR OWN REPORT IS A TASK, NOT A DISCLAIMER.** The Dealer lane
+took back four claims across the night — a CU figure, a refusal code, a
+"necessary and not sufficient", and a cfg-gating inference. It caught three by
+re-measuring something it already believed. The fourth it caught only when
+asked to close a gap it had itself labelled "leading candidate" and moved past.
+Its own words: *that label was the tell; I should have treated my own hedge as
+a task rather than a disclaimer.* When a report says "likely", "candidate" or
+"probably", that is the sentence to go back and settle before anyone builds on
+it — most cheaply by the lane that wrote it, while the evidence is still warm.
+
+**A related test hazard, worth its own name: THE BUILDER AS ITS OWN WITNESS.**
+While mutation-proving that repair, one mutation ("the profile never projects
+`Creation`") stayed GREEN — because the validator rebuilds the profile with the
+same builder it is validating, and the projection helper *emulates* the
+compartment reads instead of running a real `AccountObservationV1`. On chain
+that bundle would read a zero scalar, move only rent, and strand a principal
+nothing could ever release. A test whose fixture and subject share a builder
+proves only that the builder is self-consistent. The fix was to read the
+DECODED operation list instead, which turns the mutation red. This is the same
+family as a vacuous `P -> P` theorem: green, and about nothing.
+
+## 2026-09-01 — DIRECT: the registered family has no route, and the manifest
+## defect is confirmed across two families
+
+- **`hot_v3.rs:5372` refuses every Direct-kind Hot action except
+  `InlineOrdinary`.** RegisterSell, RegisterBuy, the fill, both cancels,
+  expiry, every close, both splits and merges — none has an admitted
+  generic-Hot route at all. Measured `UnsupportedContent` (0x4000) at 323,523
+  CU, 451 CU past the `preflight-children` checkpoint on a profiled build, so
+  the action is a complete admitted preflighted act at the moment its KIND is
+  rejected. Behind a probe returning `Ok(None)` there, the registered Sell
+  **executes at 374,455 CU** with exact root/maker/record poststates and Claims
+  untouched — the first registered Sell ever created on a chain. The probe was
+  NOT committed: it is a refusal relaxation and needs a ruling.
+
+- **SCOPE SHARPENED by the lane that first reported it (it had understated
+  its own finding): the ordinary lifecycle is a THIRD distinct record.** A
+  Direct market founded to trade inline pins the ordinary policy in its root
+  header, so it cannot admit ANY registered action even after the action gate
+  opens. This is not Sell-versus-Buy; it is every-action-versus-every-action.
+  **But it may need no contract change at all.** `StateLifecyclePolicyV5`
+  already selects plans BY ACTION — `action_plan_count(action: u32)` is on its
+  public surface (`lifecycle_v3.rs:778`, verified) and `hot_v3` already carries
+  `selected_action` into lifecycle selection. One Direct policy per market with
+  an action-keyed plan bank would satisfy `validate_selection` for every action
+  under one root, with `derivation_policy` never disagreeing. What decides it
+  is whether the RENT-QUOTE BANK can be safely unioned:
+  `LifecycleCurrentRentQuoteV5` carries `exact_data_len` and a scalar
+  destination, has no action field, and is addressed by ordinal. **That is step
+  one and nothing else should start before it**, because it decides whether
+  this is a codec change or a contract ruling.
+
+- **The manifest/derivation-policy defect is NOT Dealer-specific — CONFIRMED
+  in Direct, independently.** A capability root persists ONE manifest-entry
+  index, and Buy's `LifecyclePolicyV5` carries two more rent quotes than
+  Sell's (the Custody replay and vault), so different width -> different digest
+  -> different `derivation_policy`. **One Direct root cannot admit both
+  creation actions.** Convicted by controlled experiment: mint the manifest
+  entry from the Sell descriptor and the Sell executes while Buy refuses
+  `Content` at 133,173 CU; rebuild from the Buy descriptor and the refusal
+  moves to the Sell at 125,433 CU, same band, nothing else changed. This is the
+  Dealer lane's finding reproduced in a second family by a different route, so
+  the ruling above is protocol-wide, not a Dealer quirk. Padding Sell's
+  lifecycle to match Buy's would make it quote a vault it never opens.
+
+- **`reserved_claims` is a CAP, not a reservation — and must never be shown as
+  solvency.** A registered Sell escrows NOTHING: `register_intent_v2` writes
+  `reserved_claims = maximum_fill` into the record, the Sell `EffectProgramV4`
+  has zero routes, and the Sell profile's 13 coordinates include neither a
+  Claims Position nor the aggregate. A registered Buy genuinely escrows (three
+  Custody routes move `reserved_collateral` into a record-keyed
+  `TradingPrincipal` vault and drain the delegate allowance to zero). So: one
+  maker may register N Sell records each reserving full supply; a resting Sell
+  can become unfillable for free at the taker's CU expense; and
+  **`sum(reserved_claims)` over live records is not bounded by supply and is
+  not a conservation quantity.** The browser and the simulator must never
+  display it as one. Real conservation is enforced at fill, where
+  `claim_custody_debit: fill` moves actual claims and rolls the whole
+  transaction back if they are gone.
+
+## 2026-09-01 — GENERAL: nothing writes the root register, and 14 of 15
+## actions cannot pass Trading's geometry
+
+- **Nothing writes `identity::GENERAL_ROOT` (register 27).** Every General
+  lifecycle state recipe in `state_seeds_v3.rs` — Batch, Order, Selection,
+  Settlement, Candidate, Verifier, VerifiedCandidate, Terminal — seeds on
+  `CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3)`, and nothing populates
+  it: OpenBatch's twenty AccountProfile operations are fully enumerated, and
+  the trusted environments supply only `CURRENT_SLOT`, `TRADING_PROGRAM` and
+  `RESULT_OWNER`. Measured on chain: **32 zero bytes.**
+  `general_hot_v3.rs:2238-2243` compensates HOST-SIDE, so the artifact derives
+  a rootless PDA while `GeneralStateAddressSeedsV3::batch` refuses a zero root
+  outright — the seed helper and the lifecycle policy disagree about whether a
+  rootless General state exists.
+  **Why it hid, and this is its own hazard:** the accelerator's admission joins
+  `STATE_BUMP` to `PRIMARY_CANONICAL_BUMP` and never compares the two
+  ADDRESSES. While the bumps differed it refused (`InvalidCoordinate`, 255 vs
+  254); once an unrelated fixture fix made the bumps collide, the guard went
+  SILENT while the addresses stayed different. A guard on a derived byte is not
+  a guard on the thing derived.
+
+- **General's artifacts cannot satisfy Trading's `require_geometry` — 14 of
+  General's 15 actions cannot execute through Trading Hot at all.**
+  `artifacts_v3.rs:620,634` DELIBERATELY requires
+  `account.item_account_stride() == 1` and `effect.item_account_stride() == 0`,
+  because under Profile13 the item-rule table is the dynamic fixed-span
+  template bank rather than a Product-N account stride. `hot_v3.rs:12237`
+  requires them EQUAL, with no dynamic-span case — though the same function
+  already special-cases dynamic spans when counting logical accounts. Both
+  cannot hold. Only `CloseCandidate` passes; Direct passes only because both
+  its strides are zero. Measured `Content` (0x4003) at 370,977 CU, localized
+  between checkpoints `runtime-observations` and `p5-geometry-rent`; the frame
+  was ruled out first (host and chain agree on 12 logical accounts, 4 scratch
+  pages, 4 chunk authorities, a 58-account v0 route).
+  The lane landed a test RED ON PURPOSE naming it
+  (`general_dynamic_spans_v1.rs`), which converts an undifferentiated on-chain
+  refusal into a one-second host assertion. That is the right shape for a wall
+  someone else must resolve.
+
+**THE PATTERN ACROSS THREE FAMILIES.** Direct: every Hot action except
+`InlineOrdinary` has no admitted route (`hot_v3.rs:5372`). General: 14 of 15
+actions cannot satisfy the geometry check. Dealer: the manifest can describe
+only one selector. Each family authored a full action set; the generic Hot
+route admits a small fraction of it. These were found independently, by three
+lanes, in one night — so the question for ember is not three bugs but whether
+the generic route's admission surface was ever intended to carry what the
+families declare, and what the plan is for closing that distance.
+
 ## 2026-09-01 — open seams from the completion swarm
 
 Two jointly-unsatisfiable constraint pairs were convicted by measurement
@@ -1562,6 +1840,49 @@ rather than parked. Recorded here so they are not lost if a lane dies.
   of describing a multi-selector set), or stop pinning `derivation_policy` to
   the per-action lifecycle digest? A persisted-layout change is a much larger
   act than a validation change; that asymmetry is the crux.
+
+  **UPDATE — measured on-chain, and the answer got harder.** Per-selector
+  manifest entries were shown UNREPRESENTABLE (`entry_index` is a PDA seed of
+  a write-once root header, and `validate_manifest` needs entries strictly
+  ascending by `kind_id` while all nine Dealer selectors share one kind), and
+  so was a shared lifecycle body (coordinate 6 is the LP Position in the LP
+  frame but a custody-transfer account in the equity frame — a shared body
+  would name the WRONG ACCOUNT). Selector 9 is unexecutable under R2 for ANY
+  manifest, two-branch: carry the per-root constant and R2 refuses at
+  `hot_v3:3370`; carry anything else and R3 refuses at `:3318`.
+  An isolated spike convicted R2 on-chain — with R3 satisfied for every
+  selector, R2 alone stops the first Hot execution with `UnsupportedContent`
+  (0x4000).
+
+  **CORRECTION, and it simplifies the picture: an earlier entry here claimed
+  dropping R2 was "necessary and not sufficient" because of a fourth binding
+  in the activation cache. THAT WAS WRONG and is withdrawn.** There is no
+  fourth binding. The `0xd001` came from R2's OWN second site
+  (`hot_v3.rs:1235`), reached through the accelerator — the spike had dropped
+  R2 only in the Trading tree, never in the tree the accelerator builds from.
+  With both corrected the Dealer Add clears the entire seam: 166,768 ->
+  **582,773 CU**, past `artifacts-strategy-effect`, LP Open executing, the
+  substituted-identity hostile still refusing `Content`, and all ten rollback
+  keys byte-unchanged. **R2's three sites are the whole runtime story; they
+  merely span two ELFs.** (`capability-activation-codec:551` is a real site but
+  is a self-consistency check inside the release compiler — the whole crate is
+  `cfg(not(target_os = "solana"))`, so the SBF artifact cannot reach it.)
+
+  **What actually makes this a release event** is not the site count. The field
+  sits at offset 144 of the fixed 600-byte V4 record. It is NOT a direct PDA
+  seed — but the capability-root seed tuple is
+  `[domain, market, generation, manifest, entry_index, kind, capability_release, config]`
+  and seeds 4 and 7 are digests that CONTAIN the field. So changing its value
+  transitively **moves every capability-root address**: existing on-chain
+  markets cannot be migrated in place, they must be re-founded. Persisted
+  carriers beyond the descriptor: the Market manifest account (offset 160),
+  selected-release publication ids, the Series-Shadow bundle manifest, and —
+  newly found — `HotExecutionAckV3.execution_digest`
+  (`direct_finalization_v3.rs:438`), which is UNGATED and lives in the Trading
+  ELF. Grouped sweep: ~84 host-side producer sites, ~43 runtime validation,
+  ~60 persisted/digest-bearing, ~205 tests/Lean/TS/docs.
+  EMBER RULES THE SCOPE; no lane may start it. Spike patch preserved, nothing
+  landed in the shared tree.
 
 ## 2026-09-01
 

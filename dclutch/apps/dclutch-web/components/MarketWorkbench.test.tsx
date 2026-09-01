@@ -4,17 +4,23 @@ import { describe, expect, it } from 'vitest';
 import MarketWorkbench, { workbenchRefusalFieldV1 } from './MarketWorkbench';
 
 describe('market lifecycle workbench', () => {
-  it('renders creation as unavailable until exact chain authority is selected', () => {
+  it('says what each authoring act needs before it can begin, and never greys a control', () => {
     const html = renderToStaticMarkup(<MarketWorkbench />);
     expect(html).toContain('Lifecycle readiness');
     expect(html).toContain('read-only map of where a market has got to');
     expect(html).toContain('does not create, trade, resolve, or redeem');
     expect(html).toContain('Author &amp; fund');
-    expect(html).toContain('Compile an admitted degree-2/3 Product graph');
-    expect(html).toContain('Found a current Market and first participant');
+    expect(html).toContain('Compile a Product record and its admission request');
+    expect(html).toContain('Found a Market and admit its first participant');
     expect(html).toContain('Admit another participant');
-    expect(html).toContain('Reacquire the selected role programs');
-    expect(html).toContain('Transaction unavailable');
+    expect(html).toContain('Read the selected programs, and any Market you name, at one finalized floor first');
+    expect(html).toContain('Where it runs');
+    expect(html).toContain('What it promises');
+    // No disabled control anywhere: every card that cannot be opened links to
+    // the page that answers why, which is always reachable.
+    expect(html).not.toContain('disabled');
+    expect(html.toLowerCase()).not.toContain('transaction unavailable');
+    expect(html.toLowerCase()).not.toContain('greyed');
     expect(html).toContain('Devnet supplies the six program addresses');
     expect(html).toContain('Program overrides · 6 filled from Devnet');
     expect(html).toContain('Filled from the Devnet deployment');
@@ -36,10 +42,13 @@ describe('market lifecycle workbench', () => {
     const html = renderToStaticMarkup(<MarketWorkbench initialStage="trade" />);
     expect(html).toContain('Trade &amp; provide liquidity');
     expect(html).toContain('Author a portable sell offer');
-    expect(html).toContain('Take and execute a Direct offer');
-    expect(html).toContain('Wallet signs one detached message');
-    expect(html).toContain('Transaction unavailable');
-    expect(html).toContain('Inventory-bounded immediate trade');
+    expect(html).toContain('Take and execute a signed offer');
+    expect(html).toContain('This browser \u00b7 one detached message signature');
+    expect(html).toContain('Take an inventory-bounded immediate trade');
+    // An act with no venue names its wall here too, in the same words and
+    // with the same citation the census uses.
+    expect(html).toContain('Known wall');
+    expect(html).toContain('crates/dclutch-dealer-scenario-kernel');
     expect(html).not.toContain('25,000');
     expect(html).not.toContain('Awaiting local chain');
   });

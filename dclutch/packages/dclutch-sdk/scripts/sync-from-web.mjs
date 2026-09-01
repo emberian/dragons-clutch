@@ -40,6 +40,11 @@ const WEB_ONLY = new Set([
 
 /** App compatibility shims that already re-export their SDK semantic owner. */
 const SDK_OWNED_REEXPORTS = new Set([
+  // The capability catalogue and every rule that turns evidence into a status
+  // are SDK semantics; the browser supplies only its own routes, through
+  // `apps/dclutch-web/lib/capabilitySurface.ts`. Absorbing the web file would
+  // overwrite the owner with its own two-line shim.
+  'lib/capabilityModel.ts',
   'lib/founding/principalCapacity.ts',
   'lib/marketDiscovery.ts',
   'lib/rationalTerminalChainV4.ts',

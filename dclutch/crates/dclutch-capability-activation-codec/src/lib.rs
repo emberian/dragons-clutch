@@ -86,7 +86,7 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 use dclutch_account_profile_contract::{
-    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountProfileV1,
+    ACCOUNT_PROFILE_SCHEMA_RELEASE_ID_V1, AccountProfileV1, OperationKindV1,
     encode_v1::{
         AccountAliasInputV1, AccountEffectPermissionsV1, AccountOperationInputV1,
         AccountPrivilegesV1, AccountRuleInputV1, RegisterGeometryV1, account_profile_v1_bytes,
@@ -153,6 +153,19 @@ pub const ACTIVATION_RENT_QUOTE_SCALAR_V2: u16 = ACTIVATION_FIRST_FAMILY_SCALAR_
 
 /// First scalar holding a constant root-tail word loaded by the transition.
 pub const ACTIVATION_FIRST_CONSTANT_SCALAR_V1: u16 = ACTIVATION_RENT_QUOTE_SCALAR_V1 + 1;
+
+/// Scalar holding the Creation compartment projected out of the funding ledger.
+///
+/// Allocated only by a family that declares
+/// [`ActivationBundleInputV1::delivers_creation_principal`]; a family that does
+/// not keeps the exact scalar bank, artifact bytes and digests it had.
+pub const ACTIVATION_CREATION_QUOTE_SCALAR_V1: u16 = ACTIVATION_RENT_QUOTE_SCALAR_V1 + 1;
+
+/// Scalar holding the exact total one activation transfers into its root.
+pub const ACTIVATION_ROOT_TRANSFER_SCALAR_V1: u16 = ACTIVATION_CREATION_QUOTE_SCALAR_V1 + 1;
+
+const ACTIVATION_FIRST_CONSTANT_SCALAR_WITH_CREATION_V1: u16 =
+    ACTIVATION_ROOT_TRANSFER_SCALAR_V1 + 1;
 
 const ACTIVATION_ROOT_BUMP_MULTIPLIER_SCALAR_V2: u16 = ACTIVATION_RENT_QUOTE_SCALAR_V2 + 1;
 const ACTIVATION_ROOT_BUMP_BASE_SCALAR_V2: u16 = ACTIVATION_ROOT_BUMP_MULTIPLIER_SCALAR_V2 + 1;
@@ -274,6 +287,19 @@ pub struct ActivationBundleInputV1<'a> {
     pub seam_fields: &'a [ActivationTailFieldV1],
     /// Compartment rows the founding provisions in the selected funding ledger.
     pub funding_ledger_slot_count: u16,
+    /// Whether this activation delivers the manifest-declared `Creation`
+    /// compartment into the root alongside its exact Rent reserve.
+    ///
+    /// `Rent` and `Creation` are the funding model's only two
+    /// `NativeLamportsOnly` compartments, and
+    /// `FundingLedgerV2::activate_in_place` already releases BOTH and reports
+    /// them as `ActivationDebitV1`. A family that leaves this `false` keeps the
+    /// exact artifacts, bytes and digests it has today; a family that sets it
+    /// true is stating that its root's opening balance is
+    /// `rent_lamports + creation_lamports`, which is the only family-varying
+    /// lamport quantity the seam admits and which the manifest — not any family
+    /// config record — authenticates.
+    pub delivers_creation_principal: bool,
 }
 
 /// Three finalized activation records and their exact identities.
@@ -330,8 +356,12 @@ pub enum ActivationBundleErrorV1 {
     /// reaches this would have created an undecodable root.
     ProjectedTailMismatch,
     /// The real effect kernel did not leave the vacant root holding exactly the
-    /// ledger's parked rent quote.
+    /// ledger's parked rent quote plus any declared creation principal.
     ProjectedRentMismatch,
+    /// A family asked for both the append-only root-bump bank and a delivered
+    /// creation principal. No family needs both, and composing the two scalar
+    /// layouts blind would silently move a constant word; this refuses instead.
+    CreationPrincipalWithRootBump,
 }
 
 /// Result alias for family-neutral activation construction.
@@ -352,6 +382,23 @@ pub struct ActivationSeamImageV1<'a> {
     pub identities: &'a [[u8; 32]],
     /// Lamports the founding parked in the ledger's Rent compartment.
     pub rent_quote: u64,
+}
+
+/// Seam image for an activation that also delivers a creation principal.
+///
+/// Append-only beside [`ActivationSeamImageV1`]: `rent_quote` keeps its exact
+/// meaning and `creation_quote` is the manifest's `Creation` compartment, which
+/// `FundingLedgerV2::activate_in_place` releases in the same statement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActivationSeamImageV3<'a> {
+    /// Seam-seeded scalar bank, exactly `ACTIVATION_COMMON_SCALARS_V2` wide.
+    pub scalars: &'a [u64],
+    /// Unchanged common identity bank.
+    pub identities: &'a [[u8; 32]],
+    /// Lamports the founding parked in the ledger's Rent compartment.
+    pub rent_quote: u64,
+    /// Lamports the founding parked in the ledger's Creation compartment.
+    pub creation_quote: u64,
 }
 
 /// Append-only seam image for roots which persist their canonical PDA bump.
@@ -471,6 +518,7 @@ pub fn validate_activation_bundle_v1(
     {
         return Err(ActivationBundleErrorV1::AccountProfile);
     }
+    require_declared_creation_projection(profile, &plan)?;
     if bundle.transition != build_transition(&plan)? {
         return Err(ActivationBundleErrorV1::Transition);
     }
@@ -532,6 +580,31 @@ pub fn project_activation_root_tail_v1(
         seam.scalars,
         seam.identities,
         seam.rent_quote,
+        0,
+        ACTIVATION_RENT_QUOTE_SCALAR_V1,
+    )
+}
+
+/// Run the activation seam over a bundle that also delivers a creation principal.
+///
+/// Append-only beside [`project_activation_root_tail_v1`]: the returned lamports
+/// are `[root, ledger]`, and a correct bundle leaves the root holding
+/// `rent_quote + creation_quote` with the ledger row at zero.
+pub fn project_activation_root_tail_v3(
+    bundle: &ActivationBundleV1,
+    seam: ActivationSeamImageV3<'_>,
+) -> ActivationResultV1<(Vec<u8>, [u64; 2])> {
+    if seam.scalars.len() != ACTIVATION_COMMON_SCALARS_V2
+        || seam.identities.len() != ACTIVATION_COMMON_IDENTITIES_V2
+    {
+        return Err(ActivationBundleErrorV1::RegisterGeometry);
+    }
+    project_activation_root_tail(
+        bundle,
+        seam.scalars,
+        seam.identities,
+        seam.rent_quote,
+        seam.creation_quote,
         ACTIVATION_RENT_QUOTE_SCALAR_V1,
     )
 }
@@ -557,6 +630,7 @@ pub fn project_activation_root_tail_v2(
         seam.scalars,
         seam.identities,
         seam.rent_quote,
+        0,
         ACTIVATION_RENT_QUOTE_SCALAR_V2,
     )
 }
@@ -566,6 +640,7 @@ fn project_activation_root_tail(
     seam_scalars: &[u64],
     seam_identities: &[[u8; 32]],
     rent_quote: u64,
+    creation_quote: u64,
     rent_quote_scalar: u16,
 ) -> ActivationResultV1<(Vec<u8>, [u64; 2])> {
     let effect =
@@ -596,6 +671,17 @@ fn project_activation_root_tail(
     // faithful `AccountObservationV1` image would restate the ledger layout this
     // module deliberately never restates.
     set_scalar(&mut scalars, rent_quote_scalar, rent_quote)?;
+    // The second projected compartment, when the family declared one. For a
+    // bundle that declared none this coordinate is its first CONSTANT scalar,
+    // which the transition's own `load_const` overwrites before any write reads
+    // it -- so a caller passing a stray creation quote cannot alter the tail.
+    if creation_quote != 0 {
+        set_scalar(
+            &mut scalars,
+            ACTIVATION_CREATION_QUOTE_SCALAR_V1,
+            creation_quote,
+        )?;
+    }
     run_transition(transition, &mut scalars, &mut identities)?;
     let ledger_bytes = ledger_data_length(&profile)?;
     let request_bytes = usize::from(effect.request_bytes());
@@ -605,7 +691,9 @@ fn project_activation_root_tail(
             data_len: 0,
         },
         AccountInput {
-            lamports: rent_quote,
+            lamports: rent_quote
+                .checked_add(creation_quote)
+                .ok_or(ActivationBundleErrorV1::Geometry)?,
             data_len: ledger_bytes,
         },
     ];
@@ -689,6 +777,12 @@ struct CompositionPlanV1 {
     geometry: GeometryV1,
     common_scalars: usize,
     rent_quote_scalar: u16,
+    /// Present exactly when the family declared a delivered creation principal.
+    creation_quote_scalar: Option<u16>,
+    /// Scalar the single transfer instruction reads. Equal to
+    /// `rent_quote_scalar` unless a creation principal is delivered, in which
+    /// case the transition sums the two projected compartments into it.
+    root_transfer_scalar: u16,
 }
 
 impl CompositionPlanV1 {
@@ -718,6 +812,9 @@ impl CompositionPlanV1 {
             return Err(ActivationBundleErrorV1::TailFieldGeometry);
         }
         let uses_root_bump = root_bump_fields == 1;
+        if uses_root_bump && input.delivers_creation_principal {
+            return Err(ActivationBundleErrorV1::CreationPrincipalWithRootBump);
+        }
         let common_scalars = if uses_root_bump {
             ACTIVATION_COMMON_SCALARS_V3
         } else {
@@ -728,8 +825,18 @@ impl CompositionPlanV1 {
         } else {
             ACTIVATION_RENT_QUOTE_SCALAR_V1
         };
+        let creation_quote_scalar = input
+            .delivers_creation_principal
+            .then_some(ACTIVATION_CREATION_QUOTE_SCALAR_V1);
+        let root_transfer_scalar = if input.delivers_creation_principal {
+            ACTIVATION_ROOT_TRANSFER_SCALAR_V1
+        } else {
+            rent_quote_scalar
+        };
         let first_constant_scalar = if uses_root_bump {
             ACTIVATION_FIRST_CONSTANT_SCALAR_V2
+        } else if input.delivers_creation_principal {
+            ACTIVATION_FIRST_CONSTANT_SCALAR_WITH_CREATION_V1
         } else {
             ACTIVATION_FIRST_CONSTANT_SCALAR_V1
         };
@@ -861,8 +968,57 @@ impl CompositionPlanV1 {
             },
             common_scalars,
             rent_quote_scalar,
+            creation_quote_scalar,
+            root_transfer_scalar,
         })
     }
+}
+
+/// Require the profile to declare the Creation projection exactly when the
+/// family declared a delivered principal — read off the DECODED artifact.
+///
+/// The byte-equality check above rebuilds the profile with
+/// [`build_account_profile`], so a builder that stopped emitting this operation
+/// would agree with itself and the emulated projection would still succeed:
+/// `project_activation_root_tail` seeds the compartment scalars directly rather
+/// than re-running an `AccountObservationV1`. On chain that bundle would read a
+/// zero scalar, transfer the rent alone, and strand a principal
+/// `release_in_place` can never release. This reads the operation list the outer
+/// will actually interpret, so the builder cannot be its own witness.
+fn require_declared_creation_projection(
+    profile: AccountProfileV1<'_>,
+    plan: &CompositionPlanV1,
+) -> ActivationResultV1<()> {
+    let creation_offset = u32::try_from(
+        funding_ledger_remaining_offset_v2(0, FundingCompartment::Creation)
+            .map_err(|_| ActivationBundleErrorV1::Geometry)?,
+    )
+    .map_err(|_| ActivationBundleErrorV1::Geometry)?;
+    let mut declared = None;
+    let mut index = 0_u16;
+    while index < profile.operation_count() {
+        let operation = profile
+            .operation(index)
+            .map_err(|_| ActivationBundleErrorV1::AccountProfile)?;
+        if operation.kind() == OperationKindV1::ProjectDataU64
+            && operation.account() == ACTIVATION_FIRST_FUNDING_ACCOUNT_V2
+            && operation.data_offset() == creation_offset
+        {
+            // Two projections of the same compartment into different scalars
+            // would make the transferred total depend on operation order.
+            if declared.is_some() {
+                return Err(ActivationBundleErrorV1::AccountProfile);
+            }
+            declared = Some(operation.register());
+        }
+        index = index
+            .checked_add(1)
+            .ok_or(ActivationBundleErrorV1::Geometry)?;
+    }
+    if declared != plan.creation_quote_scalar {
+        return Err(ActivationBundleErrorV1::AccountProfile);
+    }
+    Ok(())
 }
 
 fn build_account_profile(
@@ -917,6 +1073,22 @@ fn build_account_profile(
             destination: plan.rent_quote_scalar,
         },
     ];
+    // The declared creation principal is projected from the SAME ledger row, one
+    // compartment along, so the two halves of `ActivationDebitV1` reach the
+    // artifacts from the account the outer already authenticated. A family that
+    // declares none appends nothing and keeps its exact profile bytes.
+    let mut operations = Vec::from(operations);
+    if let Some(destination) = plan.creation_quote_scalar {
+        operations.push(AccountOperationInputV1::ProjectDataU64 {
+            account: ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
+            data_offset: u32::try_from(
+                funding_ledger_remaining_offset_v2(0, FundingCompartment::Creation)
+                    .map_err(|_| ActivationBundleErrorV1::Geometry)?,
+            )
+            .map_err(|_| ActivationBundleErrorV1::Geometry)?,
+            destination,
+        });
+    }
     let width = account_profile_v1_bytes(rules.len(), operations.len())
         .map_err(|_| ActivationBundleErrorV1::AccountProfile)?;
     let mut scratch = vec![0_u8; width];
@@ -940,6 +1112,17 @@ fn build_transition(plan: &CompositionPlanV1) -> ActivationResultV1<Vec<u8>> {
     // register seeds. They are read out of the family's own canonical initial
     // state, so a layout change moves this artifact with it or refuses.
     let mut instructions = Vec::new();
+    // The one arithmetic statement a delivered creation principal needs: the
+    // total the transfer moves is the checked sum of the two native compartments
+    // the profile projected, so an overflowing manifest quote refuses inside the
+    // transition instead of wrapping into a short root.
+    if let Some(creation_scalar) = plan.creation_quote_scalar {
+        instructions.push(TransitionInstructionV2::checked_add_into(
+            plan.rent_quote_scalar,
+            creation_scalar,
+            plan.root_transfer_scalar,
+        ));
+    }
     for write in &plan.writes {
         match *write {
             WriteV1::Constant { scalar, value, .. } => {
@@ -1009,12 +1192,14 @@ fn build_effect(
             .checked_add(1)
             .ok_or(ActivationBundleErrorV1::Geometry)?,
     );
-    // Move the ledger's parked rent quote into the vacant root; the outer
-    // requires the root to end at exactly its rent-exempt minimum.
+    // Move the ledger's parked activation quote into the vacant root. Without a
+    // declared creation principal that is the rent quote alone and the outer
+    // requires the root to end at exactly its rent-exempt minimum; with one it
+    // is the checked sum, and the outer requires rent plus that principal.
     instructions.push(EffectInstructionV2::transfer_lamports(
         ACTIVATION_FIRST_FUNDING_ACCOUNT_V2,
         ACTIVATION_ROOT_ACCOUNT_V2,
-        plan.rent_quote_scalar,
+        plan.root_transfer_scalar,
     ));
     // Compose the initial root tail into the request buffer, ascending, so the
     // instruction list reads as the tail itself.
@@ -1281,6 +1466,17 @@ mod tests {
             constant_root_tail: tail,
             seam_fields: fields,
             funding_ledger_slot_count: 1,
+            delivers_creation_principal: false,
+        }
+    }
+
+    fn input_with_creation<'a>(
+        tail: &'a [u8],
+        fields: &'a [ActivationTailFieldV1],
+    ) -> ActivationBundleInputV1<'a> {
+        ActivationBundleInputV1 {
+            delivers_creation_principal: true,
+            ..input(tail, fields)
         }
     }
 
@@ -1563,6 +1759,75 @@ mod tests {
             *record.last_mut().expect("record byte") ^= 1;
             assert!(validate_activation_bundle_v1(&hostile, input(&tail, &fields)).is_err());
         }
+    }
+
+    #[test]
+    fn a_declared_creation_principal_is_projected_summed_and_delivered_whole() {
+        const RENT: u64 = 2_672_640;
+        const CREATION: u64 = 5_000;
+        let tail = mixed_tail();
+        let plain = build_activation_bundle_v1(input(&tail, &[])).expect("plain bundle");
+        let bundle =
+            build_activation_bundle_v1(input_with_creation(&tail, &[])).expect("creation bundle");
+
+        // Declaring the principal changes the artifacts; not declaring it must
+        // leave every family that does not byte-identical.
+        assert_ne!(plain.account_profile, bundle.account_profile);
+        assert_ne!(plain.transition, bundle.transition);
+        assert_ne!(plain.effect, bundle.effect);
+
+        // The root opens holding BOTH native compartments and the ledger empties.
+        let (composed, lamports) = project_activation_root_tail_v3(
+            &bundle,
+            ActivationSeamImageV3 {
+                scalars: &[0_u64; ACTIVATION_COMMON_SCALARS_V2],
+                identities: &[[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V2],
+                rent_quote: RENT,
+                creation_quote: CREATION,
+            },
+        )
+        .expect("projection");
+        assert_eq!(lamports, [RENT + CREATION, 0]);
+        // The tail is unchanged by the funding: a creation principal funds the
+        // root, it does not compose a byte of family state.
+        let (plain_tail, plain_lamports) = project_activation_root_tail_v1(
+            &plain,
+            ActivationSeamImageV1 {
+                scalars: &[0_u64; ACTIVATION_COMMON_SCALARS_V2],
+                identities: &[[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V2],
+                rent_quote: RENT,
+            },
+        )
+        .expect("plain projection");
+        assert_eq!(composed, plain_tail);
+        assert_eq!(plain_lamports, [RENT, 0]);
+    }
+
+    #[test]
+    fn a_creation_principal_cannot_be_combined_with_the_root_bump_bank() {
+        let mut tail = [0_u8; 56];
+        tail.get_mut(0..8)
+            .expect("magic")
+            .copy_from_slice(&0x4443_4c54_4d49_5831_u64.to_le_bytes());
+        assert_eq!(
+            build_activation_bundle_v1(input_with_creation(
+                &tail,
+                &[ActivationTailFieldV1::RootBumpWord { offset: 8 }],
+            )),
+            Err(ActivationBundleErrorV1::CreationPrincipalWithRootBump)
+        );
+    }
+
+    #[test]
+    fn a_bundle_does_not_rejoin_across_the_creation_declaration() {
+        let tail = mixed_tail();
+        let plain = build_activation_bundle_v1(input(&tail, &[])).expect("plain bundle");
+        let bundle =
+            build_activation_bundle_v1(input_with_creation(&tail, &[])).expect("creation bundle");
+        // Each rejoins only to the declaration it was built under, so a release
+        // cannot publish a rent-only triple against a creation-funded manifest.
+        assert!(validate_activation_bundle_v1(&plain, input_with_creation(&tail, &[])).is_err());
+        assert!(validate_activation_bundle_v1(&bundle, input(&tail, &[])).is_err());
     }
 
     #[test]

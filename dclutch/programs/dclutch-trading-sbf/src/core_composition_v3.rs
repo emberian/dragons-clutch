@@ -15,13 +15,14 @@ use dclutch_effect_kernel::{
     v2::FixedRole,
     v3::{ProgramV3 as EffectProgramV3, ResolvedInvocationV3, RouteKindV3},
 };
-#[cfg(test)]
-use dclutch_market_core_codec::SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1;
 use dclutch_market_core_codec::{
     Identity, SERIES_CORE_REQUEST_MAGIC_V1, SERIES_PERMIT_EXPIRY_REQUEST_MAGIC_V1,
-    SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_MAGIC_V1, SeriesCoreAckV1, SeriesCoreActionV1,
     SeriesCoreRequestV1, SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
+};
+#[cfg(test)]
+use dclutch_market_core_codec::{
+    SERIES_PERMIT_EXPIRY_REQUEST_BYTES_V1, SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1,
 };
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use dclutch_series_v3_kernel::request::{SeriesActionRequestV3, SeriesActionV3};
@@ -48,16 +49,6 @@ const CORE_PRECOMMIT_EXPIRY_DIGEST_DOMAIN_V1: &[u8] =
 // optional funded-crank successor is not part of the selected Series V4 route.
 const SERIES_PERMIT_EXPIRY_ACCOUNT_COUNT_V1: u16 = 25;
 const SERIES_PERMIT_EXPIRY_PRECOMMIT_ACCOUNT_COUNT_V1: u16 = 26;
-/// Encode the root-independent atomic Series permit-expiry transport.
-#[must_use]
-pub(crate) fn encode_series_unallocated_permit_expiry_request_v1(
-    expected_series_revision: u64,
-    expected_ticket_revision: u64,
-) -> [u8; SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1] {
-    SeriesUnallocatedPermitExpiryRequestV1::new(expected_series_revision, expected_ticket_revision)
-        .encode()
-}
-
 /// Recognize the one Core invocation which intentionally observes the two
 /// Trading replay prestates before Trading commits their Expire candidates.
 ///

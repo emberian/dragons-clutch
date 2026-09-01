@@ -14,18 +14,19 @@ describe('operator surface presentation', () => {
     expect(html).toContain('supplies no Market');
     expect(html).toContain('No chain state has been read');
     expect(html).toContain('each route still authenticates its own release');
-    expect(html).toContain('Constructor readiness map');
-    expect(html).toContain('Found a current Market and first participant');
+    expect(html).toContain('The whole census, including what has no venue');
+    expect(html).toContain('Found a Market and admit its first participant');
     expect(html).toContain('Author a portable sell offer');
-    expect(html).toContain('Export an authenticated Direct route');
-    expect(html).toContain('Take and execute a Direct offer');
-    expect(html).toContain('Wallet signs one detached message');
-    expect(html).toContain('portable signed artifact');
+    expect(html).toContain('Export a portable Direct route');
+    expect(html).toContain('Take and execute a signed offer');
+    expect(html).toContain('This browser \u00b7 one detached message signature');
+    expect(html).toContain('This browser \u00b7 one wallet signature, sent from here');
+    expect(html).toContain('This browser \u00b7 one wallet signature, exported as a file');
     expect(html).toContain('Reacquire one Market above to open its exact participant flow');
     expect(html).toContain('Reacquire the multiprogram deployment');
-    expect(html).toContain('Create registered order');
-    expect(html).toContain('Initialize / collect / materialize / distribute');
-    expect(html).toContain('Inventory-bounded immediate trade');
+    expect(html).toContain('Create a registered resting order');
+    expect(html).toContain('Check a settlement plan and export its exact packet');
+    expect(html).toContain('Take an inventory-bounded immediate trade');
     expect(html).toContain('Redeem a terminal Claims Position');
     expect(html).toContain('Inspect, reacquire, then export');
     expect(html).toContain('Export the portable Direct route');
@@ -45,12 +46,34 @@ describe('operator surface presentation', () => {
     expect(html).toContain('data-slot="button"');
     expect(html.indexOf('Inspect unsigned packet')).toBeLessThan(html.indexOf('Reacquire packet dependencies'));
     expect(html.indexOf('Reacquire packet dependencies')).toBeLessThan(html.indexOf('Download exact unsigned bytes'));
-    expect(html.indexOf('Export the portable Direct route')).toBeLessThan(html.indexOf('Constructor readiness map'));
+    expect(html.indexOf('Export the portable Direct route')).toBeLessThan(html.indexOf('The whole census, including what has no venue'));
     expect(html).not.toContain('External identity boundary');
     expect(html).not.toContain('Optional. This surface never signs or submits.');
     expect(html).toContain('No chain state has been read.');
     expect(html).not.toContain('Illustrative');
     expect(html).not.toContain('mock');
+  });
+
+  /**
+   * The census renders what the code can do, and says so about what it cannot.
+   *
+   * These are the two failures this surface has actually had. It used to print
+   * a hand-typed implementation word beside every act -- so it could say
+   * `rust unsigned` above a page that signs -- and it used to answer an act it
+   * could not open with a disabled button, which says no and cannot say why.
+   */
+  it('names each act by where it runs, and names a wall where it runs nowhere', () => {
+    const html = renderToStaticMarkup(<OperatorSurface />);
+    expect(html).toContain('nothing here is a status anyone typed');
+    expect(html).toContain('acts this browser builds');
+    expect(html).toContain('acts with no venue and a named wall');
+    expect(html).toContain('Known wall');
+    expect(html).toContain('crates/dclutch-dealer-scenario-kernel');
+    expect(html).toContain('WAVE.md');
+    // The vocabulary of a roadmap, in every spelling this surface has used.
+    for (const word of ['awaiting production', 'coming soon', 'unavailable', 'greyed-out', 'rust unsigned']) {
+      expect(html.toLowerCase()).not.toContain(word);
+    }
   });
 
   it('closes packet export when the endpoint, artifact, or reacquisition state changes', () => {

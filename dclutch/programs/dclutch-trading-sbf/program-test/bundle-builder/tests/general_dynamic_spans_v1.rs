@@ -15,17 +15,12 @@
 
 use dclutch_account_profile_contract::v2::AccountProfileV2;
 use dclutch_chain_bundle_builder::{
-    BuilderError, WaistFactsV1, profile_ops,
+    BuilderError, WaistFactsV1,
+    general::{GeneralOpenBatchRequestInputV1, derive_general_open_batch_request_v1},
+    profile_ops,
     registers::{SpanWidthInputV1, derive_dynamic_span_widths},
 };
-use dclutch_effect_kernel::{
-    v3::{ProgramV3 as EffectProgramV3, SCHEMA_RELEASE_ID as EFFECT_SCHEMA_ID_V3},
-    v4::{
-        BorrowedRangePolicyV4, HEADER_BYTES_V4 as EFFECT_V4_HEADER_BYTES,
-        ProgramV4 as EffectProgramV4, SCHEMA_RELEASE_ID_V4 as EFFECT_SCHEMA_ID_V4,
-        encode_program_v4_atomic,
-    },
-};
+use dclutch_effect_kernel::v4::ProgramV4 as EffectProgramV4;
 use dclutch_execution_strategy_contract::shadow_v3::{
     SHADOW_ACK_SCHEMA_ID_V3, SHADOW_REQUEST_SCHEMA_ID_V3,
 };
@@ -40,17 +35,20 @@ use dclutch_general_adapter_contract::{
         general_account_profile_bytes_v3, general_account_profile_fixed_count_v3,
     },
     effect_artifacts_v3::{
-        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v3_atomic,
+        GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3, encode_general_effect_program_v4_atomic,
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
-        general_effect_template_bytes_v3,
+        general_effect_program_bytes_v4, general_effect_template_bytes_v3,
     },
     hot_candidate_v3::{GENERAL_HOT_COMMON_IDENTITIES_V3, general_hot_scalar_count_v3, scalar},
     release_v3::GENERAL_ACTIONS_V3,
     specialization::general_request_profile_bytes_v1,
 };
 use dclutch_general_codec::{
-    Action,
-    successor_request_v2::{CONTROLLER_REQUEST_BYTES_V2, ControllerRequestV2},
+    Action, successor_request_v2::ControllerRequestV2, successor_request_v3::ControllerRequestV3,
+};
+use dclutch_general_config_contract::{
+    GeneralRootV2,
+    v3::{GeneralConfigV3, GeneralConfigV3Input},
 };
 use dclutch_request_profile_contract::{
     ProjectionRegisterKindV1, ProjectionRegisterSpaceV1, ProjectionTargetV1, RequestProfileV1,
@@ -102,53 +100,28 @@ fn account_profile(action: Action) -> Vec<u8> {
     output
 }
 
-/// General's real emitted EffectProgram — an **EffectV3** record.
-fn effect_v3(action: Action) -> Vec<u8> {
+/// General's current emitted EffectProgram V4 envelope.
+fn effect_v4(action: Action) -> Vec<u8> {
     let (fixed, item) = general_effect_instruction_count_v3(action);
     let count = fixed.checked_add(item).expect("effect instruction count");
     let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; count];
     let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
-    let bytes = general_effect_program_bytes_v3(action).expect("effect width");
+    let base_bytes = general_effect_program_bytes_v3(action).expect("base effect width");
+    let mut base_scratch = vec![0_u8; base_bytes];
+    let mut base_output = vec![0_u8; base_bytes];
+    let bytes = general_effect_program_bytes_v4(action).expect("effect width");
     let mut scratch = vec![0_u8; bytes];
     let mut output = vec![0_u8; bytes];
-    encode_general_effect_program_v3_atomic(
+    encode_general_effect_program_v4_atomic(
         action,
         &mut instructions,
         &mut templates,
+        &mut base_scratch,
+        &mut base_output,
         &mut scratch,
         &mut output,
     )
     .expect("General EffectProgram");
-    output
-}
-
-/// General's real effect program inside the V4 envelope it does not yet emit.
-///
-/// The Hot executor accepts one effect schema, `SCHEMA_RELEASE_ID_V4`, and
-/// General's descriptor names the V3 one (see
-/// [`the_general_effect_artifact_is_v3_and_the_v4_hot_path_refuses_it`]). This
-/// is exactly the migration that blocker names — the same V3 program, zero
-/// spans and zero borrowed ranges, under a V4 header — and it exists here so
-/// the span seam can be exercised at General's *real* register geometry rather
-/// than against an invented effect. It is not a General artifact: wrapping
-/// moves the effect digest, so the descriptor and the seal move with it.
-fn effect_in_v4_envelope(action: Action) -> Vec<u8> {
-    let base = effect_v3(action);
-    let bytes = EFFECT_V4_HEADER_BYTES
-        .checked_add(base.len())
-        .expect("V4 envelope width");
-    let mut scratch = vec![0_u8; bytes];
-    let mut output = vec![0_u8; bytes];
-    encode_program_v4_atomic(
-        &base,
-        BorrowedRangePolicyV4::DisjointExactCoverage,
-        u32::try_from(CONTROLLER_REQUEST_BYTES_V2).expect("family request width"),
-        &[],
-        &[],
-        &mut scratch,
-        &mut output,
-    )
-    .expect("V4 envelope");
     output
 }
 
@@ -235,7 +208,7 @@ fn artifacts(action: Action) -> Artifacts {
     Artifacts {
         account_profile: account_profile(action),
         request_profile: general_request_profile_bytes_v1(action).to_vec(),
-        effect: effect_in_v4_envelope(action),
+        effect: effect_v4(action),
         request: request(action),
     }
 }
@@ -253,6 +226,7 @@ fn derive(
         request_profile_bytes: &set.request_profile,
         request_profile_schema: REQUEST_PROFILE_SCHEMA_ID_V1,
         effect_bytes: &set.effect,
+        effect_schema: dclutch_effect_kernel::v4::SCHEMA_RELEASE_ID_V4,
         strategy_bytes,
         waist: waist(),
         tail_count: outcome_count,
@@ -409,41 +383,262 @@ fn a_zero_span_profile_derives_no_widths() {
     ));
 }
 
-/// General's emitted EffectProgram is an EffectV3 record, and
-/// `process_hot_execution_v3` accepts exactly one effect schema: V4.
-///
-/// This is a hard blocker on any General bundle, and it sits *before* the span
-/// seam — the effect is decoded to get the register geometry the span widths
-/// are derived from, so nothing downstream can be reached. It is recorded here
-/// as an executed refusal rather than a prose note.
+/// Current General releases emit the V4 envelope the Hot executor selects.
 #[test]
-fn the_general_effect_artifact_is_v3_and_the_v4_hot_path_refuses_it() {
-    assert_ne!(EFFECT_SCHEMA_ID_V3, EFFECT_SCHEMA_ID_V4);
+fn the_general_effect_artifact_is_current_v4_and_drives_span_geometry() {
     for action in GENERAL_ACTIONS_V3 {
-        let emitted = effect_v3(action);
-        // It really is a well-formed V3 program...
-        EffectProgramV3::decode(&emitted).expect("General emits a valid EffectV3");
-        // ...and the V4 kernel the Hot executor requires refuses those bytes.
-        assert!(
-            EffectProgramV4::decode(&emitted).is_err(),
-            "{action:?} EffectV3 must not decode as V4"
-        );
-        // The builder reports it at the stage that hits it first.
-        let set = Artifacts {
-            account_profile: account_profile(action),
-            request_profile: general_request_profile_bytes_v1(action).to_vec(),
-            effect: emitted,
-            request: request(action),
-        };
+        let emitted = effect_v4(action);
+        EffectProgramV4::decode(&emitted).expect("General emits a valid EffectV4");
+        let set = artifacts(action);
         assert_eq!(
             derive(
                 action,
                 &set,
                 &strategy(StrategyDispositionV2::AdmittedAot),
                 OUTCOME_COUNT
-            ),
-            Err(BuilderError::Spans("effect-decode")),
+            )
+            .expect("current effect drives span geometry"),
+            vec![expected_pages(OUTCOME_COUNT)],
             "{action:?}"
         );
     }
+}
+
+fn open_config(generation: u64) -> Vec<u8> {
+    GeneralConfigV3::new(GeneralConfigV3Input {
+        capacity_profile_id: [0x41; 32],
+        claim_basis_id: [0x42; 32],
+        program_set_id: [0x43; 32],
+        generation,
+        price_scale: 1_000_000,
+        collection_slots: 16,
+        selection_slots: 16,
+        settlement_slots: 64,
+        max_orders_per_candidate: 32,
+        max_pages_per_candidate: 32,
+        continuation_reward_lamports: 1,
+        selection_policy_id: [0x44; 32],
+        quote_surplus_beneficiary: [0x45; 32],
+    })
+    .expect("General config")
+    .to_bytes()
+    .to_vec()
+}
+
+#[test]
+fn open_batch_request_derives_occurrence_and_lifecycle_bump_at_runtime_widths() {
+    let config = open_config(9);
+    let config_id = solana_program::hash::hash(&config).to_bytes();
+    let market = [0x61; 32];
+    let root_address = Pubkey::new_from_array([0x62; 32]);
+    let root = GeneralRootV2::active(market, config_id, 9).expect("active root");
+    for outcome_count in [1_u32, 258] {
+        let derived = derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+            root,
+            root_address,
+            config: &config,
+            outcome_count,
+            product_id: [0x63; 32],
+            trading_program: waist().trading_program,
+        })
+        .expect("chain-derived OpenBatch request");
+        let decoded = ControllerRequestV3::decode(&derived.request).expect("canonical V3 request");
+        assert_eq!(decoded.action.legacy(), Some(Action::OpenBatch));
+        assert_eq!(decoded.subject_id, Some(derived.occurrence_id));
+        assert_eq!(decoded.expected_revision, root.revision());
+        assert_eq!(decoded.primary_state_bump, derived.batch_bump);
+        assert_ne!(derived.batch, root_address);
+    }
+}
+
+#[test]
+fn open_batch_request_refuses_substituted_config_generation_and_zero_coordinates() {
+    let config = open_config(9);
+    let root = GeneralRootV2::active(
+        [0x61; 32],
+        solana_program::hash::hash(&config).to_bytes(),
+        9,
+    )
+    .expect("active root");
+    let base = GeneralOpenBatchRequestInputV1 {
+        root,
+        root_address: Pubkey::new_from_array([0x62; 32]),
+        config: &config,
+        outcome_count: 1,
+        product_id: [0x63; 32],
+        trading_program: waist().trading_program,
+    };
+    let foreign_config = open_config(10);
+    assert!(matches!(
+        derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+            config: &foreign_config,
+            ..base
+        }),
+        Err(BuilderError::Binding(_))
+    ));
+    assert!(matches!(
+        derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+            product_id: [0; 32],
+            ..base
+        }),
+        Err(BuilderError::Binding(_))
+    ));
+    assert!(matches!(
+        derive_general_open_batch_request_v1(GeneralOpenBatchRequestInputV1 {
+            outcome_count: 0,
+            ..base
+        }),
+        Err(BuilderError::Binding(_))
+    ));
+}
+
+/// General's emitted base EffectProgram V3, the geometry authority Trading's
+/// `require_geometry` actually reads (`SelectedEffectProgramV4` derefs to it).
+fn effect_v3(action: Action) -> Vec<u8> {
+    let (fixed, item) = general_effect_instruction_count_v3(action);
+    let count = fixed.checked_add(item).expect("effect instruction count");
+    let mut instructions = vec![GENERAL_EFFECT_INSTRUCTION_PLACEHOLDER_V3; count];
+    let mut templates = vec![0_u8; general_effect_template_bytes_v3(action)];
+    let bytes = general_effect_program_bytes_v3(action).expect("base effect width");
+    let mut scratch = vec![0_u8; bytes];
+    let mut output = vec![0_u8; bytes];
+    dclutch_general_adapter_contract::effect_artifacts_v3::encode_general_effect_program_v3_atomic(
+        action,
+        &mut instructions,
+        &mut templates,
+        &mut scratch,
+        &mut output,
+    )
+    .expect("General base EffectProgram");
+    output
+}
+
+/// Trading's `require_geometry` register join, executed host-side against
+/// General's own emitted artifacts.
+///
+/// The on-chain executor collapses every one of these equalities into a single
+/// undifferentiated `TradingSbfError::Content` (`0x4003`) after roughly 371k CU,
+/// so a General artifact whose four register geometries disagree stays
+/// invisible until a real-ELF submission -- and no General campaign had ever
+/// submitted one: `tools/gauntlet/general/` reaches the accelerator through a
+/// purpose-built caller and never runs this join at all. Each pair is checked
+/// separately so a failure names the two artifacts that disagree.
+///
+/// THIS TEST IS CURRENTLY RED, and it is red because the protocol contradicts
+/// itself rather than because the check is wrong:
+///
+/// - `dclutch_general_adapter_contract::artifacts_v3` admission REQUIRES
+///   `account.item_account_stride() == GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3`
+///   (1) and `effect.item_account_stride() == 0`, because under Profile13 the
+///   item-rule table is repurposed as the dynamic fixed-span template bank and
+///   is not a Product-N semantic account stride;
+/// - `dclutch_trading_sbf::hot_v3::require_geometry` REQUIRES
+///   `account.item_account_stride() == effect.item_account_stride()`, with no
+///   dynamic-fixed-span case, even though the same function already special-
+///   cases dynamic spans when it counts logical accounts.
+///
+/// Both cannot hold, so fourteen of General's fifteen actions cannot execute
+/// through Trading Hot at all. The resolution belongs to the owner of the
+/// Profile13 dynamic-span contract, not to this campaign; the Direct family
+/// passes only because both of its strides are zero.
+#[test]
+fn every_general_action_declares_one_register_geometry_across_its_four_artifacts() {
+    let mut mismatches = 0_usize;
+    for action in dclutch_general_adapter_contract::release_v3::GENERAL_ACTIONS_V4 {
+        let account_profile_bytes = account_profile(action);
+        let request_profile_bytes = general_request_profile_bytes_v1(action).to_vec();
+        let effect_bytes = effect_v3(action);
+        let profile = AccountProfileV2::decode(&account_profile_bytes).expect("AccountProfile");
+        let request_profile =
+            RequestProfileV1::decode(&request_profile_bytes).expect("RequestProfile");
+        let effect =
+            dclutch_effect_kernel::v3::ProgramV3::decode(&effect_bytes).expect("EffectProgram V3");
+        let transition_bytes =
+            dclutch_general_adapter_contract::transition_artifacts_v3::general_transition_program_bytes_lean_v3(
+                action,
+            );
+        let transition =
+            dclutch_transition_vm::v3::ProgramV3::decode(transition_bytes).expect("Transition");
+        for (label, left, right) in [
+            (
+                "fixed_account_count account/effect",
+                u64::from(profile.fixed_account_count()),
+                u64::from(effect.fixed_account_count()),
+            ),
+            (
+                "item_account_stride account/effect",
+                u64::from(profile.item_account_stride()),
+                u64::from(effect.item_account_stride()),
+            ),
+            (
+                "common_scalar_count account/request",
+                u64::from(profile.common_scalar_count()),
+                u64::from(request_profile.common_scalar_count()),
+            ),
+            (
+                "item_scalar_stride account/request",
+                u64::from(profile.item_scalar_stride()),
+                u64::from(request_profile.item_scalar_stride()),
+            ),
+            (
+                "common_identity_count account/request",
+                u64::from(profile.common_identity_count()),
+                u64::from(request_profile.common_identity_count()),
+            ),
+            (
+                "item_identity_stride account/request",
+                u64::from(profile.item_identity_stride()),
+                u64::from(request_profile.item_identity_stride()),
+            ),
+            (
+                "common_scalar_count account/transition",
+                u64::from(profile.common_scalar_count()),
+                u64::from(transition.common_scalar_count()),
+            ),
+            (
+                "item_scalar_stride account/transition",
+                u64::from(profile.item_scalar_stride()),
+                u64::from(transition.item_scalar_stride()),
+            ),
+            (
+                "common_identity_count account/transition",
+                u64::from(profile.common_identity_count()),
+                u64::from(transition.common_identity_count()),
+            ),
+            (
+                "item_identity_stride account/transition",
+                u64::from(profile.item_identity_stride()),
+                u64::from(transition.item_identity_stride()),
+            ),
+            (
+                "common_scalar_count account/effect",
+                u64::from(profile.common_scalar_count()),
+                u64::from(effect.common_scalar_count()),
+            ),
+            (
+                "item_scalar_stride account/effect",
+                u64::from(profile.item_scalar_stride()),
+                u64::from(effect.item_scalar_stride()),
+            ),
+            (
+                "common_identity_count account/effect",
+                u64::from(profile.common_identity_count()),
+                u64::from(effect.common_identity_count()),
+            ),
+            (
+                "item_identity_stride account/effect",
+                u64::from(profile.item_identity_stride()),
+                u64::from(effect.item_identity_stride()),
+            ),
+        ] {
+            if left != right {
+                eprintln!("MISMATCH {action:?}: {label}: profile={left} artifact={right}");
+                mismatches += 1;
+            }
+        }
+    }
+    assert_eq!(
+        mismatches, 0,
+        "General artifacts cannot satisfy Trading's require_geometry; see this test's doc comment"
+    );
 }

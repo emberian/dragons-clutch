@@ -145,6 +145,7 @@ const REGISTRY_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe3; 32]);
 const CORE_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe4; 32]);
 const TEST_CALLER_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe5; 32]);
 const RESOLUTION_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe6; 32]);
+const TRADING_PROGRAM_ID: Pubkey = Pubkey::new_from_array([0xe7; 32]);
 const TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array(TOKEN_2022_PROGRAM_ID);
 const GENERATION: u64 = 29;
 /// The campaign basis width `K`, which is also the Product outcome width `N`.
@@ -550,6 +551,11 @@ struct Fixture {
     /// The Structured basis this Market's descriptor was DERIVED from.
     basis: StructuredBasis,
     terminal_accounts: Option<TerminalFixture>,
+    /// Current five-action Structured release and activated child root for the
+    /// real common-Hot campaign. Ordinary direct-Claims fixtures leave both
+    /// absent so their historical release/caller bytes remain unchanged.
+    hot_release: Option<common_hot_open::HotReleaseFixture>,
+    capability_root: Option<Pubkey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -574,6 +580,757 @@ struct Submission {
     compute_units: u64,
     wire_bytes: usize,
     logs: Vec<String>,
+}
+
+mod common_hot_open {
+    use super::*;
+    use dclutch_account_profile_contract::v2::AccountProfileV2;
+    use dclutch_bearer_v2_operator::{
+        CheckedRationalHotOuterReleaseV3, ConstructedHotOpenSelectedV3,
+        ConstructedHotOpenStructuredV3, RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3,
+        RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3, RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3,
+        RationalOpenCapabilityProgramSetInputV6, RationalOpenCapabilityProgramSetV3,
+        RationalOpenSelectedBundleInputV6, RationalOpenSelectedHotBundleV3,
+        RationalOpenSelectedHotStateV3, RationalOpenStructuredHotBundleV3,
+        RationalOpenStructuredHotStateV3, RationalOpenStructuredSelectedBundleInputV6,
+        RationalTerminalAccountProfileInputV3, RationalTerminalSelectedBundleInputV6,
+        build_rational_open_capability_program_set_v6, build_rational_open_selected_bundle_v6,
+        build_rational_open_selected_hot_instruction_v3,
+        build_rational_open_structured_hot_instruction_v3,
+        build_rational_open_structured_selected_bundle_v6,
+        build_rational_terminal_selected_bundle_v6, construct_chain_hot_denominate_v3,
+        construct_chain_hot_issue_structured_v3, encode_open_capability_lifecycle_policy_v5,
+    };
+    use dclutch_capability_contract::{
+        ActivationPolicy, CAPABILITY_ENTRY_BYTES, CapabilityEntryV1, CapabilityManifestV1,
+        FundingQuoteV1, MANIFEST_HEADER_BYTES, MAX_DEPENDENCIES_PER_CAPABILITY,
+        funding::{CompartmentFundingV1, FundingAmountsV1},
+    };
+    use dclutch_capability_program_contract::{
+        SelectedRecordBumpsV1, set_v2::CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+        v4::CapabilityProgramV4,
+    };
+    use dclutch_chain_bundle_builder::{
+        WaistFactsV1,
+        artifacts::{ArtifactSetV1, derive_record},
+        bundle::{BuiltBundleV1, BundleInputV1, FixedCorpusV1, ScenarioV1, build_bundle},
+        frame::BuiltAccountV1,
+    };
+    use dclutch_rational_representation_v2_contract::{
+        TokenBehaviorRecordAdmissionV2, authenticate_token_behavior_v2,
+    };
+    use dclutch_rational_representation_v2_operator::{
+        AssetObservationV2, FinalizedRecordObservationV2, ObservedAccountV2,
+        ProductEvidenceObservationV2, RationalObservationV2, ReplayObservationV2,
+        SelectedActionInputV2, StructuredActionInputV2,
+    };
+    use dclutch_release_set_contract::CapabilityExecutionSelectionV1;
+    use dclutch_structured_v2_kernel::{
+        STRUCTURED_CAPABILITY_KIND_ID_V2, STRUCTURED_CAPACITY_PROFILE_ID_V2,
+        STRUCTURED_ROOT_BYTES_V2, STRUCTURED_ROOT_SCHEMA_ID_V2,
+    };
+    use dclutch_token_svm::{TOKEN_BEHAVIOR_SELECTION_BYTES_V2, TokenBehaviorSelectionV2};
+
+    pub(super) struct ManifestSelection {
+        pub(super) bytes: Vec<u8>,
+        pub(super) selection: CapabilityExecutionSelectionV1,
+        pub(super) record_bumps: SelectedRecordBumpsV1,
+    }
+
+    pub(super) struct HotReleaseFixture {
+        pub(super) denominate: RationalOpenSelectedHotBundleV3,
+        pub(super) issue: RationalOpenStructuredHotBundleV3,
+        pub(super) set: RationalOpenCapabilityProgramSetV3,
+        pub(super) manifest: ManifestSelection,
+    }
+
+    fn record_bumps(schema: [u8; 32], digest: [u8; 32]) -> (u8, u8) {
+        (
+            Pubkey::find_program_address(
+                &[RAW_RECORD_PDA_SEED_V1, &schema, &digest],
+                &REGISTRY_PROGRAM_ID,
+            )
+            .1,
+            Pubkey::find_program_address(
+                &[STAGING_CURSOR_PDA_SEED_V1, &schema, &digest],
+                &REGISTRY_PROGRAM_ID,
+            )
+            .1,
+        )
+    }
+
+    fn manifest(
+        set: &RationalOpenCapabilityProgramSetV3,
+        descriptor_bytes: &[u8],
+    ) -> ManifestSelection {
+        let descriptor = CapabilityProgramV4::decode(descriptor_bytes).expect("descriptor");
+        let amounts = FundingAmountsV1::new(
+            CompartmentFundingV1::native_lamports(1).expect("native activation funding"),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+            CompartmentFundingV1::not_applicable(),
+        )
+        .expect("funding compartments");
+        let entry = CapabilityEntryV1::new(
+            dclutch_capability_contract::ContentId::new(descriptor.kind().to_bytes())
+                .expect("kind"),
+            dclutch_capability_contract::ContentId::new(set.program_set_id).expect("ProgramSet"),
+            dclutch_capability_contract::ContentId::new(set.token_behavior_selection_id)
+                .expect("config"),
+            dclutch_capability_contract::ContentId::new(descriptor.capacity_profile().to_bytes())
+                .expect("capacity"),
+            dclutch_capability_contract::ContentId::new(descriptor.root_schema().to_bytes())
+                .expect("root schema"),
+            dclutch_capability_contract::ContentId::new(descriptor.derivation_policy().to_bytes())
+                .expect("lifecycle"),
+            ActivationPolicy::PrepaidLazy,
+            100,
+            0,
+            [0; MAX_DEPENDENCIES_PER_CAPABILITY],
+            FundingQuoteV1::new(amounts, None).expect("funding quote"),
+        )
+        .expect("manifest entry");
+        let mut bytes = vec![0; MANIFEST_HEADER_BYTES + CAPABILITY_ENTRY_BYTES];
+        CapabilityManifestV1::encode_into(&[entry], &mut bytes).expect("manifest");
+        let manifest_digest = hash(&bytes).to_bytes();
+        let manifest_bumps = record_bumps(
+            dclutch_capability_contract::CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1,
+            manifest_digest,
+        );
+        let config_bumps = record_bumps(
+            descriptor.config_schema().to_bytes(),
+            set.token_behavior_selection_id,
+        );
+        let program_set_bumps = record_bumps(
+            CAPABILITY_PROGRAM_SET_SCHEMA_RELEASE_ID_V2,
+            set.program_set_id,
+        );
+        let selection = CapabilityExecutionSelectionV1::new(
+            0,
+            ContentId::new(manifest_digest).expect("manifest"),
+            ContentId::new(descriptor.kind().to_bytes()).expect("kind"),
+            ContentId::new(set.program_set_id).expect("ProgramSet"),
+            ContentId::new(set.token_behavior_selection_id).expect("config"),
+        )
+        .expect("selection")
+        .with_capability_release_record_bumps(program_set_bumps.0, program_set_bumps.1);
+        ManifestSelection {
+            bytes,
+            selection,
+            record_bumps: SelectedRecordBumpsV1::new(
+                manifest_bumps.0,
+                manifest_bumps.1,
+                config_bumps.0,
+                config_bumps.1,
+            ),
+        }
+    }
+
+    pub(super) fn compile_release(
+        realm: [u8; 32],
+        release_set: [u8; 32],
+        product_basis: &[u8],
+    ) -> HotReleaseFixture {
+        let selection = TokenBehaviorSelectionV2::new(realm, release_set).expect("selection");
+        let lifecycle = encode_open_capability_lifecycle_policy_v5().expect("empty lifecycle");
+        let basis_width = u32::try_from(product_basis.len()).expect("basis bytes");
+        let mut selected_lengths = [0_u32; RATIONAL_OPEN_SELECTED_LOGICAL_ACCOUNTS_V3 as usize];
+        selected_lengths[4] = basis_width;
+        selected_lengths[29] = basis_width;
+        let mut structured_lengths = [0_u32; RATIONAL_OPEN_STRUCTURED_FIXED_ACCOUNTS_V3 as usize];
+        structured_lengths[4] = basis_width;
+        structured_lengths[29] = basis_width;
+        // The widths that ARE knowable when a release is authored, each taken
+        // from the constant that owns it rather than typed.
+        structured_lengths[0] = u32::try_from(
+            dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+                + dclutch_structured_v2_kernel::STRUCTURED_ROOT_BYTES_V2,
+        )
+        .expect("capability root width");
+        structured_lengths[17] = u32::try_from(
+            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_MARKET_HEADER_BYTES_V2
+                + K * 8,
+        )
+        .expect("Claims aggregate width");
+        structured_lengths[18] =
+            u32::try_from(ACTIVATED_EXECUTION_RELEASE_SET_BYTES_V1).expect("activation width");
+        structured_lengths[22] =
+            u32::try_from(dclutch_market_core_codec::STATE_BYTES).expect("Core market width");
+        let mut terminal_lengths = [0_u32; RATIONAL_TERMINAL_LOGICAL_ACCOUNT_COUNT_V3 as usize];
+        terminal_lengths[1] =
+            u32::try_from(TOKEN_BEHAVIOR_SELECTION_BYTES_V2).expect("selection bytes");
+        terminal_lengths[4] = basis_width;
+        terminal_lengths[29] = basis_width;
+        let selected = |action| {
+            build_rational_open_selected_bundle_v6(RationalOpenSelectedBundleInputV6 {
+                action,
+                logical_data_lengths: &selected_lengths,
+                product_basis,
+                kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+                token_behavior_selection: selection,
+                root_schema: STRUCTURED_ROOT_SCHEMA_ID_V2,
+                lifecycle_policy: &lifecycle,
+                capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+                root_state_bytes: u32::try_from(STRUCTURED_ROOT_BYTES_V2)
+                    .expect("Structured root width"),
+            })
+            .expect("selected artifacts")
+        };
+        let structured = |action| {
+            build_rational_open_structured_selected_bundle_v6(
+                RationalOpenStructuredSelectedBundleInputV6 {
+                    action,
+                    fixed_data_lengths: &structured_lengths,
+                    item_data_lengths: [
+                        u32::try_from(
+                            dclutch_claims_svm::liability_basis_state_v2::LIABILITY_BASIS_POSITION_HEADER_BYTES_V2
+                                + K * 8,
+                        )
+                        .expect("custody Position width"),
+                        0,
+                        0,
+                        0,
+                    ],
+                    product_basis,
+                    representation_outcome_count: OUTCOME_COUNT,
+                    token_behavior_selection: selection,
+                    kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+                    root_schema: STRUCTURED_ROOT_SCHEMA_ID_V2,
+                    lifecycle_policy: &lifecycle,
+                    capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+                    root_state_bytes: u32::try_from(STRUCTURED_ROOT_BYTES_V2)
+                        .expect("Structured root width"),
+                },
+            )
+            .expect("Structured artifacts")
+        };
+        let denominate = selected(RepresentationActionV2::Denominate);
+        let reconstitute = selected(RepresentationActionV2::Reconstitute);
+        let issue = structured(RepresentationActionV2::IssueStructured);
+        let unwrap = structured(RepresentationActionV2::UnwrapStructured);
+        let redeem =
+            build_rational_terminal_selected_bundle_v6(RationalTerminalSelectedBundleInputV6 {
+                account_profile: RationalTerminalAccountProfileInputV3 {
+                    logical_data_lengths: &terminal_lengths,
+                    product_basis,
+                },
+                kind: STRUCTURED_CAPABILITY_KIND_ID_V2,
+                token_behavior_selection: selection,
+                root_schema: STRUCTURED_ROOT_SCHEMA_ID_V2,
+                lifecycle_policy: &lifecycle,
+                capacity_profile: STRUCTURED_CAPACITY_PROFILE_ID_V2,
+                root_state_bytes: u32::try_from(STRUCTURED_ROOT_BYTES_V2)
+                    .expect("Structured root width"),
+            })
+            .expect("terminal artifacts");
+        let set = build_rational_open_capability_program_set_v6(
+            RationalOpenCapabilityProgramSetInputV6 {
+                token_behavior_selection: selection,
+                denominate: &denominate,
+                reconstitute: &reconstitute,
+                issue_structured: &issue,
+                unwrap_structured: &unwrap,
+                redeem_terminal: &redeem,
+            },
+        )
+        .expect("five-action Structured release");
+        let manifest = manifest(&set, &issue.descriptor);
+        HotReleaseFixture {
+            denominate,
+            issue,
+            set,
+            manifest,
+        }
+    }
+
+    fn observed<'a>(key: Pubkey, account: &'a Account) -> ObservedAccountV2<'a> {
+        ObservedAccountV2 {
+            key,
+            owner: account.owner,
+            lamports: account.lamports,
+            executable: account.executable,
+            data: &account.data,
+        }
+    }
+
+    fn record<'a>(
+        schema_id: [u8; 32],
+        raw_key: Pubkey,
+        raw: &'a Account,
+        staging_key: Pubkey,
+        staging: &'a Account,
+    ) -> FinalizedRecordObservationV2<'a> {
+        FinalizedRecordObservationV2 {
+            schema_id,
+            raw: observed(raw_key, raw),
+            staging: observed(staging_key, staging),
+        }
+    }
+
+    async fn account(context: &mut ProgramTestContext, key: Pubkey) -> Account {
+        context
+            .banks_client
+            .get_account(key)
+            .await
+            .expect("account query")
+            .expect("observed account")
+    }
+
+    async fn plan(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+        action: RepresentationActionV2,
+    ) -> Result<ConstructedHotOpenStructuredV3, ConstructedHotOpenSelectedV3> {
+        let activation = account(context, fixture.activation_cache).await;
+        let descriptor_raw = account(context, fixture.descriptor_raw).await;
+        let descriptor_staging = account(context, fixture.descriptor_staging).await;
+        let graph_raw = account(context, fixture.graph_raw).await;
+        let graph_staging = account(context, fixture.graph_staging).await;
+        let linked_raw = account(context, fixture.linked_basis_record).await;
+        let linked_staging = account(context, fixture.linked_basis_staging).await;
+        let product_raw = account(context, fixture.product_record).await;
+        let product_staging = account(context, fixture.product_staging).await;
+        let domain_raw = account(context, fixture.result_domain_record).await;
+        let domain_staging = account(context, fixture.result_domain_staging).await;
+        let portfolio_raw = account(context, fixture.portfolio_record).await;
+        let portfolio_staging = account(context, fixture.portfolio_staging).await;
+        let market = account(context, fixture.market).await;
+        let aggregate = account(context, fixture.aggregate).await;
+        let replay = account(context, fixture.representation_replay).await;
+        let receipt_mint = account(context, fixture.receipt_mint).await;
+        let actor_receipt = account(context, fixture.actor_receipt).await;
+        let actor_position = account(context, fixture.actor_position).await;
+
+        let selected = action == RepresentationActionV2::Denominate;
+        let selected_index = usize::try_from(WINNER).expect("selected outcome");
+        let asset_range: Vec<usize> = if selected {
+            vec![selected_index]
+        } else {
+            (0..K).collect()
+        };
+        let mut asset_accounts = Vec::with_capacity(asset_range.len());
+        for index in &asset_range {
+            let fixture_asset = fixture.assets.get(*index).expect("asset");
+            asset_accounts.push((
+                account(context, fixture_asset.position).await,
+                account(context, fixture_asset.mint).await,
+                account(context, fixture_asset.actor_token).await,
+                account(context, fixture_asset.structured_token).await,
+            ));
+        }
+        let assets = asset_range
+            .iter()
+            .zip(&asset_accounts)
+            .map(|(index, (position, mint, actor_shard, structured))| {
+                let fixture_asset = fixture.assets.get(*index).expect("asset");
+                AssetObservationV2 {
+                    outcome: u32::try_from(*index).expect("outcome"),
+                    claims_custody_position: observed(fixture_asset.position, position),
+                    shard_mint: observed(fixture_asset.mint, mint),
+                    actor_shard_account: observed(fixture_asset.actor_token, actor_shard),
+                    structured_custody_account: observed(
+                        fixture_asset.structured_token,
+                        structured,
+                    ),
+                }
+            })
+            .collect::<Vec<_>>();
+        let observation = RationalObservationV2 {
+            caller_role: CallerRoleV2::Trading,
+            registry_program: REGISTRY_PROGRAM_ID,
+            activation_cache: observed(fixture.activation_cache, &activation),
+            descriptor: record(
+                REPRESENTATION_DESCRIPTOR_SCHEMA_RELEASE_ID_V3,
+                fixture.descriptor_raw,
+                &descriptor_raw,
+                fixture.descriptor_staging,
+                &descriptor_staging,
+            ),
+            graph: record(
+                COMPOSITION_EXPOSURE_SCHEMA_ID_V3,
+                fixture.graph_raw,
+                &graph_raw,
+                fixture.graph_staging,
+                &graph_staging,
+            ),
+            product_evidence: ProductEvidenceObservationV2 {
+                linked_basis: record(
+                    GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+                    fixture.linked_basis_record,
+                    &linked_raw,
+                    fixture.linked_basis_staging,
+                    &linked_staging,
+                ),
+                product: record(
+                    PRODUCT_RECORD_SCHEMA_ID_V2,
+                    fixture.product_record,
+                    &product_raw,
+                    fixture.product_staging,
+                    &product_staging,
+                ),
+                result_domain: record(
+                    RESULT_DOMAIN_SCHEMA_ID_V2,
+                    fixture.result_domain_record,
+                    &domain_raw,
+                    fixture.result_domain_staging,
+                    &domain_staging,
+                ),
+                portfolio: record(
+                    PORTFOLIO_SCHEMA_ID_V2,
+                    fixture.portfolio_record,
+                    &portfolio_raw,
+                    fixture.portfolio_staging,
+                    &portfolio_staging,
+                ),
+            },
+            core_market: observed(fixture.market, &market),
+            claims_aggregate: observed(fixture.aggregate, &aggregate),
+            replay: ReplayObservationV2 {
+                account: observed(fixture.representation_replay, &replay),
+            },
+            receipt_mint: observed(fixture.receipt_mint, &receipt_mint),
+            actor_receipt_account: (!selected)
+                .then_some(observed(fixture.actor_receipt, &actor_receipt)),
+            actor_claims_position: selected
+                .then_some(observed(fixture.actor_position, &actor_position)),
+            assets: &assets,
+            actor: fixture.actor.pubkey(),
+            parent_context: [0; 32],
+            rent: &Rent::default(),
+        };
+        if selected {
+            Err(construct_chain_hot_denominate_v3(
+                observation,
+                SelectedActionInputV2 {
+                    outcome: WINNER,
+                    quantity: 1,
+                },
+            )
+            .expect("public Denominate planner"))
+        } else {
+            Ok(construct_chain_hot_issue_structured_v3(
+                observation,
+                StructuredActionInputV2 { quantity: 1 },
+            )
+            .expect("public IssueStructured planner"))
+        }
+    }
+
+    pub(super) async fn plan_issue(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+    ) -> ConstructedHotOpenStructuredV3 {
+        plan(context, fixture, RepresentationActionV2::IssueStructured)
+            .await
+            .expect("Structured plan")
+    }
+
+    pub(super) async fn plan_denominate(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+    ) -> ConstructedHotOpenSelectedV3 {
+        plan(context, fixture, RepresentationActionV2::Denominate)
+            .await
+            .expect_err("selected plan")
+    }
+
+    pub(super) async fn token_behavior(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+    ) -> dclutch_rational_representation_v2_contract::AuthenticatedTokenBehaviorV2 {
+        let descriptor = account(context, fixture.descriptor_raw).await;
+        let admitted =
+            dclutch_rational_representation_v2_kernel::RepresentationDescriptorV2::decode(
+                &descriptor.data,
+                DescriptorAdmissionV2 {
+                    selected_descriptor_id: fixture.descriptor_id,
+                    finalized_descriptor_id: fixture.descriptor_id,
+                    recomputed_descriptor_digest: hash(&descriptor.data).to_bytes(),
+                    finalized_descriptor_digest: fixture.descriptor_id,
+                    record_authenticated: true,
+                    derived_representation_authority: fixture.representation_authority.to_bytes(),
+                    authority_derivation_authenticated: true,
+                },
+            )
+            .expect("finalized descriptor admission");
+        let release = fixture.hot_release.as_ref().expect("Hot release");
+        authenticate_token_behavior_v2(
+            admitted,
+            fixture.realm_id,
+            &release.set.token_behavior_selection,
+            TokenBehaviorRecordAdmissionV2 {
+                selected_schema_id: dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                finalized_schema_id: dclutch_token_svm::TOKEN_BEHAVIOR_SELECTION_SCHEMA_ID_V2,
+                selected_content_digest: release.set.token_behavior_selection_id,
+                finalized_content_digest: release.set.token_behavior_selection_id,
+                recomputed_content_digest: hash(&release.set.token_behavior_selection).to_bytes(),
+                record_authenticated: true,
+                market_realm_authenticated: true,
+            },
+        )
+        .expect("Token behavior admission")
+    }
+
+    fn built(key: Pubkey, account: Account) -> BuiltAccountV1 {
+        BuiltAccountV1 {
+            key,
+            account,
+            observed: None,
+        }
+    }
+
+    fn artifact_set<'a>(
+        release: &'a HotReleaseFixture,
+        action: RepresentationActionV2,
+    ) -> ArtifactSetV1<'a> {
+        let (descriptor, account_profile, request_profile, transition, effect, lifecycle, strategy) =
+            match action {
+                RepresentationActionV2::IssueStructured => (
+                    release.issue.descriptor.as_slice(),
+                    release.issue.account_profile.as_slice(),
+                    release.issue.request_profile.as_slice(),
+                    release.issue.transition.as_slice(),
+                    release.issue.effect.as_slice(),
+                    release.issue.lifecycle_policy.as_slice(),
+                    release.issue.strategy.as_slice(),
+                ),
+                RepresentationActionV2::Denominate => (
+                    release.denominate.descriptor.as_slice(),
+                    release.denominate.account_profile.as_slice(),
+                    release.denominate.request_profile.as_slice(),
+                    release.denominate.transition.as_slice(),
+                    release.denominate.effect.as_slice(),
+                    release.denominate.lifecycle_policy.as_slice(),
+                    release.denominate.strategy.as_slice(),
+                ),
+                _ => panic!("physical common-Hot action"),
+            };
+        ArtifactSetV1 {
+            descriptor,
+            account_profile,
+            request_profile,
+            transition,
+            effect,
+            lifecycle,
+            strategy,
+            program_set: &release.set.program_set,
+            manifest: &release.manifest.bytes,
+            config: &release.set.token_behavior_selection,
+        }
+    }
+
+    pub(super) async fn build_hot(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+        action: RepresentationActionV2,
+        family_request: &[u8],
+        claims_child: &dclutch_rational_representation_v2_operator::ConstructedInstructionV2,
+    ) -> BuiltBundleV1 {
+        let release = fixture.hot_release.as_ref().expect("Hot release");
+        let set = artifact_set(release, action);
+        let tail_count = if action == RepresentationActionV2::IssueStructured {
+            OUTCOME_COUNT
+        } else {
+            0
+        };
+        let profile = AccountProfileV2::decode(set.account_profile).expect("AccountProfile");
+        let mut bindings = Vec::new();
+        for (child_index, meta) in claims_child.instruction.accounts.iter().enumerate() {
+            let logical = 5_usize
+                .checked_add(child_index)
+                .expect("logical coordinate");
+            let representative = profile
+                .representative_with_dynamic_spans(tail_count, &[], logical)
+                .expect("profile representative");
+            if representative != logical || child_index == 0 {
+                continue;
+            }
+            let account = account(context, meta.pubkey).await;
+            bindings.push((logical, built(meta.pubkey, account)));
+        }
+
+        let market_account = account(context, fixture.market).await;
+        let root_key = fixture.capability_root.expect("Structured capability root");
+        let root_account = account(context, root_key).await;
+        let product = account(context, fixture.product_record).await;
+        let domain = account(context, fixture.result_domain_record).await;
+        let portfolio = account(context, fixture.portfolio_record).await;
+        let basis = account(context, fixture.linked_basis_record).await;
+        let product_record = derive_record(
+            REGISTRY_PROGRAM_ID,
+            PRODUCT_RECORD_SCHEMA_ID_V2,
+            &product.data,
+        );
+        let domain_record = derive_record(
+            REGISTRY_PROGRAM_ID,
+            RESULT_DOMAIN_SCHEMA_ID_V2,
+            &domain.data,
+        );
+        let portfolio_record =
+            derive_record(REGISTRY_PROGRAM_ID, PORTFOLIO_SCHEMA_ID_V2, &portfolio.data);
+        let basis_record = derive_record(
+            REGISTRY_PROGRAM_ID,
+            GRADED_BASIS_RECORD_SCHEMA_ID_V3,
+            &basis.data,
+        );
+        assert_eq!(product_record.raw, fixture.product_record);
+        assert_eq!(domain_record.raw, fixture.result_domain_record);
+        assert_eq!(portfolio_record.raw, fixture.portfolio_record);
+        assert_eq!(basis_record.raw, fixture.linked_basis_record);
+
+        let trading = trading_artifact();
+        let trading_release = super::release(TRADING_PROGRAM_ID, 0x44, &trading);
+        let waist = WaistFactsV1 {
+            registry_program: REGISTRY_PROGRAM_ID,
+            trading_program: TRADING_PROGRAM_ID,
+            core_program: CORE_PROGRAM_ID,
+            claims_program: CLAIMS_PROGRAM_ID,
+            custody_program: CUSTODY_PROGRAM_ID,
+            release_set: fixture.release_set,
+            activation_cache: fixture.activation_cache,
+            trading_semantic_release: trading_release.semantic_release_id().to_bytes(),
+        };
+        let extras = [TOKEN_PROGRAM_ID];
+        let rent = Rent::default();
+        let input = BundleInputV1 {
+            set,
+            waist,
+            scenario: ScenarioV1 {
+                family_request,
+                tail_count,
+                clock_slot: 1,
+                generation: GENERATION,
+                ed25519_evidence: None,
+                native_message_instruction_index: 0,
+                externally_installed_extra: &extras,
+                payer: context.payer.pubkey(),
+            },
+            fixed: FixedCorpusV1 {
+                market: built(fixture.market, market_account),
+                root: built(root_key, root_account),
+                product: product_record,
+                result_domain: domain_record,
+                portfolio: portfolio_record,
+                linked_basis: basis_record,
+                core_programdata: fixture.core_programdata,
+                trading_programdata: fixture.caller_programdata,
+            },
+            bindings: &bindings,
+            rent: &rent,
+        };
+        let built = build_bundle(&input).expect("shared common-Hot bundle builder");
+        let authority = built.authorities.first().expect("Claims caller authority");
+        assert_eq!(
+            authority.authority,
+            claims_child
+                .instruction
+                .accounts
+                .first()
+                .expect("child caller")
+                .pubkey
+        );
+        assert_eq!(authority.request_digest, claims_child.request_digest);
+        built
+    }
+
+    pub(super) fn install(context: &mut ProgramTestContext, bundle: &BuiltBundleV1) {
+        for install in &bundle.accounts {
+            if !bundle.externally_installed_keys.contains(&install.key) {
+                context.set_account(
+                    &install.key,
+                    &AccountSharedData::from(install.account.clone()),
+                );
+            }
+        }
+    }
+
+    fn hot_state<'a>(
+        fixture: &Fixture,
+        root_data: &'a [u8],
+        fixed_accounts: &'a [AccountMeta],
+    ) -> dclutch_bearer_v2_operator::RationalTerminalHotStateV3<'a> {
+        let trading = trading_artifact();
+        let release = super::release(TRADING_PROGRAM_ID, 0x44, &trading);
+        dclutch_bearer_v2_operator::RationalTerminalHotStateV3 {
+            fixed_accounts,
+            strategy_accounts: &[],
+            root_data,
+            release_set: fixture.release_set,
+            market: fixture.market,
+            generation: GENERATION,
+            finalized_slot: 1,
+            hot_outer: Some(CheckedRationalHotOuterReleaseV3 {
+                trading_program: TRADING_PROGRAM_ID,
+                artifact_release: super::artifact_id(release).to_bytes(),
+                checked_manifest_digest: hash(
+                    &fixture
+                        .hot_release
+                        .as_ref()
+                        .expect("Hot release")
+                        .manifest
+                        .bytes,
+                )
+                .to_bytes(),
+            }),
+        }
+    }
+
+    pub(super) async fn assert_public_issue_outer(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+        planned: &ConstructedHotOpenStructuredV3,
+        built: &BuiltBundleV1,
+    ) {
+        let root = account(context, fixture.capability_root.expect("root")).await;
+        let fixed = built
+            .hot_instruction
+            .accounts
+            .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
+            .expect("Hot fixed prefix");
+        let state: RationalOpenStructuredHotStateV3<'_> = hot_state(fixture, &root.data, fixed);
+        let behavior = token_behavior(context, fixture).await;
+        let release = fixture.hot_release.as_ref().expect("Hot release");
+        let public = build_rational_open_structured_hot_instruction_v3(
+            &state,
+            planned,
+            &release.issue,
+            &release.set,
+            behavior,
+        )
+        .expect("public complete IssueStructured outer");
+        assert_eq!(public.instruction, built.hot_instruction);
+        assert_eq!(public.required_wallet_signers, vec![fixture.actor.pubkey()]);
+    }
+
+    pub(super) async fn assert_public_denominate_outer(
+        context: &mut ProgramTestContext,
+        fixture: &Fixture,
+        planned: &ConstructedHotOpenSelectedV3,
+        built: &BuiltBundleV1,
+    ) {
+        let root = account(context, fixture.capability_root.expect("root")).await;
+        let fixed = built
+            .hot_instruction
+            .accounts
+            .get(..dclutch_capability_program_contract::hot_v3::HOT_FIXED_ACCOUNT_COUNT_V3)
+            .expect("Hot fixed prefix");
+        let state: RationalOpenSelectedHotStateV3<'_> = hot_state(fixture, &root.data, fixed);
+        let behavior = token_behavior(context, fixture).await;
+        let release = fixture.hot_release.as_ref().expect("Hot release");
+        let public = build_rational_open_selected_hot_instruction_v3(
+            &state,
+            planned,
+            &release.denominate,
+            &release.set,
+            behavior,
+        )
+        .expect("public complete Denominate outer");
+        assert_eq!(public.instruction, built.hot_instruction);
+        assert_eq!(public.required_wallet_signers, vec![fixture.actor.pubkey()]);
+    }
 }
 
 fn token_2022_provenance_value(key: &str) -> &'static str {
@@ -629,6 +1386,13 @@ fn artifacts() -> Artifacts {
         token_2022,
         caller: read("dclutch_rational_v2_test_caller_sbf.so"),
     }
+}
+
+fn trading_artifact() -> Vec<u8> {
+    let directory = PathBuf::from(env::var("SBF_OUT_DIR").expect("SBF_OUT_DIR is required"));
+    let path = directory.join("dclutch_trading_sbf.so");
+    assert!(path.is_file(), "missing real ELF: {}", path.display());
+    fs::read(path).expect("read real Trading ELF")
 }
 
 #[test]
@@ -772,10 +1536,18 @@ fn activation_input(release: ArtifactReleaseV1) -> ArtifactActivationInputV1 {
 }
 
 fn activation_cache(artifacts: &Artifacts) -> ([u8; 32], Vec<u8>) {
+    activation_cache_for_upstream(artifacts, TEST_CALLER_PROGRAM_ID, &artifacts.caller)
+}
+
+fn activation_cache_for_upstream(
+    artifacts: &Artifacts,
+    upstream_program: Pubkey,
+    upstream_elf: &[u8],
+) -> ([u8; 32], Vec<u8>) {
     let core = release(CORE_PROGRAM_ID, 0x41, &artifacts.core);
     let claims = release(CLAIMS_PROGRAM_ID, 0x42, &artifacts.claims);
     let custody = release(CUSTODY_PROGRAM_ID, 0x43, &artifacts.custody);
-    let trading = release(TEST_CALLER_PROGRAM_ID, 0x44, &artifacts.caller);
+    let trading = release(upstream_program, 0x44, upstream_elf);
     let resolution = release(RESOLUTION_PROGRAM_ID, 0x45, &artifacts.resolution);
     let release_set = ExecutionReleaseSetV1::new(
         binding(core),
@@ -908,6 +1680,7 @@ fn core_market(
     product_id: [u8; 32],
     terminal_receipt: Option<[u8; 32]>,
     terminal_winner: u32,
+    capability_manifest: [u8; 32],
 ) -> (Pubkey, Vec<u8>) {
     let mut identity = MarketIdentity {
         market_id: semantic_identity([1; 32]),
@@ -915,7 +1688,7 @@ fn core_market(
         product_record: semantic_identity(product_record),
         product_id: semantic_identity(product_id),
         resolution_policy: semantic_identity([0x63; 32]),
-        capability_manifest: semantic_identity([0x64; 32]),
+        capability_manifest: semantic_identity(capability_manifest),
         selected_release_set: semantic_identity(release_set),
         registry_program: semantic_identity(REGISTRY_PROGRAM_ID.to_bytes()),
         generation: GENERATION,
@@ -1959,6 +2732,15 @@ fn fixture_with_basis(
     receipt_roles: ReceiptMintRoles,
     basis_profile: ProductBasisProfileV1,
 ) -> (ProgramTest, Fixture) {
+    fixture_with_basis_and_trading(terminal, receipt_roles, basis_profile, None)
+}
+
+fn fixture_with_basis_and_trading(
+    terminal: TerminalV1,
+    receipt_roles: ReceiptMintRoles,
+    basis_profile: ProductBasisProfileV1,
+    real_trading_elf: Option<Vec<u8>>,
+) -> (ProgramTest, Fixture) {
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
@@ -2002,6 +2784,14 @@ fn fixture_with_basis(
     ] {
         add_upgradeable_program(&mut test, name, program, elf);
     }
+    if let Some(trading) = real_trading_elf.as_deref() {
+        add_upgradeable_program(
+            &mut test,
+            "dclutch_trading_sbf",
+            TRADING_PROGRAM_ID,
+            trading,
+        );
+    }
 
     let actor = Keypair::new_from_array(if terminal.resolved() {
         [0x72; 32]
@@ -2024,7 +2814,10 @@ fn fixture_with_basis(
             .checked_mul(2)
             .expect("actor funding width"),
     );
-    let (release_set, cache_data) = activation_cache(&artifacts);
+    let (release_set, cache_data) = match real_trading_elf.as_deref() {
+        Some(trading) => activation_cache_for_upstream(&artifacts, TRADING_PROGRAM_ID, trading),
+        None => activation_cache(&artifacts),
+    };
     let activation_cache = Pubkey::find_program_address(
         &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
         &REGISTRY_PROGRAM_ID,
@@ -2054,6 +2847,9 @@ fn fixture_with_basis(
         add_finalized_record(&mut test, REALM_SCHEMA_RELEASE_ID_V1, &realm_bytes);
 
     let product_claims = add_product_claims(&mut test, basis_profile);
+    let hot_release = real_trading_elf.as_ref().map(|_| {
+        common_hot_open::compile_release(realm_id, release_set, &product_claims.linked_basis_bytes)
+    });
     let terminal_scenario = basis_profile.terminal_scenario(terminal);
     let mut terminal_payouts = [0_u64; K];
     if terminal.resolved() {
@@ -2098,6 +2894,9 @@ fn fixture_with_basis(
         product_claims.product_id,
         terminal_certificate.map(|certificate| certificate.to_bytes()),
         terminal.winner(),
+        hot_release.as_ref().map_or([0x64; 32], |release| {
+            hash(&release.manifest.bytes).to_bytes()
+        }),
     );
     add_account(&mut test, market, CORE_PROGRAM_ID, core_data);
     add_account(
@@ -2161,11 +2960,20 @@ fn fixture_with_basis(
     } else {
         [0x75; 32]
     });
-    let actor_receipt = Pubkey::new_from_array(if terminal.resolved() {
-        [0x78; 32]
-    } else {
-        [0x77; 32]
-    });
+    // The actor's receipt holding is an Associated Token Account, not a tag.
+    //
+    // The receipt Mint above stays a written value because the descriptor
+    // *names* it and every reader takes it from there. This account is the
+    // opposite kind of coordinate: nothing names it, so `authenticate_actor_receipt`
+    // derives it, and a builder handed some other address has been handed an
+    // account the wallet it builds for could never be holding. The two branches
+    // stay distinct without being typed, because the resolved and unresolved
+    // campaigns already run under different actors and different receipt Mints.
+    let actor_receipt = get_associated_token_address_with_program_id(
+        &actor.pubkey(),
+        &receipt_mint,
+        &TOKEN_PROGRAM_ID,
+    );
     // THE DESCRIPTOR IS DERIVED, not written. `structured_lowering::lower`
     // builds one canonical composition (graph, translation, composition
     // descriptor), the exposure record the chain will hold, the shard layer and
@@ -2255,11 +3063,14 @@ fn fixture_with_basis(
                 .expect("custody Position seeds");
         let position =
             Pubkey::find_program_address(&position_seeds.as_slices(), &CLAIMS_PROGRAM_ID).0;
-        let actor_token = Pubkey::new_from_array(
-            [0x81_u8
-                .checked_add(u8::try_from(index).expect("outcome index"))
-                .expect("actor shard account tag"); 32],
-        );
+        // Derived for the same reason as `actor_receipt` above, and the reason
+        // is visible in this very block: the Mint, the custody owner, the
+        // Position and the Structured custody below are all canonical
+        // derivations that agree with the operator. This one coordinate was a
+        // typed tag, so it was the one address in the campaign that no rule
+        // produces.
+        let actor_token =
+            get_associated_token_address_with_program_id(&actor.pubkey(), &mint, &TOKEN_PROGRAM_ID);
         let structured_token = Pubkey::find_program_address(
             &[
                 RATIONAL_STRUCTURED_CUSTODY_SEED_V2,
@@ -2421,6 +3232,37 @@ fn fixture_with_basis(
         custody_context, parent_context,
         "the Custody namespace and the representation parent context are different facts"
     );
+    let capability_root = hot_release.as_ref().map(|release| {
+        let header = dclutch_capability_program_contract::CapabilityRootHeaderV1::new(
+            ContentId::new(release_set).expect("release set"),
+            market.to_bytes(),
+            GENERATION,
+            release.manifest.selection,
+            release.manifest.record_bumps,
+        )
+        .expect("Structured capability root header");
+        let (root, root_bump) =
+            Pubkey::find_program_address(&header.seeds().as_slices(), &TRADING_PROGRAM_ID);
+        let mut bytes = header.to_bytes().to_vec();
+        let root_tail = dclutch_structured_v2_contract::StructuredRootV2::new(
+            dclutch_structured_v2_contract::StructuredRootInputV2 {
+                bump: root_bump,
+                terms: descriptor_id,
+                market: market.to_bytes(),
+                rent_beneficiary: market_rent_credit().to_bytes(),
+                revision: 0,
+                historical_rent_principal: Rent::default().minimum_balance(
+                    dclutch_capability_program_contract::CAPABILITY_ROOT_HEADER_BYTES_V1
+                        + dclutch_structured_v2_kernel::STRUCTURED_ROOT_BYTES_V2,
+                ),
+            },
+        )
+        .expect("Structured root tail");
+        bytes.extend_from_slice(&root_tail.to_bytes());
+        add_account(&mut test, root, TRADING_PROGRAM_ID, bytes);
+        root
+    });
+
     let fixture_stub = Fixture {
         actor,
         basis_profile,
@@ -2438,7 +3280,11 @@ fn fixture_with_basis(
         custody_programdata: programdata_address(CUSTODY_PROGRAM_ID),
         core_programdata: programdata_address(CORE_PROGRAM_ID),
         resolution_programdata: programdata_address(RESOLUTION_PROGRAM_ID),
-        caller_programdata: programdata_address(TEST_CALLER_PROGRAM_ID),
+        caller_programdata: programdata_address(if real_trading_elf.is_some() {
+            TRADING_PROGRAM_ID
+        } else {
+            TEST_CALLER_PROGRAM_ID
+        }),
         representation_authority,
         descriptor_id,
         descriptor_raw,
@@ -2473,6 +3319,8 @@ fn fixture_with_basis(
         assets,
         basis,
         terminal_accounts: None,
+        hot_release,
+        capability_root,
     };
 
     let mut fixture = fixture_stub;
@@ -3725,6 +4573,226 @@ async fn real_sbf_open_actions_are_exact_and_conserved() {
         denominated.compute_units,
         reconstituted.wire_bytes,
         reconstituted.compute_units,
+    );
+}
+
+#[tokio::test]
+async fn current_common_hot_executes_issue_and_selected_denominate_through_real_elves() {
+    let trading = trading_artifact();
+    let (test, fixture) = fixture_with_basis_and_trading(
+        TerminalV1::None,
+        ReceiptMintRoles::Both,
+        ProductBasisProfileV1::Categorical,
+        Some(trading),
+    );
+    let mut context = test.start_with_context().await;
+
+    let issue_plan = common_hot_open::plan_issue(&mut context, &fixture).await;
+    let issue_bundle = common_hot_open::build_hot(
+        &mut context,
+        &fixture,
+        RepresentationActionV2::IssueStructured,
+        &issue_plan.family_request,
+        &issue_plan.claims_child,
+    )
+    .await;
+    common_hot_open::assert_public_issue_outer(&mut context, &fixture, &issue_plan, &issue_bundle)
+        .await;
+    common_hot_open::install(&mut context, &issue_bundle);
+    let before = snapshot(&mut context, &fixture).await;
+    let issue = issue_bundle.hot_instruction.clone();
+    let issue_addresses = lookup_addresses(
+        context.payer.pubkey(),
+        fixture.actor.pubkey(),
+        std::slice::from_ref(&issue),
+    );
+    let (issue_table, issue_alt_cu) = create_live_lookup_table(
+        &mut context,
+        &issue_addresses,
+        "Trading common-Hot Rational IssueStructured",
+    )
+    .await;
+
+    let mut substituted_digest = issue.clone();
+    *substituted_digest
+        .data
+        .last_mut()
+        .expect("nonempty family request") ^= 1;
+    let refused = submit_v0(
+        &mut context,
+        &fixture,
+        substituted_digest,
+        issue_table,
+        &issue_addresses,
+        "Trading common-Hot Rational IssueStructured substituted request digest refuses",
+    )
+    .await
+    .expect("hostile common-Hot transaction");
+    assert!(!refused.accepted, "substituted family request must refuse");
+    assert!(
+        refused.logs.iter().any(|line| line.contains(&format!(
+            "Custom({})",
+            dclutch_trading_sbf::TradingSbfError::Content as u32
+        ))),
+        "the Hot content owner must name the substituted family refusal: {}",
+        refused.logs.join("\n")
+    );
+    assert_eq!(
+        snapshot(&mut context, &fixture).await,
+        before,
+        "a substituted common-Hot request rolls back Claims and Token state"
+    );
+
+    let issued = submit_v0(
+        &mut context,
+        &fixture,
+        issue.clone(),
+        issue_table,
+        &issue_addresses,
+        "Trading common-Hot Rational IssueStructured commits",
+    )
+    .await
+    .expect("real Trading IssueStructured transaction");
+    if !issued.accepted {
+        eprintln!(
+            "common-Hot IssueStructured refusal:\n{}",
+            issued.logs.join("\n")
+        );
+    }
+    assert!(issued.accepted, "real Trading → Claims IssueStructured");
+    assert!(
+        issued
+            .logs
+            .iter()
+            .any(|line| line == &format!("Program {CLAIMS_PROGRAM_ID} success")),
+        "real Claims ELF must return through Trading"
+    );
+    assert!(
+        issued
+            .logs
+            .iter()
+            .any(|line| line == &format!("Program {TOKEN_PROGRAM_ID} success")),
+        "real Token-2022 must commit the receipt and shard transfers"
+    );
+    let after_issue = snapshot(&mut context, &fixture).await;
+    assert_eq!(replay_revision(&after_issue.replay), 1);
+    assert_eq!(after_issue.aggregate, before.aggregate);
+    assert_eq!(after_issue.actor_position, before.actor_position);
+    assert_eq!(after_issue.positions, before.positions);
+    assert_eq!(mint_supply(&after_issue.receipt_mint), RECEIPT_SUPPLY + 1);
+    assert_eq!(token_amount(&after_issue.actor_receipt), 1);
+    for (index, (actor, structured)) in actor_shards_after_issue()
+        .into_iter()
+        .zip(structured_shards_after_issue())
+        .enumerate()
+    {
+        let supply = mint_supply(after_issue.shard_mints.get(index).expect("shard Mint"));
+        assert_eq!(supply, shard_supply(index));
+        assert_eq!(
+            token_amount(after_issue.actor_shards.get(index).expect("actor shard")),
+            actor
+        );
+        assert_eq!(
+            token_amount(
+                after_issue
+                    .structured_shards
+                    .get(index)
+                    .expect("Structured shard"),
+            ),
+            structured
+        );
+        assert_eq!(actor + structured, supply, "no hidden shard remainder");
+    }
+
+    let denominate_plan = common_hot_open::plan_denominate(&mut context, &fixture).await;
+    let denominate_bundle = common_hot_open::build_hot(
+        &mut context,
+        &fixture,
+        RepresentationActionV2::Denominate,
+        &denominate_plan.family_request,
+        &denominate_plan.claims_child,
+    )
+    .await;
+    common_hot_open::assert_public_denominate_outer(
+        &mut context,
+        &fixture,
+        &denominate_plan,
+        &denominate_bundle,
+    )
+    .await;
+    common_hot_open::install(&mut context, &denominate_bundle);
+    assert_eq!(
+        snapshot(&mut context, &fixture).await,
+        after_issue,
+        "installing immutable action artifacts does not mutate protocol state"
+    );
+    let denominate = denominate_bundle.hot_instruction.clone();
+    let denominate_addresses = lookup_addresses(
+        context.payer.pubkey(),
+        fixture.actor.pubkey(),
+        std::slice::from_ref(&denominate),
+    );
+    let (denominate_table, denominate_alt_cu) = create_live_lookup_table(
+        &mut context,
+        &denominate_addresses,
+        "Trading common-Hot Rational Denominate",
+    )
+    .await;
+    let denominated = submit_v0(
+        &mut context,
+        &fixture,
+        denominate.clone(),
+        denominate_table,
+        &denominate_addresses,
+        "Trading common-Hot Rational Denominate commits",
+    )
+    .await
+    .expect("real Trading Denominate transaction");
+    if !denominated.accepted {
+        eprintln!(
+            "common-Hot Denominate refusal:\n{}",
+            denominated.logs.join("\n")
+        );
+    }
+    assert!(denominated.accepted, "real Trading → Claims Denominate");
+    assert!(
+        denominated.wire_bytes <= PACKET_LIMIT,
+        "selected Denominate is honestly signable at K=3: {} bytes",
+        denominated.wire_bytes
+    );
+    let after_denominate = snapshot(&mut context, &fixture).await;
+    assert_eq!(replay_revision(&after_denominate.replay), 2);
+    assert_eq!(lbv2_revision(&after_denominate.aggregate.data), 1);
+    assert_eq!(lbv2_revision(&after_denominate.actor_position.data), 1);
+    assert_eq!(
+        lbv2_position_quantity(&after_denominate.actor_position.data, WINNER),
+        ACTOR_CLAIMS[WINNERS] - 1
+    );
+    assert_eq!(lbv2_revision(&after_denominate.positions[WINNERS].data), 1);
+    assert_eq!(
+        lbv2_position_quantity(&after_denominate.positions[WINNERS].data, WINNER),
+        CUSTODY_CLAIMS[WINNERS] + 1
+    );
+    assert_eq!(
+        mint_supply(&after_denominate.shard_mints[WINNERS]),
+        shard_supply(WINNERS) + DENOMINATOR
+    );
+    assert_eq!(
+        token_amount(&after_denominate.actor_shards[WINNERS]),
+        actor_shards_after_issue()[WINNERS] + DENOMINATOR
+    );
+    assert_eq!(
+        token_amount(&after_denominate.structured_shards[WINNERS]),
+        structured_shards_after_issue()[WINNERS]
+    );
+    eprintln!(
+        "common-Hot Rational: issue accounts={} wire={} CU={} ALT-CU={issue_alt_cu:?}; denominate accounts={} wire={} CU={} ALT-CU={denominate_alt_cu:?}; replay=0→1→2; aggregate=0→1",
+        issue.accounts.len(),
+        issued.wire_bytes,
+        issued.compute_units,
+        denominate.accounts.len(),
+        denominated.wire_bytes,
+        denominated.compute_units,
     );
 }
 

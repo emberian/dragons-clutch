@@ -1628,6 +1628,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-claims-conservation-contract"
+version = "0.1.0"
+dependencies = [
+ "dclutch-custody-contract",
+ "dclutch-economic-slice-kernel",
+ "dclutch-source-contract",
+]
+
+[[package]]
 name = "dclutch-claims-representation-codec"
 version = "0.1.0"
 

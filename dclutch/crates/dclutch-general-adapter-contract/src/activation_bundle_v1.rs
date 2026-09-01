@@ -300,6 +300,8 @@ impl InheritedV1 {
             constant_root_tail: constant_tail,
             seam_fields: &GENERAL_ACTIVATION_TAIL_FIELDS_V1,
             funding_ledger_slot_count: self.funding_ledger_slot_count,
+            // This family funds its root with its exact Rent reserve alone.
+            delivers_creation_principal: false,
         }
     }
 }

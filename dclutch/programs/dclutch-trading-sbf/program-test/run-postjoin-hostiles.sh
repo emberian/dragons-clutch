@@ -60,19 +60,60 @@ do
   build_sbf "$manifest" "$hostile_out"
 done
 
+# EVERY case runs, and every case is reported. This used to be four bare
+# invocations under `set -e`, so the first failure aborted the script and the
+# remaining rows never ran -- and nothing said so. Measured 2026-09-01: the
+# control was failing, CI reported exactly one failing case, and the true
+# figure in that test file was TEN. Three of the rows below had not been
+# executed at all, and "did not run" had been presented as though it were the
+# whole result. Keep the accounting; it is the only reason a silent red here
+# is visible from outside.
+declare -a passed=() failed=()
+
 run_case() {
   name="$1"
-  SBF_OUT_DIR="$real_out" \
-  POSTJOIN_SBF_OUT_DIR="$hostile_out" \
-  DCLUTCH_FIXTURE_SUBSTRATE=slot-pinned \
-    "${cargo_command[@]}" test --locked \
-      --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
-      --test registry_hot_continuation "$name" -- --exact --nocapture
+  if SBF_OUT_DIR="$real_out" \
+     POSTJOIN_SBF_OUT_DIR="$hostile_out" \
+     DCLUTCH_FIXTURE_SUBSTRATE=slot-pinned \
+       "${cargo_command[@]}" test --locked \
+         --manifest-path programs/dclutch-trading-sbf/program-test/Cargo.toml \
+         --test registry_hot_continuation "$name" -- --exact --nocapture
+  then
+    passed+=("$name")
+  else
+    failed+=("$name")
+  fi
 }
 
-run_case real_registry_executes_profile14_direct_hot_under_protocol_limit
+# The first row is the CONTROL: the same bundle with nothing hostile about it.
+# The three that follow are hostiles, and each one is only meaningful while the
+# control executes -- a hostile that "passes" because the honest path already
+# refused is a test of nothing (`AGENTS.md`, ledger M-38).
+control=real_registry_executes_profile14_direct_hot_under_protocol_limit
+
+set +e
+run_case "$control"
 run_case nonselected_claims_supply_corruption_after_real_child_commit_rolls_back
 run_case omitted_token_close_authority_corruption_after_real_custody_commit_rolls_back
 run_case omitted_custody_replay_lineage_corruption_after_real_child_commit_rolls_back
+set -e
+
+printf '\n=== postjoin ===\n'
+for name in "${passed[@]}"; do printf '  passed  %s\n' "$name"; done
+for name in "${failed[@]}"; do printf '  FAILED  %s\n' "$name"; done
+
+control_failed=0
+for name in "${failed[@]}"; do
+  [ "$name" = "$control" ] && control_failed=1
+done
+if [ "$control_failed" = "1" ]; then
+  echo "  the CONTROL failed, so every hostile verdict above proves NOTHING:" >&2
+  echo "  each of them can refuse for the honest path's reason instead of its own." >&2
+fi
 
 printf 'postjoin hostile evidence retained at %s\n' "$work"
+
+if [ "${#failed[@]}" -ne 0 ]; then
+  printf '%s of %s postjoin rows failed\n' "${#failed[@]}" "$(( ${#passed[@]} + ${#failed[@]} ))" >&2
+  exit 1
+fi

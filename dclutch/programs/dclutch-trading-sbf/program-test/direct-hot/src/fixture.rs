@@ -816,7 +816,23 @@ fn registered_creation_hot_instruction_v4(
         .map(|value| value.meta.clone())
         .collect::<Vec<_>>();
     let seal_accounts = metas.clone();
-    alias_sealed_execution_metas(&mut metas)?;
+    // NOT aliased, and that is a rule of the executing program rather than a
+    // fixture preference. `hot_v3` computes
+    // `frame.uses_sealed_execution_aliases()` and requires it to EQUAL
+    // `selected_kind == DIRECT_SUCCESSOR_KIND_ID_V3 && selected_action ==
+    // InlineOrdinary`, refusing `TradingSbfError::Content` (0x4003) either way
+    // round. The entitlement is packet relief for the one action that needed
+    // it -- the ordinary continuation sat at 1,198 of 1,232 bytes and the six
+    // aliases bought it six lookup indexes -- and the seal is what makes the
+    // staging coordinate redundant there. Every other action, this one
+    // included, keeps the fully distinct frame.
+    //
+    // Measured 2026-09-01 (lane DIRECT-SELLBUY): this builder aliased
+    // unconditionally, copied from the ordinary builder, so the FIRST registered
+    // Sell ever submitted to a real ELF refused `Content` at 117,613 CU in the
+    // band between the `root-product` and `artifacts-strategy-effect`
+    // checkpoints, before any child CPI. Nothing caught it because no registered
+    // creation had ever executed on a chain.
     metas.extend(runtime.iter().skip(5).map(|value| value.meta.clone()));
     Ok((
         Instruction {

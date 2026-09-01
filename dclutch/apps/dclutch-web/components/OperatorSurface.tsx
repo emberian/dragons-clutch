@@ -15,12 +15,11 @@ import {
   type OperatorSurfaceSnapshotV1,
 } from '@/lib/operatorSurface';
 import {
-  CAPABILITY_ACTIONS_V1,
   capabilityActContractV1,
-  capabilityWorkspaceV1,
-  type CapabilityActionV1,
   type CapabilityFamily,
+  type CapabilityStandingV1,
 } from '@/lib/capabilityModel';
+import { BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import { SolanaRpcClient } from '@/lib/rpc';
 import {
   acquireUnsignedTransactionDependenciesV1,
@@ -76,9 +75,12 @@ export function packetExportReadyV1(packet: PacketExportStateV1 | null, endpoint
     && packet.report.missing.length === 0
     && packet.report.nonExecutablePrograms.length === 0;
 }
-function familyGroups(): ReadonlyArray<Readonly<{ family: CapabilityFamily; actions: ReadonlyArray<CapabilityActionV1> }>> {
+function familyGroups(): ReadonlyArray<Readonly<{ family: CapabilityFamily; actions: ReadonlyArray<CapabilityStandingV1> }>> {
   const order: CapabilityFamily[] = ['Release', 'Creation', 'Direct', 'Source', 'Series', 'General', 'Dealer', 'Claims'];
-  return order.map((family) => Object.freeze({ family, actions: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.family === family) }));
+  return order.map((family) => Object.freeze({
+    family,
+    actions: BROWSER_CAPABILITY_STANDINGS_V1.filter((standing) => standing.action.family === family),
+  }));
 }
 
 export default function OperatorSurface() {
@@ -96,10 +98,12 @@ export default function OperatorSurface() {
   useEffect(() => { currentEndpoint.current = endpoint; }, [endpoint]);
   useEffect(() => { currentUnsignedText.current = unsignedText; }, [unsignedText]);
   const groups = useMemo(() => familyGroups(), []);
+  // Counted from the derived standings, so these three numbers move when the
+  // browser moves and never because someone retyped a row.
   const counts = useMemo(() => ({
-    constructible: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-unsigned' || workflow.implementation === 'browser-message' || workflow.implementation === 'browser-wallet').length,
-    request: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'rust-unsigned' || workflow.implementation === 'operator-artifact' || workflow.implementation === 'operator-campaign').length,
-    blocked: CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'awaiting-production').length,
+    constructible: BROWSER_CAPABILITY_STANDINGS_V1.filter((standing) => standing.venue === 'browser').length,
+    request: BROWSER_CAPABILITY_STANDINGS_V1.filter((standing) => standing.venue === 'operator-cli').length,
+    blocked: BROWSER_CAPABILITY_STANDINGS_V1.filter((standing) => standing.venue === 'no-venue').length,
   }), []);
 
   function updateCoordinate(role: string, value: string) {
@@ -197,7 +201,7 @@ export default function OperatorSurface() {
 
   return <main className="product-shell operator-shell">
     <ConsoleHeader path="/operate" title="Operations" purpose="See known constructors and missing seams. Every route still requires its own preflight." />
-    <section className="operator-hero"><div><h1>Operations.</h1><p>Load the checked devnet coordinates instead of typing six program addresses. The preset supplies no Market, and every deployment slot is read live from ProgramData: these programs are upgraded in place at permanent addresses, so a slot that has moved forward is reported, not refused. A matching deployment does not make a route executable — each route still authenticates its own release, accounts, state, and packet.</p></div><div className="operator-counts"><article><strong>{counts.constructible}</strong><span>browser constructors</span></article><article><strong>{counts.request}</strong><span>operator-only constructors</span></article><article><strong>{counts.blocked}</strong><span>missing execution seams</span></article></div></section>
+    <section className="operator-hero"><div><h1>Operations.</h1><p>Load the checked devnet coordinates instead of typing six program addresses. The preset supplies no Market, and every deployment slot is read live from ProgramData: these programs are upgraded in place at permanent addresses, so a slot that has moved forward is reported, not refused. A matching deployment does not make a route executable — each route still authenticates its own release, accounts, state, and packet.</p></div><div className="operator-counts"><article><strong>{counts.constructible}</strong><span>acts this browser builds</span></article><article><strong>{counts.request}</strong><span>acts a published command runs</span></article><article><strong>{counts.blocked}</strong><span>acts with no venue and a named wall</span></article></div></section>
 
     <form className="operator-inspector" onSubmit={inspectDeployment}>
       <header><span>01</span><div><h2>Reacquire the multiprogram deployment</h2><p>Load the published devnet coordinates, or enter your own. Only the devnet preset earns a checked-deployment verdict; a custom set is an input.</p><div className="direct-actions"><button type="button" className="secondary-action" onClick={loadLiveDevnetPreset}>Use checked live-devnet preset</button><Anchor href="/release">Inspect the full route release →</Anchor></div></div></header>
@@ -208,12 +212,12 @@ export default function OperatorSurface() {
 
     <section className="operator-route-runbook" id="direct-route"><header><span>02</span><div><h2>Export the portable Direct route</h2><p>This is the artifact a maker or taker pastes into a client. Two read-only successor calls produce it; neither command has a key, wallet, signing, or submission capability.</p></div></header><div className="operator-route-contract"><article><span>Inputs</span><strong>Checked releases + frozen Direct session</strong><p>Absolute paths and lowercase SHA-256 from the current release reports: five execution roles, Registry, Rent, and the Direct session whose durable journal proves its lookup table frozen.</p></article><article><span>Authority</span><strong>Finalized devnet reads only</strong><p>The Rust producer reauthenticates devnet, reads the live Registry activation cache, and uses the same finalized Direct planning path as execution. Typed files remain candidates.</p></article><article><span>Result</span><strong>One route + one report</strong><p>The JSON carries the exact 39 named rows, runtime tail, frozen lookup table, and checked infrastructure. Every consuming client reacquires it; copying it grants no authority.</p></article><article><span>If refused</span><strong>Fix the named evidence wall</strong><p>A missing lookup-freeze journal means the Direct session is not ready to publish. A digest or activation mismatch means the supplied release evidence is not the live selected set.</p></article></div><details><summary>Show the exact CLI invocation</summary><p>Set each shell variable to an absolute path or the digest from that artifact’s machine report. Both output paths must be new.</p><CommandRunbook label="Read-only route export" command={DIRECT_ROUTE_RUNBOOK_V1} /></details></section>
 
-    <section className="operator-wave"><header><span>03</span><div><h2>Constructor readiness map</h2><p>Each entry separates the act from its authority and result. “Operator artifact” is a key-free, read-only CLI export. “Operator campaign” is a journaled Rust workflow with explicit execution authority. “Browser message” asks only for a detached signature. “Browser wallet” is a transaction flow with durable recovery and finalized verification. “Rust unsigned” stays in operator tooling. “Awaiting production” names the exact missing seam.</p></div></header><div className="operator-family-grid">{groups.map((group) => <article key={group.family}><h3>{group.family}</h3>{group.actions.map((workflow) => {
-      const contract = capabilityActContractV1(workflow);
-      const workspace = capabilityWorkspaceV1(workflow, discovery.kind === 'ready' ? discovery.snapshot : null);
-      return <div className="operator-action" key={workflow.id}><span className={`operator-status ${workflow.implementation}`}>{workflow.implementation.replaceAll('-', ' ')}</span><strong>{workflow.action}</strong><p>{workflow.exactBoundary}</p><dl className="operator-action-contract"><div><dt>Authority</dt><dd>{contract.authority}</dd></div><div><dt>Result</dt><dd>{contract.result}</dd></div></dl>{workspace !== null
-        ? <Anchor href={workspace}>{workflow.implementation === 'browser-unsigned' ? 'Open exact preflight' : workflow.implementation === 'browser-message' ? 'Open offer authoring' : workflow.implementation === 'browser-wallet' ? 'Open wallet flow' : workflow.implementation === 'operator-artifact' || workflow.implementation === 'operator-campaign' ? 'Open exact runbook' : 'Inspect current boundary'} →</Anchor>
-        : workflow.workspace === 'market-detail' && <small className="operator-action-remedy">Reacquire one Market above to open its exact participant flow.</small>}</div>;
+    <section className="operator-wave"><header><span>03</span><div><h2>The whole census, including what has no venue</h2><p>Every protocol act, grouped by family. The venue line is derived from this application&rsquo;s own routes and the module that builds each act&rsquo;s bytes — nothing here is a status anyone typed. An act with no venue names its wall and where that wall is written down, rather than a date.</p></div></header><div className="operator-family-grid">{groups.map((group) => <article key={group.family}><h3>{group.family}</h3>{group.actions.map((standing) => {
+      const contract = capabilityActContractV1(standing);
+      const workspace = capabilityWorkspaceV1(standing.action, discovery.kind === 'ready' ? discovery.snapshot : null);
+      return <div className="operator-action" key={standing.action.id}><span className={`operator-status ${standing.venue}`}>{contract.venue}</span><strong>{standing.action.action}</strong><p>{standing.action.guarantee}</p>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{standing.unverifiedAbis.map((module) => <p className="operator-action-wall" key={module}><strong>No authority behind it</strong> {module} is generated and no <code>abi:*:verify</code> script checks it.</p>)}{workspace !== null
+        ? <Anchor href={workspace}>{standing.venue === 'operator-cli' ? 'Open the exact runbook' : standing.authority === 'none' ? 'Open exact preflight' : standing.authority === 'wallet-message' ? 'Open offer authoring' : 'Open wallet flow'} →</Anchor>
+        : standing.action.workspace === 'market-detail' && <small className="operator-action-remedy">Reacquire one Market above to open its exact participant flow.</small>}</div>;
     })}</article>)}</div></section>
 
     <section className="operator-handoff"><header><span>04</span><div><h2>Inspect, reacquire, then export</h2><p>Each act unlocks the next. Signed and oversized packets refuse before any chain read; export stays closed until every dependency is reacquired.</p></div></header><div className="operator-handoff-grid"><form onSubmit={inspectPacket}>

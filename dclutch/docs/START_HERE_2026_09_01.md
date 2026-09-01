@@ -44,6 +44,18 @@ sweep ran as value tests before the push and passed. You do **not** need to
 publish anything, and you do not have publication, push, tag, deploy or
 mainnet authority — those require ember naming the act.
 
+> **STATUS, 2026-09-01 ~07:00.** Much of the CI section below has since been
+> repaired; it is kept because the *diagnoses* remain the useful part, but read
+> `GOAL.md` for current state. Fixed since: the journey relink (`673fcb3e`)
+> plus the two lockfile commits it needed (`7b8cafd9`, and `90e45b29` for the
+> four workspaces that could not resolve under `--locked` at all); the seam
+> audit, 46 findings to green (`c088430e`); the display-decimals pin
+> (`d728d6ff`); and the postjoin control's real cause — an unsatisfiable
+> lifecycle-credit owner conjunct (`ff8ca269`), which took 10 of 27 cases down
+> while CI reported 1. **Still open:** the compute regression that refusal was
+> masking (1,330,239 of 1,399,700 CU), and the Dealer `Content` wall, which is
+> a DIFFERENT defect from the Direct one despite sharing the code.
+
 ## Public CI at the cut — read before you touch anything
 
 The cut ran the public gates and they are red. Every red below is already

@@ -84,6 +84,114 @@ deletions — so no lane lost a line, including the one SERIES asked to have
 carried. I caused part of it: the journey relink committed a `Cargo.toml`
 dependency without its lock.
 
+## THE NIGHT'S BIGGEST RESULT — one class, three families
+
+Three lanes independently convicted the same shape, none of them looking for
+it: **a declaration or guard that no account can satisfy, because it was
+authored in one place and never executed against a real account.** Direct Hot's
+lifecycle-credit owner (repaired), Dealer's doubly-pinned `derivation_policy`
+(ember's ruling), and Structured's account profile declaring `Exact{0}` for the
+Rent sysvar and the System program (route-owner proposal). Full write-up in
+`WAVE.md`. The lesson is the canonical-generation mandate's sibling: an
+expectation must be DERIVED or GENERATED rather than hand-carried — and a
+declaration must be EXECUTED before it can be believed, because a component
+test over encodings and digests passes forever above an unreachable route.
+
+## TREE IS GREEN — all five workspaces, verified
+
+`cargo check --workspace --all-targets` clean at the root (4m08s), and the four
+SEPARATE workspaces the root check does not cover — trading program-test,
+dealer program-test, local-validator successor, gauntlet journey — each clean
+too. That gap was mine: five lockfiles should have told me there were five
+workspaces, and my first "tree-wide" check covered one of them.
+
+## Public CI scoreboard at cut 3 (`5a09fc0f5`)
+
+GREEN, verified in public and not just locally:
+`repository hygiene` - `release tooling refusals` - `web+SDK (sdk)` -
+**`the journey campaign compiles`** - **`seam register and emission census`**.
+
+RED, and each is a wall we already own by name:
+- `SBF programs and the Direct compute margin` — COMPUTE-MARGIN's.
+- `SBF program-test suites`, 2 of 7 rows: `dealer` (26 passed, 1 failed — the
+  jointly-unsatisfiable `derivation_policy`, ember's ruling) and `postjoin`
+  (0 passed, 1 failed, 26 filtered — the control, which now dies on the COMPUTE
+  wall rather than the `Content` refusal, exactly as measured locally, so the
+  repair moved it forward). `claims` DID NOT RUN — a host fact by design.
+- `web+SDK (web)`, 160 passed / 1 failed — the explorer-coverage drift.
+
+Three jobs turned green tonight. Every remaining red is a named wall with an
+owner, which is the state the letter asks for.
+
+## Orchestrator done-log (wave 2)
+
+- **Public CI: `repository hygiene` is GREEN** at cut `5a09fc0f5` — the seam
+  audit's 46 findings verified retired in public, not just locally.
+- `f3a6a6e0` postjoin runner now reports EVERY row and says outright when a
+  failed control voids the hostiles below it. It was four bare invocations
+  under `set -e`, so the first failure aborted and three rows never ran while
+  CI printed one number. That reporting defect is why a ten-case break looked
+  like a one-case break. Class checked: this was the only runner of that shape.
+- `65b20c24` **red umbrella caught**: `dealer_v3_multi_lp` did not compile at
+  committed HEAD — `v3_equity_operator` moved to borrowing signatures and the
+  test never followed. Invisible to every per-file check; found only by a
+  tree-wide `cargo check --workspace --all-targets`. Worth repeating after
+  each wave — and here is WHY these accumulate: the public job that would
+  catch them, `every Cargo workspace checks`, is gated
+  `if: github.event_name == 'schedule' || workflow_dispatch` with a 120-minute
+  timeout (`rust.yml:340-343`). Nightly-only, so a cross-lane compile break
+  can sit in the tree for a day while every per-crate gate stays green. During
+  a swarm the orchestrator must run it by hand. It found two real breaks
+  tonight, and the second was invisible until the first was fixed, because
+  cargo aborts the run at the first failing crate.
+- Host repo `02bab0b84` + `4dc8bafbf`: the web suite's rustup conflict is gone
+  (fix confirmed working — it now fails differently), and the parity binary is
+  prebuilt instead of cold-compiled inside a 30s test timeout.
+- Cut 3 published (`5a09fc0f5`), tree-hash gated, swept, pushed.
+- **Web suite is down to ONE legitimate finding**: `160 passed, 1 failed`.
+  The rustup conflict and then the 30s cold-compile timeout are both gone;
+  what remains is `explorerCoverage.test.ts` catching a refusal code
+  (`DCGVFY02`) that reached the protocol without the browser's explorer
+  learning it — a hand-maintained TS list falling behind its wire, which is
+  the exact architecture CONSOLE-TRUTH was sent to retire. Assigned there,
+  with the instruction to make the set DERIVE from the refusal registry
+  rather than to add one string.
+- **Second umbrella find, handed to SERIES**: `tests/series_v2.rs` does not
+  compile at HEAD (`unresolved import crate::core_composition_v3`).
+  Pre-existing from `2d871068`, invisible because a per-crate check builds the
+  library and never this test. NOT a two-line fix: the seam deliberately binds
+  real library modules to keep one owner per authenticated type, but
+  `core_composition_v3` has zero `pub fn`, so binding cannot reach the
+  function; and `#[path]`-including it reaches `crate::child_authority_v4`,
+  so the closure needs measuring first. I reverted my partial fix rather than
+  leave a misleading half-repair in a shared tree.
+  NOTE: the first umbrella run never reached this error — cargo aborted on the
+  dealer break first. One tree-wide check is not proof; run it again after
+  each repair until it is clean.
+- **Operator/guide command audit: CLEAN. A finding I nearly filed was WRONG,
+  recorded so nobody repeats it.** `docs/operators/` teaches `ticket
+  author|post|verify`; all three exist. I then flagged `dclutch found`,
+  `portfolio`, `redeem`, `walk`, `join`, `markets ls`, `intent buy` in
+  `docs/guides/` as the "guides teaching impossible commands" P0, because none
+  are subcommands of the Rust CLI (`tools/dclutch-cli` dispatches exactly
+  five: market, capability, ticket, general, fractional-retirement-next).
+  **That premise was false.** There are TWO binaries named `dclutch`: the Rust
+  one, and a TypeScript one at `packages/dclutch-cli` whose commands are
+  found, join, markets, portfolio, product, redeem, refusal, route, spine,
+  trade, walk — plus intent/buy/sell in its dispatch. Every flagged command
+  exists. The guides are correct.
+  The one real (mild) observation left: two different binaries answer to
+  `dclutch` and the guides do not say which they mean. That is legibility, not
+  a defect, and it is NOT fixed by rewriting guides.
+- **Declared-control class swept: clean.** postjoin's failure mattered because
+  a dead control silently voids every hostile measured against it (ledger
+  M-38). Four tests in the tree declare a named control; one was postjoin's.
+  The other three all pass — `capability_seal_close` is 9/9 including both
+  `a_stranger_closes_a_stranded_seal_and_keeps_the_rent` and
+  `a_defunct_seal_closes_under_a_mined_bump_candidate`, and
+  `the_seal_outer_writes_exactly_the_bytes_the_hot_path_expects` passes in
+  `registry_hot_continuation`. So the class is retired, not just the instance.
+
 ## Done-log
 
 - Published two cuts (`7509c998b`, `546288b8b`), tree-hash gated + swept.

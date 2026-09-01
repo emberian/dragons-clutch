@@ -1,134 +1,87 @@
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import { Card, CardContent } from '@/components/ui/card';
-import {
-  CAPABILITY_ACTIONS_V1,
-  capabilityActContractV1,
-  type CapabilityActionV1,
-} from '@/lib/capabilityModel';
+import { capabilityVenueTextV1, type CapabilityStage, type CapabilityStandingV1 } from '@/lib/capabilityModel';
+import { BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import { docsHrefV1 } from '@/lib/flags';
 
 /**
- * `/console` — one directory generated from the executable capability truth.
+ * `/console` — the directory, generated from what the code can actually do.
  *
- * A linked workspace may still perform its own chain-specific preflight, but
- * this directory never keeps a second description of what the workspace can
- * do. Capability labels and act contracts come directly from the catalogue
- * used by `/operate`; only lifecycle grouping and two evidence-only support
- * tools are local presentation facts.
+ * Every line below except the four stage decks and the two evidence tools is
+ * derived: the outcomes are the capability catalogue's own labels, the venue
+ * line is computed from the browser's import graph, and an act appears here at
+ * all only because a route reaches a module that builds its bytes. There is no
+ * second description of any workspace on this page, and no status anyone can
+ * type — see `packages/dclutch-sdk/lib/capabilityModel.ts` for why that
+ * mattered enough to rebuild.
+ *
+ * Each card is outcome first, venue and authority second, one safety or
+ * recovery guarantee third. An act with a wall carries the wall in the same
+ * card as the outcome, because a reader deciding whether to start needs both
+ * facts at once; an act with no venue at all is not listed here, because a
+ * directory of things you can do is not the place to advertise things you
+ * cannot. Those live on `/operate`, with the wall that holds them.
  */
-
-type ActionConsoleDefinitionV1 = Readonly<{
-  workspace: string;
-  href: string;
-  name: string;
-}>;
 
 type SupportConsoleV1 = Readonly<{
   href: string;
-  name: string;
   outcome: string;
-  contract: string;
+  venue: string;
+  guarantee: string;
 }>;
 
-type ConsoleEntryV1 = Readonly<{
-  href: string;
-  name: string;
-  actions: ReadonlyArray<CapabilityActionV1>;
-  support: SupportConsoleV1 | null;
-}>;
-
-type ConsoleBandV1 = Readonly<{
+type StageBandV1 = Readonly<{
+  stage: CapabilityStage;
   title: string;
   deck: string;
-  actionConsoles?: ReadonlyArray<ActionConsoleDefinitionV1>;
-  supportConsoles?: ReadonlyArray<SupportConsoleV1>;
 }>;
 
-const BANDS_V1: ReadonlyArray<ConsoleBandV1> = Object.freeze([
+/** The only editorial facts on this page: how the lifecycle reads. */
+const STAGE_BANDS_V1: ReadonlyArray<StageBandV1> = Object.freeze([
+  Object.freeze({ stage: 'author', title: 'Author and open', deck: 'Compile the product, check the founding, and open the market.' }),
+  Object.freeze({ stage: 'trade', title: 'Trade and clear', deck: 'Offer, take, and clear at the prices participants set.' }),
+  Object.freeze({ stage: 'resolve', title: 'Resolve', deck: 'Fund the resolution, admit the outside evidence, and close it out.' }),
+  Object.freeze({ stage: 'claim', title: 'Claim and retire', deck: 'Redeem what a finished market owes, and retire what it no longer needs.' }),
+]);
+
+/**
+ * Two read-only tools that answer a question rather than perform an act.
+ *
+ * They are not capabilities and deliberately do not appear in the catalogue:
+ * neither builds bytes, and calling them acts would put a readiness map beside
+ * a redemption. They keep the same three lines so the page reads as one thing.
+ */
+const SUPPORT_CONSOLES_V1: ReadonlyArray<SupportConsoleV1> = Object.freeze([
   Object.freeze({
-    title: 'Author and open',
-    deck: 'Compile the product, then open the market from authenticated inputs.',
-    actionConsoles: Object.freeze([
-      Object.freeze({ workspace: '/product-v2', href: '/product-v2#spline-product', name: 'Product compiler' }),
-      Object.freeze({ workspace: '/found', href: '/found#current-founding', name: 'Founding' }),
-    ]),
+    href: '/workbench',
+    outcome: 'Read the remaining lifecycle work for one market',
+    venue: 'This browser · no key, no signature',
+    guarantee: 'Finalized reads only. It produces a readiness map and no transaction.',
   }),
   Object.freeze({
-    title: 'Trade and resolve',
-    deck: 'Construct the market’s live trading, clearing, and resolution acts.',
-    actionConsoles: Object.freeze([
-      Object.freeze({ workspace: '/liquidity', href: '/liquidity', name: 'Dealer liquidity' }),
-      Object.freeze({ workspace: '/general', href: '/general', name: 'General clearing' }),
-      Object.freeze({ workspace: '/resolution', href: '/resolution', name: 'Resolution' }),
-    ]),
-  }),
-  Object.freeze({
-    title: 'Run the deployment',
-    deck: 'Activate checked releases and produce current operator artifacts.',
-    actionConsoles: Object.freeze([
-      Object.freeze({ workspace: '/release', href: '/release', name: 'Release activation' }),
-      Object.freeze({ workspace: '/operate', href: '/operate', name: 'Operations' }),
-    ]),
-  }),
-  Object.freeze({
-    title: 'Verify the record',
-    deck: 'Reacquire lifecycle readiness and compare durable evidence with finalized state.',
-    supportConsoles: Object.freeze([
-      Object.freeze({
-        href: '/workbench',
-        name: 'Lifecycle workbench',
-        outcome: 'Read the remaining lifecycle work for one authenticated Market.',
-        contract: 'Finalized reads only. Produces a readiness map; no transaction.',
-      }),
-      Object.freeze({
-        href: '/local',
-        name: 'Local successor',
-        outcome: 'Rejoin a checkpointed local validator to its published evidence.',
-        contract: 'Local files and finalized reads only. Produces a byte-for-byte comparison.',
-      }),
-    ]),
+    href: '/local',
+    outcome: 'Rejoin a checkpointed local validator to its published evidence',
+    venue: 'This browser · no key, no signature',
+    guarantee: 'Local files and finalized reads only. It produces a byte-for-byte comparison.',
   }),
 ]);
 
-function workspacePathV1(workspace: CapabilityActionV1['workspace']): string | null {
-  if (workspace === null || workspace === 'market-detail') return null;
-  return workspace.split('#', 1)[0] ?? null;
+/** Where a reader goes to perform one act. */
+function destinationV1(standing: CapabilityStandingV1): string {
+  // A market-bound act has no address until a Market is chosen, so the
+  // directory hands the reader the market list rather than inventing one.
+  return capabilityWorkspaceV1(standing.action, null) ?? '/markets';
 }
 
-const EXECUTABLE_ACTIONS_V1 = Object.freeze(CAPABILITY_ACTIONS_V1.filter(
-  (candidate) => candidate.implementation !== 'awaiting-production',
-));
+const LISTED_V1 = Object.freeze(BROWSER_CAPABILITY_STANDINGS_V1.filter((candidate) => candidate.venue !== 'no-venue'));
 
-function entriesForBandV1(band: ConsoleBandV1): ReadonlyArray<ConsoleEntryV1> {
-  const actionEntries = (band.actionConsoles ?? []).map((definition) => Object.freeze({
-    href: definition.href,
-    name: definition.name,
-    actions: Object.freeze(EXECUTABLE_ACTIONS_V1.filter(
-      (candidate) => workspacePathV1(candidate.workspace) === definition.workspace,
-    )),
-    support: null,
-  })).filter((entry) => entry.actions.length > 0);
-  const supportEntries = (band.supportConsoles ?? []).map((support) => Object.freeze({
-    href: support.href,
-    name: support.name,
-    actions: Object.freeze([]) as ReadonlyArray<CapabilityActionV1>,
-    support,
-  }));
-  return Object.freeze([...actionEntries, ...supportEntries]);
+function standingsForStageV1(stage: CapabilityStage): ReadonlyArray<CapabilityStandingV1> {
+  return LISTED_V1.filter((candidate) => candidate.action.stage === stage);
 }
 
-function contractsForActionsV1(actions: ReadonlyArray<CapabilityActionV1>): ReadonlyArray<string> {
-  return Object.freeze(Array.from(new Set(actions.map((candidate) => {
-    const contract = capabilityActContractV1(candidate);
-    return `${contract.result} ${contract.authority}`;
-  }))));
-}
-
-const DIRECTORY_ACTION_COUNT_V1 = BANDS_V1.reduce(
-  (total, band) => total + entriesForBandV1(band).reduce((subtotal, entry) => subtotal + entry.actions.length, 0),
-  0,
-);
+/** Acts whose venue is elsewhere, counted rather than hidden. */
+const WALLED_V1 = Object.freeze(BROWSER_CAPABILITY_STANDINGS_V1.filter((candidate) => candidate.venue === 'no-venue'));
 
 export default function ConsoleDirectory() {
   return <main className="product-shell trade-v3-shell">
@@ -136,36 +89,35 @@ export default function ConsoleDirectory() {
 
     <section className="trade-v3-hero">
       <div>
-        <p className="eyebrow">Tools for running and building on dClutch</p>
+        <p className="eyebrow">Everything dClutch can do, and where each act happens</p>
         <h1>Choose the<br /><em>outcome.</em></h1>
-        <p>{DIRECTORY_ACTION_COUNT_V1} executable protocol acts are routed below. Each
-        entry says what works, what it produces, and whose authority it asks for.
-        Market-participant acts stay on the selected <Anchor href="/markets">Market</Anchor>.</p>
-        <p>These claims come from the same capability catalogue used for chain
-        preflight. Artifact inputs name their producer; the complete provenance
-        table is <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts,
-        and where they come from”</a>.</p>
+        <p>{LISTED_V1.length} protocol acts are routed below. Each one says what it produces,
+        whose authority it asks for, and the one promise it keeps about signing,
+        sending, and recovery. Market-participant acts stay on the
+        selected <Anchor href="/markets">Market</Anchor>.</p>
+        <p>None of these claims is written down. Each is derived from the module
+        that builds the act and the route that reaches it, so this page can only
+        say what the code does. {WALLED_V1.length} further acts have no venue here
+        yet; each names its wall on the <Anchor href="/operate">operations console</Anchor>.
+        Artifact inputs name their producer, and the complete provenance table
+        is <a href={docsHrefV1('readme.html', 'README.md')}>“The artifacts, and where they come from”</a>.</p>
       </div>
     </section>
 
-    <section aria-label="Operator consoles">
-      {BANDS_V1.map((band, index) => {
-        const entries = entriesForBandV1(band);
-        return <Card className="trade-v3-card" key={band.title}>
+    <section aria-label="Protocol acts by lifecycle stage">
+      {STAGE_BANDS_V1.map((band, index) => {
+        const standings = standingsForStageV1(band.stage);
+        if (standings.length === 0) return null;
+        return <Card className="trade-v3-card" key={band.stage}>
           <header><span>{String(index + 1).padStart(2, '0')}</span><div><h2>{band.title}</h2><p>{band.deck}</p></div></header>
           <CardContent className="console-index p-0">
-            {entries.map((entry) => {
-              const outcomes = entry.support === null
-                ? entry.actions.map((candidate) => candidate.action)
-                : [entry.support.outcome];
-              const contracts = entry.support === null
-                ? contractsForActionsV1(entry.actions)
-                : [entry.support.contract];
-              return <Anchor key={entry.href} className="console-entry" href={entry.href}>
-                <strong>{entry.name}</strong>
+            {standings.map((standing) => {
+              return <Anchor key={standing.action.id} className="console-entry" href={destinationV1(standing)}>
+                <strong>{standing.action.action}</strong>
                 <span className="console-entry-copy">
-                  <b>{outcomes.join(' · ')}</b>
-                  {contracts.map((contract) => <small key={contract}>{contract}</small>)}
+                  <b>{capabilityVenueTextV1(standing)}</b>
+                  <small>{standing.action.guarantee}</small>
+                  {standing.walls.map((held) => <small key={held.citation} className="console-entry-wall">Known wall · {held.statement}</small>)}
                 </span>
                 <em aria-hidden="true">→</em>
               </Anchor>;
@@ -173,6 +125,23 @@ export default function ConsoleDirectory() {
           </CardContent>
         </Card>;
       })}
+      <Card className="trade-v3-card" key="verify">
+        <header><span>{String(STAGE_BANDS_V1.length + 1).padStart(2, '0')}</span><div><h2>Verify the record</h2><p>Compare durable evidence with finalized state.</p></div></header>
+        <CardContent className="console-index p-0">
+          {SUPPORT_CONSOLES_V1.map((support) => <Anchor key={support.href} className="console-entry" href={support.href}>
+            <strong>{support.outcome}</strong>
+            <span className="console-entry-copy">
+              <b>{support.venue}</b>
+              <small>{support.guarantee}</small>
+            </span>
+            <em aria-hidden="true">→</em>
+          </Anchor>)}
+        </CardContent>
+      </Card>
     </section>
+
+    <p className="console-stage-note">Stages are the only grouping this page decides. Everything
+    else — which acts exist, where each one runs, and what it asks for — comes
+    from the capability catalogue and this application&rsquo;s own routes.</p>
   </main>;
 }

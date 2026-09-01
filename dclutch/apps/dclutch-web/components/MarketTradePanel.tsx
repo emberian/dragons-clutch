@@ -302,10 +302,20 @@ export default function MarketTradePanel({
       <FlowStep step={stepAt(4)}>
         {ticket !== null && (() => {
           const most = formatQuantityV1(ticket.intent.maximumFill, denomination);
+          // THE CEILING, NOT A BALANCE. A signed sell offer sets aside
+          // nothing: its maximum fill is a bound on what this offer may ever
+          // trade, and the maker's claims are moved — or the whole transaction
+          // is rolled back — only when the fill executes. Saying "up to X" and
+          // stopping there invites a reader to hear "X are waiting for you",
+          // which no part of this protocol promises.
+          const ceiling = <small className="direct-note">This is the offer&rsquo;s ceiling, not a balance. Nothing
+          is set aside when a sell is signed; the chain moves the maker&rsquo;s claims when the
+          trade executes, or refuses the whole trade.</small>;
           return fillOrKill
             ? <div className="size-fixed">
               <span>All or nothing — this offer is for exactly {most.display} claims.</span>
               <small title={most.title}>{exactTwinV1(most, 'claim')}. Its maker signed it fill-or-kill, so a smaller size is not a smaller trade — it is no trade.</small>
+              {ceiling}
             </div>
             : <>
               <div className="direct-form-grid">
@@ -316,6 +326,7 @@ export default function MarketTradePanel({
                 </label>
               </div>
               <p className="direct-status" title={most.title}>You can take up to {most.display} claims from this offer · {exactTwinV1(most, 'claim')}</p>
+              {ceiling}
             </>;
         })()}
         {!size.ok && <StepRefusal refusal={assignRefusalV1(size.reason, 4)} />}

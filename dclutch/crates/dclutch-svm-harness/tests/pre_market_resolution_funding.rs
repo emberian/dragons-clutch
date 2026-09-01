@@ -548,7 +548,12 @@ fn fixture() -> Fixture {
         SourceContentId::new(source_spec.digest).expect("SourceSpec"),
         source_id(0x7d),
         source_id(0x7e),
-        Some(SourceContentId::new(recovery.digest).expect("recovery identity")),
+        // The no-recovery material. `SourceResolutionStateV2` has no transition
+        // that advances a recovery attempt -- `funded.rs` plans the whole walk
+        // as `Primary -> Exhausted -> FailureCommitted` -- so a material that
+        // named a recovery policy would found a market no route can terminalize
+        // and `build_resolution_create_fund_v3` refuses it at `12d0deb5`'s weld.
+        None,
         SourceContentId::new(SOURCE_FAILURE_POLICY_RELEASE_ID_V2).expect("failure release"),
     );
     let material = Record::new(
@@ -1169,16 +1174,29 @@ async fn initializer_found_and_create_preserve_the_resolution_ledger() {
         funding_ledger: required(&mut context, fixture.ledger).await,
         rent_sysvar: required(&mut context, sysvar::rent::ID).await,
         system_program: required(&mut context, system_program::ID).await,
-        recovery_policy: required(&mut context, fixture.recovery.raw).await,
-        recovery_policy_staging: vacant(fixture.recovery.staging),
+        // The no-recovery frame rule: with no policy record to authenticate,
+        // the two policy positions must re-present the already-authenticated
+        // Source-material pair, so every frame position stays authenticated
+        // against exactly one expectation.
+        recovery_policy: required(&mut context, fixture.material.raw).await,
+        recovery_policy_staging: vacant(fixture.material.staging),
     })
     .expect("V6 CreateFund against initializer ledger");
     validate_resolution_create_fund_report_v3(&create).expect("exact CreateFund report");
     let create_manifest =
         CapabilityManifestV1::decode(&fixture.manifest.data).expect("CreateFund manifest");
+    // The no-recovery selection is a derivation, not a choice: the failure
+    // compartment is the unique Resolution-controller entry configured by this
+    // market's own Source material, and it is returned LAST; the recovery and
+    // exhaustion compartments are exactly the two other Resolution-controller
+    // entries in manifest order. `manifest()` orders entries by `kind_id`,
+    // which is `hash(config)`, so the expectation is derived here from the two
+    // other configs rather than read back out of the manifest under test.
+    let mut other_configs = [fixture.recovery_allocation, fixture.recovery.digest];
+    other_configs.sort_by_key(|config| hash(config).to_bytes());
     for (index, expected_config) in create.funding_entry_indices.into_iter().zip([
-        fixture.recovery_allocation,
-        fixture.recovery.digest,
+        other_configs[0],
+        other_configs[1],
         fixture.material.digest,
     ]) {
         assert_eq!(

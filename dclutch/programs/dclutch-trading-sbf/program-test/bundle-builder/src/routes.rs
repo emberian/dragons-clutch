@@ -26,6 +26,9 @@ use dclutch_custody_contract::{
     ProjectedCustodyCallerSeedsV1, ProjectedCustodyRequestV1,
 };
 use dclutch_effect_kernel::v2::FixedRole;
+use dclutch_rational_representation_v2_contract::{
+    CallerRoleV2, REQUEST_MAGIC_V2, RepresentationRequestV2,
+};
 use dclutch_release_set_contract::{CallerAuthoritySeedsV1, ExecutionRoleV1};
 use sha2::{Digest, Sha256};
 use solana_program::pubkey::Pubkey;
@@ -97,15 +100,22 @@ mod tests {
         CompartmentV1, ProjectedCallerRoleV1, ProjectedCustodyOperationV1,
         ProjectedCustodyRequestV1,
     };
+    use dclutch_rational_representation_v2_contract::{
+        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, CallerRoleV2, REQUEST_HEADER_BYTES_V2,
+        RepresentationActionV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
+    };
+    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
     use sha2::{Digest, Sha256};
     use solana_program::pubkey::Pubkey;
 
-    use super::{BuilderError, PROJECTED_CUSTODY_REQUEST_BYTES_V1, derive_authority};
+    use super::{
+        BuilderError, PROJECTED_CUSTODY_REQUEST_BYTES_V1, claims_context, derive_authority,
+    };
     use crate::registers::DerivedInvocationV1;
+    use dclutch_effect_kernel::v2::FixedRole;
     use dclutch_effect_kernel::v3::{
         ResolvedInvocationV3, ResolvedReceiptDependenciesV3, RouteKindV3,
     };
-    use dclutch_effect_kernel::v2::FixedRole;
 
     fn id(byte: u8) -> [u8; 32] {
         [byte; 32]
@@ -174,6 +184,57 @@ mod tests {
         }
     }
 
+    fn rational_request(caller_role: CallerRoleV2) -> Vec<u8> {
+        let mut asset = [0_u8; ASSET_BYTES_V2];
+        AssetV2 {
+            shard_mint: id(20),
+            actor_shard_account: id(21),
+            structured_custody_account: id(22),
+            claims_custody_owner: id(23),
+            coefficient: 3,
+            expected_shard_supply: 30,
+            expected_actor_shards: 7,
+            expected_structured_shards: 0,
+        }
+        .encode_into(&mut asset)
+        .expect("asset");
+        let request = RepresentationRequestV2::new(
+            RepresentationRequestHeaderV2 {
+                action: RepresentationActionV2::Denominate,
+                caller_role,
+                release_set: id(1),
+                market: id(2),
+                graph_id: id(3),
+                descriptor_id: id(4),
+                parent_context: id(5),
+                actor: id(6),
+                receipt_mint: id(7),
+                receipt_account: [0; 32],
+                representation_authority: id(8),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                realm: [0; 32],
+                collateral_recipient: [0; 32],
+                expected_representation_revision: 4,
+                expected_claims_market_revision: 11,
+                expected_actor_position_revision: 12,
+                expected_custody_position_revision: 13,
+                expected_custody_replay_revision: ABSENT_REVISION,
+                generation: 14,
+                quantity: 2,
+                denominator: 10,
+                expected_receipt_supply: 0,
+                outcome_count: 2,
+                selected_outcome: 1,
+                asset_count: 1,
+            },
+            &asset,
+        )
+        .expect("request");
+        let mut bytes = vec![0_u8; REQUEST_HEADER_BYTES_V2 + ASSET_BYTES_V2];
+        request.encode_into(&mut bytes).expect("encode");
+        bytes
+    }
+
     #[test]
     fn projected_custody_authority_is_exact_and_hostile() {
         let trading_program = Pubkey::new_from_array(id(11));
@@ -213,9 +274,10 @@ mod tests {
 
         let mut changed_digest = bytes;
         changed_digest[688] ^= 1;
-        let changed = derive_authority(&invocation(changed_digest.to_vec()), id(7), trading_program)
-            .expect("changed request remains canonical")
-            .expect("authority");
+        let changed =
+            derive_authority(&invocation(changed_digest.to_vec()), id(7), trading_program)
+                .expect("changed request remains canonical")
+                .expect("authority");
         assert_ne!(changed.request_digest, derived.request_digest);
         assert_ne!(changed.authority, derived.authority);
 
@@ -231,6 +293,25 @@ mod tests {
         let truncated = bytes[..PROJECTED_CUSTODY_REQUEST_BYTES_V1 - 1].to_vec();
         assert_eq!(
             derive_authority(&invocation(truncated), id(7), trading_program),
+            Err(BuilderError::UnsupportedRoute)
+        );
+    }
+
+    #[test]
+    fn rational_representation_context_is_decoded_and_trading_bound() {
+        let bytes = rational_request(CallerRoleV2::Trading);
+        assert_eq!(claims_context(&bytes), Ok((id(2), id(5))));
+
+        let wrong_role = rational_request(CallerRoleV2::Core);
+        assert_eq!(
+            claims_context(&wrong_role),
+            Err(BuilderError::UnsupportedRoute)
+        );
+
+        let mut noncanonical = bytes;
+        noncanonical[REQUEST_HEADER_BYTES_V2 - 1] = 1;
+        assert_eq!(
+            claims_context(&noncanonical),
             Err(BuilderError::UnsupportedRoute)
         );
     }
@@ -283,9 +364,18 @@ fn claims_context(request: &[u8]) -> Result<([u8; 32], [u8; 32]), BuilderError> 
         let decoded =
             ClaimsFoundingRequestV5::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
         Ok((decoded.market(), decoded.founding_intent_digest()))
+    } else if request.get(..8) == Some(REQUEST_MAGIC_V2.as_slice()) {
+        let decoded =
+            RepresentationRequestV2::decode(request).map_err(|_| BuilderError::UnsupportedRoute)?;
+        let header = decoded.header();
+        if header.caller_role != CallerRoleV2::Trading {
+            return Err(BuilderError::UnsupportedRoute);
+        }
+        Ok((header.market, header.parent_context))
     } else {
-        // Rational representation/lifecycle request kinds are a named boundary:
-        // add their contract crates and arms when a reproduced family needs them.
+        // Rational lifecycle remains a named boundary until a reproduced
+        // family needs it. Representation is decoded through its semantic
+        // owner above; no request offset is restated here.
         Err(BuilderError::UnsupportedRoute)
     }
 }

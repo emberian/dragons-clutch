@@ -1,7 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
 import { describe, expect, it } from 'vitest';
 
-import { CAPABILITY_ACTIONS_V1, capabilityActContractV1, capabilityWorkspaceV1, evaluateCapabilityV1 } from './capabilityModel';
+import { capabilityActContractV1, evaluateCapabilityV1 } from './capabilityModel';
+import { BROWSER_CAPABILITY_STANDINGS_V1, capabilityWorkspaceV1 } from './capabilitySurface';
 import { DEVNET_DEPLOYMENT_V1, DEVNET_PROGRAM_EVIDENCE_V1 } from './deployments';
 import {
   ACTIVATION_CACHE_BYTES,
@@ -204,64 +205,28 @@ describe('unified chain-derived operator surface', () => {
     )).rejects.toThrow(/release activation cache is absent/);
   });
 
-  it('has an explicit executable boundary for every exposed workflow', () => {
-    expect(CAPABILITY_ACTIONS_V1.length).toBeGreaterThanOrEqual(20);
-    expect(CAPABILITY_ACTIONS_V1.every((workflow) => workflow.exactBoundary.length > 40)).toBe(true);
-    expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-unsigned').every((workflow) => workflow.workspace !== null)).toBe(true);
-    expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-wallet').every((workflow) => workflow.workspace !== null)).toBe(true);
-    expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'browser-message').every((workflow) => workflow.workspace !== null)).toBe(true);
-    expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.implementation === 'operator-artifact').every((workflow) => workflow.workspace !== null)).toBe(true);
-    expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'claims.redeem')).toMatchObject({ implementation: 'browser-wallet', workspace: '/redeem' });
-    expect(CAPABILITY_ACTIONS_V1.filter((workflow) => workflow.id === 'source.create-fund' || workflow.id === 'source.ready'))
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'source.create-fund', implementation: 'browser-wallet', workspace: '/resolution' }),
-        expect.objectContaining({ id: 'source.ready', implementation: 'browser-wallet', workspace: '/resolution' }),
-      ]));
-    expect(CAPABILITY_ACTIONS_V1.some((workflow) => workflow.family === 'Direct' && workflow.implementation === 'awaiting-production')).toBe(true);
-    expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'market.found')).toMatchObject({
-      implementation: 'operator-campaign',
-      workspace: '/found#current-founding',
-      exactBoundary: expect.stringContaining('records explicit devnet execution authority'),
-    });
-    expect(CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'product.compile')).toMatchObject({
-      implementation: 'operator-artifact',
-      workspace: '/product-v2#spline-product',
-      exactBoundary: expect.stringContaining('production Rust spline-basis'),
-    });
-    const join = CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'market.join');
-    expect(join).toMatchObject({
-      implementation: 'operator-campaign',
-      workspace: 'market-detail',
-      requiresMarket: true,
-      exactBoundary: expect.stringContaining('caller-named key file'),
-    });
-    expect(join && evaluateCapabilityV1(join, null)).toMatchObject({ status: 'needs-chain' });
-    expect(join && capabilityWorkspaceV1(join, null)).toBeNull();
+  it('gives the capability verdict ladder the exact snapshot it decides on', () => {
+    // The operator snapshot is the only chain input a capability status takes,
+    // so the ladder is checked here, against this file's own snapshot shape.
+    // Everything else about a capability -- venue, authority, walls -- is
+    // derived from the browser's import graph and gated in
+    // `lib/capabilityEvidence.test.ts`.
+    const redeem = BROWSER_CAPABILITY_STANDINGS_V1.find((standing) => standing.action.id === 'claims.redeem');
+    expect(redeem).toBeDefined();
+    expect(redeem && evaluateCapabilityV1(redeem, null)).toMatchObject({ status: 'needs-chain' });
     const withoutMarket = { market: null } as unknown as OperatorSurfaceSnapshotV1;
-    expect(join && evaluateCapabilityV1(join, withoutMarket)).toMatchObject({ status: 'needs-market' });
+    expect(redeem && evaluateCapabilityV1(redeem, withoutMarket)).toMatchObject({ status: 'needs-market' });
     const withMarket = { market: { address: key(44) } } as unknown as OperatorSurfaceSnapshotV1;
-    expect(join && evaluateCapabilityV1(join, withMarket)).toMatchObject({ status: 'rust-only' });
-    expect(join && capabilityWorkspaceV1(join, withMarket)).toBe(`/market?address=${key(44)}`);
-    const direct = CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'direct.inline');
-    expect(direct).toMatchObject({
-      implementation: 'browser-wallet',
-      workspace: 'market-detail',
-      exactBoundary: expect.stringContaining('persists intent and signed packet'),
-    });
-    expect(direct && evaluateCapabilityV1(direct, null)).toMatchObject({ status: 'needs-chain' });
-    const author = CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'direct.author');
-    expect(author).toMatchObject({ implementation: 'browser-message', workspace: 'market-detail' });
-    expect(author && capabilityActContractV1(author)).toMatchObject({
-      authority: expect.stringContaining('detached message'),
-      result: expect.stringContaining('portable signed artifact'),
-    });
-    expect(author && capabilityWorkspaceV1(author, null)).toBeNull();
-    const route = CAPABILITY_ACTIONS_V1.find((workflow) => workflow.id === 'direct.route');
-    expect(route).toMatchObject({ implementation: 'operator-artifact', workspace: '/operate#direct-route' });
-    expect(route && evaluateCapabilityV1(route, null)).toMatchObject({ status: 'rust-only' });
-    expect(route && capabilityActContractV1(route)).toMatchObject({
-      authority: expect.stringContaining('No key or wallet access'),
-      result: expect.stringContaining('portable artifact and machine report'),
-    });
+    expect(redeem && evaluateCapabilityV1(redeem, withMarket)).toMatchObject({ status: 'ready-to-preflight' });
+    expect(redeem && capabilityWorkspaceV1(redeem.action, withMarket)).toBe('/redeem');
+
+    // A market-bound act has no address until a Market is read, and an act
+    // with no venue never reaches the chain questions at all.
+    const author = BROWSER_CAPABILITY_STANDINGS_V1.find((standing) => standing.action.id === 'direct.author');
+    expect(author && capabilityWorkspaceV1(author.action, null)).toBeNull();
+    expect(author && capabilityWorkspaceV1(author.action, withMarket)).toBe(`/market?address=${key(44)}`);
+    const walled = BROWSER_CAPABILITY_STANDINGS_V1.find((standing) => standing.action.id === 'dealer.trade');
+    expect(walled && evaluateCapabilityV1(walled, withMarket)).toMatchObject({ status: 'no-venue' });
+    expect(walled && capabilityActContractV1(walled).venue).toBe('Nothing here can build it yet');
   });
 });

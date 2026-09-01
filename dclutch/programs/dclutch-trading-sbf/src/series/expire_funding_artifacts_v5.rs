@@ -50,7 +50,7 @@ use dclutch_market_core_codec::{
     SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_SERIES_REVISION_OFFSET_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_EXPECTED_TICKET_REVISION_OFFSET_V1,
     SERIES_UNALLOCATED_PERMIT_EXPIRY_REQUEST_BYTES_V1, SeriesCoreRequestV1,
-    SeriesPermitExpiryRequestV1,
+    SeriesPermitExpiryRequestV1, SeriesUnallocatedPermitExpiryRequestV1,
 };
 use dclutch_product_runtime_v2::{
     PORTFOLIO_COEFFICIENT_BYTES, PORTFOLIO_COEFFICIENT_COUNT_OFFSET, PORTFOLIO_HEADER_BYTES,
@@ -73,8 +73,6 @@ use dclutch_transition_vm::v3::{
     IdentityRegisterV3, InstructionV3, ProgramGeometryV3, ProgramV3 as TransitionProgramV3,
     ScalarRegisterV3, encode_program_atomic,
 };
-
-use crate::core_composition_v3::encode_series_unallocated_permit_expiry_request_v1;
 
 use super::{
     account_profile_v4::{
@@ -800,7 +798,7 @@ fn encode_request_bank(requests: SeriesExpireChildRequestsV5<'_>) -> Result<Vec<
     // transport with zero placeholders; authenticated RequestProfile scalars
     // patch both revisions immediately before the Core CPI.
     let _authority = (requests.permit_expiry, requests.core_expire);
-    let core = encode_series_unallocated_permit_expiry_request_v1(0, 0);
+    let core = SeriesUnallocatedPermitExpiryRequestV1::new(0, 0).encode();
     let mut projected_abort = *requests.projected_abort;
     projected_abort
         .get_mut(

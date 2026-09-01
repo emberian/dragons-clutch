@@ -37,35 +37,40 @@
 //! That is stronger than General's two-probe completeness check, not weaker: it
 //! is an identity join rather than a variance sample.
 //!
-//! # The prepaid close principal, and where it currently cannot go
+//! # How the prepaid close principal is funded
 //!
 //! A Template's `close_rent` is separately prepaid principal. The kernel's
-//! terminal contract already reads it back out of the root and classifies it
-//! apart from root Rent and donation
-//! ([`dclutch_series_v3_kernel::terminal::plan_series_root_closure_v3`]), and
-//! this module composes it into the root exactly as that contract expects, for
-//! every Template, with no zero-principal rule imposed anywhere.
+//! terminal contract reads it back out of the root and classifies it apart from
+//! root Rent and donation
+//! ([`dclutch_series_v3_kernel::terminal::plan_series_root_closure_v3`]), so the
+//! root must OPEN holding it. It reaches the root through the funding model's
+//! second native compartment, and through no family-shaped byte anywhere:
 //!
-//! What it cannot do is FUND it. The family-neutral activation seam moves the
-//! selected funding ledger's parked Rent quote into the vacant root and then
-//! requires, at `outer.rs:1644`, that the root's poststate balance equal
-//! `rent.minimum_balance(descriptor.root_account_bytes())` exactly —
-//! `TradingSbfError::Root` otherwise. That quantity is a pure function of the
-//! declared root width and carries no family-varying term, so a Template with a
-//! nonzero `close_rent` describes a root that activation may not fund and
-//! terminal Close will therefore refuse with `SeriesTerminalErrorV3::Balance`
-//! forever. [`series_activation_seam_funding_verdict_v1`] states that
-//! arithmetic explicitly rather than letting a release discover it on a bricked
-//! root; it convicts the seam, and refuses no Template.
+//! `FundingCompartment::{Rent, Creation}` are the only two
+//! `NativeLamportsOnly` compartments. A founding parks both — `Core`'s
+//! `validate_native_custody` requires the exact declared total to be present —
+//! and `FundingLedgerV2::activate_in_place` releases both in one statement,
+//! reporting them as `ActivationDebitV1 { rent_lamports, creation_lamports }`.
+//! `release_in_place` then refuses to release either one ever again, so an
+//! activation that does not deliver `Creation` strands it permanently.
+//!
+//! Series therefore declares its manifest entry's `Creation` compartment equal
+//! to `template.close_rent()` (see [`series_activation_funding_plan_v1`]) and
+//! sets `delivers_creation_principal`, which makes the family-neutral effect
+//! transfer the checked sum of the two compartments. `outer.rs` requires the
+//! activated root to hold exactly `rent_lamports + creation_lamports`, with
+//! `rent_lamports` independently pinned to the live Rent sysvar's exemption
+//! minimum. The amount is authenticated by the Market's own manifest entry —
+//! the outer's stated refusal to decode a family config record is untouched.
 
 extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 
 use dclutch_capability_activation_codec::{
-    ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationSeamImageV1,
+    ActivationBundleErrorV1, ActivationBundleInputV1, ActivationBundleV1, ActivationSeamImageV3,
     ActivationTailFieldV1, activation_descriptor_schema_v1, build_activation_bundle_v1,
-    project_activation_root_tail_v1, validate_activation_bundle_v1,
+    project_activation_root_tail_v3, validate_activation_bundle_v1,
 };
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityProgramV1,
@@ -79,7 +84,9 @@ use dclutch_capability_program_contract::{
 use dclutch_core_contract::ContentId;
 use dclutch_series_v3_kernel::{
     SERIES_TEMPLATE_SCHEMA_RELEASE_ID_V3, TemplateV3,
-    activation::{SeriesActivationErrorV3, series_activation_root_tail_v3},
+    activation::{
+        SeriesActivationErrorV3, plan_series_root_activation_v3, series_activation_root_tail_v3,
+    },
     replay::{SERIES_STATE_BYTES_V3, SeriesStateV3},
     template_content_id,
 };
@@ -170,32 +177,39 @@ pub enum SeriesActivationBundleErrorV1 {
 /// Result alias for Series activation construction.
 pub type SeriesActivationResultV1<T> = core::result::Result<T, SeriesActivationBundleErrorV1>;
 
-/// Whether the family-neutral activation seam can fund one Template's root.
+/// The exact two native compartments a Series manifest entry must declare.
 ///
-/// This is a statement about `outer.rs`, not about the Template. It carries the
-/// two quantities whose disagreement is the whole finding so a caller can report
-/// the wall rather than rediscover it.
+/// A release publisher builds its `FundingQuoteV1` from this and nothing else.
+/// The activation seam delivers the sum into the root, and the terminal closure
+/// classifies the same two quantities back out, so a founding that parks these
+/// amounts is a Series whose root can be both activated and closed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SeriesActivationSeamVerdictV1 {
-    /// The seam's exact root quote is the whole opening balance the terminal
-    /// contract will later demand, so this Template activates and closes.
-    Fundable {
-        /// Lamports the founding must park, which the seam will move whole.
-        parked_quote: u64,
-    },
-    /// The Template prepays close principal the seam has no way to deliver.
+pub struct SeriesActivationFundingPlanV1 {
+    rent_compartment: u64,
+    creation_compartment: u64,
+}
+
+impl SeriesActivationFundingPlanV1 {
+    /// Lamports the manifest entry must declare in `FundingCompartment::Rent`.
     ///
-    /// `outer.rs:1644` requires the activated root to hold exactly
-    /// `seam_root_quote`, while
-    /// [`dclutch_series_v3_kernel::terminal::plan_series_root_closure_v3`]
-    /// requires it to hold `seam_root_quote + prepaid_principal` before it will
-    /// classify anything. No release can satisfy both.
-    PrepaidPrincipalUnfundable {
-        /// Template-authenticated close principal the root must persist.
-        prepaid_principal: u64,
-        /// The only balance the activation seam will admit.
-        seam_root_quote: u64,
-    },
+    /// Exactly the composite root's Rent-exempt minimum; `outer.rs` pins this
+    /// against the live Rent sysvar, so a manifest cannot move it.
+    pub const fn rent_compartment(self) -> u64 {
+        self.rent_compartment
+    }
+
+    /// Lamports the manifest entry must declare in
+    /// `FundingCompartment::Creation`: the Template's prepaid close principal.
+    pub const fn creation_compartment(self) -> u64 {
+        self.creation_compartment
+    }
+
+    /// Exact native total the founding parks and the activation moves whole.
+    pub fn parked_quote(self) -> Result<u64, SeriesActivationErrorV3> {
+        self.rent_compartment
+            .checked_add(self.creation_compartment)
+            .ok_or(SeriesActivationErrorV3::Arithmetic)
+    }
 }
 
 /// Exact Solana account width of an activated Series composite root.
@@ -204,27 +218,37 @@ pub const fn series_root_account_bytes_v1() -> usize {
     CAPABILITY_ROOT_HEADER_BYTES_V1 + SERIES_STATE_BYTES_V3
 }
 
-/// State whether the current activation seam can fund this Template's root.
+/// Derive the exact funding quote one Series Template's founding must park.
 ///
 /// `exact_root_rent` is the caller's own
 /// `Rent::minimum_balance(series_root_account_bytes_v1())`; this module reads no
-/// sysvar. The verdict imposes nothing — a caller may build the bundle either
-/// way — but a release publisher that ignores it publishes roots that cannot be
-/// closed.
-pub fn series_activation_seam_funding_verdict_v1(
+/// sysvar. The plan is the kernel's activation plan restated in the funding
+/// model's own compartments, so the two cannot disagree about what the root
+/// opens holding.
+pub fn series_activation_funding_plan_v1(
     template: TemplateV3,
     exact_root_rent: u64,
-) -> SeriesActivationSeamVerdictV1 {
-    if template.close_rent() == 0 {
-        SeriesActivationSeamVerdictV1::Fundable {
-            parked_quote: exact_root_rent,
-        }
-    } else {
-        SeriesActivationSeamVerdictV1::PrepaidPrincipalUnfundable {
-            prepaid_principal: template.close_rent(),
-            seam_root_quote: exact_root_rent,
-        }
+) -> SeriesActivationResultV1<SeriesActivationFundingPlanV1> {
+    let plan = plan_series_root_activation_v3(template, exact_root_rent)
+        .map_err(SeriesActivationBundleErrorV1::CreationOracle)?;
+    let funding = SeriesActivationFundingPlanV1 {
+        rent_compartment: plan.root_rent(),
+        creation_compartment: plan.close_rent(),
+    };
+    // The two owners must agree on the total, or a founding would park one
+    // amount while the activation delivered another.
+    if funding
+        .parked_quote()
+        .map_err(SeriesActivationBundleErrorV1::CreationOracle)?
+        != plan
+            .parked_quote()
+            .map_err(SeriesActivationBundleErrorV1::CreationOracle)?
+    {
+        return Err(SeriesActivationBundleErrorV1::CreationOracle(
+            SeriesActivationErrorV3::Funding,
+        ));
     }
+    Ok(funding)
 }
 
 /// Finalized schema of the Series activation selector request.
@@ -309,12 +333,25 @@ pub fn validate_series_activation_bundle_v1(
     }
     // Read the OUTPUT, not the instruction list: run the real artifacts and
     // require the family's own decoder to accept what the outer would write.
-    let projected = project_series_activation_root_state_v1(bundle, input, 2_672_640)?;
-    if projected != SeriesStateV3::new(decode_template(input)?.close_rent()) {
+    // The probe delivers this Template's own close principal, so a bundle whose
+    // effect forgot the Creation compartment refuses here rather than stranding
+    // it on chain.
+    let template = decode_template(input)?;
+    let projected = project_series_activation_root_state_v1(
+        bundle,
+        input,
+        PROBE_ROOT_RENT,
+        template.close_rent(),
+    )?;
+    if projected != SeriesStateV3::new(template.close_rent()) {
         return Err(SeriesActivationBundleErrorV1::ProjectedState);
     }
     Ok(())
 }
+
+/// Rent-exempt minimum for a 296-byte composite root on a canonical bank, used
+/// only as a probe quantity for the byte-for-byte projection gate.
+const PROBE_ROOT_RENT: u64 = 2_672_640;
 
 /// Run the real activation artifacts and decode the root this bundle creates.
 ///
@@ -328,20 +365,27 @@ pub fn project_series_activation_root_state_v1(
     bundle: &ActivationBundleV1,
     input: SeriesActivationBundleInputV1<'_>,
     rent_quote: u64,
+    creation_quote: u64,
 ) -> SeriesActivationResultV1<SeriesStateV3> {
     let template = decode_template(input)?;
     let scalars = [0_u64; ACTIVATION_COMMON_SCALARS_V2];
     let identities = [[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V2];
-    let (tail, lamports) = project_activation_root_tail_v1(
+    let (tail, lamports) = project_activation_root_tail_v3(
         bundle,
-        ActivationSeamImageV1 {
+        ActivationSeamImageV3 {
             scalars: &scalars,
             identities: &identities,
             rent_quote,
+            creation_quote,
         },
     )
     .map_err(SeriesActivationBundleErrorV1::Bundle)?;
-    if lamports != [rent_quote, 0] {
+    // The exact statement `outer.rs` makes on chain: the root opens holding
+    // both native compartments and the ledger row is emptied.
+    let expected_root = rent_quote.checked_add(creation_quote).ok_or(
+        SeriesActivationBundleErrorV1::CreationOracle(SeriesActivationErrorV3::Arithmetic),
+    )?;
+    if lamports != [expected_root, 0] {
         return Err(SeriesActivationBundleErrorV1::Bundle(
             ActivationBundleErrorV1::ProjectedRentMismatch,
         ));
@@ -462,6 +506,11 @@ impl InheritedV1 {
             constant_root_tail: constant_tail,
             seam_fields: &SERIES_ACTIVATION_TAIL_FIELDS_V1,
             funding_ledger_slot_count: self.funding_ledger_slot_count,
+            // Series is the family the Creation compartment was waiting for: the
+            // Template's prepaid close principal is delivered into the root
+            // beside its Rent reserve, and the root persists exactly that
+            // principal for `plan_series_root_closure_v3` to classify.
+            delivers_creation_principal: true,
         }
     }
 }
@@ -661,7 +710,8 @@ mod tests {
             let input = input(&descriptor, &template_bytes);
             let bundle = build_series_activation_bundle_v1(input).expect("bundle");
             let state =
-                project_series_activation_root_state_v1(&bundle, input, ROOT_RENT).expect("state");
+                project_series_activation_root_state_v1(&bundle, input, ROOT_RENT, close_rent)
+                    .expect("state");
             assert_eq!(state, SeriesStateV3::new(close_rent));
             assert_eq!(state.close_rent_remaining(), close_rent);
             // The descriptor is a V1 activation descriptor over the exact width
@@ -806,64 +856,104 @@ mod tests {
     }
 
     #[test]
-    fn the_seam_root_quote_is_the_only_balance_activation_may_move() {
-        // Zero principal: the seam's exact quote is the whole opening balance,
-        // and the terminal contract closes on it.
-        let zero = TemplateV3::decode(&template_bytes(0)).expect("Template");
-        assert_eq!(
-            series_activation_seam_funding_verdict_v1(zero, ROOT_RENT),
-            SeriesActivationSeamVerdictV1::Fundable {
-                parked_quote: ROOT_RENT
-            }
-        );
-        let state = terminal_state(zero);
-        let closure = plan_series_root_closure_v3(
-            zero,
-            state,
-            state.revision(),
-            ROOT_RENT,
-            ROOT_RENT,
-            sink(wallet()),
-        )
-        .expect("closure");
-        assert_eq!(closure.close_rent(), 0);
-        assert_eq!(closure.donation(), 0);
-        assert_eq!(closure.total_credit(), Ok(ROOT_RENT));
+    fn the_root_opens_holding_its_reserve_plus_the_declared_close_principal() {
+        for close_rent in [0_u64, 1, 5_000, 900_000] {
+            let template_bytes = template_bytes(close_rent);
+            let template = TemplateV3::decode(&template_bytes).expect("Template");
+            let descriptor = action_descriptor(&template_bytes, 40);
+            let input = input(&descriptor, &template_bytes);
 
-        // Nonzero principal: the seam admits exactly ROOT_RENT into the root
-        // (`outer.rs:1644`), and the terminal contract refuses that balance.
-        // The two statements cannot both be satisfied by any release.
-        let prepaid = TemplateV3::decode(&template_bytes(5_000)).expect("Template");
-        assert_eq!(
-            series_activation_seam_funding_verdict_v1(prepaid, ROOT_RENT),
-            SeriesActivationSeamVerdictV1::PrepaidPrincipalUnfundable {
-                prepaid_principal: 5_000,
-                seam_root_quote: ROOT_RENT
-            }
-        );
-        let state = terminal_state(prepaid);
+            // The founding's two native compartments, derived from the kernel's
+            // own activation plan rather than restated here.
+            let funding = series_activation_funding_plan_v1(template, ROOT_RENT).expect("funding");
+            assert_eq!(funding.rent_compartment(), ROOT_RENT);
+            assert_eq!(funding.creation_compartment(), close_rent);
+            let parked = funding.parked_quote().expect("parked");
+            assert_eq!(parked, ROOT_RENT.checked_add(close_rent).expect("sum"));
+
+            // The real artifacts, run by the real effect kernel: the root opens
+            // holding the whole parked quote and the ledger row is emptied.
+            let bundle = build_series_activation_bundle_v1(input).expect("bundle");
+            let state = project_series_activation_root_state_v1(
+                &bundle,
+                input,
+                funding.rent_compartment(),
+                funding.creation_compartment(),
+            )
+            .expect("state");
+            assert_eq!(state, SeriesStateV3::new(close_rent));
+
+            // And the terminal contract closes exactly on that opening balance,
+            // returning the principal to the Template's own refund owner.
+            let terminal = terminal_state(template);
+            let closure = plan_series_root_closure_v3(
+                template,
+                terminal,
+                terminal.revision(),
+                parked,
+                ROOT_RENT,
+                sink(wallet()),
+            )
+            .expect("closure");
+            assert_eq!(closure.root_rent(), ROOT_RENT);
+            assert_eq!(closure.close_rent(), close_rent);
+            assert_eq!(closure.donation(), 0);
+            assert_eq!(closure.total_credit(), Ok(parked));
+        }
+    }
+
+    #[test]
+    fn an_activation_that_delivered_rent_alone_still_cannot_close_a_prepaid_root() {
+        // The wall this seam change removed, kept as a live statement: a root
+        // that opens holding its reserve ALONE is exactly what the old
+        // Rent-only projection produced, and it can never be closed. What is
+        // gone is the impossibility of funding it, not the requirement.
+        let template = TemplateV3::decode(&template_bytes(5_000)).expect("Template");
+        let terminal = terminal_state(template);
         assert_eq!(
             plan_series_root_closure_v3(
-                prepaid,
-                state,
-                state.revision(),
+                template,
+                terminal,
+                terminal.revision(),
                 ROOT_RENT,
                 ROOT_RENT,
                 sink(wallet()),
             ),
             Err(SeriesTerminalErrorV3::Balance)
         );
-        // The activation still composes the honest tail for that Template: no
-        // zero-principal rule is imposed anywhere in this module.
-        let template = template_bytes(5_000);
-        let descriptor = action_descriptor(&template, 40);
-        let bundle =
-            build_series_activation_bundle_v1(input(&descriptor, &template)).expect("bundle");
+    }
+
+    #[test]
+    fn a_delivered_principal_and_a_persisted_principal_cannot_disagree() {
+        // The projection gate compares the effect kernel's real output against
+        // the Template, so a bundle probed with the WRONG creation quote refuses
+        // on the root balance rather than silently persisting a principal the
+        // founding never parked.
+        let template_bytes = template_bytes(5_000);
+        let descriptor = action_descriptor(&template_bytes, 40);
+        let input = input(&descriptor, &template_bytes);
+        let bundle = build_series_activation_bundle_v1(input).expect("bundle");
         assert_eq!(
-            project_series_activation_root_state_v1(&bundle, input(&descriptor, &template), 1)
+            project_series_activation_root_state_v1(&bundle, input, ROOT_RENT, 5_000)
                 .expect("state")
                 .close_rent_remaining(),
             5_000
+        );
+        // The seam moves whatever the ledger parked; the root balance the caller
+        // predicted must be that same sum.
+        assert_eq!(
+            project_activation_root_tail_v3(
+                &bundle,
+                ActivationSeamImageV3 {
+                    scalars: &[0_u64; ACTIVATION_COMMON_SCALARS_V2],
+                    identities: &[[0_u8; 32]; ACTIVATION_COMMON_IDENTITIES_V2],
+                    rent_quote: ROOT_RENT,
+                    creation_quote: 5_000,
+                },
+            )
+            .expect("projection")
+            .1,
+            [ROOT_RENT + 5_000, 0]
         );
     }
 }

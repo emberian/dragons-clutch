@@ -342,7 +342,8 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
             .as_ptr()
     );
     let mut decoded_claims = [0; 3];
-    let intent = materialize_equity_intent_v3(request, chain, &mut decoded_claims).expect("intent");
+    let intent =
+        materialize_equity_intent_v3(&request, &chain, &mut decoded_claims).expect("intent");
     assert_eq!(
         intent,
         MultiLpIntentV3::Contribute {
@@ -368,9 +369,9 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     let mut custody_scratch = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
     let mut custody_effects = [None; MAX_MULTI_LP_CUSTODY_EFFECTS_V3];
     let physical = prepare_equity_request_v3(
-        request,
-        chain,
-        physical_context,
+        &request,
+        &chain,
+        &physical_context,
         &mut request_claims,
         &mut physical_obligations,
         &mut before,
@@ -455,7 +456,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
     stale.collateral.principal_balance = 21;
     assert_eq!(
         dclutch_trading_sbf::dealer::v3_equity_operator::authenticate_equity_request_v3(
-            request, stale,
+            &request, &stale,
         ),
         Err(EquityOperatorErrorV3::InvalidProjection)
     );

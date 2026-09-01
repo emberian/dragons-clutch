@@ -870,11 +870,16 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         // recovery policy still unspent, `exhaust_after_primary_deadline`
         // refuses, because a market that has attempts left has not run out of
         // ways to be answered honestly.
-        if failure_terms {
-            None
-        } else {
-            Some(source_id(recovery_policy_id))
-        },
+        //
+        // No prestate carries one any more. `SourceResolutionStateV2` has no
+        // transition that advances a recovery attempt -- `funded.rs` plans the
+        // whole walk as `Primary -> Exhausted -> FailureCommitted`, and the
+        // per-leg `FailNext` route it replaced sits under `cfg(any())` in the
+        // Resolution program's dispatch -- so `12d0deb5` welded
+        // `build_resolution_create_fund_v3` shut against recovery-bearing
+        // material. A recovery-bearing prestate would therefore assert a
+        // poststate no founding can reach.
+        None,
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );
     let material_bytes = material_value.to_bytes();
@@ -1453,10 +1458,36 @@ fn provider_execute_deployment(fixture: &Fixture) -> ProviderExecuteDeploymentV3
     }
 }
 
+/// The two optional-policy frame positions, resolved from the material itself.
+///
+/// The on-chain frame pins absent optional policy coordinates by repeating the
+/// already-authenticated Source-material record pair, so every frame position
+/// stays authenticated against exactly one expectation. Passing an unrelated
+/// but valid policy record into a no-recovery frame is still a `Record`
+/// refusal, which is why this reads the material rather than the prestate.
+async fn optional_recovery_policy_pair(
+    context: &mut ProgramTestContext,
+    fixture: &Fixture,
+) -> (ObservedAccount, ObservedAccount) {
+    let source_material = required_observed(context, fixture.source_material.raw).await;
+    let source_material_staging = vacant_observed(fixture.source_material.staging);
+    let material = SourceMaterialV3::decode(&source_material.data).expect("Source material");
+    if material.recovery_policy().is_some() {
+        (
+            required_observed(context, fixture.recovery_policy.raw).await,
+            vacant_observed(fixture.recovery_policy.staging),
+        )
+    } else {
+        (source_material, source_material_staging)
+    }
+}
+
 async fn create_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
 ) -> ResolutionCreateFundSnapshotV3 {
+    let (recovery_policy, recovery_policy_staging) =
+        optional_recovery_policy_pair(context, fixture).await;
     ResolutionCreateFundSnapshotV3 {
         market: required_observed(context, fixture.market).await,
         activation_cache: required_observed(context, fixture.activation).await,
@@ -1473,8 +1504,8 @@ async fn create_snapshot(
         funding_ledger: required_observed(context, fixture.funding).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
         system_program: required_observed(context, system_program::ID).await,
-        recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
-        recovery_policy_staging: vacant_observed(fixture.recovery_policy.staging),
+        recovery_policy,
+        recovery_policy_staging,
     }
 }
 
@@ -1482,6 +1513,8 @@ async fn verify_snapshot(
     context: &mut ProgramTestContext,
     fixture: &Fixture,
 ) -> ResolutionVerifyFundReadySnapshotV3 {
+    let (recovery_policy, recovery_policy_staging) =
+        optional_recovery_policy_pair(context, fixture).await;
     ResolutionVerifyFundReadySnapshotV3 {
         market: required_observed(context, fixture.market).await,
         activation_cache: required_observed(context, fixture.activation).await,
@@ -1500,8 +1533,8 @@ async fn verify_snapshot(
         clock_sysvar: required_observed(context, sysvar::clock::ID).await,
         rent_sysvar: required_observed(context, sysvar::rent::ID).await,
         activation_receipt: observed_or_vacant(context, fixture.activation_receipt).await,
-        recovery_policy: required_observed(context, fixture.recovery_policy.raw).await,
-        recovery_policy_staging: vacant_observed(fixture.recovery_policy.staging),
+        recovery_policy,
+        recovery_policy_staging,
     }
 }
 
@@ -1653,18 +1686,8 @@ async fn close_snapshot(
 ) -> ResolutionCloseFundSnapshotV3 {
     let source_material = required_observed(context, fixture.source_material.raw).await;
     let source_material_staging = vacant_observed(fixture.source_material.staging);
-    let material = SourceMaterialV3::decode(&source_material.data).expect("Source material");
-    let (recovery_policy, recovery_policy_staging) = if material.recovery_policy().is_some() {
-        (
-            required_observed(context, fixture.recovery_policy.raw).await,
-            vacant_observed(fixture.recovery_policy.staging),
-        )
-    } else {
-        // The on-chain frame pins absent optional policy coordinates by
-        // repeating the already-authenticated Source-material record pair.
-        // Passing an unrelated, valid policy record is still a Record refusal.
-        (source_material.clone(), source_material_staging.clone())
-    };
+    let (recovery_policy, recovery_policy_staging) =
+        optional_recovery_policy_pair(context, fixture).await;
     ResolutionCloseFundSnapshotV3 {
         market: required_observed(context, fixture.market).await,
         activation_cache: required_observed(context, fixture.activation).await,
@@ -2915,17 +2938,51 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     // readiness at the commit-last Open. The activation itself lives in the
     // three active rows in one FundingLedgerV2, which is what `AdmitTerminal`
     // rechecks.
+    //
+    // Activation is its own transition, exactly as in the readiness ladder:
+    // `CreateFund` leaves the subset ledger Pending, `ActivateFund` moves the
+    // three rows to Active, and only then does `VerifyFundReady` have the
+    // Active ledger its builder authenticates. This arc used to call
+    // `VerifyFundReady` straight off a Pending ledger, which no builder
+    // accepts; it was unreachable behind the recovery-material refusal above
+    // and so had never run.
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("chain-derived direct activation against an Open Market");
+    let activation_beneficiary_before = observed(&mut context, fixture.rent_credit)
+        .await
+        .expect("RentCredit")
+        .lamports;
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    activation_instructions.push(activation.instruction);
+    submit(&mut context, &activation_instructions)
+        .await
+        .expect("activate the three-row Resolution funding ledger of an Open Market");
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+    assert_eq!(
+        observed(&mut context, fixture.rent_credit)
+            .await
+            .expect("RentCredit")
+            .lamports,
+        activation_beneficiary_before + activation.expected_beneficiary_credit_lamports
+    );
+
     let verify =
         build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
             .expect("chain-derived VerifyFundReady against an Open Market");
     validate_resolution_verify_fund_ready_report_v3(&verify).expect("exact VerifyFundReady report");
-    let beneficiary_before = observed(&mut context, fixture.rent_credit)
-        .await
-        .expect("RentCredit")
-        .lamports;
     submit(&mut context, &[verify.instruction])
         .await
-        .expect("activate the three-row Resolution funding ledger of an Open Market");
+        .expect("VerifyFundReady rechecks the Active ledger of an Open Market");
     let activated = CoreState::decode(
         &observed(&mut context, fixture.market)
             .await
@@ -2939,12 +2996,15 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
         Readiness::Consumed,
         "an Open Market has already consumed its readiness and must not be rewritten to Ready"
     );
+    // The beneficiary is credited ONCE, at activation. `VerifyFundReady`
+    // rechecks the same fact and adds nothing, so the base here is the
+    // pre-activation balance -- exactly as the readiness ladder measures it.
     assert_eq!(
         observed(&mut context, fixture.rent_credit)
             .await
             .expect("RentCredit")
             .lamports,
-        beneficiary_before + verify.expected_beneficiary_credit_lamports
+        activation_beneficiary_before + verify.expected_beneficiary_credit_lamports
     );
     assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
 
@@ -3066,8 +3126,14 @@ async fn an_atomically_founded_market_reaches_a_terminal_certificate() {
     // has resolved may not create a second Fund, which is the conjunct that
     // keeps `Terminal`, `Retiring` and `Retired` out of the admission even
     // though this test's Market is still the same account it always was.
-    assert!(
-        build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await).is_err(),
+    //
+    // Named by discriminant, not by `is_err()`. This hostile had never
+    // executed: every path to it panicked earlier on the recovery-material
+    // refusal, and a bare `is_err()` would have passed on whichever conjunct
+    // happened to refuse first even once it did run.
+    assert_eq!(
+        build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await),
+        Err(ResolutionCoreOperatorErrorV3::Market),
         "a Market carrying a terminal receipt must not create a Resolution Fund"
     );
 }

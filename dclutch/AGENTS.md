@@ -115,6 +115,30 @@ construction belong outside the kernel in explicitly named adapters.
   discipline (refusing empty/wildcard commit path lists, a post-commit
   readback, crate-root and mid-run-edit guards) so it isn't re-learned by
   hand each time. See `tools/lane/README.md`.
+- **Distrust silent success.** The worst failure mode in this tree is not a red
+  gate; it is a command that reports success having done nothing, because every
+  check downstream then measures an absence. Three instances, all measured on
+  2026-09-01: `swarm-build` on hbox can fail with `Unit run-u<N>.scope was
+  already loaded` and **still exit 0 having executed nothing** (hit seven times
+  in one day; wrap it in a retry that greps for that string, and never read an
+  empty exit-0 as a clean run). A long `cp -a` interrupted by a timeout leaves
+  a partial directory, and a retry guarded by `test -d` then skips the recopy —
+  use `rsync -a --delete`, which is idempotent. And a suite runner of bare
+  invocations under `set -e` stops at its first failure, so the rows after it
+  never run while the summary reports one number: `run-postjoin-hostiles.sh`
+  reported one failing case when the true figure was ten. Run every row, report
+  every row, and keep "failed" distinct from "never ran".
+- **A commit carries the manifest and lock its code needs.** Named-path commits
+  keep a shared checkout safe, and their exact cost is that the `Cargo.toml`
+  and `Cargo.lock` a change depends on are easy to leave behind — three
+  measured instances on 2026-09-01 alone: a `#[path]` relink committed with its
+  dependency but not its lock; four workspace lockfiles that could not resolve
+  under `--locked` at committed HEAD; and a program-test committed while the
+  eight dev-dependencies it needs stayed uncommitted, which compiles for
+  whoever holds the dirty file and for nobody else. Before committing, ask what
+  the change now depends on that HEAD does not have. `cargo metadata --locked`
+  answers it for a workspace in seconds, and nothing else in day-to-day work
+  runs `--locked` at all.
 - Build vertical executable slices. A slice includes kernel semantics, adapter,
   operator construction, and an honest user-visible status; no layer may claim
   completion alone.

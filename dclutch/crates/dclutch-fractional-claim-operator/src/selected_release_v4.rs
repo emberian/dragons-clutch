@@ -547,6 +547,8 @@ impl FractionalActivationInheritedV1 {
             constant_root_tail: tail,
             seam_fields: &FRACTIONAL_ACTIVATION_TAIL_FIELDS_V1,
             funding_ledger_slot_count: FRACTIONAL_SELECTED_FUNDING_LEDGER_SLOTS_V1,
+            // This family funds its root with its exact Rent reserve alone.
+            delivers_creation_principal: false,
         }
     }
 }

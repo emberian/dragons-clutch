@@ -861,6 +861,8 @@ mod tests {
             constant_root_tail: initial.as_slice(),
             seam_fields: &[],
             funding_ledger_slot_count: FUNDING_LEDGER_SLOT_COUNT,
+            // This family funds its root with its exact Rent reserve alone.
+            delivers_creation_principal: false,
         })
         .expect("template bundle");
 

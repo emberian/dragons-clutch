@@ -10,12 +10,11 @@ import {
   type OperatorSurfaceSnapshotV1,
 } from '@/lib/operatorSurface';
 import {
-  capabilityActionsForStageV1,
   capabilityActContractV1,
-  capabilityWorkspaceV1,
   evaluateCapabilityV1,
   type CapabilityStage,
 } from '@/lib/capabilityModel';
+import { browserCapabilityStandingsForStageV1, capabilityWorkspaceV1 } from '@/lib/capabilitySurface';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { smokeStoryEnabledV1 } from '@/lib/flags';
 import { SolanaRpcClient } from '@/lib/rpc';
@@ -80,7 +79,7 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
   const [coordinates, setCoordinates] = useState<Record<string, string>>(() => Object.fromEntries([...OPERATOR_ROLES, 'realm', 'market'].map((role) => [role, ''])));
   const [state, setState] = useState<WorkbenchState>({ kind: 'idle', message: 'Deployment programs are filled from the selected cluster. No chain read yet.' });
   const stage = STAGES.find((candidate) => candidate.id === stageId) ?? STAGES[0];
-  const actions = useMemo(() => capabilityActionsForStageV1(stage.id), [stage]);
+  const actions = useMemo(() => browserCapabilityStandingsForStageV1(stage.id), [stage]);
   const effectiveCoordinates: OperatorCoordinatesV1 = Object.freeze({
     ...Object.fromEntries(OPERATOR_ROLES.map((role) => [role, coordinates[role] || deployment.programs[role]])),
     realm: coordinates.realm,
@@ -148,12 +147,22 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
       </div></fieldset>
       <button type="submit" disabled={currentState.kind === 'loading'}>{currentState.kind === 'loading' ? 'Reading finalized state…' : 'Observe this chain surface'}</button><p className="direct-status" aria-live="polite">{currentState.kind === 'ready' ? `Observed at slot ${currentState.snapshot.observedSlot}${currentState.snapshot.market ? ` · ${compact(currentState.snapshot.market.address)} · ${currentState.snapshot.market.dataBytes} bytes` : ' · no Market selected'}` : currentState.kind === 'error' && refusalField !== null ? `Observation refused at ${refusalField}. Its remedy is beside that field.` : currentState.message}</p>{currentState.kind === 'error' && refusalField === null ? <OperatorRefusal remedy="Recheck the coordinates as one deployment." detail={currentState.message} /> : null}{currentState.kind === 'ready' && <dl className="workbench-authority"><div><dt>Programs</dt><dd>{currentState.snapshot.roles.length} executable</dd></div><div><dt>Realm</dt><dd>{currentState.snapshot.realm?.header ?? (currentState.snapshot.realm ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Market</dt><dd>{currentState.snapshot.market?.header ?? (currentState.snapshot.market ? 'Core-owned / unclassified' : 'not selected')}</dd></div><div><dt>Release</dt><dd>unrecognized until route preflight</dd></div></dl>}</form>
 
-      <section className="workbench-actions"><header><span>{stage.number} · current stage</span><h2>{stage.title}</h2><p>{stage.summary}</p></header><div>{actions.map((action) => {
-        const verdict = evaluateCapabilityV1(action, snapshot);
-        const workspace = capabilityWorkspaceV1(action, snapshot);
-        const contract = capabilityActContractV1(action);
+      <section className="workbench-actions"><header><span>{stage.number} · current stage</span><h2>{stage.title}</h2><p>{stage.summary}</p></header><div>{actions.map((standing) => {
+        const verdict = evaluateCapabilityV1(standing, snapshot);
+        const workspace = capabilityWorkspaceV1(standing.action, snapshot);
+        const contract = capabilityActContractV1(standing);
         const accepted = verdict.status === 'ready-to-preflight' && workspace !== null;
-        return <article className={accepted ? 'ready' : ''} key={action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Authority</dt><dd>{contract.authority}</dd></div><div><dt>Result</dt><dd>{contract.result}</dd></div></dl>{accepted && workspace !== null ? <Anchor href={workspace}>Open exact preflight →</Anchor> : verdict.status === 'rust-only' && workspace !== null ? <Anchor href={workspace}>Inspect current boundary →</Anchor> : <button type="button" disabled>{verdict.status === 'needs-market' ? 'Select and reacquire a Market' : 'Transaction unavailable'}</button>}</article>;
-      })}</div><footer><strong>Action handoff</strong><span>Each action above names its authority and result. For an unsigned transaction, inspect dependencies and download the exact packet in the <Anchor href="/operate">operator console →</Anchor></span></footer></section></div>
+        // No disabled button anywhere on this surface. A control that says no
+        // and cannot say why is the flat-console failure in miniature; where an
+        // act cannot be opened, the card says what is missing and links to the
+        // page that answers it, which is always reachable.
+        return <article className={accepted ? 'ready' : ''} key={standing.action.id}><div><span className={`operator-status ${verdict.status}`}>{verdict.status.replaceAll('-', ' ')}</span><h3>{standing.action.action}</h3></div><p>{verdict.reason}</p><dl className="operator-action-contract"><div><dt>Where it runs</dt><dd>{contract.venue}</dd></div><div><dt>What it promises</dt><dd>{contract.guarantee}</dd></div></dl>{standing.walls.map((held) => <p className="operator-action-wall" key={held.citation}><strong>Known wall</strong> {held.statement} <small>({held.citation})</small></p>)}{accepted && workspace !== null
+          ? <Anchor href={workspace}>Open exact preflight →</Anchor>
+          : workspace !== null
+            ? <Anchor href={workspace}>Inspect current boundary →</Anchor>
+            : verdict.status === 'needs-market'
+              ? <Anchor href="/markets">Choose a Market, then reacquire →</Anchor>
+              : <Anchor href="/operate">Read this act’s boundary →</Anchor>}</article>;
+      })}</div><footer><strong>Action handoff</strong><span>Each act above names where it runs and what it promises. For an unsigned transaction, inspect dependencies and download the exact packet in the <Anchor href="/operate">operator console →</Anchor></span></footer></section></div>
   </main>;
 }

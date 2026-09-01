@@ -1523,6 +1523,7 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             .ok_or(TradingSbfError::Content)?;
         let mut selected_present = false;
         let mut selected_funding_index = None;
+        let mut activation_debit = None;
         for (physical_index, account) in self.funding.iter().enumerate() {
             let index = physical_index
                 .checked_add(1)
@@ -1603,14 +1604,21 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             let mut ledger_post = pre_bytes.to_vec();
             drop(pre_bytes);
             if selected_mask & selected_bit != 0 {
-                FundingLedgerV2::activate_in_place(
-                    &mut ledger_post,
-                    manifest_id,
-                    manifest,
-                    selected_entry_index,
-                    current_slot,
-                )
-                .map_err(|_| TradingSbfError::Content)?;
+                // The debit is the manifest's own quote for this entry, and it
+                // has TWO native halves. Both are released here; the root check
+                // below is what delivers them, so capturing it is not a
+                // convenience -- discarding it is what made a nonzero Creation
+                // quote unactivatable and unreleasable at once.
+                activation_debit = Some(
+                    FundingLedgerV2::activate_in_place(
+                        &mut ledger_post,
+                        manifest_id,
+                        manifest,
+                        selected_entry_index,
+                        current_slot,
+                    )
+                    .map_err(|_| TradingSbfError::Content)?,
+                );
             }
             let post = FundingLedgerV2::decode(&ledger_post)
                 .and_then(|value| value.authenticate(manifest_id, manifest))
@@ -1636,12 +1644,37 @@ impl<'accounts, 'info> RuntimeFrameV2<'accounts, 'info> {
             return Err(TradingSbfError::Content.into());
         }
         let selected_funding_index = selected_funding_index.ok_or(TradingSbfError::Content)?;
-        let root_rent = rent.minimum_balance(
+        // The root's opening balance is the manifest's own activation debit, and
+        // that debit has exactly two native halves.
+        //
+        // `Rent` funds exemption and is checked against the live Rent sysvar, so
+        // a manifest can neither underfund the root below exemption nor inflate
+        // its reserve. `Creation` is the family-declared principal the root is
+        // to hold BEYOND its reserve -- a prepaid amount the founding already
+        // parked and `validate_native_custody` already required to be present,
+        // which `FundingLedgerV2::activate_in_place` releases in the same
+        // statement as the rent and `release_in_place` refuses to release ever
+        // again. Delivering it here is therefore the only place it can go; the
+        // previous rule pinned the root to exemption alone and thereby made a
+        // nonzero Creation quote permanently unactivatable.
+        //
+        // Nothing family-shaped is decoded to learn the amount. It comes from
+        // the manifest entry this Market's own selection names, which the outer
+        // already decodes for `realm_collateral` above -- the family-config
+        // opacity stated at the top of this module is untouched.
+        let debit = activation_debit.ok_or(TradingSbfError::Content)?;
+        let exact_root_rent = rent.minimum_balance(
             descriptor
                 .root_account_bytes()
                 .map_err(|_| TradingSbfError::Root)?,
         );
-        if output_lamports.first().copied() != Some(root_rent) {
+        if debit.rent_lamports() != exact_root_rent {
+            return Err(TradingSbfError::Root.into());
+        }
+        let expected_root_lamports = exact_root_rent
+            .checked_add(debit.creation_lamports())
+            .ok_or(TradingSbfError::Root)?;
+        if output_lamports.first().copied() != Some(expected_root_lamports) {
             return Err(TradingSbfError::Root.into());
         }
         // An activation that projects no family state at all creates a root whose
