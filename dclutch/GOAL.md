@@ -1765,3 +1765,46 @@ listed at the end.
    user-facing. They overlap only on `help`, and the near-misses are lethal
    (`market show` vs `markets show`; `--keypair` normal in one and refused by
    name in the other; env vars differing by one character).
+
+## R-13 CLOSED, gate GREEN, deploy released — 2026-09-01 ~09:30
+
+Verified at HEAD `b74f5d5b`: `--check-unique` exits **0**. 288 magics, 271
+distinct, 3 mirrored under one name, **9 collisions adjudicated**, 161 routes,
+297 refusal codes, 0 unclassified positions.
+
+**R-13 was fixed, not exempted around.** `RecordActionV1::Begin` moved 1 → **5**,
+out of Registry's half, and two `const _: () = assert!` in
+`programs/dclutch-registry-sbf/src/lib.rs` bind the action ranges disjoint **and**
+the two widths distinct. The arithmetic accident that was the only thing between
+a Record `Begin` and a Registry `Reauthenticate` — `BEGIN_RECORD_BYTES_V1 == 176`
+against `REGISTRY_INSTRUCTION_BYTES_V1 == 16` — is now a compile-time fact.
+
+**The exemption file is a register, not a mute switch**, and its three rules are
+the reason: every entry must carry a `verdict` naming why *this* sharing cannot
+mis-dispatch (an entry without one is refused by the gate); the `constants` list
+pins the exact observed set, so a **third** constant claiming a listed value
+re-fires the collision; and an entry whose magic no longer collides is reported
+stale and must be deleted. The safety question is always *can one dispatcher see
+both* — different ELFs never meet one, and a request paired with a receipt never
+does either, because instruction data and account data are different channels.
+
+The deploy hold is lifted; the ELF pack is being rebuilt at a post-adjudication
+commit, since re-lettering moved the artifacts.
+
+### Also landed while the gate was being taken green
+
+- **R-2 answered by fact, as routed**: ten refusals outlived the route that
+  raised them and no chain ever saw one (`32fc79d5`).
+- **R-9 written** (`eaa4a1fa`): the batch relation is small on purpose, and
+  nothing recorded that — now a named invariant.
+- **The `.is_err()` discard fixed** (`f1121675`): the descriptor join was
+  throwing away which of three things was wrong. That discard is what made one
+  defect look like two and cost a full bisect.
+- **The product V1 entrance has a successor**, so it can be deleted rather than
+  kept as parallel authority (`bc237abd`).
+- **The reference window has one author, and it is the Rust** (`544a0feb`) —
+  the hand-agreeing constant in the simulator is gone.
+- **The Studio renders the operator's real partition** (`11be4b01`); the browser
+  had been decoding those cuts and discarding them.
+- **The source policy is keyed to an identity the live entrance does not emit**
+  (`5ba7f387`) — C-02's absent constructor, named with what it would need.

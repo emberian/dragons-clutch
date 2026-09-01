@@ -2473,3 +2473,56 @@ import in one module graph its module-scope ProgramData derivation throws
 Bisected, count pinned in the file. **A page that happens to import one more
 component ships broken** — module-scope derivation that can throw is the
 hazard, not the test that surfaced it.
+
+## 2026-09-01 — the recursion: no ledger-bearing campaign runs at all
+
+The conservation ledger was blind to eight of nine compartments because the
+campaigns it is mounted on only ever open one. Underneath that:
+
+**Those campaigns do not execute.** Measured today at `2bf8a582` — the journey
+built all seven SBF roles with zero frame diagnostics, then **exited 1** at
+stage tool:
+
+```
+demo-market is retired: a standalone registry address cannot authenticate the
+checked local Direct deployment.
+```
+
+`run-journey.sh:445` calls `$JOURNEY_BIN demo-market`, which
+`journey/src/main.rs:243` now refuses **unconditionally**, and does so *before*
+the campaign invocation at `:480`. The whole-life journey cannot run at HEAD.
+`docs/evidence/LOCAL_CAMPAIGN_SERIES_2026_08_30.md` documents it, notes
+`tools/gauntlet/run.sh` dies at the same boundary, gives the ordering a fix
+needs — and it has been open two days. The sibling `relayed-vertical`, which
+links the same seven-law ledger by `#[path]`, is recorded in that same document
+as not compiling on main.
+
+> Instrument and risk not in the same room — one level below where the last
+> instance was found.
+
+**And the gate shape is the same class yet again:** public CI has a job named
+*"the journey campaign compiles."* **Compiles.** Nothing anywhere runs it. A
+refusal introduced two days ago sits in the campaign's own entry point and no
+gate noticed, because the only question ever asked was whether it builds.
+
+### A law that invents violations
+
+The lane caught its own regression **before** landing it. Its derived per-class
+split assumed classification works; `relayed-vertical` calls `admit_founding`
+**without** `admit_custody_namespace`, so its Hoard classifies as
+`unclassified`, and the derivation would have attributed the Hoard's movement to
+the wallets — **manufacturing an L8 violation out of its own arithmetic rather
+than out of that market.**
+
+A conservation law that invents violations is worse than one that misses them:
+it burns the credibility of every true one. Guard: derive nothing when no
+namespace has been admitted.
+
+### The provenance rule applies to your own shell
+
+The lane nearly reported *"the runner exits 0 on a failed campaign."* It exits
+**1**, correctly — the 0 was its own `nohup` wrapper's status. Second false
+finding caught by provenance discipline before leaving the lane, and the general
+form is the useful one: **most lanes check the repository's provenance and trust
+their own harness implicitly, and that asymmetry is exactly where a wrong number
+gets in.**
