@@ -280,3 +280,307 @@ constant (SMOKE-0) and was NOT weakened to get past this.
 What it needs is a devnet endpoint that is not the free public one. That is an
 operator input this lane does not hold, and hunting for credentials would be
 the wrong way to obtain it.
+
+## Re-observation after the driver died — 2026-09-01 18:11-18:15
+
+The previous lane's last written report said *2 of 9 records finalized,
+44.968159503 SOL*. The balance was then read at 42.945709919 — 2.022449584 SOL
+gone after its last observation, far more than seven records' rent. The rule
+this file already carries says a driver that fails and is assumed to have
+written nothing is how a partial external mutation goes unnoticed. So: observed
+first, acted second.
+
+### The ladder, read live off devnet at slot 491667150
+
+`campaign --founding-only` in its preflight (reads only, enforced) mode, run
+from tree root `/Users/ember/dev/dclutch` at HEAD `64cc3436`:
+
+```
+substrate    complete
+publication  complete    9 of 9
+initialize   complete
+succession   complete    (reports the plan has NO ceremony; it has never run)
+activation   complete    5 of 5
+founding     partial     the Open Market does not exist at
+                         6URVxwyXUfXFxwEFhvGysx89fx4vQTCKxUiBwXvwCoK9 but this
+                         founding has started: collateral mint DAjjZfKR…,
+                         collateral wallet AftBLbo2…, realm record 6uwcZDqL…
+```
+
+The five stages the previous lane was driving all completed. `publication
+complete` is nine of nine because `publication_state` returns Complete only
+when `missing` and `partial` are both empty over `plan.records`, and this plan
+has nine. `activation complete` is five of five because
+`activation_state_from_progress` returns Complete only on
+`progress.is_complete()` against `ACTIVATION_ROLE_COUNT_V1 = 5` (Core, Claims,
+Trading, Resolution, Custody). Positive control on chain: the activation cache
+at `EGY1DPNCmbTTFX4uAbpJuuW9YBmhXpSzXFF6MtxyHVxU` is 1,288 bytes owned by the
+Registry program `Gaap8HNi…`.
+
+**`succession complete` still is not a claim that the ceremony ran, and this
+time that is provable rather than merely restated.** The V2 profile PDA
+`G5M2jgBQXypkUgoMc2jswH8WZx61ykDcSeQm3Bfw5tTF` — `find_program_address`
+`["dclutch:infrastructure:v2"]` under core `AXCKJ2rY…` — reads back as an
+absent account: System-owned, zero data, zero lamports. The one-per-domain
+vacancy `InitializeProtocolInfrastructureV2` demands is untouched. The
+derivation is not asserted: the same script derives the V1 domain to
+`FYzxwAjEqRwzYA727p3K3bCyEioesJoCQzx6oKVeVmNe`, which is byte-for-byte the
+address the plan already carries. That is the positive control on the
+instrument.
+
+### The 2.022449584 SOL, fully accounted
+
+Three transactions, no residue:
+
+| what | lamports |
+| --- | ---: |
+| the remaining seven records, the profile, the five activations (deployer-paid) | 22,369,584 |
+| the last ladder transaction's fee | 75,000 |
+| `23sCw5Vz…` slot 491600580: **System transfer of exactly 2.000000000 SOL to the campaign payer `3gDQDzsh…`**, plus its 5,000 fee | 2,000,005,000 |
+| | **2,022,449,584** |
+
+Read off `getTransaction` pre/post balances, not inferred. The 2 SOL did not
+leave the cohort: it capitalized the founding payer, which is a distinct
+keypair from the deployer and holds 1.805402034 SOL now. The 0.194597966 SOL
+difference is the two founding attempts described below. **Nothing is
+unaccounted for.**
+
+### Founder-key custody, proven before anything else
+
+`/private/tmp/c9keys/founder.json` derives
+`GrjLXgD2Pbd9Lqf2nAqes3wzDdPNswJwiWoJaapQXUJu`, which is exactly the
+`founding_founder` in the campaign's execution intent. We hold it. Under
+decision 0015 §8 that is the check that must pass before a fourth unretirable
+market can exist, and it passes.
+
+It was however sitting only in `/private/tmp`, which macOS clears. A founder
+key that survives until the next reboot is the 2026-08-30 defect on a delay.
+The six generated keypairs, the plan and the market input are now also at
+`~/jobs/dclutch-cohort9-20260901/`, mode 700.
+
+### Two stranded foundings, and why retrying was the wrong instrument
+
+The founding stage ran twice and stranded twice:
+
+- 15:07-15:15, collateral mint `GAwdVv3K…`, wallet `G1HKXpdb…`, realm record
+  `9amZxeS4…`. Refused on the resume, correctly: *"this founding has STARTED on
+  this chain … but no compatible durable DCLTPCB2 checkpoint authenticates a
+  safe suffix resume."*
+- 17:58-18:07, fresh mint `DAjjZfKR…`, wallet `AftBLbo2…`, realm record
+  `6uwcZDqL…`, after regenerating the mint and wallet keypairs (the stranded
+  pair is kept as `*.stranded.json`). Fifty-five transactions of market-record
+  publication landed, and then:
+
+```
+Error: Error("chain-derived Found projection: AccountAuthority")
+```
+
+`AccountAuthority` has twenty-plus return sites in
+`crates/dclutch-product-runtime-v2-operator/src/found.rs` — the coarse-refusal
+shape AGENTS.md names — so a third attempt would have bought another stranded
+mint and the same word. It was localized without spending anything instead,
+because `project_found_v2` is a pure function over chain-read state.
+
+### The wall, convicted at one line for zero lamports
+
+`tools/local-validator/bootstrap/successor/src/market.rs:2003` wraps
+`project_found_v2`. Its first conjunct block is
+`authenticate_runtime_accounts`, and
+`crates/dclutch-product-runtime-v2-operator/src/found.rs:548` reads:
+
+```rust
+|| state.infrastructure_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+```
+
+`PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2` is **224**
+(`crates/dclutch-release-set-contract/src/generated_protocol_infrastructure.rs:22`).
+The profile this cohort committed, read off chain at
+`FYzxwAjEqRwzYA727p3K3bCyEioesJoCQzx6oKVeVmNe`, is **144 bytes**, owner
+`AXCKJ2rY…` (core), lamports 1,722,576 — which is exactly devnet's live
+`getMinimumBalanceForRentExemption(144)`, so it is a correctly-rented V1, not a
+damaged V2. `PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1` is 144. 144 ≠ 224.
+
+`git log -L 548,548` names the seam exactly. Commit `2951b226`, *"profile
+succession: every consumer reads V2, and the predecessor is never an authority
+again"*, changed that single line:
+
+```
+-        || state.infrastructure_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
++        || state.infrastructure_profile.data.len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+```
+
+That is why cohort-8 founded markets 21 and 22 on a profile that is also 144
+bytes (`5pisnL8e…`, still on chain) and cohort-9 cannot: cohort-9 is the first
+cohort deployed after the consumer moved to V2.
+
+### It is not the driver picking the wrong account. The driver's V1 arm is now unreachable-good.
+
+`market.rs:4290` `checked_found_infrastructure_selection_v1` dispatches on
+`(plan.infrastructure_succession.is_some(), successor_profile_observed)`:
+
+```rust
+(false, false) => Ok(FoundInfrastructureSelectionV1::Predecessor),
+```
+
+Cohort-9 is exactly `(false, false)` — no succession in the plan, no V2 on
+chain — so `authenticated_found_infrastructure_plan_v1` returns the plan
+unchanged and `market.rs:4739-4740` feeds `plan.infrastructure_profile.address`,
+the 144-byte V1, into the projection. **After `2951b226` the `Predecessor` arm
+can no longer produce a foundable projection at all.** It is not dead code that
+never runs; it is the arm a genesis cohort always takes, and it now always
+fails, sixty transactions deep.
+
+### It is two independent conjuncts, not one stale constant
+
+Worth stating so nobody reaches for a one-line repair. `found.rs:548` is only
+the first refusal on this path. `authenticate_infrastructure`
+(`found.rs:676-686`) derives its expected profile from
+`PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2` and compares it to
+`state.infrastructure_profile.key` — which, on the `Predecessor` arm, is the V1
+PDA `FYzxwAjE…`, a different address — and separately requires
+`lamports >= rent.minimum_balance(224)`, which is 2,229,216 against the
+account's 1,722,576. Relaxing the length check would walk into both.
+
+The core program has no genesis V2 writer either:
+`programs/dclutch-core-sbf/src/infrastructure.rs:67` constructs a
+`ProtocolInfrastructureProfileV1` and `:587-616` commits 144 bytes at the V1
+PDA. The only writer of a V2 anywhere is the succession ceremony.
+
+### Why this is not fixable underneath the live cohort, and the refusal
+
+The obvious repair — run the succession ceremony so a V2 profile exists — is
+refused by the ceremony's own conjunct 4, and it should be.
+`programs/dclutch-core-sbf/src/infrastructure_v2.rs:29-34` states it: a moved
+binding's successor record must bind **a strictly later deployment slot** than
+the predecessor it replaces, and *"a succession in which nothing moved selects
+nothing and would only burn the one V2 vacancy — refused."*
+`market.rs` restates it on the driver side at 4344:
+`successor.registry().artifact_release() == predecessor.registry().artifact_release()`
+is a refusal. Cohort-9 was deployed hours ago and nothing has moved.
+
+The way to make something move would be to re-upload the Registry program's
+identical bytes to bump its deployment slot, publish a new artifact release for
+it, and then call the succession "forward". That manufactures exactly the
+forward step conjunct 4 exists to require evidence of. **Refused. A slot bump
+with no changed bytes is a ceremony performed on a check, not a succession**,
+and it is also a partial single-program deploy, which condition (a) of the
+standing grant forbids by name.
+
+Nor can the genesis cohort simply write a V2 in the first place:
+`ProtocolInfrastructureProfileV2::new`
+(`crates/dclutch-release-set-contract/src/protocol_infrastructure.rs:266-277`)
+refuses when `predecessor_registry_artifact == predecessor_rent_artifact` with
+`AliasedInfrastructureBinding`, so a genesis encoding of "no predecessor" — two
+absent ids, which are equal — is structurally impossible. V2 has no genesis
+shape.
+
+**So: cohort-9 is live, complete through activation, and cannot be founded.**
+This is the same structural gap this file already named one rung higher —
+`create-infrastructure` refusing the genesis profile with `InvalidLength`
+because `CheckedInfrastructureV1` embeds a V2 — now measured a second time, on
+chain, at the founding rung, having cost 0.19 SOL and two stranded collateral
+mints to reach and nothing further to convict. Closing it is a change to a
+release-identity-bearing structure. That is a release event and an
+Ember-scheduled one. The two candidate shapes, so the decision is not restarted
+from nothing:
+
+1. **A genesis discriminant in V2**, so `predecessor_*` has a well-formed
+   "none" that is not aliased, and the genesis cohort writes 224 bytes at the
+   V2 PDA directly. Keeps every consumer V2-only, which is what `2951b226`
+   wanted.
+2. **A version-polymorphic profile field**, so `authenticate_runtime_accounts`
+   and `CheckedInfrastructureV1` accept a V1 at the V1 PDA for a cohort with no
+   predecessor and a V2 otherwise. Cheaper, but reintroduces the two-authority
+   shape `2951b226` deleted on purpose.
+
+Consequence for the standing grant: condition (b) — the load simulator running
+against the new cohort — is blocked behind this, because there is no market on
+cohort-9 to load. Naming that is better than founding a market that could not
+have existed.
+
+### `2951b226` knew. It says so in its own last paragraph.
+
+This was not an oversight, which changes what the fix is for. The commit that
+moved every consumer to V2 closes with:
+
+> The bootstrap successor tool stays coherently on the predecessor profile and
+> moves as one piece when it gains a ceremony stage. It has to: **the ceremony
+> refuses a succession in which nothing moved, so a world whose Registry has
+> never been upgraded cannot reach V2 at all**, and that tool builds exactly
+> such a world.
+
+So the gap was priced and accepted as a tooling-coherence problem. What was not
+priced is that it is also a **founding** problem the moment a real genesis
+cohort exists — which is what cohort-9 is, and what cohort-8 (founded before
+the flip) never had to be. `PROFILE_UPGRADE_RULING_2026_08_31.md:259-266`
+reasons carefully about the window *between the Registry upgrade and the
+ceremony*; it never reasons about the window *before there has ever been an
+upgrade*.
+
+Note also that the ceremony has had a real devnet driver since `2a10fa4c`:
+`devnet-infrastructure-succession-v1 --core --registry-artifact --rent-artifact
+--evidence --i-mean-devnet [--execute …]`, whose own usage text says *"Run
+ONCE, on cut day, AFTER the Registry upgrade and BEFORE the declarations."*
+There is no missing tool. There is a missing upgrade, and no honest way to
+manufacture one.
+
+### A precondition nobody had written down, and cohort-9 satisfies it by luck
+
+Conjunct 5 requires the **predecessor** release's bound upgrade authority to
+sign (`infrastructure_v2.rs:285-294`), and an `Immutable` release binds none:
+
+```rust
+let bound = predecessor_release
+    .upgrade_authority()
+    .ok_or(CoreSbfError::InfrastructureConsentMissing)?;
+```
+
+**Therefore a cohort that revokes upgrade authority on both Registry and Rent
+before committing its V1 profile can never reach V2, and is permanently
+unfoundable — silently, at deploy time, with no diagnostic until sixty
+transactions into a founding months later.** Cohort-9 retained
+`ExactAuthority` on all seven roles, so it is not trapped. That was argued in
+this file as an iteration-substrate convenience ("repeatable redeploys only
+work if the rent comes back"). It turns out to have been load-bearing for a
+reason nobody had stated. Whatever shape the fix takes, this precondition
+should become a refusal at deploy-planning time rather than a property a cohort
+happens to have.
+
+### The sharpest form of the question, for whoever schedules the fix
+
+Conjunct 3 of the ceremony says identity never moves: V2's Registry program
+must be the same program id as V1's, only its artifact release may move
+forward. So there *is* a path by which cohort-9 becomes foundable without any
+code change at all — upgrade the Registry program in place, on the same id,
+with genuinely different bytes; publish its new artifact release; run the
+succession honestly on that real forward step; then found. Nothing is weakened
+and every conjunct is satisfied on its merits.
+
+That path is not available today (there is no Registry change to make, and
+condition (a) of the grant forbids a partial single-program deploy), but naming
+it exposes what the decision is actually about. If it is the intended
+lifecycle, then **a freshly deployed cohort is never immediately foundable, and
+the first market on any new protocol deployment can only exist after the
+Registry has been upgraded at least once.** That is a strange property to have
+acquired by moving one constant, and it is almost certainly not what `2951b226`
+meant to buy.
+
+So the question for ember is not "which of the two shapes above" so much as:
+*is a genesis cohort supposed to be foundable on the day it is deployed?* If
+yes, V2 needs a genesis shape. If no, the ceremony should say so out loud, and
+the release candidate should refuse a genesis cohort at planning time rather
+than sixty transactions into a founding.
+
+### Ledger of what is on chain and stranded
+
+| account | what | disposition |
+| --- | --- | --- |
+| `FYzxwAjEqRwzYA727p3K3bCyEioesJoCQzx6oKVeVmNe` | V1 infrastructure profile, 144 B | correct, permanent, sealed |
+| `G5M2jgBQXypkUgoMc2jswH8WZx61ykDcSeQm3Bfw5tTF` | V2 profile PDA | vacant; succession never ran |
+| `EGY1DPNCmbTTFX4uAbpJuuW9YBmhXpSzXFF6MtxyHVxU` | activation cache, 1,288 B | complete, five roles |
+| `GAwdVv3K…` / `G1HKXpdb…` / `9amZxeS4…` | first founding's mint, wallet, realm | stranded |
+| `DAjjZfKR…` / `AftBLbo2…` / `6uwcZDqL…` | second founding's mint, wallet, realm | stranded |
+| `3gDQDzsh5ceKhrHArWFfVDhtyvVRV897y8ToLJFEY8by` | campaign payer | 1.805402034 SOL |
+| `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP` | deployer / upgrade authority | 42.945709919 SOL |
+
+Devnet evidence. Not mainnet evidence.

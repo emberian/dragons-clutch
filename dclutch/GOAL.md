@@ -2270,3 +2270,50 @@ resumed. Relaunched from this file's tail block:
 | `aa481a3dcafc5b3f2` | S7 Structured | Content/Route repair in `encode_effect` → walls behind it → coefficient guard LAST; two red witnesses |
 | `af0d560c200fa8218` | S4 General | the width-1 `Refused` disposition; 258 has never run |
 | `adefc90f75702203a` | S5 Dealer | authenticated `basis_scale` from `ProductBasisV3::payout_scale` (turns `468f66b3` green by the right owner) → register 116 → the 591,781 CU Add wall |
+
+## Non-price resolution: it already exists, and this morning's gate broke it — 2026-09-01
+
+**Candidate 1 holds, harder than the brief supposed.** Verified by me at HEAD
+`4100e848`, four claims direct:
+
+- `crates/dclutch-relay-contract/src/decode.rs:52-55` — `RelayedObservableV1` has
+  **exactly one variant, `DbcMigrationProgressV1`**: *"a graduation proposition over
+  a terminal window."* The relayed payload is an attested account snapshot
+  (`wire.rs:48-57`: key, owner, lamports, data_len, inline, executable, tail_digest).
+  **No price, exponent or confidence anywhere.** The product runtime has zero hits
+  for "price" or "spot" in 840 lines.
+- **dClutch has resolved a non-price market since the relayed family landed.** The
+  only non-price market anyone built is already the non-price market.
+- **A new relay attestor is a TOML file.** `tools/relayer/` is 12,759 lines with no
+  DBC logic at all. Observable #2 ≈ 600–950 lines; #3 onward ≈ 350–480. Against the
+  honest family precedent (15,000–17,000): **4–6%, then 2–3%.**
+
+**The break, dated today.** `market.rs:3172` requires `founding_band`
+unconditionally on the founding path — *"There is no default."* `relayed.rs:532`
+declares `founding_band: None`, on purpose: *"it declares no belief rather than
+fabricating one it would never be measured against."* `git log -S` returns exactly
+one commit: **`550e581b`, this morning, 11:13.** The partition gate — ember's steer,
+landing correctly for price markets — **bricked the founding path of the only
+non-price market the tree has.** Same fact scholar #1 filed as B6.
+
+**The repair is three units and no family**, and the second closes three things at
+once:
+- **R1** decompose `interpret_sealed_record_v1` off the hardcoded DBC positions
+  (`decode.rs:275,281,381-383`), ~60–100 lines, before anyone authors #2.
+- **R2** make the quality model a *family* (~250–470, once). The framing that makes it
+  small: **a graduation market does have a belief — "P(graduates) = x" — it just is
+  not a random walk around a positive spot.** So `founding_band` becomes a match on
+  band kind, not an exemption. **This closes B6, and the B4/B6 width-2 tension, as a
+  design rather than a ruling.**
+- **R3** author observable #2 (~350–480).
+
+**Ember's queue is now two**: recovery as a capability child; the Claims split/merge
+veto. Width-2 versus the partition gate is absorbed by R2.
+
+Switchboard stays a data source that could feed candidate 1 through a quote-sink
+program the tree already knows how to pin — not next, not needed for the first
+several non-price markets.
+
+Scholar's one hedge, as a task: it traced the founding refusal by reading and
+corroborated it by commit date and the band-free fixture, but **did not run a
+founding and watch it refuse.** That is the build lane's red control before R2.

@@ -136,7 +136,7 @@ const FIXED_ACCOUNTS: usize = DIRECT_REGISTER_BUY_FIXED_ACCOUNTS_V4 as usize;
 const SELL_FIXED_ACCOUNTS: usize = DIRECT_REGISTER_SELL_FIXED_ACCOUNTS_V4 as usize;
 /// Coordinates 0..11, identical on both sides, and the whole of a Sell but one.
 const CREATION_PREFIX_ACCOUNTS: usize = 12;
-const FIXED_OPERATIONS: usize = 34;
+const FIXED_OPERATIONS: usize = 32;
 /// The prefix operations, identical on both sides.
 const CREATION_PREFIX_OPERATIONS: usize = 26;
 /// Prefix operations plus `project_key` on the collateral account.
@@ -605,7 +605,35 @@ fn operations()
     push_prefix_operations(&mut output, &mut next)?;
     // The Custody-window projections. Every account named here lives inside one
     // of the three Custody frames, which is why a Sell -- carrying none of them
-    // -- has no counterpart for any of these eight.
+    // -- has no counterpart for any of these six.
+    //
+    // The collateral mint and the token program are PROJECTED out of the Realm
+    // record and never re-required against their frame coordinates, which is
+    // the same decision `ordinary_account_artifacts_v3::operations` records at
+    // length and for the same two reasons.
+    //
+    // The first is that the restatement is not merely redundant, it is
+    // unsatisfiable. `OP_REQUIRE_KEY` compares an observed key against
+    // `input_identities`, and the only identities a family may place in the
+    // input bank are the parent request digest and the closed
+    // trusted-environment set that `seed_trusted_environment_v3` supplies
+    // (`programs/dclutch-trading-sbf/src/hot_v3.rs`). A Realm-derived fact
+    // lands in the OUTPUT bank, which `OP_REQUIRE_KEY` cannot read, so
+    // `require_key(MINT_ACCOUNT, REGISTERED_IDENTITY_MINT_V4)` compared the
+    // frame's mint against a ZERO register and refused every honest Buy that
+    // ever reached it -- measured on real ELFs as `IdentityMismatch` at
+    // coordinate 34, 308,354 CU, before any child CPI.
+    //
+    // The second is that Custody already owns the law, and owns it more
+    // strongly. `authenticate_realm` requires `request.mint ==
+    // realm.collateral_mint()` and `request.token_program ==
+    // realm.token_program() == profile.program_id()`, and
+    // `validate_token_program_and_mint` requires the live frame account to
+    // equal `request.mint` and its owner to be the token program
+    // (`programs/dclutch-custody-sbf/src/lib.rs`). Those two registers are
+    // exactly what the Effect writes into `CustodyRequestLayoutV1::{MINT,
+    // TOKEN_PROGRAM}`, so the mint reaching the vault is the Realm's or the
+    // child refuses.
     for operation in [
         project_key(REALM_ACCOUNT, REGISTERED_IDENTITY_REALM_V4)?,
         project_identity(
@@ -618,13 +646,11 @@ fn operations()
             RealmLayoutV1::TOKEN_PROGRAM,
             REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
         )?,
-        require_key(MINT_ACCOUNT, REGISTERED_IDENTITY_MINT_V4)?,
         project_key(VAULT_ACCOUNT, REGISTERED_IDENTITY_CUSTODY_VAULT_V4)?,
         project_key(
             CUSTODY_AUTHORITY_ACCOUNT,
             REGISTERED_IDENTITY_CUSTODY_AUTHORITY_V4,
         )?,
-        require_key(TOKEN_PROGRAM_ACCOUNT, REGISTERED_IDENTITY_TOKEN_PROGRAM_V4)?,
         project_key(SOURCE_ACCOUNT, REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4)?,
     ] {
         push_operation(&mut output, &mut next, operation)?;
@@ -877,10 +903,21 @@ const ROUTE_ALIASES: &[(u16, u16)] = &[
     (47, 18),
     (48, 19),
     (49, 20),
-    (50, 34),
-    (52, 35),
-    (53, 36),
-    (54, 37),
+    // The Transfer window's view of the OpenVault window: same mint, same vault
+    // as its destination, same Custody authority, same token program. These four
+    // are the reason the two Custody children cannot disagree about the token
+    // they move even though no operation compares them -- an alias is a geometry
+    // fact the runtime enforces, not a check a profile can get wrong.
+    (DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 9, MINT_ACCOUNT),
+    (DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 11, VAULT_ACCOUNT),
+    (
+        DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 12,
+        CUSTODY_AUTHORITY_ACCOUNT,
+    ),
+    (
+        DIRECT_REGISTER_BUY_DEPOSIT_ACCOUNT_START_V4 + 13,
+        TOKEN_PROGRAM_ACCOUNT,
+    ),
 ];
 
 /// The prefix widths both sides pin identically.

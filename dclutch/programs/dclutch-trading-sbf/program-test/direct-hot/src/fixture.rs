@@ -4413,17 +4413,31 @@ mod tests {
     /// test that checks its encoding and digest passes forever over a conjunct
     /// no account can satisfy. This runs the declaration.
     ///
-    /// What it finds, and what the `#[ignore]`d chain campaign meets as its
-    /// fourth wall: the Buy profile's two Custody-window `require_key`
-    /// operations name identity registers 24 and 25, and those registers are
-    /// written by `project_identity` from the Realm record IN THE SAME PASS.
+    /// What it found, and what the chain campaign met as its fourth wall: the
+    /// Buy profile carried two Custody-window `require_key` operations naming
+    /// identity registers 24 and 25, and those registers are written by
+    /// `project_identity` from the Realm record IN THE SAME PASS.
     /// `apply_operations` evaluates every `require_*` against the INPUT bank
     /// (`v2.rs::project_atomic` hands it `registers.input_identities`), so both
-    /// conjuncts compare a real key against thirty-two zero bytes and are
-    /// unsatisfiable by any transaction. The Sell profile carries neither, and
-    /// its three `require_*` operations all name trusted-environment registers
-    /// that ARE seeded before the pass -- which is exactly why a registered Sell
-    /// executes behind the action-gate probe and a Buy does not.
+    /// conjuncts compared a real key against thirty-two zero bytes and were
+    /// unsatisfiable by any transaction -- measured on real ELFs as
+    /// `IdentityMismatch` at coordinate 34, 308,354 CU, before any child CPI.
+    /// The Sell profile carried neither, and its three `require_*` operations
+    /// all name trusted-environment registers that ARE seeded before the pass --
+    /// which is exactly why a registered Sell executed behind the action-gate
+    /// probe and a Buy did not.
+    ///
+    /// Both are gone. They were never a gate: Custody authenticates the Realm
+    /// record itself and requires `request.mint == realm.collateral_mint()` and
+    /// the live frame mint to equal `request.mint`, which is strictly stronger
+    /// than a restatement in the caller's profile, and is the same decision
+    /// `ordinary_account_artifacts_v3::operations` records for the inline
+    /// family. What this case now asserts is the positive half: the pass writes
+    /// the REALM's collateral mint and token program into the two output
+    /// registers the Effect copies into `CustodyRequestLayoutV1`, and it FOLLOWS
+    /// the Realm record rather than authenticating it -- so the perturbation
+    /// below moves the projected register, which is the exact reason the law
+    /// has to live in Custody and not here.
     ///
     /// The frame corrections below are not fixture repairs. Four coordinates
     /// hold accounts the fixture deliberately defers to the harness
@@ -4436,10 +4450,11 @@ mod tests {
         use dclutch_account_profile_contract::{
             AccountObservationV1,
             v2::{
-                Error as ProfileError, PhysicalAccountDataGeometryV2, ProjectionRegistersV2,
-                TrustedEnvironmentV2, project_atomic,
+                PhysicalAccountDataGeometryV2, ProjectionRegistersV2, TrustedEnvironmentV2,
+                project_atomic,
             },
         };
+        use dclutch_realm_contract::RealmLayoutV1;
         use dclutch_capability_program_contract::hot_v3::HOT_PARENT_REQUEST_DIGEST_IDENTITY_V3;
         use dclutch_direct_codec::registered_creation_artifacts_v4::{
             DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4,
@@ -4497,9 +4512,7 @@ mod tests {
         };
         let project = |profile: AccountProfileV2<'_>,
                        accounts: &[ChainAccount],
-                       views: &[([u8; 32], [u8; 32])],
-                       seed_mint: bool,
-                       seed_token: bool| {
+                       views: &[([u8; 32], [u8; 32])]| {
             // Privileges come from the profile, exactly as `pack_runtime`
             // derives the packed AccountMetas the instruction carries: the two
             // payer coordinates sign, and writability is the profile's.
@@ -4555,17 +4568,11 @@ mod tests {
             if let Some(destination) = profile.trusted_system_program_identity() {
                 input_identities[usize::from(destination)] = system_program::ID.to_bytes();
             }
-            // NOT a relaxation: the two registers stay declared and stay
-            // compared. Seeding them by hand only asks which conjunct the
-            // refusal belongs to, by supplying the value the pass itself is
-            // about to project.
-            if seed_mint {
-                input_identities[REGISTERED_IDENTITY_MINT_V4] = custody.realm.mint.to_bytes();
-            }
-            if seed_token {
-                input_identities[REGISTERED_IDENTITY_TOKEN_PROGRAM_V4] =
-                    custody.realm.token_program.to_bytes();
-            }
+            // Nothing else is seeded. The input bank a family may fill is
+            // exactly what `seed_trusted_environment_v3` fills on chain: the
+            // parent request digest, the current slot, the current executing
+            // program and the System Program. Every other register in this pass
+            // is the pass's own output.
             let mut scratch_scalars = vec![0_u64; DIRECT_REGISTERED_CREATION_COMMON_SCALARS_V4];
             let mut scratch_identities =
                 vec![[0_u8; 32]; DIRECT_REGISTERED_CREATION_COMMON_IDENTITIES_V4];
@@ -4585,6 +4592,7 @@ mod tests {
                     output_identities: &mut output_identities,
                 },
             )
+            .map(|()| output_identities)
         };
 
         // The Sell: thirteen coordinates, three `require_*` operations, every
@@ -4604,9 +4612,8 @@ mod tests {
         )
         .expect("Sell logical accounts");
         let sell_views = observe(&sell);
-        assert_eq!(
-            project(sell_profile, &sell, &sell_views, false, false),
-            Ok(()),
+        assert!(
+            project(sell_profile, &sell, &sell_views).is_ok(),
             "the registered Sell profile must project its own frame",
         );
 
@@ -4672,31 +4679,54 @@ mod tests {
             );
         }
 
-        // WALL #4, executed. Delete this assertion when the two conjuncts are
-        // repaired -- it exists to keep the wall named, not to keep it standing.
+        // WALL #4, repaired. The Buy now projects its own honest frame, and the
+        // two registers the Effect copies into `CustodyRequestLayoutV1::{MINT,
+        // TOKEN_PROGRAM}` carry the Realm's own facts rather than zero.
         let buy_views = observe(&buy);
+        let projected = project(buy_profile, &buy, &buy_views)
+            .expect("the registered Buy profile must project its own honest frame");
         assert_eq!(
-            project(buy_profile, &buy, &buy_views, false, false),
-            Err(ProfileError::IdentityMismatch),
-            "the registered Buy profile refuses its own honest frame",
-        );
-        // And the localization: BOTH conjuncts are independently unsatisfiable,
-        // and there is no third. Register 24 is the Realm's collateral mint at
-        // coordinate 34, register 25 its token program at coordinate 37.
-        assert_eq!(
-            project(buy_profile, &buy, &buy_views, true, false),
-            Err(ProfileError::IdentityMismatch),
-            "seeding the mint register alone must leave the token-program conjunct refusing",
+            projected[REGISTERED_IDENTITY_MINT_V4],
+            custody.realm.mint.to_bytes(),
+            "register 24 must carry the Realm record's collateral mint",
         );
         assert_eq!(
-            project(buy_profile, &buy, &buy_views, false, true),
-            Err(ProfileError::IdentityMismatch),
-            "seeding the token-program register alone must leave the mint conjunct refusing",
+            projected[REGISTERED_IDENTITY_TOKEN_PROGRAM_V4],
+            custody.realm.token_program.to_bytes(),
+            "register 25 must carry the Realm record's token program",
         );
+
+        // The control that keeps the delegation honest. This pass FOLLOWS the
+        // Realm record; it does not authenticate it. Rewrite the collateral-mint
+        // field of the Realm account at coordinate 18 and the projected register
+        // moves with it, with no refusal anywhere in the profile -- which is the
+        // reason the law is Custody's: `authenticate_realm` re-derives the
+        // Registry record address from the signed content digest, so a Realm
+        // whose bytes were rewritten is a Realm whose digest no longer resolves.
+        // The Realm record is a route alias at coordinates 31 and 47, and an
+        // alias compares DATA as well as key, so a perturbation that rewrote one
+        // copy would measure `AliasMismatch` and never reach the projection.
+        let mut perturbed = buy.clone();
+        let forged = key(0xd7).to_bytes();
+        let realm_key = perturbed[18].key;
+        for account in &mut perturbed {
+            if account.key == realm_key {
+                account.account.data
+                    [RealmLayoutV1::COLLATERAL_MINT..RealmLayoutV1::COLLATERAL_MINT + 32]
+                    .copy_from_slice(&forged);
+            }
+        }
+        let perturbed_views = observe(&perturbed);
+        let perturbed_registers = project(buy_profile, &perturbed, &perturbed_views)
+            .expect("the profile authenticates no Realm byte and must still project");
         assert_eq!(
-            project(buy_profile, &buy, &buy_views, true, true),
-            Ok(()),
-            "nothing else in the Buy declaration refuses this frame",
+            perturbed_registers[REGISTERED_IDENTITY_MINT_V4], forged,
+            "the projection must follow the Realm record, proving the pass is connected",
+        );
+        assert_ne!(
+            perturbed_registers[REGISTERED_IDENTITY_MINT_V4],
+            projected[REGISTERED_IDENTITY_MINT_V4],
+            "a perturbation that does not move the register would be measuring nothing",
         );
     }
 }
