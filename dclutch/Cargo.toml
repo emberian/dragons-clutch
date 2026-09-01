@@ -88,7 +88,6 @@ members = [
     "programs/dclutch-resolution-proof-sbf",
     "programs/dclutch-registry-sbf",
     "programs/dclutch-trading-sbf",
-    "crates/dclutch-claims-representation-codec",
     "crates/dclutch-direct-aot-contract",
     "crates/dclutch-direct-aot-v3-contract",
     "crates/dclutch-fractional-cubic-life-evidence",

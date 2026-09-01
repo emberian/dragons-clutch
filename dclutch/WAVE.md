@@ -5595,3 +5595,69 @@ The lane flagged that it committed the first fix without re-running the test.
 **Shared-tree protocol, earned:** two `accepted` runs died on another lane's
 half-applied refactor mid-SBF-build. **A `cargo check` gate before the SBF build**
 is what got the third through.
+
+## 2026-09-01 — REVERSAL: the operator was right, and the composition was wrong
+
+**This ledger recorded, twice, that the Structured operator's route geometry was
+wrong on four grounds.** The scholar verified four facts; the coordinator
+spot-checked them and they held; **the inference from them was inverted**, and the
+lane that went to build the repair found it by looking for a case where the
+accused shape is admitted. Four grounds, strongest first:
+
+1. **`claims_composition_v3.rs:639-641` refuses a representation route whose kind is
+   not `Once`** — pinned by a green hostile at `:2336,:2347`. The specified
+   `AffineOnce` repair would have passed one check and died two frames later.
+2. **`AffineOnce`'s `repeated_item_count` *is* the effect tail count**
+   (`effect-kernel/src/v3.rs:968`), forced equal to the **Product** width by
+   `require_tail_count_agreement_v3`. Requiring it `== header.asset_count` binds
+   **K == N** — which the Structured family exists to deny; the operator's own green
+   test builds K=3 against N=258.
+3. **No producer ever emitted the affine shape.** Its only author was the
+   composition's own test fixture. `AFFINE_BATCH` is a different request family
+   with its own magic.
+4. The rule `a6a56e0c` replaced (empty commit body) was already request-bound —
+   `physical_account_count = 32 + asset_count*4` — exactly what the operator
+   declares.
+
+> **Three true observations and a wrong conclusion, for the third time today.** The
+> cross-boundary instrument is what caught it: `dclutch-claims-svm` is now a
+> test-only dep of the operator, and
+> `the_claims_composition_admits_the_full_width_route_this_operator_emits` builds
+> the real artifact and asks the real composition. Red with the exact discriminant
+> `ClaimsCompositionErrorV3::Route`, green after, at N=258/K=3 deliberately
+> (`368459c9`).
+
+### Then the route moved four walls on real ELFs
+
+Canonical Token-2022 built on hbox (`e2acdfb7…`) and re-verified locally; seven
+dclutch ELFs built here.
+
+- **#1 transition — corrected, not deleted** (`0f661415`). The probe named it:
+  *operation 4, `CheckFailed`, register 9 (=2) vs register 3 (=7)* — the guard
+  refused the tree's own fixture. Replaced with `nonzero`, **the check the
+  executing sibling uses on the same register**
+  (`rational-lifecycle-hot-v3/src/artifacts.rs:368-370`). Landed one step earlier
+  than the stated rule, with the reason in the commit: a *correction to the
+  sibling's law* is a re-proof on the other side, not a deletion, and it advanced
+  execution past the fold. One line to back out.
+- **#4, new** — the Claims preflight required the child program **exactly once**
+  and counted **raw keys**, so the representation wire's inactive-slot sentinel
+  (the Claims program id) counted twice: `occurrences=2, required=1`. Only
+  `IssueStructured`/`UnwrapStructured` leave a slot inactive, which is why nothing
+  had reached it. Fixed alias-aware — an alias carries no authority.
+- **#5** — the same predicate duplicated in `claims_composition_v3.rs:164-171`. One
+  shared alias-aware counter now.
+- **#6, where it stops** — `TradingSbfError::Release` at
+  `claims_composition_v3.rs:178-184`: the child frame's first account is not the
+  Trading-derived `CallerAuthoritySeedsV1` PDA. The common-Hot fixture derives its
+  caller against `CLAIMS_PROGRAM_ID`, and the file's own comment says the Claims
+  route is the one child route with no preflight derivation to reuse.
+
+#4 and #5 are **uncommitted by discipline**: they live in files another lane is
+mid-refactor in, and committing them would sweep that work. Isolated patches of
+only those hunks are handed to the file's owner. `hot_v3.rs:9584` still carries
+`map_err(|_| Content)` over the composition error — the surfacing that found the
+wall was never landed.
+
+Both red witnesses **corrected, not deleted**: `1357 → 1397` with the reason; the
+claims witness's *ID* carried the number too, so the number left the ID.

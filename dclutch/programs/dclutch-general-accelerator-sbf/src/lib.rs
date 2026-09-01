@@ -1359,9 +1359,25 @@ fn authenticated_general_domain(
     if config_id != environment.general_config_id {
         return Err(GeneralAcceleratorSemanticErrorV3::ConfigIdentity);
     }
-    config
+    if config
         .require_market(environment.generation, environment.semantic_basis_id)
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::ConfigMarket)?;
+        .is_err()
+    {
+        // `require_market` stays the sole authority for the comparison -- it is
+        // called, not reimplemented, because a second copy of a guard is how
+        // the two stop agreeing. What is added is the READER: the code alone
+        // says "generation or basis", which is two conjuncts and no values, and
+        // a log that names a disagreement without printing either side sends
+        // whoever reads it back to the fixture to guess.
+        sol_log("general: config/bank generation (config, bank)");
+        solana_program::log::sol_log_64(config.generation(), environment.generation, 0, 0, 0);
+        sol_log("general: config/bank semantic basis (config, bank)");
+        solana_program::log::sol_log_data(&[
+            &config.claim_basis_id(),
+            &environment.semantic_basis_id,
+        ]);
+        return Err(GeneralAcceleratorSemanticErrorV3::ConfigMarket);
+    }
     let product_coordinate = u16::try_from(HOT_RUNTIME_PRODUCT_COORDINATE_V3)
         .map_err(|_| GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?;
     let product_data = data(runtime, product_coordinate)?;

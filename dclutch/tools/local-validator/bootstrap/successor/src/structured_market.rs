@@ -171,12 +171,13 @@ fn structured_selected_payload_v1(
 /// The per-coordinate item width is also a lab fact and the honest one to
 /// scrutinise. It is the width of the one non-opaque per-coordinate account the
 /// structured account profile observes; 64 is what every fixture in the tree
-/// uses, and it coincides with the Lean-generated
-/// `dclutch-claims-representation-codec` `STATE_BYTES`. That crate currently has
-/// ZERO consumers anywhere in the workspace, so the coincidence is recorded as a
-/// coincidence rather than wired up as a derivation -- claiming a provenance on
-/// a matching width would be exactly the kind of unverified constant this lane
-/// exists to remove.
+/// uses. It used to be noted here that this coincided with the Lean-generated
+/// `dclutch-claims-representation-codec` `STATE_BYTES`, recorded as a
+/// coincidence rather than wired up as a derivation because that crate had zero
+/// consumers -- claiming a provenance on a matching width would be exactly the
+/// kind of unverified constant this lane exists to remove. That crate was
+/// deleted on 2026-09-01 with the Materialize route (N-11's reject decision),
+/// so the coincidence has no other end and 64 stands on the fixtures alone.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn demo_structured_market_input(
     plan_path: &std::path::Path,

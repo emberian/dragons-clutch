@@ -3,7 +3,7 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify`. Automatically, that check is the `sbom` tier of `tools/ci/run.sh` and the `lib/sbomVerify.test.ts` case in `apps/dclutch-web`'s `npm test` — see `tools/sbom/README.md`.
 
-**59 manifests, 2192 unique dependency rows (1252 cargo, 940 npm), 0 flagged for human review, 67 reviewed and allowed.**
+**59 manifests, 2191 unique dependency rows (1251 cargo, 940 npm), 0 flagged for human review, 67 reviewed and allowed.**
 
 ## Counts by license
 
@@ -12,7 +12,7 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 | `MIT` | 869 |
 | `Apache-2.0` | 500 |
 | `MIT OR Apache-2.0` | 334 |
-| `AGPL-3.0-or-later` | 165 |
+| `AGPL-3.0-or-later` | 164 |
 | `MIT/Apache-2.0` | 67 |
 | `Apache-2.0 OR MIT` | 48 |
 | `MPL-2.0` | 30 |
@@ -438,7 +438,6 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-claims-conservation-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-claims-conservation-contract` | declared |
 | `dclutch-claims-liability-basis-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/liability-basis-caller` | inherited-default (publish=false, undeclared) |
 | `dclutch-claims-protocol-position-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/protocol-position` | inherited-default (publish=false, undeclared) |
-| `dclutch-claims-representation-codec` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-claims-representation-codec` | declared |
 | `dclutch-claims-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf` | declared |
 | `dclutch-claims-sparse-chain-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/program-test/sparse-chain` | inherited-default (publish=false, undeclared) |
 | `dclutch-claims-sparse-chain-test-caller-sbf` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-claims-sbf/test-programs/sparse-chain-caller` | inherited-default (publish=false, undeclared) |
@@ -2444,7 +2443,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 
 | Manifest | Packages |
 |---|---|
-| `Cargo.toml` | 846 |
+| `Cargo.toml` | 845 |
 | `apps/dclutch-web/fixtures/founding/generator/Cargo.toml` | 21 |
 | `apps/dclutch-web/package.json` | 845 |
 | `crates/dclutch-svm-harness/Cargo.toml` | 792 |

@@ -2442,3 +2442,12 @@ than a clean named seam):
 Then the full redeploy carrying `c60b25e8` → founding → load simulator. Deployer
 unchanged at 42.945709919; that lane submitted zero transactions.
 | `a88faeac520a279ee` | COHORT-10 | the two host changes as one schema migration (`plan.rs:1123` genesis V2 pin + fifteenth account; `market.rs:4290` genesis arm, `Predecessor` arm deleted) → full redeploy carrying `c60b25e8` → ladder → found the SOL/USD market with the proven founder key → load simulator; closes condition (b) |
+
+### CORRECTION — the Structured operator was right; `composition_v3.rs` was wrong
+
+Two entries above (the scholar's reassessment, and the Structured lane map row) say
+the operator's route geometry was wrong on four grounds. **Reversed by the lane sent
+to build the repair** — `claims_composition_v3.rs:639-641` refuses any
+representation route that is not `Once`, and `AffineOnce` would bind K == N, which
+the family exists to deny. The scholar's four *facts* held; the *inference* was
+inverted. Third time today. See WAVE.md, "REVERSAL".
