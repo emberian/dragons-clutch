@@ -5024,11 +5024,15 @@ async fn current_common_hot_executes_issue_and_selected_denominate_through_real_
     .await
     .expect("hostile common-Hot transaction");
     assert!(!refused.accepted, "substituted family request must refuse");
-    assert!(
-        refused.logs.iter().any(|line| line.contains(&format!(
-            "Custom({})",
-            dclutch_trading_sbf::TradingSbfError::Content as u32
-        ))),
+    // PARSED, not matched. `line.contains("Custom(16387)")` also accepts
+    // `Custom(163870)` (AGENTS.md, refusal codes) -- and it accepted nothing at
+    // all here, because the runtime writes the code as `custom program error:
+    // 0x4003` in the program-failure line and renders `Custom(N)` only in the
+    // transaction error, which is not in `logs`. So this assertion failed while
+    // the route refused with exactly the discriminant it names.
+    assert_eq!(
+        custom_code(&refused),
+        Some(dclutch_trading_sbf::TradingSbfError::Content as u32),
         "the Hot content owner must name the substituted family refusal: {}",
         refused.logs.join("\n")
     );

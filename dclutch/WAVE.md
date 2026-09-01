@@ -4459,3 +4459,65 @@ trusts.
 **Register: 73 witnessed / 33 blocked-with-a-reason / 55 unwitnessed, of 161,
 zero dangling binding refs. C-16: six categories, six instruments, none
 finished.**
+
+## 2026-09-01 — the satisfying set is empty
+
+The `coefficient == denominator` constraint is now **convicted by proof rather
+than by absence.** Not *"no kernel states this law"* — **the law contradicts the
+kernel**:
+
+- the transition requires `coefficient[i] == D` for every `i`
+  (`open_structured_v3.rs:927`);
+- the composition kernel requires **`gcd(D, coefficients…) == 1`**
+  (`translation.rs:231`), because a canonical root payoff must be in lowest
+  terms and **the coefficients *are* the numerators** — the call site is
+  `composition(basis, &basis.coefficients, basis.denominator)`, and that
+  function's own doc says *"the same recipe in the same lowest form"*;
+- together these force **`D == 1`**;
+- but `D <= 1` refuses `NonFractionalDenominator` and `D == 0` refuses
+  `ZeroDenominator`, so **`D >= 2`**.
+
+> **The satisfying set is empty.** A guard that can never admit anything is an
+> **unconditional refusal of the entire Structured family wearing the shape of a
+> check** — and it is why nothing in this family has ever crossed the Trading
+> Hot route.
+
+**Demonstrated from the other side**, not merely derived: setting
+`COEFFICIENTS = [D, D, D]` — a basis that *satisfies* the constraint — against
+the **unmodified** operator collapses the suite to 1/45 on `NonCanonicalPayoff`.
+
+### Vacuous-permit and vacuous-deny are not the same defect
+
+Still not removed, and the reason is a distinction worth keeping:
+
+> **Deleting a never-*refusing* tautology is free.** Deleting a
+> **never-*admitting*** guard is **not symmetric: it lets through what was
+> blocked**, and the family cannot be shown to work afterwards while another
+> wall stands behind it.
+
+*The conviction is complete; the authorization waits on the wall behind it* —
+which is a different sentence from "unresolved". `Content` (`0x4003`) is that
+wall, revealed rather than caused: with the constraint's shape kept and only its
+second operand made unfailable, the transition passed and the admitted issue
+**still refused** at 367,084 CU. A fourth, independent wall.
+
+### A campaign that never asks cannot notice something else was answering
+
+The forced-budget migration landed. **+40 bytes** (the ComputeBudget program id
+entering static keys, plus its compiled instruction) and **+150 CU** (its builtin
+cost) are **what a real transaction has always paid and this campaign was not
+counting.** *A packet figure that omits what a real transaction carries is a
+packet figure for a transaction nobody sends.* Executable full-width K unchanged
+at 2 — checked, not assumed.
+
+The `claim_check` submodule then failed **8 of 9** without the limit: the same
+defect from the other side.
+
+### A test that was not weak but impossible
+
+The campaign's last log-contains check asserted `contains("Custom(16387)")`.
+Beyond also accepting `Custom(163870)`, **it could not pass however the route
+behaved**: the runtime writes `custom program error: 0x4003` in the failure line
+and renders `Custom(N)` only in the transaction error, **which never reaches
+`logs`.** Measured under probe, the hostile refuses exactly `Content` — **the
+predicate was right all along and the format was unreachable.**
