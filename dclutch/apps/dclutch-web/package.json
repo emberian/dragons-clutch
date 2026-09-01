@@ -55,6 +55,8 @@
     "abi:capability-surface:verify": "node scripts/generate-capability-surface.mjs --check",
     "abi:route-census": "node scripts/generate-route-census.mjs",
     "abi:route-census:verify": "node scripts/generate-route-census.mjs --check",
+    "abi:sbf-runtime": "node scripts/generate-sbf-runtime.mjs",
+    "abi:sbf-runtime:verify": "node scripts/generate-sbf-runtime.mjs --check",
     "abi:coverage": "node scripts/abi-coverage.mjs",
     "explorer:coverage": "node scripts/explorer-coverage.mjs",
     "a11y:coverage": "node scripts/a11y-coverage.mjs",

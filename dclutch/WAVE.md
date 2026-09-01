@@ -5661,3 +5661,154 @@ wall was never landed.
 
 Both red witnesses **corrected, not deleted**: `1357 → 1397` with the reason; the
 claims witness's *ID* carried the number too, so the number left the ID.
+
+## 2026-09-01 - the grant was always twice what the program could see
+
+**Measured before touching the grant, and the numbers force neither option.**
+The accelerator declares a `custom-heap` **feature** in its `Cargo.toml` and
+never implements one, so `solana_program::entrypoint!` installs the default
+`BumpAllocator::with_fixed_address_range(HEAP_START_ADDRESS, HEAP_LENGTH)` --
+and `HEAP_LENGTH` is hardcoded at **32 * 1024** in solana-program-entrypoint
+3.1.1, bumping downward from the top of that 32 KiB.
+`DIRECT_HOT_HEAP_FRAME_BYTES_V1` is **65,536**.
+
+A new `heap-profile` feature logs the allocator's outstanding bytes beside both
+ceilings, and says which question it answers: **not** the granted frame, which
+the ledger's own rule says only a raw write into the heap region can measure and
+which this crate cannot do because it forbids `unsafe`. It measures what this
+program's allocator has handed out and the ceiling it refuses past -- the pair
+that decides whether an allocation fails.
+
+Settlement at runtime width 258, 135 accounts, the row that dies:
+
+| mark | outstanding |
+|---|---|
+| entry (after entrypoint deserialization) | 7,369 |
+| frame-validated | 11,482 |
+| input-bank | 26,515 |
+| next allocation | **fails** -- 6,253 left of 32,768 |
+
+> **The answer is not a larger declared grant and not a narrower frame. The
+> grant was always large enough; the program has never been able to see half of
+> it.**
+
+The fix is to declare a custom heap over the granted region, which Trading
+already does at `entrypoint_adapter.rs:697`. `BumpHeapV1` lives inside
+`programs/dclutch-trading-sbf`, so sharing it is an extraction from another
+lane's program and writing a second one here means `unsafe` in a crate whose
+policy forbids it. **Routed, not done unilaterally** -- the shape is settled and
+the measurement is the argument.
+
+**This revises what 22/3 means.** Those three rows do not fail because the real
+frame is too big for the heap the protocol grants. They fail because thirty more
+`AccountInfo`s pushed a program already spending 26,515 of a 32,768 ceiling past
+it, while half its paid-for heap sat unreachable the whole time. **The old frame
+was hiding a headroom figure, not creating one.**
+
+**Byte-identical was the wrong claim to reach for.** With the feature off the
+ELF hash still moves (`53ce2075` -> `3a1393da`) because 49 added lines shift
+line tables -- the diff is 49 insertions and zero deletions, and the committed
+`lib.rs` rebuilt inside the same dirty tree reproduces `53ce2075` exactly. The
+right control for an added line is identical compute on a real run: 27,045 /
+49,670 / 51,695 / 84,718 CU, all four unchanged.
+
+## 2026-09-01 - the producer cannot satisfy two of the four conjuncts
+
+**`ConfigMarket` localized in one run, because the refusal had a reader.** The
+path prints both sides of both conjuncts now, and `require_market` stays the
+sole authority for the comparison -- called, not reimplemented.
+
+| conjunct | config | bank |
+|---|---|---|
+| generation | 9 | 9 |
+| semantic basis | `0x56` x32 | **`0x00` x32** |
+
+**It is zero because nothing writes it.** The General AccountProfile sources
+eighteen identity registers and `identity::SEMANTIC_BASIS_ID` is not among them
+-- no `ProjectDataIdentity` rule anywhere in `account_rules_v3.rs`. Nor is there
+a field to source it from: `GeneralRootV2` records magic, header word, market,
+config id, generation, revision, next batch sequence, open batches and
+lifecycle, and **no basis**.
+
+The conjunct behind it is the same defect: `identity::PRODUCT_RECORD_DIGEST` is
+sourced **zero** times in that file, so `authenticated_general_domain`'s fourth
+comparison is queued to fail identically the moment the third stops.
+
+> **Two of the four conjuncts every one of the fifteen General actions crosses
+> first are unsatisfiable on the real route -- and it is the frame's shape
+> again. The harnesses hand-write these registers into the bank, so the harness
+> and the accelerator agree and the producer cannot.**
+
+I wrote `CONFIG_CLAIM_BASIS_ID` into `freeze.rs`'s bank by hand earlier today.
+That is the same act, and it is why that file passes. **Three findings this
+session, one shape**: a table, a frame, and now a register bank, each with a
+harness that could satisfy it and a producer that could not.
+
+**The constraint any fix must meet**, stated because getting it wrong has three
+recorded instances in this tree: **the source must not be the config.**
+`config_id` is the pattern -- the *root* records the config identity as a field,
+the profile projects that field, and the accelerator recomputes
+`hash(config_data)` and compares. Two independent authorities. A basis register
+projected out of the config account would compare the config to itself and pass
+forever.
+
+## 2026-09-01 — half the granted heap has never been addressable
+
+**The General accelerator's ceiling is 32,768, not 65,536.** It declares a
+`custom-heap` *feature* in `Cargo.toml` and **never implements one**, so
+`entrypoint!` installs the default `BumpAllocator::with_fixed_address_range` with
+`HEAP_LENGTH` hardcoded at `32 * 1024` in solana-program-entrypoint 3.1.1.
+`DIRECT_HOT_HEAP_FRAME_BYTES_V1` is 65,536. **Half the paid-for frame sits
+unreachable.**
+
+Measured (`f0a4c4f6`, a `heap-profile` feature that states which question it
+answers — the allocator's outstanding bytes and the ceiling it refuses past, not
+the grant, which only a raw write could measure and this crate forbids `unsafe`).
+Settlement at width 258, 135 accounts:
+
+| mark | outstanding |
+|---|---|
+| entry (after deserialization) | 7,369 |
+| frame-validated | 11,482 |
+| input-bank | 26,515 |
+| next allocation | **fails** — 6,253 left of 32,768 |
+
+**Neither candidate repair is forced** — not a larger grant, not a narrower frame,
+and the exact-grant rule does not move. The fix is a custom heap over the granted
+region, exactly Trading's `BumpHeapV1::with_base`
+(`entrypoint_adapter.rs:697`) — which lives inside `programs/dclutch-trading-sbf`,
+so sharing it is an extraction, and a second implementation here means `unsafe` in
+a crate that forbids it. **This revises 22/3: those rows fail because thirty more
+`AccountInfo`s pushed a program already at 26,515 of 32,768 past it, while half its
+heap sat unreachable. The old frame was hiding a headroom figure, not creating
+one.**
+
+**A wrong control, caught**: feature-off is *not* byte-identical (`53ce2075` →
+`3a1393da`) because 49 added lines shift line tables — 49 insertions, zero
+deletions, and the committed `lib.rs` rebuilt in the same tree reproduces
+`53ce2075` exactly. **The right control for an added line is identical compute**
+— all four figures unchanged.
+
+### `ConfigMarket`: zero because nothing writes it
+
+`require_market` stays the sole authority — called, not reimplemented; a reader
+was added around it (`3b7a1025`). Generation 9 = 9; semantic basis `0x56`×32 in
+the config against **`0x00`×32 in the bank.** The General AccountProfile sources
+eighteen identity registers and `SEMANTIC_BASIS_ID` is not among them — no
+`ProjectDataIdentity` rule, and `GeneralRootV2` has no basis field to source from.
+`PRODUCT_RECORD_DIGEST` is sourced **zero** times in the same file, so the fourth
+conjunct is queued to fail identically.
+
+> **Two of the four conjuncts every one of the fifteen actions crosses first are
+> unsatisfiable by the producer** — the frame's shape a third time today: the
+> harnesses hand-write those registers, so harness and accelerator agree and the
+> producer cannot.
+
+The lane named its own instance: it hand-wrote `CONFIG_CLAIM_BASIS_ID` into
+`freeze.rs` this morning — the same act, and why that file passes.
+
+**Constraint on the fix, written down because the tree has three recorded
+instances of getting it wrong: the source must not be the config.** Copy
+`config_id`: the *root* records it as a field, the profile projects the field, the
+accelerator recomputes `hash(config_data)`. A basis projected out of the config
+account compares the config to itself and passes forever.

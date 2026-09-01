@@ -13,13 +13,32 @@
  *     states, attributed to the program whose frame originated it, by the same
  *     two rules the gauntlet census credits refusals with.
  *
+ * And the fourth, which is the other half of the third: when the program did
+ * not refuse but ABORTED, there is no code to name, and `ProgramFailedToComplete`
+ * is the runtime's discriminant rather than an account of anything. `aborts.ts`
+ * reads the virtual machine's own sentence out of the logs and places the fault
+ * address in the memory map the pinned runtime declares; this module supplies
+ * the half no log line carries — what the transaction itself asked the
+ * ComputeBudget program for — so the two can be compared.
+ *
  * Nothing here asserts a program's identity. dClutch programs have no fixed
  * addresses — the reader selects them — so an address is labelled only when the
  * reader named it or the runtime owns it.
  */
-import { VersionedTransaction } from '@solana/web3.js';
+import { ComputeBudgetProgram, VersionedTransaction } from '@solana/web3.js';
 
+import {
+  REQUEST_HEAP_FRAME_DISCRIMINANT_V1,
+  SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT_V1,
+} from '../generated/genericFoundingV1';
 import type { SolanaRpcClient, TransactionMetaObservation } from '../rpc';
+import {
+  diagnoseAbort,
+  readProgramAbort,
+  type AbortDiagnosis,
+  type ProgramAbort,
+  type TransactionBudget,
+} from './aborts';
 import { decodeBase58 } from './base58';
 import { decodeInstructionData, programLabel, type DecodedInstruction } from './instructions';
 import {
@@ -64,6 +83,12 @@ export type ExplorerTransaction = Readonly<{
   refusal: ReportedRefusal | null;
   /** A runtime refusal that carries no custom code, in the runtime's own words. */
   runtimeError: string | null;
+  /** The virtual machine's own account of a fault, when the program aborted. */
+  abort: ProgramAbort | null;
+  /** What that fault means next to this transaction's own budget, and the remedy. */
+  abortDiagnosis: AbortDiagnosis | null;
+  /** What the transaction declared to the ComputeBudget program. */
+  budget: TransactionBudget;
   /** The programs the chain's logs say were invoked, in order. */
   invoked: ReadonlyArray<InvokedFrame>;
   logMessages: ReadonlyArray<string>;
@@ -116,6 +141,41 @@ function outerInstructions(
   } catch {
     return null;
   }
+}
+
+/**
+ * What the transaction told the ComputeBudget program.
+ *
+ * Read from the transaction's own outer instructions rather than assumed, and
+ * neither the program nor the two discriminants is written down here: the
+ * address comes from `ComputeBudgetProgram.programId` and the discriminants
+ * from `lib/generated/genericFoundingV1.ts`, which scrapes them from the same
+ * Rust the reference client encodes with. Both bodies are one `u8` tag then a
+ * little-endian `u32`.
+ *
+ * This is the half of an abort diagnosis no log line carries. A fault address
+ * says where a program wrote; only the request says whether that was inside
+ * what it had asked for.
+ */
+function readBudget(
+  outer: ReadonlyArray<Readonly<{ programIdIndex: number; data: Uint8Array }>> | null,
+  addresses: ReadonlyArray<string>,
+): TransactionBudget {
+  const computeBudget = ComputeBudgetProgram.programId.toBase58();
+  let heapFrameBytes: number | null = null;
+  let computeUnitLimit: number | null = null;
+  for (const instruction of outer ?? []) {
+    if (addresses[instruction.programIdIndex] !== computeBudget) continue;
+    if (instruction.data.length !== 5) continue;
+    const value = new DataView(
+      instruction.data.buffer,
+      instruction.data.byteOffset,
+      instruction.data.byteLength,
+    ).getUint32(1, true);
+    if (instruction.data[0] === REQUEST_HEAP_FRAME_DISCRIMINANT_V1) heapFrameBytes = value;
+    if (instruction.data[0] === SET_COMPUTE_UNIT_LIMIT_DISCRIMINANT_V1) computeUnitLimit = value;
+  }
+  return Object.freeze({ heapFrameBytes, computeUnitLimit });
 }
 
 /** Build the transaction view from one finalized observation. */
@@ -188,6 +248,13 @@ export function projectTransaction(
 
   const refusal = meta.succeeded ? null : readReportedRefusal(meta.logMessages, meta.error);
   const runtimeError = meta.succeeded || refusal !== null ? null : runtimeErrorLabel(meta.error);
+  // An abort and a refusal are exclusive: a program that returned a code did
+  // not fault, and `readProgramAbort` declines a `custom program error` line
+  // for exactly that reason. The guard here is the same claim stated once more
+  // at the level where both are in hand.
+  const budget = readBudget(outer, addresses);
+  const abort = meta.succeeded || refusal !== null ? null : readProgramAbort(meta.logMessages);
+  const abortDiagnosis = abort === null ? null : diagnoseAbort(abort, budget);
 
   return Object.freeze({
     signature: meta.signature,
@@ -200,6 +267,9 @@ export function projectTransaction(
     instructions: Object.freeze(instructions),
     refusal,
     runtimeError,
+    abort,
+    abortDiagnosis,
+    budget,
     invoked: invokedFrames(meta.logMessages),
     logMessages: meta.logMessages,
     note,

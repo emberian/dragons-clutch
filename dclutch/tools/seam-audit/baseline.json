@@ -71,6 +71,7 @@
       "LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2\tprograms/dclutch-trading-sbf/program-test/user-position-admission/tests/lifecycle.rs": "debt-derivation-restatement",
       "LIFECYCLE_RENT_CREDIT_PDA_DOMAIN_V2\tprograms/dclutch-trading-sbf/src/series/terminal.rs": "debt-derivation-restatement",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\tcrates/dclutch-operator/src/infrastructure_succession_v1.rs": "debt-derivation-restatement",
+      "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\tcrates/dclutch-release-tool/src/infrastructure.rs": "untriaged",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\tprograms/dclutch-core-sbf/src/infrastructure.rs": "debt-derivation-restatement",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\tprograms/dclutch-core-sbf/src/infrastructure_v2.rs": "debt-derivation-restatement",
       "PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1\tprograms/dclutch-core-sbf/tests/found_program_test.rs": "debt-derivation-restatement",
@@ -445,7 +446,6 @@
       "crates/dclutch-capability-program-contract/src/hot_v3.rs": "inventory-guard-present",
       "crates/dclutch-capability-program-contract/src/set_v1.rs": "inventory-guard-present",
       "crates/dclutch-capability-program-contract/src/set_v2.rs": "inventory-guard-present",
-      "crates/dclutch-claims-representation-codec/src/lib.rs": "inventory-guard-present",
       "crates/dclutch-claims-svm/src/affine_batch_v2.rs": "inventory-guard-present",
       "crates/dclutch-claims-svm/src/claim_check_v1.rs": "inventory-guard-present",
       "crates/dclutch-claims-svm/src/composition_v3.rs": "inventory-guard-present",
@@ -636,6 +636,7 @@
       "crates/dclutch-token-svm/src/closeable_mint.rs": "inventory-guard-present",
       "crates/dclutch-transition-vm/src/v2/encode.rs": "inventory-guard-present",
       "crates/dclutch-transition-vm/src/v3.rs": "inventory-guard-present",
+      "crates/dclutch-wallet-terminal-payout-operator/src/wire.rs": "untriaged",
       "programs/dclutch-claims-sbf/src/affine_batch_v2.rs": "inventory-guard-present",
       "programs/dclutch-claims-sbf/src/founding_v5.rs": "inventory-guard-present",
       "programs/dclutch-claims-sbf/src/fractional_atomic_v3.rs": "inventory-guard-present",
@@ -713,7 +714,6 @@
       "tools/local-validator/bootstrap/successor/src/terminal_exterior_pyth.rs": "inventory-guard-present",
       "tools/local-validator/bootstrap/successor/src/terminal_sequence.rs": "inventory-guard-present",
       "tools/local-validator/bootstrap/successor/src/upgrade.rs": "inventory-guard-present",
-      "tools/local-validator/bootstrap/successor/src/wallet_terminal.rs": "inventory-guard-present",
       "tools/local-validator/bootstrap/successor/src/wallet_terminal_payout_exterior.rs": "inventory-guard-present",
       "tools/relayer/src/config.rs": "inventory-guard-present",
       "tools/relayer/src/id32.rs": "inventory-guard-present",
@@ -742,6 +742,6 @@
       "programs/dclutch-trading-sbf/src/hot_v3.rs\tapply_lifecycle_creates_v3": "hazard-unset-pin"
     }
   },
-  "measured_commit": "650a0fc4699732ad6d17877b10231a59000ee064",
+  "measured_commit": "47860c0073a21dd81421dd621e21045040a40ad7",
   "schema": "dclutch-seam-audit-v1"
 }

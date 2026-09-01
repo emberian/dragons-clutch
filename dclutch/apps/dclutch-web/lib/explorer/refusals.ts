@@ -230,6 +230,12 @@ function findCustom(value: unknown, depth: number): number | null {
  * account already in use — are not custom codes and have no band. Naming them
  * is the runtime's job, not this registry's, so this returns the error's own
  * discriminant verbatim rather than translating it.
+ *
+ * One discriminant is NOT a refusal and must not be read as one:
+ * `ProgramFailedToComplete` means the virtual machine aborted, and the account
+ * of what happened is in the logs rather than in the error. `aborts.ts` reads
+ * it. This function still returns the discriminant, because it is what the node
+ * reported, but it is the caption on that reading and not the reading.
  */
 export function runtimeErrorLabel(error: unknown): string | null {
   if (error === null || error === undefined) return null;

@@ -1,4 +1,5 @@
 import {
+  ComputeBudgetProgram,
   PublicKey,
   SystemProgram,
   TransactionInstruction,
@@ -216,6 +217,97 @@ describe('the transaction view', () => {
     );
     expect(projected.computeUnits).toBe('18000');
     expect(projected.invoked.map((frame) => frame.depth)).toEqual([1, 2]);
+  });
+});
+
+/**
+ * A transaction that declares its budget and then faults.
+ *
+ * Built through `ComputeBudgetProgram` rather than by hand, so the bytes the
+ * view has to decode are the bytes a real client emits — including the
+ * discriminants, which the view reads from `genericFoundingV1` and this file
+ * therefore never states.
+ */
+function budgetedMeta(heapBytes: number, unitLimit: number, faultAddress: number): TransactionMetaObservation {
+  const message = new TransactionMessage({
+    payerKey: PAYER,
+    recentBlockhash: PublicKey.default.toBase58(),
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: unitLimit }),
+      ComputeBudgetProgram.requestHeapFrame({ bytes: heapBytes }),
+      new TransactionInstruction({
+        programId: RENT_PROGRAM,
+        keys: [{ pubkey: PAYER, isSigner: true, isWritable: true }],
+        data: Buffer.alloc(8),
+      }),
+    ],
+  }).compileToV0Message();
+  const bytes = new VersionedTransaction(message).serialize();
+  const addresses = VersionedTransaction.deserialize(bytes).message.staticAccountKeys.map((key) => key.toBase58());
+  return Object.freeze({
+    signature: SIGNATURE,
+    slot: '4242',
+    blockTime: '1790000000',
+    succeeded: false,
+    errorText: null,
+    error: { InstructionError: [2, 'ProgramFailedToComplete'] },
+    feeLamports: '5000',
+    computeUnits: '203408',
+    accountAddresses: Object.freeze(addresses),
+    preBalances: Object.freeze(addresses.map(() => '1000000')),
+    postBalances: Object.freeze(addresses.map(() => '1000000')),
+    logMessages: Object.freeze([
+      `Program ${RENT_PROGRAM.toBase58()} invoke [1]`,
+      `Program ${RENT_PROGRAM.toBase58()} consumed 203408 of ${unitLimit} compute units`,
+      `Program ${RENT_PROGRAM.toBase58()} failed: Access violation writing 8 bytes at address 0x${faultAddress.toString(16)}`,
+    ]),
+    innerInstructions: Object.freeze([]),
+    returnData: null,
+    transactionBytes: bytes,
+  });
+}
+
+describe('a transaction that aborted rather than refusing', () => {
+  it('reads the budget it declared out of its own ComputeBudget instructions', () => {
+    const projected = projectTransaction(budgetedMeta(65_536, 1_400_000, 0x30000fa58));
+    expect(projected.budget.heapFrameBytes).toBe(65_536);
+    expect(projected.budget.computeUnitLimit).toBe(1_400_000);
+  });
+
+  it('names the fault, places it, and says what can be done — where it used to show a discriminant', () => {
+    const projected = projectTransaction(budgetedMeta(65_536, 1_400_000, 0x30000fa58));
+    expect(projected.refusal).toBeNull();
+    // The discriminant is still reported, because the node reported it. It is
+    // no longer the whole of what the reader is told.
+    expect(projected.runtimeError).toBe('InstructionError #2: ProgramFailedToComplete');
+    expect(projected.abort?.program).toBe(RENT_PROGRAM.toBase58());
+    expect(projected.abort?.fault?.region).toBe('heap');
+    expect(projected.abort?.fault?.offset).toBe(64_088);
+    expect(projected.abortDiagnosis?.title).toContain('the runtime had not mapped it');
+    expect(projected.abortDiagnosis?.remedy).toBeTruthy();
+  });
+
+  it('leaves a refusal alone: a program that returned a code did not fault', () => {
+    const refusal = PROTOCOL_REFUSALS.find((entry) => entry.program === 'rent');
+    expect(refusal).toBeDefined();
+    if (refusal === undefined) return;
+    const projected = projectTransaction(
+      meta({
+        succeeded: false,
+        error: { InstructionError: [0, { Custom: refusal.code }] },
+        logMessages: Object.freeze([
+          `Program ${RENT_PROGRAM.toBase58()} failed: custom program error: 0x${refusal.code.toString(16)}`,
+        ]),
+      }),
+    );
+    expect(projected.refusal?.code).toBe(refusal.code);
+    expect(projected.abort).toBeNull();
+    expect(projected.abortDiagnosis).toBeNull();
+  });
+
+  it('carries a null budget for a transaction that declared none', () => {
+    const projected = projectTransaction(meta());
+    expect(projected.budget).toEqual({ heapFrameBytes: null, computeUnitLimit: null });
   });
 });
 

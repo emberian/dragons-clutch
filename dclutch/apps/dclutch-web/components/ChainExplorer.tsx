@@ -19,6 +19,7 @@ import {
   type ProtocolHomeV1,
   type ProtocolProgramCardV1,
 } from '@/lib/explorer/protocolHome';
+import { SBF_DEFAULT_HEAP_BYTES_V1, SBF_RUNTIME_VERSIONS_V1 } from '@/lib/generated/sbfRuntimeV1';
 import { attributionTitle, describeAttribution, hexCode } from '@/lib/explorer/refusals';
 import {
   inspectTransaction,
@@ -411,7 +412,8 @@ function TransactionView({ state }: Readonly<{ state: Async<ExplorerTransactionR
         <dl className="fact-list">
           <div><dt>Slot</dt><dd>{transaction.slot}</dd></div>
           <div><dt>Fee</dt><dd>{transaction.feeLamports} lamports</dd></div>
-          <div><dt>Compute units</dt><dd>{transaction.computeUnits ?? 'not reported'}</dd></div>
+          <div><dt>Compute units</dt><dd>{transaction.computeUnits ?? 'not reported'}{transaction.budget.computeUnitLimit === null ? '' : ` of ${transaction.budget.computeUnitLimit.toLocaleString('en-US')} requested`}</dd></div>
+          <div><dt>Heap requested</dt><dd>{transaction.budget.heapFrameBytes === null ? `none · the ${SBF_DEFAULT_HEAP_BYTES_V1.toLocaleString('en-US')}-byte default` : `${transaction.budget.heapFrameBytes.toLocaleString('en-US')} bytes`}</dd></div>
           <div><dt>Instructions</dt><dd>{transaction.instructions.filter((entry) => entry.innerIndex === null).length} outer · {transaction.instructions.filter((entry) => entry.innerIndex !== null).length} inner</dd></div>
         </dl>
         {transaction.note === null ? null : <Honest>{transaction.note}</Honest>}
@@ -445,7 +447,63 @@ function TransactionView({ state }: Readonly<{ state: Async<ExplorerTransactionR
         </article>
       )}
 
-      {transaction.runtimeError === null ? null : (
+      {transaction.abort === null || transaction.abortDiagnosis === null ? null : (
+        <article className="account-card refused">
+          <div className="card-topline">
+            <p className="account-kind">Runtime abort · no custom code</p>
+            <Chip tone="fail">
+              {transaction.abort.named === null
+                ? 'unnamed by the pinned runtime'
+                : `${transaction.abort.named.origin === 'vm' ? 'EbpfError' : 'SyscallError'}::${transaction.abort.named.variant}`}
+            </Chip>
+          </div>
+          <h3>{transaction.abortDiagnosis.title}</h3>
+          <p className="observation">{transaction.abortDiagnosis.finding}</p>
+          <dl className="fact-list">
+            <div><dt>The runtime said</dt><dd className="xp-hex">{transaction.abort.sentence}</dd></div>
+            <div>
+              <dt>Faulted in</dt>
+              <dd>{transaction.abort.program === null
+                ? 'the logs name no frame for this abort'
+                : <Jump view="account" value={transaction.abort.program}>{compact(transaction.abort.program, 8)}</Jump>}</dd>
+            </div>
+            {transaction.abort.fault === null ? null : (
+              <div>
+                <dt>Address</dt>
+                <dd className="xp-hex">
+                  0x{transaction.abort.fault.address.toString(16)}
+                  {' · '}
+                  {transaction.abort.fault.region === null
+                    ? 'in no region the virtual machine declares'
+                    : `${transaction.abort.fault.region} + ${transaction.abort.fault.offset.toLocaleString('en-US')}`}
+                </dd>
+              </div>
+            )}
+            {transaction.abort.meter === null ? null : (
+              <div><dt>Last meter</dt><dd>{transaction.abort.meter.consumed.toLocaleString('en-US')} of {transaction.abort.meter.limit.toLocaleString('en-US')} units</dd></div>
+            )}
+            {transaction.runtimeError === null ? null : (
+              <div><dt>Reported by the node as</dt><dd>{transaction.runtimeError}</dd></div>
+            )}
+          </dl>
+          {transaction.abortDiagnosis.remedy === null ? null : (
+            <p className="observation"><strong>What can be done:</strong> {transaction.abortDiagnosis.remedy}</p>
+          )}
+          <Honest>
+            An abort is not a refusal: the program never returned a code, so there is no band and no dClutch name to give.
+            What there is instead is the virtual machine&rsquo;s own sentence, matched against the `#[error]` format strings
+            of the pinned runtime (solana-sbpf {SBF_RUNTIME_VERSIONS_V1.sbpf}, solana-syscalls {SBF_RUNTIME_VERSIONS_V1.syscalls}),
+            and the fault address placed in the memory map those same crates declare.
+            {transaction.abortDiagnosis.confidence === 'named'
+              ? ' The runtime’s vocabulary names this one.'
+              : transaction.abortDiagnosis.confidence === 'placed'
+                ? ' No pinned format string prints this exact sentence — the reading rests on the address, which is read separately for that reason.'
+                : ' Nothing in the pinned vocabulary prints this sentence, so it is shown verbatim and nothing is inferred from it.'}
+          </Honest>
+        </article>
+      )}
+
+      {transaction.runtimeError === null || transaction.abort !== null ? null : (
         <article className="account-card refused">
           <div className="card-topline"><p className="account-kind">Runtime refusal</p><Chip tone="fail">no custom code</Chip></div>
           <h3>{transaction.runtimeError}</h3>
