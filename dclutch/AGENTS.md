@@ -194,6 +194,19 @@ construction belong outside the kernel in explicitly named adapters.
   never run while the summary reports one number: `run-postjoin-hostiles.sh`
   reported one failing case when the true figure was ten. Run every row, report
   every row, and keep "failed" distinct from "never ran".
+- **Never point a nested program-test workspace at the root `CARGO_TARGET_DIR`.**
+  Each `program-test` is its own workspace with its own `target/`. Overriding
+  `CARGO_TARGET_DIR` to the root's mixes rustc invocations made from two
+  workspace roots, so one path-dependency crate is compiled twice -- once with
+  a relative source path and once absolute -- and the link fails with *"multiple
+  different versions of crate `X`"* naming crates nobody touched. Measured
+  2026-09-01: it blamed `dclutch-operator` and `dclutch-direct-codec` for a
+  duplicate `dclutch-core-contract` while `cargo metadata` showed exactly ONE
+  of it in the graph and uniform `../../../crates/...` spellings. Dropping the
+  override built the same workspace in nineteen seconds. `cargo metadata`
+  is the discriminator: if the graph has one copy, the manifest is innocent and
+  the target directory is the culprit. Note that the general-hot command
+  recorded in `docs/LETTER_TO_CLAUDE_2026_09_01.md` carries this override.
 - **A commit carries the manifest and lock its code needs.** Named-path commits
   keep a shared checkout safe, and their exact cost is that the `Cargo.toml`
   and `Cargo.lock` a change depends on are easy to leave behind — three

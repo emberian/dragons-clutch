@@ -6,6 +6,10 @@ use dclutch_capability_program_contract::hot_v3::{
     DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3,
 };
 use dclutch_core_contract::ContentId;
+use dclutch_execution_strategy_contract::admitted_v3::{
+    ADMITTED_INSTRUCTIONS_ACCOUNT_V3, ADMITTED_RUNTIME_ACCOUNTS_START_V3,
+    ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
+};
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
     AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
@@ -322,13 +326,31 @@ fn fixture(outcome_count: u32, corrupt_page: bool) -> Fixture {
     let fixed_count = usize::from(
         general_account_profile_fixed_count_v3(Action::Freeze).expect("Freeze account geometry"),
     );
-    let mut frame = vec![DUMMY; 18 + fixed_count];
+    // `18` was written out four times here, and it is
+    // `ADMITTED_RUNTIME_ACCOUNTS_START_V3` -- the same constant the accelerator
+    // derives its scratch-page window from, in `assemble_input_bank`. The two
+    // agree today; a second author for a frame offset is how they stop
+    // agreeing, and the pages sit at the far end of exactly this offset, where
+    // a drift would surface as a bank-content refusal rather than as a missing
+    // account. The two named coordinates below come from the same table.
+    let runtime_start = ADMITTED_RUNTIME_ACCOUNTS_START_V3;
+    let mut frame = vec![DUMMY; runtime_start + fixed_count];
     *frame.first_mut().expect("authority frame") = authority;
-    *frame.get_mut(4).expect("instructions frame") = sysvar::instructions::ID;
-    *frame.get_mut(5).expect("Trading frame") = CALLER;
-    *frame.get_mut(18 + 1).expect("config runtime frame") = CONFIG_ACCOUNT;
-    *frame.get_mut(18 + 2).expect("Product runtime frame") = PRODUCT_ACCOUNT;
-    *frame.get_mut(18 + 5).expect("selection runtime frame") = SELECTION_STATE;
+    *frame
+        .get_mut(ADMITTED_INSTRUCTIONS_ACCOUNT_V3)
+        .expect("instructions frame") = sysvar::instructions::ID;
+    *frame
+        .get_mut(ADMITTED_TRADING_PROGRAM_ACCOUNT_V3)
+        .expect("Trading frame") = CALLER;
+    *frame
+        .get_mut(runtime_start + 1)
+        .expect("config runtime frame") = CONFIG_ACCOUNT;
+    *frame
+        .get_mut(runtime_start + 2)
+        .expect("Product runtime frame") = PRODUCT_ACCOUNT;
+    *frame
+        .get_mut(runtime_start + 5)
+        .expect("selection runtime frame") = SELECTION_STATE;
     frame.extend(page_keys);
     let mut metas = Vec::with_capacity(frame.len() + 2);
     metas.push(AccountMeta::new_readonly(REQUEST_ACCOUNT, false));

@@ -1012,3 +1012,30 @@ Ember's, and on the ruling list.
 **Costed from the tree's own two precedents**: a new *profile* inside an
 existing family ran ~4,940 lines; a new *evidence family* ran ~12,900. Neither
 is cheap and Switchboard is the second kind.
+
+### This letter's own `general-hot` command carries a trap — 2026-09-01
+
+The `general-hot` invocation above sets **`CARGO_TARGET_DIR` to the root
+workspace's target directory.** `programs/dclutch-general-accelerator-sbf/
+program-test` is **its own workspace**, so that override mixes rustc invocations
+made from two workspace roots. One path-dependency crate then compiles twice —
+once with a relative source path, once absolute — and the link fails with:
+
+```
+multiple different versions of crate `dclutch_core_contract`
+```
+
+**blaming `dclutch-operator` and `dclutch-direct-codec`, which nobody has
+touched.** A lane inheriting this command from the handoff will lose hours to a
+manifest problem that does not exist. Drop the override and the same workspace
+builds in **nineteen seconds**.
+
+**`cargo metadata` is the discriminator between the two explanations.** If it
+resolves **one** copy of the crate at a canonical absolute path — as it does
+here, with uniform spellings and no `..` oddities — **the manifest is innocent
+and the target directory is the culprit.** Every remaining duplicate in that
+dump is a genuine semver-incompatible registry crate (`ark-ff` 0.4/0.5, `sha2`
+0.9/0.10/0.11) and is normal.
+
+`cargo update --workspace` never clears it, because there is nothing in the
+dependency graph to clear.

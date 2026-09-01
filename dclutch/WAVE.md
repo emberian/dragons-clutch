@@ -4357,3 +4357,47 @@ count lives longest.
    reads **331,274**, +7,751.
 
 The lamport half **is** swept.
+
+## 2026-09-01 — a build hazard the handoff letter itself carries
+
+**My diagnosis was wrong and the lane corrected it with evidence.** I called the
+accelerator program-test's *"multiple different versions of crate
+`dclutch_core_contract`"* a manifest path-normalisation problem. It is not:
+`cargo metadata` resolves **exactly one** copy at a canonical absolute path,
+uniform `../../../crates/…` spellings, no `..` oddities, no symlink prefixes. The
+graph is clean, and every other duplicate in it is a genuine semver-incompatible
+registry crate.
+
+**The cause was an overridden `CARGO_TARGET_DIR`.** That program-test is **its
+own workspace**; pointing its target directory at the root workspace's mixes
+rustc invocations made from two workspace roots, so one path-dependency crate
+compiles twice — once relative, once absolute — and the link fails **blaming
+crates nobody touched.** Dropping the override built it in **nineteen seconds.**
+
+> **`cargo metadata` is the discriminator: one copy in the graph means the
+> manifest is innocent and the target directory is the culprit.**
+
+`cargo update --workspace` never clears it because there is nothing in the graph
+to clear — right prediction, wrong reason.
+
+**And the trap is in the handoff letter itself**: its `general-hot` command
+carries that override, so the next lane inherits it from the document meant to
+orient them. Recorded in `AGENTS.md` and appended to the letter's corrections.
+
+### Re-running your own conclusions when the build turns out to have been mixing
+
+Every OpenBatch measurement that lane reported today was taken under the
+override — and it was the lane that raised the doubt. It re-ran them: with
+`general-hot` building in its own target directory, OpenBatch still refuses
+**`0xC00A InstructionsSysvarAccount`** at N=2, accelerator CPI reached, same
+frame counts. **The finding stands independent of the hazard.**
+
+> **A session that discovers its own build was mixing artifacts has to re-run
+> its conclusions, not assume them.**
+
+The refactor also landed, verified this time: `18` written out four times **is**
+`ADMITTED_RUNTIME_ACCOUNTS_START_V3` — the same constant the accelerator derives
+its scratch-page window from — a second author for a frame offset **in the one
+file whose pages sit at the far end of exactly that offset**, where a drift
+surfaces as a bank-content refusal rather than as a missing account. 24/1 before
+and after.
