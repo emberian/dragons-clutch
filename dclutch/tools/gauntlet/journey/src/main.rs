@@ -66,7 +66,11 @@ mod relayed;
 #[path = "../../../local-validator/bootstrap/successor/src/rpc.rs"]
 #[allow(dead_code)]
 mod rpc;
-// SIX MODULES THE JOURNEY DOES NOT USE AND CANNOT BUILD WITHOUT.
+// THE MODULES THE JOURNEY DOES NOT USE AND CANNOT BUILD WITHOUT.
+//
+// Kept deliberately count-free in this header: the number was "six" when the
+// arrangement was first written down and it has already gone stale twice, so
+// a reader who trusts a count here is reading a lie the next lane will tell.
 //
 // The journey founds one Direct market. It does not found a Structured, a
 // General or a Rational one, does not select a capability, and does not drive
@@ -83,12 +87,27 @@ mod rpc;
 // was simply un-buildable until somebody tried to run it. The closure is
 // finite — none of the six reaches outside the set now linked here — so the
 // honest fix is to link them, not to fork the files or to guard the call sites.
+//
+// IT WENT OFF A SECOND TIME on 2026-09-01, and the public `checks` run is what
+// caught it: the overnight completion wave grew `campaign.rs` and `market.rs`
+// call sites into `crate::chaos_fault` and `crate::infrastructure_succession`,
+// and pulled `dclutch-source-readiness-operator` in as an import. Same shape,
+// same remedy, applied per the paragraph above -- link, do not fork. If you are
+// reading this because it went off a third time, that is the tripwire earning
+// its keep; extend the set, and resist the urge to make the journey its own
+// copy of the successor.
+#[path = "../../../local-validator/bootstrap/successor/src/chaos_fault.rs"]
+#[allow(dead_code)]
+mod chaos_fault;
 #[path = "../../../local-validator/bootstrap/successor/src/funding_readiness.rs"]
 #[allow(dead_code)]
 mod funding_readiness;
 #[path = "../../../local-validator/bootstrap/successor/src/general_market.rs"]
 #[allow(dead_code)]
 mod general_market;
+#[path = "../../../local-validator/bootstrap/successor/src/infrastructure_succession.rs"]
+#[allow(dead_code)]
+mod infrastructure_succession;
 #[path = "../../../local-validator/bootstrap/successor/src/rational_market.rs"]
 #[allow(dead_code)]
 mod rational_market;
