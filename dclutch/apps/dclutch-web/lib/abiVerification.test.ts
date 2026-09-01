@@ -57,7 +57,15 @@ describe('generated ABI modules still agree with their authorities', () => {
   it('pairs every abi:* generator with a verify script', () => {
     // A generator without a verifier is a module that can drift silently. This
     // is the ratchet that stops the next one being added without its gate.
-    expect(verifiers.map((name) => name.slice(0, -':verify'.length))).toEqual(generators);
+    // SORTED AFTER THE STRIP, NOT BEFORE. `verifiers` is sorted with the
+    // `:verify` suffix still attached, and `-` (0x2D) sorts before `:` (0x3A),
+    // so the moment one generator's name is a prefix of another's the two
+    // lists come out in different orders and this compares a real bijection
+    // against itself and fails. `abi:wallet-terminal` and
+    // `abi:wallet-terminal-payout` are the first pair to have that shape and
+    // they found it. Order carries no meaning here; the claim is that the two
+    // sets correspond.
+    expect(verifiers.map((name) => name.slice(0, -':verify'.length)).sort()).toEqual(generators);
     expect(generators.length).toBeGreaterThan(0);
   });
 

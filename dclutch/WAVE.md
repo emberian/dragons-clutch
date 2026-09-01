@@ -4841,3 +4841,53 @@ and:
 
 > **The only instrument that can catch it is one that crosses the boundary.
 > Every check confined to one side passes.**
+
+## 2026-09-01 — a ratchet that had been slightly weaker than it claimed
+
+The redemption WASM boundary landed (`a2686852`): generator, a committed 712 KB
+artifact, browser loader, **not wired to a snapshot** — the larger half is its own
+run. Three `const _: () = assert!(...)` read the settlement frame width, request
+width and candidate domain **out of Claims** by constant name; the client pins
+length and SHA-256 so unverified bytes never execute, then **asks the loaded
+derivation its own frame width and refuses if it disagrees with Claims.**
+
+One design choice that shrinks the next unit: **the boundary hands the caller the
+derivation's own address list** rather than letting a client assemble one —
+*which is what stops a second routing implementation existing when the
+acquisition is built.* The mirror hazard prevented at the point it would
+otherwise be introduced.
+
+### A dead field asked what it was for
+
+The compiler flagged the snapshot's per-account `key` as unread. Deleting it was
+the easy answer; instead it is **cross-checked against the address slot it
+arrived in** — because *an observation paired with the wrong slot is the single
+corruption a snapshot can suffer that still decodes cleanly and still
+authenticates, **against the wrong account.*** A defect nothing else in the chain
+could catch, found by asking what an unused field was **for** rather than whether
+it was needed.
+
+### And the ratchet was wrong since it was written
+
+The ABI pairing ratchet sorted generators and verifiers **independently** and
+compared them after stripping `:verify`. With `-` at `0x2D` and `:` at `0x3A`,
+the moment one generator's name is a **prefix** of another's, the two lists come
+out in different orders and the check **fails a real bijection.**
+`abi:wallet-terminal` beside `abi:wallet-terminal-payout` is the first pair with
+that shape.
+
+> **Renaming mine would have dodged it and left the trap for whoever next names
+> an `abi:foo-bar` alongside an `abi:foo`.**
+
+The sort moved **after** the strip, where order is meaningful.
+
+> **The ratchet has been asserting something slightly weaker than it claimed for
+> as long as it has existed; it just never met the shape.**
+
+Eighth instrument this session found wrong by its own author — and the first
+found by a **name collision** rather than a measurement.
+
+The capability surface's only delta was `OPERATOR_CRATES_V1` gaining the two new
+crates — exactly what that census exists for, *so an act cannot name an owner
+that is gone*, and confirmation that adding a compiled derivation changed no
+act's standing.

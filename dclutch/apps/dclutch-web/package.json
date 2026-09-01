@@ -31,6 +31,8 @@
     "abi:direct-v3:verify": "node scripts/generate-direct-inline-v3.mjs --check",
     "abi:source-readiness": "node scripts/generate-source-readiness-wasm.mjs",
     "abi:source-readiness:verify": "node scripts/generate-source-readiness-wasm.mjs --check",
+    "abi:wallet-terminal-payout": "node scripts/generate-wallet-terminal-payout-wasm.mjs",
+    "abi:wallet-terminal-payout:verify": "node scripts/generate-wallet-terminal-payout-wasm.mjs --check",
     "abi:user-position-admission": "node scripts/generate-user-position-admission-wasm.mjs",
     "abi:user-position-admission:verify": "node scripts/generate-user-position-admission-wasm.mjs --check",
     "abi:source-provider": "node scripts/generate-source-provider-wasm.mjs",

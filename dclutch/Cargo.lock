@@ -3012,6 +3012,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-wallet-terminal-payout-wasm"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "dclutch-claims-svm",
+ "dclutch-wallet-terminal-payout-operator",
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "solana-program",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "defmt"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
