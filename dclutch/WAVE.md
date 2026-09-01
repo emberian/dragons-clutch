@@ -4211,3 +4211,106 @@ rebuild-and-compare that can fail.
 
 > *Name something that must survive the filter and check that it did* —
 > **including when the filter is your own measurement harness.**
+
+## 2026-09-01 — three hypotheses eliminated, and a refactor reverted unverified
+
+The `0xC011 ScratchBankDigest` cause at width 258 is **narrowed, not located**,
+and the narrowing is four eliminations rather than a guess:
+
+1. **Geometry tiles exactly at every width.** At 258:
+   `total_bank_bytes == bank_len == 15032`, 18 pages, offsets contiguous at 880,
+   final page exactly 72 bytes. Same at 1, 2 and 257. **No boundary or length
+   fault.**
+2. **The page codec round-trips byte-for-byte at both widths** — carve → `new` →
+   `encode_into` → `decode` → concatenate reproduces the bank exactly, with
+   **position-dependent filler** that would expose any offset shift.
+   `first_diff = None`. **No padding fault.**
+3. **The page window aligns at both widths** — the fixture writes
+   `vec![DUMMY; 18 + fixed_count]`, the program derives
+   `ADMITTED_RUNTIME_ACCOUNTS_START_V3 + fixed_count`, the constant **is** 18,
+   and `fixed_count` for Freeze is width-independent.
+
+**The fixture's page transport is exonerated.** What remains: *what the program
+reads at those coordinates is not what the fixture wrote, at 258 only* — the same
+family as the OpenBatch finding, where the account was correct and its
+**position** was not. Named rather than claimed, because it is unmeasured.
+
+### A refactor written, then reverted rather than committed unrun
+
+`18` is `ADMITTED_RUNTIME_ACCOUNTS_START_V3` **restated as a bare literal, four
+times**, in the file whose scratch pages sit at the far end of exactly that
+offset — a second author for a frame constant, in the place a drift would be
+hardest to see. The derivation was written and could not be verified: the
+accelerator's **nested workspace resolves `dclutch-core-contract` under two path
+spellings**, so `dclutch-operator` and `dclutch-direct-codec` compile against
+different copies.
+
+> The refactor is provably behaviour-preserving — but **"provably" is not
+> "verified"**, so it was reverted rather than committed as code that could not
+> be run.
+
+That nested-workspace duplicate now blocks the whole accelerator program-test,
+and is its own named wall.
+
+### The `AGENTS.md` amendment, and why it is usable
+
+The M-38 bullet now carries both causes: the hostile that never reaches its
+subject, **fixed in the test**; and the hostile that *does* reach its subject and
+has no word for what it found, **fixed by splitting the discriminant** — until
+which point the bare `is_err()` is *the most precise assertion its author could
+have written*. It closes with the operative instruction:
+
+> **Before reaching for the test, ask whether the code it needs exists.**
+
+Most rules in that file say what not to do. That one says what to check first.
+
+## 2026-09-01 — declared, convicted, built, observed
+
+**The route register, corrected against observation** — a fresh six-program SBF
+set (zero frame diagnostics), `fractional_compaction` run with the evidence dir
+set, **47 transactions**, folded, and `census observe` admitting **94
+observations with zero problems**:
+
+| | before | after |
+|---|---|---|
+| witnessed | 69 | **73** |
+| blocked, stated + owned | 35 | **33** |
+| **never executed, no stated reason** | **57** | **55** |
+
+Two `never → witnessed` (exactly the two predicted) and two `blocked →
+witnessed`, with their `blocked.json` entries **deleted the moment their routes
+executed** — *keep an entry only while it is true* — and the remaining entry
+narrowed to the three targets that still emit nothing rather than covering the
+workspace.
+
+### The instrument refused its own author, twice
+
+**First pass:** labels auto-generated from the enclosing *helper*, and folding
+showed **one label spanning both executed and refused transactions** — which no
+binding can describe.
+
+**Second pass:** `census observe` **refused the bindings outright.** Six hostile
+crank substitutions shared one label, and the refusal code had been read off the
+first transaction and written for all six. **Five of them raise different
+codes** — `Rent`, `TerminalIdentity`, `SignedDeltaRelease`, `SelectionConfig`,
+`Phase`.
+
+> Had I written those bindings from expectation, all six would have read
+> *witnessed* with a code five of them never raise — **the exact false green
+> this lane exists to remove, published by the lane that exists to remove it.**
+
+**The census refused to record coverage it could not corroborate, and it was
+right.** An instrument that will not accept its own author's word is the only
+kind worth having. The rule that falls out: verify every label carries **exactly
+one outcome and one refusal code** before a binding is written.
+
+### One code, four states, three lanes, one session
+
+`0x5644` was **declared and unraisable** when this ledger opened; **convicted**
+in §1.3 as a guard declared and never written; the **guard landed** by another
+lane at `fractional_claim_check_v1.rs:1196-1209`; and this fold is the **first
+census evidence of it firing on a real ELF** — via a hostile that rewrites the
+Core Market to `Open` with its terminal receipt dropped, at its own derived
+address, so the phase is the sole discriminator.
+
+> **Declared, convicted, built, observed.**

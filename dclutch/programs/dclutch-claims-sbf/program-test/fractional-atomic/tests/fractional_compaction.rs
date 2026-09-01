@@ -1615,7 +1615,7 @@ async fn a_stranger_opens_the_escrow_and_pays_for_it() {
     let before = lamports_at(&mut context, fixture.opener).await;
 
     let outcome = submit_as(&mut context,
-        "fractional claim-check: a stranger opens the escrow and pays for it", open_instruction(&fixture), &opener_keypair()).await;
+        "fractional claim-check: open the native claim-check escrow", open_instruction(&fixture), &opener_keypair()).await;
     assert!(
         outcome.accepted,
         "the permissionless open must land: {:?} (code {:?})",
@@ -2141,7 +2141,7 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
 
     // --- the stranger opens the escrow, and the 180-day clock starts ---------
     let opened = submit_as(&mut context,
-        "fractional claim-check: a stranger compacts a sleeping holders reserve and nothing leaks", open_instruction(&fixture), &opener_keypair()).await;
+        "fractional claim-check: open the native claim-check escrow", open_instruction(&fixture), &opener_keypair()).await;
     assert!(opened.accepted, "the open must land: {:?}", opened.result);
     create_custody_replay(&mut context, &fixture).await;
     let escrow = ClaimCheckEscrowV1::decode(
@@ -2214,7 +2214,7 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
     // --- THE CRANK -----------------------------------------------------------
     let outcome = submit_as(
         &mut context,
-        "fractional claim-check: a stranger compacts a sleeping holders reserve and nothing leaks [2]",
+        "fractional claim-check: a stranger compacts a sleeping holder reserve",
         compaction_instruction(
             &fixture,
             &request,
@@ -2458,7 +2458,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
 
     let mut context = test.start_with_context().await;
     let opened = submit_as(&mut context,
-        "fractional claim-check: drive curve holder life", open_instruction(&fixture), &opener_keypair()).await;
+        "fractional claim-check: open the native claim-check escrow", open_instruction(&fixture), &opener_keypair()).await;
     assert!(
         opened.accepted,
         "the escrow open must land: {:?}",
@@ -2527,7 +2527,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
 
     let outcome = submit_as(
         &mut context,
-        "fractional claim-check: drive curve holder life [2]",
+        "fractional claim-check: a stranger compacts a sleeping holder reserve",
         compaction_instruction(
             &fixture,
             &request,
@@ -2689,7 +2689,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     ] {
         let before = fractional_redemption_state(&mut context, &fixture).await;
         let refused = submit_holder_act(&mut context,
-        "fractional claim-check: drive curve holder life [3]", instruction, &signer).await;
+        &format!("fractional claim-check: redemption refuses: {label}"), instruction, &signer).await;
         assert!(!refused.accepted, "{label} must refuse");
         assert_eq!(custom_refusal(&refused.result), Some(expected_code), "{label}");
         assert_eq!(
@@ -2702,7 +2702,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let before_premature_close = fractional_redemption_state(&mut context, &fixture).await;
     let premature_close = submit_holder_act(
         &mut context,
-        "fractional claim-check: drive curve holder life [4]",
+        "fractional claim-check: a premature escrow close refuses on the vault",
         close_settled_escrow_instruction(&fixture),
         &cranker_keypair(),
     )
@@ -2725,7 +2725,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let holder_lamports_before_partial = lamports_at(&mut context, fixture.holder).await;
     let partial = submit_holder_act(
         &mut context,
-        "fractional claim-check: drive curve holder life [5]",
+        "fractional claim-check: the holder redeems shards for collateral",
         fractional_redemption_instruction(
             &fixture,
             request(2 * DENOMINATOR),
@@ -2815,7 +2815,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let holder_lamports_before_settle = lamports_at(&mut context, fixture.holder).await;
     let settling = submit_holder_act(
         &mut context,
-        "fractional claim-check: drive curve holder life [6]",
+        "fractional claim-check: the holder redeems shards for collateral",
         fractional_redemption_instruction(
             &fixture,
             request(OUTSTANDING_SHARDS - 2 * DENOMINATOR),
@@ -2890,7 +2890,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let cranker_before_close = lamports_at(&mut context, fixture.cranker).await;
     let close = submit_holder_act(
         &mut context,
-        "fractional claim-check: drive curve holder life [7]",
+        "fractional claim-check: close the settled native escrow",
         close_settled_escrow_instruction(&fixture),
         &cranker_keypair(),
     )
@@ -3007,7 +3007,7 @@ async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &Campa
             .to_vec(),
     };
     let outcome = submit_as(context,
-        "fractional claim-check: create custody replay", instruction, &cranker_keypair()).await;
+        "fractional claim-check: create the custody replay", instruction, &cranker_keypair()).await;
     assert!(
         outcome.accepted,
         "the Claims-role Custody replay must be creatable: {:?}",
@@ -3061,7 +3061,7 @@ async fn run_to_the_crank_substituting(
     let (test, fixture) = campaign_fixture_planting(plant);
     let mut context = test.start_with_context().await;
     let opened = submit_as(&mut context,
-        "fractional claim-check: run to the crank substituting", open_instruction(&fixture), &opener_keypair()).await;
+        "fractional claim-check: open the native claim-check escrow", open_instruction(&fixture), &opener_keypair()).await;
     assert!(opened.accepted, "the open must land: {:?}", opened.result);
     create_custody_replay(&mut context, &fixture).await;
     let escrow = ClaimCheckEscrowV1::decode(
@@ -3107,7 +3107,11 @@ async fn run_to_the_crank_substituting(
     }
     submit_as(
         &mut context,
-        "fractional claim-check: run to the crank substituting [2]",
+        // The plant is the discriminator: each caller founds a different
+        // hostile and reaches a different refusal, so one label for all six
+        // would claim a code five of them do not raise. `census observe`
+        // refuses exactly that, which is how this was found.
+        &format!("fractional claim-check: crank refuses {plant:?}/{substitution:?}"),
         compaction_instruction(&fixture, &request, custody_caller, action),
         &cranker_keypair(),
     )
@@ -3370,7 +3374,7 @@ async fn a_worthless_coordinate_mints_no_record_and_never_moves_the_burn_authori
     let mut context = test.start_with_context().await;
 
     let opened = submit_as(&mut context,
-        "fractional claim-check: a worthless coordinate mints no record and never moves the burn authority", open_instruction(&fixture), &opener_keypair()).await;
+        "fractional claim-check: open the native claim-check escrow", open_instruction(&fixture), &opener_keypair()).await;
     assert!(opened.accepted, "the open must land: {:?}", opened.result);
     create_custody_replay(&mut context, &fixture).await;
     let escrow = ClaimCheckEscrowV1::decode(
@@ -3430,7 +3434,7 @@ async fn a_worthless_coordinate_mints_no_record_and_never_moves_the_burn_authori
 
     let outcome = submit_as(
         &mut context,
-        "fractional claim-check: a worthless coordinate mints no record and never moves the burn authority [2]",
+        "fractional claim-check: a worthless coordinate compacts and mints no record",
         compaction_instruction(
             &fixture,
             &request,

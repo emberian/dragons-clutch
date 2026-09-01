@@ -122,7 +122,7 @@ async fn submit_opener_signed(
         .await
         .expect("fresh blockhash");
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[compute_unit_limit_instruction(), instruction],
         Some(&context.payer.pubkey()),
         &[&context.payer],
         blockhash,
@@ -1034,7 +1034,7 @@ async fn submit_compaction(
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &payer,
-            &[instruction],
+            &[compute_unit_limit_instruction(), instruction],
             &[AddressLookupTableAccount {
                 key: table,
                 addresses: addresses.to_vec(),
@@ -1381,7 +1381,7 @@ async fn submit_holder_signed(
         .await
         .expect("a distinct redemption blockhash");
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[compute_unit_limit_instruction(), instruction],
         Some(&fixture.actor.pubkey()),
         &[&fixture.actor],
         blockhash,

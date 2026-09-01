@@ -2801,7 +2801,20 @@ fn fixture_with_basis_and_trading(
     let artifacts = artifacts();
     let mut test = ProgramTest::default();
     test.prefer_bpf(true);
-    test.set_compute_max_units(1_400_000);
+    // NO FORCED BUDGET. `set_compute_max_units` installs a FIXED
+    // `RuntimeConfig.compute_budget` for every transaction -- `heap_size`
+    // included, at `ComputeBudget::new_with_defaults`' 32 KiB -- after which the
+    // per-transaction `RequestHeapFrame` is never consulted
+    // (`solana-program-test-4.3.0-beta.2/src/lib.rs:1074`). This campaign drives
+    // `DCLTHOT3`, which declares an extended heap and whose adapter sizes its
+    // scratch ceiling from the request it reads in the instructions sysvar. A
+    // forced budget therefore let the program believe it had 64 KiB while the VM
+    // mapped 32 KiB, and its first scratch write landed outside the mapping as an
+    // ACCESS VIOLATION rather than as any refusal. `direct_hot_top_level` avoids
+    // exactly this with `program_test_without_forced_budget`.
+    //
+    // So the limit is asked for ON THE WIRE, which is what a real caller does and
+    // what makes the bank derive the whole budget per transaction.
     for (name, program, elf) in [
         (
             "dclutch_claims_sbf",
@@ -3758,14 +3771,40 @@ fn unique_account_count(instruction: &Instruction) -> usize {
     addresses.len()
 }
 
+/// Compute-unit limit this campaign's routes need, asked for on the wire.
+///
+/// 1.4M is the runtime maximum and the figure the forced budget used to install,
+/// so every published CU number stays comparable across the migration.
+const CAMPAIGN_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+
+/// The ComputeBudget instruction every submitted transaction carries.
+///
+/// One author, and every submission and every wire MEASUREMENT goes through it:
+/// a packet figure that omits what a real transaction carries is a packet figure
+/// for a transaction nobody sends.
+fn compute_unit_limit_instruction() -> Instruction {
+    solana_compute_budget_interface::ComputeBudgetInstruction::set_compute_unit_limit(
+        CAMPAIGN_COMPUTE_UNIT_LIMIT,
+    )
+}
+
 fn legacy_wire_bytes(payer: Pubkey, instruction: Instruction, _hash: Hash) -> usize {
-    let message = solana_message::legacy::Message::new(&[instruction], Some(&payer));
+    let message = solana_message::legacy::Message::new(
+        &[compute_unit_limit_instruction(), instruction],
+        Some(&payer),
+    );
     1 + usize::from(message.header.num_required_signatures) * 64 + message.serialize().len()
 }
 
 fn no_lookup_v0_wire_bytes(payer: Pubkey, instruction: Instruction, hash: Hash) -> usize {
     let message = VersionedMessage::V0(
-        v0::Message::try_compile(&payer, &[instruction], &[], hash).expect("uncompressed v0"),
+        v0::Message::try_compile(
+            &payer,
+            &[compute_unit_limit_instruction(), instruction],
+            &[],
+            hash,
+        )
+        .expect("uncompressed v0"),
     );
     1 + 2 * 64 + message.serialize().len()
 }
@@ -3780,7 +3819,7 @@ fn live_lookup_v0_wire_bytes(
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &payer,
-            &[instruction],
+            &[compute_unit_limit_instruction(), instruction],
             &[AddressLookupTableAccount {
                 key: table,
                 addresses: addresses.to_vec(),
@@ -3824,7 +3863,7 @@ async fn process_legacy(
         .await
         .expect("blockhash");
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[compute_unit_limit_instruction(), instruction],
         Some(&context.payer.pubkey()),
         &[&context.payer],
         blockhash,
@@ -3971,10 +4010,12 @@ async fn submit_v0_instructions(
     label: &str,
 ) -> Result<Submission, BanksClientError> {
     let blockhash = context.banks_client.get_latest_blockhash().await?;
+    let mut carried = std::vec![compute_unit_limit_instruction()];
+    carried.extend_from_slice(instructions);
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &context.payer.pubkey(),
-            instructions,
+            &carried,
             &[AddressLookupTableAccount {
                 key: table,
                 addresses: addresses.to_vec(),
@@ -4186,7 +4227,7 @@ async fn submit_legacy_with(
     let mut signers: Vec<&Keypair> = std::vec![&context.payer];
     signers.extend_from_slice(extra_signers);
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[compute_unit_limit_instruction(), instruction],
         Some(&context.payer.pubkey()),
         &signers,
         blockhash,
@@ -6936,7 +6977,7 @@ async fn submit_wallet_payout(
     let message = VersionedMessage::V0(
         v0::Message::try_compile(
             &fee_payer,
-            &[instruction],
+            &[compute_unit_limit_instruction(), instruction],
             &[AddressLookupTableAccount {
                 key: table,
                 addresses: addresses.to_vec(),
@@ -7366,7 +7407,7 @@ async fn a_stranger_begins_retiring(context: &mut ProgramTestContext, fixture: &
         .await
         .expect("blockhash");
     let transaction = Transaction::new_signed_with_payer(
-        &[instruction],
+        &[compute_unit_limit_instruction(), instruction],
         Some(&stranger.pubkey()),
         &[&stranger],
         blockhash,

@@ -1,0 +1,187 @@
+{
+  "campaign": "claims-fractional-atomic-programtest",
+  "note": "Real-ELF ProgramTest for the fractional claim-check life: open the native escrow, compact a sleeping holder's reserve, redeem shards, close. Committed and passing since 8fdcdc56 and INVISIBLE to the census until 2026-09-01, because the workspace took no dclutch-program-test-evidence dependency and so called record() for nothing. Campaign: programs/dclutch-claims-sbf/program-test/fractional-atomic (tests/fractional_compaction.rs). EVERY BINDING BELOW WAS AUTHORED FROM FOLDED EVIDENCE, NEVER FROM WHAT THE CAMPAIGN OUGHT TO TOUCH: the labels, the outcomes, the invoked programs and the refusal codes are the ones the runtime reported in a 47-transaction fold, and each label was checked to carry exactly one outcome AND one refusal code before it was written down. The first draft failed that check and `census observe` is what caught it: six hostile crank substitutions shared a label, and five of them raise codes the binding did not name. The label now carries the plant, which is the discriminator the campaign itself varies. That order matters -- docs/reference/routes.md derives `witnessed` from bindings alone and never consults the ledger, so a binding written from expectation manufactures the false green this tier exists to remove.",
+  "bindings": [
+    {
+      "label": "fractional claim-check: open the native claim-check escrow",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_compaction_v1::process_open_escrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTCCO1. A stranger opens the escrow and prepays it; observed 11 times across the campaign, always accepted, invoking Claims and the System program only. This is the route's first census evidence of any kind."
+    },
+    {
+      "label": "fractional claim-check: close the settled native escrow",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTCCR1 / CloseEscrow. The settled escrow closes and its rent returns to the cranker; observed twice, accepted, Claims plus Token-2022."
+    },
+    {
+      "label": "fractional claim-check: a premature escrow close refuses on the vault",
+      "routes": [
+        "claims/process_instruction",
+        "claims/claim_check_redemption_v1::process_escrow_close#CloseEscrow"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/ClaimCheckRedemptionSbfErrorV1::Vault",
+      "note": "HOSTILE. The same route refusing: a close attempted while the vault is still funded. Observed twice as Custom(0x5625), Claims alone in the frame."
+    },
+    {
+      "label": "fractional claim-check: a stranger compacts a sleeping holder reserve",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTFCC1, driven through the test caller. Observed 3 times, accepted, invoking test-caller then Claims then Custody then Token-2022 and System -- the whole compaction composition the route exists for."
+    },
+    {
+      "label": "fractional claim-check: a worthless coordinate compacts and mints no record",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "The zero-value boundary of the same route: a coordinate worth nothing compacts, mints no claim-check record, and never moves the burn authority. Observed once, accepted, test-caller then Claims."
+    },
+    {
+      "label": "fractional claim-check: the holder redeems shards for collateral",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "DCLTFCR1. The sleeping holder wakes and redeems; observed 4 times, accepted, Claims plus two Token-2022 invocations."
+    },
+    {
+      "label": "fractional claim-check: redemption refuses: substituted payout owner",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Authority",
+      "note": "HOSTILE. Observed twice as Custom(0x5661)."
+    },
+    {
+      "label": "fractional claim-check: redemption refuses: substituted shard authority",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Authority",
+      "note": "HOSTILE, and a different substitution from the row above reaching the same code. Observed twice as Custom(0x5661)."
+    },
+    {
+      "label": "fractional claim-check: redemption refuses: holder overdraw",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::Conservation",
+      "note": "HOSTILE. A holder redeeming more than they hold refuses on conservation. Observed twice as Custom(0x5663)."
+    },
+    {
+      "label": "fractional claim-check: redemption refuses: sub-denominator dust",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_redemption"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckRedemptionSbfErrorV1::NoWholeClaim",
+      "note": "HOSTILE. Shards below the denominator buy no whole claim. Observed twice as Custom(0x5665)."
+    },
+    {
+      "label": "fractional claim-check: create the custody replay",
+      "routes": [
+        "claims/process_instruction",
+        "claims/custody_replay_v1::process"
+      ],
+      "program": "claims",
+      "outcome": "executed",
+      "note": "Campaign setup rather than a new route: DCLCCR01 is already witnessed by claims-rational-representation-v2. Bound because it is a real transaction this campaign submits and the census should not have to guess which of its 47 are load-bearing."
+    },
+    {
+      "label": "fractional claim-check: crank refuses Faithful/None",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckCompactionSbfErrorV1::Authority",
+      "note": "HOSTILE. A faithful market, and only the crank authority substituted. Observed once as Custom(0x5641)."
+    },
+    {
+      "label": "fractional claim-check: crank refuses Faithful/CoreMarketBeforeTerminal",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckCompactionSbfErrorV1::Phase",
+      "note": "HOSTILE, and the one worth reading. The Core Market is rewritten to `Open` with its terminal receipt dropped, at its own derived address, so the phase is the SOLE discriminator. This raises `Phase` (0x5644) -- a code that could not be raised at all until 2026-09-01: it was declared for exactly this check and the fractional route never made it, which lane S11 convicted as a missing guard (`docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md` 1.3) and S7 then landed at `fractional_claim_check_v1.rs:1196-1209`. This observation is the first census evidence of that guard firing on a real ELF. Observed once as Custom(0x5644)."
+    },
+    {
+      "label": "fractional claim-check: crank refuses RentCreditAtANonDerivedAddress/None",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckCompactionSbfErrorV1::Rent",
+      "note": "HOSTILE. A RentCredit at an address that does not derive. Observed once as Custom(0x564D)."
+    },
+    {
+      "label": "fractional claim-check: crank refuses TerminalCertificateIdentityMismatch/None",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckCompactionSbfErrorV1::TerminalIdentity",
+      "note": "HOSTILE. The terminal certificate names another identity. Observed once as Custom(0x564F)."
+    },
+    {
+      "label": "fractional claim-check: crank refuses SignedDeltaCallerReleaseMismatch/None",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckCompactionSbfErrorV1::SignedDeltaRelease",
+      "note": "HOSTILE. The SignedDelta caller runs a different release. Observed once as Custom(0x5655)."
+    },
+    {
+      "label": "fractional claim-check: crank refuses UnselectedExposureTerms/None",
+      "routes": [
+        "claims/process_instruction",
+        "claims/fractional_claim_check_v1::process_fractional_compaction"
+      ],
+      "program": "claims",
+      "outcome": "refused",
+      "refusal": "claims/FractionalClaimCheckCompactionSbfErrorV1::SelectionConfig",
+      "note": "HOSTILE. Exposure terms the Market never selected. Observed once as Custom(0x565C)."
+    }
+  ]
+}
