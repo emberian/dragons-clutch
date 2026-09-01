@@ -584,3 +584,109 @@ than sixty transactions into a founding.
 | `4zrxtw5c4oPLpuTQbLYjRCXFUudvFCNNjzR9LqVQvEwP` | deployer / upgrade authority | 42.945709919 SOL |
 
 Devnet evidence. Not mainnet evidence.
+
+## Correction: the wall is ON CHAIN, and the host refusal was only its mirror
+
+Written 2026-09-01 19:0x, after the coordinator directed this lane to build the
+genesis arm. Two facts found while scoping it change the build, and both were
+found by reading rather than by spending, so they cost nothing but say the plan
+as issued cannot work.
+
+### 1. No host-side change can found cohort-9
+
+`project_found_v2` lives in `dclutch-product-runtime-v2-operator`, which is a
+**dev-dependency** of `programs/dclutch-core-sbf` — the projection is host-side
+and never runs on chain. That was promising for a moment, and then:
+
+`programs/dclutch-core-sbf/src/found.rs:289` and `:311` route both Found paths
+through `authenticate_projected_found` / `authenticate_found`, which call
+`authenticate_profile`, whose own doc comment
+(`programs/dclutch-core-sbf/src/infrastructure.rs:124-135`) reads:
+
+> **V2 only, and never a fallback.** Every route reaching here reads the
+> succession profile at `dclutch:infrastructure:v2` and nothing else. … Before
+> the ceremony this read refuses on vacancy (`CoreSbfError::Infrastructure`, the
+> width check below, since a vacant PDA is System-owned and zero-length); the
+> ceremony is what un-refuses it.
+
+And it is in the **deployed** sources: `git merge-base --is-ancestor 2951b226
+5ba7f387` returns true, and `git show 5ba7f387:…/infrastructure.rs` carries the
+V2-only read at its lines 151-159. Cohort-9's live Core ELF was verified
+byte-identical to that build.
+
+**So the host-side `AccountAuthority` this lane convicted is a faithful mirror
+of what the chain would do, not a driver defect.** A genesis arm in `found.rs`
+and `market.rs` alone would move the refusal from the planner to the validator:
+the founding would run the collateral mint, the fifty-five record publications,
+and then refuse on chain with `CoreSbfError::Infrastructure` — stranding a third
+mint to learn a fact already in hand. The red-then-green control as issued
+("after: it founds") cannot be met on cohort-9 by any host change.
+
+The fix is a **program** change, and it reaches chain only through a redeploy.
+That is cohort-10, and condition (a) of the standing grant authorizes it
+precisely — full redeploy, all seven roles, from a named commit.
+
+### 2. The prescribed shape is refused by name in a written ruling
+
+`docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md` §6:
+
+> **V2-only in redeployed consumers. No fallback.** A try-V2-then-V1 read was
+> considered and refused: it creates two live authentication paths (an O-005
+> "parallel authority path" smell), **its only benefit is founding during the
+> mid-cut window that gate 7 forbids anyway**, and its failure mode (V2 creation
+> forgotten, V1 silently still ruling) is exactly the silent divergence this
+> codebase spends itself refusing.
+
+"A genesis arm on the founding path that authenticates a V1 profile at the V1
+PDA domain and the V1 rent floor" is try-V2-then-V1 with a genesis guard. The
+ruling refused it, AGENTS.md refuses it generically ("Do not preserve parallel
+legacy/current authority paths"), and the program says so in its own comment.
+
+**But the ruling's benefit analysis is now stale, and that is the real finding.**
+§6 says the fallback's *only* benefit is founding during the mid-cut window,
+because §6 was reasoned for the cohort-8→9 plan of record: an **in-place
+upgrade**, with markets 21/22 to drain and hop and refound (§6's own ordering
+list, steps 1-6). That is not what happened. Cohort-8 was closed entirely and
+cohort-9 was deployed fresh, with new program ids and no predecessor — so there
+is no mid-cut window, and the fallback's benefit is not "founding during a
+window gate 7 forbids." It is **founding at all, ever, on a genesis cohort.**
+
+The premise of the refusal is dead. The failure mode it named — two live
+authentication paths, the ceremony silently forgotten — is not.
+
+### The shape that satisfies both, and the one open design unit
+
+A **genesis-shaped V2, written at the V2 PDA by initialize.** Then:
+
+- there is exactly one authentication path, V2 at `dclutch:infrastructure:v2`,
+  224 bytes. §6 holds in full; O-005 holds; no fallback exists to forget;
+- vacancy still refuses, and still means the ceremony is owed;
+- a genesis cohort is foundable on the day it deploys, which is what the grant
+  requires and what cohort-8 had;
+- the succession ceremony is untouched for real upgrades, and a succession
+  cohort is still refused a V1 profile by name, because nothing reads V1.
+
+It is buildable **without a layout change**. The blocker named earlier in this
+file — that "no predecessor" cannot be encoded — is real but narrow:
+`ContentId::new` refuses all-zero (`ZeroContentId`, `dclutch-product-runtime-v2/src/lib.rs:73-78`)
+so `ArtifactReleaseIdV1::new([0;32])` fails, and `ProtocolInfrastructureProfileV2::new`
+refuses two equal predecessors as aliased. Two **distinct, domain-separated
+sentinels** — `hash("dclutch:infrastructure:genesis:registry")` and
+`…:rent` — are nonzero and unequal, so the existing constructor already accepts
+them, and they are unforgeable as real artifact digests by construction.
+
+**One design unit genuinely needs a decision before it is built**, and it is not
+the encoding. Conjunct 6 of the ceremony is one V2 per domain, ever
+(`InfrastructureAlreadySucceeded`, a vacancy that is burned once). If genesis
+writes the V2, a genesis cohort has spent its single vacancy at birth and can
+**never** succeed its Registry — which reintroduces P-008, the protocol-wide
+brick the whole succession exists to repair, for exactly the cohorts that start
+clean. So the genesis V2 needs either a generation counter, or a V2→V3 hop, or a
+vacancy rule that distinguishes "succeeded from V1" from "born at V2". That is a
+choice about the identity structure and it wants one paragraph of ruling, not a
+lane's guess made underneath a cohort.
+
+Named rather than improvised. The two workarounds declined earlier stay
+declined, and this lane declines a third: shipping the V1 fallback because it is
+the shape that was asked for, when a written ruling refuses it and the reason
+the ruling gave has simply changed rather than disappeared.

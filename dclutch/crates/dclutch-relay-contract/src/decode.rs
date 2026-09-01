@@ -85,6 +85,89 @@ impl RelayedObservableV1 {
             Self::DbcMigrationProgressV1 => DBC_VENUE_SET_CARDINALITY_V1,
         }
     }
+
+    /// Where each structural role sits in this row's ordered account set.
+    pub const fn set_layout(self) -> RelayedSetLayoutV1 {
+        match self {
+            Self::DbcMigrationProgressV1 => RelayedSetLayoutV1 {
+                program: DBC_PROGRAM_POSITION_V1,
+                programdata: DBC_PROGRAMDATA_POSITION_V1,
+                state: DBC_VENUE_POSITION_V1,
+                clock: DBC_CLOCK_POSITION_V1,
+            },
+        }
+    }
+}
+
+/// Every row of this release's decoding-rules table.
+///
+/// Exhaustive by construction: [`table_rows_are_exhaustive_and_well_formed`]
+/// matches on each variant, so a row added to [`RelayedObservableV1`] without
+/// being added here does not compile.
+///
+/// [`table_rows_are_exhaustive_and_well_formed`]: self
+pub const RELAYED_OBSERVABLE_TABLE_V1: &[RelayedObservableV1] =
+    &[RelayedObservableV1::DbcMigrationProgressV1];
+
+/// Which position of one observable's ordered account set carries which role.
+///
+/// The spine of an interpretation — authenticate the observed program
+/// cross-cluster, read the observed cluster's own clock, check staleness — is
+/// identical for every row of the table. The only thing that varies is *where
+/// in the set* each of those accounts sits, and how many accounts there are.
+/// Holding that as data on the row, beside [`RelayedObservableV1::set_cardinality`],
+/// is what lets a second observable be authored without editing
+/// [`interpret_sealed_record_v1`]. Before this existed the DBC positions were
+/// read inside the orchestration, and an observable with a different
+/// cardinality would have had to fork it.
+///
+/// Every role is required. An observable that wanted no venue program would
+/// not be a relayed observable: `require_pinned_venue` is the family's
+/// cross-cluster deployment authentication, and dropping it would drop the
+/// property that makes the family worth having.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RelayedSetLayoutV1 {
+    /// Loader V3 `Program` account of the observed venue.
+    pub program: u16,
+    /// Loader V3 `ProgramData` account holding the observed venue's ELF.
+    pub programdata: u16,
+    /// The account whose attested bytes carry this observable's own state.
+    pub state: u16,
+    /// The observed cluster's `Clock` sysvar.
+    pub clock: u16,
+}
+
+impl RelayedSetLayoutV1 {
+    /// The four roles in set order, for range and distinctness checks.
+    const fn positions(self) -> [u16; 4] {
+        [self.program, self.programdata, self.state, self.clock]
+    }
+
+    /// Refuse a table row whose roles collide or fall outside its own set.
+    ///
+    /// A malformed row is a defect in the emitted decoding-rules table rather
+    /// than in any caller's record, so this can never fire for a shipped row —
+    /// [`RELAYED_OBSERVABLE_TABLE_V1`] is walked by a test that asserts it. It
+    /// is here so that the author of observable #2 gets a named refusal at the
+    /// interpretation boundary instead of two roles silently reading one body.
+    fn require_well_formed(self, cardinality: u16) -> Result<()> {
+        let positions = self.positions();
+        let mut outer = 0;
+        while outer < positions.len() {
+            if positions[outer] >= cardinality {
+                return Err(Error::InvalidSetGeometry);
+            }
+            let mut inner = outer + 1;
+            while inner < positions.len() {
+                if positions[outer] == positions[inner] {
+                    return Err(Error::InvalidSetGeometry);
+                }
+                inner += 1;
+            }
+            outer += 1;
+        }
+        Ok(())
+    }
 }
 
 /// The explicit four-state graduation enum of a DBC `VirtualPool`.
@@ -219,19 +302,20 @@ fn pinned_body<'a>(
 /// may select a failure selector at all.
 fn require_pinned_venue(
     entries: &[AccountSetEntryV1],
+    layout: RelayedSetLayoutV1,
     program: AccountObservationV1<'_>,
     programdata: AccountObservationV1<'_>,
     venue: AccountObservationV1<'_>,
     pinned_venue_release: ArtifactReleaseV1,
 ) -> Result<DeploymentObservationV1> {
     let program_entry = entries
-        .get(usize::from(DBC_PROGRAM_POSITION_V1))
+        .get(usize::from(layout.program))
         .ok_or(Error::InvalidSetGeometry)?;
     let programdata_entry = entries
-        .get(usize::from(DBC_PROGRAMDATA_POSITION_V1))
+        .get(usize::from(layout.programdata))
         .ok_or(Error::InvalidSetGeometry)?;
     let venue_entry = entries
-        .get(usize::from(DBC_VENUE_POSITION_V1))
+        .get(usize::from(layout.state))
         .ok_or(Error::InvalidSetGeometry)?;
     if program_entry.expected_owner != LOADER_V3_PROGRAM_ID
         || programdata_entry.expected_owner != LOADER_V3_PROGRAM_ID
@@ -270,15 +354,16 @@ fn require_pinned_venue(
 fn require_observed_clock(
     record: RelayedObservationRecordViewV1<'_>,
     entries: &[AccountSetEntryV1],
+    position: u16,
 ) -> Result<i64> {
     let entry = entries
-        .get(usize::from(DBC_CLOCK_POSITION_V1))
+        .get(usize::from(position))
         .ok_or(Error::InvalidSetGeometry)?;
     if entry.key != OBSERVED_CLOCK_SYSVAR_KEY_V1 || entry.expected_owner != OBSERVED_SYSVAR_OWNER_V1
     {
         return Err(Error::ObservedClockMismatch);
     }
-    let body = pinned_body(record, entries, DBC_CLOCK_POSITION_V1)?;
+    let body = pinned_body(record, entries, position)?;
     if !body.is_fully_inline() || body.executable() {
         return Err(Error::ObservedClockMismatch);
     }
@@ -378,17 +463,30 @@ pub fn interpret_sealed_record_v1(
         observable.set_cardinality(),
     )?;
 
-    let program = pinned_body(record, entries, DBC_PROGRAM_POSITION_V1)?;
-    let programdata = pinned_body(record, entries, DBC_PROGRAMDATA_POSITION_V1)?;
-    let venue = pinned_body(record, entries, DBC_VENUE_POSITION_V1)?;
-    let venue_deployment =
-        require_pinned_venue(entries, program, programdata, venue, pinned_venue_release)?;
+    let layout = observable.set_layout();
+    layout.require_well_formed(observable.set_cardinality())?;
 
-    let observed_unix_seconds = require_observed_clock(record, entries)?;
+    let program = pinned_body(record, entries, layout.program)?;
+    let programdata = pinned_body(record, entries, layout.programdata)?;
+    let state = pinned_body(record, entries, layout.state)?;
+    let venue_deployment = require_pinned_venue(
+        entries,
+        layout,
+        program,
+        programdata,
+        state,
+        pinned_venue_release,
+    )?;
+
+    let observed_unix_seconds = require_observed_clock(record, entries, layout.clock)?;
     config.require_observation_freshness(current_unix_seconds, observed_unix_seconds)?;
 
+    // The ONE observable-specific line of the whole interpretation. Everything
+    // above is the family's spine, driven by the row's own layout; everything
+    // below is shape-free. A second observable adds one arm here and one row to
+    // `set_layout`, and edits nothing else in this function.
     let atoms = match observable {
-        RelayedObservableV1::DbcMigrationProgressV1 => read_dbc_graduation(venue)?,
+        RelayedObservableV1::DbcMigrationProgressV1 => read_dbc_graduation(state)?,
     };
     Ok(RelayedObservationOutcomeV1 {
         observable,
@@ -515,6 +613,48 @@ mod tests {
                 Err(Error::UnknownObservable)
             );
         }
+    }
+
+    #[test]
+    fn every_table_row_states_a_well_formed_set_layout() {
+        // The table is exhaustive by construction: this match has no wildcard,
+        // so a row added to `RelayedObservableV1` fails to compile until it is
+        // added to `RELAYED_OBSERVABLE_TABLE_V1` too.
+        for observable in RELAYED_OBSERVABLE_TABLE_V1.iter().copied() {
+            match observable {
+                RelayedObservableV1::DbcMigrationProgressV1 => {}
+            }
+            let layout = observable.set_layout();
+            layout
+                .require_well_formed(observable.set_cardinality())
+                .expect("a shipped row's roles must be distinct and inside its own set");
+            assert_eq!(
+                RelayedObservableV1::from_selector(observable.selector()),
+                Ok(observable),
+                "a row's selector must round-trip to the row"
+            );
+        }
+        assert_eq!(RELAYED_OBSERVABLE_TABLE_V1.len(), 1);
+    }
+
+    #[test]
+    fn a_malformed_layout_refuses_by_name_rather_than_reading_one_body_twice() {
+        let sound = RelayedObservableV1::DbcMigrationProgressV1.set_layout();
+        assert_eq!(sound.require_well_formed(DBC_VENUE_SET_CARDINALITY_V1), Ok(()));
+        // Two roles on one position: the defect the check exists to catch.
+        let collided = RelayedSetLayoutV1 {
+            state: sound.clock,
+            ..sound
+        };
+        assert_eq!(
+            collided.require_well_formed(DBC_VENUE_SET_CARDINALITY_V1),
+            Err(Error::InvalidSetGeometry)
+        );
+        // A role outside the row's own declared cardinality.
+        assert_eq!(
+            sound.require_well_formed(DBC_VENUE_SET_CARDINALITY_V1 - 1),
+            Err(Error::InvalidSetGeometry)
+        );
     }
 
     #[test]

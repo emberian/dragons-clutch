@@ -62,6 +62,12 @@ const PRODUCT_RECORD: [u8; 64] = [0xb1; 64];
 const BATCH: [u8; 32] = [0xb2; 32];
 const POLICY: [u8; 32] = [0xb3; 32];
 const CANDIDATE: [u8; 32] = [0xb4; 32];
+// The config's own market coordinates, named because the input bank has to
+// declare exactly them: `require_market` compares the bank's generation and
+// semantic basis against the config account's, and a literal repeated in two
+// places is how those two stop agreeing.
+const CONFIG_GENERATION: u64 = 9;
+const CONFIG_CLAIM_BASIS_ID: [u8; 32] = [2; 32];
 
 struct Fixture {
     test: ProgramTest,
@@ -81,9 +87,9 @@ fn product_id() -> [u8; 32] {
 fn config() -> Vec<u8> {
     GeneralConfigV3::new(GeneralConfigV3Input {
         capacity_profile_id: [1; 32],
-        claim_basis_id: [2; 32],
+        claim_basis_id: CONFIG_CLAIM_BASIS_ID,
         program_set_id: [3; 32],
-        generation: 9,
+        generation: CONFIG_GENERATION,
         price_scale: 1,
         collection_slots: 10,
         selection_slots: 10,
@@ -166,17 +172,29 @@ fn open_selection(outcome_count: u32) -> Vec<u8> {
     state
 }
 
+/// Build the authenticated input bank the accelerator will reassemble.
+///
+/// The bank is what the accelerator authenticates the DOMAIN against: it
+/// compares the config account's digest, the config's generation and its claim
+/// basis, and the Product record's digest against the identities declared
+/// here. This fixture used to declare only the outcome count, the settlement
+/// flag and the Product digest -- so `general_config_id` was thirty-two zero
+/// bytes, and every run refused domain authentication before any Freeze
+/// transition ran. `lifecycle.rs` had always written these; this file simply
+/// had not, and nothing could say so until the refusal learned to name itself.
 fn input_bank(outcome_count: u32) -> Vec<u8> {
     let mut bank =
         vec![0_u8; general_hot_candidate_bank_len_v3(outcome_count).expect("bank width")];
     write_scalar(&mut bank, scalar::OUTCOME_COUNT, u64::from(outcome_count));
     write_scalar(&mut bank, scalar::SETTLEMENT_POSITION_PRESENT, 0);
-    write_identity(
-        &mut bank,
-        outcome_count,
-        identity::PRODUCT_RECORD_DIGEST,
-        product_id(),
-    );
+    write_scalar(&mut bank, scalar::GENERATION, CONFIG_GENERATION);
+    for (coordinate, value) in [
+        (identity::PRODUCT_RECORD_DIGEST, product_id()),
+        (identity::GENERAL_CONFIG_ID, hash(&config()).to_bytes()),
+        (identity::SEMANTIC_BASIS_ID, CONFIG_CLAIM_BASIS_ID),
+    ] {
+        write_identity(&mut bank, outcome_count, coordinate, value);
+    }
     bank
 }
 

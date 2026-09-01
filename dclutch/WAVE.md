@@ -5048,3 +5048,190 @@ only re-running it made that visible.
 > The same shape as the stale caveat: **a recorded wall decays exactly like a
 > recorded total, and nobody re-derives the sentence that says you cannot get
 > further.**
+
+## 2026-09-01 - the accelerator refused for eight months and never said why
+
+The width-1 `Refused` ack was a **semantic** refusal with no reader. The whole
+of `process_instruction` ended:
+
+```rust
+Err(_) => AcceleratorAckV2::refused(request, request_digest),
+```
+
+**Ninety-six refusal sites, three semantic variants, one indistinguishable
+`Refused` ack, and not a single `msg!` in the program.** The wire cannot carry
+the distinction and should not -- the refused ack is one canonical shape so
+Trading can separate a transport fault from a failure-atomic semantic refusal --
+which makes the validator log the only place the cause can live, and there was
+none.
+
+`GeneralAcceleratorSemanticErrorV3` carries no `#[repr]` and never becomes a
+`ProgramError`. **It is not protocol-visible, so granularity there is free of
+decision 0007's band ceremony** -- a fact worth writing down, because the same
+reflex that correctly slows a wire-code split had been silently slowing a
+diagnostic one. Six causes split out of `State`, all inside the three helpers
+every one of the fifteen actions calls before anything else: `RuntimeAccount`,
+`EvidenceCoordinate`, `ConfigDecode`, `ConfigIdentity`, `ConfigMarket`,
+`ProductIdentity`. `log_line` is a `&'static str` per variant under an
+exhaustive match rather than a `{:?}` format, because peak heap at runtime width
+258 is this program's binding constraint and `sol_log` takes a `&str`.
+
+**The instrument convicted in one run**: `ConfigIdentity` -- the config
+account's digest is not the `general_config_id` the input bank declares.
+`freeze.rs` built a bank carrying the outcome count, the settlement flag and the
+Product digest and nothing else, so `general_config_id` was thirty-two zero
+bytes. `lifecycle.rs` had always written them; this file never had.
+
+> **The fixture had been failing domain authentication before any Freeze
+> transition ran, for as long as the file has existed, and the program had no
+> word with which to say so.**
+
+At `51a4df9e` in a clean worktree, accelerator ELF sha256 `e9544323`, zero
+frame diagnostics, name-filtered with `--test-threads=1`:
+
+| width | transaction | ack | accelerator CPI | top level |
+|---|---|---|---|---|
+| 1 | commits | **Accepted** | 21,108 CU | 35,693 CU |
+| 258 | commits | **Accepted** | 45,758 CU | 68,220 CU |
+
+**Width 258 had never executed.** The accelerator program-test goes 24 passed /
+1 failed to **25 / 0**, and the corrupted-page hostile still names
+`ScratchBankDigest` exactly. Control, separately: perturbing the bank's declared
+generation by one turns it red on `config rejects the bank's generation or
+basis` -- a different line from the identity one, so two of the six new causes
+are reachable and separable, and the added scalars are load-bearing.
+
+Committed as `b876c340`. Its first draft said the pre-fix CPI cost 20,264 CU,
+which is the **retraction entry's** figure and not one this lane measured; the
+real reading was 17,187. Amended before the reader saw it, and recorded here
+because a number carried forward from someone else's run is the cheapest way to
+publish a measurement you did not take.
+
+**And the ELF hash caught the second instance of the same thing.** The figures
+above were first taken against a build made before `rustfmt` ran, hash
+`105961a4`; the committed source builds `e9544323`, deterministically and from a
+clean worktree at `51a4df9e`. The CU readings turned out identical, so nothing
+downstream changes -- which is exactly why only the hash could notice. **A
+measurement whose artifact no commit names is not a measurement, even when it
+happens to be right.** The co-tenant Trading lane was mid-edit in a shared
+dependency at the time, twice; a detached worktree at `HEAD` measures the
+commit rather than the ambient tree and does not wait on anyone's timing.
+
+## 2026-09-01 - two frame tables, and only one of them is produced
+
+**The OpenBatch N=2 `0xC00A InstructionsSysvarAccount` wall is not a coordinate
+typo and not a one-line fix.** It is two authors of one geometry, at the scale
+of two programs.
+
+The General accelerator is the **only** reader of
+`crates/dclutch-execution-strategy-contract/src/admitted_v3.rs`: an 18-account
+prefix with the caller authority at 0, the instructions sysvar at **4**, the
+Trading program at 5 and the runtime accounts starting at **18**.
+
+Trading has exactly **one** admitted-accelerator CPI site,
+`programs/dclutch-trading-sbf/src/admitted_composition_v3.rs:410`, family-neutral
+and reached by General like everyone else. `fixed_cpi_accounts` builds the frame
+as caller authority, then `ADMITTED_ACCELERATOR_HOT_FIXED_COUNT_V4` = 39 hot
+fixed accounts, then 8 strategy-evidence accounts:
+
+| coordinate | V3 table says | the real frame has |
+|---|---|---|
+| caller authority | 0 | 0 |
+| instructions sysvar | **4** | **30** (`1 + HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3`) |
+| Trading program | **5** | **26** (`1 + HOT_TRADING_PROGRAM_ACCOUNT_V3`) |
+| runtime start | **18** | **48** |
+
+So at index 4 the real frame puts `HOT_MANIFEST_STAGING_ACCOUNT_V3`, a vacant
+CapabilityManifest staging cursor. **The refusal is telling the exact truth.**
+The V3 table is also not merely offset -- it has a different membership, with
+capability and strategy raw/staging as top-level slots and no accelerator-program
+account at all.
+
+**The Dealer accelerator does not have this problem, and why is the whole
+lesson**: it authenticates through
+`dclutch_trading_sbf::hot_v3::authenticate_accelerator_invocation_v4`, the same
+function that owns the producer's layout. General re-derived its own.
+
+> **Every General harness builds the V3 frame and the General accelerator reads
+> the V3 frame, so they agree with each other, and neither agrees with the
+> producer.** The third instance of that shape this session.
+
+**Correction to an earlier report.** "The sysvar is present in the transaction,
+readonly and unsigned, at instruction index 29" -- the 29 is
+`HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3`, an **account coordinate**, off by the
+one-account authority prefix from its real position at 30. Not an instruction
+index.
+
+**Routed, not edited**, because the repair is a cross-lane convergence and not
+this lane's to slam in: derive the four coordinates the accelerator actually
+reads from `HOT_*` plus the V4 composition, then follow it through
+`freeze.rs`, `lifecycle.rs`, `crates/dclutch-operator/src/general_hot_v3.rs`
+(whose campaign-frame test compares against executed evidence and says in its
+own comment to re-run the campaign rather than edit the numbers), and
+`tools/local-validator/bootstrap/successor/src/family_hot_campaign.rs:142-146`
+-- **which restates `18`, `0` and `4` as bare literals**, the same second-author
+defect `ecc43002` removed from `freeze.rs` twelve hours ago, in the one file
+that would go stale silently.
+
+## 2026-09-01 — a refusal with no reader, and both widths execute
+
+C-05's width-1 wall is closed. The `Refused` ack was **semantic and unreadable**:
+`process_instruction` ended `Err(_) => AcceleratorAckV2::refused(...)` — **96 refusal
+sites → 3 variants → one indistinguishable ack, and zero `msg!` in the program.**
+
+`GeneralAcceleratorSemanticErrorV3` carries no `#[repr]` and never becomes a
+`ProgramError`, so it is not protocol-visible and **granularity there needs no band
+allocation** — six causes split out of `State` with a `&'static str` `log_line` per
+variant under an exhaustive match (peak heap at N=258 is the binding constraint;
+`sol_log` takes a `&str`).
+
+**Convicted in one run: `ConfigIdentity`.** `freeze.rs` built a bank with only the
+outcome count, settlement flag and Product digest, so `general_config_id` was 32
+zero bytes — **failing domain authentication before any Freeze transition ran, for
+the file's whole history.** `lifecycle.rs` had always written them.
+
+| width | transaction | ack | accelerator CPI | top level |
+|---|---|---|---|---|
+| 1 | commits | **Accepted** | 21,108 CU | 35,693 CU |
+| 258 | commits | **Accepted** | 45,758 CU | 68,220 CU |
+
+**Width 258 had never executed.** Accelerator program-test 24/1 → **25/0**, at
+`51a4df9e` in a clean detached worktree, ELF `e9544323`, zero frame diagnostics,
+name-filtered, `--test-threads=1`. Mutation control: perturbing the declared
+generation by one goes red on a *different* line (`config rejects the bank's
+generation or basis`), so two new causes are reachable and separable.
+
+### The hash caught the author, twice
+
+The first figures came from a **pre-`rustfmt` build** (`105961a4`); the committed
+source builds `e9544323`, deterministically. **CU readings were identical, so only
+the hash could notice.** And a commit-message CU figure had been carried forward from
+the retraction entry rather than measured — 20,264 → **17,187**. *A stale caveat
+outlives a stale total*, again: the number that was copied was the one nobody
+re-derived.
+
+### OpenBatch `0xC00A`: the refusal was telling the exact truth
+
+Two frame tables, one producer. `crates/dclutch-execution-strategy-contract/src/
+admitted_v3.rs` (18-account prefix) has **exactly one reader** — the General
+accelerator — and Trading has **exactly one** admitted-accelerator CPI site
+(`admitted_composition_v3.rs:410`, family-neutral: authority + 39 hot-fixed + 8
+strategy-evidence).
+
+| coordinate | V3 table | real frame |
+|---|---|---|
+| instructions sysvar | 4 | **30** (`1 + HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3`) |
+| Trading program | 5 | **26** |
+| runtime start | 18 | **48** |
+
+At index 4 the real frame carries `HOT_MANIFEST_STAGING_ACCOUNT_V3`, a vacant
+manifest staging cursor. **The Dealer accelerator never hits this because it
+authenticates through the producer's own authority
+(`hot_v3::authenticate_accelerator_invocation_v4`).** Membership differs, not only
+offsets. And `tools/local-validator/bootstrap/successor/src/family_hot_campaign.rs:
+142-146` **restates 18/0/4 as bare literals** — the second-author defect `ecc43002`
+removed from `freeze.rs`, alive in another file.
+
+**Correction to this ledger**: "the sysvar is at instruction index 29" — that 29 is
+`HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3`, an *account coordinate*, off by the authority
+prefix from its real position at 30. Not an instruction index.

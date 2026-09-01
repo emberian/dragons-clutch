@@ -379,6 +379,17 @@ pub struct MultiLpContextV3 {
     pub custody_replay_revision: u64,
     /// Locked capital floor from the selected immutable Dealer descriptor.
     pub locked_capital_floor: u64,
+    /// Collateral atoms per native claim unit.
+    ///
+    /// This is the authenticated `ProductBasisV3::payout_scale`. It is NOT a
+    /// descriptor fact and is deliberately absent from `DealerConfigV4`, whose
+    /// own module doc excludes anything that depends on the Market address:
+    /// scale is per-market, owned by the payoff basis, and obtained here by
+    /// authenticating that basis record against the Market identity
+    /// (`v4_equity_accelerator_accounts.rs` joins the Claims aggregate's
+    /// `basis_id` to the Product runtime's `semantic_basis_id`, and takes the
+    /// scale from the same authenticated record). Zero is refused.
+    pub basis_scale: u64,
 }
 
 /// Exact collateral endpoints and authenticated pre-balances.
@@ -625,7 +636,7 @@ pub fn prepare_multi_lp_v3(
             return Err(MultiLpErrorV3::WidthMismatch);
         }
     }
-    if post_lp.len() != DEALER_LP_POSITION_BYTES_V3 {
+    if post_lp.len() != DEALER_LP_POSITION_BYTES_V3 || context.basis_scale == 0 {
         return Err(MultiLpErrorV3::InvalidState);
     }
     let expected_obligation_bytes = super::v3_obligation::DEALER_OBLIGATION_HEADER_BYTES_V3
@@ -687,6 +698,7 @@ pub fn prepare_multi_lp_v3(
             total_shares: obligation.total_equity_shares(),
             locked_capital_floor: context.locked_capital_floor,
             action: equity_action,
+            basis_scale: context.basis_scale,
         },
         residual_before,
         residual_after,
@@ -1475,6 +1487,7 @@ mod tests {
             generation: 2,
             custody_replay_revision: 8,
             locked_capital_floor: 5,
+            basis_scale: 1,
         }
     }
 

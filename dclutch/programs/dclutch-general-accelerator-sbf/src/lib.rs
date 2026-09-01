@@ -80,8 +80,8 @@ use dclutch_general_config_contract::v3::GeneralConfigV3;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 use solana_program::{
-    account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, program::set_return_data,
-    program_error::ProgramError, pubkey::Pubkey,
+    account_info::AccountInfo, entrypoint::ProgramResult, hash::hash, log::sol_log,
+    program::set_return_data, program_error::ProgramError, pubkey::Pubkey,
 };
 use solana_sdk_ids::{compute_budget, sysvar};
 
@@ -259,14 +259,65 @@ impl From<GeneralAcceleratorSbfErrorV3> for ProgramError {
 }
 
 /// Semantic refusal after the complete physical frame has authenticated.
+///
+/// This is NOT a protocol-visible refusal code -- it carries no `#[repr]` and
+/// is never converted to a `ProgramError`. Every value here becomes the same
+/// canonical refused acknowledgement on the wire, by design, so that Trading
+/// can tell a transport fault from a failure-atomic semantic refusal. Which
+/// means the validator log is the only place the cause can live, and
+/// [`GeneralAcceleratorSemanticErrorV3::log_line`] is how it gets there.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GeneralAcceleratorSemanticErrorV3 {
+    /// A runtime account coordinate was unresolvable, out of frame, or borrowed.
+    RuntimeAccount,
+    /// The action's readonly-evidence table carries no entry of the kind asked for.
+    EvidenceCoordinate,
+    /// The General config account's bytes were not a canonical config.
+    ConfigDecode,
+    /// The config account's digest differed from the one the input bank declares.
+    ConfigIdentity,
+    /// The config refused the generation or semantic basis the bank declares.
+    ConfigMarket,
+    /// The Product account's digest differed from the one the input bank declares.
+    ProductIdentity,
     /// Action-selected state or evidence was absent, extraneous, or malformed.
+    ///
+    /// Narrowed the way `InvalidTopLevelInstruction` and `InvalidScratchBank`
+    /// were: this used to carry the six causes above as well, so every action
+    /// in the program -- all fifteen call `authenticated_general_domain` before
+    /// anything else -- refused domain authentication under the same word it
+    /// uses for its own state accounts. It now means the action's own selected
+    /// state or evidence, and the domain says which conjunct of itself failed.
     State,
     /// The pure General transition refused its authenticated inputs.
     Transition,
     /// Candidate-bank projection refused.
     Candidate,
+}
+
+impl GeneralAcceleratorSemanticErrorV3 {
+    /// The exact line this refusal writes to the validator log.
+    ///
+    /// A `&'static str` per variant rather than a `{:?}` format: the refusing
+    /// path is inside a `no_std` program whose peak heap is already the binding
+    /// constraint at runtime width 258, and `sol_log` takes a `&str` with no
+    /// allocation at all. The match is exhaustive, so a tenth variant does not
+    /// compile until its author says what a reader should see.
+    const fn log_line(self) -> &'static str {
+        match self {
+            Self::RuntimeAccount => "general: refused, runtime account coordinate unreadable",
+            Self::EvidenceCoordinate => "general: refused, no readonly evidence of that kind",
+            Self::ConfigDecode => "general: refused, config account did not decode",
+            Self::ConfigIdentity => "general: refused, config digest is not the bank's config id",
+            Self::ConfigMarket => "general: refused, config rejects the bank's generation or basis",
+            Self::ProductIdentity => {
+                "general: refused, product digest is not the bank's product id"
+            }
+            Self::State => "general: refused, action state or evidence",
+            Self::Transition => "general: refused, the pure transition",
+            Self::Candidate => "general: refused, candidate projection",
+        }
+    }
 }
 
 #[cfg(not(feature = "no-entrypoint"))]
@@ -332,7 +383,16 @@ pub fn process_instruction(
             AcceleratorAckV2::accepted(request, request_digest, bank_digest, payload)
                 .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?
         }
-        Err(_) => AcceleratorAckV2::refused(request, request_digest),
+        Err(cause) => {
+            // The wire cannot carry this distinction and should not: the
+            // refused acknowledgement is one canonical shape so Trading can
+            // separate a transport fault from a failure-atomic semantic
+            // refusal. That makes the log the only reader, and until this line
+            // there was none -- ninety-six refusal sites collapsed into three
+            // variants collapsed into one `Refused` ack that named nothing.
+            sol_log(cause.log_line());
+            AcceleratorAckV2::refused(request, request_digest)
+        }
     };
     let ack_len = ACCELERATOR_ACK_HEADER_BYTES_V2
         .checked_add(ack.payload().len())
@@ -1232,23 +1292,23 @@ fn authenticated_general_domain(
     environment: dclutch_general_adapter_contract::hot_candidate_v3::GeneralHotEnvironmentV3,
 ) -> Result<(GeneralConfigV3, [u8; 32]), GeneralAcceleratorSemanticErrorV3> {
     let config_coordinate = u16::try_from(HOT_RUNTIME_CONFIG_COORDINATE_V3)
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?;
     let config_data = data(runtime, config_coordinate)?;
     let config = GeneralConfigV3::decode(&config_data)
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::ConfigDecode)?;
     let config_id = hash(&config_data).to_bytes();
     if config_id != environment.general_config_id {
-        return Err(GeneralAcceleratorSemanticErrorV3::State);
+        return Err(GeneralAcceleratorSemanticErrorV3::ConfigIdentity);
     }
     config
         .require_market(environment.generation, environment.semantic_basis_id)
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::ConfigMarket)?;
     let product_coordinate = u16::try_from(HOT_RUNTIME_PRODUCT_COORDINATE_V3)
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?;
     let product_data = data(runtime, product_coordinate)?;
     let product_record_digest = hash(&product_data).to_bytes();
     if product_record_digest != environment.product_record_digest {
-        return Err(GeneralAcceleratorSemanticErrorV3::State);
+        return Err(GeneralAcceleratorSemanticErrorV3::ProductIdentity);
     }
     Ok((config, product_record_digest))
 }
@@ -1260,15 +1320,15 @@ fn evidence_coordinate(
     let mut index = 0_u16;
     while index < general_readonly_evidence_count_v3(action) {
         let evidence = general_readonly_evidence_v3(action, index)
-            .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+            .map_err(|_| GeneralAcceleratorSemanticErrorV3::EvidenceCoordinate)?;
         if evidence.kind == kind {
             return Ok(evidence.coordinate);
         }
         index = index
             .checked_add(1)
-            .ok_or(GeneralAcceleratorSemanticErrorV3::State)?;
+            .ok_or(GeneralAcceleratorSemanticErrorV3::EvidenceCoordinate)?;
     }
-    Err(GeneralAcceleratorSemanticErrorV3::State)
+    Err(GeneralAcceleratorSemanticErrorV3::EvidenceCoordinate)
 }
 
 fn data<'a>(
@@ -1277,9 +1337,9 @@ fn data<'a>(
 ) -> Result<core::cell::Ref<'a, [u8]>, GeneralAcceleratorSemanticErrorV3> {
     let borrowed = runtime
         .get(usize::from(coordinate))
-        .ok_or(GeneralAcceleratorSemanticErrorV3::State)?
+        .ok_or(GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?
         .try_borrow_data()
-        .map_err(|_| GeneralAcceleratorSemanticErrorV3::State)?;
+        .map_err(|_| GeneralAcceleratorSemanticErrorV3::RuntimeAccount)?;
     Ok(core::cell::Ref::map(borrowed, |value| &**value))
 }
 

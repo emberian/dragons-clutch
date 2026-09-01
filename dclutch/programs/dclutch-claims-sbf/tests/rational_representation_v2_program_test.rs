@@ -5212,10 +5212,13 @@ const PER_COORDINATE_WIRE_BYTES: usize = ASSET_BYTES_V2 + 2 * RATIONAL_ASSET_ACC
 /// this route had never been submitted at `K = 3`.
 ///
 /// A transaction carrying `IssueStructured` or `UnwrapStructured` at `K = 3` is
-/// **1,357 bytes** as a v0 message against a live Address Lookup Table, against
+/// **1,397 bytes** as a v0 message against a live Address Lookup Table, against
 /// a 1,232-byte cluster packet limit. The ALT is already applied — it is what
-/// takes the same frame from 2,594 down to 1,357 — so there is no second
-/// compression left to reach for.
+/// takes the same frame from 2,634 down to 1,397 — so there is no second
+/// compression left to reach for. (It was 1,357 against 2,594 until `7b80869d`
+/// made every wire measurement carry the `set_compute_unit_limit` a real
+/// transaction always pays: +40 bytes on every frame, and the derived `K = 2`
+/// ceiling unchanged.)
 ///
 /// The selected-outcome actions are untouched: `Denominate`, `Reconstitute` and
 /// `RedeemTerminal` carry `asset_count == 1` at every `K`

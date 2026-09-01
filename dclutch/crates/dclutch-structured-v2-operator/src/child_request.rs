@@ -77,10 +77,13 @@ use crate::{Error, Result};
 ///
 /// **Raising the RequestProfile bound would not raise this.** The packet, not
 /// the artifact, is the binding wall on the two full-width actions:
-/// `IssueStructured`/`UnwrapStructured` at `K = 3` measure 1,357 bytes as a v0
+/// `IssueStructured`/`UnwrapStructured` at `K = 3` measure 1,397 bytes as a v0
 /// message with the ALT already applied, against a 1,232-byte limit, so a
 /// cluster caps full-width issuance at `K = 2` -- BELOW this ceiling. See
-/// `the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`.
+/// `the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`. (1,357
+/// until `7b80869d` made every wire measurement carry the
+/// `set_compute_unit_limit` a real transaction always pays: +40 bytes, and the
+/// `K = 2` conclusion unchanged.)
 ///
 /// `STRUCTURED_HOT_MAX_TOKEN_EFFECTS_V2 = 257` is a capacity-profile
 /// measurement and has no executable meaning; do not size against it.

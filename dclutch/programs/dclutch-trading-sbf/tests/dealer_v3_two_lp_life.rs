@@ -74,6 +74,7 @@ fn redeem(pool: &Pool, burn: u64) -> Option<(PoolEquityPlanV3, Pool, Vec<u64>)> 
             action: PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 {
                 burned_shares: burn,
             }),
+            basis_scale: 1,
         },
         &mut residual_before,
         &mut residual_after,
@@ -116,6 +117,7 @@ fn contribute(
                 claims,
                 minted_shares: minted,
             }),
+            basis_scale: 1,
         },
         &mut residual_before,
         &mut residual_after,
@@ -410,6 +412,7 @@ fn a_policy_floor_raised_after_i_joined_can_strand_my_exit() {
                 action: PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 {
                     burned_shares: 100,
                 }),
+                basis_scale: 1,
             },
             &mut a,
             &mut b,

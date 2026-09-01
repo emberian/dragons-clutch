@@ -91,6 +91,7 @@ fn redeem(pool: &Pool, burn: u64) -> Option<(PoolEquityPlanV3, Pool, Vec<u64>)> 
             action: PoolEquityActionV3::Redeem(PoolEquityRedemptionV3 {
                 burned_shares: burn,
             }),
+            basis_scale: 1,
         },
         &mut residual_before,
         &mut residual_after,
@@ -252,6 +253,7 @@ fn a_contribution_immediately_redeemed_never_returns_more_than_it_brought() {
                         claims: &contribution_claims,
                         minted_shares: minted,
                     }),
+                    basis_scale: 1,
                 },
                 &mut residual_before,
                 &mut residual_after,

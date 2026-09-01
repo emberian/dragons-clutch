@@ -114,6 +114,7 @@ fn fixture() -> Fixture {
         generation: 2,
         custody_replay_revision: 8,
         locked_capital_floor: 5,
+        basis_scale: 1,
     };
     let principal_vault = Pubkey::find_program_address(
         &CustodyVaultSeedsV1::new([1; 32], [6; 32], [5; 32], CompartmentV1::TradingPrincipal)
@@ -300,6 +301,7 @@ fn runtime_width_equity_request_is_chain_derived_and_rejoins_physical_intent() {
         now: 20,
         expires_at: 25,
         terminal: false,
+        basis_scale: 1,
     };
     let set_bytes = program_set(DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3);
     let set = CapabilityProgramSetV1::decode(&set_bytes).expect("program set");
@@ -513,6 +515,7 @@ fn unsigned_equity_builder_refuses_dilution_before_emitting_request() {
         now: 20,
         expires_at: 25,
         terminal: false,
+        basis_scale: 1,
     };
     let set_bytes = program_set(DEALER_EQUITY_CONTRIBUTE_P2_SELECTOR_V3);
     let set = CapabilityProgramSetV1::decode(&set_bytes).expect("program set");

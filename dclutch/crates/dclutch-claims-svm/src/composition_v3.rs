@@ -16,9 +16,8 @@ use dclutch_rational_representation_v2_lifecycle_contract::{
     LifecycleRequestV2,
 };
 use dclutch_rational_representation_v2_request_contract::{
-    CallerRoleV2 as RepresentationCallerRoleV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
-    RATIONAL_BASE_ACCOUNT_COUNT_V2, REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2,
-    RepresentationRequestV2,
+    CallerRoleV2 as RepresentationCallerRoleV2,
+    REQUEST_MAGIC_V2 as REPRESENTATION_REQUEST_MAGIC_V2, RepresentationRequestV2,
 };
 
 use crate::{
@@ -668,21 +667,49 @@ fn validate_rational_representation_route(
     if invocation.borrowed_witness.is_some() {
         return Err(ClaimsCompositionErrorV3::Route);
     }
-    if header.action.selected_outcome() {
-        let expected_accounts = decoded
-            .physical_account_count()
-            .map_err(|_| ClaimsCompositionErrorV3::Route)?;
-        if kind != RouteKindV3::Once
-            || usize::from(invocation.fixed_account_count) != expected_accounts
-            || invocation.item_account_count != 0
-            || invocation.repeated_item_count != 0
-        {
-            return Err(ClaimsCompositionErrorV3::Route);
-        }
-    } else if kind != RouteKindV3::AffineOnce
-        || usize::from(invocation.fixed_account_count) != RATIONAL_BASE_ACCOUNT_COUNT_V2
-        || usize::from(invocation.item_account_count) != RATIONAL_ASSET_ACCOUNT_COUNT_V2
-        || invocation.repeated_item_count != header.asset_count
+    // ONE RULE FOR BOTH ACTION SHAPES, and it is request-bound.
+    //
+    // `physical_account_count` is `RATIONAL_BASE_ACCOUNT_COUNT_V2 +
+    // asset_count * RATIONAL_ASSET_ACCOUNT_COUNT_V2` read off THIS request's
+    // own header, so a caller whose declared span was baked at release time is
+    // still checked against the width it actually carries. The full-width
+    // actions differ from the selected ones only in what that arithmetic
+    // yields.
+    //
+    // `a6a56e0c` split this into a second, affine arm for the full-width
+    // actions. That arm cannot be satisfied by any caller, and four
+    // independent facts say so:
+    //
+    // 1. `claims_composition_v3.rs:639-641` -- Trading's own caller-authority
+    //    derivation REFUSES a `REPRESENTATION_REQUEST_MAGIC_V2` route whose
+    //    kind is not `Once`, pinned by a hostile assertion at `:2336,:2347`.
+    //    A route admitted here would have been refused two frames later.
+    // 2. `repeated_item_count` is the effect's TAIL count for `AffineOnce`
+    //    (`effect-kernel/src/v3.rs:968`), and the tail count is the PRODUCT's
+    //    result width, forced equal to it by
+    //    `require_tail_count_agreement_v3` (`hot_v3.rs:3818-3819,7426-7435`).
+    //    Requiring `repeated_item_count == header.asset_count` therefore binds
+    //    the representation width `K` to the Product width `N` -- and the
+    //    Structured family exists precisely because those are independent
+    //    (`structured_market.rs:26-35`, `open_structured_v3.rs:98-106`).
+    // 3. No producer in the tree ever emitted the affine shape. Its only
+    //    author was this file's own test fixture. `AFFINE_BATCH` -- the real
+    //    affine Claims child -- is a different request family selected by its
+    //    own magic, and Trading routes it to `AffineOnce` there.
+    // 4. The operator emits `Once` with `CLAIMS_FIXED_ACCOUNTS + K * ITEM`,
+    //    which is exactly what this arithmetic yields for its own request.
+    //
+    // The refusal is not weakened: the count is still an exact equality
+    // derived from the request, an affine route is still refused, and a
+    // release whose declared span disagrees with the request it carries is
+    // still `Route`.
+    let expected_accounts = decoded
+        .physical_account_count()
+        .map_err(|_| ClaimsCompositionErrorV3::Route)?;
+    if kind != RouteKindV3::Once
+        || usize::from(invocation.fixed_account_count) != expected_accounts
+        || invocation.item_account_count != 0
+        || invocation.repeated_item_count != 0
     {
         return Err(ClaimsCompositionErrorV3::Route);
     }
@@ -982,8 +1009,8 @@ mod tests {
         LifecycleHeaderV2,
     };
     use dclutch_rational_representation_v2_request_contract::{
-        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, RepresentationActionV2,
-        RepresentationRequestHeaderV2,
+        ABSENT_REVISION, ASSET_BYTES_V2, AssetV2, RATIONAL_ASSET_ACCOUNT_COUNT_V2,
+        RATIONAL_BASE_ACCOUNT_COUNT_V2, RepresentationActionV2, RepresentationRequestHeaderV2,
     };
     use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
@@ -1823,7 +1850,63 @@ mod tests {
         bytes
     }
 
-    fn structured_effect(request: &[u8]) -> Vec<u8> {
+    /// The frame a real Structured release emits: one flat `Once` route whose
+    /// declared span is `RATIONAL_BASE_ACCOUNT_COUNT_V2 + rows *
+    /// RATIONAL_ASSET_ACCOUNT_COUNT_V2`.
+    ///
+    /// `rows` is a parameter so a release can be asked for a span WIDER than
+    /// the request it carries -- the substitution the request-bound rule
+    /// exists to refuse.
+    fn structured_effect(request: &[u8], rows: usize) -> Vec<u8> {
+        let span = RATIONAL_BASE_ACCOUNT_COUNT_V2
+            .checked_add(
+                rows.checked_mul(RATIONAL_ASSET_ACCOUNT_COUNT_V2)
+                    .expect("rows"),
+            )
+            .expect("span");
+        let route = [RouteInputV3 {
+            role: FixedRole::Claims,
+            kind: RouteKindV3::Once,
+            enable_common_scalar: None,
+            witness_range_common_scalar: None,
+            receipt_dependency: None,
+            fixed_account_start: 0,
+            fixed_account_count: u16::try_from(span).expect("declared frame"),
+            item_account_start: 0,
+            item_account_count: 0,
+            fixed_request: request,
+            item_request: &[],
+        }];
+        let width = dclutch_effect_kernel::v3::HEADER_BYTES
+            + dclutch_effect_kernel::v3::ROUTE_BYTES
+            + request.len();
+        let mut scratch = vec![0_u8; width];
+        let mut output = vec![0_u8; width];
+        encode_effect_program_v3_atomic(
+            EffectGeometryV3 {
+                fixed_accounts: u16::try_from(span).expect("declared frame"),
+                item_account_stride: 0,
+                common_scalars: 1,
+                item_scalar_stride: 0,
+                common_identities: 1,
+                item_identity_stride: 0,
+            },
+            &route,
+            &[],
+            &[],
+            &mut scratch,
+            &mut output,
+        )
+        .expect("structured EffectProgram");
+        output
+    }
+
+    /// The affine frame `a6a56e0c` required and nothing produced.
+    ///
+    /// Kept as a fixture so the refusal has a subject: Trading refuses this
+    /// kind for a representation request at `claims_composition_v3.rs:639`,
+    /// and admitting it here would only have moved the wall two frames later.
+    fn structured_affine_effect(request: &[u8]) -> Vec<u8> {
         let (fixed, items) = request
             .split_at(dclutch_rational_representation_v2_request_contract::REQUEST_HEADER_BYTES_V2);
         let item = items.get(..ASSET_BYTES_V2).expect("item template");
@@ -1863,7 +1946,7 @@ mod tests {
             &mut scratch,
             &mut output,
         )
-        .expect("structured EffectProgram");
+        .expect("affine EffectProgram");
         output
     }
 
@@ -2328,14 +2411,28 @@ mod tests {
         }
     }
 
+    /// The full-width frame is admitted on the REQUEST's width, and on
+    /// nothing else.
+    ///
+    /// `TAIL_COUNT` is 1 while the request carries two coordinates, which is
+    /// the whole point: the Structured family's representation width `K` is
+    /// independent of the Product result width `N`, so a rule that reads the
+    /// tail count cannot express it. The affine arm this replaced did exactly
+    /// that.
     #[test]
-    fn composes_structured_representation_only_through_exact_affine_frame() {
+    fn composes_structured_representation_only_through_the_exact_request_bound_frame() {
         let request = structured_representation_request();
-        let effect_bytes = structured_effect(&request);
+        let effect_bytes = structured_effect(&request, 2);
         let program = ProgramV3::decode(&effect_bytes).expect("structured EffectProgram");
-        let composition =
-            ClaimsCompositionV3::decode_selected(program, 2, &[1], &[id(40)], &request, parent())
-                .expect("structured composition");
+        let composition = ClaimsCompositionV3::decode_selected(
+            program,
+            TAIL_COUNT,
+            &[1],
+            &[id(40)],
+            &request,
+            parent(),
+        )
+        .expect("structured composition");
         assert_eq!(
             composition
                 .rational_representation()
@@ -2345,25 +2442,34 @@ mod tests {
             RepresentationActionV2::IssueStructured
         );
 
+        // A release declaring a three-coordinate span while carrying a
+        // two-coordinate request is refused. This is what makes the operator's
+        // release-time constant honest rather than merely coincidental.
+        let wide = structured_effect(&request, 3);
         assert_eq!(
-            {
-                let truncated = request
-                    .get(
-                        ..request
-                            .len()
-                            .checked_sub(ASSET_BYTES_V2)
-                            .expect("two-row request"),
-                    )
-                    .expect("truncated request");
-                ClaimsCompositionV3::decode_selected(
-                    program,
-                    1,
-                    &[1],
-                    &[id(40)],
-                    truncated,
-                    parent(),
-                )
-            },
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&wide).expect("wide EffectProgram"),
+                TAIL_COUNT,
+                &[1],
+                &[id(40)],
+                &request,
+                parent(),
+            ),
+            Err(ClaimsCompositionErrorV3::Route)
+        );
+
+        // And the affine shape stays refused, agreeing with Trading's own
+        // caller-authority derivation rather than contradicting it.
+        let affine = structured_affine_effect(&request);
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                ProgramV3::decode(&affine).expect("affine EffectProgram"),
+                2,
+                &[1],
+                &[id(40)],
+                &request,
+                parent(),
+            ),
             Err(ClaimsCompositionErrorV3::Route)
         );
     }

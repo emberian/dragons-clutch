@@ -1021,6 +1021,7 @@ fn evaluate_equity_commit_last(
             .content_digest
             .to_bytes(),
         linked_basis_record_digest: invocation.linked_basis_record().content_digest.to_bytes(),
+        basis_scale: invocation.product_runtime().payout_scale,
         claims_market_revision: claims.market_revision,
         collateral: collateral.frame,
         locked_capital_floor: config.locked_capital_floor(),
@@ -1043,6 +1044,11 @@ fn evaluate_equity_commit_last(
         generation: request.generation,
         custody_replay_revision: collateral.replay.next_revision,
         locked_capital_floor: config.locked_capital_floor(),
+        // The scale comes from the SAME authenticated ProductBasisV3 record
+        // whose `semantic_basis_id` was already joined to the Claims
+        // aggregate's `basis_id` above. Nothing here declares it; the basis
+        // owns it, and this route only reads it after that join has held.
+        basis_scale: invocation.product_runtime().payout_scale,
     };
     let mut request_claims = vec![0_u64; width];
     let mut obligation_scratch = vec![0_u64; width];

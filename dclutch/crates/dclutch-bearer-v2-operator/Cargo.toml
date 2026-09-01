@@ -25,6 +25,14 @@ dclutch-token-svm = { path = "../dclutch-token-svm" }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-sdk-ids = "=3.1.0"
 
+# Test-only, and the reason is the defect this edge exists to catch. The
+# Structured route's account geometry has two authors -- this operator declares
+# it and `dclutch-claims-svm`'s composition admits it -- and every check
+# confined to one side passed while the two disagreed. A dependency that
+# crosses the boundary is the only instrument that can compare them.
+[dev-dependencies]
+dclutch-claims-svm = { path = "../dclutch-claims-svm" }
+
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

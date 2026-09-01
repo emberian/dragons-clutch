@@ -1541,6 +1541,7 @@ dependencies = [
  "dclutch-account-profile-contract",
  "dclutch-bearer-v2-contract",
  "dclutch-capability-program-contract",
+ "dclutch-claims-svm",
  "dclutch-core-contract",
  "dclutch-effect-kernel",
  "dclutch-execution-strategy-contract",

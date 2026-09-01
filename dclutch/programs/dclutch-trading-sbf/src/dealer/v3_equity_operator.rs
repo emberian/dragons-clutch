@@ -141,6 +141,10 @@ pub struct EquityPoolChainProjectionV3<'a> {
     pub product_record_digest: [u8; 32],
     /// Exact finalized linked LiabilityBasis raw-record digest.
     pub linked_basis_record_digest: [u8; 32],
+    /// Collateral atoms per native claim unit, from that same basis record.
+    ///
+    /// The authenticated `ProductBasisV3::payout_scale`. Zero is refused.
+    pub basis_scale: u64,
     /// Current Claims aggregate revision.
     pub claims_market_revision: u64,
     /// Exact physical collateral accounts and pre-balances.
@@ -419,7 +423,7 @@ pub fn build_equity_request_v3(
             )
         }
     };
-    if shares == 0 {
+    if shares == 0 || chain.basis_scale == 0 {
         return Err(EquityOperatorErrorV3::InvalidIntent);
     }
     let equity = plan_pool_equity_v3(
@@ -430,6 +434,7 @@ pub fn build_equity_request_v3(
             total_shares: chain.obligation.total_equity_shares(),
             locked_capital_floor: chain.locked_capital_floor,
             action: pool_action,
+            basis_scale: chain.basis_scale,
         },
         residual_before,
         residual_after,

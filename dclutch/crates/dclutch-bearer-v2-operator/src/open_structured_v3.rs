@@ -106,8 +106,10 @@ pub const RATIONAL_OPEN_STRUCTURED_ITEM_SCALARS_V3: usize = 4;
 ///
 /// **It is also not the binding wall, and raising it would not help.** A
 /// transaction carrying `IssueStructured` or `UnwrapStructured` at K = 3 is
-/// 1,357 bytes as a v0 message with the Address Lookup Table already applied,
-/// against a 1,232-byte packet limit; the packet caps full-width issuance at
+/// 1,397 bytes as a v0 message with the Address Lookup Table already applied,
+/// against a 1,232-byte packet limit (1,357 until `7b80869d` made every wire
+/// measurement carry the `set_compute_unit_limit` a real transaction always
+/// pays: +40 bytes, same conclusion); the packet caps full-width issuance at
 /// K = 2, one coordinate BELOW this artifact ceiling
 /// (`the_full_width_structured_frame_does_not_fit_a_packet_at_k_three`, which
 /// derives the 2 rather than asserting it). Widening the RequestProfile bound
@@ -1303,9 +1305,16 @@ fn artifact(schema: [u8; 32], program: [u8; 32]) -> Result<ArtifactReferenceV4> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dclutch_claims_svm::composition_v3::{
+        ClaimsCompositionErrorV3, ClaimsCompositionParentV3, ClaimsCompositionV3,
+    };
     use dclutch_product_payoff_v2_codec::runtime_v3::{
         BasisInputV3, BasisKindV3, compile_basis_v3,
     };
+    use dclutch_rational_representation_v2_contract::{
+        AssetV2, RepresentationRequestHeaderV2, RepresentationRequestV2,
+    };
+    use dclutch_token_svm::TOKEN_2022_PROGRAM_ID;
 
     fn id(value: u8) -> [u8; 32] {
         [value; 32]
@@ -1537,5 +1546,167 @@ mod tests {
         .expect("bundle");
         *bundle.request_profile.get_mut(0).expect("profile byte") ^= 1;
         assert!(validate_rational_open_structured_hot_bundle_v3(&bundle).is_err());
+    }
+
+    /// THE CHECK THAT CROSSES THE BOUNDARY.
+    ///
+    /// This operator declares the Structured route's account geometry and
+    /// `dclutch-claims-svm`'s composition admits it, and until this test the
+    /// two had never been compared in one process. Every check confined to one
+    /// side passed while they disagreed, and the disagreement surfaced on real
+    /// ELFs as one `TradingSbfError::Content` out of thousands of sites.
+    ///
+    /// `N` is deliberately 258 against `K = 3`. The Structured family's whole
+    /// point is that the representation width is not the Product result width
+    /// (`structured_market.rs:26-35`), and a fixture that sets them equal
+    /// cannot tell a request-bound check from a tail-bound one.
+    #[test]
+    fn the_claims_composition_admits_the_full_width_route_this_operator_emits() {
+        let basis = basis(258);
+        let lengths = lengths(&basis);
+        let bundle = build_rational_open_structured_hot_bundle_v3(input(
+            RepresentationActionV2::IssueStructured,
+            &basis,
+            &lengths,
+        ))
+        .expect("structured bundle");
+        let program = EffectProgramV4::decode(&bundle.effect).expect("effect");
+        let effect = program.base();
+        let tail_count = 258_u32;
+        let request = full_width_issue_request(3);
+        let mut bank = vec![0_u8; effect.request_bytes(tail_count).expect("request bank")];
+        assert_eq!(bank.len(), request.len(), "the route's request is the bank");
+        bank.copy_from_slice(&request);
+        let scalars = vec![0_u64; effect.scalar_count(tail_count).expect("scalars")];
+        let identities = vec![[0_u8; 32]; effect.identity_count(tail_count).expect("identities")];
+        let composition = ClaimsCompositionV3::decode_selected(
+            effect,
+            tail_count,
+            &scalars,
+            &identities,
+            &bank,
+            composition_parent(),
+        )
+        .expect("the Claims composition must admit the route this operator emits");
+        assert_eq!(composition.mutation_route(), 0);
+        assert_eq!(
+            composition
+                .rational_representation()
+                .map(|request| request.header().asset_count),
+            Some(3),
+        );
+    }
+
+    /// The admission above is REQUEST-BOUND, which is the property that makes
+    /// the operator's release-time span honest rather than merely lucky.
+    ///
+    /// The route declares `CLAIMS_FIXED_ACCOUNTS + K * ITEM` accounts from a
+    /// constant baked at release. That constant binds nothing by itself -- the
+    /// scholar's charge, and it is correct. What binds is the consumer: the
+    /// composition recomputes the span from the REQUEST's own `asset_count`
+    /// (`RepresentationFrameSpecV2::account_count`), so a release whose
+    /// declared width does not match the request it carries is refused. A
+    /// two-coordinate request under a three-coordinate release is that case.
+    #[test]
+    fn a_request_narrower_than_the_declared_span_is_refused_by_the_composition() {
+        let basis = basis(258);
+        let lengths = lengths(&basis);
+        let bundle = build_rational_open_structured_hot_bundle_v3(input(
+            RepresentationActionV2::IssueStructured,
+            &basis,
+            &lengths,
+        ))
+        .expect("structured bundle");
+        let program = EffectProgramV4::decode(&bundle.effect).expect("effect");
+        let effect = program.base();
+        let tail_count = 258_u32;
+        let narrow = full_width_issue_request(2);
+        let mut bank = vec![0_u8; effect.request_bytes(tail_count).expect("request bank")];
+        assert!(narrow.len() < bank.len());
+        bank.get_mut(..narrow.len())
+            .expect("narrow prefix")
+            .copy_from_slice(&narrow);
+        let scalars = vec![0_u64; effect.scalar_count(tail_count).expect("scalars")];
+        let identities = vec![[0_u8; 32]; effect.identity_count(tail_count).expect("identities")];
+        assert_eq!(
+            ClaimsCompositionV3::decode_selected(
+                effect,
+                tail_count,
+                &scalars,
+                &identities,
+                &bank,
+                composition_parent(),
+            )
+            .err(),
+            Some(ClaimsCompositionErrorV3::Route),
+        );
+    }
+
+    fn composition_parent() -> ClaimsCompositionParentV3 {
+        ClaimsCompositionParentV3 {
+            release_set: id(0x51),
+            market: id(0x52),
+            generation: 14,
+            parent_request_digest: id(0x53),
+        }
+    }
+
+    fn full_width_issue_request(assets: u32) -> Vec<u8> {
+        let mut rows = vec![0_u8; usize::try_from(assets).expect("width") * ASSET_BYTES_V2];
+        for row in 0..assets {
+            let seed = u8::try_from(row).expect("small width");
+            let index = usize::try_from(row).expect("small width");
+            AssetV2 {
+                shard_mint: id(0x60 + seed),
+                actor_shard_account: id(0x70 + seed),
+                structured_custody_account: id(0x80 + seed),
+                claims_custody_owner: id(0x90 + seed),
+                coefficient: u64::from(row) + 2,
+                expected_shard_supply: 0,
+                expected_actor_shards: 0,
+                expected_structured_shards: 0,
+            }
+            .encode_into(
+                rows.get_mut(index * ASSET_BYTES_V2..(index + 1) * ASSET_BYTES_V2)
+                    .expect("asset row"),
+            )
+            .expect("asset");
+        }
+        let parent = composition_parent();
+        let request = RepresentationRequestV2::new(
+            RepresentationRequestHeaderV2 {
+                action: RepresentationActionV2::IssueStructured,
+                caller_role: CallerRoleV2::Trading,
+                release_set: parent.release_set,
+                market: parent.market,
+                graph_id: id(0x54),
+                descriptor_id: id(0x55),
+                parent_context: parent.parent_request_digest,
+                actor: id(0x56),
+                receipt_mint: id(0x57),
+                receipt_account: id(0x58),
+                representation_authority: id(0x59),
+                token_program: TOKEN_2022_PROGRAM_ID,
+                realm: [0; 32],
+                collateral_recipient: [0; 32],
+                expected_representation_revision: 0,
+                expected_claims_market_revision: ABSENT_REVISION,
+                expected_actor_position_revision: ABSENT_REVISION,
+                expected_custody_position_revision: ABSENT_REVISION,
+                expected_custody_replay_revision: ABSENT_REVISION,
+                generation: parent.generation,
+                quantity: 1,
+                denominator: 10,
+                expected_receipt_supply: 0,
+                outcome_count: assets,
+                selected_outcome: u32::MAX,
+                asset_count: assets,
+            },
+            &rows,
+        )
+        .expect("full-width request");
+        let mut bytes = vec![0_u8; REQUEST_HEADER_BYTES_V2 + rows.len()];
+        request.encode_into(&mut bytes).expect("request bytes");
+        bytes
     }
 }
