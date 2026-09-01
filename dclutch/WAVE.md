@@ -5529,3 +5529,69 @@ heap *rule*, not the heap.
 
 Two shared-index collisions during commit were **waited out, never unlocked by
 hand.**
+
+## 2026-09-01 — under-collateralized issuance of n·(basis_scale − 1), invisible at scale 1
+
+**The mixed-unit solvency gate is closed by its real owner** (`5ec149fa`), and the
+scholar's cost was wrong in the good direction: **the Dealer needs no new account.**
+The shared Hot prefix already hands both accelerators an
+`AuthenticatedProductRuntimeV3` whose `payout_scale` *is* the value, and
+`v3_accelerator_accounts.rs:546` / `v4_equity_accelerator_accounts.rs:439` already
+pin that record's `semantic_basis_id` to the Claims aggregate's `basis_id` — an
+aggregate that is a PDA of the Market. Zero new accounts, zero new CPI; the
+authenticating join was already there and already checked.
+
+Units are now stated by the types, as `dclutch-dealer-scenario-kernel` had already
+documented: collateral and obligations are **atoms**, Claims inventory is
+**units**, split/merge are **sets** — converted once at each meeting point.
+
+### The dangerous direction was real, and it was in the composer
+
+`v3_composer.rs` `PrincipalToHoard` moved the **set count** as an **atom amount**: a
+split of *n* sets funded the Hoard with *n* atoms while Claims minted *n* sets
+against it — **under-collateralized issuance of `n · (basis_scale − 1)`.** Invisible
+only because every in-tree fixture uses 1. Zero now refuses by name at every read;
+not on `DealerConfigV4`, not on `CoreState`.
+
+**Proof:** `468f66b3` green; a second test describes one width-2 pool at scale 1
+and 97 and demands one plan in atoms. Teeth: a floor one atom above the candidate
+refuses at both, one atom below admits at both. **Red proved** by neutralizing the
+conversions — both scale tests red, the four scale-1 tests green, which is also the
+control: nothing changes at scale 1. **Residual, named:** no in-tree market has
+scale ≠ 1, so the obligation denomination is settled by doc, not by a live witness.
+
+### Register 116, repaired by General's precedent (`322de4b2`)
+
+The account pass **projects** the observed obligation key into register **117**
+(bank 117 → 118, still six scratch pages at every admitted width); the request
+profile keeps authoring 116; the transition carries `identity_eq(116, 117)`. Two
+witnesses, both reading **artifacts** — `writes_register` over the encoded Profile13
+(writes 117, does not write 116); the encoded transition's instruction region
+containing the `identity_eq` record byte-for-byte from a one-instruction reference
+program — because the previous lane wrote no test precisely to avoid the builder as
+its own witness. Both proved red. **28/1 on rebuilt ELFs**; the widened bank re-pins
+every selector-9 artifact with no regression.
+
+### The equity-Add wall, localized further
+
+Dies at **573,103 CU, `0x4003 Content`, invoking no child program** — entirely
+inside Trading. The LP Open immediately before it in the same test consumes
+1,042,690 CU and invokes the accelerator successfully, so a near-identical route
+works. **And the hostile beside it is a universal donor**: `accepted.rs:7751`
+demands a substituted Position identity refuse `Content` with the accelerator
+uninvoked — exactly what the honest Add does. Named debt behind it: **2,126
+`TradingSbfError::Content` sites** in trading-sbf (785 in `hot_v3.rs`) and **2,386
+`map_err(|_| …)`** (492 in `hot_v3.rs`).
+
+### A test with two causes, and a process error owned
+
+`lp_descriptors_rederive_every_successor_artifact` had two: the fixture declared zero
+bytes at the one `AdapterAuthenticatedVariableData` prestate; and behind it,
+`finalize_dealer_lp_descriptor_v3` required `LIFECYCLE_PRESTATE_ARTIFACT_PROFILE`
+while the LP encoder stamps `DYNAMIC_FIXED_SPAN_ARTIFACT_PROFILE` — **no LP
+descriptor could be finalized through that route at all**, masked by the first.
+The lane flagged that it committed the first fix without re-running the test.
+
+**Shared-tree protocol, earned:** two `accepted` runs died on another lane's
+half-applied refactor mid-SBF-build. **A `cargo check` gate before the SBF build**
+is what got the third through.

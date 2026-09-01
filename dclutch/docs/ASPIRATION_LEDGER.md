@@ -2485,6 +2485,51 @@ Materialize/Dematerialize) is built and shipped three generations deep
 stated rationale — *"external venue compatibility"* — is also unrealized
 (**M-52**).
 
+**REJECTED, 2026-09-01. The criterion is evaluated by not being able to be
+evaluated, and the route is cut.** The reject-or-redesign test asks whether
+supply ownership stays singular and whether Token-2022 profile semantics make
+the generic Realm abstraction dishonest. Neither question can be answered from
+this hybrid, because the half that would have answered them was never built:
+Materialize and Dematerialize move claim atoms between the `native` and
+`materialized` `u64` pair on the Market record and the matching pair on two
+Position records, under `supply == native + materialized` — **no token is
+minted, no Custody effect runs, no Token-2022 CPI is made**. The token half
+existed only as `AdapterStyle::{Mint, Burn}` in
+`crates/dclutch-claims-representation-codec`, and the two halves were never
+wired to each other. A representation that cannot reach Token-2022 cannot fail
+a Token-2022 profile test, and cannot be a venue-compatible one either, which
+is the same reason **M-52** never materialized.
+
+What was cut, and it was live rather than dead:
+`programs/dclutch-claims-sbf/src/lib.rs` mapped `ClaimsAction::{Materialize,
+Dematerialize, RedeemMaterializedTerminal}` straight through to `BasketAction`
+with no `#[cfg]` and no gate, so every Claims ELF built from this tree admitted
+Materialize for any registry-authenticated Claims-role caller. Nobody was
+stranded: `materialized` was credited in exactly two places tree-wide, both
+gated on Materialize, so no reachable state ever required Dematerialize to
+exit.
+
+What was deliberately NOT cut, and why:
+
+- **The persisted `materialized` slot stays, permanently zero.** It is the
+  trailing vector of both records (Market `144 + 3×8N`, Position `96 + 2×8N`),
+  so removing it moves no other field's offset — but it does shorten every
+  rent-paid Claims account, which is a migration, and the aggregate and
+  Position invariants still READ it on every write. A record that arrives with
+  it nonzero is corrupt and now refuses instead of being ignored.
+- **`crates/dclutch-economic-kernel`'s `State` stays.** The scholar's cut list
+  named its `materialized_supply` / `source_materialized` /
+  `destination_materialized` fields. They sit at indices 2, 4 and 6 of an
+  INTERLEAVED seven-vector `DCES` encoding, so cutting them shifts
+  `source_native` and `destination_native` and rewrites **all sixteen**
+  byte-exact state rows in `formal/dclutch-semantics/vectors/economic-kernel-v1.txt`,
+  not the eight materialize ones — for a crate with zero dependents that no
+  program links, and at the cost of a Lean rebuild and re-pinned `native_decide`
+  proofs. **This is named as debt, not as done**: the Lean model still describes
+  a semantics the programs no longer implement, and the honest moment to
+  reconcile it is whenever that model is next touched for its own reasons.
+- The codec crate is a disjoint deletion, taken as its own commit.
+
 ### N-12. `COST_MODEL.md` §9 — the 22-row matrix that gates every byte layout
 
 > **Before choosing byte layouts or claiming cheapness, measure** with the exact

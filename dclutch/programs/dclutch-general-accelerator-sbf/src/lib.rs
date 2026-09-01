@@ -268,6 +268,50 @@ impl From<GeneralAcceleratorSbfErrorV3> for ProgramError {
     }
 }
 
+/// Log the bump allocator's outstanding bytes against the ceiling it enforces.
+///
+/// WHICH QUESTION THIS ANSWERS, because a heap probe answers only one. It does
+/// NOT measure the granted heap frame -- the ledger's rule is that only a raw
+/// write into the heap region does that, and this crate forbids `unsafe`. It
+/// measures what THIS PROGRAM'S ALLOCATOR has handed out and the ceiling that
+/// allocator will refuse past, which is exactly the pair that decides whether
+/// an allocation fails.
+///
+/// `solana_program::entrypoint!` installs `BumpAllocator` over
+/// `HEAP_START_ADDRESS .. + HEAP_LENGTH` and bumps DOWNWARD from the top, so a
+/// one-byte probe allocation sits at the current position and the bytes
+/// outstanding are the ceiling minus that address.
+#[cfg(feature = "heap-profile")]
+fn heap_mark(label: &str) {
+    #[cfg(target_os = "solana")]
+    {
+        let probe = vec![0_u8; 1];
+        let ceiling = usize::try_from(solana_program::entrypoint::HEAP_START_ADDRESS)
+            .unwrap_or(0)
+            .saturating_add(solana_program::entrypoint::HEAP_LENGTH);
+        let used = ceiling.saturating_sub(probe.as_ptr() as usize);
+        sol_log(label);
+        solana_program::log::sol_log_64(
+            u64::try_from(used).unwrap_or(u64::MAX),
+            u64::try_from(solana_program::entrypoint::HEAP_LENGTH).unwrap_or(u64::MAX),
+            u64::try_from(DIRECT_HOT_HEAP_FRAME_BYTES_V1).unwrap_or(u64::MAX),
+            0,
+            0,
+        );
+    }
+    #[cfg(not(target_os = "solana"))]
+    {
+        let _ = label;
+    }
+}
+
+macro_rules! heap_mark {
+    ($label:literal) => {
+        #[cfg(feature = "heap-profile")]
+        heap_mark(concat!("dclutch-general-heap:", $label));
+    };
+}
+
 /// Semantic refusal after the complete physical frame has authenticated.
 ///
 /// This is NOT a protocol-visible refusal code -- it carries no `#[repr]` and
@@ -353,6 +397,7 @@ pub fn process_instruction(
     accounts: &[AccountInfo<'_>],
     instruction_data: &[u8],
 ) -> ProgramResult {
+    heap_mark!("entry");
     let request = AcceleratorRequestV2::decode(instruction_data)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidRequest)?;
     validate_request_geometry(request)?;
@@ -362,7 +407,9 @@ pub fn process_instruction(
             .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFrame)?,
     );
     validate_frame(accounts, request, fixed_count)?;
+    heap_mark!("frame-validated");
     let mut candidate = assemble_input_bank(accounts, request, fixed_count)?;
+    heap_mark!("input-bank");
     let request_digest = content(instruction_data)?;
     let evaluation = evaluate_candidate(
         controller,
@@ -371,6 +418,7 @@ pub fn process_instruction(
         runtime_accounts(accounts, fixed_count)?,
         &mut candidate,
     );
+    heap_mark!("evaluated");
     let bank_digest = content(&candidate)?;
     let ack = match evaluation {
         Ok(()) => {
@@ -423,6 +471,7 @@ pub fn process_instruction(
         .ok_or(GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
     ack.encode_into(output)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidAcknowledgement)?;
+    heap_mark!("acknowledged");
     set_return_data(output);
     Ok(())
 }

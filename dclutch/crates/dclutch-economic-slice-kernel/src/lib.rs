@@ -103,20 +103,6 @@ pub enum Command {
         /// Exact claim atoms.
         quantity: u64,
     },
-    /// Convert source-native claims into destination materialized claims.
-    Materialize {
-        /// Product-owned outcome selector.
-        outcome: u32,
-        /// Exact claim atoms.
-        quantity: u64,
-    },
-    /// Convert source materialized claims into destination-native claims.
-    Dematerialize {
-        /// Product-owned outcome selector.
-        outcome: u32,
-        /// Exact claim atoms.
-        quantity: u64,
-    },
     /// Burn source-native terminal claims and derive an exact payout.
     RedeemTerminal {
         /// Product-owned outcome selector.
@@ -153,14 +139,8 @@ pub struct Payout {
 pub enum BasketAction {
     /// Move native claims between two Positions.
     TransferNative,
-    /// Convert source native claims into destination materialized claims.
-    Materialize,
-    /// Convert source materialized claims into destination native claims.
-    Dematerialize,
     /// Burn source native terminal claims.
     RedeemNativeTerminal,
-    /// Burn source materialized terminal claims.
-    RedeemMaterializedTerminal,
     /// Mint coordinate-equal complete sets into one destination Position.
     MintCompleteSet,
     /// Merge coordinate-equal complete sets from one source Position.
@@ -318,29 +298,20 @@ pub fn execute(
 
     let mut supply = u64_at(market, offsets.supply)?;
     let mut native = u64_at(market, offsets.native)?;
-    let mut materialized = u64_at(market, offsets.materialized)?;
+    // Read, checked, and written back unchanged. No surviving command moves a
+    // claim into the materialized representation, so this slot is permanently
+    // zero on every record this program can write -- but it is still READ and
+    // still has to partition supply, because a record that arrived with it
+    // nonzero is corrupt and must refuse rather than be silently ignored.
+    let materialized = u64_at(market, offsets.materialized)?;
     let mut source_native = u64_at(source, source_offsets.native)?;
-    let mut source_materialized = u64_at(source, source_offsets.materialized)?;
+    let source_materialized = u64_at(source, source_offsets.materialized)?;
     let mut destination_native = u64_at(destination, destination_offsets.native)?;
-    let mut destination_materialized = u64_at(destination, destination_offsets.materialized)?;
+    let destination_materialized = u64_at(destination, destination_offsets.materialized)?;
     let mut hoard = market_meta.hoard;
     let payout = match frame.command {
         Command::TransferNative { .. } => {
             source_native = debit(source_native, quantity)?;
-            destination_native = credit(destination_native, quantity)?;
-            0
-        }
-        Command::Materialize { .. } => {
-            native = debit(native, quantity)?;
-            source_native = debit(source_native, quantity)?;
-            materialized = credit(materialized, quantity)?;
-            destination_materialized = credit(destination_materialized, quantity)?;
-            0
-        }
-        Command::Dematerialize { .. } => {
-            materialized = debit(materialized, quantity)?;
-            source_materialized = debit(source_materialized, quantity)?;
-            native = credit(native, quantity)?;
             destination_native = credit(destination_native, quantity)?;
             0
         }
@@ -628,12 +599,8 @@ fn validate_basket_shape(
     destination_present: bool,
 ) -> Result<()> {
     let expected = match action {
-        BasketAction::TransferNative | BasketAction::Materialize | BasketAction::Dematerialize => {
-            (true, true)
-        }
-        BasketAction::RedeemNativeTerminal
-        | BasketAction::RedeemMaterializedTerminal
-        | BasketAction::MergeCompleteSet => (true, false),
+        BasketAction::TransferNative => (true, true),
+        BasketAction::RedeemNativeTerminal | BasketAction::MergeCompleteSet => (true, false),
         BasketAction::MintCompleteSet => (false, true),
     };
     if (source_present, destination_present) == expected {
@@ -677,16 +644,12 @@ fn admit_basket_phase(phase: Phase, action: BasketAction) -> Result<()> {
         (
             Phase::Open,
             BasketAction::TransferNative
-            | BasketAction::Materialize
-            | BasketAction::Dematerialize
             | BasketAction::MintCompleteSet
             | BasketAction::MergeCompleteSet,
         )
         | (
             Phase::Terminal(_) | Phase::Retiring(_),
-            BasketAction::Dematerialize
-            | BasketAction::RedeemNativeTerminal
-            | BasketAction::RedeemMaterializedTerminal,
+            BasketAction::RedeemNativeTerminal,
         ) => Ok(()),
         _ => Err(Error::InvalidPhase),
     }
@@ -745,15 +708,13 @@ fn basket_hoard_and_payout(market: MarketMeta, frame: BasketFrame<'_>) -> Result
         BasketAction::MergeCompleteSet => {
             Ok((debit(market.hoard, complete_quantity)?, complete_quantity))
         }
-        BasketAction::RedeemNativeTerminal | BasketAction::RedeemMaterializedTerminal => {
+        BasketAction::RedeemNativeTerminal => {
             let winner = terminal_winner(market.phase).ok_or(Error::InvalidPhase)?;
             let index = usize::try_from(winner).map_err(|_| Error::InvalidOutcome)?;
             let payout = basket_quantity(frame, index)?;
             Ok((debit(market.hoard, payout)?, payout))
         }
-        BasketAction::TransferNative | BasketAction::Materialize | BasketAction::Dematerialize => {
-            Ok((market.hoard, 0))
-        }
+        BasketAction::TransferNative => Ok((market.hoard, 0)),
     }
 }
 
@@ -805,28 +766,10 @@ fn basket_candidate(
             candidate.source_native = debit(candidate.source_native, quantity)?;
             candidate.destination_native = credit(candidate.destination_native, quantity)?;
         }
-        BasketAction::Materialize => {
-            candidate.native = debit(candidate.native, quantity)?;
-            candidate.source_native = debit(candidate.source_native, quantity)?;
-            candidate.materialized = credit(candidate.materialized, quantity)?;
-            candidate.destination_materialized =
-                credit(candidate.destination_materialized, quantity)?;
-        }
-        BasketAction::Dematerialize => {
-            candidate.materialized = debit(candidate.materialized, quantity)?;
-            candidate.source_materialized = debit(candidate.source_materialized, quantity)?;
-            candidate.native = credit(candidate.native, quantity)?;
-            candidate.destination_native = credit(candidate.destination_native, quantity)?;
-        }
         BasketAction::RedeemNativeTerminal => {
             candidate.supply = debit(candidate.supply, quantity)?;
             candidate.native = debit(candidate.native, quantity)?;
             candidate.source_native = debit(candidate.source_native, quantity)?;
-        }
-        BasketAction::RedeemMaterializedTerminal => {
-            candidate.supply = debit(candidate.supply, quantity)?;
-            candidate.materialized = debit(candidate.materialized, quantity)?;
-            candidate.source_materialized = debit(candidate.source_materialized, quantity)?;
         }
         BasketAction::MintCompleteSet => {
             candidate.supply = credit(candidate.supply, quantity)?;
@@ -882,23 +825,16 @@ fn validate_basket_candidate(
 fn command_coordinates(command: Command) -> (u32, u64) {
     match command {
         Command::TransferNative { outcome, quantity }
-        | Command::Materialize { outcome, quantity }
-        | Command::Dematerialize { outcome, quantity }
         | Command::RedeemTerminal { outcome, quantity } => (outcome, quantity),
     }
 }
 
 fn admit_phase(phase: Phase, command: Command) -> Result<()> {
     match (phase, command) {
-        (
-            Phase::Open,
-            Command::TransferNative { .. }
-            | Command::Materialize { .. }
-            | Command::Dematerialize { .. },
-        )
+        (Phase::Open, Command::TransferNative { .. })
         | (
             Phase::Terminal(_) | Phase::Retiring(_),
-            Command::Dematerialize { .. } | Command::RedeemTerminal { .. },
+            Command::RedeemTerminal { .. },
         ) => Ok(()),
         _ => Err(Error::InvalidPhase),
     }
@@ -1458,73 +1394,21 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn issue_then_transferred_receipt_redeems_to_a_different_holder() -> Result<()> {
-        let count = 3;
-        let (mut market, mut issuer, mut wrapper) = fixture(count);
-        let market_offsets = vector_offsets(count, 1)?;
-        let issuer_offsets = position_offsets(count, 1)?;
-        set_claim(&mut market, market_offsets.supply, 10);
-        set_claim(&mut market, market_offsets.native, 10);
-        set_claim(&mut issuer, issuer_offsets.native, 10);
-        assert_eq!(validate_joined(&market, &issuer, &wrapper, count), Ok(()));
-        assert_eq!(
-            execute(
-                &mut market,
-                &mut issuer,
-                &mut wrapper,
-                Frame {
-                    expected_market_revision: 0,
-                    expected_source_revision: 0,
-                    expected_destination_revision: 0,
-                    command: Command::Materialize {
-                        outcome: 1,
-                        quantity: 4,
-                    },
-                },
-            ),
-            Ok(Payout {
-                recipient: [3; 32],
-                amount: 0,
-            })
-        );
-
-        let (_, position_bytes) = widths(count);
-        let mut current_holder = vec![0; position_bytes];
-        assert_eq!(
-            initialize_position(&mut current_holder, [1; 32], [9; 32], count),
-            Ok(())
-        );
-        assert_eq!(
-            execute(
-                &mut market,
-                &mut wrapper,
-                &mut current_holder,
-                Frame {
-                    expected_market_revision: 1,
-                    expected_source_revision: 1,
-                    expected_destination_revision: 0,
-                    command: Command::Dematerialize {
-                        outcome: 1,
-                        quantity: 4,
-                    },
-                },
-            ),
-            Ok(Payout {
-                recipient: [4; 32],
-                amount: 0,
-            })
-        );
-        let holder_offsets = position_offsets(count, 1)?;
-        assert_eq!(u64_at(&current_holder, holder_offsets.native), Ok(4));
-        assert_eq!(u64_at(&wrapper, holder_offsets.materialized), Ok(0));
-        assert_eq!(u64_at(&market, market_offsets.native), Ok(10));
-        assert_eq!(u64_at(&market, market_offsets.materialized), Ok(0));
-        Ok(())
-    }
+    // `issue_then_transferred_receipt_redeems_to_a_different_holder` stood here
+    // until 2026-09-01. It was the only test of the materialized
+    // representation's round trip -- Materialize into a wrapper Position, then
+    // Dematerialize out to a different holder -- and it went with the commands
+    // it drove, as N-11's reject decision. Nothing replaces it: no surviving
+    // command can put a claim into that representation, which the aggregate and
+    // Position invariants below still check on every write.
 
     #[test]
     fn hostile_refusals_are_byte_exact_rollbacks() {
+        // Three hostiles -- a stale market revision, an out-of-range outcome,
+        // and a zero quantity -- carried on `Materialize` until 2026-09-01 and
+        // now on `TransferNative`. The command was only ever the vehicle; the
+        // subject is that a refusal writes no byte, so the coverage is
+        // retargeted rather than deleted with the retired action.
         let count = 3;
         let (mut market, mut source, mut destination) = fixture(count);
         let before_market = market.clone();
@@ -1535,7 +1419,7 @@ mod tests {
                 expected_market_revision: 1,
                 expected_source_revision: 0,
                 expected_destination_revision: 0,
-                command: Command::Materialize {
+                command: Command::TransferNative {
                     outcome: 0,
                     quantity: 1,
                 },
@@ -1544,7 +1428,7 @@ mod tests {
                 expected_market_revision: 0,
                 expected_source_revision: 0,
                 expected_destination_revision: 0,
-                command: Command::Materialize {
+                command: Command::TransferNative {
                     outcome: 3,
                     quantity: 1,
                 },
@@ -1553,7 +1437,7 @@ mod tests {
                 expected_market_revision: 0,
                 expected_source_revision: 0,
                 expected_destination_revision: 0,
-                command: Command::Materialize {
+                command: Command::TransferNative {
                     outcome: 0,
                     quantity: 0,
                 },

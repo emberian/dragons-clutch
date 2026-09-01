@@ -596,10 +596,15 @@ fn process_remaining_instruction(
 
     // ECONOMIC_SLICE_MIGRATION_ONLY: this generic ClaimsPlanV1 route remains
     // reachable solely for the current Trading General child-packet builder
-    // (`dclutch-general-adapter-contract/src/child_packets.rs`) and Dealer
-    // physical composers (`dclutch-trading-sbf/src/dealer/physical.rs` and
-    // `dclutch-dealer-sbf/src/lib.rs`). New families use LBV2 affine/signed
-    // plans; deleting those three consumers permits deleting this route.
+    // (`dclutch-general-adapter-contract/src/child_packets.rs`) and the Dealer
+    // physical composer (`dclutch-dealer-sbf/src/lib.rs`). New families use
+    // LBV2 affine/signed plans; deleting those consumers permits deleting this
+    // route. The comment named a third, `dclutch-trading-sbf/src/dealer/
+    // physical.rs`, until 2026-09-01; that file no longer exists.
+    //
+    // The route's Materialize, Dematerialize and RedeemMaterializedTerminal
+    // arms were retired on 2026-09-01 -- N-11's reject decision. They were
+    // reachable here by any Claims-role caller and constructed by nobody.
     if let Ok(plan) = ClaimsPlanV1::decode(instruction_data) {
         return process_generic_plan(program_id, accounts, instruction_data, plan);
     }
@@ -622,10 +627,7 @@ fn process_generic_plan(
     authenticate_releases(&accounts, plan)?;
     let basket_action = match plan.action() {
         ClaimsAction::TransferNative => BasketAction::TransferNative,
-        ClaimsAction::Materialize => BasketAction::Materialize,
-        ClaimsAction::Dematerialize => BasketAction::Dematerialize,
         ClaimsAction::RedeemNativeTerminal => BasketAction::RedeemNativeTerminal,
-        ClaimsAction::RedeemMaterializedTerminal => BasketAction::RedeemMaterializedTerminal,
         ClaimsAction::MintCompleteSet => BasketAction::MintCompleteSet,
         ClaimsAction::MergeCompleteSet => BasketAction::MergeCompleteSet,
         ClaimsAction::InitializeCompleteSet => return Err(ClaimsSbfError::Instruction.into()),

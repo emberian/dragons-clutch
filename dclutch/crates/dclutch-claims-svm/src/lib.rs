@@ -194,19 +194,21 @@ impl ClaimsPositionSeedsV1 {
 }
 
 /// One capability-neutral Claims basket operation.
+///
+/// **Tags 1, 2 and 4 are HOLES and are never backfilled.** They were
+/// `Materialize`, `Dematerialize` and `RedeemMaterializedTerminal`, retired on
+/// 2026-09-01 as the reject decision for aspiration N-11. The discriminants are
+/// explicit and this is a wire encoding, so renumbering would silently change
+/// the meaning of the four live actions in every packet already signed; a new
+/// action takes the next free tag instead. `decode` refuses 1, 2 and 4 with
+/// `UnknownTag`, which is what a caller carrying a retired tag should hear.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum ClaimsAction {
     /// Move native claims from one Position to another.
     TransferNative = 0,
-    /// Convert source native claims into destination materialized claims.
-    Materialize = 1,
-    /// Convert source materialized claims into destination native claims.
-    Dematerialize = 2,
     /// Burn source native terminal claims and derive collateral payout.
     RedeemNativeTerminal = 3,
-    /// Burn source materialized terminal claims and derive collateral payout.
-    RedeemMaterializedTerminal = 4,
     /// Mint one or more equal complete sets into a destination Position.
     MintCompleteSet = 5,
     /// Merge equal complete sets from a source Position.
@@ -219,10 +221,7 @@ impl ClaimsAction {
     fn decode(value: u8) -> Result<Self> {
         match value {
             0 => Ok(Self::TransferNative),
-            1 => Ok(Self::Materialize),
-            2 => Ok(Self::Dematerialize),
             3 => Ok(Self::RedeemNativeTerminal),
-            4 => Ok(Self::RedeemMaterializedTerminal),
             5 => Ok(Self::MintCompleteSet),
             6 => Ok(Self::MergeCompleteSet),
             7 => Ok(Self::InitializeCompleteSet),
@@ -450,18 +449,14 @@ impl<'a> ClaimsPlanV1<'a> {
         let source_revision = self.expected_source_revision != NO_POSITION_REVISION;
         let destination_revision = self.expected_destination_revision != NO_POSITION_REVISION;
         let shape_valid = match self.action {
-            ClaimsAction::TransferNative
-            | ClaimsAction::Materialize
-            | ClaimsAction::Dematerialize => {
+            ClaimsAction::TransferNative => {
                 source
                     && destination
                     && self.source_owner != self.destination_owner
                     && source_revision
                     && destination_revision
             }
-            ClaimsAction::RedeemNativeTerminal
-            | ClaimsAction::RedeemMaterializedTerminal
-            | ClaimsAction::MergeCompleteSet => {
+            ClaimsAction::RedeemNativeTerminal | ClaimsAction::MergeCompleteSet => {
                 source && !destination && source_revision && !destination_revision
             }
             ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => {
@@ -600,12 +595,8 @@ impl ClaimsReceiptV1 {
             return Err(Error::InvalidPostRevision);
         }
         let (source_present, destination_present) = match value.action {
-            ClaimsAction::TransferNative
-            | ClaimsAction::Materialize
-            | ClaimsAction::Dematerialize => (true, true),
-            ClaimsAction::RedeemNativeTerminal
-            | ClaimsAction::RedeemMaterializedTerminal
-            | ClaimsAction::MergeCompleteSet => (true, false),
+            ClaimsAction::TransferNative => (true, true),
+            ClaimsAction::RedeemNativeTerminal | ClaimsAction::MergeCompleteSet => (true, false),
             ClaimsAction::MintCompleteSet | ClaimsAction::InitializeCompleteSet => (false, true),
         };
         validate_post_revision_presence(value.post_source_revision, source_present)?;

@@ -15,6 +15,10 @@ default = []
 no-entrypoint = []
 custom-heap = []
 custom-panic = []
+# Diagnostic-only. Logs the default bump allocator's outstanding bytes against
+# the ceiling it actually enforces, which is NOT the granted heap frame. Never
+# enabled in a shipped artifact; the campaign builds without it.
+heap-profile = []
 
 [dependencies]
 dclutch-capability-program-contract = { path = "../../crates/dclutch-capability-program-contract" }
