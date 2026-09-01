@@ -102,7 +102,15 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     /// below are split out; its numeric value is unchanged, so a code already
     /// seen in a log still means a subset of what it meant.
     InvalidTopLevelInstruction = 0xC002,
-    /// A Trading-owned scratch page or whole-bank digest differed.
+    /// The request's declared scratch-bank geometry could not be used.
+    ///
+    /// Narrowed the way `InvalidTopLevelInstruction` was: this used to carry
+    /// every cause in `assemble_input_bank`, so a refusal could not say whether
+    /// a page was mis-privileged, mis-decoded, foreign to the request, out of
+    /// order, or simply summed to the wrong bank. It now means the declared
+    /// counts and offsets, or the admitted Trading identity they are keyed by,
+    /// did not fit. Its numeric value is unchanged, so a code already seen in a
+    /// log still means a subset of what it meant.
     InvalidScratchBank = 0xC003,
     /// The exact acknowledgement could not be encoded.
     InvalidAcknowledgement = 0xC004,
@@ -122,6 +130,23 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     CurrentInstructionIndexUnreadable = 0xC00B,
     /// An instruction ahead of the current one could not be read.
     PrecedingInstructionUnreadable = 0xC00C,
+    /// A scratch page was not a Trading-owned readonly unsigned data account.
+    ScratchPagePrivileges = 0xC00D,
+    /// A scratch page's bytes were not a canonical authenticated page.
+    ScratchPageDecode = 0xC00E,
+    /// A scratch page did not belong to this caller and this request.
+    ScratchPageRequestBinding = 0xC00F,
+    /// A scratch page arrived out of its streamed chunk index or offset.
+    ScratchPageOrder = 0xC010,
+    /// The reassembled bank's bytes differed from the digest declared.
+    ScratchBankDigest = 0xC011,
+    /// The pages did not sum to the bank length the request declared.
+    ///
+    /// Split from `ScratchBankDigest` because the two say different things: a
+    /// length mismatch means the pages do not add up to the declared bank, and
+    /// a digest mismatch means they add up exactly and carry different bytes.
+    /// One is a transport arithmetic fault and the other is a content fault.
+    ScratchBankLength = 0xC012,
 }
 
 impl GeneralAcceleratorSbfErrorV3 {
@@ -131,7 +156,7 @@ impl GeneralAcceleratorSbfErrorV3 {
     /// [`GeneralAcceleratorSbfErrorV3::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 19] = [
         Self::InvalidRequest,
         Self::InvalidFrame,
         Self::InvalidTopLevelInstruction,
@@ -145,6 +170,12 @@ impl GeneralAcceleratorSbfErrorV3 {
         Self::InstructionsSysvarAccount,
         Self::CurrentInstructionIndexUnreadable,
         Self::PrecedingInstructionUnreadable,
+        Self::ScratchPagePrivileges,
+        Self::ScratchPageDecode,
+        Self::ScratchPageRequestBinding,
+        Self::ScratchPageOrder,
+        Self::ScratchBankDigest,
+        Self::ScratchBankLength,
     ];
 
     /// This refusal's position in [`GeneralAcceleratorSbfErrorV3::ALL`].
@@ -167,6 +198,12 @@ impl GeneralAcceleratorSbfErrorV3 {
             Self::InstructionsSysvarAccount => 10,
             Self::CurrentInstructionIndexUnreadable => 11,
             Self::PrecedingInstructionUnreadable => 12,
+            Self::ScratchPagePrivileges => 13,
+            Self::ScratchPageDecode => 14,
+            Self::ScratchPageRequestBinding => 15,
+            Self::ScratchPageOrder => 16,
+            Self::ScratchBankDigest => 17,
+            Self::ScratchBankLength => 18,
         }
     }
 }
@@ -468,35 +505,38 @@ fn assemble_input_bank(
             || page_account.is_writable
             || page_account.executable
         {
-            return Err(GeneralAcceleratorSbfErrorV3::InvalidScratchBank.into());
+            return Err(GeneralAcceleratorSbfErrorV3::ScratchPagePrivileges.into());
         }
         let data = page_account
             .try_borrow_data()
-            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::ScratchPagePrivileges)?;
         let page = AuthenticatedScratchPageV2::decode(&data)
-            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::ScratchPageDecode)?;
         page.validate_request_input(trading_id, request)
-            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::ScratchPageRequestBinding)?;
         if usize::try_from(page.chunk_index())
-            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::ScratchPageOrder)?
             != page_index
             || usize::try_from(page.chunk_offset())
-                .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?
+                .map_err(|_| GeneralAcceleratorSbfErrorV3::ScratchPageOrder)?
                 != cursor
         {
-            return Err(GeneralAcceleratorSbfErrorV3::InvalidScratchBank.into());
+            return Err(GeneralAcceleratorSbfErrorV3::ScratchPageOrder.into());
         }
         let end = cursor
             .checked_add(page.payload().len())
-            .ok_or(GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?;
+            .ok_or(GeneralAcceleratorSbfErrorV3::ScratchBankLength)?;
         output
             .get_mut(cursor..end)
-            .ok_or(GeneralAcceleratorSbfErrorV3::InvalidScratchBank)?
+            .ok_or(GeneralAcceleratorSbfErrorV3::ScratchBankLength)?
             .copy_from_slice(page.payload());
         cursor = end;
     }
-    if cursor != output.len() || content(&output)? != request.input_bank_digest() {
-        return Err(GeneralAcceleratorSbfErrorV3::InvalidScratchBank.into());
+    if cursor != output.len() {
+        return Err(GeneralAcceleratorSbfErrorV3::ScratchBankLength.into());
+    }
+    if content(&output)? != request.input_bank_digest() {
+        return Err(GeneralAcceleratorSbfErrorV3::ScratchBankDigest.into());
     }
     Ok(output)
 }

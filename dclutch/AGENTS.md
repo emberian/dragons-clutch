@@ -144,6 +144,14 @@ construction belong outside the kernel in explicitly named adapters.
 - Before every commit, inspect the complete staged path list. If the shared
   index contains another lane's files, stop and coordinate; a named-file `add`
   does not make a subsequent whole-index commit safe.
+- **Never delete `.git/index.lock`.** In a shared checkout a lock that looks
+  stale usually is not: 1Password's `op-ssh-sign` holds it for as long as
+  another lane's commit is waiting on a signing prompt, which can be minutes and
+  looks identical to a crash. Removing it corrupts that lane's in-flight commit.
+  Check `ps` for a live `git`/`op-ssh-sign` first, then wait — measured
+  2026-09-01, a lock that looked abandoned cleared on its own in nine seconds.
+  If signing is what is stuck, an unsigned commit of your own paths is allowed
+  and is the honest signal that a lane worked while Ember was away.
 - Use `tools/lane.sh` for commits, pinned `rustfmt`, wave-board entries, and
   running a script another lane might edit concurrently. The raw commands
   (`git commit --only`, `rustup run 1.97.1 rustfmt --edition 2024`, appending

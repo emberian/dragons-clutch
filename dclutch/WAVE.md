@@ -4002,3 +4002,53 @@ stated method, not as a proof.*
 eight projection sources read); **Direct inline is not separately traced**; and
 the **Series account-profile gate is decoration**, with Core carrying that
 binding alone.
+
+## 2026-09-01 — no cross-LP subsidy, in actual numbers
+
+C-06's acceptance question is one sentence — *can LP A's capital ever fund LP
+B's outcome* — and it is now answered over **the real planner**,
+`plan_pool_equity_v3`, the same function the accelerator runs on chain
+(`f45cfd78`).
+
+**The tests never re-derive its arithmetic**, and the reason is the discipline:
+
+> A test that recomputed `floor(burn * residual / supply)` and asserted the
+> planner agreed would assert that **one copy of a formula equals another**.
+
+The terminal life, every split computed by the planner:
+
+```
+LP A founds with 100 cash           -> 100 shares
+venue trades: 40 cash + [0,60,120]  -> residual [40,100,160]
+LP B joins LATER at that value      -> 200 shares, residual [80,200,320]
+venue earns 10                      -> residual [90,210,330]
+both exit, in BOTH orders
+measured: A [45,105,165] · B [45,105,165] · pool [0,0,0]
+```
+
+- **Conservation exact per scenario**: 45+45+0 = 90, 105+105+0 = 210,
+  165+165+0 = 330. Nothing created, no dust stranded.
+- **No first-mover subsidy**: `a_first == a_second`, `b_first == b_second` —
+  exiting first is worth exactly what exiting second is worth.
+- **B took none of A's capital**: contributed `[40,100,160]`, extracted
+  `[45,105,165]` — a gain of exactly **5**, exactly half the **10** the venue
+  earned.
+
+### Teeth, checked rather than trusted
+
+The corpus test **refuses to pass on an all-continue sweep**. Tightening B's
+bound from +5 to +4 makes the life test **fail on the real numbers**, so the
+assertion binds **exactly rather than slackly**. And the sharpest control:
+
+> A mutation minting B 150 shares for the same basket **does not reach any
+> assertion at all — the planner refuses it**, because issuance is exact
+> cross-multiplication. **Mis-minting subsidy is structurally impossible, not
+> merely detected.**
+
+### Scope, stated plainly by the lane
+
+This is evidence about **the production planner arithmetic, executed** — **not**
+end-to-end on-chain evidence. Selector 9's account admission is separately
+unsatisfiable (register 116 is written only by the later request pass), so the
+physical venue cannot run today, and the two inventory moves are applied to the
+pool directly because a trade is exogenous to the equity kernel.

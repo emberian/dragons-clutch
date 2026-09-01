@@ -11,6 +11,7 @@ use dclutch_execution_strategy_contract::v2::{
     AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
     SCRATCH_PAGE_HEADER_BYTES_V2, ScratchPageKindV2,
 };
+use dclutch_general_accelerator_sbf::GeneralAcceleratorSbfErrorV3;
 use dclutch_general_accelerator_test_caller_sbf::GENERAL_ACCELERATOR_TEST_CALLER_AUTHORITY_SEED_V1;
 use dclutch_general_adapter_contract::{
     account_rules_v3::general_account_profile_fixed_count_v3,
@@ -492,7 +493,23 @@ async fn corrupted_scratch_page_refuses_without_mutating_selection() {
     )
     .await
     .expect("ProgramTest processing");
-    assert!(processed.result.is_err(), "corrupted page must refuse");
+    // A bare `is_err()` here would pass on whatever the transaction refused
+    // first -- ledger M-38 -- and until the scratch-bank causes were split
+    // there was no code to name instead: one `InvalidScratchBank` covered the
+    // page privileges, the decode, the request binding, the streamed order and
+    // the reassembled bank alike. The fixture flips one byte of the LAST
+    // page's payload, so the page still decodes and still binds to this
+    // request; what fails is the bank those pages reassemble to.
+    assert_eq!(
+        format!("{:?}", processed.result),
+        format!(
+            // Index 1: this file grants the heap frame ahead of the Trading
+            // instruction, so the Trading instruction is the second one.
+            "Err(InstructionError(1, Custom({})))",
+            GeneralAcceleratorSbfErrorV3::ScratchBankDigest as u32
+        ),
+        "a corrupted page must refuse as a bank-content fault, not as anything else",
+    );
     let selection_after = context
         .banks_client
         .get_account(selection_key)
