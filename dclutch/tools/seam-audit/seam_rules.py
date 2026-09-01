@@ -43,6 +43,7 @@ CLASS_CODES: dict[str, tuple[str, ...]] = {
     "UNSET_PIN": ("UNSET_PUBKEY_UNGUARDED", "UNSET_GUARD_PRESENT"),
     "DOMAIN_DUP": ("DOMAIN_BYTES_COLLIDE", "DOMAIN_NAME_BYTES_DISAGREE"),
     "PRIVILEGE": ("TRANSACTION_LEVEL_SIGNER_CENSUS", "PRIVILEGE_PIN_UNEXEMPTED"),
+    "AUTHORITY": ("AUTHORITY_CACHE_UNDERIVED",),
 }
 
 # Which ``&[u8]`` constants are PDA seed domains at all.  This discriminator is
@@ -1210,6 +1211,167 @@ def class_privilege(survey: Survey) -> list[Finding]:
 
 
 # --------------------------------------------------------------------------
+# AUTHORITY
+# --------------------------------------------------------------------------
+
+# The one authority object this reader knows: the Registry-owned activation
+# cache, which answers "which release is this role running" for every child
+# frame in the protocol.  It is the right first subject because it is a CACHED
+# ROLE -- an authentication performed once, by another program, and then read
+# by everybody -- which is exactly where an authority stops being derived and
+# starts being assumed.
+_AUTHORITY_CACHE_READ = re.compile(r"ActivatedExecutionReleaseSetViewV1\s*::\s*decode")
+
+# Delegating to the shared authenticator IS the derivation.  The crate performs
+# the privilege frame, cache ownership, the PDA address, the hostile decode and
+# the deployment check, in that order, and every reader of the cache is the
+# same code so they cannot drift apart.
+# The blessed crate's whole vocabulary, taken by measurement rather than
+# guessed: `authenticate_activated_role*` is the role-projection family and
+# `authenticate_activation_cache*` is the coordinate family Custody uses, both
+# in `dclutch-registry-activation-auth-v1` and both performing owner, width and
+# derived-address before a byte of role data is trusted.
+_AUTHORITY_DELEGATES = re.compile(r"authenticate_activat(?:ed|ion)_[a-z_0-9]*\s*\(")
+
+# Deriving the address yourself is the other acceptable answer: an account the
+# Registry did not open for exactly this release set cannot stand in.
+_AUTHORITY_DERIVES = re.compile(
+    r"find_program_address|create_program_address|try_find_program_address"
+    r"|[A-Za-z0-9_]*[Ss]eeds[A-Za-z0-9_]*::new|\.as_slices\s*\("
+)
+
+# ...but only together with ownership.  A derived address proves WHERE the
+# account is; the owner check proves WHO may have written it.  Either alone
+# leaves the other half of "program-owned record at a program-derived address"
+# unstated, and the cache's whole value is that both hold.
+_AUTHORITY_OWNER_CHECK = re.compile(
+    r"\.owner\s*(==|!=)|owner\s*(==|!=)\s*program_id|require_owned|assert_owned"
+)
+
+# A called function name.  Deliberately loose on the left (any path prefix is
+# stripped by taking the last segment) and anchored on `(` so a type name or a
+# field read is not mistaken for a call.
+_CALL_SITE = re.compile(r"(?:^|[^A-Za-z0-9_.])([a-z_][a-z_0-9]*)\s*\(")
+
+
+def class_authority(survey: Survey) -> list[Finding]:
+    """Is a cached role's authority DERIVED, or merely read?
+
+    C-16 forbids "unexplained authority", and no reader in this tool answered
+    that question before this one.  ``PRIVILEGE`` is the near miss and it is
+    worth stating why, because the two look alike and point opposite ways: that
+    class reads an exact-privilege census as *over*-constraint -- a frame made
+    unsatisfiable for a legitimate builder, because privileges merge across a
+    transaction -- so it finds routes that refuse what they should admit.  This
+    class asks the *under*-constraint question: does the act establish who may
+    perform it, or does it read an answer somebody else supplied?  ``PRIVILEGE``
+    never asks whether a signer is the RIGHT signer.
+
+    The subject is the Registry-owned activation cache, chosen because a cached
+    role is where authority is most likely to go unexplained: the authentication
+    happened once, in another program, and everything downstream reads the
+    result.  The protocol's own settled shape for reading it is written down in
+    ``dclutch-registry-activation-auth-v1``: privilege frame, cache OWNERSHIP by
+    the Registry, cache ADDRESS derived from
+    ``[ACTIVATION_PDA_DOMAIN_V1, execution_release_set_id]``, hostile decode,
+    then the activated role's current deployment.  A function that decodes the
+    cache while doing neither that delegation nor, in its own body, both a
+    derivation and an owner check, is reading a role out of an account whose
+    provenance it never established -- an authority asserted rather than
+    derived.
+
+    **What a clean result asserts, and what it does not.**  Silence here means
+    every cache read in an on-chain program either delegates to the shared
+    authenticator or derives and owner-checks the account itself.  It does NOT
+    mean the authority is *correct*: a function that derives the right address
+    and then reads the wrong role, or checks ownership and then applies the role
+    to an act it does not cover, reads as derived and is still wrong.  Provenance
+    and correctness are different questions and this reader answers the first --
+    the same distinction the compartment census draws when it says *swept clean
+    at the construction sites, correctness not asserted*.
+
+    **Scope is `programs/` on purpose.**  Operator and codec crates decode this
+    cache too, and there it is not an authority check at all: they are building
+    a transaction, and reading the cache is how they learn what to put in it.
+    An authority question only has teeth where an ELF acts on the answer.
+    """
+
+    # One level of call resolution, and it is what makes the reader usable
+    # rather than merely strict.  The Registry authenticates its own cache
+    # through a LOCAL helper (`authenticate_cache_identity`: owner check, then
+    # the address reproduced from the bump the cache carries) rather than
+    # through the shared crate, and a reader that could not see one hop
+    # reported three of its functions as unexplained when the explanation was
+    # one call away.  Resolving by NAME within the same crate is deliberate:
+    # a helper in another crate is a seam, and this tool's whole subject is
+    # that seams are where each side's private beliefs stop agreeing.
+    authenticators: dict[tuple[str, str], bool] = {}
+    for candidate in survey.functions:
+        authenticators[(candidate.crate, candidate.name)] = bool(
+            _AUTHORITY_DERIVES.search(candidate.text)
+        ) and bool(_AUTHORITY_OWNER_CHECK.search(candidate.text))
+
+    def delegates_to_authenticator(function: Function) -> bool:
+        for call in _CALL_SITE.finditer(function.text):
+            name = call.group(1)
+            if name == function.name:
+                continue
+            if authenticators.get((function.crate, name)):
+                return True
+        return False
+
+    findings: list[Finding] = []
+    for function in survey.functions:
+        if function.is_test or not function.path.startswith("programs/"):
+            continue
+        body = function.text
+        if not _AUTHORITY_CACHE_READ.search(body):
+            continue
+        # An authority question needs an ACCOUNT to ask it about, and the honest
+        # test is where the bytes came from rather than what the signature says.
+        # The Registry's own `require_consistent_completion` decodes the view out
+        # of a `&[u8]` output buffer it just wrote: no account, so no provenance
+        # to establish, and its own doc calls it "a belt on a fact the write path
+        # already enforces, not the safety argument for it".  Reporting that
+        # would be the reader mistaking a decode for a trust decision -- the same
+        # error `_censuses_signers` guards against one class over.
+        #
+        # Keyed on `try_borrow_data` and NOT on an `AccountInfo` in the
+        # signature, because Trading passes its accounts inside a typed frame
+        # (`HotFrameV3`) and a signature test silently dropped a real candidate.
+        if "try_borrow_data" not in body:
+            continue
+        if _AUTHORITY_DELEGATES.search(body):
+            continue
+        derives = bool(_AUTHORITY_DERIVES.search(body))
+        owns = bool(_AUTHORITY_OWNER_CHECK.search(body))
+        if derives and owns:
+            continue
+        if delegates_to_authenticator(function):
+            continue
+        missing = []
+        if not derives:
+            missing.append("no address derivation")
+        if not owns:
+            missing.append("no owner check")
+        findings.append(
+            Finding(
+                code="AUTHORITY_CACHE_UNDERIVED",
+                key=f"{function.path}\t{function.name}",
+                path=function.path,
+                line=function.start,
+                detail=(
+                    "decodes the Registry activation cache without delegating to "
+                    "authenticate_activated_role*, and " + " and ".join(missing) +
+                    " in this body: the role is read out of an account whose "
+                    "provenance this function never established"
+                ),
+            )
+        )
+    return findings
+
+
+# --------------------------------------------------------------------------
 # dispatch
 # --------------------------------------------------------------------------
 
@@ -1220,6 +1382,7 @@ _READERS = {
     "UNSET_PIN": class_unset_pin,
     "DOMAIN_DUP": class_domain_dup,
     "PRIVILEGE": class_privilege,
+    "AUTHORITY": class_authority,
 }
 
 

@@ -46,6 +46,7 @@ CONTROLS=(
   "live|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|projected_custody_bootstrap_v1.rs.authenticate_expired_checkpoint_v1|SEAM_AUDIT #13b, unfixed: a blanket signer refusal over a frame the builder puts the fee payer in, so an expired founding can never be unwound"
   "live|HEAD|DOMAIN_DUP|DOMAIN_BYTES_COLLIDE|CLAIMS_FOUNDING_AGGREGATE_SEED_V4|unfixed: the V4 and V5 founding aggregate domains are byte-identical, so the version bump lives in the name and not in the address"
   "synthetic|HEAD|UNSET_PIN|UNSET_GUARD_PRESENT|series/kernel_adapter.rs|no 2026-08-29 defect exists for this class; the bar is that deleting a live unset-pubkey guard is noticed"
+  "synthetic|HEAD|AUTHORITY|AUTHORITY_CACHE_UNDERIVED|lib.rs.authenticate_market|no historical defect exists for this class either; the bar is that deleting Custody delegation to the blessed activation authenticator turns a derived cache read into an asserted one, and is noticed"
   "silent|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|terminal_sequence.rs.authenticate_lookup_infrastructure_planned_journal_v1|not a refusal at all: both is_signer reads classify the coordinate into TerminalAddressClassV1::InlineSigner and no Err is reachable, so reporting it as an always-refuses frame was the reader mistaking a read for a rejection"
   "silent|HEAD|PRIVILEGE|TRANSACTION_LEVEL_SIGNER_CENSUS|direct_hot_route_manifest.rs.project_manifest_document_v3|refuses the fee payer being named in the frame at all, one line below the census, so the harm this class states -- dead for any builder that pays with an account it also names -- is refused in place by its own error code"
 )
@@ -118,6 +119,43 @@ for control in "${CONTROLS[@]}"; do
   if ! git -C "${ROOT}" worktree add --detach --quiet "${tree}" "${target}" 2>/dev/null; then
     echo "SKIP ${class}/${code} -- cannot create a worktree at ${target}"
     skipped=$((skipped + 1))
+    continue
+  fi
+
+  if [ "${kind}" = "synthetic" ] && [ "${class}" = "AUTHORITY" ]; then
+    # The mirror of the ratchet below: this class counts UP.  Custody's
+    # `authenticate_market` reads the activation cache and is silent today
+    # because it delegates to the blessed authenticator, which performs owner,
+    # width and derived address before a role byte is trusted.  Remove the
+    # delegation and the same function is reading a cached role out of an
+    # account whose provenance it never established -- an authority asserted
+    # rather than derived, which is the whole subject of the class.
+    victim="${tree}/programs/dclutch-custody-sbf/src/lib.rs"
+    before="$(report "${tree}" "${class}" | grep -cE "^${code}.*${needle}" || true)"
+    python3 - "${victim}" <<'AUTHPY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = text.replace(
+    "authenticate_activation_cache_bump_v1(registry, cache, &request.release_set)",
+    "unauthenticated_cache_bump_stub(registry, cache, &request.release_set)",
+)
+path.write_text(text)
+AUTHPY
+    after="$(report "${tree}" "${class}" | grep -cE "^${code}.*${needle}" || true)"
+    git -C "${ROOT}" worktree remove --force "${tree}" 2>/dev/null
+    if [ "${before}" -eq 0 ] && [ "${after}" -gt 0 ]; then
+      echo "PASS ${code} (synthetic)"
+      echo "     silent at HEAD, ${after} finding after deleting the delegation --"
+      echo "     the reader names the derivation it can no longer see"
+      pass=$((pass + 1))
+    else
+      echo "FAIL ${code} (synthetic)"
+      echo "     ${before} before the deletion, ${after} after (want 0 then >0)"
+      fail=$((fail + 1))
+    fi
+    echo "     ${story}"
+    echo
     continue
   fi
 

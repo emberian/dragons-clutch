@@ -151,6 +151,16 @@ construction belong outside the kernel in explicitly named adapters.
   discipline (refusing empty/wildcard commit path lists, a post-commit
   readback, crate-root and mid-run-edit guards) so it isn't re-learned by
   hand each time. See `tools/lane/README.md`.
+- **A backticked span in a shell-quoted message is command-substituted, and
+  that includes BOARD POSTS.** zsh runs every `` `word` `` inside a double-quoted
+  `git commit -m` *or* `lane.sh board` argument and silently substitutes the
+  result, so a message loses exactly the code spans that made it precise. The
+  commit hazard was known; that it applies to the board was not, and on
+  2026-09-01 a board entry lost two passages this way and needed a correction.
+  Write the message to a file and use `git commit -F`, or single-quote it and
+  use no backticks — then READ BACK what actually landed. Which is the general
+  rule: verify the instrument reported what you think it reported, not merely
+  that it reported something.
 - **Distrust silent success.** The worst failure mode in this tree is not a red
   gate; it is a command that reports success having done nothing, because every
   check downstream then measures an absence. Three instances, all measured on

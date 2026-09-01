@@ -109,6 +109,32 @@ const fn lifecycle_bytes(rent_quotes: usize) -> usize {
         + rent_quotes * CURRENT_RENT_QUOTE_BYTES_V5
 }
 
+/// Plans in the unified policy: maker and record, once per creation action.
+const UNIFIED_PLAN_COUNT: usize = PLAN_COUNT * 2;
+/// Bindings in the unified policy: the same four, once per creation action.
+const UNIFIED_BINDING_COUNT: usize = BINDING_COUNT * 2;
+/// Quotes in the unified policy: the Buy's four, two of them Buy-scoped.
+const UNIFIED_RENT_QUOTE_COUNT: usize = BUY_RENT_QUOTE_COUNT;
+
+const fn unified_lifecycle_bytes() -> usize {
+    HEADER_BYTES
+        + RECIPE_COUNT * RECIPE_BYTES
+        + SEED_COUNT * SEED_BYTES
+        + UNIFIED_PLAN_COUNT * ACTION_PLAN_BYTES
+        + UNIFIED_PLAN_COUNT * PROTECTED_OUTPUT_BYTES
+        + UNIFIED_BINDING_COUNT * IMMUTABLE_IDENTITY_BINDING_BYTES
+        + UNIFIED_RENT_QUOTE_COUNT * CURRENT_RENT_QUOTE_BYTES_V5
+}
+
+/// Exact LifecycleV5 bytes for the ONE policy both creation actions share.
+///
+/// Wall B was: one manifest entry pins one `derivation_policy`, so a root admits
+/// one lifecycle policy, and the two registered creation actions had policies of
+/// different widths and therefore different digests. No Direct root could admit
+/// both. This is the policy that ends that -- one digest, one entry, one root,
+/// serving RegisterSell and RegisterBuy.
+pub const DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5: usize = unified_lifecycle_bytes();
+
 /// Exact LifecycleV5 bytes for registered Buy creation.
 pub const DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5: usize = lifecycle_bytes(BUY_RENT_QUOTE_COUNT);
 /// Exact LifecycleV5 bytes for registered Sell creation.
@@ -171,104 +197,15 @@ pub fn encode_direct_registered_creation_lifecycle_v5_atomic(
     if scratch.len() != expected || output.len() != expected {
         return Err(DirectRegisteredStateArtifactErrorV4::Coordinate);
     }
-    let recipes = [
-        recipe(
-            DIRECT_REGISTERED_MAKER_ACCOUNT_V4,
-            0,
-            MAKER_SEED_COUNT_U8,
-            MAKER_BYTES_U32,
-        ),
-        recipe(
-            DIRECT_REGISTERED_RECORD_ACCOUNT_V4,
-            RECORD_SEED_START,
-            RECORD_SEED_COUNT_U8,
-            RECORD_BYTES_U32,
-        ),
-    ];
-    let seeds = [
-        LifecycleSeedInputV3::Literal(DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1),
-        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_MARKET_V4)?),
-        LifecycleSeedInputV3::CommonScalar {
-            index: scalar(REGISTERED_SCALAR_GENERATION_V4)?,
-            width: 8,
-        },
-        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_REQUEST_MAKER_V4)?),
-        LifecycleSeedInputV3::CanonicalBump,
-        LifecycleSeedInputV3::Literal(DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V2),
-        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_MARKET_V4)?),
-        LifecycleSeedInputV3::CommonScalar {
-            index: scalar(REGISTERED_SCALAR_GENERATION_V4)?,
-            width: 8,
-        },
-        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_REQUEST_MAKER_V4)?),
-        LifecycleSeedInputV3::CommonScalar {
-            index: scalar(REGISTERED_SCALAR_NONCE_V4)?,
-            width: 8,
-        },
-        LifecycleSeedInputV3::CanonicalBump,
-    ];
+    let recipes = registered_creation_recipes_v4();
+    let seeds = registered_creation_seeds_v4()?;
     // Both plans fund through the one lifecycle credit. There is exactly one
     // `LifecycleRentCreditV2` per Market lifecycle, so `plan` no longer takes a
     // rent-credit coordinate at all: naming it per plan is what let the profile
     // declare two credits that were never two accounts on any chain.
-    let plans = [
-        plan(
-            action,
-            0,
-            DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
-            REGISTERED_SCALAR_MAKER_PRINCIPAL_OBSERVATION_V4,
-            REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4,
-        )?,
-        plan(
-            action,
-            1,
-            DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
-            REGISTERED_SCALAR_RECORD_PRINCIPAL_OBSERVATION_V4,
-            REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4,
-        )?,
-    ];
-    let protected = [
-        Some(LifecycleProtectedOutputsInputV3 {
-            created: scalar(REGISTERED_SCALAR_MAKER_CREATED_V4)?,
-            bump_observation: scalar(REGISTERED_SCALAR_MAKER_BUMP_OBSERVATION_V4)?,
-            bump: scalar(REGISTERED_SCALAR_MAKER_BUMP_V4)?,
-            historical_rent_principal: scalar(REGISTERED_SCALAR_MAKER_PRINCIPAL_V4)?,
-            beneficiary: identity(REGISTERED_IDENTITY_MAKER_BENEFICIARY_V4)?,
-            state: identity(REGISTERED_IDENTITY_MAKER_STATE_V4)?,
-            owner: identity(REGISTERED_IDENTITY_MAKER_STATE_OWNER_V4)?,
-        }),
-        Some(LifecycleProtectedOutputsInputV3 {
-            created: scalar(REGISTERED_SCALAR_RECORD_CREATED_V4)?,
-            bump_observation: scalar(REGISTERED_SCALAR_RECORD_BUMP_OBSERVATION_V4)?,
-            bump: scalar(REGISTERED_SCALAR_RECORD_BUMP_V4)?,
-            historical_rent_principal: scalar(REGISTERED_SCALAR_RECORD_PRINCIPAL_V4)?,
-            beneficiary: identity(REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4)?,
-            state: identity(REGISTERED_IDENTITY_RECORD_STATE_V4)?,
-            owner: identity(REGISTERED_IDENTITY_RECORD_STATE_OWNER_V4)?,
-        }),
-    ];
-    let bindings = [
-        binding(
-            0,
-            DirectMakerReplayLayoutV1::MARKET,
-            REGISTERED_IDENTITY_MARKET_V4,
-        )?,
-        binding(
-            0,
-            DirectMakerReplayLayoutV1::MAKER,
-            REGISTERED_IDENTITY_REQUEST_MAKER_V4,
-        )?,
-        binding(
-            1,
-            DirectRegisteredRecordLayoutV2::MAKER,
-            REGISTERED_IDENTITY_REQUEST_MAKER_V4,
-        )?,
-        binding(
-            1,
-            DirectRegisteredRecordLayoutV2::INTENT + intent::COMPACT_INTENT_MARKET_OFFSET_V2,
-            REGISTERED_IDENTITY_MARKET_V4,
-        )?,
-    ];
+    let plans = registered_creation_plans_v4(action)?;
+    let protected = registered_creation_protected_v4()?;
+    let bindings = registered_creation_bindings_v4(0)?;
     let quotes = rent_quotes(action, child_widths)?;
     encode_lifecycle_policy_v5_atomic(
         &recipes,
@@ -642,5 +579,338 @@ mod tests {
             Err(DirectRegisteredStateArtifactErrorV4::Coordinate)
         );
         assert_eq!(short, short_before);
+    }
+}
+
+/// Encode the ONE lifecycle policy both registered creation actions share.
+///
+/// This is the Direct half of crossing wall B. `c8396b0b` gave
+/// `LifecycleCurrentRentQuoteV5` an action tag at zero digest cost; this emits
+/// the policy that uses it, so a Sell and a Buy stop needing two policies and
+/// therefore two manifest entries and therefore two roots.
+///
+/// The union is safe because every part of it is already action-selected by the
+/// contract, not by this crate:
+///
+/// - PLANS were always tagged (`LifecyclePlanInputV3::action`). The four here are
+///   maker and record once per action, and `action_plan_count` returns two for
+///   each, exactly what each side saw when it had its own policy.
+/// - PROTECTED OUTPUTS are 1:1 with plans, so the same two sets appear twice.
+///   That is admissible and not an accident:
+///   `validate_protected_output_uniqueness` SKIPS pairs whose plans carry
+///   different actions, which is the decoder saying multi-action policies were
+///   always the intent.
+/// - QUOTES are scoped. The Custody replay and vault a Buy opens are tagged
+///   `RegisterBuy`; the maker replay and registered record both sides create are
+///   unscoped. A Sell therefore projects registers 52 and 53 and never 50 or 51,
+///   which is what it projected before, and cannot be made to quote rent for a
+///   Custody child it does not open.
+/// - SEEDS, RECIPES and BINDINGS are identical between the sides already; the
+///   bindings simply repeat per action because they name a plan index.
+///
+/// `child_widths` is REQUIRED here, unlike the per-action encoder: this policy
+/// always carries the Buy's two quotes, so the vault width is always needed.
+/// A Sell built from it still never reads them.
+pub fn encode_direct_registered_creation_unified_lifecycle_v5_atomic(
+    child_widths: DirectRegisteredCreationChildRentWidthsV4,
+    scratch: &mut [u8],
+    output: &mut [u8],
+) -> Result<(), DirectRegisteredStateArtifactErrorV4> {
+    if child_widths.custody_vault == 0 {
+        return Err(DirectRegisteredStateArtifactErrorV4::ChildWidths);
+    }
+    if scratch.len() != DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5
+        || output.len() != DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5
+    {
+        return Err(DirectRegisteredStateArtifactErrorV4::Coordinate);
+    }
+    let recipes = registered_creation_recipes_v4();
+    let seeds = registered_creation_seeds_v4()?;
+    // No allocation: this crate is `no_alloc`, so the union is built as fixed
+    // arrays whose widths are the `UNIFIED_*` constants the header width is
+    // computed from. If a side ever gained a plan these would not compile,
+    // which is the point.
+    let [sell_maker, sell_record] =
+        registered_creation_plans_v4(DirectExecutionActionV3::RegisterSell)?;
+    let [buy_maker, buy_record] =
+        registered_creation_plans_v4(DirectExecutionActionV3::RegisterBuy)?;
+    let plans: [LifecyclePlanInputV3; UNIFIED_PLAN_COUNT] =
+        [sell_maker, sell_record, buy_maker, buy_record];
+    let [protected_maker, protected_record] = registered_creation_protected_v4()?;
+    let protected: [Option<LifecycleProtectedOutputsInputV3>; UNIFIED_PLAN_COUNT] = [
+        protected_maker,
+        protected_record,
+        protected_maker,
+        protected_record,
+    ];
+    let [sell_b0, sell_b1, sell_b2, sell_b3] = registered_creation_bindings_v4(0)?;
+    let buy_base =
+        u16::try_from(PLAN_COUNT).map_err(|_| DirectRegisteredStateArtifactErrorV4::Coordinate)?;
+    let [buy_b0, buy_b1, buy_b2, buy_b3] = registered_creation_bindings_v4(buy_base)?;
+    let bindings: [LifecycleImmutableIdentityBindingInputV4; UNIFIED_BINDING_COUNT] = [
+        sell_b0, sell_b1, sell_b2, sell_b3, buy_b0, buy_b1, buy_b2, buy_b3,
+    ];
+    let quotes = [
+        LifecycleCurrentRentQuoteInputV5 {
+            exact_data_len: u32::try_from(CUSTODY_REPLAY_BYTES_V1)
+                .map_err(|_| DirectRegisteredStateArtifactErrorV4::Coordinate)?,
+            scalar_destination: scalar(REGISTERED_SCALAR_REPLAY_RENT_V4)?,
+            action: Some(DirectExecutionActionV3::RegisterBuy as u32),
+        },
+        LifecycleCurrentRentQuoteInputV5 {
+            exact_data_len: child_widths.custody_vault,
+            scalar_destination: scalar(REGISTERED_SCALAR_VAULT_RENT_V4)?,
+            action: Some(DirectExecutionActionV3::RegisterBuy as u32),
+        },
+        LifecycleCurrentRentQuoteInputV5 {
+            exact_data_len: MAKER_BYTES_U32,
+            scalar_destination: scalar(REGISTERED_SCALAR_MAKER_CURRENT_RENT_V4)?,
+            action: None,
+        },
+        LifecycleCurrentRentQuoteInputV5 {
+            exact_data_len: RECORD_BYTES_U32,
+            scalar_destination: scalar(REGISTERED_SCALAR_RECORD_CURRENT_RENT_V4)?,
+            action: None,
+        },
+    ];
+    encode_lifecycle_policy_v5_atomic(
+        &recipes, &seeds, &plans, &protected, &bindings, &quotes, scratch, output,
+    )
+    .map_err(DirectRegisteredStateArtifactErrorV4::Lifecycle)?;
+    StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], output)
+        .map_err(DirectRegisteredStateArtifactErrorV4::Lifecycle)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The parts BOTH encoders share, with one author each.
+//
+// The per-action policies and the unified one differ in exactly three places --
+// how many plans, how many bindings, and whether the quotes are scoped. Every
+// other component is identical, so it is defined once here rather than copied.
+// A predicate or a table with two authors drifts; this crate has already paid
+// for that lesson twice this session.
+// ---------------------------------------------------------------------------
+
+fn registered_creation_recipes_v4() -> [LifecycleRecipeInputV3; RECIPE_COUNT] {
+    [
+        recipe(
+            DIRECT_REGISTERED_MAKER_ACCOUNT_V4,
+            0,
+            MAKER_SEED_COUNT_U8,
+            MAKER_BYTES_U32,
+        ),
+        recipe(
+            DIRECT_REGISTERED_RECORD_ACCOUNT_V4,
+            RECORD_SEED_START,
+            RECORD_SEED_COUNT_U8,
+            RECORD_BYTES_U32,
+        ),
+    ]
+}
+
+fn registered_creation_seeds_v4()
+-> Result<[LifecycleSeedInputV3<'static>; SEED_COUNT], DirectRegisteredStateArtifactErrorV4> {
+    Ok([
+        LifecycleSeedInputV3::Literal(DIRECT_MAKER_REPLAY_PDA_DOMAIN_V1),
+        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_MARKET_V4)?),
+        LifecycleSeedInputV3::CommonScalar {
+            index: scalar(REGISTERED_SCALAR_GENERATION_V4)?,
+            width: 8,
+        },
+        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_REQUEST_MAKER_V4)?),
+        LifecycleSeedInputV3::CanonicalBump,
+        LifecycleSeedInputV3::Literal(DIRECT_REGISTERED_RECORD_PDA_DOMAIN_V2),
+        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_MARKET_V4)?),
+        LifecycleSeedInputV3::CommonScalar {
+            index: scalar(REGISTERED_SCALAR_GENERATION_V4)?,
+            width: 8,
+        },
+        LifecycleSeedInputV3::CommonIdentity(identity(REGISTERED_IDENTITY_REQUEST_MAKER_V4)?),
+        LifecycleSeedInputV3::CommonScalar {
+            index: scalar(REGISTERED_SCALAR_NONCE_V4)?,
+            width: 8,
+        },
+        LifecycleSeedInputV3::CanonicalBump,
+    ])
+}
+
+fn registered_creation_plans_v4(
+    action: DirectExecutionActionV3,
+) -> Result<[LifecyclePlanInputV3; PLAN_COUNT], DirectRegisteredStateArtifactErrorV4> {
+    Ok([
+        plan(
+            action,
+            0,
+            DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
+            REGISTERED_SCALAR_MAKER_PRINCIPAL_OBSERVATION_V4,
+            REGISTERED_IDENTITY_MAKER_BENEFICIARY_OBSERVATION_V4,
+        )?,
+        plan(
+            action,
+            1,
+            DIRECT_REGISTERED_PAYER_ACCOUNT_V4,
+            REGISTERED_SCALAR_RECORD_PRINCIPAL_OBSERVATION_V4,
+            REGISTERED_IDENTITY_RECORD_BENEFICIARY_OBSERVATION_V4,
+        )?,
+    ])
+}
+
+fn registered_creation_protected_v4()
+-> Result<[Option<LifecycleProtectedOutputsInputV3>; PLAN_COUNT], DirectRegisteredStateArtifactErrorV4>
+{
+    Ok([
+        Some(LifecycleProtectedOutputsInputV3 {
+            created: scalar(REGISTERED_SCALAR_MAKER_CREATED_V4)?,
+            bump_observation: scalar(REGISTERED_SCALAR_MAKER_BUMP_OBSERVATION_V4)?,
+            bump: scalar(REGISTERED_SCALAR_MAKER_BUMP_V4)?,
+            historical_rent_principal: scalar(REGISTERED_SCALAR_MAKER_PRINCIPAL_V4)?,
+            beneficiary: identity(REGISTERED_IDENTITY_MAKER_BENEFICIARY_V4)?,
+            state: identity(REGISTERED_IDENTITY_MAKER_STATE_V4)?,
+            owner: identity(REGISTERED_IDENTITY_MAKER_STATE_OWNER_V4)?,
+        }),
+        Some(LifecycleProtectedOutputsInputV3 {
+            created: scalar(REGISTERED_SCALAR_RECORD_CREATED_V4)?,
+            bump_observation: scalar(REGISTERED_SCALAR_RECORD_BUMP_OBSERVATION_V4)?,
+            bump: scalar(REGISTERED_SCALAR_RECORD_BUMP_V4)?,
+            historical_rent_principal: scalar(REGISTERED_SCALAR_RECORD_PRINCIPAL_V4)?,
+            beneficiary: identity(REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4)?,
+            state: identity(REGISTERED_IDENTITY_RECORD_STATE_V4)?,
+            owner: identity(REGISTERED_IDENTITY_RECORD_STATE_OWNER_V4)?,
+        }),
+    ])
+}
+
+/// The four bindings, rebased onto one action's plan pair.
+///
+/// A binding names a PLAN INDEX, so the unified policy repeats them per action
+/// with `base` stepping over that action's plans.
+fn registered_creation_bindings_v4(
+    base: u16,
+) -> Result<[LifecycleImmutableIdentityBindingInputV4; BINDING_COUNT], DirectRegisteredStateArtifactErrorV4>
+{
+    Ok([
+        binding(
+            base + 0,
+            DirectMakerReplayLayoutV1::MARKET,
+            REGISTERED_IDENTITY_MARKET_V4,
+        )?,
+        binding(
+            base + 0,
+            DirectMakerReplayLayoutV1::MAKER,
+            REGISTERED_IDENTITY_REQUEST_MAKER_V4,
+        )?,
+        binding(
+            base + 1,
+            DirectRegisteredRecordLayoutV2::MAKER,
+            REGISTERED_IDENTITY_REQUEST_MAKER_V4,
+        )?,
+        binding(
+            base + 1,
+            DirectRegisteredRecordLayoutV2::INTENT + intent::COMPACT_INTENT_MARKET_OFFSET_V2,
+            REGISTERED_IDENTITY_MARKET_V4,
+        )?,
+    ])
+}
+
+#[cfg(test)]
+mod unified_lifecycle_tests {
+    extern crate std;
+    use std::vec::Vec;
+
+    use super::*;
+    use dclutch_account_profile_contract::lifecycle_v3::StateLifecyclePolicyV5;
+
+    const OBSERVED_VAULT_BYTES: u32 = 165;
+
+    fn unified() -> [u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5] {
+        let mut scratch = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+        let mut output = [0_u8; DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5];
+        encode_direct_registered_creation_unified_lifecycle_v5_atomic(
+            DirectRegisteredCreationChildRentWidthsV4 {
+                custody_vault: OBSERVED_VAULT_BYTES,
+            },
+            &mut scratch,
+            &mut output,
+        )
+        .expect("unified registered creation lifecycle");
+        output
+    }
+
+    /// **Wall B's premise is false now: ONE policy serves both creation actions.**
+    ///
+    /// The wall was that a Sell's policy and a Buy's policy had different widths
+    /// and therefore different digests, so one manifest entry -- which pins one
+    /// `derivation_policy` -- could not admit both. This decodes one policy and
+    /// asks it, per action, for exactly what each side used to get from a policy
+    /// of its own.
+    #[test]
+    fn one_policy_serves_both_registered_creation_actions() {
+        let bytes = unified();
+        let policy = StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], &bytes)
+            .expect("unified policy decodes");
+
+        for action in [
+            DirectExecutionActionV3::RegisterSell,
+            DirectExecutionActionV3::RegisterBuy,
+        ] {
+            assert_eq!(
+                policy.action_plan_count(action as u32),
+                Ok(u16::try_from(PLAN_COUNT).expect("plan count")),
+                "{action:?} must see exactly the maker and record plans it had alone",
+            );
+        }
+
+        // The whole point of the action tag: the two sides quote DIFFERENT rent,
+        // out of one policy. A Sell must not be able to quote rent for a Custody
+        // child it never opens.
+        assert_eq!(policy.current_rent_quote_count(), 4);
+        let sell_quotes = quote_destinations(&bytes, DirectExecutionActionV3::RegisterSell);
+        let buy_quotes = quote_destinations(&bytes, DirectExecutionActionV3::RegisterBuy);
+        assert_eq!(
+            sell_quotes.len(),
+            SELL_RENT_QUOTE_COUNT,
+            "a Sell projects only the two accounts both sides create",
+        );
+        assert_eq!(buy_quotes.len(), BUY_RENT_QUOTE_COUNT);
+        for destination in &sell_quotes {
+            assert!(
+                buy_quotes.contains(destination),
+                "every Sell quote is also a Buy quote; the Buy adds two",
+            );
+        }
+        assert!(
+            !sell_quotes.contains(&scalar(REGISTERED_SCALAR_REPLAY_RENT_V4).expect("replay"))
+                && !sell_quotes
+                    .contains(&scalar(REGISTERED_SCALAR_VAULT_RENT_V4).expect("vault")),
+            "a Sell must never quote the Custody replay or vault",
+        );
+    }
+
+    fn quote_destinations(bytes: &[u8], action: DirectExecutionActionV3) -> Vec<u16> {
+        let policy =
+            StateLifecyclePolicyV5::decode_selected([1; 32], [1; 32], bytes).expect("policy");
+        let mut found = Vec::new();
+        let mut ordinal = 0_u16;
+        while ordinal < policy.current_rent_quote_count() {
+            let quote = policy.current_rent_quote(ordinal).expect("quote");
+            if quote.applies_to(action as u32) {
+                found.push(quote.scalar_destination().index());
+            }
+            ordinal += 1;
+        }
+        found
+    }
+
+    /// The two per-action policies this replaces had different widths, which was
+    /// the wall; this one has a single width and therefore a single digest.
+    #[test]
+    fn the_unified_policy_is_one_digest_where_there_were_two_widths() {
+        assert_ne!(
+            DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5,
+            DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5,
+            "the wall this crosses was two widths; if they ever match, say why",
+        );
+        assert!(unified().len() == DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5);
     }
 }

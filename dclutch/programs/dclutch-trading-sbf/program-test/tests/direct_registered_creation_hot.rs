@@ -138,6 +138,7 @@ use dclutch_direct_codec::native_evidence_v3::{
 use dclutch_direct_codec::ordinary_geometry_v3::DirectOrdinaryGeometryV3;
 use dclutch_direct_codec::registered_state_artifacts_v4::{
     DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5, DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5,
+    DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5,
 };
 use dclutch_direct_codec::successor::{
     DIRECT_MAKER_REPLAY_BYTES_V1, DIRECT_REGISTERED_RECORD_BYTES_V2,
@@ -887,11 +888,26 @@ async fn a_registered_buy_refuses_root_when_its_sell_has_not_committed() {
 /// `LifecycleCurrentRentQuoteInputV5` rows, for the Custody replay and vault a
 /// Buy opens and a Sell has no business quoting.
 ///
-/// Different widths, different digests, different `derivation_policy`. The
-/// consequence is not about this fixture: no Direct root can admit both
-/// registered creation actions until either the entry stops pinning the
-/// lifecycle for multi-action program sets, or a root can select an entry per
-/// action. That is a capability-contract ruling and it is not made here.
+/// Different widths, different digests, different `derivation_policy`.
+///
+/// RESOLVED, and by neither of the two routes this comment used to offer. It
+/// said the wall stood "until either the entry stops pinning the lifecycle for
+/// multi-action program sets, or a root can select an entry per action" -- one
+/// weakening a capability-contract gate, the other changing the persisted root
+/// header. There was a third way and it touches neither: give the QUOTES an
+/// action, so one policy carries both sides.
+///
+/// `c8396b0b` added `LifecycleCurrentRentQuoteV5`'s action tag inside bytes that
+/// were already canonical zeros -- no width moved and no pinned digest moved --
+/// and `registered_state_artifacts_v4::
+/// encode_direct_registered_creation_unified_lifecycle_v5_atomic` emits the
+/// policy that uses it. `one_policy_serves_both_registered_creation_actions`
+/// decodes that policy and asks it, per action, for exactly what each side used
+/// to get from a policy of its own.
+///
+/// This case stays as the record of WHY the wall existed: the two per-action
+/// policies still have different widths, and that is still what made a shared
+/// entry impossible for as long as a root had to choose one of them.
 #[test]
 fn the_two_registered_creation_lifecycle_policies_cannot_share_a_manifest_entry() {
     assert_ne!(
@@ -899,4 +915,10 @@ fn the_two_registered_creation_lifecycle_policies_cannot_share_a_manifest_entry(
         "a Sell and a Buy would share a lifecycle policy, and wall B would not exist",
     );
     assert!(DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5 > DIRECT_REGISTER_SELL_LIFECYCLE_BYTES_V5);
+    // And the policy that ends it is wider than either, because it carries both
+    // sides' plans and bindings and the union of their quotes.
+    assert!(
+        DIRECT_REGISTERED_CREATION_LIFECYCLE_BYTES_V5 > DIRECT_REGISTER_BUY_LIFECYCLE_BYTES_V5,
+        "the unified policy must carry more than the larger side, or it is not the union",
+    );
 }

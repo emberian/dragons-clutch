@@ -3137,3 +3137,102 @@ caught only by reading back what actually landed.
 
 > **Verify the instrument reported what you think it reported, not just that it
 > reported something.** Check the artifact, not the command you believe you ran.
+
+## 2026-09-01 — tightened by a defect, not by a filter
+
+The census filter was corrected to exclude test scope by **line position**
+rather than by path — and the first attempt was itself wrong, in the direction
+that looks like success.
+
+Taking the **first** `#[cfg(test)]` as the start of test scope is wrong for
+every `no_std` crate here: they carry an item-level
+`#[cfg(test)] extern crate std;` near the top, so the whole file got excluded.
+The measurement came back **43 atom / 139 lamport** — smaller, tighter,
+apparently better.
+
+> **Tightened by a defect, not by a filter.**
+
+A correction that moves a number the direction you wanted is the hardest kind to
+catch. It was caught because **the custody contract's own request decoders had
+vanished from the production set, which they had no business doing** — a
+positive control on a *filter*: a thing that must survive, surviving. Same move
+that caught the dead `sol_log_64` channel and the disconnected instrument.
+
+The rule: require the next item after the attribute to be a **module**
+declaration. An item-level `cfg(test)` is not a cutoff.
+
+**Corrected figures, and the caveat retires:**
+
+| | path filter | corrected |
+|---|---|---|
+| atom set-sites | 103 | **51** (22 source, 29 destination) |
+| lamport set-sites | 391 | **152** |
+
+The old numbers carried roughly **2× in declarations and test fixtures**. *"Upper
+bound on production sites"* is replaced by an exact figure, so the C-16 category
+closes on a measurement rather than a bound.
+
+**And the correction validated itself on the case that motivated it**:
+`dealer_reservation_v1` dropped out of the never-executed join exactly as
+predicted, because its two set-sites were the test fixtures that produced the
+original false positive. The join went 9 modules / 18 routes → **4 / 5**, and
+the conclusion held on the cleaner denominator: **no "named owner, no route
+home" defect at the never-executed frontier.**
+
+The atom conclusion also survived its denominator changing underneath it — 39
+literal-at-site, 4 wire decodes inside the contract's own decoder (owner is the
+authenticated calling program), 8 traced pass-throughs. **Every production site
+that sets a compartment has a named owner.**
+
+## 2026-09-01 — the browser can originate one of the three
+
+**Maker/taker trade is stranger-operable** (`d0c2839a`). `JoinPanel` no longer
+says the browser cannot build the admission transaction, and no longer publishes
+a `--execute` command — and the superseded runbook, the loopback spelling checks
+and the `$POSITION_KEYPAIR` line were **deleted in the same cycle as their
+successor**, not kept beside it.
+
+Both constraints are structural rather than incidental. **Every address is
+derived**: a caller supplies a Market, an owner and this deployment's programs;
+the aggregate comes from the Market, the Position and admission records from the
+aggregate and owner, the four record raw/staging pairs from content digests
+under the Registry's own PDA, the ProgramData accounts from the Loader, the
+RentCredit from the Market and its generation. **Every read is finalized at one
+floor**, taken once before anything is read and passed to every read after. One
+v0 transaction, because the planner says the two rent transfers and the Trading
+outer must roll back together.
+
+> **"The browser can sign but cannot originate" is now two capabilities, not
+> three.**
+
+### The ratchet caught the author, not a stranger
+
+The ABI ratchet caught the lane writing two Claims seed domains **by hand, under
+a comment claiming they were imported rather than restated.**
+
+> **My prose was ahead of my code, and the gate was not fooled by either.**
+
+That is what a ratchet is for: catching an author mid-self-deception, at the one
+moment nobody else is looking.
+
+### A private copy would have accepted it
+
+Using the app's own `decodeMarketCoreStateV2` rather than writing a second
+header check paid on the first fixture: 360 bytes, and the real decoder said
+*why* — the exact current width is 368, that older devnet Market generation is
+incompatible. **A private copy of that check would have accepted it.** The
+mirror hazard refuted by construction rather than by argument.
+
+### The same refusal, recognised in a smaller costume
+
+The lane declined a sync that would have **created** an SDK twin of the client
+operation journal — *"the 132-file drift I refused earlier, wearing a smaller
+costume."* Recognising one's own principle at reduced scale is the hardest time
+to recognise it.
+
+And two tests moved **with** the behaviour rather than being deleted quietly:
+the console assertion that pinned *"Published command · your own key, after an
+explicit authorization"* now asserts its **absence**, because `market.join` was
+the only listed act that asked a reader for their own key. A test flipping from
+asserting a thing to asserting its absence is the cleanest record that a
+capability changed.

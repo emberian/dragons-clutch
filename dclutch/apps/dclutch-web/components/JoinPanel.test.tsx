@@ -1,11 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
-import JoinPanel, { JoinStanding, joiningClosedForPhaseV1, joinRunbookV1 } from '@/components/JoinPanel';
+import JoinPanel, { JoinStanding, joiningClosedForPhaseV1 } from '@/components/JoinPanel';
 import { type DirectParticipantReadinessV1 } from '@/lib/directParticipant';
 
 const WALLET = '5oGySWQAKZ3fLmAwUbG6WifP7dCF6FRtriawtgxoCZXf';
-const LOOPBACK = 'http://127.0.0.1:20890/';
 const DEVNET = 'https://api.devnet.solana.com';
 
 const COORDINATES = Object.freeze({
@@ -77,27 +76,31 @@ describe('the join surface', () => {
     expect(html).toContain('The trade panel below trades against exactly these accounts.');
   });
 
-  it('tells a non-participant exactly what joining creates and how, without a fake admission button', () => {
-    const html = renderToStaticMarkup(<JoinStanding readiness={INCOMPLETE} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} />);
+  it('tells a non-participant exactly what joining creates, and now offers it', () => {
+    // WAS: this test pinned the published `dclutch --rpc … --execute` runbook
+    // and the sentence "cannot yet build the admission transaction itself".
+    // Both were honest while the browser could not compose the frame. It can
+    // now — the compiled planner does — so the assertions move with the
+    // behaviour rather than the wall being quietly deleted from under them.
+    const html = renderToStaticMarkup(
+      <JoinStanding readiness={INCOMPLETE} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} admission={{
+        market: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG', owner: WALLET,
+        coreProgramId: '11111111111111111111111111111112', claimsProgramId: '11111111111111111111111111111113',
+        tradingProgramId: '11111111111111111111111111111114', registryProgramId: '11111111111111111111111111111115',
+        rentProgramId: '11111111111111111111111111111117', activationCache: '11111111111111111111111111111118',
+      }} />);
     expect(html).toContain('This wallet is not a participant here yet.');
     expect(html).toContain('Position and admission');
     expect(html).toContain('collateral account');
     expect(html).toContain(COORDINATES.position);
-    expect(html).toContain('dclutch --rpc');
-    expect(html).toContain(`--rpc &#x27;${DEVNET}&#x27;`);
-    expect(html).toContain('--bootstrap-bin &quot;$SUCCESSOR&quot;');
-    expect(html).toContain('--i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG');
-    expect(html).toContain('--execute');
-    expect(html).toContain(WALLET);
-    expect(html).toContain('must derive this exact connected address');
-    // The wall is named as a gap, never dressed up as a virtue.
-    expect(html).toContain('cannot yet build the admission transaction itself');
-    // Renegotiated 2026-08-31: "that is a gap we intend to close, not a
-    // policy" is us managing the reader's opinion of us. Deleted. The gap is
-    // still named in the sentence above, which is the part that matters.
+    // The act, not a command.
+    expect(html).toContain('Join this market');
+    expect(html).toContain('Nothing is signed');
+    // The old wall, and the old apology for it, are both gone.
+    expect(html).not.toContain('cannot yet build the admission transaction itself');
     expect(html).not.toContain('not a policy');
-    expect(html).toContain('Copy commands');
-    expect(html).not.toContain('>Join now<');
+    // Still no button that cannot tell the truth: planning happens first, and
+    // signing is a separate, explicit step after the reader sees the frame.
     expect(html).not.toContain('>Sign and join<');
   });
 
@@ -121,17 +124,48 @@ describe('the join surface', () => {
     expect(joiningClosedForPhaseV1('Founding')).toBe(false);
   });
 
-  it('renders the owned-loopback command without a devnet acknowledgment', () => {
-    const runbook = joinRunbookV1(LOOPBACK);
-    expect(runbook).toMatchObject({ kind: 'ready', cluster: 'owned-loopback' });
-    expect(runbook.kind === 'ready' && runbook.command).toContain(`--rpc '${LOOPBACK}'`);
-    expect(runbook.kind === 'ready' && runbook.command).not.toContain('--i-mean-devnet');
+  const ADMISSION = Object.freeze({
+    market: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+    owner: WALLET,
+    coreProgramId: '11111111111111111111111111111112',
+    claimsProgramId: '11111111111111111111111111111113',
+    tradingProgramId: '11111111111111111111111111111114',
+    registryProgramId: '11111111111111111111111111111115',
+    rentProgramId: '11111111111111111111111111111117',
+    activationCache: '11111111111111111111111111111118',
+  });
+  // Rendered in the exact state that used to publish the command: a connected
+  // wallet that is not yet a participant.
+  const admitted = renderToStaticMarkup(
+    <JoinStanding readiness={INCOMPLETE} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} admission={ADMISSION} />);
+
+  it('no longer says the browser cannot build the transaction', () => {
+    // The sentence this whole campaign was aimed at. It was true, and it was
+    // why maker/taker trade was unreachable for a stranger: you cannot trade
+    // in a market you cannot join.
+    expect(admitted).not.toContain('cannot yet build the admission transaction itself');
+    expect(admitted).not.toContain('Joining runs through the');
   });
 
-  it('refuses a misleading loopback spelling instead of emitting a public-cluster command', () => {
-    expect(joinRunbookV1('http://localhost:20890/')).toMatchObject({
-      kind: 'refused',
-      reason: expect.stringContaining('http://127.0.0.1:PORT/'),
-    });
+  it('offers admission as an act in this browser, and names its authority', () => {
+    expect(admitted).toContain('Join this market');
+    expect(admitted).toContain('compiled Rust planner');
+    expect(admitted).toContain('checked against');
+  });
+
+  it('publishes no CLI command for admission', () => {
+    // A published `--execute` line is what a console offers when it cannot do
+    // the thing. This one can.
+    expect(admitted).not.toContain('--execute');
+    expect(admitted).not.toContain('$POSITION_KEYPAIR');
+    expect(admitted).not.toContain('dclutch --rpc');
+  });
+
+  it('does not offer the act when the deployment cannot derive the frame', () => {
+    // Offering it and refusing after a reader commits is the worse failure.
+    const partial = renderToStaticMarkup(
+      <JoinStanding readiness={INCOMPLETE} marketPhase="Open" walletAddress={WALLET} endpoint={DEVNET} />);
+    expect(partial).toContain('does not name every program the admission frame needs');
+    expect(partial).not.toContain('Join this market');
   });
 });

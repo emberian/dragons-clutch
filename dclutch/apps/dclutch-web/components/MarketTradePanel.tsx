@@ -4,7 +4,8 @@ import Anchor from '@/components/Anchor';
 import { useMemo, useState } from 'react';
 
 import WalletDirectory, { useWalletDirectoryV1 } from '@/components/WalletDirectory';
-import { JoinStanding } from '@/components/JoinPanel';
+import { admissionRequestV1, JoinStanding } from '@/components/JoinPanel';
+import { useDeploymentV1 } from '@/lib/deploymentStore';
 import FlowRail from '@/components/trade/FlowRail';
 import FlowStep from '@/components/trade/FlowStep';
 import MarketGateCard from '@/components/trade/MarketGateCard';
@@ -106,6 +107,7 @@ export default function MarketTradePanel({
   nowMs: number | null;
 }>) {
   const wallets = useWalletDirectoryV1();
+  const deployment = useDeploymentV1();
   const [spine, setSpine] = useState<DirectTradeSpineV1 | null>(null);
   const [spineStatus, setSpineStatus] = useState('The chain has not been asked about trading this Market yet.');
   const [participant, setParticipant] = useState<DirectParticipantReadinessV1 | null>(null);
@@ -242,7 +244,18 @@ export default function MarketTradePanel({
                 </div>
                 <details className="trade-v3-bytes">
                   <summary>Your accounts, exactly as the chain has them</summary>
-                  <JoinStanding readiness={participant} marketPhase={inspected.phase} walletAddress={wallets.address} endpoint={endpoint} />
+                  <JoinStanding
+                    readiness={participant}
+                    marketPhase={inspected.phase}
+                    walletAddress={wallets.address}
+                    endpoint={endpoint}
+                    admission={admissionRequestV1({
+                      market: marketAddress, owner: wallets.address, coreProgramId,
+                      registryProgramId, claimsProgramId, tradingProgramId, rentProgramId,
+                      activationCache: deployment.activationCache,
+                    })}
+                    directory={wallets}
+                  />
                 </details>
               </>;
             })()

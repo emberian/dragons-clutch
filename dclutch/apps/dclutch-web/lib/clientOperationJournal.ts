@@ -23,6 +23,10 @@ export const CLIENT_OPERATION_JOURNAL_OPERATIONS_V1 = Object.freeze([
   'rational-open-v1',
   'source-terminal-v1',
   'source-close-fund-v1',
+  // Admission: the act that turns a wallet into a market participant. It is
+  // one transaction on purpose -- any Claims refusal must roll the two rent
+  // transfers back with it -- so it journals like any other single mutation.
+  'user-position-admission-v1',
 ] as const);
 
 export type ClientOperationV1 = (typeof CLIENT_OPERATION_JOURNAL_OPERATIONS_V1)[number];

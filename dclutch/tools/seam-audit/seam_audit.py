@@ -119,6 +119,7 @@ CLASSES = (
     "UNSET_PIN",
     "DOMAIN_DUP",
     "PRIVILEGE",
+    "AUTHORITY",
 )
 
 
