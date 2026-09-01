@@ -925,11 +925,27 @@ fn encode_transition(representation_outcome_count: u32) -> Result<Vec<u8>> {
         InstructionV3::nonzero(transition_common(SCALAR_QUANTITY)?),
         InstructionV3::nonzero(transition_common(SCALAR_DENOMINATOR)?),
     ]);
+    // NONZERO, not `scalar_eq(coefficient, denominator)`.
+    //
+    // The equality was here from this file's first commit and forced every
+    // coordinate's weight to `D/D`, which is the trivial representation and
+    // the only one the whole family cannot be. It refused the tree's own
+    // canonical fixture on real ELFs -- `COEFFICIENTS = [2, 3, 5]` against
+    // `DENOMINATOR = 7`, refused at prelude operation 4 with `CheckFailed`,
+    // register 9 (row 0's coefficient, 2) against register 3 (7). And a
+    // release that DID satisfy it could not survive the composition kernel:
+    // every numerator would equal `D`, so `gcd(D, numerators...) == D`, and
+    // `translation.rs:231` refuses anything but 1.
+    //
+    // `nonzero` is the check this register has in the sibling that executes
+    // (`rational-lifecycle-hot-v3/src/artifacts.rs:368-370`, the same
+    // per-coordinate coefficient), and it keeps a real refusal: a zero
+    // coefficient never reaches projection.
     for row in 0..representation_outcome_count {
-        prelude.push(InstructionV3::scalar_eq(
-            transition_common(row_scalar(row, ITEM_SCALAR_COEFFICIENT)?)?,
-            transition_common(SCALAR_DENOMINATOR)?,
-        ));
+        prelude.push(InstructionV3::nonzero(transition_common(row_scalar(
+            row,
+            ITEM_SCALAR_COEFFICIENT,
+        )?)?));
     }
     if prelude.len()
         != TRANSITION_BASE_INSTRUCTIONS + representation_outcome_count * TRANSITION_ROW_INSTRUCTIONS
