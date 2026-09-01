@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import { Card, CardContent } from '@/components/ui/card';
@@ -377,8 +378,7 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
     : marketActivationOutlookV1(card);
   const decisionStats = marketDecisionStatsV1(decoded, activation, denomination, editorial, detail?.phaseMeaning ?? null);
 
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/markets" status={`${deployment.label} · read live`} />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -615,5 +615,5 @@ export default function MarketDetailWorkspace({ address }: Readonly<{ address: s
       minimumContextSlot={state.kind === 'ready' ? state.detail.floorSlot : decoded.observedSlot}
     />}
 
-  </main>;
+  </PageShell>;
 }

@@ -1,3 +1,4 @@
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import {
@@ -38,8 +39,7 @@ export default function LaunchStory() {
   const cut = PUBLIC_DEVNET_CUT_V1;
   const opened = cut.market !== null;
   const marketHref = publicCutMarketHrefV1(cut);
-  return <main className="product-shell launch-shell">
-    <Nav current="/live" status={opened ? 'public devnet · market open' : 'public devnet · programs deployed'} />
+  return <PageShell className="product-shell launch-shell" header={<Nav current="/live" status={opened ? 'public devnet · market open' : 'public devnet · programs deployed'} />}>
 
     <section className="launch-hero launch-shot">
       <div className="launch-hero-copy">
@@ -123,5 +123,5 @@ export default function LaunchStory() {
       </div>
       <p className="launch-fineprint">Public Solana devnet preview. Test assets have no monetary value. This is low-assurance software under active development, not a financial product.</p>
     </section>
-  </main>;
+  </PageShell>;
 }

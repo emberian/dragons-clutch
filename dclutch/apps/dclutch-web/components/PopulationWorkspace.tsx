@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import Nav from '@/components/Nav';
@@ -290,8 +291,7 @@ export default function PopulationWorkspace({ preloaded }: Readonly<{
     return inner(state.series);
   };
 
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/population" status="local rehearsal record" />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/population" status="local rehearsal record" />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -338,5 +338,5 @@ export default function PopulationWorkspace({ preloaded }: Readonly<{
       <span>One seeded population&apos;s own transcript · a private validator on 127.0.0.1</span>
       <span>Not devnet · not mainnet · every mutation went through its own shipped driver</span>
     </footer>
-  </main>;
+  </PageShell>;
 }

@@ -19,7 +19,7 @@
  * may only shrink. This is the third of those. It needs no browser, no new
  * dependency and no DOM, and it fails the build when the inventory grows.
  *
- * THE TWO CLASSES, and why only these two.
+ * THE THREE CLASSES, and why only these three.
  *
  *   1. A SCROLL CONTAINER NO KEYBOARD CAN REACH (WCAG 2.1.1). A `div` whose
  *      class sets `overflow-x: auto` scrolls under a mouse or a finger and is
@@ -34,13 +34,13 @@
  *      `htmlFor` names is announced as "edit, blank". Neighbouring text is not
  *      a name: a screen reader does not read the table cell to the left.
  *
- * Both are syntactic properties of the source, decidable without running
- * anything, which is what makes them gateable here. Contrast ratios, landmark
- * nesting and focus ORDER are equally real defects and are deliberately not
- * surveyed: the first two need a resolved cascade and a document tree, and the
- * third needs a rendered one. They are named in the report rather than
- * half-measured here, because a check that quietly covers a third of its class
- * is how a surface comes to look guarded.
+ * All three are syntactic properties of the source, decidable without running
+ * anything, which is what makes them gateable here. Landmark nesting needs a
+ * document tree and lives in `lib/landmarks.test.tsx`; focus ORDER needs a
+ * rendered one and is named in the report rather than half-measured, because a
+ * check that quietly covers a third of its class is how a surface comes to look
+ * guarded. The 223 rules whose background this survey will not guess are the
+ * same kind of honesty, counted rather than waved through.
  *
  * Usage:
  *   node scripts/a11y-coverage.mjs           # print the inventory
@@ -69,6 +69,50 @@ const CONTROL_TAGS = ['input', 'textarea', 'select', 'Input', 'Textarea', 'Selec
 
 /** Elements that name what they wrap, in both spellings this app uses. */
 const LABEL_TAGS = ['label', 'Label'];
+
+/**
+ * The page's own ground, and the contrast floor small text must clear.
+ *
+ * `body` paints a gradient that ends at `--ground`, and `--ground` is the
+ * darkest thing under any of this app's text, so it is the background a rule
+ * inherits unless it paints its own. WCAG 1.4.3 asks 4.5:1 of text below
+ * 18.66px bold / 24px regular, which is every size this palette uses except
+ * the display headings.
+ */
+const CONTRAST_FLOOR = 4.5;
+const LARGE_TEXT_PX = 24;
+
+function channel(value) {
+  const scaled = value / 255;
+  return scaled <= 0.03928 ? scaled / 12.92 : ((scaled + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance([red, green, blue]) {
+  return 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+}
+
+function contrast(foreground, background) {
+  const [lighter, darker] = [luminance(foreground), luminance(background)].sort((left, right) => right - left);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** `#rgb`, `#rrggbb`, or `rgba(r,g,b,a)` -> `[r,g,b,a]`, else null. */
+function colour(text) {
+  const hex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(text.trim());
+  if (hex !== null) {
+    const digits = hex[1].length === 3 ? [...hex[1]].map((one) => one + one).join('') : hex[1];
+    return [0, 2, 4].map((at) => Number.parseInt(digits.slice(at, at + 2), 16)).concat(1);
+  }
+  const rgba = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+))?\s*\)$/.exec(text.trim());
+  if (rgba === null) return null;
+  return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), rgba[4] === undefined ? 1 : Number(rgba[4])];
+}
+
+/** Lay a possibly translucent colour over an opaque one. */
+function over([red, green, blue, alpha], base) {
+  if (alpha >= 1) return [red, green, blue];
+  return [0, 1, 2].map((index) => Math.round([red, green, blue][index] * alpha + base[index] * (1 - alpha)));
+}
 
 function sourceFiles() {
   const found = [];
@@ -132,6 +176,115 @@ export function scrollingClasses() {
     }
   }
   return [...found].sort();
+}
+
+/** `:root`'s custom properties, resolved through each other. */
+function tokens() {
+  const found = new Map();
+  for (const sheet of STYLESHEETS) {
+    for (const match of readFileSync(sheet, 'utf8').matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+      if (!found.has(match[1])) found.set(match[1], match[2].trim());
+    }
+  }
+  const resolve = (value, depth = 0) => {
+    if (depth > 8) return value;
+    return value.replace(/var\((--[\w-]+)[^)]*\)/g, (whole, name) => (found.has(name) ? resolve(found.get(name), depth + 1) : whole));
+  };
+  return new Map([...found].map(([name, value]) => [name, resolve(value)]));
+}
+
+/**
+ * Every rule that paints small text, with the background it paints it on.
+ *
+ * The background is the rule's OWN if it declares an opaque one, composited
+ * over the ground if it declares a translucent one, and the page ground
+ * otherwise. That distinction is the whole accuracy of this check: measuring
+ * every foreground against the ground reports `.skip-link`'s `#17200f` on
+ * `--acid` as 1.15:1, when it is dark ink on a bright button and among the
+ * most legible things on the site. Eight of the first fifty-six findings were
+ * that mistake, and a check that cries wolf on the accessible cases is one
+ * nobody keeps.
+ */
+export function surveyContrast() {
+  const table = tokens();
+  const groundValue = colour(table.get('--ground') ?? '#000000');
+  const ground = groundValue === null ? [0, 0, 0] : over(groundValue, [0, 0, 0]);
+  const expand = (value) => value.replace(/var\((--[\w-]+)[^)]*\)/g, (whole, name) => table.get(name) ?? whole);
+
+  // Every selector that paints a background, gathered first so a colour rule
+  // can ask what its own ancestors put behind it.
+  const painted = new Map();
+  for (const sheet of STYLESHEETS) {
+    for (const rule of readFileSync(sheet, 'utf8').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const paint = /(?:^|[;\s])background(?:-color)?\s*:\s*([^;]+)(?:;|$)/.exec(rule[2]);
+      if (paint === null) continue;
+      for (const one of rule[1].split(',')) {
+        const key = one.trim().split('\n').pop().trim();
+        if (key !== '' && !painted.has(key)) painted.set(key, paint[1]);
+      }
+    }
+  }
+
+  const rows = [];
+  const unresolved = [];
+  for (const sheet of STYLESHEETS) {
+    const css = readFileSync(sheet, 'utf8');
+    for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = rule[1].trim().split('\n').pop().trim();
+      if (selector.startsWith('@') || selector.startsWith(':root')) continue;
+      const body = rule[2];
+      const declared = /(?:^|[;\s])color\s*:\s*([^;]+)(?:;|$)/.exec(body);
+      if (declared === null) continue;
+      const foreground = colour(expand(declared[1]));
+      if (foreground === null) continue;
+
+      // THE BACKGROUND, or an honest refusal to name one.
+      //
+      // A rule that paints its own opaque background is exact. A rule that
+      // paints nothing AND has no ancestor selector in these sheets that
+      // paints one is exact too: it sits on the page ground. Anything else --
+      // a gradient, a translucent stack, a colour whose background comes from
+      // an ancestor this file can see but cannot resolve a cascade for -- is
+      // UNRESOLVED, and is reported rather than judged.
+      //
+      // An earlier draft guessed the ancestor's paint. It moved the inventory
+      // from 52 to 66 and invented a 3.22:1 finding for a rule that had not
+      // changed, because picking "the nearest selector with a background" is
+      // not what a cascade does. A contrast number produced by a guess is
+      // worse than no number: it gets colours rewritten to satisfy it.
+      const ownPaint = painted.get(selector);
+      const ancestors = selector.split(/\s+|(?=>)/).filter((part) => part !== '' && part !== '>');
+      const inherited = ancestors.slice(0, -1).some((_, depth) => painted.has(ancestors.slice(0, depth + 1).join(' ')));
+      let background = null;
+      if (ownPaint !== undefined) {
+        const own = colour(expand(ownPaint));
+        if (own !== null && own[3] >= 1) background = over(own, ground);
+      } else if (!inherited) {
+        background = ground;
+      }
+      if (background === null) {
+        unresolved.push({ site: `${relative(webRoot, sheet).split('\\').join('/')}:${lineOf(css, rule.index)}`, selector });
+        continue;
+      }
+
+      const sized = /font-size\s*:\s*([\d.]+)px/.exec(body) ?? /font\s*:\s*(?:[^;]*?\s)?([\d.]+)px/.exec(expand(body));
+      const size = sized === null ? null : Number(sized[1]);
+      if (size !== null && size >= LARGE_TEXT_PX) continue;
+
+      const ratio = contrast(over(foreground, background), background);
+      if (ratio >= CONTRAST_FLOOR) continue;
+      rows.push({
+        site: `${relative(webRoot, sheet).split('\\').join('/')}:${lineOf(css, rule.index)}`,
+        selector,
+        ratio: Number(ratio.toFixed(2)),
+        size,
+      });
+    }
+  }
+  return Object.freeze({
+    failing: rows.sort((left, right) => left.site.localeCompare(right.site)),
+    unresolved: unresolved.sort((left, right) => left.site.localeCompare(right.site)),
+  });
 }
 
 /** One JSX opening tag, from `<` to its matching `>`, quote-aware. */
@@ -313,6 +466,8 @@ export function coverage() {
     scrollingClasses: found.scrollingClasses,
     unnamedControls: classify(found.unnamedControls, exempt.unnamedControls),
     unreachableScrollers: classify(found.unreachableScrollers, exempt.unreachableScrollers),
+    lowContrastText: classify(surveyContrast().failing, exempt.lowContrastText),
+    unresolvedContrast: surveyContrast().unresolved,
   };
 }
 
@@ -327,5 +482,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     for (const entry of open(report.unnamedControls)) process.stdout.write(`  unnamed  ${entry.site}\n`);
     process.stdout.write(`a11y: ${open(report.unreachableScrollers).length} scroll boxes no keyboard reaches (${report.unreachableScrollers.length - open(report.unreachableScrollers).length} exempt)\n`);
     for (const entry of open(report.unreachableScrollers)) process.stdout.write(`  no tabIndex  ${entry.site}\n`);
+    const contrast = surveyContrast();
+    process.stdout.write(`a11y: ${open(report.lowContrastText).length} small-text rules below ${CONTRAST_FLOOR}:1 on a resolvable background (${report.lowContrastText.length - open(report.lowContrastText).length} exempt)\n`);
+    for (const entry of contrast.failing) process.stdout.write(`  ${String(entry.ratio).padStart(5)}:1  ${entry.site}  ${entry.selector.slice(0, 60)}\n`);
+    process.stdout.write(`a11y: ${contrast.unresolved.length} rules paint small text on a background this survey will not guess\n`);
   }
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
@@ -239,8 +240,7 @@ export default function CoreFoundWorkspace() {
   }
 
   const group = (name: 'authority' | 'deployment' | 'records') => ADDRESS_FIELDS.filter((entry) => entry.group === name);
-  return <main className="product-shell direct-workspace found-workspace">
-    <ConsoleHeader path="/found" title="Found a market" purpose="Run the current journaled devnet founding campaign. The legacy packet inspector remains below for diagnosis only." />
+  return <PageShell className="product-shell direct-workspace found-workspace" header={<ConsoleHeader path="/found" title="Found a market" purpose="Run the current journaled devnet founding campaign. The legacy packet inspector remains below for diagnosis only." />}>
 
     <section className="market-heading found-heading"><div><h1>Found, then<br />admit.</h1></div><p>One operation document drives current Market founding and first-participant admission. Preparation is read-only. Execution is explicit, journaled before any key-owning child runs, and resumes only that same operation.</p></section>
 
@@ -335,5 +335,5 @@ export default function CoreFoundWorkspace() {
       </section>
     </>}
     </details>
-  </main>;
+  </PageShell>;
 }

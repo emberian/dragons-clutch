@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -113,14 +114,13 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
   const refusalFor = (field: Exclude<WorkbenchRefusalFieldV1, null>) => refusalField === field
     ? <OperatorRefusal remedy={refusalRemedy(field)} detail={currentState.kind === 'error' ? currentState.message : ''} />
     : null;
-  return <main className="product-shell workbench-shell">
-    <ConsoleHeader
+  return <PageShell className="product-shell workbench-shell" header={<ConsoleHeader
       path={resolutionSurface ? '/resolution' : '/workbench'}
       title={resolutionSurface ? 'Resolution readiness' : 'Lifecycle readiness'}
       purpose={resolutionSurface
         ? 'Read what the selected market still needs before a resolution route can begin preflight.'
         : 'Read which lifecycle routes can begin preflight against the chain you choose.'}
-    />
+    />}>
     <section className="workbench-heading"><div><h1>{resolutionSurface ? <>Resolution<br />readiness.</> : <>The market<br />lifecycle.</>}</h1></div><p>{resolutionSurface
       ? 'This read-only map opens at Resolve & settle. It reads the selected chain and names missing preconditions; it cannot resolve a market.'
       : 'This is a read-only map of where a market has got to. It reads the chain and tells you what is still missing; it does not create, trade, resolve, or redeem. No sample market, price, pool, balance, or wallet authority appears here.'}</p></section>
@@ -164,5 +164,5 @@ export default function MarketWorkbench({ initialStage = 'author', surface = 'li
               ? <Anchor href="/markets">Choose a Market, then reacquire →</Anchor>
               : <Anchor href="/operate">Read this act’s boundary →</Anchor>}</article>;
       })}</div><footer><strong>Action handoff</strong><span>Each act above names where it runs and what it promises. For an unsigned transaction, inspect dependencies and download the exact packet in the <Anchor href="/operate">operator console →</Anchor></span></footer></section></div>
-  </main>;
+  </PageShell>;
 }

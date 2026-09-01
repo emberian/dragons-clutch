@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useMemo, useState } from 'react';
 
@@ -107,8 +108,7 @@ export default function ProductV2Studio() {
     try { const numerator = productInteger(sampleNumerator, 'sample numerator'); const denominator = productInteger(sampleDenominator, 'sample denominator'); setSample(`${evaluateProductV2(compiled, numerator, denominator)} scaled payout atoms at ${numerator}/${denominator}`); } catch (error) { setSample(`Refused: ${message(error)}`); }
   }
 
-  return <main className="product-shell direct-workspace product-v2-studio">
-    <ConsoleHeader path="/product-v2" title="Product studio" purpose="Compile the current five-record spline graph through its Rust owner, then inspect exact low-level payoff semantics." />
+  return <PageShell className="product-shell direct-workspace product-v2-studio" header={<ConsoleHeader path="/product-v2" title="Product studio" purpose="Compile the current five-record spline graph through its Rust owner, then inspect exact low-level payoff semantics." />}>
     <section className="market-heading"><div><h1>Product studio.</h1><p>The current compiler accepts exact degree-2/3 spline semantics and emits every immutable record founding needs. Nothing is rounded until the named cumulative-floor boundary.</p></div></section>
 
     <section className="direct-card product-spline-current" id="spline-product">
@@ -198,5 +198,5 @@ export default function ProductV2Studio() {
       {admission && <div className="direct-output"><dl><div><dt>Derived receipt · bump</dt><dd>{admission.receipt} · {admission.bump}</dd></div><div><dt>Account frame</dt><dd>{admission.accounts.length} accounts</dd></div></dl><label><span>112-byte DCLTPRQ2 admission request · hex</span><textarea readOnly value={admission.requestHex} /></label><ol className="registered-refusals">{admission.accounts.map((entry, index) => <li key={entry}>{index}. {entry}</li>)}</ol><p className="direct-refusal">This is an instruction, not a transaction: no fee payer, no blockhash, no signature slot. The three records must be authenticated against the Registry before it is worth signing.</p></div>}
     </form>
     <footer className="product-footer"><span>No private keys · no signing · no submission</span></footer>
-  </main>;
+  </PageShell>;
 }

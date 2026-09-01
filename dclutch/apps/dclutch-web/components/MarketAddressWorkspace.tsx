@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import { useSyncExternalStore } from 'react';
 
 import Anchor from '@/components/Anchor';
@@ -27,8 +28,7 @@ export default function MarketAddressWorkspace() {
   if (query.kind === 'ready') return <MarketDetailWorkspace address={query.address} />;
 
   const resolving = query.kind === 'resolving';
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/markets" />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" />}>
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">{resolving ? 'Reading this link' : 'Market link refused'}</p>
@@ -47,5 +47,5 @@ export default function MarketAddressWorkspace() {
       <header><span>01</span><div><h2>Open the finalized Market list</h2><p>Each listed Market carries a complete link to this page.</p></div></header>
       <div className="direct-actions"><Anchor className="secondary-action" href="/markets">Discover Markets →</Anchor></div>
     </section>}
-  </main>;
+  </PageShell>;
 }

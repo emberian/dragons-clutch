@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import ConsoleHeader from '@/components/ConsoleHeader';
@@ -899,8 +900,7 @@ export default function ResolutionWorkspace() {
     ? state.journal
     : state.kind === 'refused' && state.journal?.phase === 'unsigned' ? state.journal : null;
 
-  return <main className="product-shell workbench-shell">
-    <ConsoleHeader path="/resolution" title="Resolution funding" purpose="Finish the Market’s exact Source funding-readiness walk." />
+  return <PageShell className="product-shell workbench-shell" header={<ConsoleHeader path="/resolution" title="Resolution funding" purpose="Finish the Market’s exact Source funding-readiness walk." />}>
     <section className="workbench-heading"><div><h1>Make resolution<br />ready.</h1></div><p>Read the current Market, authenticate its releases and records in the Rust planner, then execute the one adjacent permissionless act. The browser owns RPC, durable recovery, wallet consent, submission, and finalized poststate verification.</p></section>
 
     <div className="workbench-grid">
@@ -944,5 +944,5 @@ export default function ResolutionWorkspace() {
       <section className="workbench-coordinates"><header><span>Reclaim input</span><h2>Use the Market above</h2><p>The reclaim must join the lifecycle back to that exact Market and the current Registry and Resolution deployment.</p></header><dl className="workbench-authority"><div><dt>Market</dt><dd>{market.trim() === '' ? 'select above' : short(market.trim())}</dd></div><div><dt>Registry</dt><dd>{short(programs.registryProgram)}</dd></div><div><dt>Resolution</dt><dd>{short(programs.resolutionProgram)}</dd></div></dl></section>
       <ProviderReclaimPanel client={client} directory={directory} endpoint={endpoint} market={market} programs={{ registryProgram: programs.registryProgram, resolutionProgram: programs.resolutionProgram }} />
     </div>
-  </main>;
+  </PageShell>;
 }

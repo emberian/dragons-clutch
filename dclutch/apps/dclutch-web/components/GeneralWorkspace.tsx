@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
@@ -143,8 +144,7 @@ export default function GeneralWorkspace() {
     } catch (error) { setReceiptStatus(`Refused: ${message(error)}`); }
   }
 
-  return <main className="product-shell direct-workspace">
-    <ConsoleHeader path="/general" title="General market operator" purpose="Understand and re-check one exact General action before any wallet sees it." />
+  return <PageShell className="product-shell direct-workspace" header={<ConsoleHeader path="/general" title="General market operator" purpose="Understand and re-check one exact General action before any wallet sees it." />}>
     <section className="market-heading"><div><h1>General market operator.</h1><p>Inspect one exact action across order collection, candidate verification, settlement, and cleanup. The page explains what the packet can change, reacquires its authority from finalized state, and keeps the unsigned bytes available for an independent wallet handoff. Nothing is signed or submitted.</p></div></section>
 
     <form className="direct-card" onSubmit={inspect} aria-labelledby="general-plan">
@@ -167,5 +167,5 @@ export default function GeneralWorkspace() {
       <div className="direct-card-heading"><span>03</span><div><h2 id="general-receipt">Verify the commit-last execution receipt</h2><p>Paste the 280-byte HotExecutionAckV3 the chain returns. It is accepted only if it joins the request digest, selected CapabilityProgram, Market generation, root prestate, and release set.</p></div></div>
       <label><span>Execution receipt · base64 — the 280-byte HotExecutionAckV3 the chain returns when the packet executes</span><textarea required value={receiptText} onChange={(event) => setReceiptText(event.target.value.trim())} /></label><button disabled={inspection === null}>Verify exact receipt</button><p className="direct-status" aria-live="polite">{receiptStatus}</p>{receipt && <Receipt value={receipt} />}
     </form>
-  </main>;
+  </PageShell>;
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import { useEffect, useState } from 'react';
 
 import Anchor from '@/components/Anchor';
@@ -383,8 +384,7 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
   const status = read !== null && read.kind === 'loaded' ? read.status : null;
   const beat = beatFor(read);
 
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/pulse" status={status === null ? 'no simulator running' : status.halted ? 'halted' : 'simulator publishing'} />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/pulse" status={status === null ? 'no simulator running' : status.halted ? 'halted' : 'simulator publishing'} />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -492,5 +492,5 @@ export default function PulseWorkspace({ preloaded, preloadedSeries }: Readonly<
     <footer className="product-footer">
       <span>The simulator&apos;s own report · one file, rewritten every cycle</span>
     </footer>
-  </main>;
+  </PageShell>;
 }

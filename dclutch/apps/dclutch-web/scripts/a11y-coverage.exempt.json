@@ -9,5 +9,11 @@
       "reason": "The pass-through primitive itself, which forwards every prop and has no name of its own by construction. Its callers are the ones that owe a label, and the survey checks each of them where they render it."
     }
   },
-  "unreachableScrollers": {}
+  "unreachableScrollers": {},
+  "lowContrastText": {
+    "app/globals.css": {
+      "sites": 2,
+      "reason": "Two decorative marks, neither of which carries information a reader needs: `.launch-hero::after` stamps 'DCLUTCH / DEVNET / 2026' sideways in the corner of the launch hero at 8px, and `.chart-watermark` is a watermark by name and by function. WCAG 1.4.3 exempts incidental and decorative text, and raising either to 4.5:1 would turn a texture into a competing label. Every other rule in this file that paints small text on a background this survey can resolve is above the floor; a third failure here changes the count and reopens both."
+    }
+  }
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
@@ -156,8 +157,7 @@ export default function DealerLiquidityWorkspace() {
     link.click(); URL.revokeObjectURL(link.href);
   }
 
-  return <main className="product-shell trade-v3-shell">
-    <ConsoleHeader path="/liquidity" title="Liquidity" purpose="Check an equity request against the chain, build the unsigned transaction, sign, and download the packet." />
+  return <PageShell className="product-shell trade-v3-shell" header={<ConsoleHeader path="/liquidity" title="Liquidity" purpose="Check an equity request against the chain, build the unsigned transaction, sign, and download the packet." />}>
 
     <section className="trade-v3-hero"><div><h1>Dealer<br /><em>liquidity.</em></h1><p>Contribute or redeem dealer equity. The dealer’s live custody state is read first, and every pasted address and byte is checked against the chain, before any transaction is built.</p></div><aside><span>Executable successor</span><strong>{inspection?.checkedOuter.status === 'checked' ? `${inspection.request.action} · P${inspection.request.signedPositionCount}` : 'fail closed'}</strong><p>Selectors 1–6 only. LP open/close and scenario trading remain hidden until their production outer routes are complete.</p></aside></section>
 
@@ -182,5 +182,5 @@ export default function DealerLiquidityWorkspace() {
     </section>
 
     <footer className="product-footer"><span>Six equity routes</span><span>No automatic wallet request · no submission path</span></footer>
-  </main>;
+  </PageShell>;
 }

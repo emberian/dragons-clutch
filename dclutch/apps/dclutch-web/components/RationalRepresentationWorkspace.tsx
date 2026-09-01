@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useState } from 'react';
 
@@ -129,8 +130,7 @@ export default function RationalRepresentationWorkspace() {
     link.click(); URL.revokeObjectURL(link.href);
   }
 
-  return <main className="product-shell trade-v3-shell">
-    <ConsoleHeader path="/redeem" title="Representation" purpose="Inspect claim-transfer and redemption constructors for a local or compatible custom chain." />
+  return <PageShell className="product-shell trade-v3-shell" header={<ConsoleHeader path="/redeem" title="Representation" purpose="Inspect claim-transfer and redemption constructors for a local or compatible custom chain." />}>
 
     <section className="trade-v3-hero"><div><h1>Claims &amp;<br /><em>redemption.</em></h1><p>The constructors below have local execution evidence and derive their routes from on-chain state. No current devnet market can supply that route today. Opening a representation and retiring a receipt produce unsigned candidates; where a step is unavailable, the console says exactly what is missing.</p></div><aside><span>Local/custom chain</span><strong>Bearer transfer</strong><p>No current devnet market can use this surface. Terminal redemption is SBF-tested, while browser payout remains read-only until it consumes the canonical Rust emitter.</p></aside></section>
 
@@ -167,5 +167,5 @@ export default function RationalRepresentationWorkspace() {
     <RationalRetireReceiptPanel />
 
     <footer className="product-footer"><span>Arbitrary u8 display decimals · exact raw-u64 economics</span><span>No mock token state · no hidden rounding · no submit path</span></footer>
-  </main>;
+  </PageShell>;
 }

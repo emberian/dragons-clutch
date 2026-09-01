@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import { FormEvent, useCallback, useState } from 'react';
@@ -169,8 +170,7 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
     void read(candidate);
   }
 
-  return <main className="product-shell trade-v3-shell">
-    <Nav current={redemption ? '/redeem' : '/portfolio'} status={`${deployment.label} · ${redemption ? 'wallet redemption' : 'read live'}`} />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current={redemption ? '/redeem' : '/portfolio'} status={`${deployment.label} · ${redemption ? 'wallet redemption' : 'read live'}`} />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -226,5 +226,5 @@ export default function PortfolioWorkspace({ mode = 'portfolio' }: Readonly<{ mo
       </>}
     </section>
 
-  </main>;
+  </PageShell>;
 }

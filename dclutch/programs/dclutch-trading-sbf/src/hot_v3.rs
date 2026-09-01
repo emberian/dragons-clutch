@@ -1231,9 +1231,28 @@ fn authenticate_accelerator_artifacts_v4(
         descriptor.lifecycle().schema().to_bytes(),
         descriptor.lifecycle().program().to_bytes(),
     )?;
-    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
-        || descriptor.derivation_policy() != descriptor.lifecycle().program()
-    {
+    // R2 -- `derivation_policy == lifecycle().program()` -- is GONE, and what it
+    // restated was already authenticated more strongly two statements up.
+    //
+    // `lifecycle().program()` is the lifecycle record's CONTENT DIGEST. The
+    // `borrow_finalized_record` above refuses unless `hash(&data) == digest`
+    // (`hot_v3.rs:13437`) at the Registry PDA derived from
+    // `[RAW_RECORD_PDA_SEED_V1, schema, digest]`, and `sealed_token` below binds
+    // those exact bytes to the execution seal. R2 authenticated nothing on top of
+    // that; it only demanded that ONE field be a per-action digest and a per-root
+    // constant at the same time, which no descriptor can satisfy once a family
+    // has more than one action -- `derivation_policy` is per-root by
+    // construction and the lifecycle digest is per-action.
+    //
+    // What still binds the descriptor to its manifest entry is untouched:
+    // `validate_selection` compares `kind`, `release_id`, `config_id`,
+    // `capacity_profile` and `root_schema`. The lifecycle SCHEMA admission below
+    // is untouched too. This is a re-proof on the other side, not a weakening.
+    //
+    // The host half is `a153f08e`; this is the runtime half, and the two are one
+    // repair. R2 spans two ELFs -- dropping it in Trading alone leaves the dealer
+    // accelerator refusing `0xd001` here.
+    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     StateLifecyclePolicyV5::decode_selected(
@@ -3366,9 +3385,28 @@ fn authenticate_and_execute_hot_v3(
         descriptor.lifecycle().schema().to_bytes(),
         descriptor.lifecycle().program().to_bytes(),
     )?;
-    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5
-        || descriptor.derivation_policy() != descriptor.lifecycle().program()
-    {
+    // R2 -- `derivation_policy == lifecycle().program()` -- is GONE, and what it
+    // restated was already authenticated more strongly two statements up.
+    //
+    // `lifecycle().program()` is the lifecycle record's CONTENT DIGEST. The
+    // `borrow_finalized_record` above refuses unless `hash(&data) == digest`
+    // (`hot_v3.rs:13437`) at the Registry PDA derived from
+    // `[RAW_RECORD_PDA_SEED_V1, schema, digest]`, and `sealed_token` below binds
+    // those exact bytes to the execution seal. R2 authenticated nothing on top of
+    // that; it only demanded that ONE field be a per-action digest and a per-root
+    // constant at the same time, which no descriptor can satisfy once a family
+    // has more than one action -- `derivation_policy` is per-root by
+    // construction and the lifecycle digest is per-action.
+    //
+    // What still binds the descriptor to its manifest entry is untouched:
+    // `validate_selection` compares `kind`, `release_id`, `config_id`,
+    // `capacity_profile` and `root_schema`. The lifecycle SCHEMA admission below
+    // is untouched too. This is a re-proof on the other side, not a weakening.
+    //
+    // The host half is `a153f08e`; this is the runtime half, and the two are one
+    // repair. R2 spans two ELFs -- dropping it in Trading alone leaves the dealer
+    // accelerator refusing `0xd001` here.
+    if descriptor.lifecycle().schema().to_bytes() != SELECTED_LIFECYCLE_SCHEMA_RELEASE_ID_V5 {
         return Err(TradingSbfError::UnsupportedContent.into());
     }
     let lifecycle_token = sealed_token(

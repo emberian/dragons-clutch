@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Nav from '@/components/Nav';
 import { FormEvent, useMemo, useState } from 'react';
 
@@ -256,8 +257,7 @@ export default function CreateMarketWizard() {
     }
   }
 
-  return <main className="product-shell wizard-shell">
-    <Nav current="/create" />
+  return <PageShell className="product-shell wizard-shell" header={<Nav current="/create" />}>
 
     <section className="market-heading">
       <div>
@@ -513,5 +513,5 @@ export default function CreateMarketWizard() {
         caller is available here, use this page only to review the design and inspect the unsigned preview.
       </p>
     </section>}
-  </main>;
+  </PageShell>;
 }

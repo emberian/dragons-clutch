@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import MarketFilterBar from '@/components/MarketFilterBar';
@@ -403,8 +404,7 @@ export default function MarketDiscoveryWorkspace() {
     : Object.freeze([]);
   const asideCount = wholeListing === null ? 0 : wholeListing.founding.length + wholeListing.untradeable.length + wholeListing.settled.length + wholeListing.unreadable.length + incompatible.length;
 
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/markets" status={`${deployment.label} · read live`} />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/markets" status={`${deployment.label} · read live`} />}>
 
     <section className="trade-v3-hero hero-solo">
       <div>
@@ -452,5 +452,5 @@ export default function MarketDiscoveryWorkspace() {
     {discovery !== null && listing !== null && state.kind === 'ready'
       && <RestOfTheRecord listing={listing} incompatible={incompatible} clock={clock} nowMs={nowMs} />}
 
-  </main>;
+  </PageShell>;
 }

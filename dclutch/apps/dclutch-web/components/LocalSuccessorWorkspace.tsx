@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -68,8 +69,7 @@ export default function LocalSuccessorWorkspace() {
   const pruned = snapshot?.transactions.filter((transaction) => transaction.rpcStatus === 'pruned').length ?? 0;
   const statusMessage = discovery.kind === 'ready' ? '' : discovery.message;
 
-  return <main className="product-shell direct-workspace local-successor-shell">
-    <ConsoleHeader path="/local" title="Local successor" purpose="Compare the checkpointed validator's finalized state against the published evidence." />
+  return <PageShell className="product-shell direct-workspace local-successor-shell" header={<ConsoleHeader path="/local" title="Local successor" purpose="Compare the checkpointed validator's finalized state against the published evidence." />}>
     <section className="market-heading local-heading"><div><h1>The local chain.</h1><p>Every account on the fixed localhost validator, compared byte for byte against the hash-pinned checkpoint.</p></div><aside className="local-endpoint"><span>Fixed profile</span><strong>{LOCAL_SUCCESSOR_CHECKPOINT.network.rpc_url}</strong><code>{LOCAL_SUCCESSOR_CHECKPOINT.network.genesis_hash}</code><button type="button" onClick={() => void refresh()} disabled={discovery.kind === 'loading'}>{discovery.kind === 'loading' ? 'Reading finalized state…' : 'Refresh exact state'}</button></aside></section>
     <section className="local-status-strip" aria-live="polite"><i className={snapshot ? 'online' : discovery.kind === 'error' ? 'offline' : ''} /><strong>{snapshot ? 'Finalized state read' : statusMessage}</strong>{snapshot && <span>slot {snapshot.observedSlot} · Agave {snapshot.facts.solanaCore} · feature {snapshot.facts.featureSet}</span>}</section>
     {snapshot && <>
@@ -81,5 +81,5 @@ export default function LocalSuccessorWorkspace() {
       <section className="direct-card"><div className="direct-card-heading"><span>05</span><div><h2>Genesis boundary</h2></div></div><ol className="local-genesis-list">{LOCAL_SUCCESSOR_CHECKPOINT.evidence.genesis_fixture_boundary.map((boundary) => <li key={boundary}>{boundary}</li>)}</ol><div className="local-provenance"><span>tool {compact(LOCAL_SUCCESSOR_CHECKPOINT.provenance.tool_commit)}</span><span>source {compact(LOCAL_SUCCESSOR_CHECKPOINT.provenance.exact_source_commit)}</span><span>plan {compact(LOCAL_SUCCESSOR_CHECKPOINT.provenance.plan_sha256)}</span><span>evidence {compact(LOCAL_SUCCESSOR_CHECKPOINT.provenance.evidence_sha256)}</span></div></section>
     </>}
     <footer className="product-footer"><span>Read-only localhost profile · no wallet · no signing · no submission</span></footer>
-  </main>;
+  </PageShell>;
 }

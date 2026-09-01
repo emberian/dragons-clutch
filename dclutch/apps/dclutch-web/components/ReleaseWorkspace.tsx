@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import ArtifactInput from '@/components/ArtifactInput';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import {
@@ -187,8 +188,7 @@ export default function ReleaseWorkspace() {
   const derivedCache = activation?.cache ?? deployment.activationCache;
   const cacheSource = activation === null ? `the ${deployment.label} deployment` : 'the green activation plan in step 02';
 
-  return <main className="product-shell direct-workspace release-workspace">
-    <ConsoleHeader path="/release" title="Release activation" purpose="Activate already-installed checked artifacts against the Registry. Does not update program code." />
+  return <PageShell className="product-shell direct-workspace release-workspace" header={<ConsoleHeader path="/release" title="Release activation" purpose="Activate already-installed checked artifacts against the Registry. Does not update program code." />}>
     <section className="market-resolution"><strong>Activation only.</strong> This page activates checked artifacts already installed on the selected chain. It does not deploy or upgrade programs.</section>
     <section className="market-heading"><div><h1>Release activation.</h1><p>Load the six files produced by <code>checked-release-candidate.sh</code>. Preflight compares them with finalized Registry records and current Loader accounts.</p></div></section>
     <section className="direct-card"><div className="direct-card-heading"><span>01</span><div><h2>The chain, the Registry, and who pays</h2><p>These three fields are shared by every act below.</p></div></div><fieldset className="operator-act"><legend>Release authority</legend><div className="operator-act-grid">
@@ -232,5 +232,5 @@ export default function ReleaseWorkspace() {
       <button type="submit">Reacquire &amp; inspect immutable chain</button><p className="direct-status" aria-live="polite">{infrastructureStatus}</p>{infrastructure && <InfrastructureResult report={infrastructure} />}
     </form>
     <footer className="product-footer"><span>Wallet signing only behind a green plan · no submit path</span></footer>
-  </main>;
+  </PageShell>;
 }

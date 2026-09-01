@@ -2287,3 +2287,68 @@ while proving nothing** — all four calls returned `InvalidShareSupply`, then
 The same defect it had spent the session convicting in other people's tests. The
 anti-vacuity guard it then wrote caught the second draft, and is committed
 beside the test.
+
+## 2026-09-01 — C-09's stranded loser goes home
+
+The hole is closed with a route, not a relaxation. `40217014`.
+
+`AbandonSubmission` (`DCLTPAB3`, action 3, 18 accounts) is **the other half of a
+partition**. The consumed gate did not move and could not have: the consumed
+wire *physically cannot express* an abandoned submission —
+`ProviderReclaimRequestV3::decode` refuses a zero `terminal_sequence` and any
+zero identity, `certificate` among them, and a `Submitted` lifecycle carries
+zero in both by construction. Where the consumed route proves a submission
+became truth, this one proves it never can.
+
+The gate is a **conjunction**: the submitter's own `reclaim_after_unix_seconds`
+has passed **AND** the Source can no longer consume (program-owned past
+`Primary`, or the vacant System account `CloseFund` leaves). Both, never either
+— the deadline alone is the stranger-deletes-a-live-answer failure. The
+lifecycle's `terminal_sequence` / `certificate` / `provider_evidence` are each
+checked zero rather than trusted from `status`, because this route's whole
+admissibility rests on that statement.
+
+Refusal `SubmissionStillConsumable = 0x8017` earns its own code because it is
+the only refusal here an honest well-formed request triggers: **right route,
+wrong moment.** Evidence on a real ELF, 4/4 green: against a live market the
+*builder* refuses (griefing stopped before a transaction exists); one second
+early the chain refuses `0x8017`, red-proven, with lifecycle, update and
+beneficiary byte-identical after; past the deadline a stranger reclaims and the
+rent lands on the same persisted recipient the winner's did. **The strand
+assertion is gone, replaced by the assertion that the loser goes home** — that
+transition is the proof.
+
+`docs/evidence/LIVENESS_CENSUS_2026_08_29.md` row Q8a had already reached this
+exact construction — new magic, new request type, new terminality conjunct, the
+same griefing argument — **and stopped at the analysis.** The analysis was right
+and sat unbuilt for three days.
+
+### The stub with an alibi
+
+`resolution_successor.rs`'s `primary_instruction` and `funded_caller_instruction`
+were replaced by `panic!` stubs on 2026-08-26 00:19. The `#[ignore]` landed
+**47 minutes later.** The campaign body has been unreachable for six days
+**while the README quoted its ten-row compute table as evidence.**
+
+Four layers of cover, removed one at a time with a rerun after each: the
+`#[ignore]`; six env vars nothing in the repo set; a pinned Resolution identity
+at V4 while the program authenticates **V7**; and an activation-cache address
+derived and **never seeded**, refusing `RegistryError::ActivationCache`. Under
+all four: the panics.
+
+Dispositioned as **convergence, not repair** — rebuilding those builders means
+porting the current Core-effect and funded ABIs into a *second* fixture, while
+`resolution_core_v3_lifecycle.rs` already carries them against current ELFs. The
+`#[ignore]` stays with the true reason and a pointer, because an un-ignored
+permanently-red test in a shared checkout makes every other lane's run red for a
+cause they did not create.
+
+### Delegated verification, swept and stated
+
+No ed25519/secp256k1/keccak in the Resolution program or `dclutch-pyth-svm`;
+`FullPriceUpdateV2::parse` reads a tag byte. Soundness is the Receiver-owned
+account plus a release record pinning that Receiver by ProgramData, deployment
+slot, upgrade policy and config digest. Swept docs, web components and console
+strings for first-party verification claims: **none found** — a negative result
+with the search named. Also corrected "performs no provider CPI": the transport
+CPIs the Receiver in three places.

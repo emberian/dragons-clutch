@@ -528,8 +528,15 @@ impl ConservationLedgerV1 {
             payer_lamports,
             mint_supply: mint.supply,
             token_atoms,
+            declared_class_deltas: match self.pending_class_claim.take() {
+                Some(explicit) => Some(explicit),
+                None => self.derive_class_claim(
+                    &class_atoms,
+                    declared_collateral_delta,
+                    declared_hoard_delta,
+                ),
+            },
             class_atoms,
-            declared_class_deltas: self.pending_class_claim.take(),
             tracked_collateral,
             hoard_atoms,
             outcome_count,
@@ -750,6 +757,56 @@ impl ConservationLedgerV1 {
         verdicts.push(self.evaluate_lamports(now));
 
         verdicts
+    }
+
+    /// Derive a stage's per-class claim from the two numbers it already states,
+    /// but ONLY where that derivation is sound.
+    ///
+    /// A stage already declares its tracked-total delta and its Hoard delta.
+    /// While every tracked collateral account is either the Hoard or not a
+    /// Custody vault at all, those two numbers determine the third:
+    /// `unclassified = tracked - hoard`. Deriving it means a journey whose
+    /// market opens one compartment gets L8 for free and states it honestly.
+    ///
+    /// WHAT THIS DERIVATION DOES AND DOES NOT ADD, stated because a law that
+    /// cannot fail independently is decoration. Under exactly these two classes
+    /// both of L8's rows are IMPLIED by L2 and L5: the Hoard row is L2 restated,
+    /// and the unclassified row follows from the other two by subtraction. Its
+    /// independent content is precisely one claim, and it is the one worth
+    /// having: **no third compartment exists, and if one appears its movement is
+    /// not silently absorbed into the remainder.** The moment a vault of any
+    /// other class joins the tracked set, this returns `None` rather than
+    /// guessing a split, and L8 says it cannot be derived and must be declared.
+    fn derive_class_claim(
+        &self,
+        class_atoms: &BTreeMap<String, u64>,
+        declared_collateral_delta: i128,
+        declared_hoard_delta: i128,
+    ) -> Option<BTreeMap<String, i128>> {
+        let hoard = COMPARTMENTS
+            .iter()
+            .find(|(compartment, _)| matches!(compartment, CompartmentV1::HoardPrincipal))
+            .map(|(_, label)| *label)?;
+        let derivable = |classes: &BTreeMap<String, u64>| {
+            classes
+                .keys()
+                .all(|class| class == hoard || class == UNCLASSIFIED)
+        };
+        if !derivable(class_atoms) {
+            return None;
+        }
+        if let Some(previous) = self.observations.last() {
+            if !derivable(&previous.class_atoms) {
+                return None;
+            }
+        }
+        Some(BTreeMap::from([
+            (hoard.to_string(), declared_hoard_delta),
+            (
+                UNCLASSIFIED.to_string(),
+                declared_collateral_delta.saturating_sub(declared_hoard_delta),
+            ),
+        ]))
     }
 
     /// L8: every compartment class moved by exactly the amount its stage
@@ -1187,6 +1244,83 @@ mod tests {
         let l8 = verdict(&verdicts, "L8");
         std::println!("L8 {} -- {}", l8.status, l8.detail);
         assert_eq!(l8.status, "holds");
+    }
+
+    /// The journey's own shape: one compartment plus ordinary wallets. The
+    /// stage states its tracked and Hoard deltas and the third number follows,
+    /// so L8 costs the journey no new authoring.
+    #[test]
+    fn a_one_compartment_market_derives_its_class_claim_from_what_it_already_states() {
+        let ledger = new_ledger();
+        let classes = BTreeMap::from([
+            ("HoardPrincipal".to_string(), 1_000_u64),
+            (UNCLASSIFIED.to_string(), 500),
+        ]);
+        let derived = ledger
+            .derive_class_claim(&classes, -300, -120)
+            .expect("a two-class census is derivable");
+        assert_eq!(derived.get("HoardPrincipal"), Some(&-120));
+        // Everything the tracked total moved that the Hoard did not.
+        assert_eq!(derived.get(UNCLASSIFIED), Some(&-180));
+    }
+
+    /// THE TRIPWIRE, and the only thing the derivation independently asserts.
+    ///
+    /// Under two classes both of L8's rows follow from L2 and L5. What does not
+    /// follow is that there are only two. A vault of any other compartment
+    /// joining the tracked set makes the split underdetermined, and the ledger
+    /// refuses to guess it: no claim is derived, so L8 reports that it must be
+    /// declared rather than absorbing the newcomer into the remainder.
+    #[test]
+    fn a_third_compartment_is_never_absorbed_into_the_remainder() {
+        let ledger = new_ledger();
+        let mut classes = BTreeMap::from([
+            ("HoardPrincipal".to_string(), 1_000_u64),
+            (UNCLASSIFIED.to_string(), 500),
+        ]);
+        assert!(ledger.derive_class_claim(&classes, -300, -120).is_some());
+        classes.insert("FeeVault".to_string(), 1);
+        assert_eq!(ledger.derive_class_claim(&classes, -300, -120), None);
+
+        // And end to end: an undeclared, underivable boundary is inapplicable
+        // and names the stage, never a green.
+        let mut ledger = new_ledger();
+        ledger.restore_observations(vec![census(
+            &new_ledger(),
+            "before",
+            1_000,
+            500,
+            0,
+            100,
+            None,
+        )]);
+        let after = census(&new_ledger(), "after", 1_000, 0, 500, 100, None);
+        assert_eq!(
+            verdict(&ledger.evaluate(&after), "L8").status,
+            "inapplicable"
+        );
+    }
+
+    /// A previous census with a third class also blocks the derivation: a
+    /// compartment that VANISHES between boundaries is as underdetermined as
+    /// one that appears.
+    #[test]
+    fn a_compartment_that_vanishes_also_blocks_the_derivation() {
+        let mut ledger = new_ledger();
+        ledger.restore_observations(vec![census(
+            &new_ledger(),
+            "before",
+            1_000,
+            500,
+            0,
+            100,
+            None,
+        )]);
+        let two_class = BTreeMap::from([
+            ("HoardPrincipal".to_string(), 1_000_u64),
+            (UNCLASSIFIED.to_string(), 0),
+        ]);
+        assert_eq!(ledger.derive_class_claim(&two_class, 0, 0), None);
     }
 
     /// L8 covers the Hoard too. A law that omitted it because L2 exists would

@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import ConsoleHeader from '@/components/ConsoleHeader';
 import { FormEvent, useMemo, useState } from 'react';
@@ -200,8 +201,7 @@ export default function DirectTradeWorkspace() {
     } catch (error) { setTradeStatus(`Refused: ${errorMessage(error)}`); }
   }
 
-  return <main className="product-shell trade-v3-shell">
-    <ConsoleHeader path="/trade" title="Direct trade" purpose="Check a route against live chain state and review one fill without signing or building a transaction." />
+  return <PageShell className="product-shell trade-v3-shell" header={<ConsoleHeader path="/trade" title="Direct trade" purpose="Check a route against live chain state and review one fill without signing or building a transaction." />}>
 
     <section className="trade-v3-hero"><div><h1>Direct<br /><em>trade.</em></h1><p>Name a Market and a possible fill, and see the exact collateral arithmetic against its programs, route, and release evidence. No intent, signature, packet, or transaction is created.</p></div><aside><span>Where trading happens</span><strong>Markets</strong><p>To place a trade, open the market on <Anchor href="/markets">Markets</Anchor> and use its trade panel. It asks your wallet to sign and sends the transaction once.</p></aside></section>
 
@@ -229,5 +229,5 @@ export default function DirectTradeWorkspace() {
     </section>
 
     <footer className="product-footer"><span>No wallet request · no packet builder · no submission path</span></footer>
-  </main>;
+  </PageShell>;
 }

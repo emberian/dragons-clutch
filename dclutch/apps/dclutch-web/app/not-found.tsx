@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import { useSyncExternalStore } from 'react';
 
 import Anchor from '@/components/Anchor';
@@ -70,8 +71,7 @@ export default function NotFound() {
 
 /** Server-rendered and first-client-render alike: nothing is known yet. */
 function ResolvingShell() {
-  return <main className="product-shell trade-v3-shell">
-    <SiteNav />
+  return <PageShell className="product-shell trade-v3-shell" header={<SiteNav />}>
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">Resolving this address</p>
@@ -81,13 +81,12 @@ function ResolvingShell() {
         nothing, you will get a plain not-found instead.</p>
       </div>
     </section>
-  </main>;
+  </PageShell>;
 }
 
 /** A path no route claims. */
 function NotFoundSurface({ pathname }: Readonly<{ pathname: string }>) {
-  return <main className="product-shell trade-v3-shell">
-    <SiteNav />
+  return <PageShell className="product-shell trade-v3-shell" header={<SiteNav />}>
     <section className="trade-v3-hero">
       <div>
         <p className="eyebrow">404 · no such page</p>
@@ -114,7 +113,7 @@ function NotFoundSurface({ pathname }: Readonly<{ pathname: string }>) {
         <Anchor className="secondary-action" href="/console">Operator tools →</Anchor>
       </div>
     </section>
-  </main>;
+  </PageShell>;
 }
 
 function SiteNav() {

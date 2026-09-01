@@ -1571,3 +1571,125 @@ acts requiring ember are mainnet, push and tags.
     letter says "use a proven K=2 route" — **no K=2 route exists**; every
     campaign in the tree is K=3. So C-08's "useful exact-denominator products"
     turns on whether two-outcome structured products are a product you want.
+
+## The deploy: built, budgeted, held — and the budget decides something
+
+**It does not fit.** Rent measured per role (`890,880 + 6,960·(45+n)`): registry
+1.6334 · rent 0.9918 · custody 3.9784 · resolution 5.6052 · claims 9.4924 ·
+trading 15.9105 · core 8.2627 = **45.8743 SOL**, ≈**45.9617** with fees,
+records, profile and market. On hand **43.7428**. **Short 2.2189.**
+
+ELFs grew ~40% since the old DEMO table (4.72 → 6.59 MB), so the remembered
+"45 SOL buys one cohort" is stale.
+
+**Reclaiming cohort-8 is therefore necessary, not optional** — its ProgramData
+holds **43.1186 SOL** across seven accounts, measured. Authorized under your
+*"tear everything down"* ruling; reclaim gives 86.86 total, surplus ~40.9.
+
+**Mutable / ExactAuthority chosen over immutable, and W1 is REFUTED at HEAD** —
+`programs/dclutch-core-sbf/src/infrastructure.rs:311-314` admits
+`ExactAuthority`, live tree-wide, so the 2026-08-27 claim that the life requires
+immutable roles does not hold. Decisive reason: **your grant is standing**, and
+repeatable redeploys only work if rent comes back. Immutable is unaffordable
+*and* unrecoverable.
+
+Still held on R-13 — re-lettering changes magics, which changes ELFs, so the
+rehearsal pack is not the deploy artifact. Deploy order is
+Registry→Rent→Custody→Resolution→Claims→Trading→Core, each deploy→verify, then
+nine records published from **observed** slots, profile init, and activation one
+role per transaction (five together are 2,396,686 CU against a 1.4M ceiling).
+
+### Reproducibility: all seven ELFs byte-identical
+
+Two independent detached worktrees at `10527ddc`, `cmp` 7/7. SBOM regenerates
+byte-identically with a red control (injected drift → `STOP` exit 1).
+
+### The gate that ran nowhere and said otherwise about itself
+
+There was **no `sbom` CI tier at all**; `web` excluded the test citing another
+repo's job; and generated `SBOM.md:4` claimed it was *"wired into
+`tools/gauntlet`"* when `grep -rn sbom tools/gauntlet/` returns nothing. **A
+false claim inside a generated file, reprinting itself on every
+regeneration** — the most self-sustaining form of this tree's recurring class.
+Fixed in `9a32790b`.
+
+And the gate measured the wrong object: same commit, **dirty tree `PASS` vs
+clean worktree `STOP` exit 1**, with a **fifteenth** stale lock existing only
+uncommitted (`69a0aa69`).
+
+### Two more named walls
+
+- `tools/release/private-validator-lifecycle/test_preflight.py`: **12 failures
+  + 3 errors, ungated** — the `release` tier runs only the four `test-*.sh`.
+  Red where nothing looks. To be fixed or gated **before** the deploy.
+- **The two `dclutch` binaries overlap only on `help`**, and the near-misses are
+  lethal: `market show` vs `markets show`; `--keypair` normal in one and
+  *refused by name* in the other; env vars differing by one character
+  (`DCLUTCH_RPC_URL` vs `DCLUTCH_RPC`). No doc disambiguates them and **no doc
+  under `docs/` teaches building the TypeScript binary at all.** Nothing was
+  missing — the earlier near-P0 was right to be doubted — but this is a genuine
+  C-13 defect. Renaming a released binary is still yours.
+
+### Your steer, convicted to three lines
+
+*"SOL/USD always resolves into the same bucket"* is now a measured defect with a
+gate that refuses it.
+
+**The defect is live**: `apps/dclutch-web/components/CreateMarketWizard.tsx:117-119`
+ships `cutDenominator=100` with cuts `12000/18000`;
+`tools/local-validator/bootstrap/successor/src/market.rs:12180-12182`
+`demo_market_input` is **byte-identical** to it; and
+`crates/dclutch-source-contract/src/lib.rs:612` returns raw price atoms
+**unrescaled**. The flagship authored market resolves into its top cell **100%
+of the time** — those cut values measure as `0 / 0 / 0 / 0 / 10000 bp`.
+
+**The gate** (`95316da7`): characteristic displacement is
+`volatility_bps × √(window / 10,000 slots)` of spot, exact integers, with mass
+over cells under a named `TriangularPlausibleBand` — triangular rather than
+uniform, so a tight-centre profile is not punished for being good. A SOL/USD
+market founded today (spot 100,000,000 atoms, 200 bp, one hour) gets cuts
+`99,400,000 / 99,800,000 / 100,200,000 / 100,600,000` and shares
+**3612 / 900 / 975 / 900 / 3612 bp** — admitted. The historical cent-scale cuts
+are **refused `DegenerateOutcomePartition`**. Both in one test, so the refusal
+is not a checker that refuses everything.
+
+**Still ungated where it matters**: the live founding path calls the old
+entrance, so the fresh cohort would found the same broken markets. Routed to the
+release lane as deploy-critical.
+
+### "Exhaustive and disjoint" was self-asserted — including in Lean
+
+Three ways: `recheck` re-derived with the **same** `derive_shape`;
+`recheck_categorical_approximation_v3` literally called `certify_…` again; and
+the Lean `ResultDomain.selection_disjoint` is
+`rw [← leftSelected, ← rightSelected]` — **a function-is-a-function tautology.**
+Twelve hand-picked coordinates were the whole evidence.
+
+Now proven by sweep against an **independently written** interval predicate with
+permanent controls in the same run — 3,204 + 1,842 + 303 coordinates, every
+region reached, a one-boundary convention flip detected 9/400 times (`29f35cdb`).
+
+**A formal proof that restates its own hypothesis is worse than no proof**,
+because it carries a formal method's authority.
+
+### Two of C-02's seven outputs do not exist
+
+**Source policy** — no Rust anywhere builds one from a description;
+`RecoveryPolicyV1/V2::new` has **zero non-test callers**; production only
+`decode`s operator hex. **Funding plan** — no record carries
+`{target, deadline, abort}`; the only artifact is a component self-labelled
+"wizard placeholders". Not named refusals: **absent constructors**, which is
+worse, because a refusal tells a caller what is wrong and an absent constructor
+looks like scope.
+
+### Two more for your queue
+
+13. **`MAX_CELL_EX_ANTE_SHARE_BPS_V1 = 9000`** — provisional. 90% refuses the
+    convicted defect without refusing a legitimately lopsided binary market. The
+    ceiling is a product decision; the constant is only the name the entrance
+    defaults to.
+14. **Where does the volatility anchor come from at founding?** The authoring
+    path has no home for it — `spline_product.rs:44-65` has twenty fields and
+    all are geometry: no spot, no window, no volatility. Reading it from the
+    source's own founding observation is the obvious candidate, but which
+    observation is authoritative is yours.

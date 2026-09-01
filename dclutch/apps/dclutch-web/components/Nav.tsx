@@ -22,6 +22,13 @@ import { docsIndexHrefV1 } from '@/lib/flags';
  * always knows which side of the site they are on. Pulse and Activity are the
  * two aliveness surfaces; they earned their slots the day they became
  * reachable only by typing a URL.
+ *
+ * It renders the `<header>` and nothing else. It used to also emit a
+ * zero-height `<span id="main-content">` for the skip link to land on, which
+ * only worked while the nav itself sat inside `<main>` — and the nav sitting
+ * inside `<main>` is exactly what demoted this header out of the `banner`
+ * landmark on all 28 page shells. `PageShell` now puts the id on the `<main>`
+ * element, which is the thing the skip link was always naming.
  */
 
 type ProductItem = Readonly<{
@@ -65,7 +72,7 @@ export default function Nav({
   status?: ReactNode;
 }>) {
   const consoleActive = current !== undefined && CONSOLE_PATHS.includes(current);
-  return <>
+  return (
     <header className="product-nav">
       <Anchor className="brand" href="/"><span className="brand-mark">dC</span><span>dClutch</span></Anchor>
       <nav aria-label="Primary navigation">
@@ -90,6 +97,5 @@ export default function Nav({
         <span className="preview-control"><i className="preview-dot" />{status}</span>
       </span>
     </header>
-    <span id="main-content" className="main-content-anchor" tabIndex={-1} />
-  </>;
+  );
 }

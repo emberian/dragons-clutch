@@ -19,7 +19,13 @@ describe('the site nav', () => {
       expect(html).not.toContain(retired);
     }
     expect((html.match(/<nav aria-label="Primary navigation">/g) ?? []).length).toBe(1);
-    expect(html).toContain('<span id="main-content" class="main-content-anchor" tabindex="-1"></span>');
+    // The nav renders the header and nothing else. It used to also emit a
+    // zero-height `<span id="main-content">` for the skip link, which only
+    // worked while the nav sat inside `<main>` — and the nav sitting inside
+    // `<main>` is what demoted this header out of the `banner` landmark on
+    // every page. `PageShell` puts that id on the `<main>` element itself.
+    expect(html).not.toContain('main-content');
+    expect(html.startsWith('<header class="product-nav">')).toBe(true);
   });
 
   it('marks the current product route active, and only it', () => {

@@ -1,3 +1,4 @@
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import { Card, CardContent } from '@/components/ui/card';
@@ -94,8 +95,7 @@ function standingsForStageV1(stage: CapabilityStage): ReadonlyArray<CapabilitySt
 const WALLED_V1 = Object.freeze(BROWSER_CAPABILITY_STANDINGS_V1.filter((candidate) => candidate.venue === 'no-venue'));
 
 export default function ConsoleDirectory() {
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/console" status="operator tools" />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/console" status="operator tools" />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -157,5 +157,5 @@ export default function ConsoleDirectory() {
     <p className="console-stage-note">Stages are the only grouping this page decides. Everything
     else — which acts exist, where each one runs, and what it asks for — comes
     from the capability catalogue and this application&rsquo;s own routes.</p>
-  </main>;
+  </PageShell>;
 }

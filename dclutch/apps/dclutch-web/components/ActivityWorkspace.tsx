@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Nav from '@/components/Nav';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
@@ -131,8 +132,7 @@ export default function ActivityWorkspace() {
     void read(owner, parseMarketAddressListV1(addressList));
   }
 
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/activity" status="node history" />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/activity" status="node history" />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -185,5 +185,5 @@ export default function ActivityWorkspace() {
       <span>Node history · finalized bytes · explicit refusals</span>
       <span>No indexer · no synthesized events · raw lamports</span>
     </footer>
-  </main>;
+  </PageShell>;
 }

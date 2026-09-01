@@ -212,24 +212,28 @@ pub const fn general_scratch_page_rule_v3() -> AccountRuleWithPrestateInputV2 {
 /// than admission-checked: an artifact that omits it leaves scalar
 /// `ROOT_LIFECYCLE_OBSERVATION` at zero, which is not
 /// `GeneralLifecycleV2::Active`, and every action refuses.
+///
+/// The root-identity projection is NOT fail-closed in that sense and cannot be
+/// made so, which is why it is pinned by a test instead: see
+/// [`general_root_identity_operation_index_v3`].
 #[must_use]
 pub const fn general_account_profile_operation_count_v3(action: Action) -> u16 {
     match action {
-        Action::SubmitCandidate => 33,
-        Action::VerifyCandidateRow => 12,
-        Action::CloseCandidate => 20,
-        Action::OpenBatch => 20,
-        Action::CloseBatch => 17,
-        Action::PlaceOrder => 31,
-        Action::CancelOrder => 29,
-        Action::ReleaseOrder => 17,
-        Action::Close => 10,
+        Action::SubmitCandidate => 34,
+        Action::VerifyCandidateRow => 13,
+        Action::CloseCandidate => 21,
+        Action::OpenBatch => 21,
+        Action::CloseBatch => 18,
+        Action::PlaceOrder => 32,
+        Action::CancelOrder => 30,
+        Action::ReleaseOrder => 18,
+        Action::Close => 11,
         Action::Consider
         | Action::Freeze
         | Action::InitializeSettlement
         | Action::Collect
         | Action::Materialize
-        | Action::Distribute => 6,
+        | Action::Distribute => 7,
     }
 }
 
@@ -244,6 +248,37 @@ const fn general_account_profile_item_operation_count_v3(action: Action) -> u16 
     } else {
         0
     }
+}
+
+/// Operations evaluated once per action, before any Product-item tail.
+const fn general_account_profile_fixed_operation_count_v3(action: Action) -> u16 {
+    general_account_profile_operation_count_v3(action)
+        .saturating_sub(general_account_profile_item_operation_count_v3(action))
+}
+
+/// Index of the sole operation naming the General root in the seed register.
+///
+/// Every one of the eight seed orders in [`crate::state_seeds_v3`] opens with
+/// `CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3)`, and until this
+/// operation existed NOTHING wrote that register: not an AccountProfile
+/// operation, not one of the fifteen Lean-emitted RequestProfiles (whose
+/// identity destinations are exactly `{0, 3, 29}`), and not a trusted
+/// environment (General declares `CurrentSlot`, `CurrentExecutingProgram` and
+/// `SystemProgram`, none of which is the root). The executor therefore derived
+/// every General state address from 32 zero bytes where the root belongs --
+/// a well-formed address, identical for every General root in existence, so two
+/// roots would collide on one occurrence identity. `crates/dclutch-operator`
+/// injected the key host-side before consulting the same policy, so the host
+/// and the chain derived different addresses from one artifact.
+///
+/// It is the LAST fixed operation deliberately. Appending leaves every earlier
+/// ordinal, and therefore every earlier operation's bytes, exactly where they
+/// were; and the register it writes is read by the lifecycle adapter after the
+/// whole projection chain has run, never by another operation, so its position
+/// among the operations is semantically free while every other pair's relative
+/// order is load-bearing.
+const fn general_root_identity_operation_index_v3(action: Action) -> u16 {
+    general_account_profile_fixed_operation_count_v3(action).saturating_sub(1)
 }
 
 /// Generate one exact canonical fixed AccountProfile operation.
@@ -821,7 +856,7 @@ pub fn general_account_profile_operation_v3(
             destination: common_scalar(scalar::GENERATION)?,
             data_offset: width(GeneralConfigV3Layout::GENERATION)?,
         }),
-        29 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
+        30 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
             account: order_terms_account(action)?,
             destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::CURSOR_INVENTORY)?),
             data_offset: width(
@@ -829,7 +864,7 @@ pub fn general_account_profile_operation_v3(
             )?,
             data_stride: width(GENERAL_ORDER_ROW_STRIDE_V1)?,
         }),
-        30 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
+        31 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64Affine {
             account: order_terms_account(action)?,
             destination: ScalarCoordinateV2::item(narrow_u32(item_scalar::QUANTITY)?),
             data_offset: width(
@@ -1085,19 +1120,27 @@ pub fn general_account_profile_operation_v3(
         // Every exact signer account Lifecycle may debit is anchored to the
         // trusted System Program identity. SubmitCandidate already carries
         // this same anchor in its signed-evidence suffix; CloseCandidate has
-        // no create payer. This operation is last in the fixed body so
-        // PlaceOrder's two affine item projections remain the exact tail.
+        // no create payer. This operation is second-to-last in the fixed body,
+        // immediately before the root-identity projection, so PlaceOrder's two
+        // affine item projections remain the exact tail.
         owner_anchor
             if !matches!(action, Action::SubmitCandidate | Action::CloseCandidate)
                 && owner_anchor
-                    == general_account_profile_operation_count_v3(action)
-                        .checked_sub(general_account_profile_item_operation_count_v3(action))
-                        .and_then(|count| count.checked_sub(1))
+                    == general_root_identity_operation_index_v3(action)
+                        .checked_sub(1)
                         .ok_or(GeneralAccountRuleErrorV3::Geometry)? =>
         {
             Ok(AccountOperationInputV2::RequireOwner {
                 account: AccountCoordinateV2::fixed(creation_payer),
                 expected: common_identity(identity::RESULT_OWNER)?,
+            })
+        }
+        // The General root, named into the register every state seed order
+        // opens with. See `general_root_identity_operation_index_v3`.
+        root_identity if root_identity == general_root_identity_operation_index_v3(action) => {
+            Ok(AccountOperationInputV2::ProjectKey {
+                account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_ROOT_COORDINATE_V3)?),
+                destination: common_identity(identity::GENERAL_ROOT)?,
             })
         }
         _ => Err(GeneralAccountRuleErrorV3::Geometry),
@@ -1222,7 +1265,7 @@ pub fn encode_general_account_profile_v3_atomic(
 }
 
 /// Widest canonical operation list any action declares.
-const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 33;
+const GENERAL_MAX_ACCOUNT_PROFILE_OPERATIONS_V3: usize = 34;
 
 /// Inert operation the fixed-width operation buffer is filled with.
 const GENERAL_ACCOUNT_PROFILE_OPERATION_PLACEHOLDER_V3: AccountOperationInputV2 =
@@ -2226,6 +2269,7 @@ const fn opaque_rule(privileges: AccountPrivilegesV2) -> AccountRuleWithPrestate
 mod tests {
     extern crate std;
 
+    use dclutch_account_profile_contract::lifecycle_v3::encode::LifecycleSeedInputV3;
     use dclutch_effect_kernel::v2::FixedRole;
     use std::vec;
 
@@ -2235,6 +2279,7 @@ mod tests {
         general_effect_instruction_count_v3, general_effect_program_bytes_v3,
         general_effect_template_bytes_v3,
     };
+    use crate::state_seeds_v3::{GENERAL_ROOT_IDENTITY_REGISTER_V3, GeneralStateRecipeV3};
 
     /// The exact emitted Effect bytes for one action.
     fn effect(action: Action) -> vec::Vec<u8> {
@@ -2311,11 +2356,167 @@ mod tests {
         }
     }
 
+    /// The three guards that cannot hold, named so a fourth cannot appear quietly.
+    ///
+    /// `(action tag, operation index)`. Every entry is a `RequireKey` against
+    /// `identity::OWNER`, which the SAME profile pass projects out of an
+    /// evidence record -- SubmitCandidate operation 25, PlaceOrder operation 20,
+    /// CancelOrder operation 20.
+    const UNSATISFIABLE_GUARDS_V3: [(u8, u16); 3] = [
+        (Action::SubmitCandidate as u8, 31),
+        (Action::PlaceOrder as u8, 26),
+        (Action::CancelOrder as u8, 27),
+    ];
+
+    /// Every account guard names a register the INPUT identity bank carries.
+    ///
+    /// `OP_REQUIRE_KEY` and `OP_REQUIRE_OWNER` compare an account fact against
+    /// `input_identities` (`dclutch-account-profile-contract/src/v2.rs:3178`),
+    /// while `OP_PROJECT_KEY`/`OP_PROJECT_OWNER`/`OP_PROJECT_DATA_IDENTITY`
+    /// write a SEPARATE output bank. So a guard can never observe anything an
+    /// operation in the same pass wrote, whatever the operation order is. Only
+    /// three identity registers reach a General profile's input bank: register
+    /// zero, pre-seeded with the parent request digest by the outer
+    /// (`hot_v3.rs:12481`); `TRADING_PROGRAM`, from
+    /// `TrustedIdentityEnvironmentV2::CurrentExecutingProgram`; and
+    /// `RESULT_OWNER`, from `TrustedBuiltinIdentityV2::SystemProgram`, which
+    /// `CloseCandidate` alone does not declare.
+    ///
+    /// Five of General's eight guards name one of those and hold. The other
+    /// three name `identity::OWNER`, a register the same pass projects, and are
+    /// therefore unsatisfiable and fail-closed: SubmitCandidate, PlaceOrder and
+    /// CancelOrder cannot execute at all. This is a convicted defect class in
+    /// this tree -- guards whose two sides move together -- with a Direct
+    /// instance and a live Dealer instance at
+    /// `programs/dclutch-trading-sbf/src/dealer/v3_trade_profile.rs:269`.
+    ///
+    /// The repair is not to delete the guard. The law it states -- the payer
+    /// must BE the maker or solver the record names -- is real, and General
+    /// already re-proves exactly this shape on the other side: the emitted
+    /// transition runs over the PROJECTED bank and carries
+    /// `identity_eq(PRIMARY_BENEFICIARY, OWNER)` at
+    /// `transition_artifacts_v3.rs:246`. Projecting the payer's key into
+    /// `identity::PAYER` and adding `identity_eq(PAYER, OWNER)` to those three
+    /// transitions moves the same law to the only bank that can hold both
+    /// values. That edit lands in `formal/dclutch-semantics/GeneralTransitionV3`
+    /// and its regenerated arrays, not here.
+    ///
+    /// Do not make this test pass by adding a row to `UNSATISFIABLE_GUARDS_V3`.
+    #[test]
+    fn every_account_guard_names_a_register_the_input_bank_carries() {
+        let trading = IdentityCoordinateV2::common(
+            u16::try_from(identity::TRADING_PROGRAM).expect("Trading register"),
+        );
+        let result_owner = IdentityCoordinateV2::common(
+            u16::try_from(identity::RESULT_OWNER).expect("result-owner register"),
+        );
+        let parent_digest = IdentityCoordinateV2::common(
+            u16::try_from(identity::PARENT_REQUEST_DIGEST).expect("parent-digest register"),
+        );
+        let mut guards = 0_usize;
+        let mut unsatisfiable = 0_usize;
+        for action in ACTIONS {
+            let count = general_account_profile_operation_count_v3(action);
+            let mut index = 0_u16;
+            while index < count {
+                let expected = match general_account_profile_operation_v3(action, index)
+                    .expect("exact operation")
+                {
+                    AccountOperationInputV2::RequireKey { expected, .. }
+                    | AccountOperationInputV2::RequireOwner { expected, .. } => expected,
+                    _ => {
+                        index += 1;
+                        continue;
+                    }
+                };
+                guards += 1;
+                let carried = expected == trading
+                    || expected == parent_digest
+                    || (expected == result_owner && action != Action::CloseCandidate);
+                if !carried {
+                    unsatisfiable += 1;
+                    assert!(
+                        UNSATISFIABLE_GUARDS_V3.contains(&(action as u8, index)),
+                        "{action:?} operation {index} guards against a register no General \
+                         input bank carries, and it is not one of the three named ones",
+                    );
+                }
+                index += 1;
+            }
+        }
+        assert_eq!(
+            guards, 22,
+            "General declares twenty-two account guards across its fifteen actions",
+        );
+        assert_eq!(
+            unsatisfiable,
+            UNSATISFIABLE_GUARDS_V3.len(),
+            "the named unsatisfiable guards are exactly the ones still present",
+        );
+    }
+
+    /// Every register a General state recipe seeds on has an artifact writer.
+    ///
+    /// `state_seeds_v3` is the sole author of the eight General state seed
+    /// orders, and every one of them opens with
+    /// `CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3)`. A register the
+    /// recipe READS and no artifact WRITES is not a build error and not a
+    /// geometry refusal: `AccountProfileV2::common_identity_count()` is 45 and
+    /// 27 < 45, so `validate_seed_against_profile` accepts it, and the
+    /// lifecycle adapter then derives the state address from 32 zero bytes
+    /// where the root belongs. That derives a real, well-formed, WRONG address
+    /// -- one that is the same for every General root in existence, so two
+    /// roots would collide on one occurrence identity -- and the only thing
+    /// that refuses it on chain is the undifferentiated address join, which
+    /// looks exactly like a caller passing the wrong account.
+    ///
+    /// The operation list is the only place the join is checkable at all:
+    /// `AccountProfileV2::operation` is private, so admission cannot read the
+    /// operations back out of the encoded artifact. This test reads them from
+    /// their one author instead.
+    #[test]
+    fn every_action_projects_the_root_key_into_the_register_its_state_recipes_seed_on() {
+        let expected = AccountOperationInputV2::ProjectKey {
+            account: AccountCoordinateV2::fixed(
+                u16::try_from(HOT_RUNTIME_ROOT_COORDINATE_V3).expect("root coordinate"),
+            ),
+            destination: IdentityCoordinateV2::common(GENERAL_ROOT_IDENTITY_REGISTER_V3),
+        };
+        for action in ACTIONS {
+            let count = general_account_profile_operation_count_v3(action);
+            let mut writers = 0_usize;
+            let mut index = 0_u16;
+            while index < count {
+                if general_account_profile_operation_v3(action, index).expect("exact operation")
+                    == expected
+                {
+                    writers += 1;
+                }
+                index += 1;
+            }
+            assert_eq!(
+                writers, 1,
+                "{action:?} declares {writers} operations writing the root identity register, \
+                 and every General state recipe seeds on it",
+            );
+            assert!(
+                GeneralStateRecipeV3::primary_for_action(action)
+                    .lifecycle_seeds()
+                    .iter()
+                    .any(|seed| matches!(
+                        seed,
+                        LifecycleSeedInputV3::CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3)
+                    )),
+                "{action:?} primary state recipe does not seed on the root identity register",
+            );
+        }
+    }
+
     #[test]
     fn submit_candidate_profile_owns_one_fixed_candidate_and_three_exact_evidence_records() {
         let action = Action::SubmitCandidate;
         assert_eq!(general_account_profile_fixed_count_v3(action), Ok(11));
-        assert_eq!(general_account_profile_operation_count_v3(action), 33);
+        assert_eq!(general_account_profile_operation_count_v3(action), 34);
 
         let candidate =
             general_account_profile_rule_v3(action, GENERAL_PRIMARY_STATE_ACCOUNT_V3, WIDTHS)

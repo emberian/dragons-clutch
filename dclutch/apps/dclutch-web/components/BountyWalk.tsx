@@ -1,3 +1,4 @@
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 
@@ -45,8 +46,7 @@ const REFUSALS = Object.freeze([
 export default function BountyWalk() {
   const abandoned = SMOKE_MARKETS_V1.abandoned;
   const live = abandoned.address !== null;
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/bounty" status={live ? 'live on devnet' : 'not live yet'} />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/bounty" status={live ? 'live on devnet' : 'not live yet'} />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -108,5 +108,5 @@ export default function BountyWalk() {
       <span>A silent data source cannot strand a market — it can only pay you to finish it</span>
       <span>{live ? 'The abandoned market is linked above; the walk is yours once its deadline passes' : 'Live markets: none yet — this page will link them when that changes'}</span>
     </footer>
-  </main>;
+  </PageShell>;
 }

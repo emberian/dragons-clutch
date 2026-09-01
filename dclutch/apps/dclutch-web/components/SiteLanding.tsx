@@ -1,3 +1,4 @@
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
@@ -40,8 +41,7 @@ export default function SiteLanding() {
   const featuredTitle = PUBLIC_DEVNET_CUT_V1.market === null
     ? null
     : marketEditorialV1(PUBLIC_DEVNET_CUT_V1.market)?.title ?? null;
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/" status="live devnet programs" />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/" status="live devnet programs" />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -151,5 +151,5 @@ export default function SiteLanding() {
         <a className="secondary-action" href={FIELD_NOTES_HREF_V1}>Plan to compost at least three →</a>
       </div>
     </section>
-  </main>;
+  </PageShell>;
 }

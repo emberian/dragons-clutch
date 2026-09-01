@@ -42,7 +42,11 @@ use dclutch_general_adapter_contract::{
         GENERAL_HOT_COMMON_IDENTITIES_V3, GENERAL_HOT_COMMON_SCALARS_V3,
         GENERAL_HOT_ITEM_SCALAR_STRIDE_V3, identity, scalar,
     },
-    release_v3::GENERAL_ACTIONS_V3,
+    release_v3::{GENERAL_ACTIONS_V3, GENERAL_ACTIONS_V5},
+    state_artifacts_v3::{
+        GENERAL_CLOSE_PAYER_ACCOUNT_V3, GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
+        GENERAL_VERIFY_PAYER_ACCOUNT_V3,
+    },
     transition_artifacts_v3::{
         GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3, encode_general_transition_program_v3_atomic,
         general_transition_instruction_count_v3, general_transition_program_bytes_v3,
@@ -82,6 +86,14 @@ const MARKET: [u8; 32] = [0x21; 32];
 /// explicitly, because it destroys that account rather than creating it, so this
 /// has to be a real value in both the frame and the identity bank.
 const TRADING_PROGRAM: [u8; 32] = [0x71; 32];
+/// The adapter-trusted System Program, seeded into `identity::RESULT_OWNER`.
+///
+/// The profile declares `TrustedBuiltinIdentityV2::SystemProgram`, and its
+/// last-but-one fixed operation anchors the creation payer's owner against
+/// that register. A frame whose payer is owned by anything else is refused
+/// with `IdentityMismatch` before any projection lands, so the fixture has to
+/// model both halves: the seeded register and the system-owned payer.
+const SYSTEM_PROGRAM: [u8; 32] = [0x00; 32];
 /// Immutable Market occurrence generation.
 const GENERATION: u64 = 7;
 
@@ -265,6 +277,18 @@ struct ObservedFrame {
 /// representative's coordinate -- same key, same bytes, same privileges --
 /// which is exactly what `validate_aliases` requires and what a runtime adapter
 /// materialises.
+/// The coordinate whose owner the profile's System Program anchor names.
+///
+/// Read off the same partition `account_rules_v3` selects `creation_payer`
+/// from, so the fixture cannot anchor a different account than the artifact.
+fn creation_payer_coordinate(action: Action) -> usize {
+    usize::from(match action {
+        Action::VerifyCandidateRow => GENERAL_VERIFY_PAYER_ACCOUNT_V3,
+        Action::Close | Action::PlaceOrder | Action::CancelOrder => GENERAL_CLOSE_PAYER_ACCOUNT_V3,
+        _ => GENERAL_PRIMARY_PAYER_ACCOUNT_V3,
+    })
+}
+
 fn observed_data(action: Action, profile: AccountProfileV2<'_>, root: &[u8]) -> ObservedFrame {
     let logical = profile
         .logical_account_count_with_dynamic_spans(TAIL_COUNT, &[SCRATCH_PAGES])
@@ -302,10 +326,13 @@ fn observed_data(action: Action, profile: AccountProfileV2<'_>, root: &[u8]) -> 
             vec![0x5a_u8; width]
         });
         keys.push(coordinate_key(representative));
-        owners.push(TRADING_PROGRAM);
+        owners.push(if representative == creation_payer_coordinate(action) {
+            SYSTEM_PROGRAM
+        } else {
+            TRADING_PROGRAM
+        });
         representatives.push(representative);
     }
-    let _ = action;
     ObservedFrame {
         data,
         keys,
@@ -352,6 +379,11 @@ fn register(coordinate: u32) -> usize {
 /// Returns the projected scalar bank, which is exactly what the runtime feeds
 /// the emitted `TransitionProgramV3`.
 fn project(action: Action, root: &[u8]) -> Vec<u64> {
+    project_banks(action, root).0
+}
+
+/// Both projected banks, for the joins that live in the identity half.
+fn project_banks(action: Action, root: &[u8]) -> (Vec<u64>, Vec<[u8; 32]>) {
     let profile_bytes = account_profile(action);
     let profile = AccountProfileV2::decode(&profile_bytes).expect("Profile13 decodes");
     let frame = observed_data(action, profile, root);
@@ -417,6 +449,13 @@ fn project(action: Action, root: &[u8]) -> Vec<u64> {
     *input_identities
         .get_mut(register(identity::TRADING_PROGRAM))
         .expect("trading program register") = TRADING_PROGRAM;
+    // `TrustedIdentityEnvironmentV2::CurrentExecutingProgram` and
+    // `TrustedBuiltinIdentityV2::SystemProgram` are the outer's to seed; the
+    // profile only names their destinations. Both are seeded here for the same
+    // reason the runtime seeds them: an operation reads them.
+    *input_identities
+        .get_mut(register(identity::RESULT_OWNER))
+        .expect("result owner register") = SYSTEM_PROGRAM;
     let mut scratch_scalars = vec![0_u64; scalar_width()];
     let mut scratch_identities = vec![[0_u8; 32]; identity_width()];
     let mut output_scalars = vec![0_u64; scalar_width()];
@@ -436,7 +475,7 @@ fn project(action: Action, root: &[u8]) -> Vec<u64> {
         },
     )
     .expect("the real projection accepts the real frame");
-    output_scalars
+    (output_scalars, output_identities)
 }
 
 /// The missing link, executed: a real root's lifecycle byte reaches the register
@@ -465,6 +504,68 @@ fn the_real_projection_carries_a_real_roots_lifecycle_into_the_conjuncts_registe
                     .copied(),
                 Some(u64::from(lifecycle.tag())),
                 "{action:?} did not project the root's own lifecycle",
+            );
+        }
+    }
+}
+
+/// The twelve actions whose account projection can accept at all.
+///
+/// The other three do not refuse because this fixture is thin. They refuse
+/// because their profiles carry a guard nothing can satisfy: `PlaceOrder`,
+/// `CancelOrder` and `SubmitCandidate` each `RequireKey` against
+/// `identity::OWNER`, and `OP_REQUIRE_KEY` reads the INPUT identity bank
+/// (`dclutch-account-profile-contract/src/v2.rs:3178`) while `OP_PROJECT_*`
+/// writes a separate output bank, so the register the same pass projects
+/// `OWNER` into is 32 zero bytes at every guard, whatever the account data
+/// says. Filling the evidence records with real bytes would not change it.
+/// `account_rules_v3::every_account_guard_names_a_register_the_input_bank_carries`
+/// is the census; the root-register law for those three is carried by the
+/// operation-level test beside it, which is total over all fifteen.
+const PROJECTS_WITHOUT_AN_UNSATISFIABLE_GUARD: [u8; 12] = [
+    Action::Consider as u8,
+    Action::Freeze as u8,
+    Action::InitializeSettlement as u8,
+    Action::Collect as u8,
+    Action::Materialize as u8,
+    Action::Distribute as u8,
+    Action::Close as u8,
+    Action::OpenBatch as u8,
+    Action::CloseBatch as u8,
+    Action::VerifyCandidateRow as u8,
+    Action::ReleaseOrder as u8,
+    Action::CloseCandidate as u8,
+];
+
+/// The register every General state address is keyed by, carrying a real key.
+///
+/// Each of the eight seed orders in `state_seeds_v3` opens with
+/// `CommonIdentity(GENERAL_ROOT_IDENTITY_REGISTER_V3)`, and until the
+/// root-identity projection existed nothing anywhere wrote it: not an
+/// AccountProfile operation, not one of the fifteen Lean-emitted
+/// RequestProfiles, and not a trusted environment. `27 < 45`, so the geometry
+/// check accepts the recipe, and the lifecycle adapter then derived every
+/// General state address from 32 zero bytes -- a real address, the SAME one
+/// for every General root in existence. `crates/dclutch-operator` had been
+/// injecting the key host-side before consulting the same policy, so the host
+/// and the chain derived different addresses from one artifact and only an
+/// undifferentiated address join stood between that and two roots sharing one
+/// Batch account.
+///
+/// This is the projection half of the join, executed. The operation half is
+/// `every_action_projects_the_root_key_into_the_register_its_state_recipes_seed_on`
+/// in `account_rules_v3`, which is the only place the operation list is
+/// readable at all -- `AccountProfileV2::operation` is private.
+#[test]
+fn the_real_projection_carries_the_root_key_into_every_state_addresss_first_seed() {
+    let (root, _) = composite_root(GeneralLifecycleV2::Active);
+    for action in GENERAL_ACTIONS_V5 {
+        if PROJECTS_WITHOUT_AN_UNSATISFIABLE_GUARD.contains(&(action as u8)) {
+            let (_, identities) = project_banks(action, &root);
+            assert_eq!(
+                identities.get(register(identity::GENERAL_ROOT)).copied(),
+                Some(coordinate_key(0)),
+                "{action:?} left the root identity register its state recipes seed on unwritten",
             );
         }
     }

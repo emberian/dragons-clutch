@@ -1,3 +1,4 @@
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import Nav from '@/components/Nav';
 
@@ -21,8 +22,7 @@ export default function SmokeStory() {
         {market.liveNote === null ? null : <span className="direct-status">{market.liveNote}</span>}
       </div>
     );
-  return <main className="product-shell trade-v3-shell">
-    <Nav current="/smoke" status={live ? 'live on devnet' : 'not live yet'} />
+  return <PageShell className="product-shell trade-v3-shell" header={<Nav current="/smoke" status={live ? 'live on devnet' : 'not live yet'} />}>
 
     <section className="trade-v3-hero">
       <div>
@@ -63,5 +63,5 @@ export default function SmokeStory() {
       <span>Three markets, founded once, run in public, then wound down</span>
       <span>{live ? 'The substrate is live on devnet; each market links above as it founds' : 'Live dates: none yet — this page will say so when that changes'}</span>
     </footer>
-  </main>;
+  </PageShell>;
 }

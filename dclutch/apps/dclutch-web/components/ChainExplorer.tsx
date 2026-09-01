@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Nav from '@/components/Nav';
 import PublicDeploymentEvidence from '@/components/PublicDeploymentEvidence';
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -882,8 +883,7 @@ export default function ChainExplorer() {
   const atHome = query.q === '' && query.view !== 'scan' && query.view !== 'record';
 
   return (
-    <main className="shell xp" onClick={onJump}>
-      <Nav current="/explorer" status="read-only projection" />
+    <PageShell className="shell xp" header={<Nav current="/explorer" status="read-only projection" />} onClick={onJump}>
 
       <section className="xp-hero">
         <p className="eyebrow">Seven devnet programs, live · no wallet, no setup</p>
@@ -964,7 +964,7 @@ export default function ChainExplorer() {
         <p>Untrusted static projection of the active deployment&rsquo;s infrastructure.</p>
         <p>No wallet adapter. No transaction construction, signing, or submission.</p>
       </footer>
-    </main>
+    </PageShell>
   );
 }
 

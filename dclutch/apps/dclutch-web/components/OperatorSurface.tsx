@@ -1,5 +1,6 @@
 'use client';
 
+import PageShell from '@/components/PageShell';
 import Anchor from '@/components/Anchor';
 import ArtifactInput from '@/components/ArtifactInput';
 import ConsoleHeader from '@/components/ConsoleHeader';
@@ -199,8 +200,7 @@ export default function OperatorSurface() {
     URL.revokeObjectURL(link.href);
   }
 
-  return <main className="product-shell operator-shell">
-    <ConsoleHeader path="/operate" title="Operations" purpose="See known constructors and missing seams. Every route still requires its own preflight." />
+  return <PageShell className="product-shell operator-shell" header={<ConsoleHeader path="/operate" title="Operations" purpose="See known constructors and missing seams. Every route still requires its own preflight." />}>
     <section className="operator-hero"><div><h1>Operations.</h1><p>Load the checked devnet coordinates instead of typing six program addresses. The preset supplies no Market, and every deployment slot is read live from ProgramData: these programs are upgraded in place at permanent addresses, so a slot that has moved forward is reported, not refused. A matching deployment does not make a route executable — each route still authenticates its own release, accounts, state, and packet.</p></div><div className="operator-counts"><article><strong>{counts.constructible}</strong><span>acts this browser builds</span></article><article><strong>{counts.request}</strong><span>acts a published command runs</span></article><article><strong>{counts.blocked}</strong><span>acts with no venue and a named wall</span></article></div></section>
 
     <form className="operator-inspector" onSubmit={inspectDeployment}>
@@ -233,5 +233,5 @@ export default function OperatorSurface() {
       <Button type="button" disabled={!packetExportReadyV1(packet, endpoint, unsignedText)} onClick={downloadPacket}>Download exact unsigned bytes</Button>
       <p>No wallet is requested here because this surface neither signs nor submits.</p>
     </aside></div></section>
-  </main>;
+  </PageShell>;
 }
