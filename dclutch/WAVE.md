@@ -4988,3 +4988,63 @@ stage two went.** Its impurity is two file reads, an RPC and a cluster policy;
 its inputs are the six coordinates the browser already holds. *The last CLI
 command standing between a stranger and a redemption — and its shape is now
 known rather than guessed.*
+
+## 2026-09-01 — the registered Sell executes, and wall A is a missing implementation
+
+With wall A relaxed **as a probe only** (reverted; it stands at
+`hot_v3.rs:5413`), the acceptance case un-ignored:
+
+```
+REGSELL compute units consumed: 365,011   — Program ... success
+```
+
+**The registered Sell executes on real ELFs** — six System-program CPIs creating
+the maker replay and registered record, passing **every** Sell assertion
+(exact root, maker-replay and record poststates, Claims conservation) before the
+Buy is even submitted. That has never happened.
+
+### The Buy's new wall, localized in four measured steps
+
+`0x4003` at **308,354 CU with no child CPI at all** — it dies inside Trading.
+Checkpoints → `p5-geometry-rent`; probes → inside `project_accounts_atomic`;
+kernel error logged → **17 = `IdentityMismatch`**, raised from exactly one helper
+with two call sites; coordinate distinguished → **account 34 = `MINT_ACCOUNT`**.
+
+`require_key(MINT_ACCOUNT, REGISTERED_IDENTITY_MINT_V4)`, whose identity is
+projected from the Realm's `COLLATERAL_MINT`. **The mint in the Buy's frame is
+not the collateral mint the Realm account records.** Buy-only, consistent with
+the Sell passing — the Sell has no collateral block. **A pre-existing latent
+defect, newly reachable because wall B was crossed** — the same pattern as the
+four activation reds.
+
+### Wall A is not a gate to remove
+
+Measured rather than assumed: `DirectInlineHotCrosscheckV3` is an **independent
+re-derivation of every account's expected poststate**, checked after the children
+run — *the "two implementations agree" check for Direct*, the planner's opinion
+against the effect kernel's.
+
+> **That is why `src/direct/{sell,buy}_escrow.rs` have no caller: 1,604 lines of
+> registration, fill, close and terminal planners are exactly the input a
+> registered crosscheck would consume.**
+
+So crossing wall A is **not relaxing a refusal** — the refusal is correct,
+because *a crosscheck that cannot check an action must refuse it.* It is
+**writing the registered analogue** of ~500 lines of inline machinery across nine
+functions. The 1,604 orphaned lines were never dead; they are the input to a
+check nobody wrote.
+
+Not started, because the probe **changed the order**: the Buy's mint mismatch
+sits *before* the crosscheck on the same path, and building a crosscheck for an
+action that cannot get through account projection would be building against a
+known wall.
+
+### A wall that was true when written
+
+The file's header records a previous lane running this same probe and stopping
+the Buy at wall B. **That claim was true when written and is now false**, and
+only re-running it made that visible.
+
+> The same shape as the stale caveat: **a recorded wall decays exactly like a
+> recorded total, and nobody re-derives the sentence that says you cannot get
+> further.**

@@ -2063,3 +2063,33 @@ that already existed, or the caller named it and the chain refused unless it
 matched something written down earlier* — **gains a third instance from a route
 that did not exist when the statement was written.** That is what separates an
 architectural property from an artifact of one parse.
+
+## RULING: C-15 — ember, 2026-09-01
+
+**Ruled out of the accepted current project.** Ember, verbatim:
+
+> *"privacy/FHE is a 'not yet' for sure for sure, that would be a much later
+> version of Clutch, solana isn't ready for that kinda awesomeness onchain yet
+> (we'd want to use minidregg, which isn't ready yet)."*
+
+Dated, explicit, with the reason and the named prerequisite. This is a **scope
+ruling on the accepted project**, not a third state: the FHE/MPC/energy
+objective is **not in this Clutch**. The condition for revisiting is named —
+a later version, on a substrate that can carry it, using minidregg.
+
+**What this obliges now:**
+
+1. **Remove contradictory claims.** Anything in the tree that implies the
+   privacy ambition is in scope, planned, or partially built must say what this
+   ruling says instead. C-15's row closes on this ruling rather than on code.
+2. **`O-019` becomes load-bearing.** The invariant recorded earlier — *the batch
+   relation is small and specialized **on purpose*** (`INTENT.md:118-120`) — is
+   now the thing keeping the door open. A future "simplification" that widens the
+   batch relation toward a general encrypted-exchange computer closes that door
+   **permanently**, and closes it while nobody is looking, because the ambition
+   it forecloses is no longer on any active list. That invariant is the whole
+   reason the ruling is safe to make.
+
+**Nothing may report the privacy horizon as deferred, future work, or
+in-progress.** It is ruled out, dated, with a stated prerequisite — which is a
+terminal state, and the difference matters.
