@@ -2317,3 +2317,4 @@ several non-price markets.
 Scholar's one hedge, as a task: it traced the founding refusal by reading and
 corroborated it by commit date and the band-free fixture, but **did not run a
 founding and watch it refuse.** That is the build lane's red control before R2.
+| `acbf4b5b36cee638f` | NON-PRICE build | red control (found the relayed market, watch it refuse) → R1 decompose the observable → R2 quality model as a family → R3 observable #2 |
