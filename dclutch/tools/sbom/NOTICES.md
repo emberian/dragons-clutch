@@ -526,6 +526,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - wincode-derive 0.4.6 (cargo)
 - wincode-derive 0.5.1 (cargo)
 - workerd 1.20260826.1 (npm)
+- xml-name-validator 5.0.0 (npm)
 
 ### `Apache-2.0 / MIT`
 
@@ -635,6 +636,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - Inflector 0.11.4 (cargo)
 - arrayref 0.3.9 (cargo)
 - damerau-levenshtein 1.0.8 (npm)
+- entities 8.0.0 (npm)
 - eslint-scope 5.1.1 (npm)
 - eslint-scope 8.4.0 (npm)
 - espree 10.4.0 (npm)
@@ -645,6 +647,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - terser 5.50.0 (npm)
 - uri-js 4.4.1 (npm)
 - webidl-conversions 3.0.1 (npm)
+- webidl-conversions 8.0.1 (npm)
 
 ### `BSD-2-Clause OR Apache-2.0 OR MIT`
 
@@ -669,6 +672,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - stream-chain 2.2.5 (npm)
 - stream-json 1.9.1 (npm)
 - subtle 2.6.1 (cargo)
+- tough-cookie 6.0.2 (npm)
 
 ### `BSD-3-Clause AND MIT`
 
@@ -685,6 +689,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 ### `BlueOak-1.0.0`
 
+- lru-cache 11.5.2 (npm)
 - minimatch 10.2.6 (npm)
 
 ### `CC-BY-4.0`
@@ -695,6 +700,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 - @speed-highlight/core 1.2.24 (npm)
 - language-subtag-registry 0.3.23 (npm)
+- mdn-data 2.27.1 (npm)
 
 ### `CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception`
 
@@ -727,6 +733,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - picocolors 1.1.1 (npm)
 - rustls-webpki 0.101.7 (cargo)
 - rustls-webpki 0.103.15 (cargo)
+- saxes 6.0.0 (npm)
 - semver 6.3.1 (npm)
 - semver 7.8.5 (npm)
 - siginfo 2.0.0 (npm)
@@ -768,6 +775,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 ### `MIT`
 
 - @alloc/quick-lru 5.2.0 (npm)
+- @asamuzakjp/css-color 6.0.7 (npm)
+- @asamuzakjp/dom-selector 8.3.2 (npm)
 - @babel/code-frame 7.29.7 (npm)
 - @babel/compat-data 7.29.7 (npm)
 - @babel/core 7.29.7 (npm)
@@ -785,8 +794,13 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @babel/template 7.29.7 (npm)
 - @babel/traverse 7.29.8 (npm)
 - @babel/types 7.29.8 (npm)
+- @bramus/specificity 2.4.2 (npm)
 - @cloudflare/vite-plugin 1.54.1 (npm)
 - @cspotcode/source-map-support 0.8.1 (npm)
+- @csstools/css-calc 3.3.0 (npm)
+- @csstools/css-color-parser 4.2.2 (npm)
+- @csstools/css-parser-algorithms 4.0.0 (npm)
+- @csstools/css-tokenizer 4.0.0 (npm)
 - @emnapi/core 1.10.0 (npm)
 - @emnapi/runtime 1.10.0 (npm)
 - @emnapi/runtime 1.11.3 (npm)
@@ -874,6 +888,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @eslint-community/regexpp 4.12.2 (npm)
 - @eslint/eslintrc 3.3.6 (npm)
 - @eslint/js 9.39.4 (npm)
+- @exodus/bytes 1.15.1 (npm)
 - @floating-ui/core 1.8.0 (npm)
 - @floating-ui/dom 1.8.0 (npm)
 - @floating-ui/react-dom 2.1.9 (npm)
@@ -1039,12 +1054,14 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @types/connect 3.4.38 (npm)
 - @types/deep-eql 4.0.2 (npm)
 - @types/estree 1.0.9 (npm)
+- @types/jsdom 30.0.0 (npm)
 - @types/json-schema 7.0.15 (npm)
 - @types/json5 0.0.29 (npm)
 - @types/node 12.20.55 (npm)
 - @types/node 22.19.19 (npm)
 - @types/react 19.2.14 (npm)
 - @types/react-dom 19.2.3 (npm)
+- @types/tough-cookie 4.0.5 (npm)
 - @types/uuid 10.0.0 (npm)
 - @types/ws 7.4.7 (npm)
 - @types/ws 8.18.1 (npm)
@@ -1152,6 +1169,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - base-x 3.0.11 (npm)
 - base64-js 0.0.8 (npm)
 - base64-js 1.5.1 (npm)
+- bidi-js 1.0.3 (npm)
 - bincode 1.3.3 (cargo)
 - bitvec 1.1.1 (cargo)
 - blake3-wasm 2.1.5 (npm)
@@ -1196,17 +1214,20 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - css-box-shadow 1.0.0-3 (npm)
 - css-gradient-parser 0.0.16 (npm)
 - css-to-react-native 3.2.0 (npm)
+- css-tree 3.2.1 (npm)
 - csstype 3.2.3 (npm)
 - darling 0.23.0 (cargo)
 - darling_core 0.23.0 (cargo)
 - darling_macro 0.23.0 (cargo)
 - dashmap 5.5.3 (cargo)
 - data-encoding 2.11.1 (cargo)
+- data-urls 7.0.0 (npm)
 - data-view-buffer 1.0.2 (npm)
 - data-view-byte-length 1.0.2 (npm)
 - data-view-byte-offset 1.0.1 (npm)
 - debug 3.2.7 (npm)
 - debug 4.4.3 (npm)
+- decimal.js 10.6.0 (npm)
 - deep-is 0.1.4 (npm)
 - define-data-property 1.1.4 (npm)
 - define-properties 1.2.1 (npm)
@@ -1307,6 +1328,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - hermes-estree 0.25.1 (npm)
 - hermes-parser 0.25.1 (npm)
 - hex-rgb 4.3.0 (npm)
+- html-encoding-sniffer 6.0.0 (npm)
 - http-body 0.4.6 (cargo)
 - http-body 1.1.0 (cargo)
 - http-body-util 0.1.5 (cargo)
@@ -1342,6 +1364,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - is-negative-zero 2.0.3 (npm)
 - is-number 7.0.0 (npm)
 - is-number-object 1.1.1 (npm)
+- is-potential-custom-element-name 1.0.1 (npm)
 - is-regex 1.2.1 (npm)
 - is-set 2.0.3 (npm)
 - is-shared-array-buffer 1.0.4 (npm)
@@ -1361,6 +1384,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - js-tokens 9.0.1 (npm)
 - js-yaml 4.3.1 (npm)
 - js-yaml 4.3.2 (npm)
+- jsdom 30.0.1 (npm)
 - jsesc 3.1.0 (npm)
 - json-buffer 3.0.1 (npm)
 - json-schema-traverse 0.4.1 (npm)
@@ -1427,6 +1451,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - pako 0.2.9 (npm)
 - parent-module 1.0.1 (npm)
 - parse-css-color 0.2.1 (npm)
+- parse5 8.0.1 (npm)
 - path-exists 4.0.0 (npm)
 - path-key 3.1.1 (npm)
 - path-parse 1.0.7 (npm)
@@ -1512,6 +1537,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - supports-color 7.2.0 (npm)
 - supports-color 8.1.1 (npm)
 - supports-preserve-symlinks-flag 1.0.0 (npm)
+- symbol-tree 3.2.4 (npm)
 - synstructure 0.12.6 (cargo)
 - synstructure 0.13.2 (cargo)
 - tailwind-merge 3.6.0 (npm)
@@ -1526,6 +1552,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - tinyexec 1.3.0 (npm)
 - tinyglobby 0.2.17 (npm)
 - tinyrainbow 3.1.1 (npm)
+- tldts 7.4.11 (npm)
+- tldts-core 7.4.11 (npm)
 - to-regex-range 5.0.1 (npm)
 - tokio 1.53.1 (cargo)
 - tokio-macros 2.7.2 (cargo)
@@ -1538,6 +1566,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - tower-layer 0.3.3 (cargo)
 - tower-service 0.3.3 (cargo)
 - tr46 0.0.3 (npm)
+- tr46 6.0.0 (npm)
 - tracing 0.1.44 (cargo)
 - tracing-attributes 0.1.31 (cargo)
 - tracing-core 0.1.36 (cargo)
@@ -1556,7 +1585,9 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - typescript-eslint 8.68.0 (npm)
 - unbox-primitive 1.1.0 (npm)
 - undici 7.29.0 (npm)
+- undici 8.10.1 (npm)
 - undici-types 6.21.0 (npm)
+- undici-types 8.10.1 (npm)
 - unenv 2.0.0-rc.24 (npm)
 - unicode-trie 2.0.0 (npm)
 - unpic 4.2.2 (npm)
@@ -1580,10 +1611,14 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - vitest 4.0.17 (npm)
 - vitest 4.1.11 (npm)
 - void 1.0.2 (cargo)
+- w3c-xmlserializer 5.0.0 (npm)
 - want 0.3.1 (cargo)
 - watchpack 2.5.2 (npm)
 - webpack 5.109.2 (npm)
 - webpack-sources 3.5.1 (npm)
+- whatwg-mimetype 5.0.0 (npm)
+- whatwg-url 16.0.1 (npm)
+- whatwg-url 17.1.0 (npm)
 - whatwg-url 5.0.0 (npm)
 - which 8.0.6 (cargo)
 - which-boxed-primitive 1.1.1 (npm)
@@ -1599,6 +1634,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - ws 8.21.0 (npm)
 - ws 8.21.3 (npm)
 - wyz 0.5.1 (cargo)
+- xmlchars 2.2.0 (npm)
 - yocto-queue 0.1.0 (npm)
 - yoga-layout 3.2.1 (npm)
 - youch 4.1.0-beta.10 (npm)
@@ -1965,6 +2001,11 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 ### `MIT OR Zlib OR Apache-2.0`
 
 - miniz_oxide 0.9.1 (cargo)
+
+### `MIT-0`
+
+- @csstools/color-helpers 6.1.1 (npm)
+- @csstools/css-syntax-patches-for-csstree 1.1.12 (npm)
 
 ### `MIT/Apache-2.0`
 

@@ -51,10 +51,48 @@ describe('wallet redemption flow', () => {
     expect(html).toContain('Browser data is an untrusted projection');
   });
 
-  it('exposes the Rust artifact handoff without claiming browser authorship', () => {
+  it('exposes the Rust artifact handoff and now completes it here', () => {
+    // WAS: this pinned "This browser never creates or completes a payout
+    // plan". That was honest while the derivation lived only in a binary. It
+    // was extracted verbatim, compiled, and given its snapshot, so the
+    // assertion moves with the behaviour rather than the sentence being
+    // quietly deleted from under it.
     expect(html).toContain('Rust payout plan file');
-    expect(html).toContain('This browser never creates or completes a payout plan');
+    expect(html).not.toContain('This browser never creates or completes a payout plan');
+    expect(html).toContain('This browser completes the plan itself');
     expect(html).toContain('the checked Program and ProgramData generation');
     expect(html).toContain('remain disabled until the payment record above is verified');
+  });
+});
+
+describe('the browser derives the payout plan instead of only importing one', () => {
+  const html = renderToStaticMarkup(<RedeemFlow
+    endpoint="https://api.devnet.solana.com"
+    marketAddress="gBxS1f6uyyGPuW5MzGBukidSb71jdsCb5fZaoSzULE5"
+    positionAddress="k7FaK87WH8sR2tHfMX7hGivxiCrcHNTGkZLH5TbtQsS"
+    claimIndex={1}
+    availableQuantity="2"
+    claimsProgramId="4vJ9JU1bJJE96FWSJKvHsmmF7ujPKAy5SKpjXkLc6R1Q"
+    custodyProgramId="8qbHbw2BbbTHBW1sbeqakYXV5ZZGczXJG2ajNeN3WFe"
+    registryProgramId="CktRuQ2mttgRG9XJNgMHDqZqQmM4j5EJQ3R2A4j3ZxY"
+    directory={directory}
+  />);
+
+  it('no longer claims the browser cannot create a payout plan', () => {
+    // The sentence this unit was aimed at. It was true until the derivation
+    // was extracted, compiled, and given its snapshot.
+    expect(html).not.toContain('This browser never creates or completes a payout plan');
+  });
+
+  it('names the compiled derivation as the authority, and what it reads', () => {
+    expect(html).toContain('compiled Rust');
+    expect(html).toContain('finalized');
+  });
+
+  it('is honest that the payout input still comes from the Rust producer', () => {
+    // Stage one — `wallet-terminal-payout-input` — reads two operator
+    // artifacts and its own RPC and was NOT extracted. Saying the browser does
+    // everything would be a claim this lane did not earn.
+    expect(html).toContain('wallet-terminal-payout-input');
   });
 });

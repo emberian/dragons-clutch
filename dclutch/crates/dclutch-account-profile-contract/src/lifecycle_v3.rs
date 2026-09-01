@@ -924,6 +924,26 @@ impl<'a> StateLifecyclePolicyV5<'a> {
         self.0.validate_account_profile_join(profile)
     }
 
+    /// The same recorded join, for a profile that describes ONE action's frame.
+    ///
+    /// This is the form the generic Hot path and the bundle builder need. A
+    /// family whose one profile covers every action keeps using
+    /// [`Self::validate_account_profile_join`]; one that encodes a frame per
+    /// action -- Dealer LP, where the Open payer and the Close RentCredit share
+    /// fixed slot 7 -- must use this, because the whole-policy form asks whether
+    /// a sibling action's plans fit a frame that was never built for them.
+    pub fn validate_account_profile_join_for_action<'b>(
+        self,
+        profile: AccountProfileV2<'b>,
+        action: u32,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        self.0
+            .validate_account_profile_join_for_action(profile, action)
+    }
+
     /// Whether every lifecycle and quote table is canonically empty.
     pub const fn is_empty(self) -> bool {
         self.0.recipes == 0
@@ -1357,6 +1377,27 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         })
     }
 
+    /// The same recorded join, for a profile that describes ONE action's frame.
+    ///
+    /// The evidence it returns is the same shape and is consumed identically:
+    /// `require_join` only asks whether the recorded pair names these exact two
+    /// artifacts, and it does, because the bytes are the same bytes. What
+    /// differs is which plans were answered for on the way in.
+    pub fn validate_account_profile_join_for_action<'b>(
+        self,
+        profile: AccountProfileV2<'b>,
+        action: u32,
+    ) -> Result<ValidatedProfileJoinV3<'b>>
+    where
+        'a: 'b,
+    {
+        self.validate_account_profile_for_action(profile, action)?;
+        Ok(ValidatedProfileJoinV3 {
+            policy: self.bytes(),
+            profile: profile.bytes(),
+        })
+    }
+
     /// Establish this policy's join to `profile`, deriving it only if the
     /// supplied evidence does not already name exactly these two artifacts.
     fn require_join(
@@ -1386,7 +1427,16 @@ impl<'a> StateLifecyclePolicyV3<'a> {
         // Measured, not feared: without this, naming the wrong action made the
         // Dealer LP join green while validating zero plans -- a check that cannot
         // fail, arrived at while repairing one.
-        if self.action_plan_count(action)? == 0 {
+        //
+        // A policy with NO plans at all is exempt, and that is not a loophole.
+        // The canonically empty policy is a real artifact -- Dealer equity's V5
+        // is exactly `LIFECYCLE_HEADER_BYTES_V5`, carrying no recipe, plan or
+        // quote, and its family proves separately that it grants no create or
+        // close authority. There is nothing for any action to answer for, so the
+        // join is vacuous for every action equally rather than wrong for each.
+        // The error case is a policy that describes SOME action and was asked
+        // about another.
+        if self.plans != 0 && self.action_plan_count(action)? == 0 {
             return Err(Error::ProfileMismatch);
         }
         self.validate_account_profile_inner(profile, None, Some(action))

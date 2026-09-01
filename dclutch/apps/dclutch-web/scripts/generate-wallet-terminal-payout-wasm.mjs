@@ -34,6 +34,7 @@ const app = resolve(here, '..');
 const root = resolve(app, '../..');
 const wasmOwner = join(root, 'crates/dclutch-wallet-terminal-payout-wasm/src/lib.rs');
 const claims = join(root, 'crates/dclutch-claims-svm/src/terminal_settlement_v3.rs');
+const operator = join(root, 'crates/dclutch-wallet-terminal-payout-operator/src/wire.rs');
 const crate = 'dclutch-wallet-terminal-payout-wasm';
 const output = join(app, 'lib/generated/walletTerminalPayoutWasm');
 const facts = join(app, 'lib/generated/walletTerminalPayoutWasmV1.ts');
@@ -69,6 +70,7 @@ try {
 
   const owner = readFileSync(wasmOwner, 'utf8');
   const claimsSource = readFileSync(claims, 'utf8');
+  const operatorSource = readFileSync(operator, 'utf8');
   const wasm = readFileSync(join(generated, 'wallet_terminal_payout_bg.wasm'));
   const digest = createHash('sha256').update(wasm).digest('hex');
 
@@ -76,6 +78,9 @@ try {
     + '// Regenerate with: npm run abi:wallet-terminal-payout\n'
     + `export const WALLET_TERMINAL_PAYOUT_SNAPSHOT_FORMAT_V1 = '${rustString(owner, 'SNAPSHOT_FORMAT_V1')}' as const;\n`
     + `export const WALLET_TERMINAL_PAYOUT_ADDRESSES_FORMAT_V1 = '${rustString(owner, 'ADDRESSES_FORMAT_V1')}' as const;\n`
+    // The stage-one artifact a reader still imports. Read from the operator
+    // crate so the browser can recognise it without writing its name down.
+    + `export const WALLET_TERMINAL_PAYOUT_INPUT_FORMAT_V1 = '${rustString(operatorSource, 'INPUT_FORMAT')}' as const;\n`
     + `export const TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3 = ${rustUsize(claimsSource, 'TERMINAL_SETTLEMENT_ACCOUNT_COUNT_V3')} as const;\n`
     + `export const TERMINAL_SETTLEMENT_REQUEST_BYTES_V3 = ${rustUsize(claimsSource, 'TERMINAL_SETTLEMENT_REQUEST_BYTES_V3')} as const;\n`
     + `export const WALLET_TERMINAL_PAYOUT_WASM_SHA256_V1 = '${digest}' as const;\n`

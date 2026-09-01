@@ -292,8 +292,11 @@ pub(crate) fn run_engine_with_admitted_candidate(
         input.lifecycle_bytes,
     )
     .map_err(|_| BuilderError::Projection("lifecycle-decode"))?;
+    // FOR THIS ACTION -- the host-side twin of the join `hot_v3/seal.rs` runs.
+    // The builder already selects plans and quotes by action; the profile join
+    // is the third thing that has to, for the same reason.
     let profile_join = lifecycle
-        .validate_account_profile_join(profile)
+        .validate_account_profile_join_for_action(profile, input.action)
         .map_err(|_| BuilderError::Projection("profile-join"))?;
     let transition = TransitionProgramV3::decode(input.transition_bytes)
         .map_err(|_| BuilderError::Projection("transition-decode"))?;

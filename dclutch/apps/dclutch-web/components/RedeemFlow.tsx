@@ -34,6 +34,9 @@ import {
   type PreparedWalletTerminalPayoutV3,
 } from '@/lib/walletTerminalPayoutV3';
 import { requestWalletTransactionSignatureV1, submitSignedTransactionV1 } from '@/lib/walletHandoff';
+import { WALLET_TERMINAL_PAYOUT_INPUT_FORMAT_V1 } from '@/lib/generated/walletTerminalPayoutWasmV1';
+import { deriveWalletTerminalPayoutManifestV1 } from '@/lib/walletTerminalPayoutSnapshot';
+import { loadWalletTerminalPayoutWasmV1 } from '@/lib/walletTerminalPayoutV1';
 
 type ReplayFlow =
   | Readonly<{ kind: 'idle' | 'inspecting' }>
@@ -60,6 +63,22 @@ const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 1_000));
 function browserStorage(): Storage {
   if (typeof window === 'undefined' || window.localStorage === undefined) throw new Error('this browser does not expose local recovery storage, so no wallet signature was requested');
   return window.localStorage;
+}
+
+/**
+ * Is this the payout INPUT rather than a completed manifest?
+ *
+ * The format name is emitted from the operator crate, so the browser
+ * recognises the artifact without writing its name down. A reader who pastes
+ * the earlier artifact gets it completed here rather than being sent away to
+ * run a second command.
+ */
+function isPayoutInputV1(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed !== null && typeof parsed === 'object'
+      && (parsed as Record<string, unknown>).format === WALLET_TERMINAL_PAYOUT_INPUT_FORMAT_V1;
+  } catch { return false; }
 }
 
 export default function RedeemFlow({ endpoint, marketAddress, positionAddress, claimIndex, availableQuantity, claimsProgramId, custodyProgramId, registryProgramId, directory }: Readonly<{
@@ -238,7 +257,17 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
     setPayout({ kind: 'preparing' });
     try {
       if (BigInt(availableQuantity) === 0n) throw new Error('this Position holds zero winning atoms, so there is nothing to redeem');
-      const manifest = importRustWalletTerminalPayoutArtifactV3(manifestText);
+      // A payout INPUT is completed here by the compiled derivation; an
+      // already-complete manifest is taken as it always was. Two artifacts at
+      // different stages of ONE authority, not two authorities: whichever
+      // arrives, what reaches the checks below is the same
+      // `dclutch-wallet-terminal-payout-v3` proved against finalized devnet by
+      // the same code.
+      const manifest = importRustWalletTerminalPayoutArtifactV3(
+        isPayoutInputV1(manifestText)
+          ? await deriveWalletTerminalPayoutManifestV1(client, await loadWalletTerminalPayoutWasmV1(), manifestText)
+          : manifestText,
+      );
       if (manifest.request.market !== marketAddress || manifest.request.position !== positionAddress || manifest.request.owner !== wallet || manifest.request.claimIndex !== claimIndex) throw new Error('the payout plan names another Market, Position, owner, or winning claim');
       if (BigInt(manifest.request.quantity) > BigInt(availableQuantity)) throw new Error('the payout plan tries to redeem more winning atoms than this Position holds');
       const plan = await prepareCheckedLiveDevnetWalletTerminalPayoutV3(client, manifest, wallet); const scope = await operationScope(wallet);
@@ -329,7 +358,7 @@ export default function RedeemFlow({ endpoint, marketAddress, positionAddress, c
 
     <details className="trade-v3-bytes" open={payout.kind !== 'idle'}>
       <summary>Review and execute a payout plan</summary>
-      <p className="direct-status">Import the exact JSON emitted by the Rust wallet-terminal payout producer — the <code>wallet-terminal-payout-input</code> command of the successor bootstrap tool, run against this market with your wallet as the position owner — or paste those same bytes below. This browser never creates or completes a payout plan. Before your wallet opens, it proves Solana devnet genesis, the checked Program and ProgramData generation, the activation release, terminal Market and certificate, Registry records, your Position, your recipient token account, and the one exact lookup table from finalized chain state.</p>
+      <p className="direct-status">Import the payout input the Rust producer emits — the <code>wallet-terminal-payout-input</code> command of the successor bootstrap tool, run against this market with your wallet as the position owner — or paste those bytes below. <strong>This browser completes the plan itself</strong>, with the <strong>compiled Rust</strong> derivation: the same code the operator toolchain runs, built to WebAssembly and refused unless its bytes match the recorded digest. It asks that derivation which accounts it authenticates, reads every one at one <strong>finalized</strong> floor, and hands them back for it to build the exact payout. An already-complete payout manifest is still accepted here unchanged. Before your wallet opens, it proves Solana devnet genesis, the checked Program and ProgramData generation, the activation release, terminal Market and certificate, Registry records, your Position, your recipient token account, and the one exact lookup table from finalized chain state.</p>
       <label><span>Rust payout plan file</span><input type="file" accept="application/json,.json" disabled={payoutUnsigned !== null || payout.kind === 'submitted'} onChange={(event) => void importPayoutFile(event)} /></label>
       {manifestSource !== '' && <p className="direct-status" aria-live="polite">Imported {manifestSource}. No wallet action occurred.</p>}
       <label><span>Payout plan JSON</span><textarea rows={7} spellCheck={false} disabled={payoutUnsigned !== null || payout.kind === 'submitted'} value={manifestText} onChange={(event) => { setManifestText(event.target.value); setPayout({ kind: 'idle' }); }} /></label>

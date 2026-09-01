@@ -4891,3 +4891,47 @@ The capability surface's only delta was `OPERATOR_CRATES_V1` gaining the two new
 crates — exactly what that census exists for, *so an act cannot name an owner
 that is gone*, and confirmation that adding a compiled derivation changed no
 act's standing.
+
+## 2026-09-01 — vacuous for every action equally, not wrong for each
+
+Both callers of the profile join are now action-aware (`f87dae3c`) — the runtime
+at `hot_v3/seal.rs` and its host-side twin in the bundle-builder.
+
+**And the first repair would have broken equity the moment the runtime site
+switched.** The non-vacuity guard refused **any** action the policy carried no
+plan for — correct for a policy that *describes some action and was asked about
+another*, and **wrong for the canonically empty policy.** Equity's V5 is exactly
+`LIFECYCLE_HEADER_BYTES_V5`:
+
+> There is nothing for any action to answer for, so the join is **vacuous for
+> every action equally**, rather than **wrong for each**.
+
+Shipped blind, that would have turned a vacuous pass into a `Content` refusal —
+at the runtime site, on the generic Hot path — for the one family whose policy is
+legitimately empty, and it would have read as a new Dealer defect.
+
+### Two perturbations that proved nothing, reported rather than hidden
+
+`input.action ^ 1` still named a **real** General action. And the
+bundle-builder's own suite stayed green under `0xFFFF_FFFF` because **it never
+reaches `run_engine` at all** — so that host-side site is **under-covered**, and
+the lane said so instead of claiming a proof it did not get.
+
+> **A perturbation that does not go red has told you about your test, not your
+> fix.**
+
+Third way this session the tree has learned the same thing: a hostile that
+cannot reach its subject; a hostile that reaches it and has **no word** for what
+it found; and now a perturbation that **cannot move** the thing it perturbs.
+
+### Naming the property beats naming the failure
+
+The Dealer lane's `open & close == 0`, read off the **decoded** artifacts, was
+credited by the lane that had instead printed the mismatch from inside
+`require_permissions` — *"the assertion I should have written and did not."*
+
+> Printing the mismatch names **what broke**. Asserting the disjointness names
+> **what cannot be added.**
+
+trading-sbf lib **446/6 → 449/4**; the same four remain, none the validator,
+none newly broken.

@@ -625,8 +625,21 @@ fn validate_descriptor_closure_v1<'info>(
     }
     let account_profile =
         AccountProfileV2::decode(&account_profile_data).map_err(|_| TradingSbfError::Content)?;
+    // FOR THIS ACTION, on the generic Hot path every family crosses.
+    //
+    // A single lifecycle policy may carry plans for several actions whose
+    // AccountProfiles are DIFFERENT accounts at the same coordinate -- the
+    // Dealer LP frame puts the Open payer and the Close RentCredit both at fixed
+    // slot 7, so one grants debit and the other credit and no shared answer
+    // exists. Joining the whole policy to one action's profile therefore asked
+    // whether a sibling action's plans fit a frame never built for them, and
+    // refused `Content` at runtime for every such family.
+    //
+    // The canonically empty policy still joins vacuously here, which is what
+    // Dealer equity relies on: it carries no plans at all, so there is nothing
+    // for any action to answer for.
     lifecycle
-        .validate_account_profile_join(account_profile)
+        .validate_account_profile_join_for_action(account_profile, action)
         .map_err(|_| TradingSbfError::Content)?;
 
     let request_profile_data = borrow_finalized_record(
@@ -1070,14 +1083,7 @@ mod tests {
             "wrong staging coordinate",
         );
         assert_eq!(
-            require_sealed_record_coordinates_v1(
-                descriptor,
-                &staging,
-                &raw,
-                schema,
-                digest,
-                false,
-            ),
+            require_sealed_record_coordinates_v1(descriptor, &staging, &raw, schema, digest, false,),
             Err(TradingSbfError::Content.into()),
             "swapped raw/staging pair",
         );

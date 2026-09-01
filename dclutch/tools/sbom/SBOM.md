@@ -3,24 +3,24 @@
 
 The complete dependency/license closure of this repository: every tracked Cargo workspace and npm package tree discovered from the repository manifests. The exact current set is listed in [Coverage](#coverage); it is discovered from tracked manifests rather than maintained as a separate count. Regenerate with `tools/sbom/sbom_check.py`; check for drift with `tools/sbom/sbom_check.py --verify`. Automatically, that check is the `sbom` tier of `tools/ci/run.sh` and the `lib/sbomVerify.test.ts` case in `apps/dclutch-web`'s `npm test` — see `tools/sbom/README.md`.
 
-**59 manifests, 2151 unique dependency rows (1249 cargo, 902 npm), 0 flagged for human review, 67 reviewed and allowed.**
+**59 manifests, 2192 unique dependency rows (1252 cargo, 940 npm), 0 flagged for human review, 67 reviewed and allowed.**
 
 ## Counts by license
 
 | License | Rows |
 |---|---|
-| `MIT` | 840 |
-| `Apache-2.0` | 499 |
+| `MIT` | 869 |
+| `Apache-2.0` | 500 |
 | `MIT OR Apache-2.0` | 334 |
-| `AGPL-3.0-or-later` | 162 |
+| `AGPL-3.0-or-later` | 165 |
 | `MIT/Apache-2.0` | 67 |
 | `Apache-2.0 OR MIT` | 48 |
 | `MPL-2.0` | 30 |
-| `ISC` | 22 |
+| `ISC` | 23 |
 | `LGPL-3.0-or-later` | 20 |
 | `Unicode-3.0` | 18 |
-| `BSD-3-Clause` | 16 |
-| `BSD-2-Clause` | 13 |
+| `BSD-3-Clause` | 17 |
+| `BSD-2-Clause` | 15 |
 | `Apache-2.0 OR ISC OR MIT` | 7 |
 | `Unlicense OR MIT` | 7 |
 | `Apache-2.0 AND LGPL-3.0-or-later` | 6 |
@@ -28,16 +28,18 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 | `Zlib OR Apache-2.0 OR MIT` | 5 |
 | `0BSD` | 3 |
 | `Apache-2.0/MIT` | 3 |
+| `CC0-1.0` | 3 |
 | `MPL-2.0+` | 3 |
 | `Zlib` | 3 |
 | `Apache-2.0 / MIT` | 2 |
 | `Apache-2.0 AND LGPL-3.0-or-later AND MIT` | 2 |
 | `BSD-2-Clause OR Apache-2.0 OR MIT` | 2 |
 | `BSD-3-Clause OR MIT OR Apache-2.0` | 2 |
-| `CC0-1.0` | 2 |
+| `BlueOak-1.0.0` | 2 |
 | `CDLA-Permissive-2.0` | 2 |
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 2 |
 | `MIT OR Apache-2.0 OR Zlib` | 2 |
+| `MIT-0` | 2 |
 | `Unlicense/MIT` | 2 |
 | `(Apache-2.0 OR MIT) AND BSD-3-Clause` | 1 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
@@ -47,7 +49,6 @@ The complete dependency/license closure of this repository: every tracked Cargo 
 | `Apache-2.0 OR BSL-1.0` | 1 |
 | `BSD-3-Clause AND MIT` | 1 |
 | `BSD-3-Clause/MIT` | 1 |
-| `BlueOak-1.0.0` | 1 |
 | `CC-BY-4.0` | 1 |
 | `CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception` | 1 |
 | `CC0-1.0 OR MIT-0 OR Apache-2.0` | 1 |
@@ -581,7 +582,10 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `dclutch-trading-user-position-admission-program-test` | 0.1.0 | `AGPL-3.0-or-later` | `path+programs/dclutch-trading-sbf/program-test/user-position-admission` | inherited-default (publish=false, undeclared) |
 | `dclutch-transition-vm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-transition-vm` | declared |
 | `dclutch-user-position-admission-contract` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-user-position-admission-contract` | declared |
+| `dclutch-user-position-admission-wasm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-user-position-admission-wasm` | declared |
 | `dclutch-versioned-message-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-versioned-message-operator` | declared |
+| `dclutch-wallet-terminal-payout-operator` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-wallet-terminal-payout-operator` | declared |
+| `dclutch-wallet-terminal-payout-wasm` | 0.1.0 | `AGPL-3.0-or-later` | `path+crates/dclutch-wallet-terminal-payout-wasm` | declared |
 | `dclutch-web-founding-vector-generator` | 0.1.0 | `AGPL-3.0-or-later` | `path+apps/dclutch-web/fixtures/founding/generator` | declared |
 | `defmt` | 1.1.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
 | `defmt-macros` | 1.1.1 | `MIT OR Apache-2.0` | `registry+https://github.com/rust-lang/crates.io-index` | declared |
@@ -1494,6 +1498,8 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | Name | Version | License | Source | Basis |
 |---|---|---|---|---|
 | `@alloc/quick-lru` | 5.2.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@asamuzakjp/css-color` | 6.0.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@asamuzakjp/dom-selector` | 8.3.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@babel/code-frame` | 7.29.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@babel/compat-data` | 7.29.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@babel/core` | 7.29.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1511,6 +1517,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `@babel/template` | 7.29.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@babel/traverse` | 7.29.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@babel/types` | 7.29.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@bramus/specificity` | 2.4.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@cloudflare/kv-asset-handler` | 0.5.0 | `MIT OR Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@cloudflare/unenv-preset` | 2.16.1 | `MIT OR Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@cloudflare/vite-plugin` | 1.54.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1521,6 +1528,12 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `@cloudflare/workerd-windows-64` | 1.20260826.1 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@cloudflare/workers-types` | 5.20260828.1 | `MIT OR Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@cspotcode/source-map-support` | 0.8.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@csstools/color-helpers` | 6.1.1 | `MIT-0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@csstools/css-calc` | 3.3.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@csstools/css-color-parser` | 4.2.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@csstools/css-parser-algorithms` | 4.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@csstools/css-syntax-patches-for-csstree` | 1.1.12 | `MIT-0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@csstools/css-tokenizer` | 4.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@dclutch/cli` | 0.1.0 | `AGPL-3.0-or-later` | `path+packages/dclutch-cli` | declared |
 | `@dclutch/sdk` | 0.1.0 | `AGPL-3.0-or-later` | `path+packages/dclutch-sdk` | declared |
 | `@emnapi/core` | 1.10.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1615,6 +1628,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `@eslint/js` | 9.39.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@eslint/object-schema` | 2.1.7 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@eslint/plugin-kit` | 0.4.1 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@exodus/bytes` | 1.15.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@floating-ui/core` | 1.8.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@floating-ui/dom` | 1.8.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@floating-ui/react-dom` | 2.1.9 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1841,12 +1855,14 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `@types/connect` | 3.4.38 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/deep-eql` | 4.0.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/estree` | 1.0.9 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@types/jsdom` | 30.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/json-schema` | 7.0.15 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/json5` | 0.0.29 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/node` | 12.20.55 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/node` | 22.19.19 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/react` | 19.2.14 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/react-dom` | 19.2.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `@types/tough-cookie` | 4.0.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/uuid` | 10.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/ws` | 7.4.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `@types/ws` | 8.18.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -1964,6 +1980,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `base64-js` | 0.0.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `base64-js` | 1.5.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `baseline-browser-mapping` | 2.11.19 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `bidi-js` | 1.0.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `blake3-wasm` | 2.1.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `bn.js` | 5.2.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `borsh` | 0.7.0 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2002,14 +2019,17 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `css-color-keywords` | 1.0.0 | `ISC` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `css-gradient-parser` | 0.0.16 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `css-to-react-native` | 3.2.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `css-tree` | 3.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `csstype` | 3.2.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `damerau-levenshtein` | 1.0.8 | `BSD-2-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `data-urls` | 7.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `data-view-buffer` | 1.0.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `data-view-byte-length` | 1.0.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `data-view-byte-offset` | 1.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `dclutch-web` | 0.1.0 | `AGPL-3.0-or-later` | `path+apps/dclutch-web` | inherited-default (first-party app, undeclared) |
 | `debug` | 3.2.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `debug` | 4.4.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `decimal.js` | 10.6.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `deep-is` | 0.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `define-data-property` | 1.1.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `define-properties` | 1.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2022,6 +2042,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `emoji-regex` | 9.2.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `emoji-regex-xs` | 2.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `enhanced-resolve` | 5.24.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `entities` | 8.0.0 | `BSD-2-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `error-stack-parser-es` | 1.0.5 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `es-abstract` | 1.24.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `es-abstract-get` | 1.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2112,6 +2133,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `hermes-estree` | 0.25.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `hermes-parser` | 0.25.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `hex-rgb` | 4.3.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `html-encoding-sniffer` | 6.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `humanize-ms` | 1.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `ieee754` | 1.2.1 | `BSD-3-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `ignore` | 5.3.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2138,6 +2160,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `is-negative-zero` | 2.0.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `is-number` | 7.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `is-number-object` | 1.1.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `is-potential-custom-element-name` | 1.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `is-regex` | 1.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `is-set` | 2.0.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `is-shared-array-buffer` | 1.0.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2158,6 +2181,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `js-tokens` | 9.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `js-yaml` | 4.3.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `js-yaml` | 4.3.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `jsdom` | 30.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `jsesc` | 3.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `json-buffer` | 3.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `json-schema-traverse` | 0.4.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2200,9 +2224,11 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `locate-path` | 6.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `lodash.merge` | 4.6.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `loose-envify` | 1.4.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `lru-cache` | 11.5.2 | `BlueOak-1.0.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `lru-cache` | 5.1.1 | `ISC` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `magic-string` | 0.30.21 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `math-intrinsics` | 1.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `mdn-data` | 2.27.1 | `CC0-1.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `merge-stream` | 2.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `merge2` | 1.4.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `micromatch` | 4.0.8 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2239,6 +2265,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `pako` | 0.2.9 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `parent-module` | 1.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `parse-css-color` | 0.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `parse5` | 8.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `path-exists` | 4.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `path-key` | 3.1.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `path-parse` | 1.0.7 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2279,6 +2306,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `safe-push-apply` | 1.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `safe-regex-test` | 1.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `satori` | 0.16.0 | `MPL-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `saxes` | 6.0.0 | `ISC` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `scheduler` | 0.27.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `schema-utils` | 4.3.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `semver` | 6.3.1 | `ISC` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2322,6 +2350,7 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `supports-color` | 7.2.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `supports-color` | 8.1.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `supports-preserve-symlinks-flag` | 1.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `symbol-tree` | 3.2.4 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tailwind-merge` | 3.6.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tailwindcss` | 4.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tapable` | 2.3.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2332,8 +2361,12 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `tinyexec` | 1.3.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tinyglobby` | 0.2.17 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tinyrainbow` | 3.1.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `tldts` | 7.4.11 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `tldts-core` | 7.4.11 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `to-regex-range` | 5.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `tough-cookie` | 6.0.2 | `BSD-3-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tr46` | 0.0.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `tr46` | 6.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `ts-api-utils` | 2.5.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tsconfig-paths` | 3.15.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `tslib` | 2.8.1 | `0BSD` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2349,7 +2382,9 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `typescript-eslint` | 8.68.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `unbox-primitive` | 1.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `undici` | 7.29.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `undici` | 8.10.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `undici-types` | 6.21.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `undici-types` | 8.10.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `unenv` | 2.0.0-rc.24 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `unicode-trie` | 2.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `unpic` | 4.2.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2370,11 +2405,16 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `vitefu` | 1.1.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `vitest` | 4.0.17 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `vitest` | 4.1.11 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `w3c-xmlserializer` | 5.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `watchpack` | 2.5.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `web-vitals` | 4.2.4 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `webidl-conversions` | 3.0.1 | `BSD-2-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `webidl-conversions` | 8.0.1 | `BSD-2-Clause` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `webpack` | 5.109.2 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `webpack-sources` | 3.5.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `whatwg-mimetype` | 5.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `whatwg-url` | 16.0.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `whatwg-url` | 17.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `whatwg-url` | 5.0.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `which` | 2.0.2 | `ISC` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `which-boxed-primitive` | 1.1.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2388,6 +2428,8 @@ Not a ruling and not an exception — a consequence of reading the license expre
 | `ws` | 7.5.13 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `ws` | 8.21.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `ws` | 8.21.3 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `xml-name-validator` | 5.0.0 | `Apache-2.0` | `npm+https://registry.npmjs.org/` | npm-lock-field |
+| `xmlchars` | 2.2.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `yallist` | 3.1.1 | `ISC` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `yocto-queue` | 0.1.0 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
 | `yoga-layout` | 3.2.1 | `MIT` | `npm+https://registry.npmjs.org/` | npm-lock-field |
@@ -2402,9 +2444,9 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 
 | Manifest | Packages |
 |---|---|
-| `Cargo.toml` | 843 |
+| `Cargo.toml` | 846 |
 | `apps/dclutch-web/fixtures/founding/generator/Cargo.toml` | 21 |
-| `apps/dclutch-web/package.json` | 803 |
+| `apps/dclutch-web/package.json` | 845 |
 | `crates/dclutch-svm-harness/Cargo.toml` | 792 |
 | `crates/dclutch-svm-harness/test-programs/pre-market-funding-caller/Cargo.toml` | 165 |
 | `crates/dclutch-svm-harness/test-programs/resolution-receipt-caller/Cargo.toml` | 169 |
@@ -2412,7 +2454,7 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `packages/dclutch-cli/package.json` | 299 |
 | `packages/dclutch-sdk/package.json` | 270 |
 | `programs/dclutch-claims-sbf/program-test/affine-batch/Cargo.toml` | 773 |
-| `programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml` | 788 |
+| `programs/dclutch-claims-sbf/program-test/fractional-atomic/Cargo.toml` | 789 |
 | `programs/dclutch-claims-sbf/program-test/fractional-signed-delta/Cargo.toml` | 783 |
 | `programs/dclutch-claims-sbf/program-test/protocol-position/Cargo.toml` | 789 |
 | `programs/dclutch-claims-sbf/program-test/rational-lifecycle/Cargo.toml` | 790 |
@@ -2429,16 +2471,16 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-claims-sbf/test-programs/terminal-settlement-caller/Cargo.toml` | 173 |
 | `programs/dclutch-core-sbf/test-programs/series-consume-caller/Cargo.toml` | 175 |
 | `programs/dclutch-custody-sbf/test-programs/caller/Cargo.toml` | 165 |
-| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 814 |
+| `programs/dclutch-dealer-accelerator-sbf/program-test/Cargo.toml` | 815 |
 | `programs/dclutch-dealer-accelerator-sbf/test-programs/dealer-caller/Cargo.toml` | 202 |
 | `programs/dclutch-dealer-sbf/program-test/Cargo.toml` | 771 |
-| `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 808 |
+| `programs/dclutch-general-accelerator-sbf/program-test/Cargo.toml` | 809 |
 | `programs/dclutch-general-accelerator-sbf/test-programs/general-caller/Cargo.toml` | 160 |
 | `programs/dclutch-series-shadow-sbf/generator/Cargo.toml` | 199 |
 | `programs/dclutch-series-shadow-sbf/program-test/Cargo.toml` | 788 |
 | `programs/dclutch-trading-sbf/dealer-program-test/Cargo.toml` | 734 |
-| `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 809 |
-| `programs/dclutch-trading-sbf/program-test/general-hot/Cargo.toml` | 807 |
+| `programs/dclutch-trading-sbf/program-test/Cargo.toml` | 810 |
+| `programs/dclutch-trading-sbf/program-test/general-hot/Cargo.toml` | 808 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/core-caller/Cargo.toml` | 163 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/custody-leg-caller/Cargo.toml` | 164 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-claims/Cargo.toml` | 232 |
@@ -2446,19 +2488,19 @@ Every manifest this tool checked, and how many of the rows above it contributed.
 | `programs/dclutch-trading-sbf/program-test/test-programs/postjoin-token/Cargo.toml` | 160 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/registry/Cargo.toml` | 163 |
 | `programs/dclutch-trading-sbf/program-test/test-programs/trading-outer/Cargo.toml` | 199 |
-| `programs/dclutch-trading-sbf/program-test/user-position-admission/Cargo.toml` | 773 |
+| `programs/dclutch-trading-sbf/program-test/user-position-admission/Cargo.toml` | 774 |
 | `programs/dclutch-trading-sbf/test-programs/dealer-wave/Cargo.toml` | 161 |
-| `tools/dclutch-cli/Cargo.toml` | 404 |
+| `tools/dclutch-cli/Cargo.toml` | 405 |
 | `tools/devnet-scenarios/Cargo.toml` | 63 |
 | `tools/direct-translation-validator/Cargo.toml` | 42 |
 | `tools/fractional-exterior/Cargo.toml` | 651 |
 | `tools/gauntlet/aot-cu/Cargo.toml` | 772 |
 | `tools/gauntlet/census/Cargo.toml` | 22 |
 | `tools/gauntlet/direct/producer/Cargo.toml` | 754 |
-| `tools/gauntlet/journey/Cargo.toml` | 405 |
-| `tools/gauntlet/relayed-vertical/Cargo.toml` | 408 |
+| `tools/gauntlet/journey/Cargo.toml` | 406 |
+| `tools/gauntlet/relayed-vertical/Cargo.toml` | 409 |
 | `tools/lineage-loopback/Cargo.toml` | 230 |
-| `tools/local-validator/bootstrap/successor/Cargo.toml` | 411 |
+| `tools/local-validator/bootstrap/successor/Cargo.toml` | 413 |
 | `tools/relayer/Cargo.toml` | 229 |
 | `tools/ticket-board/Cargo.toml` | 241 |
 
@@ -3009,6 +3051,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - wincode-derive 0.4.6 (cargo)
 - wincode-derive 0.5.1 (cargo)
 - workerd 1.20260826.1 (npm)
+- xml-name-validator 5.0.0 (npm)
 
 ### `Apache-2.0 / MIT`
 
@@ -3118,6 +3161,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - Inflector 0.11.4 (cargo)
 - arrayref 0.3.9 (cargo)
 - damerau-levenshtein 1.0.8 (npm)
+- entities 8.0.0 (npm)
 - eslint-scope 5.1.1 (npm)
 - eslint-scope 8.4.0 (npm)
 - espree 10.4.0 (npm)
@@ -3128,6 +3172,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - terser 5.50.0 (npm)
 - uri-js 4.4.1 (npm)
 - webidl-conversions 3.0.1 (npm)
+- webidl-conversions 8.0.1 (npm)
 
 ### `BSD-2-Clause OR Apache-2.0 OR MIT`
 
@@ -3152,6 +3197,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - stream-chain 2.2.5 (npm)
 - stream-json 1.9.1 (npm)
 - subtle 2.6.1 (cargo)
+- tough-cookie 6.0.2 (npm)
 
 ### `BSD-3-Clause AND MIT`
 
@@ -3168,6 +3214,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 ### `BlueOak-1.0.0`
 
+- lru-cache 11.5.2 (npm)
 - minimatch 10.2.6 (npm)
 
 ### `CC-BY-4.0`
@@ -3178,6 +3225,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 
 - @speed-highlight/core 1.2.24 (npm)
 - language-subtag-registry 0.3.23 (npm)
+- mdn-data 2.27.1 (npm)
 
 ### `CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception`
 
@@ -3210,6 +3258,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - picocolors 1.1.1 (npm)
 - rustls-webpki 0.101.7 (cargo)
 - rustls-webpki 0.103.15 (cargo)
+- saxes 6.0.0 (npm)
 - semver 6.3.1 (npm)
 - semver 7.8.5 (npm)
 - siginfo 2.0.0 (npm)
@@ -3251,6 +3300,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 ### `MIT`
 
 - @alloc/quick-lru 5.2.0 (npm)
+- @asamuzakjp/css-color 6.0.7 (npm)
+- @asamuzakjp/dom-selector 8.3.2 (npm)
 - @babel/code-frame 7.29.7 (npm)
 - @babel/compat-data 7.29.7 (npm)
 - @babel/core 7.29.7 (npm)
@@ -3268,8 +3319,13 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @babel/template 7.29.7 (npm)
 - @babel/traverse 7.29.8 (npm)
 - @babel/types 7.29.8 (npm)
+- @bramus/specificity 2.4.2 (npm)
 - @cloudflare/vite-plugin 1.54.1 (npm)
 - @cspotcode/source-map-support 0.8.1 (npm)
+- @csstools/css-calc 3.3.0 (npm)
+- @csstools/css-color-parser 4.2.2 (npm)
+- @csstools/css-parser-algorithms 4.0.0 (npm)
+- @csstools/css-tokenizer 4.0.0 (npm)
 - @emnapi/core 1.10.0 (npm)
 - @emnapi/runtime 1.10.0 (npm)
 - @emnapi/runtime 1.11.3 (npm)
@@ -3357,6 +3413,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @eslint-community/regexpp 4.12.2 (npm)
 - @eslint/eslintrc 3.3.6 (npm)
 - @eslint/js 9.39.4 (npm)
+- @exodus/bytes 1.15.1 (npm)
 - @floating-ui/core 1.8.0 (npm)
 - @floating-ui/dom 1.8.0 (npm)
 - @floating-ui/react-dom 2.1.9 (npm)
@@ -3522,12 +3579,14 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - @types/connect 3.4.38 (npm)
 - @types/deep-eql 4.0.2 (npm)
 - @types/estree 1.0.9 (npm)
+- @types/jsdom 30.0.0 (npm)
 - @types/json-schema 7.0.15 (npm)
 - @types/json5 0.0.29 (npm)
 - @types/node 12.20.55 (npm)
 - @types/node 22.19.19 (npm)
 - @types/react 19.2.14 (npm)
 - @types/react-dom 19.2.3 (npm)
+- @types/tough-cookie 4.0.5 (npm)
 - @types/uuid 10.0.0 (npm)
 - @types/ws 7.4.7 (npm)
 - @types/ws 8.18.1 (npm)
@@ -3635,6 +3694,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - base-x 3.0.11 (npm)
 - base64-js 0.0.8 (npm)
 - base64-js 1.5.1 (npm)
+- bidi-js 1.0.3 (npm)
 - bincode 1.3.3 (cargo)
 - bitvec 1.1.1 (cargo)
 - blake3-wasm 2.1.5 (npm)
@@ -3679,17 +3739,20 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - css-box-shadow 1.0.0-3 (npm)
 - css-gradient-parser 0.0.16 (npm)
 - css-to-react-native 3.2.0 (npm)
+- css-tree 3.2.1 (npm)
 - csstype 3.2.3 (npm)
 - darling 0.23.0 (cargo)
 - darling_core 0.23.0 (cargo)
 - darling_macro 0.23.0 (cargo)
 - dashmap 5.5.3 (cargo)
 - data-encoding 2.11.1 (cargo)
+- data-urls 7.0.0 (npm)
 - data-view-buffer 1.0.2 (npm)
 - data-view-byte-length 1.0.2 (npm)
 - data-view-byte-offset 1.0.1 (npm)
 - debug 3.2.7 (npm)
 - debug 4.4.3 (npm)
+- decimal.js 10.6.0 (npm)
 - deep-is 0.1.4 (npm)
 - define-data-property 1.1.4 (npm)
 - define-properties 1.2.1 (npm)
@@ -3790,6 +3853,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - hermes-estree 0.25.1 (npm)
 - hermes-parser 0.25.1 (npm)
 - hex-rgb 4.3.0 (npm)
+- html-encoding-sniffer 6.0.0 (npm)
 - http-body 0.4.6 (cargo)
 - http-body 1.1.0 (cargo)
 - http-body-util 0.1.5 (cargo)
@@ -3825,6 +3889,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - is-negative-zero 2.0.3 (npm)
 - is-number 7.0.0 (npm)
 - is-number-object 1.1.1 (npm)
+- is-potential-custom-element-name 1.0.1 (npm)
 - is-regex 1.2.1 (npm)
 - is-set 2.0.3 (npm)
 - is-shared-array-buffer 1.0.4 (npm)
@@ -3844,6 +3909,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - js-tokens 9.0.1 (npm)
 - js-yaml 4.3.1 (npm)
 - js-yaml 4.3.2 (npm)
+- jsdom 30.0.1 (npm)
 - jsesc 3.1.0 (npm)
 - json-buffer 3.0.1 (npm)
 - json-schema-traverse 0.4.1 (npm)
@@ -3910,6 +3976,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - pako 0.2.9 (npm)
 - parent-module 1.0.1 (npm)
 - parse-css-color 0.2.1 (npm)
+- parse5 8.0.1 (npm)
 - path-exists 4.0.0 (npm)
 - path-key 3.1.1 (npm)
 - path-parse 1.0.7 (npm)
@@ -3995,6 +4062,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - supports-color 7.2.0 (npm)
 - supports-color 8.1.1 (npm)
 - supports-preserve-symlinks-flag 1.0.0 (npm)
+- symbol-tree 3.2.4 (npm)
 - synstructure 0.12.6 (cargo)
 - synstructure 0.13.2 (cargo)
 - tailwind-merge 3.6.0 (npm)
@@ -4009,6 +4077,8 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - tinyexec 1.3.0 (npm)
 - tinyglobby 0.2.17 (npm)
 - tinyrainbow 3.1.1 (npm)
+- tldts 7.4.11 (npm)
+- tldts-core 7.4.11 (npm)
 - to-regex-range 5.0.1 (npm)
 - tokio 1.53.1 (cargo)
 - tokio-macros 2.7.2 (cargo)
@@ -4021,6 +4091,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - tower-layer 0.3.3 (cargo)
 - tower-service 0.3.3 (cargo)
 - tr46 0.0.3 (npm)
+- tr46 6.0.0 (npm)
 - tracing 0.1.44 (cargo)
 - tracing-attributes 0.1.31 (cargo)
 - tracing-core 0.1.36 (cargo)
@@ -4039,7 +4110,9 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - typescript-eslint 8.68.0 (npm)
 - unbox-primitive 1.1.0 (npm)
 - undici 7.29.0 (npm)
+- undici 8.10.1 (npm)
 - undici-types 6.21.0 (npm)
+- undici-types 8.10.1 (npm)
 - unenv 2.0.0-rc.24 (npm)
 - unicode-trie 2.0.0 (npm)
 - unpic 4.2.2 (npm)
@@ -4063,10 +4136,14 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - vitest 4.0.17 (npm)
 - vitest 4.1.11 (npm)
 - void 1.0.2 (cargo)
+- w3c-xmlserializer 5.0.0 (npm)
 - want 0.3.1 (cargo)
 - watchpack 2.5.2 (npm)
 - webpack 5.109.2 (npm)
 - webpack-sources 3.5.1 (npm)
+- whatwg-mimetype 5.0.0 (npm)
+- whatwg-url 16.0.1 (npm)
+- whatwg-url 17.1.0 (npm)
 - whatwg-url 5.0.0 (npm)
 - which 8.0.6 (cargo)
 - which-boxed-primitive 1.1.1 (npm)
@@ -4082,6 +4159,7 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 - ws 8.21.0 (npm)
 - ws 8.21.3 (npm)
 - wyz 0.5.1 (cargo)
+- xmlchars 2.2.0 (npm)
 - yocto-queue 0.1.0 (npm)
 - yoga-layout 3.2.1 (npm)
 - youch 4.1.0-beta.10 (npm)
@@ -4448,6 +4526,11 @@ This repository's own code is `AGPL-3.0-or-later` (see `LICENSE` in the parent `
 ### `MIT OR Zlib OR Apache-2.0`
 
 - miniz_oxide 0.9.1 (cargo)
+
+### `MIT-0`
+
+- @csstools/color-helpers 6.1.1 (npm)
+- @csstools/css-syntax-patches-for-csstree 1.1.12 (npm)
 
 ### `MIT/Apache-2.0`
 
