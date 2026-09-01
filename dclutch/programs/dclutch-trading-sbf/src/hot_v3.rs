@@ -1744,7 +1744,7 @@ struct ActivationCacheAuthenticatedV1(());
 #[inline(always)]
 fn require_activation_cache_account_v3(
     frame: HotFrameV3<'_, '_>,
-    envelope: HotExecutionEnvelopeV3,
+    release_set: [u8; 32],
 ) -> Result<ActivationCacheAuthenticatedV1, ProgramError> {
     if frame.activation_cache.owner != frame.registry.key
         || frame.activation_cache.is_signer
@@ -1778,7 +1778,7 @@ fn require_activation_cache_account_v3(
             Pubkey::create_program_address(
                 &[
                     ACTIVATION_PDA_DOMAIN_V1,
-                    &envelope.release_set(),
+                    &release_set,
                     &bump_seed,
                 ],
                 frame.registry.key,
@@ -1787,7 +1787,7 @@ fn require_activation_cache_account_v3(
         }
         None => {
             Pubkey::find_program_address(
-                &[ACTIVATION_PDA_DOMAIN_V1, &envelope.release_set()],
+                &[ACTIVATION_PDA_DOMAIN_V1, &release_set],
                 frame.registry.key,
             )
             .0
@@ -1836,7 +1836,7 @@ fn authenticate_accelerator_activation_v4(
     frame: HotFrameV3<'_, '_>,
     envelope: HotExecutionEnvelopeV3,
 ) -> Result<(AuthenticatedRoleReceiptV1, ContentId, ContentId), ProgramError> {
-    require_activation_cache_account_v3(frame, envelope)?;
+    require_activation_cache_account_v3(frame, envelope.release_set())?;
     let data = frame
         .activation_cache
         .try_borrow_data()
@@ -11336,6 +11336,26 @@ fn selected_role_programs_v3<'info>(
                 None,
             )
         } else {
+            // AUTHENTICATE, THEN READ -- here, not upstream. This branch selects
+            // the Claims/Custody/Resolution programs the child walk will invoke,
+            // and it used to decode `frame.activation_cache` with no owner check,
+            // no derivation and no delegation to the blessed authenticator,
+            // resting on the argument that some caller had already done it. The
+            // argument may even have held on the accelerator path, where
+            // `child_programs` is `Some` because
+            // `authenticate_accelerator_activation_v4` produced it -- but this
+            // branch is exactly the path where that is NOT true: it runs when
+            // there is no accelerator, or when a Resolution role forces it.
+            //
+            // A cached role is where authority most easily goes unexplained,
+            // because the authentication happened once in another program and
+            // everything downstream reads the result. So the read carries its own
+            // proof: owner is the Registry, not signer, not writable, not
+            // executable, exact width, and the address reproduced from
+            // `[ACTIVATION_PDA_DOMAIN_V1, release_set, bump]` under the Registry.
+            // The witness is dropped because the value is the refusal, not the
+            // token.
+            let _cache_authenticated = require_activation_cache_account_v3(frame, release_set)?;
             let cache = frame
                 .activation_cache
                 .try_borrow_data()

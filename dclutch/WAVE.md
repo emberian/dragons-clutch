@@ -3659,3 +3659,112 @@ One more M-38 from the same episode: the hostile's `!accepted` half **passed
 while the reason was completely wrong** — an extended-heap refusal standing in
 for a substituted-digest refusal — and **only the discriminant assertion caught
 it.**
+
+## 2026-09-01 — the address is not the recipient
+
+The root of every lamport ownership chain — `CoreState.rent_beneficiary`,
+written once at founding — is **class 3 in substance, class 4 in form.**
+
+**The authentication is the strongest in the scheme.** `generic_founding_v1.rs`
+requires the rent-credit account to be owned by the Rent program, exactly
+`LIFECYCLE_RENT_CREDIT_BYTES_V2` wide, rent-exempt at that width, decodable as
+`LifecycleRentCreditV2`, **and** to have a key equal to `create_program_address`
+over the credit's own seeds — domain, market, generation, bump. For a given
+market and generation, **exactly one account can satisfy it.**
+
+**But the address is not the recipient.** The real lamport recipient is the
+`refund_wallet` *inside* the credit, and it is compared against a
+**caller-supplied** `beneficiary` argument. If the founder created the credit,
+both sides of that comparison are the founder's — the class-4 shape, at the one
+site where it would propagate to all four downstream families at once.
+
+**Why it is not a hole:** the lamports being directed are **the founder's own
+prepaid rent**. A payer naming where their own refund goes is ownership by the
+payer — the same principle that cleared `refund_recipient: payer.key`. And it
+does not loosen afterwards: the Rent program refuses any sweep whose wallet is
+not the persisted `refund_wallet`, and the only write is at creation. **Set
+once, compared forever, no mutation path.**
+
+*A weaker census would have seen `create_program_address` and stopped.*
+
+### The sharpened question, worth more than the verdict
+
+> Safe **exactly as long as the only lamports reaching `rent_beneficiary` are
+> the rent the founding prepaid.** The moment any *other* lamports route there —
+> a fee, a bounty, a crank reward, a surplus, another party's rent — the founder
+> is directing money that is not theirs, **and no downstream comparison would
+> notice, because all four families agree with each other by construction.**
+
+So the whole census reduces to one subject: **enumerate what credits a
+`LifecycleRentCreditV2`, and check that every source is rent the same party
+prepaid.**
+
+The arc, each step narrowing the last:
+*audit 120 sites for weak checks* → *find a path with no check at all* →
+**find a path that puts foreign money into the one account everything trusts.**
+
+### A lane that miscounts its own commits
+
+The Structured lane wrote "eight commits" and listed seven, then corrected it
+unprompted:
+
+> A lane that miscounts its own commits in the same message that asks others to
+> trust its measurements should say so.
+
+Nobody would have checked. That is why it counts — the same standard as
+retracting the fourth-binding claim, restoring the coefficient constraint when
+the measurement declined to authorize its removal, and repeating both evidence
+caveats every time: phase 1 runs a test-caller ELF in Trading's slot and is
+**not Trading evidence**, and the ledger's Token-2022 is the **macOS-arm64 audit
+artifact** digest-gated against provenance, not the canonical Linux one.
+
+## 2026-09-01 — one side that does not exist, and a field refused
+
+**Selector 9's account admission is unsatisfiable by anything.**
+`v3_trade_profile.rs:271` puts `RequireKey{ account: OBLIGATION_V4, expected:
+common(116) }` in the **account** profile. Register 116 is written **only** by
+the **request** profile. The runtime order settles it: `project_accounts_atomic`
+→ `mem::swap` → `request_profile.project_atomic`. The account pass runs **first**
+and reads `input_identities`, so 116 holds unwritten zeros.
+
+> **Not two sides moving together — one side that is never written at all.**
+
+Independent of the `derivation_policy` wall, and convicted entirely from the
+pass order.
+
+**No test was written, and the reason is the finding's twin.**
+`AccountProfileV2` exposes no public operation accessor, so the only available
+assertion would have been against the builder's own input array — **builder as
+its own witness**, the precise hazard. *Convicted by reading, not faked into an
+assertion.*
+
+### A field refused because adding it would have looked like a fix
+
+The `basis_scale` repair needs the value carried into `MultiLpContextV3`. The
+lane declined to add the field on its side:
+
+> A scale field that nothing authenticates would default to 1 at every call
+> site, **reproduce today's behaviour exactly, and look fixed** — a declaration
+> never executed against reality, which is the class this whole night convicted.
+
+And the axis argument for where it must come from: the **authenticated Core
+market state**, because `basis_scale` is a per-market founding value and a
+descriptor is a release artifact authored *before any market exists*. Restating
+it in the descriptor is the same axis violation that produced `derivation_policy`.
+The intentional red stays red until the authenticated value exists.
+
+### Two operational traps, both new to the ledger
+
+- **`pgrep -f "cargo test"` matched another lane's waiter shell**, so a liveness
+  probe reported a dead run alive. The dead-channel shape wearing process-table
+  clothes; **log mtime** was the positive control that caught it.
+- **Two runners contended on one target dir**, both truncating the same log with
+  `: > "$log"`. Killing one probably killed the one holding the lock.
+
+And the staging that made the evidence worth having: built from a clean
+`git archive HEAD` plus the preserved patch rather than the working tree that
+produced the ambient `Geometry` cluster last time — then **verified the tree
+under test actually carried the repair** (`derivation_policy() !=
+descriptor.lifecycle().program()` at zero occurrences; per-root constant in 3/3
+builders). *Check that the thing you are measuring is the thing you think you
+are measuring.*
