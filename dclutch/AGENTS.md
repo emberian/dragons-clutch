@@ -134,6 +134,53 @@ band 0 is never allocated, so a code below `0x1000` is not ours.
 - `dclutch-route-census inventory --check-unique` is the gate, and it runs in
   `tools/gauntlet/run.sh`.
 
+## A `map_err` that discards its cause converts a located defect into a search
+
+`map_err(|_| Coarse)` is the single most expensive idiom in this tree. The
+callee already computed *which* conjunct failed; the wrapper throws that away
+and publishes one code covering everything the call can refuse. Nothing goes
+red, no gate notices, and the cost is paid later by whoever has to rediscover a
+fact the program already knew — by bisecting a route that has no diagnostic.
+
+Measured three times on 2026-09-01, in three subsystems, by three different
+lanes, each costing hours:
+
+- `programs/dclutch-trading-sbf/program-test/bundle-builder/src/registers.rs`
+  discarded `execute_fold_atomic`'s error, so the transition phase published
+  only `Projection("transition")`. Surfacing it gave `CheckFailed` with every
+  register width equal — which ruled out the whole geometry family in one run.
+- `programs/dclutch-trading-sbf/src/hot_v3.rs` discarded
+  `ClaimsCompositionErrorV3` behind `TradingSbfError::Content`, so a route
+  geometry mismatch surfaced as one of 2,124 possible `Content` sites.
+  Surfacing it gave `Route` — "unsupported geometry or packet bytes" — and the
+  conjunct was then two files apart and readable with no instrument at all.
+- `programs/dclutch-trading-sbf/src/entrypoint_adapter.rs` did not discard an
+  error but discarded a distinction, which is the same defect one level up:
+  `require_extended_heap_admitted_v1` reads the ComputeBudget REQUEST and
+  reports the GRANT. A request the runtime accepts and does not apply then
+  faults instead of refusing.
+
+**The recovery was identical every time: surface the inner error, then compare
+declared against observed.** So:
+
+- Prefer `map_err(|error| Specific::from(error))` over `map_err(|_| Coarse)`
+  whenever the callee's error already distinguishes causes. If the wire cannot
+  carry the distinction, keep the cause in a `msg!` on the refusing path — a
+  validator log is where a reader looks first.
+- A coarse code is legitimate when the causes are genuinely one accusation. It
+  is not legitimate as a default, and "the caller only needs to know it failed"
+  is how a route acquires 2,124 indistinguishable refusal sites.
+- When you must localize one anyway, the cheap order is: use the tree's own
+  instrument if it has one (`hot-cu-profile`'s 33 checkpoints), then markers
+  between candidate callees, then re-run the same public entry point over
+  successively longer prefixes so the answer comes from the authority rather
+  than a second interpreter written in the harness. Degrade honestly: "could
+  not be localized" is an output.
+- **A probe measures what it touches, not what you meant.** A heap probe that
+  ALLOCATES measures `entrypoint!`'s hardcoded `HEAP_LENGTH`, not the granted
+  frame; only a raw write into the heap region measures the runtime. Verify the
+  instrument before believing the reading.
+
 ## Kernel policy
 
 The first-party kernel is `no_std`, `no_alloc`, safe Rust, fixed-layout, and

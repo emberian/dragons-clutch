@@ -897,6 +897,74 @@ mod tests {
         output
     }
 
+    /// The LP frame reuses slot 7 for two roles, and the reuse is LOAD-BEARING.
+    ///
+    /// `DEALER_LP_OPEN_PAYER_ACCOUNT_V3` and
+    /// `DEALER_LP_CLOSE_RENT_CREDIT_ACCOUNT_V3` are both coordinate 7. A payer
+    /// must be debitable and a RentCredit creditable, so NO single permission
+    /// set satisfies both -- which is legal, because
+    /// `encode_dealer_lp_account_profile_v3` takes the action and builds a
+    /// different frame for each. It is exactly what made a whole-policy
+    /// validator unable to answer for this family: asking whether the Close
+    /// plan fits the Open frame has no correct answer, and `001ee89e` added the
+    /// action-aware form for that reason.
+    ///
+    /// This reads the DECODED artifacts, not the builder's inputs, and states
+    /// the constraint as the disjointness that makes a shared answer
+    /// impossible. If a third action is ever added to this frame, the same
+    /// collision decides whether it is expressible, and this test is where that
+    /// shows up.
+    #[test]
+    fn the_lp_frame_reuses_slot_seven_with_disjoint_permissions() {
+        use dclutch_account_profile_contract::{
+            EFFECT_PERMISSION_CREDIT_LAMPORTS, EFFECT_PERMISSION_DEBIT_LAMPORTS,
+        };
+        let decoded = |action: MultiLpRequestActionV3| {
+            let lengths = lengths(action);
+            let bytes = encode_dealer_lp_account_profile_v3(DealerLpAccountProfileInputV3 {
+                action,
+                logical_data_lengths: &lengths,
+            })
+            .expect("profile");
+            AccountProfileV2::decode(&bytes)
+                .expect("decode profile")
+                .rule(false, DEALER_LP_OPEN_PAYER_ACCOUNT_V3)
+                .expect("slot 7 rule")
+                .effect_permissions()
+        };
+        // Same coordinate, by construction.
+        assert_eq!(
+            DEALER_LP_OPEN_PAYER_ACCOUNT_V3,
+            DEALER_LP_CLOSE_RENT_CREDIT_ACCOUNT_V3
+        );
+
+        let open = decoded(MultiLpRequestActionV3::Open);
+        let close = decoded(MultiLpRequestActionV3::Close);
+
+        // The payer is debited; the RentCredit is credited.
+        assert_eq!(
+            open & EFFECT_PERMISSION_DEBIT_LAMPORTS,
+            EFFECT_PERMISSION_DEBIT_LAMPORTS,
+            "the Open payer at slot 7 must be debitable, got {open:#06b}"
+        );
+        assert_eq!(
+            close & EFFECT_PERMISSION_CREDIT_LAMPORTS,
+            EFFECT_PERMISSION_CREDIT_LAMPORTS,
+            "the Close RentCredit at slot 7 must be creditable, got {close:#06b}"
+        );
+
+        // And the two cannot be answered together. This is the whole finding:
+        // a validator holding one policy for both actions was being asked a
+        // question with no correct answer.
+        assert_eq!(
+            open & close,
+            0,
+            "slot 7 permissions must be disjoint across the two actions, \
+             got open={open:#06b} close={close:#06b} -- if these ever overlap, \
+             a shared-policy validator becomes possible and this comment is stale"
+        );
+    }
+
     #[test]
     fn open_and_close_profiles_join_one_canonical_lifecycle_policy() {
         let mut lifecycle_scratch = vec![0; DEALER_LP_LIFECYCLE_BYTES_V3];

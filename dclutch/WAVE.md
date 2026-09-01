@@ -4737,3 +4737,47 @@ And the localization's own lesson:
 (convicted, satisfying set provably empty); heap (closed); **Content/Route — the
 live frontier, and upstream of the coefficient question**; and whatever stands
 behind it, unknown because nothing has ever executed past it.
+
+## 2026-09-01 — the same category error, at the runtime site the fix did not reach
+
+The Dealer suite went **26/3 → 27/2** after the validator repair, and the two
+survivors moved to a different wall: `Projection("profile-join")`.
+
+**`validate_account_profile_join` delegates straight to the whole-policy form**
+(`lifecycle_v3.rs:1345`), and its own doc says so — *"It proves exactly what
+`validate_account_profile` proves."* So the action-aware form was added and
+**no `validate_account_profile_join_for_action` exists**, leaving two callers
+still asking the question with no correct answer:
+
+1. `program-test/bundle-builder/src/registers.rs:296` — host-side.
+2. **`src/hot_v3/seal.rs:629` — the runtime**, on the **generic Hot path every
+   family crosses**, raising `Content`.
+
+So the LP family cannot pass the join host-side **or** on chain, and any family
+whose single lifecycle policy carries plans for actions with differing frames
+meets it at runtime.
+
+### A scope limit, stated so nobody over-reads it
+
+This does **not** explain the unlocalized equity-Add wall at 591,781 CU.
+Equity's V5 lifecycle is the canonical **empty** policy —
+`DEALER_EQUITY_LIFECYCLE_BYTES_V5 == LIFECYCLE_HEADER_BYTES_V5`, and the
+no-create-or-close-authority test passes — so it carries no plans and **the join
+is vacuous for it.** That wall remains unlocalized and separately owned.
+
+### The collision guarded, from the decoded artifacts
+
+`7bab57df` pins the slot-7 collision by reading the **decoded** artifacts rather
+than the builder's inputs: slot 7 grants `0b0001` (DEBIT) under Open and `0b0010`
+(CREDIT) under Close, independently reproducing the `granted=0b0001
+required=0b0010` the instrumentation found. The assertion is **the disjointness
+itself** — `open & close == 0` — *because that is the property making a shared
+answer impossible.* A third action added to that frame surfaces there.
+
+### Provenance, when the name lies
+
+The hbox build tree is named `s5-accepted-7641794a` and now holds `3853fb6e` —
+the stale-checkout hazard in its purest form. Resolved by writing
+`S5-TREE-HEAD.txt` into the directory rather than renaming it, **because
+renaming would invalidate cargo's absolute-path fingerprints and cost a cold
+rebuild.** Correct the record, not the name.
