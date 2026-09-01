@@ -9,13 +9,14 @@ import {
   UPGRADEABLE_LOADER_ID,
 } from './releaseRegistry';
 import {
-  LIVE_DEVNET_OPERATOR_PRESET_V1,
+  liveDevnetOperatorPresetV1,
   OPERATOR_ROLES,
   acquireOperatorSurfaceV1,
   checkedLiveDevnetOperatorPresetV1,
   type OperatorCoordinatesV1,
   type OperatorSurfaceSnapshotV1,
 } from './operatorSurface';
+import * as operatorSurfaceModule from './operatorSurface';
 import { type RpcAccount, type SolanaRpcClient } from './rpc';
 
 function key(byte: number): string { return new PublicKey(new Uint8Array(32).fill(byte)).toBase58(); }
@@ -42,19 +43,19 @@ function loaderProgramData(slot: string): RpcAccount {
 function checkedPresetClient(changes: Readonly<Record<string, RpcAccount | null>> = {}): SolanaRpcClient {
   const accounts = new Map<string, RpcAccount | null>();
   for (const role of OPERATOR_ROLES) {
-    const evidence = LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role];
-    accounts.set(LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates[role], loaderProgram(evidence.programData));
+    const evidence = liveDevnetOperatorPresetV1().evidence[role];
+    accounts.set(liveDevnetOperatorPresetV1().coordinates[role], loaderProgram(evidence.programData));
     accounts.set(evidence.programData, loaderProgramData(evidence.deploymentSlot));
   }
   accounts.set(
-    LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache,
-    account(LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates.registry, false, ACTIVATION_CACHE_BYTES),
+    liveDevnetOperatorPresetV1().activationCache,
+    account(liveDevnetOperatorPresetV1().coordinates.registry, false, ACTIVATION_CACHE_BYTES),
   );
   for (const [address, next] of Object.entries(changes)) accounts.set(address, next);
   return {
     probe: async () => Object.freeze({
-      endpoint: LIVE_DEVNET_OPERATOR_PRESET_V1.endpoint,
-      genesisHash: LIVE_DEVNET_OPERATOR_PRESET_V1.genesisHash,
+      endpoint: liveDevnetOperatorPresetV1().endpoint,
+      genesisHash: liveDevnetOperatorPresetV1().genesisHash,
       solanaCore: 'test',
       featureSet: null,
     }),
@@ -106,14 +107,14 @@ describe('unified chain-derived operator surface', () => {
   });
 
   it('derives the explicit six-role preset from the existing checked devnet authority without inventing a Market', () => {
-    expect(LIVE_DEVNET_OPERATOR_PRESET_V1.endpoint).toBe(DEVNET_DEPLOYMENT_V1.endpoint);
-    expect(LIVE_DEVNET_OPERATOR_PRESET_V1.genesisHash).toBe(DEVNET_DEPLOYMENT_V1.genesisHash);
-    expect(LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache).toBe(DEVNET_DEPLOYMENT_V1.activationCache);
-    expect(Object.keys(LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates)).toEqual(OPERATOR_ROLES);
-    expect('market' in LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates).toBe(false);
+    expect(liveDevnetOperatorPresetV1().endpoint).toBe(DEVNET_DEPLOYMENT_V1.endpoint);
+    expect(liveDevnetOperatorPresetV1().genesisHash).toBe(DEVNET_DEPLOYMENT_V1.genesisHash);
+    expect(liveDevnetOperatorPresetV1().activationCache).toBe(DEVNET_DEPLOYMENT_V1.activationCache);
+    expect(Object.keys(liveDevnetOperatorPresetV1().coordinates)).toEqual(OPERATOR_ROLES);
+    expect('market' in liveDevnetOperatorPresetV1().coordinates).toBe(false);
     for (const role of OPERATOR_ROLES) {
-      expect(LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates[role]).toBe(DEVNET_DEPLOYMENT_V1.programs[role]);
-      expect(LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role]).toEqual(DEVNET_PROGRAM_EVIDENCE_V1[role]);
+      expect(liveDevnetOperatorPresetV1().coordinates[role]).toBe(DEVNET_DEPLOYMENT_V1.programs[role]);
+      expect(liveDevnetOperatorPresetV1().evidence[role]).toEqual(DEVNET_PROGRAM_EVIDENCE_V1[role]);
     }
   });
 
@@ -142,22 +143,22 @@ describe('unified chain-derived operator surface', () => {
     client.probe = async () => Object.freeze({ endpoint: 'https://rpc.invalid/', genesisHash: key(45), solanaCore: 'test', featureSet: null });
     await expect(acquireOperatorSurfaceV1(
       client as unknown as SolanaRpcClient,
-      LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
-      LIVE_DEVNET_OPERATOR_PRESET_V1,
+      liveDevnetOperatorPresetV1().coordinates,
+      liveDevnetOperatorPresetV1(),
     )).rejects.toThrow(/live-devnet preset refused.*not Solana devnet genesis/);
   });
 
   it('reacquires every preset Loader pair and release cache before returning a checked verdict', async () => {
     const snapshot = await acquireOperatorSurfaceV1(
       checkedPresetClient(),
-      LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
-      LIVE_DEVNET_OPERATOR_PRESET_V1,
+      liveDevnetOperatorPresetV1().coordinates,
+      liveDevnetOperatorPresetV1(),
     );
     expect(snapshot.observedSlot).toBe('902');
     expect(snapshot.deploymentPreset).toEqual({
       label: 'Checked live devnet',
-      genesisHash: LIVE_DEVNET_OPERATOR_PRESET_V1.genesisHash,
-      activationCache: LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache,
+      genesisHash: liveDevnetOperatorPresetV1().genesisHash,
+      activationCache: liveDevnetOperatorPresetV1().activationCache,
       deploymentSlots: Object.fromEntries(OPERATOR_ROLES.map((role) => [role, DEVNET_PROGRAM_EVIDENCE_V1[role].deploymentSlot])),
       upgradedSinceRecord: [],
     });
@@ -170,12 +171,12 @@ describe('unified chain-derived operator surface', () => {
     // moved past it, so the whole preset refused and /operate could not
     // inspect anything at all.
     const role = 'trading';
-    const programData = LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].programData;
-    const moved = (BigInt(LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].deploymentSlot) + 4_000n).toString();
+    const programData = liveDevnetOperatorPresetV1().evidence[role].programData;
+    const moved = (BigInt(liveDevnetOperatorPresetV1().evidence[role].deploymentSlot) + 4_000n).toString();
     const snapshot = await acquireOperatorSurfaceV1(
       checkedPresetClient({ [programData]: loaderProgramData(moved) }),
-      LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
-      LIVE_DEVNET_OPERATOR_PRESET_V1,
+      liveDevnetOperatorPresetV1().coordinates,
+      liveDevnetOperatorPresetV1(),
     );
     // The slot reported is the one on chain, not the one that shipped.
     expect(snapshot.deploymentPreset?.deploymentSlots[role]).toBe(moved);
@@ -190,18 +191,18 @@ describe('unified chain-derived operator surface', () => {
     // cluster, so a deployment slot older than the recorded one cannot be a
     // later state of this program: it is a stale or wrong-generation read.
     const role = 'trading';
-    const programData = LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].programData;
-    const earlier = (BigInt(LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role].deploymentSlot) - 1n).toString();
+    const programData = liveDevnetOperatorPresetV1().evidence[role].programData;
+    const earlier = (BigInt(liveDevnetOperatorPresetV1().evidence[role].deploymentSlot) - 1n).toString();
     await expect(acquireOperatorSurfaceV1(
       checkedPresetClient({ [programData]: loaderProgramData(earlier) }),
-      LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
-      LIVE_DEVNET_OPERATOR_PRESET_V1,
+      liveDevnetOperatorPresetV1().coordinates,
+      liveDevnetOperatorPresetV1(),
     )).rejects.toThrow(/trading DeploymentSlotMismatch.*preset records slot.*reports the earlier/);
 
     await expect(acquireOperatorSurfaceV1(
-      checkedPresetClient({ [LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache]: null }),
-      LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
-      LIVE_DEVNET_OPERATOR_PRESET_V1,
+      checkedPresetClient({ [liveDevnetOperatorPresetV1().activationCache]: null }),
+      liveDevnetOperatorPresetV1().coordinates,
+      liveDevnetOperatorPresetV1(),
     )).rejects.toThrow(/release activation cache is absent/);
   });
 
@@ -228,5 +229,50 @@ describe('unified chain-derived operator surface', () => {
     const walled = BROWSER_CAPABILITY_STANDINGS_V1.find((standing) => standing.action.id === 'dealer.trade');
     expect(walled && evaluateCapabilityV1(walled, withMarket)).toMatchObject({ status: 'no-venue' });
     expect(walled && capabilityActContractV1(walled).venue).toBe('Nothing here can build it yet');
+  });
+});
+
+describe('the live preset is derived on demand, never at import', () => {
+  /**
+   * THE DEFECT THIS CLOSES is a latent bundle bug, not a test inconvenience.
+   *
+   * `liveDevnetOperatorPresetV1()` used to be a module-scope `const` whose
+   * initializer calls `PublicKey.findProgramAddressSync` seven times. That
+   * function SEARCHES — it walks 256 nonces and throws `Unable to find a
+   * viable program address nonce` when none is off-curve — so the module could
+   * throw while merely being imported. It did: past the eighteenth component
+   * import in one module graph it threw during collection, while the same
+   * module imported alone evaluated fine. Bisected to that exact boundary.
+   *
+   * A page that happens to import one more component would ship broken, and
+   * the stack would name `operatorSurface` rather than whatever pushed the
+   * graph over. Deriving on first use instead means the throw lands where a
+   * caller can see and handle it, and importing a sibling can never take a
+   * page down.
+   *
+   * Every check the eager version made still runs, unchanged, on first call.
+   * This is laziness, not a relaxed guard.
+   */
+  it('exports a function, and no pre-derived constant', () => {
+    // The shape check is the load-bearing one: re-adding the eager const is
+    // exactly the regression, and it would otherwise look like a tidy-up.
+    expect(typeof liveDevnetOperatorPresetV1).toBe('function');
+    expect(Object.keys(operatorSurfaceModule)).not.toContain('liveDevnetOperatorPresetV1()');
+  });
+
+  it('derives once and hands back the same frozen preset', () => {
+    const first = liveDevnetOperatorPresetV1();
+    expect(liveDevnetOperatorPresetV1()).toBe(first);
+    expect(Object.isFrozen(first)).toBe(true);
+  });
+
+  it('still refuses a preset whose ProgramData is not its Loader-v3 coordinate', () => {
+    // The guard the eager derivation existed for, proven to still bite.
+    const tampered = {
+      ...DEVNET_PROGRAM_EVIDENCE_V1,
+      core: { ...DEVNET_PROGRAM_EVIDENCE_V1.core, programData: '11111111111111111111111111111111' },
+    };
+    expect(() => checkedLiveDevnetOperatorPresetV1(DEVNET_DEPLOYMENT_V1, tampered))
+      .toThrow(/is not the canonical Loader-v3 coordinate/);
   });
 });

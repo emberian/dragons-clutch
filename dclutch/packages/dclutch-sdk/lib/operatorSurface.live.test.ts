@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  LIVE_DEVNET_OPERATOR_PRESET_V1,
+  liveDevnetOperatorPresetV1,
   OPERATOR_ROLES,
   acquireOperatorSurfaceV1,
 } from './operatorSurface';
@@ -18,13 +18,13 @@ const live = process.env.DCLUTCH_LIVE_DEVNET === '1' ? it : it.skip;
 describe('live devnet operator preset', () => {
   live('matches every published Loader pair and recorded slot at finalized commitment', async () => {
     const snapshot = await acquireOperatorSurfaceV1(
-      new SolanaRpcClient(LIVE_DEVNET_OPERATOR_PRESET_V1.endpoint),
-      LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
-      LIVE_DEVNET_OPERATOR_PRESET_V1,
+      new SolanaRpcClient(liveDevnetOperatorPresetV1().endpoint),
+      liveDevnetOperatorPresetV1().coordinates,
+      liveDevnetOperatorPresetV1(),
     );
     expect(snapshot.roles.map((role) => role.role)).toEqual(OPERATOR_ROLES);
-    expect(snapshot.deploymentPreset?.genesisHash).toBe(LIVE_DEVNET_OPERATOR_PRESET_V1.genesisHash);
-    expect(snapshot.deploymentPreset?.activationCache).toBe(LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache);
+    expect(snapshot.deploymentPreset?.genesisHash).toBe(liveDevnetOperatorPresetV1().genesisHash);
+    expect(snapshot.deploymentPreset?.activationCache).toBe(liveDevnetOperatorPresetV1().activationCache);
     expect(snapshot.market).toBeNull();
     expect(snapshot.realm).toBeNull();
   }, 60_000);

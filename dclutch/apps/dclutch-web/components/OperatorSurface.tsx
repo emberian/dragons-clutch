@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  LIVE_DEVNET_OPERATOR_PRESET_V1,
+  liveDevnetOperatorPresetV1,
   OPERATOR_ROLES,
   acquireOperatorSurfaceV1,
   type OperatorDeploymentPresetV1,
@@ -133,14 +133,14 @@ export default function OperatorSurface() {
   }
 
   function loadLiveDevnetPreset() {
-    setEndpoint(LIVE_DEVNET_OPERATOR_PRESET_V1.endpoint);
+    setEndpoint(liveDevnetOperatorPresetV1().endpoint);
     setCoordinates((current) => ({
       ...current,
-      ...LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates,
+      ...liveDevnetOperatorPresetV1().coordinates,
       market: '',
       realm: '',
     }));
-    setDeploymentPreset(LIVE_DEVNET_OPERATOR_PRESET_V1);
+    setDeploymentPreset(liveDevnetOperatorPresetV1());
     setDiscovery({ kind: 'idle', message: 'The checked devnet coordinates are filled in. No chain state has been read yet.' });
   }
 

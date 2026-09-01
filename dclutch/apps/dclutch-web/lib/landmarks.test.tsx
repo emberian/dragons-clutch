@@ -29,6 +29,10 @@ import ReleaseWorkspace from '@/components/ReleaseWorkspace';
 import ResolutionWorkspace from '@/components/ResolutionWorkspace';
 import SiteLanding from '@/components/SiteLanding';
 import SmokeStory from '@/components/SmokeStory';
+import MarketWorkbench from '@/components/MarketWorkbench';
+import OperatorSurface from '@/components/OperatorSurface';
+import PortfolioWorkspace from '@/components/PortfolioWorkspace';
+import ProductV2Studio from '@/components/ProductV2Studio';
 
 
 
@@ -98,7 +102,7 @@ if (JSON.parse(readFileSync(join(webRoot, 'package.json'), 'utf8')).name !== 'dc
 const MARKET_V1 = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 
 /** Every page shell this application serves, and how to render one. */
-const PAGE_SHELLS_V1: ReadonlyArray<Readonly<{ file: string; render: (() => string) | null }>> = Object.freeze([
+const PAGE_SHELLS_V1: ReadonlyArray<Readonly<{ file: string; render: () => string }>> = Object.freeze([
   { file: 'app/direct/page.tsx', render: () => renderToStaticMarkup(<DirectPage />) },
   { file: 'app/not-found.tsx', render: () => renderToStaticMarkup(<NotFound />) },
   { file: 'components/ActivityWorkspace.tsx', render: () => renderToStaticMarkup(<ActivityWorkspace />) },
@@ -116,11 +120,11 @@ const PAGE_SHELLS_V1: ReadonlyArray<Readonly<{ file: string; render: (() => stri
   { file: 'components/MarketAddressWorkspace.tsx', render: () => renderToStaticMarkup(<MarketAddressWorkspace />) },
   { file: 'components/MarketDetailWorkspace.tsx', render: () => renderToStaticMarkup(<MarketDetailWorkspace address={MARKET_V1} />) },
   { file: 'components/MarketDiscoveryWorkspace.tsx', render: () => renderToStaticMarkup(<MarketDiscoveryWorkspace />) },
-  { file: 'components/MarketWorkbench.tsx', render: null },
-  { file: 'components/OperatorSurface.tsx', render: null },
+  { file: 'components/MarketWorkbench.tsx', render: () => renderToStaticMarkup(<MarketWorkbench />) },
+  { file: 'components/OperatorSurface.tsx', render: () => renderToStaticMarkup(<OperatorSurface />) },
   { file: 'components/PopulationWorkspace.tsx', render: () => renderToStaticMarkup(<PopulationWorkspace />) },
-  { file: 'components/PortfolioWorkspace.tsx', render: null },
-  { file: 'components/ProductV2Studio.tsx', render: null },
+  { file: 'components/PortfolioWorkspace.tsx', render: () => renderToStaticMarkup(<PortfolioWorkspace />) },
+  { file: 'components/ProductV2Studio.tsx', render: () => renderToStaticMarkup(<ProductV2Studio />) },
   { file: 'components/PulseWorkspace.tsx', render: () => renderToStaticMarkup(<PulseWorkspace />) },
   { file: 'components/RationalRepresentationWorkspace.tsx', render: () => renderToStaticMarkup(<RationalRepresentationWorkspace />) },
   { file: 'components/ReleaseWorkspace.tsx', render: () => renderToStaticMarkup(<ReleaseWorkspace />) },
@@ -169,37 +173,29 @@ describe('landmark structure', () => {
     expect(PAGE_SHELLS_V1.length).toBeGreaterThanOrEqual(20);
   });
 
-  it('renders all but the four this harness cannot load together', () => {
-    // NOT a soft edge. Four page shells import `lib/operatorSurface.ts`, whose
-    // module scope derives a ProgramData address for each of five roles. In
-    // THIS file's module graph -- and only past a threshold, bisected to the
-    // eighteenth component import -- that derivation throws "Unable to find a
-    // viable program address nonce" during collection, while the same module
-    // imported by itself, or by its own test file, evaluates fine.
+  it('renders every shell on the roster, with none held back', () => {
+    // THIS TEST USED TO EXCUSE FOUR. `MarketWorkbench`, `OperatorSurface`,
+    // `PortfolioWorkspace` and `ProductV2Studio` could not be loaded into this
+    // file's module graph at all: past the eighteenth component import, the
+    // SDK's `operatorSurface` threw `Unable to find a viable program address
+    // nonce` from its module scope, during collection, and took the whole file
+    // with it. The exemption named it as a latent bundle bug rather than a
+    // test inconvenience, which is what it turned out to be — the derivation
+    // is lazy now, and all twenty-eight render.
     //
-    // That is a real defect and it is routed as one: a module whose
-    // module-scope work depends on how much of the graph loaded before it is a
-    // latent bundle bug, not a test inconvenience. It is recorded here rather
-    // than worked around silently, and the count is pinned so the list cannot
-    // grow while nobody is looking.
-    const unrendered = PAGE_SHELLS_V1.filter((shell) => shell.render === null).map((shell) => shell.file);
-    expect(unrendered).toEqual([
-      'components/MarketWorkbench.tsx',
-      'components/OperatorSurface.tsx',
-      'components/PortfolioWorkspace.tsx',
-      'components/ProductV2Studio.tsx',
-    ]);
+    // The count is pinned rather than the list, so putting a shell back behind
+    // an excuse is a visible edit and not a quiet one.
+    expect(PAGE_SHELLS_V1.filter((shell) => shell.render === null)).toEqual([]);
   });
 
   for (const shell of PAGE_SHELLS_V1) {
-    if (shell.render === null) continue;
     // Rendered inside the case, not at collection: a page that cannot render
     // must fail as itself rather than taking the whole file down with a stack
     // that names whichever module happened to be evaluating.
     it(`${shell.file} carries one main, a banner outside it, and the skip target inside it`, () => {
       // Rendered inside the case rather than at collection time: a page that
       // cannot render must fail as itself, not take the whole file down.
-      const document = parse(shell.render!());
+      const document = parse(shell.render());
 
       expect(document.querySelectorAll('main').length, 'a page needs exactly one main landmark').toBe(1);
 

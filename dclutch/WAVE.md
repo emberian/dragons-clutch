@@ -2554,3 +2554,80 @@ bootstrap command when no market is supplied, instead of dying six minutes of
 SBF builds later inside the binary with a message that does not say what to do.
 **Runnable-by-supply beats runnable-by-nobody**, and it needed no edit to the
 producer another lane owns.
+
+## 2026-09-01 — the author of the finding walked into the finding
+
+Lane S11 convicted `fdfbe0dd` for renaming a route and leaving its bindings
+behind, so a campaign that founded a market **every single run** read
+NEVER-EXECUTED. It wrote that up. **Four commits later it did the same thing.**
+
+`a19d93b1` moved `RecordActionV1::Begin` from `1` to `5` — the R-13 repair. The
+census route id encodes the action literal, so `registry/process_begin#1` became
+`#5` and tier 1's two bindings kept pointing at the old id. Tier 1 publishes a
+record every run; its route would have read never-executed again.
+
+Caught **within the hour**, by the stale-reference check the same lane had added
+for the first instance. Repaired in `cce8705f`.
+
+> **Every convention in this tree enforced by attention rather than by a gate
+> should be assumed already broken somewhere.**
+
+The author who had just documented the failure mode still walked into it. That
+is the argument for the gate, and it is stronger than any argument the lane
+could have made from its correct findings.
+
+### C-16 has six categories and an instrument for four
+
+The entry list (`docs/evidence/C16_ENTRY_LIST_2026_09_01.md`) reports what it
+**cannot** say: **nothing in the tree measures *unexplained authority* or
+*unowned economic flow***. The only place either phrase occurs is the contract
+row demanding them. The census enumerates dispatch surface and refusal taxonomy;
+it says nothing about which signer or cached role authorises an act, nor which
+lamport and atom flows have a named owner.
+
+Recorded as **an honest blank rather than a zero** — because a reviewer handed a
+page of green numbers reads silence as coverage. **Unswept ground, not clean
+ground.**
+
+The four with instruments, re-measured at HEAD rather than remembered: **57 of
+161 never-executed** (0 stale binding refs), **19 selectors** reachable from
+neither CLI nor SDK, **20 routes** over-counted as browser-reachable, **6**
+unfixed stale guide claims, **1 dead refusal code of 297** — down from 12.
+
+## 2026-09-01 — General: an identity that was the same for everyone
+
+`GENERAL_ROOT_IDENTITY_REGISTER_V3` (27) opens all eight seed orders and
+**nothing ever wrote it.** No `ProjectKey` targets it; the fifteen Lean-emitted
+RequestProfiles write identity registers `{0, 3, 29}` only; the trusted
+environments supply three other values. Because `27 < 45`,
+`validate_seed_against_profile` accepts, and `identity_register` returns **32
+zero bytes with no zero check anywhere.**
+
+That is a **well-formed address, identical for every General root** — so two
+roots collide on one occurrence identity. And `general_hot_v3.rs:2239` injected
+the key host-side, so **host and chain derived different addresses from the same
+artifact.** A silent collision and a silent host/chain divergence, from one
+register nobody wrote. Fixed in `4180175a` as the last fixed operation, so every
+earlier ordinal's bytes are preserved; two tests, both proved red first.
+
+**"14 of 15 fail geometry" was wrong: it is 15 of 15** — the 14 was a test
+iterating a 14-entry array. And **the two findings are independent, measured
+rather than assumed**: 15/15 before the register fix, 15/15 after. A lane that
+had assumed causation would have read a correct repair as a failure.
+
+### Structurally unsatisfiable, not merely mis-ordered
+
+`OP_REQUIRE_KEY` / `OP_REQUIRE_OWNER` read `input_identities` while
+`OP_PROJECT_*` write a **separate bank** — so **no guard can ever see what the
+same pass projects, whatever the order.** Census of all 22 General guards: 19
+name `TRADING_PROGRAM`/`RESULT_OWNER` and hold; three name `identity::OWNER` and
+are fail-closed. Upgrades three ordering bugs into one structural fact.
+
+### Two live authors for one law
+
+Proving the optimality clause clean turned up a real defect:
+`runtime_candidate_key_better_v2` (the runtime) and `candidate_better` (the
+differential oracle) each carried a **private little-endian id encoding**, and
+nothing compared them. 576-comparison join added, proved red by flipping one
+`<`. Two authors for one law is the same class as two implementations of one
+constant — and nobody noticed, because both were right.

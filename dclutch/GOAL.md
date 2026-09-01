@@ -1808,3 +1808,24 @@ commit, since re-lettering moved the artifacts.
   had been decoding those cuts and discarding them.
 - **The source policy is keyed to an identity the live entrance does not emit**
   (`5ba7f387`) — C-02's absent constructor, named with what it would need.
+
+### Ruling 7 for you — provider breadth, with the premise corrected
+
+The letter asked for *"provider breadth beyond the first real Pyth profile"*.
+**There is no "first" — there are three executing profiles across two evidence
+families**, and an explicit in-code ruling that *"the closed set is the point"*:
+families are added to an enumerated set by decision, never registered into an
+open one.
+
+So the real question: **does C-09 want a third family** — Switchboard, ~13,000
+lines by the tree's own precedent, gated on economics currently recorded as
+*reported secondhand and unverified* — **or is breadth already satisfied** by
+Pyth plus relayed, leaving the generic-header refactor as the remaining work?
+
+I have authorized the refactor either way, because it is wrong today
+independent of the answer: `provider_v3.rs:372` pins
+`transport_profile_id` — a **provider-neutral field name** — to a **Wormhole
+router ABI id**, so a provider without a router cannot satisfy the neutral
+record. `PythReleaseV1` is 9 generic fields to 9 Pyth-shaped, and the two Pyth
+releases already disagree on shape, so the tree is arguing for the decomposition
+from inside the family with no second family needed.

@@ -10,7 +10,7 @@ import {
   type ProtocolRoleV1,
 } from './deployments';
 import {
-  LIVE_DEVNET_OPERATOR_PRESET_V1,
+  liveDevnetOperatorPresetV1,
   OPERATOR_ROLES,
   acquireOperatorSurfaceV1,
   checkedLiveDevnetOperatorPresetV1,
@@ -205,15 +205,15 @@ function client(value: Fixture, accounts = value.accounts, options: ClientOption
 
 describe('checked live-devnet operator SDK', () => {
   it('projects the stable six-role preset from the shared deployment authority without inventing Market or Realm', () => {
-    expect(LIVE_DEVNET_OPERATOR_PRESET_V1.endpoint).toBe(DEVNET_DEPLOYMENT_V1.endpoint);
-    expect(LIVE_DEVNET_OPERATOR_PRESET_V1.genesisHash).toBe(DEVNET_DEPLOYMENT_V1.genesisHash);
-    expect(LIVE_DEVNET_OPERATOR_PRESET_V1.activationCache).toBe(DEVNET_DEPLOYMENT_V1.activationCache);
-    expect(Object.keys(LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates)).toEqual(OPERATOR_ROLES);
-    expect('market' in LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates).toBe(false);
-    expect('realm' in LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates).toBe(false);
+    expect(liveDevnetOperatorPresetV1().endpoint).toBe(DEVNET_DEPLOYMENT_V1.endpoint);
+    expect(liveDevnetOperatorPresetV1().genesisHash).toBe(DEVNET_DEPLOYMENT_V1.genesisHash);
+    expect(liveDevnetOperatorPresetV1().activationCache).toBe(DEVNET_DEPLOYMENT_V1.activationCache);
+    expect(Object.keys(liveDevnetOperatorPresetV1().coordinates)).toEqual(OPERATOR_ROLES);
+    expect('market' in liveDevnetOperatorPresetV1().coordinates).toBe(false);
+    expect('realm' in liveDevnetOperatorPresetV1().coordinates).toBe(false);
     for (const role of OPERATOR_ROLES) {
-      expect(LIVE_DEVNET_OPERATOR_PRESET_V1.coordinates[role]).toBe(DEVNET_DEPLOYMENT_V1.programs[role]);
-      expect(LIVE_DEVNET_OPERATOR_PRESET_V1.evidence[role]).toEqual(DEVNET_PROGRAM_EVIDENCE_V1[role]);
+      expect(liveDevnetOperatorPresetV1().coordinates[role]).toBe(DEVNET_DEPLOYMENT_V1.programs[role]);
+      expect(liveDevnetOperatorPresetV1().evidence[role]).toEqual(DEVNET_PROGRAM_EVIDENCE_V1[role]);
     }
   });
 

@@ -181,7 +181,7 @@ import {
 import { decodeCoreFoundProductGraphV2 } from './coreFound';
 import {
   acquireOperatorSurfaceV1,
-  LIVE_DEVNET_OPERATOR_PRESET_V1,
+  liveDevnetOperatorPresetV1,
 } from './operatorSurface';
 import { decodeRealmRecordV1 } from './realmRecord';
 import {
@@ -880,7 +880,7 @@ function material(account: RpcAccount | null, owner: string, field: string): Rpc
 export type PreparedWalletTerminalPayoutV3 = WalletTerminalPayoutTransactionV3 & Readonly<{ lookupTable: string }>;
 
 function exactRouteDeploymentV3(manifest: WalletTerminalPayoutManifestV3, payer: string): void {
-  const preset = LIVE_DEVNET_OPERATOR_PRESET_V1;
+  const preset = liveDevnetOperatorPresetV1();
   const route = manifest.route; const request = manifest.request;
   const pairs = [
     [route.market, request.market, 'Market'],
@@ -958,7 +958,7 @@ export async function authenticateCheckedLiveDevnetPayoutPlanV3(
   const cluster = await client.assertMutationCluster();
   if (cluster.kind !== 'devnet') throw new Error('wallet terminal payout is enabled only on the exact checked live-devnet deployment');
   exactRouteDeploymentV3(manifest, canonicalPayer);
-  const preset = LIVE_DEVNET_OPERATOR_PRESET_V1;
+  const preset = liveDevnetOperatorPresetV1();
   const deployment = await acquireOperatorSurfaceV1(client, {
     ...preset.coordinates,
     market: manifest.route.market,

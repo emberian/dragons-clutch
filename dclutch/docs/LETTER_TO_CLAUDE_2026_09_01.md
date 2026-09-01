@@ -978,3 +978,37 @@ frame-overwrite diagnostics and an abort (`ProgramFailedToComplete`) rather
 than a refusal; eight out-of-line guards still produced 95; the clean tree
 measures 0. Use gated early-return probes only, and check `FRAMES` before
 believing any measurement from this function.
+
+### The overflow queue's first item is factually wrong — 2026-09-01
+
+*"provider breadth beyond the first real Pyth profile"* is written as though the
+tree had one profile. **It has four declared and three executing on real ELFs,
+across two evidence families**, measured rather than remembered:
+
+| campaign | result | what it is |
+|---|---|---|
+| `resolution_core_v3_lifecycle` | **5/5** | Pyth terminal, one transaction |
+| `sponsored_push_lifecycle` | **1/1** | Pyth sponsored push — 592-byte release vs 440, **no router, no VAA** |
+| `relayed_mainnet_state` | **19/19** | relayed observation record — a *different family*, own real ed25519 quorum, and the one the gauntlet runs |
+
+The fourth, `SharedObservationChild`, has no implementation anywhere: it shares
+Pyth's extension id and nothing switches on it. **An unimplemented cardinality
+variant, not a family.**
+
+**And the architectural ruling already exists**, at
+`crates/dclutch-source-contract/src/lib.rs:268-283`, about the relayed
+extension: *"it exists here, beside Pyth's, because the one canonical
+Source-material encoder has to be able to admit a second family without becoming
+family-agnostic: **the closed set is the point**."* Families are added to an
+enumerated set by decision, never registered into an open one. That forecloses
+the open-registry answer.
+
+So the open question is **not** whether the architecture can take breadth — it
+demonstrably has, twice — but whether C-09 wants a **third family** at roughly
+13,000 lines gated on unverified Switchboard economics, or whether breadth is
+already satisfied and the remaining work is the **generic-header refactor**.
+Ember's, and on the ruling list.
+
+**Costed from the tree's own two precedents**: a new *profile* inside an
+existing family ran ~4,940 lines; a new *evidence family* ran ~12,900. Neither
+is cheap and Switchboard is the second kind.

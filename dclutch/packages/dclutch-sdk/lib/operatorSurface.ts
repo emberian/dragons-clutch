@@ -181,10 +181,35 @@ export function checkedLiveDevnetOperatorPresetV1(
   });
 }
 
-export const LIVE_DEVNET_OPERATOR_PRESET_V1 = checkedLiveDevnetOperatorPresetV1(
-  DEVNET_DEPLOYMENT_V1 satisfies DeploymentV1,
-  DEVNET_PROGRAM_EVIDENCE_V1,
-);
+/**
+ * The one preset `/operate` may name, derived on first use.
+ *
+ * IT USED TO BE A MODULE-SCOPE `const`, and that was a latent bundle bug.
+ * `checkedLiveDevnetOperatorPresetV1` calls `PublicKey.findProgramAddressSync`
+ * once per role, and that function SEARCHES: it walks 256 nonces and throws
+ * `Unable to find a viable program address nonce` when none lands off the
+ * curve. A module whose top level can throw takes down everything that
+ * imports it, however incidentally — and it did. Past the eighteenth
+ * component import in one module graph this threw during collection, while
+ * the same module imported alone evaluated fine; bisected to that exact
+ * boundary. A page that happened to import one more component would have
+ * shipped broken, with a stack naming this file rather than whatever pushed
+ * the graph over.
+ *
+ * Deriving on demand changes nothing about the checks — every one of them
+ * runs, unchanged, on the first call — and moves the failure to a caller that
+ * can see it. The result is memoized, so the seven derivations still happen
+ * exactly once per process.
+ */
+let livePreset: OperatorDeploymentPresetV1 | null = null;
+
+export function liveDevnetOperatorPresetV1(): OperatorDeploymentPresetV1 {
+  livePreset ??= checkedLiveDevnetOperatorPresetV1(
+    DEVNET_DEPLOYMENT_V1 satisfies DeploymentV1,
+    DEVNET_PROGRAM_EVIDENCE_V1,
+  );
+  return livePreset;
+}
 
 function requireAccount(account: RpcAccount | null, field: string): RpcAccount {
   if (account === null) throw new Error(`${field} is absent at the finalized observation floor`);
