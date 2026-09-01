@@ -160,7 +160,7 @@ their Rust child commands by hand. From the exact checked candidate, run:
 
 This runner is read-only with respect to devnet and opens no key. It builds the
 Rust producer and TypeScript CLI from the pack's exact archived source, invokes
-`dclutch route release-set` and then `dclutch route direct`, preserves their
+`dclutch-terminal route release-set` and then `dclutch-terminal route direct`, preserves their
 actual JSON stdout reports, and rehashes both outputs. The release-set output
 must be byte-identical to the pack's checked multiprogram, and the Direct route
 must name the pack's checked infrastructure digest. The plan, session, frozen

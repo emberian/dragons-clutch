@@ -10,7 +10,7 @@
  * WHY THIS EXISTS. Without it the terminal client could not name a single
  * program on the substrate it ships against. `programId` resolved a role from
  * an explicit `--core-program` flag or from a session file that only a founding
- * run produces, so `dclutch markets ls` — the first command the trader guide
+ * run produces, so `dclutch-terminal markets ls` — the first command the trader guide
  * teaches — refused with "the core program id is not known" for anyone who had
  * not already founded a market themselves. The browser had the answer baked in
  * from this same SDK module the whole time.

@@ -86,6 +86,14 @@ pub struct DescriptorScenarioInput<'a> {
     pub delivered: &'a [u64],
     /// Exact candidate terminal obligations.
     pub obligations_after: &'a [u64],
+    /// Authenticated collateral atoms per native claim unit.
+    ///
+    /// The `ProductBasisV3::payout_scale` of the basis record the adapter
+    /// authenticated against this Market. It is a per-call authenticated fact,
+    /// not a descriptor field: `DealerConfigV4` is a release artifact that by
+    /// its own doc holds only facts independent of the Market address, and a
+    /// scale restated there would be joined to nothing.
+    pub basis_scale: u64,
 }
 
 /// Borrowed conservative gross-covered scenario profile.
@@ -112,6 +120,8 @@ pub struct DescriptorSolvencyInput<'a> {
     pub present_capital: u64,
     /// Exact terminal obligations from their canonical authenticated owner.
     pub obligations: &'a [u64],
+    /// Authenticated collateral atoms per native claim unit.
+    pub basis_scale: u64,
 }
 
 /// Assess one immutable Dealer state without planning a split or merge.
@@ -132,6 +142,7 @@ pub fn assess_descriptor_solvency(
             present_capital: input.present_capital,
             obligations: input.obligations,
             locked_capital_floor: input.descriptor.locked_capital_floor,
+            basis_scale: input.basis_scale,
         },
         equity_by_scenario,
     )
@@ -159,6 +170,7 @@ pub fn plan_descriptor_scenario(
             acquired: input.acquired,
             delivered: input.delivered,
             obligations_after: input.obligations_after,
+            basis_scale: input.basis_scale,
         },
         post_inventory,
         post_equity,
@@ -235,6 +247,7 @@ mod tests {
             acquired,
             delivered,
             obligations_after,
+            basis_scale: 1,
         }
     }
 
@@ -317,6 +330,7 @@ mod tests {
                 expected_position_revision: 7,
                 present_capital: 10,
                 obligations: &before_obligations,
+                basis_scale: 1,
             },
             &mut before_equity,
         )
@@ -329,6 +343,7 @@ mod tests {
                 expected_position_revision: 7,
                 present_capital: 15,
                 obligations: &after_obligations,
+                basis_scale: 1,
             },
             &mut after_equity,
         )
@@ -347,6 +362,7 @@ mod tests {
                 expected_position_revision: 7,
                 present_capital: 3,
                 obligations: &[0, 0, 0],
+                basis_scale: 1,
             },
             &mut output,
         );

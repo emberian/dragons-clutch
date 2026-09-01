@@ -67,6 +67,105 @@ pub(crate) fn process_initialize(
     let profile = ProtocolInfrastructureProfileV1::new(registry, rent_binding)
         .map_err(|_| CoreSbfError::Infrastructure)?;
     create_profile(program_id, &frame, &rent, profile)?;
+    // The same two bindings, committed again at the V2 domain with the genesis
+    // sentinels in place of predecessor ids.
+    //
+    // Since `2951b226` every Core route authenticates the V2 profile and
+    // nothing else, so without this a cohort that succeeds nothing stands up
+    // complete and can never found: the succession ceremony is the only other
+    // writer of a V2, and it needs a predecessor release's bound upgrade
+    // authority to consent to a move that a day-old cohort has not made.
+    // Measured on cohort-9, which reached activation and then refused its
+    // founding sixty transactions deep.
+    //
+    // Written HERE rather than as a V1-shaped fallback in the readers, because
+    // `docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md` §6 refused
+    // try-V2-then-V1 by name: two live authentication paths, whose failure mode
+    // is the ceremony forgotten and V1 silently still ruling. A genesis V2
+    // keeps exactly one authentication path. Vacancy still refuses, and still
+    // means the ceremony is owed.
+    let genesis = ProtocolInfrastructureProfileV2::genesis(registry, rent_binding)
+        .map_err(|_| CoreSbfError::Infrastructure)?;
+    create_genesis_profile_v2(program_id, &frame, &rent, genesis)?;
+    Ok(())
+}
+
+/// Commit the genesis V2 at its own domain, under `create_profile`'s discipline.
+///
+/// Vacancy is exact here and stays exact: this runs once, in the same
+/// instruction that writes the V1, against a PDA nothing has touched. The
+/// ceremony's conjunct 6 is what later distinguishes this profile from a
+/// succeeded one, and it does that by reading the sentinels rather than by
+/// finding the account empty.
+fn create_genesis_profile_v2(
+    program_id: &Pubkey,
+    frame: &InitializeInfrastructureAccounts<'_, '_>,
+    rent: &Rent,
+    profile: ProtocolInfrastructureProfileV2,
+) -> Result<(), solana_program::program_error::ProgramError> {
+    let (expected, bump) =
+        Pubkey::find_program_address(&[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2], program_id);
+    if frame.genesis_profile.key != &expected
+        || frame.genesis_profile.owner != &system_program::ID
+        || frame.genesis_profile.data_len() != 0
+        || frame.genesis_profile.executable
+    {
+        return Err(CoreSbfError::Infrastructure.into());
+    }
+    let required = rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2);
+    let top_up = required.saturating_sub(frame.genesis_profile.lamports());
+    if top_up > 0 {
+        invoke(
+            &transfer(frame.payer.key, frame.genesis_profile.key, top_up),
+            &[
+                frame.payer.clone(),
+                frame.genesis_profile.clone(),
+                frame.system.clone(),
+            ],
+        )
+        .map_err(|_| CoreSbfError::Creation)?;
+    }
+    let bump_seed = [bump];
+    let signer = [
+        PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2,
+        bump_seed.as_slice(),
+    ];
+    invoke_signed(
+        &allocate(
+            frame.genesis_profile.key,
+            u64::try_from(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2)
+                .map_err(|_| CoreSbfError::Arithmetic)?,
+        ),
+        &[frame.genesis_profile.clone(), frame.system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| CoreSbfError::Creation)?;
+    invoke_signed(
+        &assign(frame.genesis_profile.key, program_id),
+        &[frame.genesis_profile.clone(), frame.system.clone()],
+        &[&signer],
+    )
+    .map_err(|_| CoreSbfError::Creation)?;
+    let encoded = profile.to_bytes();
+    {
+        let mut data = frame
+            .genesis_profile
+            .try_borrow_mut_data()
+            .map_err(|_| CoreSbfError::Infrastructure)?;
+        if data.len() != encoded.len() {
+            return Err(CoreSbfError::Infrastructure.into());
+        }
+        data.copy_from_slice(&encoded);
+    }
+    let committed = frame
+        .genesis_profile
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Infrastructure)?;
+    if frame.genesis_profile.owner != program_id
+        || ProtocolInfrastructureProfileV2::decode(&committed) != Ok(profile)
+    {
+        return Err(CoreSbfError::Infrastructure.into());
+    }
     Ok(())
 }
 
@@ -127,12 +226,19 @@ pub(crate) fn authenticate_projected_found(
 /// `docs/design/PROFILE_UPGRADE_RULING_2026_08_31.md` §6: it would stand up
 /// two live authentication paths (the O-005 parallel-authority smell), and
 /// its failure mode — the ceremony forgotten and V1 silently still ruling —
-/// is the exact silent divergence the succession exists to end. Before the
-/// ceremony this read refuses on vacancy (`CoreSbfError::Infrastructure`, the
-/// width check below, since a vacant PDA is System-owned and zero-length);
-/// the ceremony is what un-refuses it. V1 stays on chain byte-identical, a
-/// sealed historical record still content-walkable from V2's predecessor
-/// artifact ids, and is never again an authority here.
+/// is the exact silent divergence the succession exists to end. V1 stays on
+/// chain byte-identical, a sealed historical record still content-walkable
+/// from V2's predecessor artifact ids, and is never again an authority here.
+///
+/// **What un-refuses this read is a V2 existing, which is no longer only the
+/// ceremony.** It used to be: before the ceremony the read refused on vacancy
+/// (`CoreSbfError::Infrastructure`, the width check below, a vacant PDA being
+/// System-owned and zero-length), and that sentence was true until a genesis
+/// cohort had no way to reach V2 at all — cohort-9 stood up complete and could
+/// never found. `process_initialize` now commits a genesis V2 alongside the
+/// V1, so a cohort that succeeds nothing is foundable on the day it deploys,
+/// and this read is unchanged because a genesis profile is simply a V2.
+/// Vacancy still refuses, and now means only that initialization has not run.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_profile(
     program_id: &Pubkey,
@@ -389,7 +495,10 @@ pub(crate) fn authenticate_artifact_release(
         }
     }
     let artifact = ArtifactReleaseIdV1::new(digest).map_err(|_| CoreSbfError::Infrastructure)?;
-    Ok((ExecutionRoleBindingV1::new(release.program(), artifact), release))
+    Ok((
+        ExecutionRoleBindingV1::new(release.program(), artifact),
+        release,
+    ))
 }
 
 /// Observe a pinned deployment whose ELF digest was already authenticated.

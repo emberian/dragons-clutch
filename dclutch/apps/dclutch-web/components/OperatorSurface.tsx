@@ -45,7 +45,7 @@ export type PacketExportStateV1 = Readonly<{
   report: Pick<UnsignedTransactionChainReportV1, 'missing' | 'nonExecutablePrograms'> | null;
 }>;
 
-export const DIRECT_ROUTE_RUNBOOK_V1 = `dclutch --rpc "$DEVNET_RPC" \\
+export const DIRECT_ROUTE_RUNBOOK_V1 = `dclutch-terminal --rpc "$DEVNET_RPC" \\
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
   --bootstrap-bin "$SUCCESSOR" route release-set \\
   --plan "$PLAN" --expected-plan-sha256 "$PLAN_SHA256" \\
@@ -56,7 +56,7 @@ export const DIRECT_ROUTE_RUNBOOK_V1 = `dclutch --rpc "$DEVNET_RPC" \\
   --custody-checked "$CUSTODY_CHECKED" --expected-custody-checked-sha256 "$CUSTODY_SHA256" \\
   --output "$CHECKED_EXECUTION_RELEASE"
 
-dclutch --rpc "$DEVNET_RPC" \\
+dclutch-terminal --rpc "$DEVNET_RPC" \\
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
   --bootstrap-bin "$SUCCESSOR" route direct \\
   --session "$DIRECT_SESSION" \\

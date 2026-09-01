@@ -217,6 +217,7 @@ mod tests {
                 now: 20,
                 expires_at: 25,
                 terminal: false,
+                basis_scale: 1,
             },
             ScenarioTradeIntentV3 {
                 direction: ScenarioTradeDirectionV3::CounterpartyPaysDealer,

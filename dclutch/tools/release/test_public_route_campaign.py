@@ -202,7 +202,7 @@ class PublicRouteCampaignTests(unittest.TestCase):
             entry.write_text("export {};\n")
             before = campaign.staged_source_manifest_bytes(root)
             (root / "packages" / "dclutch-cli" / "dist").mkdir()
-            (root / "packages" / "dclutch-cli" / "dist" / "dclutch.mjs").write_text(
+            (root / "packages" / "dclutch-cli" / "dist" / "dclutch-terminal.mjs").write_text(
                 "bundle\n"
             )
             (root / "packages" / "dclutch-cli" / "node_modules").mkdir()
@@ -264,7 +264,7 @@ class PublicRouteCampaignTests(unittest.TestCase):
             checked_output.write_bytes(b"checked-release-set")
             release, direct = campaign.command_vectors(
                 node="node",
-                launcher=root / "dclutch.mjs",
+                launcher=root / "dclutch-terminal.mjs",
                 bootstrap=root / "bootstrap",
                 rpc_url="https://api.devnet.solana.com",
                 acknowledgment=campaign.DEVNET_GENESIS_HASH,

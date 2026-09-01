@@ -258,7 +258,7 @@ export async function productCommand(
   inspectionDependencies: ProductInspectionDependenciesV1 = PRODUCT_INSPECTION_DEPENDENCIES_V1,
 ): Promise<number> {
   if (subcommand === 'inspect') return inspectProductV1(context, io, inspectionDependencies);
-  if (subcommand !== 'spline') throw new Error('usage: dclutch product spline --input <absolute canonical json> --output-dir <absolute new directory> | dclutch product inspect --report <absolute report.json>');
+  if (subcommand !== 'spline') throw new Error('usage: dclutch-terminal product spline --input <absolute canonical json> --output-dir <absolute new directory> | dclutch-terminal product inspect --report <absolute report.json>');
   const input = absoluteFlagV1(context, 'input');
   const outputDirectory = absoluteFlagV1(context, 'output-dir');
   const args = splineProductArgumentsV1(input, outputDirectory);

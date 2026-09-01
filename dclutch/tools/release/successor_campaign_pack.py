@@ -676,7 +676,7 @@ def spline_product_handoff_value(
     smoke_evidence = evidence(
         root, f"{smoke_relative}/smoke-report.json", "spline Product handoff smoke report"
     )
-    cli_bundle = evidence(root, "product-handoff/dclutch.mjs", "built public CLI bundle")
+    cli_bundle = evidence(root, "product-handoff/dclutch-terminal.mjs", "built public CLI bundle")
     successor = evidence(
         root,
         "product-handoff/dclutch-local-successor-bootstrap",

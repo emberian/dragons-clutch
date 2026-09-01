@@ -1,5 +1,5 @@
 /**
- * `dclutch found` has two explicit, non-overlapping modes.
+ * `dclutch-terminal found` has two explicit, non-overlapping modes.
  *
  * - `--spec` drives the complete private-validator run owned by the successor.
  * - `--found-operation` prepares or executes permanent-devnet founding and

@@ -303,6 +303,7 @@ fn evaluate_authenticated_candidate_v4(
                 .content_digest
                 .to_bytes(),
             linked_basis_record_digest: invocation.linked_basis_record().content_digest.to_bytes(),
+            basis_scale: invocation.product_runtime().payout_scale,
             counterparty_account: request.counterparty_account,
             principal_balance: collateral.principal.token.amount,
             locked_capital_floor: config.locked_capital_floor(),
@@ -326,6 +327,12 @@ fn evaluate_authenticated_candidate_v4(
             generation: request.generation,
             custody_replay_revision: collateral.replay.next_revision,
             locked_capital_floor: config.locked_capital_floor(),
+            // The scale comes from the SAME authenticated ProductBasisV3 record
+            // whose `semantic_basis_id` `authenticate_claims` already joined to
+            // the Claims aggregate's `basis_id`, which is itself a PDA of this
+            // Market. The Dealer declares nothing; it reads the basis it had
+            // already loaded and already checked.
+            basis_scale: invocation.product_runtime().payout_scale,
         },
         ScenarioCollateralFrameV3 {
             principal_vault: collateral.principal.key,

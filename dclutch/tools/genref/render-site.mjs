@@ -698,8 +698,13 @@ const requiredPosture = [
   [`${DOCS}/guides/README.html`, "one market on it is open for trading"],
   [`${DOCS}/guides/trader.html`, "one devnet market is open for trading"],
   // Joining is one third of the chain that works today, and for a long time no
-  // guide mentioned it at all.
-  [`${DOCS}/guides/trader.html`, "dclutch join"],
+  // guide mentioned it at all. The needle is the guide's PROSE, not its command
+  // line: the command moved to the `--bootstrap-bin "$SUCCESSOR" join` form,
+  // which puts the program and the verb on different lines, so the old
+  // `dclutch join` needle had stopped matching what the guide says; and the
+  // terminal client's executable is now `dclutch-terminal`, so a needle spelled
+  // from the command line would have to be respelled on every rename.
+  [`${DOCS}/guides/trader.html`, "Today you join from the public command line"],
 ];
 for (const [relative, needle] of requiredPosture) {
   const rendered = fs.readFileSync(path.join(outDir, relative), "utf8");

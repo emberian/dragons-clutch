@@ -1,5 +1,5 @@
 /**
- * `dclutch markets ls` / `dclutch markets show <address>`.
+ * `dclutch-terminal markets ls` / `dclutch-terminal markets show <address>`.
  *
  * Both are pure reads through the SDK's discovery projection: enumerate the
  * Core program's market headers at one finalized floor, decode each into a

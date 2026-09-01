@@ -67,7 +67,7 @@ caller with the same explicit paths, never by sending a replacement packet.
      journal, opened against the same devnet RPC in Explorer;
    - the cohort wallet and its chain-derived Position/admission account;
    - the finalized Direct completion report, exact fee and collateral
-     pre/poststate, and `dclutch portfolio <cohort-owner>` output.
+     pre/poststate, and `dclutch-terminal portfolio <cohort-owner>` output.
 
 The terminal payout wrapper begins only after the Market has an actual terminal
 state and the portfolio reports a redeemable position. It accepts explicit

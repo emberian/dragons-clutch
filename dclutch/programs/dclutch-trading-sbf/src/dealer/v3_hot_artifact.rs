@@ -1232,7 +1232,16 @@ mod tests {
                     action, positions,
                 )
                 .expect("account count");
-                let lengths = vec![0_u32; usize::from(count)];
+                let mut lengths = vec![0_u32; usize::from(count)];
+                // The linked-basis coordinate is the one
+                // `AdapterAuthenticatedVariableData` prestate and refuses a
+                // zero declared width; `every_equity_shape_emits_exact_live_profile`
+                // already writes the same nonzero minimum there.
+                *lengths
+                    .get_mut(usize::from(
+                        crate::dealer::v3_profile::LINKED_BASIS_CONTENT_ACCOUNT_V3,
+                    ))
+                    .expect("linked-basis content coordinate") = 1;
                 let profile_bytes =
                     crate::dealer::v3_profile::encode_dealer_equity_account_profile_v3(
                         crate::dealer::v3_profile::DealerEquityAccountProfileInputV3 {

@@ -597,8 +597,8 @@ def run(arguments: argparse.Namespace) -> None:
     write_new_bytes(source_after, staged_source_manifest_bytes(staged.parent))
     if source_before.read_bytes() != source_after.read_bytes():
         refuse("npm dependency installation or CLI build changed first-party staged source")
-    launcher = cli_root / "bin" / "dclutch.mjs"
-    bundle = cli_root / "dist" / "dclutch.mjs"
+    launcher = cli_root / "bin" / "dclutch-terminal.mjs"
+    bundle = cli_root / "dist" / "dclutch-terminal.mjs"
     pack_tool.regular(launcher, "built public CLI launcher")
     pack_tool.regular(bundle, "built public CLI bundle")
 

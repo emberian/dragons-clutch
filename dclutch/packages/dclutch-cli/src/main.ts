@@ -1,5 +1,5 @@
 /**
- * dclutch — the dClutch terminal client.
+ * dclutch-terminal — the dClutch terminal client.
  *
  * Command dispatch and flag parsing only; each command lives in
  * `commands/` and every chain fact it states comes through @dclutch/sdk,
@@ -22,9 +22,9 @@ import { intentCommand, offerCommand, tradeCommand } from './commands/trade';
 import { walk } from './commands/walk';
 import { fail, STDIO, type Io } from './output';
 
-const USAGE = `dclutch — the dClutch terminal client
+const USAGE = `dclutch-terminal — the dClutch terminal client
 
-usage: dclutch [global flags] <command> [args]
+usage: dclutch-terminal [global flags] <command> [args]
 
 commands:
   markets ls                       enumerate and decode markets under the Core program
@@ -50,7 +50,7 @@ global flags:
                          endpoint must then prove that chain's identity before any id is used.
   --rpc <url>            JSON-RPC endpoint (default $DCLUTCH_RPC, then the session file, then
                          the --cluster endpoint, then http://127.0.0.1:20890/)
-  --session <json>       a run spec, run evidence, or dclutch session file carrying program ids + markets
+  --session <json>       a run spec, run evidence, or dclutch-terminal session file carrying program ids + markets
   --keypair <path>       Solana JSON keypair; also $DCLUTCH_KEYPAIR (never a default wallet path)
   --json                 machine-readable output where a command supports it
   --dry-run              where supported, build and print without signing or submitting; never enables buy/sell
@@ -174,17 +174,25 @@ const FLAG_OPTIONS = {
 } as const;
 
 /**
- * The verbs of the OTHER program that also installs an executable named
- * `dclutch`.
+ * The verbs of the OTHER dClutch client in this repository, whose executable
+ * is named `dclutch`.
  *
- * This repository ships two. This one is `@dclutch/cli`
- * (`packages/dclutch-cli`, npm); the other is the Rust reader/authoring binary
- * `dclutch-cli` (`tools/dclutch-cli`, cargo). Both declare the executable name
- * `dclutch`, both are documented under that bare name — `docs/guides/
- * trencher.md` teaches `dclutch markets ls`, which is this client, while
+ * This repository ships two clients and exactly one of them is distributed.
+ * This one is the terminal client (`packages/dclutch-cli`), installed only
+ * from this checkout: its manifest is `private: true`, `@dclutch/cli` is not
+ * on any registry, and `docs/guides/client-developers.md` says so. The other
+ * is the Rust reader/authoring binary (`tools/dclutch-cli`, cargo), and it is
+ * the released artifact — signed cargo-dist tarballs and a shell installer —
+ * so it keeps the bare executable name `dclutch`. This one is
+ * `dclutch-terminal`.
+ *
+ * They used to declare the same executable name, and whichever came first on
+ * `PATH` answered. The rename ends that. This list stays because the runbooks
+ * a reader arrives with may still say the bare name for either program:
  * `docs/operators/author-a-ticket.md` teaches `dclutch ticket author` and
- * `apps/dclutch-web`'s General workspace teaches `dclutch general plan`, which
- * are not — and whichever comes first on `PATH` answers.
+ * `apps/dclutch-web`'s General workspace teaches `dclutch general plan`, both
+ * of which are the Rust binary, while `docs/guides/trencher.md` teaches
+ * `dclutch-terminal markets ls`, which is this client.
  *
  * Listing them here implements none of them and weakens nothing: an unlisted
  * typo still gets the plain refusal plus usage. It turns one specific dead end
@@ -202,10 +210,10 @@ export const RUST_READER_COMMANDS_V1: ReadonlyArray<string> = Object.freeze([
 /** The refusal for a verb this client does not have. */
 export function unknownCommandV1(command: string): string {
   if (RUST_READER_COMMANDS_V1.includes(command)) {
-    return `\`${command}\` is not a command of THIS \`dclutch\`. Two programs in this project install`
-      + ' an executable by that name, and whichever is first on PATH answers: this one is the terminal'
-      + ` client @dclutch/cli (packages/dclutch-cli), and \`${command}\` belongs to the Rust`
-      + ' reader/authoring binary in tools/dclutch-cli, whose commands are market, capability, ticket,'
+    return `\`${command}\` is not a command of \`dclutch-terminal\`. This project ships two clients:`
+      + ' this one is the terminal client (packages/dclutch-cli), and'
+      + ` \`${command}\` belongs to the Rust reader/authoring binary \`dclutch\``
+      + ' (tools/dclutch-cli), whose commands are market, capability, ticket,'
       + ' general and fractional-retirement-next. The usage below is this binary\'s.';
   }
   return `unknown command: ${command}`;
@@ -217,7 +225,7 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
     parsed = parseArgs({ args: [...argv], options: FLAG_OPTIONS, allowPositionals: true, strict: true });
   } catch (error) {
     io.err(error instanceof Error ? error.message : String(error));
-    io.err('run `dclutch --help` for usage');
+    io.err('run `dclutch-terminal --help` for usage');
     return 2;
   }
   const [command, ...rest] = parsed.positionals;
@@ -241,7 +249,7 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
         const sub = rest[0];
         if (sub === 'ls') return await marketsLs(context, io);
         if (sub === 'show' && rest[1] !== undefined) return await marketsShow(context, io, rest[1]);
-        io.err('usage: dclutch markets ls | dclutch markets show <address>');
+        io.err('usage: dclutch-terminal markets ls | dclutch-terminal markets show <address>');
         return 2;
       }
       case 'portfolio':
@@ -277,7 +285,7 @@ export async function run(argv: ReadonlyArray<string>, env: NodeJS.ProcessEnv, i
 }
 
 const entry = process.argv[1];
-if (entry !== undefined && (entry.endsWith('dclutch.mjs') || entry.endsWith('main.ts') || entry.endsWith('dclutch'))) {
+if (entry !== undefined && (entry.endsWith('dclutch-terminal.mjs') || entry.endsWith('main.ts') || entry.endsWith('dclutch-terminal'))) {
   run(process.argv.slice(2), process.env, STDIO).then((code) => {
     process.exitCode = code;
   });

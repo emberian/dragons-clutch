@@ -7,7 +7,10 @@ use dclutch_capability_program_contract::{
     hot_v3::{DIRECT_HOT_HEAP_FRAME_BYTES_V1, HotExecutionEnvelopeV3},
 };
 use dclutch_core_contract::ContentId;
-use dclutch_execution_strategy_contract::admitted_v3::ADMITTED_RUNTIME_ACCOUNTS_START_V3;
+use dclutch_execution_strategy_contract::admitted_v3::{
+    ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
+    ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
+};
 use dclutch_execution_strategy_contract::v2::{
     ACCELERATOR_CHUNK_PAYLOAD_BYTES_V2, ACCELERATOR_REQUEST_HEADER_BYTES_V2, AcceleratorAckV2,
     AcceleratorDispositionV2, AcceleratorRequestV2, AuthenticatedScratchPageV2, RequestTransportV2,
@@ -1212,10 +1215,24 @@ fn real_sbf_fixture_wire_chunk(
     // read `18` until 2026-08-29, which is the same defect class as the frame
     // count asserted in `assert_execution_evidence`: a restated constant is one
     // the code can stop agreeing with silently.
+    //
+    // And two lines below that sentence sat `4` and `5`, written out, for the
+    // instructions sysvar and the Trading program. When the contract's frame
+    // stopped being an eighteen-account invention and started being derived
+    // from the producer's own `HOT_*` coordinates, this file refused every
+    // action with `0xC00A InstructionsSysvarAccount` and `freeze.rs`, which had
+    // been made to derive all three in `ecc43002`, needed no edit at all. The
+    // comment was right; it just was not applied to the line under it.
     let mut frame = vec![DUMMY; ADMITTED_RUNTIME_ACCOUNTS_START_V3 + fixed_count];
-    *frame.first_mut().expect("authority frame") = authority;
-    *frame.get_mut(4).expect("instructions frame") = sysvar::instructions::ID;
-    *frame.get_mut(5).expect("Trading frame") = CALLER;
+    *frame
+        .get_mut(ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3)
+        .expect("authority frame") = authority;
+    *frame
+        .get_mut(ADMITTED_INSTRUCTIONS_ACCOUNT_V3)
+        .expect("instructions frame") = sysvar::instructions::ID;
+    *frame
+        .get_mut(ADMITTED_TRADING_PROGRAM_ACCOUNT_V3)
+        .expect("Trading frame") = CALLER;
     let mut observed_accounts = Vec::with_capacity(runtime_data.len());
     for (coordinate, data) in runtime_data {
         let key = runtime_key(action, coordinate);

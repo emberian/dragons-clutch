@@ -12,7 +12,14 @@
 //!
 //! For every terminal scenario `s`, exact equity is:
 //!
-//! `present_capital + canonical_claim_inventory[s] - obligations[s]`.
+//! `present_capital + basis_scale * canonical_claim_inventory[s] - obligations[s]`,
+//!
+//! in collateral atoms. Present capital and obligations are atoms; the claim
+//! inventory is native claim units; `basis_scale` is the authenticated
+//! `ProductBasisV3::payout_scale` -- atoms per claim unit -- and the adapter
+//! obtains it by authenticating that basis record against the Market identity.
+//! The same conversion prices complete-set netting: splitting one set consumes
+//! `basis_scale` atoms of present capital and merging one returns them.
 //!
 //! A transition derives the least equal complete-set split needed to execute
 //! its outgoing Claims basket, followed by the greatest equal residual merge.
@@ -40,6 +47,8 @@ pub enum Error {
     IncomingBelowLockedFloor,
     /// The candidate state would fall below its locked capital floor.
     CandidateBelowLockedFloor,
+    /// The authenticated payout scale was absent; there is no default of one.
+    InvalidBasisScale,
 }
 
 /// Result alias for the Dealer scenario kernel.
@@ -94,6 +103,8 @@ pub struct ScenarioSolvencySnapshot<'a> {
     pub obligations: &'a [u64],
     /// Minimum admitted equity in every terminal scenario.
     pub locked_capital_floor: u64,
+    /// Authenticated collateral atoms per native claim unit. Zero is refused.
+    pub basis_scale: u64,
 }
 
 /// Exact admitted solvency summary.
@@ -128,6 +139,8 @@ pub struct ScenarioTransition<'a> {
     pub delivered: &'a [u64],
     /// Exact candidate terminal obligations after the atomic transaction.
     pub obligations_after: &'a [u64],
+    /// Authenticated collateral atoms per native claim unit. Zero is refused.
+    pub basis_scale: u64,
 }
 
 /// Exact complete-set netting and scenario-solvency candidate.
@@ -157,14 +170,27 @@ pub struct ScenarioNettingPlan {
 
 /// Compute exact signed equity for one terminal scenario.
 ///
-/// Conversion to `i128` is exact for every `u64` input: the greatest asset sum
-/// is less than `2^65`, and subtracting one `u64` obligation remains in range.
+/// The inventory is native claim units and is weighed into collateral atoms by
+/// `basis_scale`. Conversion to `i128` is exact for every `u64` input: the
+/// product of two `u64`s and one `u64` addend is less than `2^129`, and
+/// subtracting one `u64` obligation remains in range.
 pub fn scenario_equity(
     present_capital: u64,
     canonical_claim_inventory: u64,
+    basis_scale: u64,
     obligation: u64,
 ) -> i128 {
-    i128::from(present_capital) + i128::from(canonical_claim_inventory) - i128::from(obligation)
+    i128::from(present_capital)
+        + i128::from(canonical_claim_inventory) * i128::from(basis_scale)
+        - i128::from(obligation)
+}
+
+/// Collateral atoms consumed by splitting, or released by merging, `sets`.
+fn set_atoms(sets: u64, basis_scale: u64) -> Result<u64> {
+    if basis_scale == 0 {
+        return Err(Error::InvalidBasisScale);
+    }
+    sets.checked_mul(basis_scale).ok_or(Error::ArithmeticOverflow)
 }
 
 /// Require exact terminal-scenario equity to meet the locked capital floor.
@@ -183,6 +209,7 @@ pub fn assess_scenario_solvency(
     let (minimum_equity, minimum_scenario) = minimum_equity(
         snapshot.present_capital,
         snapshot.position.inventory,
+        snapshot.basis_scale,
         snapshot.obligations,
     )?;
     require_floor(
@@ -198,7 +225,12 @@ pub fn assess_scenario_solvency(
         .zip(snapshot.obligations.iter())
         .zip(equity_by_scenario.iter_mut())
     {
-        *output = scenario_equity(snapshot.present_capital, *inventory, *obligation);
+        *output = scenario_equity(
+            snapshot.present_capital,
+            *inventory,
+            snapshot.basis_scale,
+            *obligation,
+        );
     }
 
     Ok(ScenarioSolvencyReport {
@@ -237,6 +269,7 @@ pub fn plan_scenario_netting(
     let (minimum_equity_before, minimum_scenario_before) = minimum_equity(
         transition.present_capital,
         transition.position.inventory,
+        transition.basis_scale,
         transition.obligations_before,
     )?;
     require_floor(
@@ -264,7 +297,11 @@ pub fn plan_scenario_netting(
             .ok_or(Error::ArithmeticOverflow)?;
         minimum_split = minimum_split.max(delivered.saturating_sub(available));
     }
-    if minimum_split > transition.present_capital {
+    // Splitting one complete set consumes `basis_scale` atoms of present
+    // capital, not one atom. Funding the split with the SET COUNT is the
+    // direction that mints sets the Hoard does not back.
+    let split_atoms = set_atoms(minimum_split, transition.basis_scale)?;
+    if split_atoms > transition.present_capital {
         return Err(Error::InsufficientPresentCapital);
     }
 
@@ -284,10 +321,11 @@ pub fn plan_scenario_netting(
         maximum_merge = maximum_merge.min(funded);
     }
 
+    let merge_atoms = set_atoms(maximum_merge, transition.basis_scale)?;
     let capital_after = transition
         .present_capital
-        .checked_sub(minimum_split)
-        .and_then(|capital| capital.checked_add(maximum_merge))
+        .checked_sub(split_atoms)
+        .and_then(|capital| capital.checked_add(merge_atoms))
         .ok_or(Error::ArithmeticOverflow)?;
 
     let mut minimum_equity_after = i128::MAX;
@@ -309,7 +347,7 @@ pub fn plan_scenario_netting(
         let candidate = funded
             .checked_sub(maximum_merge)
             .ok_or(Error::ArithmeticOverflow)?;
-        let equity = scenario_equity(capital_after, candidate, *obligation);
+        let equity = scenario_equity(capital_after, candidate, transition.basis_scale, *obligation);
         if equity < minimum_equity_after {
             minimum_equity_after = equity;
             minimum_scenario_after = scenario;
@@ -341,7 +379,8 @@ pub fn plan_scenario_netting(
             .saturating_sub(*delivered)
             .saturating_sub(maximum_merge);
         *inventory_output = candidate;
-        *equity_output = scenario_equity(capital_after, candidate, *obligation);
+        *equity_output =
+            scenario_equity(capital_after, candidate, transition.basis_scale, *obligation);
     }
 
     Ok(ScenarioNettingPlan {
@@ -385,16 +424,29 @@ fn authenticate_position(
 fn minimum_equity(
     present_capital: u64,
     inventory: &[u64],
+    basis_scale: u64,
     obligations: &[u64],
 ) -> Result<(i128, usize)> {
+    if basis_scale == 0 {
+        return Err(Error::InvalidBasisScale);
+    }
     let mut values = inventory.iter().zip(obligations.iter()).enumerate();
     let (first_scenario, (first_inventory, first_obligation)) =
         values.next().ok_or(Error::EmptyScenarios)?;
-    let mut minimum = scenario_equity(present_capital, *first_inventory, *first_obligation);
+    let mut minimum = scenario_equity(
+        present_capital,
+        *first_inventory,
+        basis_scale,
+        *first_obligation,
+    );
     let mut scenario = first_scenario;
     for (candidate_scenario, (candidate_inventory, candidate_obligation)) in values {
-        let candidate =
-            scenario_equity(present_capital, *candidate_inventory, *candidate_obligation);
+        let candidate = scenario_equity(
+            present_capital,
+            *candidate_inventory,
+            basis_scale,
+            *candidate_obligation,
+        );
         if candidate < minimum {
             minimum = candidate;
             scenario = candidate_scenario;

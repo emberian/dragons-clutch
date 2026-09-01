@@ -101,6 +101,13 @@ pub struct ScenarioComposerContextV3 {
     pub custody_replay_revision: u64,
     /// Locked capital floor from the exact selected descriptor.
     pub locked_capital_floor: u64,
+    /// Authenticated collateral atoms per native claim unit.
+    ///
+    /// The `ProductBasisV3::payout_scale` of the basis record the accelerator
+    /// authenticated against this Market, and the sole conversion between the
+    /// scenario kernel's complete-SET counts and the ATOM amounts Custody
+    /// moves. Zero is refused.
+    pub basis_scale: u64,
 }
 
 /// Exact collateral accounts and authenticated pre-balances.
@@ -285,6 +292,7 @@ pub fn prepare_scenario_atomic_v3(
             acquired: input.acquired,
             delivered: input.delivered,
             obligations_after,
+            basis_scale: context.basis_scale,
         },
         post_inventory,
         post_equity,
@@ -319,18 +327,22 @@ pub fn prepare_scenario_atomic_v3(
         input.quote.realized_fee,
         &mut balances,
     )?;
+    // The kernel returns complete-SET counts. Custody moves ATOMS, and one
+    // complete set is `basis_scale` of them: splitting `n` sets must fund the
+    // Hoard with `n * basis_scale`, or the sets Claims mints against it are
+    // short by `n * (basis_scale - 1)`.
     stage_transfer(
         &mut transfers,
         &mut count,
         TransferKindV3::PrincipalToHoard,
-        scenario.minimum_complete_sets_to_split,
+        set_atoms_v3(scenario.minimum_complete_sets_to_split, context.basis_scale)?,
         &mut balances,
     )?;
     stage_transfer(
         &mut transfers,
         &mut count,
         TransferKindV3::HoardToPrincipal,
-        scenario.maximum_complete_sets_to_merge,
+        set_atoms_v3(scenario.maximum_complete_sets_to_merge, context.basis_scale)?,
         &mut balances,
     )?;
     if input.quote.direction == ScenarioQuoteDirectionV3::DealerPaysCounterparty {
@@ -524,6 +536,18 @@ pub fn verify_scenario_postconditions_v3(
     Ok(())
 }
 
+/// Convert a complete-set count into the collateral atoms Custody moves.
+///
+/// A zero scale is refused rather than defaulted: a scale nothing states is
+/// exactly the defect this conversion exists to close.
+fn set_atoms_v3(sets: u64, basis_scale: u64) -> ScenarioComposerResultV3<u64> {
+    if basis_scale == 0 {
+        return Err(ScenarioComposerErrorV3::CoordinateMismatch);
+    }
+    sets.checked_mul(basis_scale)
+        .ok_or(ScenarioComposerErrorV3::Arithmetic)
+}
+
 fn validate_coordinates(
     context: ScenarioComposerContextV3,
     frame: ScenarioCollateralFrameV3,
@@ -532,6 +556,9 @@ fn validate_coordinates(
     candidate_digest: [u8; 32],
     input: ScenarioFillInputV3<'_>,
 ) -> ScenarioComposerResultV3<()> {
+    if context.basis_scale == 0 {
+        return Err(ScenarioComposerErrorV3::CoordinateMismatch);
+    }
     for identity in [
         context.trading_program,
         context.custody_program,

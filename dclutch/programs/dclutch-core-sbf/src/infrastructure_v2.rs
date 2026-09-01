@@ -36,9 +36,13 @@
 //!    Loader already required for the physical upgrade consents to the
 //!    re-selection, on chain. An unmoved binding stands the System program
 //!    in its consent slot and must not sign.
-//! 6. **No-fork vacancy** (`InfrastructureAlreadySucceeded`). The V2 PDA is
-//!    System-owned, zero-data, non-executable — zero-lamport-tolerant
-//!    exactly as `create_profile` demands. One succession per domain, ever.
+//! 6. **One succession per domain** (`InfrastructureAlreadySucceeded`). The
+//!    V2 PDA is vacant, or holds a profile that was BORN at V2 and has not
+//!    yet succeeded. This was raw vacancy while the ceremony was the only
+//!    writer of a V2; a genesis cohort now writes its own at birth, so the
+//!    rule reads the two predecessor ids instead — sentinels mean unspent,
+//!    real artifact releases mean spent. One succession per domain, ever;
+//!    not one V2 per domain.
 //! 7. **Read-back.** What was persisted decodes back to what was composed.
 
 use core::convert::TryFrom;
@@ -90,7 +94,8 @@ pub(crate) fn process_initialize_v2(
     let rent = Rent::from_account_info(frame.rent).map_err(|_| CoreSbfError::Infrastructure)?;
 
     // Conjunct 2: the predecessor stands written and decodes.
-    let predecessor = authenticate_predecessor_profile(program_id, frame.predecessor_profile, &rent)?;
+    let predecessor =
+        authenticate_predecessor_profile(program_id, frame.predecessor_profile, &rent)?;
 
     // Conjunct 1, per binding. Whether a binding MOVED is decided by content:
     // the presented successor record's digest against the id V1 pinned. A
@@ -339,6 +344,47 @@ fn authenticate_predecessor_record(
     Ok(release)
 }
 
+/// What the V2 PDA says about whether this domain has already succeeded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProfileSuccessionStateV2 {
+    /// No V2 has ever been written. A pre-genesis-arm cohort, or a cohort whose
+    /// Core predates the genesis profile.
+    Vacant,
+    /// A genesis profile stands here: born at V2, succession unspent.
+    BornAtV2,
+    /// A succeeded profile stands here. One succession per domain, ever.
+    Succeeded,
+}
+
+/// Classify the V2 PDA without trusting anything the caller said about it.
+///
+/// Anything occupying the PDA that is not a decodable Core-owned V2 of the
+/// exact width is `Succeeded`, not `Vacant`: an account this ceremony cannot
+/// read is never treated as room to write. The refusal that follows names the
+/// no-fork rule, which is the accusation that fits — the domain is occupied by
+/// something, and this ceremony is not the thing that gets to overwrite it.
+fn profile_succession_state_v2(
+    program_id: &Pubkey,
+    profile: &AccountInfo<'_>,
+) -> Result<ProfileSuccessionStateV2, solana_program::program_error::ProgramError> {
+    if profile.owner == &system_program::ID && profile.data_len() == 0 && !profile.executable {
+        return Ok(ProfileSuccessionStateV2::Vacant);
+    }
+    if profile.owner != program_id
+        || profile.executable
+        || profile.data_len() != PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+    {
+        return Ok(ProfileSuccessionStateV2::Succeeded);
+    }
+    let bytes = profile
+        .try_borrow_data()
+        .map_err(|_| CoreSbfError::Infrastructure)?;
+    Ok(match ProtocolInfrastructureProfileV2::decode(&bytes) {
+        Ok(standing) if standing.born_at_v2() => ProfileSuccessionStateV2::BornAtV2,
+        _ => ProfileSuccessionStateV2::Succeeded,
+    })
+}
+
 /// Conjuncts 6 and 7: the vacancy, the creation, and the read-back belt.
 ///
 /// `create_profile`'s exact discipline at the V2 domain, with the occupied
@@ -355,13 +401,56 @@ fn create_profile_v2(
     if frame.profile.key != &expected {
         return Err(CoreSbfError::Infrastructure.into());
     }
-    // Conjunct 6: this is the entire no-fork guarantee — a second ceremony
-    // finds an account that is no longer vacant.
-    if frame.profile.owner != &system_program::ID
-        || frame.profile.data_len() != 0
-        || frame.profile.executable
-    {
-        return Err(CoreSbfError::InfrastructureAlreadySucceeded.into());
+    // Conjunct 6, and it is the entire no-fork guarantee: ONE SUCCESSION per
+    // domain, ever — not one V2 per domain.
+    //
+    // The rule used to be raw vacancy, which was exact while the only writer of
+    // a V2 was this ceremony. A genesis cohort now writes its own V2 at birth
+    // (`infrastructure::process_initialize`), so vacancy would refuse the first
+    // real succession of every cohort that started clean — reinstating P-008,
+    // the protocol-wide brick this ceremony exists to repair, for exactly the
+    // cohorts that never carried the defect.
+    //
+    // What replaces it needs no new field, because the distinction is already
+    // in the bytes: a profile whose two predecessor ids are the genesis
+    // sentinels was BORN at V2 and has not spent its succession; a profile
+    // naming two real V1 artifact releases has. `born_at_v2` carries the
+    // soundness argument — only Core writes a V2, genesis writes sentinels only
+    // into a vacant PDA, and this ceremony writes real predecessor ids read out
+    // of the live V1 and can never write a sentinel back.
+    let occupied = match profile_succession_state_v2(program_id, frame.profile)? {
+        ProfileSuccessionStateV2::Vacant => false,
+        ProfileSuccessionStateV2::BornAtV2 => true,
+        ProfileSuccessionStateV2::Succeeded => {
+            return Err(CoreSbfError::InfrastructureAlreadySucceeded.into());
+        }
+    };
+    if occupied {
+        // The account already exists, is already Core-owned and already exactly
+        // 224 bytes, so there is nothing to allocate or assign — and the System
+        // program would refuse both. Overwrite in place, then fall through to
+        // the same conjunct-7 read-back the created path uses.
+        let encoded = profile.to_bytes();
+        {
+            let mut data = frame
+                .profile
+                .try_borrow_mut_data()
+                .map_err(|_| CoreSbfError::Infrastructure)?;
+            if data.len() != encoded.len() {
+                return Err(CoreSbfError::Infrastructure.into());
+            }
+            data.copy_from_slice(&encoded);
+        }
+        let committed = frame
+            .profile
+            .try_borrow_data()
+            .map_err(|_| CoreSbfError::Infrastructure)?;
+        if frame.profile.owner != program_id
+            || ProtocolInfrastructureProfileV2::decode(&committed) != Ok(profile)
+        {
+            return Err(CoreSbfError::Infrastructure.into());
+        }
+        return Ok(());
     }
     let required = rent.minimum_balance(PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2);
     let top_up = required.saturating_sub(frame.profile.lamports());

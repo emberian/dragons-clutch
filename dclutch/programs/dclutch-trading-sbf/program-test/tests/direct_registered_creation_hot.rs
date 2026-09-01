@@ -36,36 +36,44 @@
 //! children, which is what `registered_sell_creation_refuses_at_the_direct_
 //! action_wall` measures: the Sell is otherwise complete when it dies.
 //!
-//! **Wall B -- one manifest entry per root pins one lifecycle policy.**
-//! `CapabilityProgramV4::validate_selection` requires `self.derivation_policy
-//! == entry.child_derivation_id()`, and a capability root header names ONE
-//! manifest entry (`CapabilityExecutionSelectionV1`'s index is persisted, not
-//! per-action). A registered Buy's `LifecyclePolicyV5` carries two more rent
-//! quotes than a Sell's -- the Custody replay and the vault it opens, which a
-//! Sell has no business quoting -- so the two policies have different widths,
-//! different digests, and therefore different `derivation_policy` identities.
-//! One Direct root cannot satisfy both.
+//! **Wall B is CROSSED.** It said one manifest entry per root pins one
+//! lifecycle policy, so the Sell's and the Buy's `LifecyclePolicyV5` -- which
+//! differed by the Custody replay and vault quotes -- could not share a Direct
+//! root. Direct now emits ONE policy for both sides (`53da59a4`, `6fed9720`),
+//! and `the_two_registered_creation_lifecycle_policies_cannot_share_a_manifest_
+//! entry` stays below as the record of WHY it existed; the case that ends it is
+//! `registered_state_artifacts_v4::unified_lifecycle_tests::
+//! one_policy_serves_both_registered_creation_actions`. A recorded wall decays
+//! exactly like a recorded total; this one did.
 //!
-//! Wall B is NOT observable on the current release, and this file does not
-//! pretend otherwise. It lives past wall A's position, and reaching it needs a
-//! committed Sell poststate that wall A prevents. It was measured on a probe
-//! build with wall A relaxed to `Ok(None)`, and on a `hot-cu-profile` build,
-//! so its compute figures are diagnostic and are not comparable with the
-//! production numbers the cases below print: with the manifest entry built
-//! from the Sell descriptor the Sell executed and the Buy refused `Content` at
-//! 133,173 CU; rebuilding the SAME fixture with the entry taken from the Buy
-//! descriptor moved the refusal to the Sell, at 125,433 CU, in the same
-//! artifact band. Nothing else changed between those two runs.
-//! `the_two_registered_creation_lifecycle_policies_cannot_share_a_manifest_entry`
-//! carries the half of wall B that needs no chain, and is live.
+//! **Wall C, measured 2026-09-01, is the commit's lamport plan.** Behind the
+//! wall-A probe, on a `hot-cu-profile` build (so these figures are diagnostic
+//! and not comparable with the production numbers below), the registered Sell
+//! executes and the registered Buy now runs ALL THREE of its Custody children
+//! to success -- `InitializeReplay` 123,796 CU, `OpenVault` 141,105 CU, the
+//! delegated deposit 136,253 CU -- and then refuses `Commit` 0x4005 at
+//! 1,205,519 CU in `require_committed_rent_exemption_v3`, on **coordinate 20,
+//! the Custody replay: 0 lamports against 288 bytes needing 2,895,360**.
 //!
-//! Both walls are semantic-owner decisions, not fixture bugs, and neither may
-//! be relaxed to make a campaign pass. `registered_sell_then_buy_execute_on_
-//! current_elves` below is the complete acceptance gate, written and ignored:
-//! behind the wall-A probe it went green through every Sell assertion --
-//! exact root, maker-replay and record poststates, and Claims conservation --
-//! before wall B stopped the Buy. Removing its `#[ignore]` is the one edit
-//! that turns a wall closure into evidence.
+//! The cause is one line up. `output_lamports` is seeded from the OBSERVED
+//! prestate, and at observation the replay is vacant, so the plan says zero;
+//! `commit_output_lamports_v3` then writes that zero back over the rent the
+//! Custody child just deposited. It skips only coordinates an
+//! `EffectProgramV5` FUNDING ACTION names, and funding actions describe
+//! accounts TRADING creates through the rent lifecycle -- the maker replay and
+//! the record. Nothing in the declaration says "this coordinate is created and
+//! funded by a child route," which no family needed before: the inline family
+//! opens no Custody account, and registered creation is the first route in the
+//! protocol that does. Declaring it as a local `TransferLamports` is not the
+//! repair -- `require_child_disjoint_from_local` refuses a child invocation
+//! that reaches a coordinate the Effect's own operations mutate, and
+//! coordinate 20 is in the child's frame. The missing thing is an exemption,
+//! and it is family-neutral machinery, not a Direct artifact.
+//!
+//! Neither wall may be relaxed to make a campaign pass.
+//! `registered_sell_then_buy_execute_on_current_elves` below is the complete
+//! acceptance gate, written and ignored. Removing its `#[ignore]` is the one
+//! edit that turns a wall closure into evidence.
 //!
 //! # What IS live here, measured on the current ELF pack
 //!
@@ -501,16 +509,21 @@ fn table(case: &CreationCase) -> Vec<Pubkey> {
 /// Not skipped, not weakened: written in full, run against a probe build, and
 /// held one attribute away from being live. Behind wall A (the Direct action
 /// gate, relaxed to `Ok(None)` in a throwaway build) every assertion down to
-/// the Sell's Claims-conservation checks passed on real Core/Claims/Custody/
-/// Registry/Rent ELFs, with the Sell consuming 374,455 CU. The Buy then stops
-/// at wall B, which no probe of Trading alone can move.
+/// the Sell's Claims-conservation checks passes on real Core/Claims/Custody/
+/// Registry/Rent ELFs. The Buy now creates its maker replay and registered
+/// record, opens a Custody replay and a TradingPrincipal vault, and moves the
+/// maker's collateral into that vault -- three child CPIs, all successful --
+/// before wall C stops it in the commit's lamport plan. See the file header.
 ///
-/// Remove `#[ignore]` when either wall closes and this file states whether the
+/// Remove `#[ignore]` when the walls close and this file states whether the
 /// campaign completes -- do not soften an assertion to get there.
 #[tokio::test]
 #[ignore = "blocked: hot_v3 admits only InlineOrdinary through the Direct \
-            crosscheck (wall A), and one manifest entry pins one lifecycle \
-            policy per root (wall B). See this file's header."]
+            crosscheck (wall A -- a missing registered crosscheck, not a gate \
+            to remove), and behind that probe the Buy refuses Commit 0x4005 \
+            because commit_output_lamports_v3 writes the observed-vacant zero \
+            over the rent the Custody child deposited into coordinate 20 \
+            (wall C). See this file's header."]
 async fn registered_sell_then_buy_execute_on_current_elves() {
     let (mut context, case) = started().await;
     let fixture = &case.fixture;
@@ -854,13 +867,11 @@ async fn registered_sell_creation_refuses_at_the_direct_action_wall() {
 /// registered Buy that could be admitted against a stale root would be a Buy
 /// whose maker-root accounting nobody had checked.
 ///
-/// It is also the reason WALL B is not observable on the current release.
-/// Wall B lives in the artifact band, past this check and past wall A's
-/// position for the Sell; reaching it needs a committed Sell poststate, and
-/// wall A is what stops the Sell from committing. Wall B was therefore measured
-/// only behind a probe build with wall A relaxed (see this file's header), and
-/// `the_two_registered_creation_lifecycle_policies_cannot_share_a_manifest_entry`
-/// below carries the half of it that needs no chain at all.
+/// It is also why every wall past it is measured behind a probe build with wall
+/// A relaxed: reaching the artifact band on the Buy needs a committed Sell
+/// poststate, and wall A is what stops the Sell from committing. Wall B has
+/// since been crossed; see this file's header for wall C, which is where the
+/// Buy stops today.
 #[tokio::test]
 async fn a_registered_buy_refuses_root_when_its_sell_has_not_committed() {
     let (mut context, case) = started().await;

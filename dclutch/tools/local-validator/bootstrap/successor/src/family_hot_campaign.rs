@@ -138,14 +138,15 @@ const SERIES_EVIDENCE_SCHEMA_V1: &str = "dclutch-local-series-hot-campaign-evide
 /// string is a worse coupling than one named constant with a test that pins it.
 const GENERAL_ACCELERATOR_CALLER_AUTHORITY_SEED_V1: &[u8] = b"general-accelerator-test-caller";
 
-/// Frame offset at which the logical runtime vector begins.
-const ADMITTED_RUNTIME_ACCOUNTS_START_V3: usize = 18;
-/// Frame offset of the caller-authority PDA.
-const ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3: usize = 0;
-/// Frame offset of the Instructions sysvar.
-const ADMITTED_INSTRUCTIONS_ACCOUNT_V3: usize = 4;
-/// Frame offset of the invoking (Trading-shaped) program.
-const ADMITTED_TRADING_PROGRAM_ACCOUNT_V3: usize = 5;
+// These four offsets were restated here as literals -- 18, 0, 4, 5 -- which is
+// the third copy of a frame table the producer never emitted, in the one file
+// that would have gone stale in silence. They are imported now, from the crate
+// this campaign already depends on, and that crate derives them from the
+// producer's own `HOT_*_ACCOUNT_V3` coordinates.
+use dclutch_execution_strategy_contract::admitted_v3::{
+    ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3, ADMITTED_INSTRUCTIONS_ACCOUNT_V3,
+    ADMITTED_RUNTIME_ACCOUNTS_START_V3, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3,
+};
 
 /// Runtime coordinate carrying the authenticated immutable config.
 const RUNTIME_CONFIG_COORDINATE: u16 = 1;

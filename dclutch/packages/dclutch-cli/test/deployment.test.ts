@@ -190,23 +190,31 @@ describe('when the binding is owed', () => {
 });
 
 /**
- * The two programs named `dclutch`.
+ * The other dClutch client, whose executable is `dclutch`.
  *
- * `tools/dclutch-cli` (cargo) and `packages/dclutch-cli` (npm) both declare the
- * executable name `dclutch`; the docs teach both under that bare name and
- * whichever is first on PATH answers. Measured 2026-09-01, before this change:
- * this client answered `dclutch market` / `capability` / `ticket` / `general` /
- * `fractional-retirement-next` with "unknown command", and the Rust binary
- * answered `markets ls` / `portfolio` / `refusal` / `found` / `redeem` /
- * `walk` / `spine` / `intent buy` the same way — a PATH fact that read as a
- * broken runbook.
+ * `tools/dclutch-cli` (cargo) and `packages/dclutch-cli` both used to declare
+ * the executable name `dclutch`; the docs taught both under that bare name and
+ * whichever was first on PATH answered. Measured 2026-09-01, before that
+ * change: this client answered `dclutch market` / `capability` / `ticket` /
+ * `general` / `fractional-retirement-next` with "unknown command", and the
+ * Rust binary answered `markets ls` / `portfolio` / `refusal` / `found` /
+ * `redeem` / `walk` / `spine` / `intent buy` the same way — a PATH fact that
+ * read as a broken runbook.
+ *
+ * This client is now `dclutch-terminal` and the collision is gone, because the
+ * Rust binary is the one anyone can install: `@dclutch/cli` is `private: true`
+ * and on no registry, while `tools/dclutch-cli` ships as signed cargo-dist
+ * tarballs. The cross-reference stays for the runbooks that still say the bare
+ * name, and each side must name the OTHER program's current executable — the
+ * assertion below is on `` `dclutch` `` with its backticks, which
+ * `dclutch-terminal` does not contain.
  */
-describe('the other binary also named dclutch', () => {
+describe('the other client, whose executable is dclutch', () => {
   it('names the program that owns each of its verbs instead of calling it a typo', () => {
     for (const command of RUST_READER_COMMANDS_V1) {
       const text = unknownCommandV1(command);
       expect(text).toContain('tools/dclutch-cli');
-      expect(text).toContain('@dclutch/cli');
+      expect(text).toContain('`dclutch`');
       expect(text).not.toContain('unknown command');
     }
   });

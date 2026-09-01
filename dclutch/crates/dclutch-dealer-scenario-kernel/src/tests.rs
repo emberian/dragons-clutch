@@ -39,6 +39,7 @@ const fn snapshot<'a>(
         present_capital,
         obligations,
         locked_capital_floor,
+        basis_scale: 1,
     }
 }
 
@@ -60,12 +61,15 @@ const fn transition<'a>(
         acquired,
         delivered,
         obligations_after,
+        basis_scale: 1,
     }
 }
 
 #[test]
 fn exact_signed_equity_and_first_minimum_are_reported() {
-    assert_eq!(scenario_equity(3, 2, 10), -5);
+    assert_eq!(scenario_equity(3, 2, 1, 10), -5);
+    // The claim leg is weighed: two units at seven atoms is fourteen.
+    assert_eq!(scenario_equity(3, 2, 7, 10), 7);
     let mut equity = [99_i128; 3];
     let report = assess_scenario_solvency(snapshot(&[2, 10, 0], &[5, 14, 3], 8, 4), &mut equity)
         .expect("every exact terminal equity meets four");

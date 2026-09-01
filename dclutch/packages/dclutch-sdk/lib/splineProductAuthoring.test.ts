@@ -124,7 +124,7 @@ describe('spline Product authoring artifact handoff', () => {
  * Measured 2026-09-01, before this section existed: a report carrying the
  * `partition_quality` key the Rust compiler has been emitting was refused
  * outright by `exactKeys` with "spline compiler report has missing or unknown
- * fields", so `dclutch product inspect` could not read ANY current compiler
+ * fields", so `dclutch-terminal product inspect` could not read ANY current compiler
  * output. The inspector was fail-closed and therefore honest; it was also
  * broken, which is the shape this lane keeps finding — a document assembled by
  * enumeration describing an older version of the object.

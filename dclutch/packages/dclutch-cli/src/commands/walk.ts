@@ -1,5 +1,5 @@
 /**
- * `dclutch walk` — the funded failure walk from a terminal.
+ * `dclutch-terminal walk` — the funded failure walk from a terminal.
  *
  * If a market's resolution deadline has passed with no sealed observation,
  * anyone may commit the explicit failure outcome and be paid the bounty the

@@ -6,8 +6,8 @@
  * a route and sign an off-chain intent, but it does not yet own the complete
  * exterior evidence needed to mutate the chain. So the honest CLI shape is:
  *
- *   dclutch intent sell ... --out sell-intent.json    # off-chain handoff
- *   dclutch spine --market ...                       # read-only inspection
+ *   dclutch-terminal intent sell ... --out sell-intent.json    # off-chain handoff
+ *   dclutch-terminal spine --market ...                       # read-only inspection
  *
  * `buy` and `sell` refuse before context, route, key, signature, or RPC access.
  * They stay closed until one accepted caller owns the durable exact-packet
@@ -103,7 +103,7 @@ function signIntent(intent: CompactIntentV2Input, message: Uint8Array, maker: Ke
 // ------------------------------------------------------------------ commands
 
 export async function intentCommand(context: CliContext, io: Io, sideText: string | undefined, env: NodeJS.ProcessEnv): Promise<number> {
-  if (sideText !== 'sell' && sideText !== 'buy') throw new Error('usage: dclutch intent sell|buy --route <json> --outcome N --fill N --price N --collateral <address> --nonce N --valid-from SLOT --valid-through SLOT --lifecycle 0|1 --keypair <maker> --out <file>');
+  if (sideText !== 'sell' && sideText !== 'buy') throw new Error('usage: dclutch-terminal intent sell|buy --route <json> --outcome N --fill N --price N --collateral <address> --nonce N --valid-from SLOT --valid-through SLOT --lifecycle 0|1 --keypair <maker> --out <file>');
   const outPath = flagText(context, 'out');
   const inspection = await inspectRoute(context);
   const intent = buildIntent(context, inspection, sideText === 'sell' ? 0 : 1);
@@ -195,7 +195,7 @@ export async function offerCommand(
   services: OfferCommandServicesV1 = OFFER_COMMAND_SERVICES_V1,
 ): Promise<number> {
   if (sideText !== 'sell') {
-    throw new Error('usage: dclutch offer sell --route <json> --maker <address> --outcome N --fill N --price N --duration-slots N --lifecycle fok|ioc --keypair <maker> --out <ticket.json>');
+    throw new Error('usage: dclutch-terminal offer sell --route <json> --maker <address> --outcome N --fill N --price N --duration-slots N --lifecycle fok|ioc --keypair <maker> --out <ticket.json>');
   }
   const outPath = flagText(context, 'out');
   const makerAddress = flagText(context, 'maker');
@@ -236,8 +236,8 @@ export async function offerCommand(
 export const DIRECT_TRADE_MUTATION_REFUSAL_V1 =
   'public Direct mutation is disabled before all context, route, key, signature, and RPC access: ' +
   'the CLI does not yet wire one durable exact-packet journal, an authenticated HotExecutionAckV3, ' +
-  'and a finalizer for all ten writable poststates; use `dclutch spine` for read-only market ' +
-  'inspection or `dclutch intent buy|sell` for an off-chain signed handoff — neither submits';
+  'and a finalizer for all ten writable poststates; use `dclutch-terminal spine` for read-only market ' +
+  'inspection or `dclutch-terminal intent buy|sell` for an off-chain signed handoff — neither submits';
 
 /**
  * Refuse the public mutation verbs at their dispatch boundary.

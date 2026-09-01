@@ -184,7 +184,7 @@ export async function routeCommand(
   dependencies: RouteCommandDependenciesV1 = ROUTE_COMMAND_DEPENDENCIES_V1,
 ): Promise<number> {
   if (subcommand !== 'release-set' && subcommand !== 'direct') {
-    throw new Error('usage: dclutch route release-set|direct [pinned producer inputs] --output <absolute new file>');
+    throw new Error('usage: dclutch-terminal route release-set|direct [pinned producer inputs] --output <absolute new file>');
   }
   const acknowledgment = devnetGenesisAcknowledgment(context);
   const output = absoluteFlagV1(context, 'output');

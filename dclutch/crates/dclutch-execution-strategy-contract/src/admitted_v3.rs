@@ -5,6 +5,13 @@
 //! the SVM adapter. The digest merely gives that authenticated adapter and one
 //! stateless accelerator an exact common transcript to recompute.
 
+use dclutch_capability_program_contract::hot_v3::{
+    HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_DESCRIPTOR_RAW_ACCOUNT_V3,
+    HOT_DESCRIPTOR_STAGING_ACCOUNT_V3, HOT_FIXED_ACCOUNT_COUNT_V3,
+    HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3, HOT_REGISTRY_PROGRAM_ACCOUNT_V3,
+    HOT_RENT_SYSVAR_ACCOUNT_V3, HOT_STRATEGY_RAW_ACCOUNT_V3, HOT_STRATEGY_STAGING_ACCOUNT_V3,
+    HOT_TRADING_PROGRAM_ACCOUNT_V3, HOT_TRADING_PROGRAMDATA_ACCOUNT_V3,
+};
 use dclutch_core_contract::ContentId;
 use dclutch_release_set_contract::ArtifactReleaseIdV1;
 use dclutch_sha256_adapter::digestv;
@@ -12,44 +19,109 @@ use dclutch_sha256_adapter::digestv;
 /// Domain for one authoritative admitted-AOT invocation context.
 pub const ADMITTED_INVOCATION_CONTEXT_DOMAIN_V3: &[u8] = b"dclutch:admitted-invocation-context:v3";
 
+// THE ADMITTED CPI FRAME IS NOT THIS FILE'S TO INVENT.
+//
+// Every coordinate below used to be a literal, and the literals described an
+// eighteen-account frame that nothing has ever produced. There is exactly one
+// admitted-accelerator CPI site in the tree -- Trading's `invoke_admitted_chunk`
+// -- and it emits the caller authority, then the WHOLE common Hot fixed frame,
+// then eight strategy-owned evidence accounts, then the runtime slice. So the
+// real instructions sysvar sits at 30 and this file said 4, the real runtime
+// accounts start at 48 and this file said 18, and the General accelerator --
+// the only reader these constants have ever had -- refused every OpenBatch
+// through real Trading ELFs with `0xC00A InstructionsSysvarAccount`, correctly,
+// because at index 4 the real frame carries a vacant CapabilityManifest staging
+// cursor.
+//
+// Every General harness built the frame from this table too, so the harnesses
+// and the accelerator agreed with each other and neither agreed with the
+// producer. The coordinates are DERIVED now. `HOT_*_ACCOUNT_V3` is the
+// producer's own authority for what sits where inside the fixed frame, and the
+// two offsets this file still owns -- the one-account authority prefix and the
+// eight-account evidence suffix -- are named once each below.
+//
+// What this file is NOT: a second authentication path. The Dealer accelerator
+// authenticates through `authenticate_accelerator_invocation_v4`, which
+// re-derives certificates, admissions and deployments; the General accelerator
+// deliberately does not, because that authentication stays in the SVM adapter.
+// It needs coordinates, not a second verifier, and coordinates are what this is.
+
 /// Caller-authority account in every admitted accelerator CPI.
 pub const ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3: usize = 0;
+/// First common Hot fixed account, immediately after the caller authority.
+pub const ADMITTED_HOT_FIXED_START_V3: usize = ADMITTED_CALLER_AUTHORITY_ACCOUNT_V3 + 1;
 /// Current release-set activation cache.
-pub const ADMITTED_ACTIVATION_ACCOUNT_V3: usize = 1;
+pub const ADMITTED_ACTIVATION_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_ACTIVATION_CACHE_ACCOUNT_V3;
 /// Immutable Registry program.
-pub const ADMITTED_REGISTRY_ACCOUNT_V3: usize = 2;
+pub const ADMITTED_REGISTRY_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_REGISTRY_PROGRAM_ACCOUNT_V3;
 /// Rent sysvar used to reauthenticate finalized records.
-pub const ADMITTED_RENT_ACCOUNT_V3: usize = 3;
+pub const ADMITTED_RENT_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_RENT_SYSVAR_ACCOUNT_V3;
 /// Instructions sysvar exposing the exact top-level Trading request.
-pub const ADMITTED_INSTRUCTIONS_ACCOUNT_V3: usize = 4;
+pub const ADMITTED_INSTRUCTIONS_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_INSTRUCTIONS_SYSVAR_ACCOUNT_V3;
 /// Current Trading program.
-pub const ADMITTED_TRADING_PROGRAM_ACCOUNT_V3: usize = 5;
+pub const ADMITTED_TRADING_PROGRAM_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_TRADING_PROGRAM_ACCOUNT_V3;
 /// Current Trading ProgramData.
-pub const ADMITTED_TRADING_PROGRAMDATA_ACCOUNT_V3: usize = 6;
+pub const ADMITTED_TRADING_PROGRAMDATA_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_TRADING_PROGRAMDATA_ACCOUNT_V3;
 /// Action-selected CapabilityProgramV3 raw record.
-pub const ADMITTED_CAPABILITY_RAW_ACCOUNT_V3: usize = 7;
+pub const ADMITTED_CAPABILITY_RAW_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_DESCRIPTOR_RAW_ACCOUNT_V3;
 /// Vacant CapabilityProgramV3 staging cursor.
-pub const ADMITTED_CAPABILITY_STAGING_ACCOUNT_V3: usize = 8;
+pub const ADMITTED_CAPABILITY_STAGING_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_DESCRIPTOR_STAGING_ACCOUNT_V3;
 /// Descriptor-selected ExecutionStrategy raw record.
-pub const ADMITTED_STRATEGY_RAW_ACCOUNT_V3: usize = 9;
+pub const ADMITTED_STRATEGY_RAW_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_STRATEGY_RAW_ACCOUNT_V3;
 /// Vacant ExecutionStrategy staging cursor.
-pub const ADMITTED_STRATEGY_STAGING_ACCOUNT_V3: usize = 10;
+pub const ADMITTED_STRATEGY_STAGING_ACCOUNT_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_STRATEGY_STAGING_ACCOUNT_V3;
+
+/// First strategy-owned evidence account, immediately after the Hot fixed frame.
+pub const ADMITTED_STRATEGY_EVIDENCE_START_V3: usize =
+    ADMITTED_HOT_FIXED_START_V3 + HOT_FIXED_ACCOUNT_COUNT_V3;
+/// Exact strategy-owned evidence suffix, including accelerator Program/ProgramData.
+pub const ADMITTED_STRATEGY_EVIDENCE_COUNT_V3: usize = 8;
+
 /// Strategy-selected Certificate raw record.
-pub const ADMITTED_CERTIFICATE_RAW_ACCOUNT_V3: usize = 11;
+pub const ADMITTED_CERTIFICATE_RAW_ACCOUNT_V3: usize = ADMITTED_STRATEGY_EVIDENCE_START_V3;
 /// Vacant Certificate staging cursor.
-pub const ADMITTED_CERTIFICATE_STAGING_ACCOUNT_V3: usize = 12;
+pub const ADMITTED_CERTIFICATE_STAGING_ACCOUNT_V3: usize = ADMITTED_STRATEGY_EVIDENCE_START_V3 + 1;
 /// Strategy-selected Registry Admission raw record.
-pub const ADMITTED_ADMISSION_RAW_ACCOUNT_V3: usize = 13;
+pub const ADMITTED_ADMISSION_RAW_ACCOUNT_V3: usize = ADMITTED_STRATEGY_EVIDENCE_START_V3 + 2;
 /// Vacant Admission staging cursor.
-pub const ADMITTED_ADMISSION_STAGING_ACCOUNT_V3: usize = 14;
+pub const ADMITTED_ADMISSION_STAGING_ACCOUNT_V3: usize = ADMITTED_STRATEGY_EVIDENCE_START_V3 + 3;
 /// Certificate-selected ArtifactRelease raw record.
-pub const ADMITTED_ARTIFACT_RAW_ACCOUNT_V3: usize = 15;
+pub const ADMITTED_ARTIFACT_RAW_ACCOUNT_V3: usize = ADMITTED_STRATEGY_EVIDENCE_START_V3 + 4;
 /// Vacant ArtifactRelease staging cursor.
-pub const ADMITTED_ARTIFACT_STAGING_ACCOUNT_V3: usize = 16;
+pub const ADMITTED_ARTIFACT_STAGING_ACCOUNT_V3: usize = ADMITTED_STRATEGY_EVIDENCE_START_V3 + 5;
+/// Immutable accelerator program.
+///
+/// The real frame has always carried this and the literal table never named it,
+/// which is the tell that the table was a design rather than a description.
+pub const ADMITTED_ACCELERATOR_PROGRAM_ACCOUNT_V3: usize = ADMITTED_STRATEGY_EVIDENCE_START_V3 + 6;
 /// Immutable accelerator ProgramData.
-pub const ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3: usize = 17;
+pub const ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3: usize =
+    ADMITTED_STRATEGY_EVIDENCE_START_V3 + 7;
 /// First AccountProfile-ordered read-only runtime account.
-pub const ADMITTED_RUNTIME_ACCOUNTS_START_V3: usize = 18;
+pub const ADMITTED_RUNTIME_ACCOUNTS_START_V3: usize =
+    ADMITTED_STRATEGY_EVIDENCE_START_V3 + ADMITTED_STRATEGY_EVIDENCE_COUNT_V3;
+
+// The evidence suffix is the one span this file states rather than derives, so
+// it is pinned to the accounts that occupy it: the last named coordinate must be
+// the last slot before the runtime slice. A ninth evidence account added to the
+// producer without a name here stops compiling instead of silently shifting
+// every runtime coordinate by one.
+const _: () = {
+    assert!(
+        ADMITTED_ACCELERATOR_PROGRAMDATA_ACCOUNT_V3 + 1 == ADMITTED_RUNTIME_ACCOUNTS_START_V3,
+        "the admitted evidence suffix count and its named coordinates disagree"
+    );
+};
 
 /// Stable refusal from admitted transcript construction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

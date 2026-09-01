@@ -133,19 +133,24 @@ fn run(arguments: Vec<String>) -> Result<()> {
     }
 }
 
-/// The verbs of the OTHER program that also installs an executable named
-/// `dclutch`.
+/// The verbs of the OTHER dClutch client in this repository, whose executable
+/// is named `dclutch-terminal`.
 ///
-/// This repository ships two of them: this binary (`tools/dclutch-cli`,
-/// installed by cargo) and the terminal client (`packages/dclutch-cli`,
-/// installed by npm as `@dclutch/cli`). Both declare the executable name
-/// `dclutch`, both are documented under that bare name — `docs/operators/
-/// author-a-ticket.md` teaches `dclutch ticket author`, which is this binary,
-/// while `docs/guides/trencher.md` teaches `dclutch markets ls`, which is not
-/// — and whichever comes first on `PATH` answers. A reader following either
-/// runbook with the other binary installed used to get
-/// "unknown command", which reads as a documentation error rather than as the
-/// PATH fact it is.
+/// This repository ships two of them: this binary (`tools/dclutch-cli`), which
+/// is the distributed artifact — cargo-dist tarballs and a shell installer, so
+/// it keeps the bare name `dclutch` — and the terminal client
+/// (`packages/dclutch-cli`), whose executable is `dclutch-terminal`. That one
+/// is installed only from this checkout: its manifest is `private: true`, and
+/// `@dclutch/cli` is on no registry, which `docs/guides/client-developers.md`
+/// states outright. Both used to declare the executable name `dclutch`, and
+/// whichever came first on `PATH` answered; a reader following either runbook
+/// with the other binary installed got "unknown command", which reads as a
+/// documentation error rather than as the PATH fact it was.
+///
+/// The rename ends the collision. This list stays because a reader's runbook
+/// may still say the bare name for the other client: `docs/guides/trencher.md`
+/// now teaches `dclutch-terminal markets ls`, but a copy of it from before
+/// this change says `dclutch markets ls`, and that lands here.
 ///
 /// Listing the other binary's verbs here does not implement them and does not
 /// weaken anything: an unlisted typo still gets the plain refusal. It converts
@@ -174,12 +179,12 @@ pub const TERMINAL_CLIENT_COMMANDS_V1: &[&str] = &[
 pub fn unknown_command_v1(command: &str) -> String {
     if TERMINAL_CLIENT_COMMANDS_V1.contains(&command) {
         return format!(
-            "`{command}` is not a command of THIS `dclutch`. Two programs in this project install \
-             an executable by that name, and whichever is first on PATH answers: this one is the \
-             Rust reader/authoring binary (`tools/dclutch-cli`), and `{command}` belongs to the \
-             terminal client `@dclutch/cli` (`packages/dclutch-cli`). Run `dclutch --help` to see \
-             which one you are running: this binary's commands are market, capability, ticket, \
-             general and fractional-retirement-next."
+            "`{command}` is not a command of `dclutch`. This project ships two clients: this one \
+             is the Rust reader/authoring binary (`tools/dclutch-cli`), and `{command}` belongs to \
+             the terminal client `dclutch-terminal` (`packages/dclutch-cli`), which is built from \
+             this checkout and is on no registry. Run `dclutch --help` to see what this binary \
+             has: its commands are market, capability, ticket, general and \
+             fractional-retirement-next."
         );
     }
     format!("unknown command `{command}`. Run `dclutch --help` for the commands it knows.")
@@ -450,7 +455,7 @@ mod tests {
             let error = run(vec![(*command).to_owned()]).expect_err("must refuse");
             let text = error.to_string();
             assert!(
-                text.contains("@dclutch/cli") && text.contains("packages/dclutch-cli"),
+                text.contains("`dclutch-terminal`") && text.contains("packages/dclutch-cli"),
                 "`{command}` refusal does not name the binary that owns it: {text}"
             );
             assert!(

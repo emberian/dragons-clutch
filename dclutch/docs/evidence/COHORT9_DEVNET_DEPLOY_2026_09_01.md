@@ -690,3 +690,86 @@ Named rather than improvised. The two workarounds declined earlier stay
 declined, and this lane declines a third: shipping the V1 fallback because it is
 the shape that was asked for, when a written ruling refuses it and the reason
 the ruling gave has simply changed rather than disappeared.
+
+## The genesis arm, built — and the exact seam where cohort-10 picks up
+
+`c60b25e8`. The decided shape: a genesis-shaped V2 at the V2 PDA, two distinct
+domain-separated sentinels standing in for predecessor ids, and conjunct 6
+reading those sentinels instead of demanding raw vacancy.
+
+### The rule is stable, and here is the one consequence it has
+
+The instruction was to check whether the constructor or a conjunct makes the
+sentinel rule unstable, and to stop if so. It does not. The soundness rests on
+who may write the bytes: **only Core writes a V2.** Genesis initialization
+writes sentinels and only into a vacant System-owned PDA; the ceremony writes
+real predecessor ids read out of the live V1 and can never write a sentinel
+back. So a succeeded profile can never present as unspent, and the rule cannot
+be forged from outside.
+
+One consequence is real and is contained. Conjunct 6 was enforced *physically*,
+by `allocate`+`assign` on a System-owned vacancy — the System program itself
+refused a second occupation. A born-at-V2 profile is already Core-owned at the
+exact width, so those two syscalls would refuse it, and the succession now
+overwrites in place on that arm. The conjunct-7 read-back belt is unchanged,
+and anything occupying the PDA that is **not** a decodable Core-owned V2 of the
+exact width classifies as `Succeeded` — never as room to write. An account this
+ceremony cannot read is never treated as space.
+
+### Why not the readers
+
+`found.rs` and every on-chain reader are **untouched**, which is the test of
+whether the shape was right. A genesis profile is simply a V2:
+`authenticate_profile`'s key, owner, width, rent, decode and binding checks all
+pass on it unchanged. That is what §6's "no fallback" buys, and it is why the
+V1-arm shape had to be declined even after its refusal's premise went stale.
+
+### Hostiles, named before they were run
+
+- **Half a forgery is still a forgery.** One sentinel and one real predecessor
+  id is not a shape either writer can produce and must not buy a second
+  succession, so `born_at_v2` requires **both**. Proved red by weakening the
+  conjunction to a disjunction: exactly that test fails and nothing else does.
+- **Positive control in the same test on the same fixture**: both sentinels IS
+  genesis, so the test cannot pass by refusing everything.
+- Plus a succeeded-profile control, and the two constructor constraints that
+  ruled out the obvious encodings — `ContentId` refuses all-zero,
+  `ProtocolInfrastructureProfileV2::new` refuses an equal pair as aliased —
+  asserted rather than asserted-about.
+
+25 release-set-contract tests, 33 core-sbf tests, green.
+
+Initialization now commits **both** profiles in one instruction, so a cohort can
+never stand half-initialized with a V1 nothing reads and no V2 to found
+against. The frame widens 14 → 15 accounts. That is an ABI change, it reaches
+chain only through a redeploy, and nothing deployed depends on the old shape.
+
+### What cohort-10 needs before it can be planned, precisely
+
+Not rediscovered later — the seam is two host-side changes, both mechanical now
+that the program half is settled:
+
+1. **The plan must pin the genesis V2.** `plan.rs:1123` builds only the V1 and
+   pins it at the V1 PDA. It needs the genesis V2 body and the V2 PDA alongside
+   it, and the campaign's initialize stage needs to pass the fifteenth account.
+   `ProtocolInfrastructureProfileV2::genesis(registry.binding(), rent.binding())`
+   is the whole body; the address is
+   `find_program_address(["dclutch:infrastructure:v2"], core)`.
+2. **The driver's Found dispatch needs a genesis arm.**
+   `market.rs:4290` `checked_found_infrastructure_selection_v1` maps
+   `(succession_planned=false, v2_observed=true)` to a refusal —
+   *"Found refuses an observed V2 infrastructure profile without its
+   authenticated succession plan"* — which is exactly what a born-at-V2 cohort
+   presents. It needs a third arm admitting an observed V2 that `born_at_v2()`
+   and matches the plan's pin. The `Predecessor` arm should go in the same
+   change rather than being left beside it: after `2951b226` it can never
+   produce a foundable projection, and AGENTS.md forbids keeping a superseded
+   authority path alongside its successor.
+
+Then: full redeploy of all seven from a named commit carrying `c60b25e8`, fresh
+identities, cohort-9 abandoned in place and its rent reclaimed. The red control
+is honest at last — **cohort-9 cannot be founded by construction, and the reason
+is now written down in three places rather than discovered sixty transactions
+into a founding.**
+
+Devnet evidence. Not mainnet evidence.

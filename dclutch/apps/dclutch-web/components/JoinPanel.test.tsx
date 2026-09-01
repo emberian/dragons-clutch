@@ -108,7 +108,7 @@ describe('the join surface', () => {
     const html = renderToStaticMarkup(<JoinStanding readiness={INCOMPLETE} marketPhase="Terminal" walletAddress={WALLET} endpoint={DEVNET} />);
     expect(html).toContain('This market has already resolved');
     expect(html).not.toContain('How to join');
-    expect(html).not.toContain('dclutch join');
+    expect(html).not.toContain('dclutch-terminal join');
   });
 
   it('passes a refusal through verbatim', () => {

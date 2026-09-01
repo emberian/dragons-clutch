@@ -13,7 +13,7 @@ pub use dclutch_market_core_codec::{
 /// Exact projected generic-Found V2 prefix account count.
 pub const PROJECTED_FOUND_ACCOUNT_COUNT_V2: usize = 24;
 /// Exact account count for one-time infrastructure-profile initialization.
-pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1: usize = 14;
+pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V1: usize = 15;
 /// Exact account count for the one-time infrastructure succession ceremony.
 pub const INITIALIZE_INFRASTRUCTURE_ACCOUNT_COUNT_V2: usize = 21;
 
@@ -473,6 +473,13 @@ impl<'accounts, 'info> ProjectedFoundAccountsV2<'accounts, 'info> {
 pub(crate) struct InitializeInfrastructureAccounts<'accounts, 'info> {
     pub payer: &'accounts AccountInfo<'info>,
     pub profile: &'accounts AccountInfo<'info>,
+    /// The V2 PDA this genesis initialization also writes.
+    ///
+    /// A cohort that succeeds nothing commits BOTH profiles in one instruction:
+    /// the sealed V1 historical record, and the genesis V2 every consumer
+    /// actually reads. One instruction so a cohort can never stand half
+    /// initialized, with a V1 nothing reads and no V2 to found against.
+    pub genesis_profile: &'accounts AccountInfo<'info>,
     pub core_programdata: &'accounts AccountInfo<'info>,
     pub upgrade_authority: &'accounts AccountInfo<'info>,
     pub registry_artifact_raw: &'accounts AccountInfo<'info>,
@@ -496,6 +503,7 @@ impl<'accounts, 'info> InitializeInfrastructureAccounts<'accounts, 'info> {
         let [
             payer,
             profile,
+            genesis_profile,
             core_programdata,
             upgrade_authority,
             registry_artifact_raw,
@@ -518,6 +526,10 @@ impl<'accounts, 'info> InitializeInfrastructureAccounts<'accounts, 'info> {
             || profile.is_signer
             || !profile.is_writable
             || profile.executable
+            || genesis_profile.is_signer
+            || !genesis_profile.is_writable
+            || genesis_profile.executable
+            || genesis_profile.key == profile.key
             || core_programdata.is_signer
             || core_programdata.is_writable
             || core_programdata.executable
@@ -560,6 +572,7 @@ impl<'accounts, 'info> InitializeInfrastructureAccounts<'accounts, 'info> {
         Ok(Self {
             payer,
             profile,
+            genesis_profile,
             core_programdata,
             upgrade_authority,
             registry_artifact_raw,

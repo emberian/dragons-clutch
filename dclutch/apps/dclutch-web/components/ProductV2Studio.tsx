@@ -33,7 +33,7 @@ function base64(bytes: Uint8Array): string { let binary = ''; for (let offset = 
 
 type AdmissionPreflight = Readonly<{ receipt: string; bump: number; requestHex: string; accounts: ReadonlyArray<string> }>;
 
-export const SPLINE_PRODUCT_RUNBOOK_V1 = `dclutch \\
+export const SPLINE_PRODUCT_RUNBOOK_V1 = `dclutch-terminal \\
   --bootstrap-bin "$SUCCESSOR" product spline \\
   --input "$SPLINE_PRODUCT_INPUT" \\
   --output-dir "$PRODUCT_GRAPH"`;

@@ -38,8 +38,8 @@ use crate::{
 };
 
 const HEADER_RESERVED_BYTES: usize = 4;
-const PROFILE_RESERVED_TAIL_BYTES_V2: usize =
-    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2 - PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2;
+const PROFILE_RESERVED_TAIL_BYTES_V2: usize = PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2
+    - PROTOCOL_INFRASTRUCTURE_PROFILE_RESERVED_TAIL_OFFSET_V2;
 
 /// Canonical finalized-record schema label for [`ProtocolInfrastructureProfileV1`].
 pub const PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_PREIMAGE_V1: &[u8] =
@@ -229,6 +229,71 @@ pub const PROTOCOL_INFRASTRUCTURE_PROFILE_SCHEMA_ID_V2: [u8; 32] = [
     0xd3, 0x94, 0xf4, 0xd8, 0xa7, 0xcd, 0xf5, 0xe7, 0x7e, 0x97, 0x0d, 0x33, 0x0c, 0x74, 0x23, 0x6a,
     0x8f, 0x4b, 0x5c, 0x0a, 0x48, 0x5d, 0xbb, 0x79, 0xa1, 0x55, 0x5f, 0x31, 0x05, 0xad, 0x8b, 0x52,
 ];
+/// Preimage of the genesis predecessor sentinel for the Registry binding.
+pub const PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_PREIMAGE_V2: &[u8] =
+    b"dclutch/genesis/protocol-infrastructure-predecessor-registry-v2";
+/// SHA-256 of [`PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_PREIMAGE_V2`].
+///
+/// A cohort that succeeds nothing has no predecessor artifact release to name,
+/// and cannot say so with zeros: [`ArtifactReleaseIdV1::new`] refuses an
+/// all-zero id, and [`ProtocolInfrastructureProfileV2::new`] refuses two equal
+/// predecessors as aliased. Two distinct domain-separated digests say "no
+/// predecessor" in the one vocabulary the existing constructor already
+/// accepts, so the genesis profile needs no new field and no new length.
+///
+/// These are not artifact releases and can never collide with one: a real
+/// predecessor id is the SHA-256 of a published `ArtifactReleaseV1` record
+/// body, and these are the SHA-256 of a fixed ASCII domain string that is not
+/// a record body.
+pub const PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2: [u8; 32] = [
+    0x6c, 0x5e, 0x6d, 0x81, 0x92, 0x78, 0x03, 0x98, 0xa9, 0xc6, 0x8f, 0x06, 0x40, 0x9e, 0x80, 0xbf,
+    0x2a, 0x2b, 0x2d, 0xde, 0xff, 0x86, 0x85, 0x2b, 0xa2, 0x7a, 0xc1, 0x4b, 0xa4, 0xbc, 0x8f, 0x06,
+];
+/// Preimage of the genesis predecessor sentinel for the Rent binding.
+pub const PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_PREIMAGE_V2: &[u8] =
+    b"dclutch/genesis/protocol-infrastructure-predecessor-rent-v2";
+/// SHA-256 of [`PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_PREIMAGE_V2`].
+pub const PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2: [u8; 32] = [
+    0x3f, 0xf5, 0xe1, 0xb5, 0xde, 0x3c, 0xbd, 0x35, 0x2e, 0x22, 0xbd, 0x65, 0xc3, 0xc8, 0x7e, 0x53,
+    0xf6, 0x77, 0x27, 0xe7, 0xca, 0xd1, 0x8d, 0x11, 0x67, 0x66, 0xe6, 0x79, 0x13, 0x84, 0xb9, 0x38,
+];
+
+const _: () = assert!(
+    !matches!(
+        konst_all_zero(&PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2),
+        true
+    ) && !matches!(
+        konst_all_zero(&PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2),
+        true
+    )
+);
+const _: () = assert!(!konst_equal(
+    &PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2,
+    &PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2,
+));
+
+const fn konst_all_zero(bytes: &[u8; 32]) -> bool {
+    let mut index = 0;
+    while index < 32 {
+        if bytes[index] != 0 {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+const fn konst_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    let mut index = 0;
+    while index < 32 {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 /// Per-Core PDA seed domain for the succession infrastructure profile.
 ///
 /// A distinct one-seed domain, not a mutation of V1's: the V1 profile is
@@ -403,6 +468,46 @@ impl ProtocolInfrastructureProfileV2 {
     pub const fn predecessor_rent_artifact(self) -> ArtifactReleaseIdV1 {
         self.predecessor_rent_artifact
     }
+
+    /// Construct the genesis succession profile for a cohort with no predecessor.
+    ///
+    /// Same two bindings a V1 would carry, and the two genesis sentinels in
+    /// place of predecessor ids. The result is an ordinary V2 in every other
+    /// respect, which is the point: every consumer keeps reading V2 and only
+    /// V2, so `PROFILE_UPGRADE_RULING_2026_08_31.md` §6's "no fallback" holds
+    /// with no second authentication path to forget.
+    pub fn genesis(registry: ExecutionRoleBindingV1, rent: ExecutionRoleBindingV1) -> Result<Self> {
+        Self::new(
+            registry,
+            rent,
+            ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2)?,
+            ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2)?,
+        )
+    }
+
+    /// Was this profile BORN at V2, rather than succeeded from a V1?
+    ///
+    /// This is the whole no-fork rule, and it needs no new field: the
+    /// distinction is already in the exact bytes the profile carries. A
+    /// born-at-V2 cohort has not spent its one succession; a succeeded profile
+    /// names the two real V1 artifact releases it moved forward from, and has.
+    ///
+    /// Soundness rests on who may write these bytes. Only Core writes a V2:
+    /// genesis initialization writes the sentinels, and only into a vacant
+    /// System-owned PDA; the ceremony writes real predecessor ids read out of
+    /// the live V1 and can never write a sentinel. So a succeeded profile can
+    /// never present as born-at-V2, and the rule cannot be forged from
+    /// outside.
+    ///
+    /// **Both** sentinels are required. A profile carrying one sentinel and
+    /// one real id is not a shape either writer can produce, so it is not
+    /// genesis and it does not get a second succession.
+    pub fn born_at_v2(self) -> bool {
+        self.predecessor_registry_artifact.to_bytes()
+            == PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2
+            && self.predecessor_rent_artifact.to_bytes()
+                == PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2
+    }
 }
 
 /// Fixed instruction selecting the succession ceremony from authenticated accounts.
@@ -537,6 +642,113 @@ mod tests {
     fn fixture() -> ProtocolInfrastructureProfileV1 {
         ProtocolInfrastructureProfileV1::new(binding_fixture(1, 2), binding_fixture(3, 4))
             .expect("profile")
+    }
+
+    /// A cohort with no predecessor gets a real, decodable V2 — which is the
+    /// whole point of the shape: every consumer keeps reading V2 and only V2.
+    #[test]
+    fn a_genesis_profile_is_an_ordinary_v2_that_reports_itself_unspent() {
+        let registry = binding_fixture(1, 2);
+        let rent = binding_fixture(3, 4);
+        let genesis =
+            ProtocolInfrastructureProfileV2::genesis(registry, rent).expect("genesis profile");
+
+        let bytes = genesis.to_bytes();
+        assert_eq!(bytes.len(), PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2);
+        assert_eq!(
+            ProtocolInfrastructureProfileV2::decode(&bytes),
+            Ok(genesis),
+            "a genesis profile must survive the same hostile decode every V2 gets"
+        );
+        assert!(genesis.born_at_v2());
+        assert_eq!(genesis.registry(), registry);
+        assert_eq!(genesis.rent(), rent);
+    }
+
+    /// The control that makes the rule mean something: a SUCCEEDED profile,
+    /// built the ordinary way, must not report itself unspent.
+    #[test]
+    fn a_succeeded_profile_has_spent_its_succession() {
+        let succeeded = ProtocolInfrastructureProfileV2::new(
+            binding_fixture(1, 9),
+            binding_fixture(3, 8),
+            ArtifactReleaseIdV1::new([2; 32]).expect("predecessor registry"),
+            ArtifactReleaseIdV1::new([4; 32]).expect("predecessor rent"),
+        )
+        .expect("succeeded profile");
+        assert!(!succeeded.born_at_v2());
+    }
+
+    /// Hostile: forge the sentinels onto a profile that has already succeeded.
+    ///
+    /// Half a forgery is still a forgery. A profile carrying one sentinel and
+    /// one real predecessor id is not a shape either writer can produce, and it
+    /// must not buy a second succession — so `born_at_v2` requires BOTH.
+    #[test]
+    fn a_half_forged_sentinel_pair_does_not_buy_a_second_succession() {
+        let real_registry = ArtifactReleaseIdV1::new([2; 32]).expect("predecessor registry");
+        let real_rent = ArtifactReleaseIdV1::new([4; 32]).expect("predecessor rent");
+        let sentinel_registry =
+            ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2)
+                .expect("registry sentinel");
+        let sentinel_rent =
+            ArtifactReleaseIdV1::new(PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2)
+                .expect("rent sentinel");
+
+        for (predecessor_registry, predecessor_rent) in [
+            (sentinel_registry, real_rent),
+            (real_registry, sentinel_rent),
+        ] {
+            let forged = ProtocolInfrastructureProfileV2::new(
+                binding_fixture(1, 9),
+                binding_fixture(3, 8),
+                predecessor_registry,
+                predecessor_rent,
+            )
+            .expect("forged profile");
+            assert!(
+                !forged.born_at_v2(),
+                "one sentinel and one real predecessor id is not a genesis profile"
+            );
+        }
+
+        // And the positive control on the same fixture: both sentinels IS.
+        let born = ProtocolInfrastructureProfileV2::new(
+            binding_fixture(1, 9),
+            binding_fixture(3, 8),
+            sentinel_registry,
+            sentinel_rent,
+        )
+        .expect("born-at-v2 profile");
+        assert!(born.born_at_v2());
+    }
+
+    /// The sentinels must be constructible at all, which is the constraint that
+    /// ruled out the obvious encodings: zeros are refused by `ContentId`, and an
+    /// equal pair is refused as aliased.
+    #[test]
+    fn the_sentinels_are_nonzero_distinct_and_accepted_by_the_existing_constructor() {
+        assert_ne!(
+            PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2,
+            PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2
+        );
+        assert_ne!(
+            PROTOCOL_INFRASTRUCTURE_GENESIS_REGISTRY_ARTIFACT_V2,
+            [0; 32]
+        );
+        assert_ne!(PROTOCOL_INFRASTRUCTURE_GENESIS_RENT_ARTIFACT_V2, [0; 32]);
+        assert!(ArtifactReleaseIdV1::new([0; 32]).is_err());
+        let aliased = ArtifactReleaseIdV1::new([7; 32]).expect("artifact");
+        assert!(
+            ProtocolInfrastructureProfileV2::new(
+                binding_fixture(1, 2),
+                binding_fixture(3, 4),
+                aliased,
+                aliased,
+            )
+            .is_err(),
+            "an equal predecessor pair stays aliased; the sentinels are distinct for this reason"
+        );
     }
 
     #[test]

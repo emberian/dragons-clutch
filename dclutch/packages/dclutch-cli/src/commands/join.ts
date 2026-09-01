@@ -1,5 +1,5 @@
 /**
- * `dclutch join` — admit one participant into an already-founded market.
+ * `dclutch-terminal join` — admit one participant into an already-founded market.
  *
  * This file owns no protocol formula, derives no address, and builds no
  * transaction. The Rust successor's User Position admission remains the sole
@@ -277,7 +277,7 @@ function successorReportV1(path: string, cluster: JoinClusterV1): Record<string,
 }
 
 /**
- * `dclutch join`: preflight by default, admission under `--execute`.
+ * `dclutch-terminal join`: preflight by default, admission under `--execute`.
  *
  * Preflight is the successor's finalized read-only planning run. It writes the
  * same durable report the execution later resumes, and passes no `--execute`

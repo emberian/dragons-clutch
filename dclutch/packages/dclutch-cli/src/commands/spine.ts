@@ -1,5 +1,5 @@
 /**
- * `dclutch spine --market <address>` — is this market tradable through the
+ * `dclutch-terminal spine --market <address>` — is this market tradable through the
  * Direct path right now, and if not, exactly which walls stand?
  *
  * The spine derivation reads everything from the market alone: the manifest

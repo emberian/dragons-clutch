@@ -757,8 +757,8 @@ PRODUCT_BUILD_LOG="$PRODUCT_HANDOFF_DIR/build.log"
     || { echo "source-pinned SDK package-lock.json changed during Product build" >&2; exit 1; }
 [ "$(sha256 "$CLI_LOCK")" = "$CLI_LOCK_BEFORE" ] \
     || { echo "source-pinned CLI package-lock.json changed during Product build" >&2; exit 1; }
-CLI_BUNDLE="$PRODUCT_HANDOFF_DIR/dclutch.mjs"
-cp "$PRODUCT_PACKAGES/dclutch-cli/dist/dclutch.mjs" "$CLI_BUNDLE"
+CLI_BUNDLE="$PRODUCT_HANDOFF_DIR/dclutch-terminal.mjs"
+cp "$PRODUCT_PACKAGES/dclutch-cli/dist/dclutch-terminal.mjs" "$CLI_BUNDLE"
 [ -f "$CLI_BUNDLE" ] && [ ! -L "$CLI_BUNDLE" ] \
     || { echo "source-pinned CLI build did not emit a regular bundle" >&2; exit 1; }
 PRODUCT_BOOTSTRAP_TARGET="$PRODUCT_BUILD_DIR/bootstrap-target"

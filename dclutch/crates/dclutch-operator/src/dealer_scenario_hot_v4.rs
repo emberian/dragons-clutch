@@ -1081,6 +1081,7 @@ mod tests {
             now: 20,
             expires_at: 25,
             terminal: false,
+            basis_scale: 1,
         };
         let intent = ScenarioTradeIntentV3 {
             direction: ScenarioTradeDirectionV3::CounterpartyPaysDealer,
@@ -1120,6 +1121,7 @@ mod tests {
                 generation: 17,
                 custody_replay_revision: 7,
                 locked_capital_floor: 0,
+                basis_scale: 1,
             },
             collateral: ScenarioCollateralFrameV3 {
                 principal_vault: vault(child, CompartmentV1::TradingPrincipal),

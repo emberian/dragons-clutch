@@ -26,7 +26,7 @@ type BuildState =
   | Readonly<{ kind: 'idle' | 'loading' | 'error'; message: string }>
   | Readonly<{ kind: 'ready'; plan: CoreFoundPlanV2; rentBase64: string | null; foundBase64: string | null }>;
 
-export const CURRENT_FOUND_RUNBOOK_V1 = `dclutch --rpc "$DEVNET_RPC" \\
+export const CURRENT_FOUND_RUNBOOK_V1 = `dclutch-terminal --rpc "$DEVNET_RPC" \\
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
   --bootstrap-bin "$SUCCESSOR" found \\
   --found-operation "$FOUND_OPERATION" \\
@@ -34,7 +34,7 @@ export const CURRENT_FOUND_RUNBOOK_V1 = `dclutch --rpc "$DEVNET_RPC" \\
 
 # Review the authored Market input and read-only journal, then authorize the
 # exact same operation. Rerun this line unchanged after an interruption.
-dclutch --rpc "$DEVNET_RPC" \\
+dclutch-terminal --rpc "$DEVNET_RPC" \\
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \\
   --bootstrap-bin "$SUCCESSOR" found \\
   --found-operation "$FOUND_OPERATION" \\

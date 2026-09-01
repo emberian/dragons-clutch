@@ -55,11 +55,11 @@ outside your limit? The transaction doesn't execute badly; it doesn't
 execute.
 
 ```sh
-dclutch markets ls
-dclutch markets show <market>
-dclutch intent buy --route route.json --outcome 1 --fill 5 \
+dclutch-terminal markets ls
+dclutch-terminal markets show <market>
+dclutch-terminal intent buy --route route.json --outcome 1 --fill 5 \
     --price 400000 --collateral <acct> --keypair me.json --out my-bid.json
-dclutch portfolio
+dclutch-terminal portfolio
 ```
 
 That intent is an off-chain handoff, not a submitted trade. The public `buy`
@@ -73,7 +73,7 @@ When the chain says no, you get told who said no and why — the actual
 program and the actual reason, not a hex number and a shrug:
 
 ```sh
-$ dclutch refusal 0x5000
+$ dclutch-terminal refusal 0x5000
   claims refused: ClaimsSbfError::Instruction (0x5000) — Instruction bytes
   were hostile or selected no supported family.
 ```
@@ -98,7 +98,7 @@ transaction without submitting it. The rest of this section is what the walk
 will look like on a market that funds one.
 
 ```sh
-dclutch walk --book walk-book.json --generation 1 --terminal-sequence 1 \
+dclutch-terminal walk --book walk-book.json --generation 1 --terminal-sequence 1 \
     --keypair anyone.json --dry-run \
     --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 ```

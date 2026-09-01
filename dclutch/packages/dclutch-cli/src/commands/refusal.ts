@@ -1,5 +1,5 @@
 /**
- * `dclutch refusal <code...>` — the band registry from a terminal. Accepts
+ * `dclutch-terminal refusal <code...>` — the band registry from a terminal. Accepts
  * decimal or 0x hex, and full log lines (`custom program error: 0x5042`)
  * pasted verbatim.
  */
@@ -9,7 +9,7 @@ import type { Io } from '../output';
 
 export function refusal(io: Io, args: ReadonlyArray<string>): number {
   if (args.length === 0) {
-    io.err('usage: dclutch refusal <code> [<code> ...]  (decimal, 0x hex, or a pasted "custom program error" line)');
+    io.err('usage: dclutch-terminal refusal <code> [<code> ...]  (decimal, 0x hex, or a pasted "custom program error" line)');
     return 1;
   }
   const text = args.join(' ');

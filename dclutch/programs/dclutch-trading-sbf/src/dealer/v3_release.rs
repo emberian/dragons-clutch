@@ -594,10 +594,21 @@ mod tests {
     }
 
     fn lp_profile(action: MultiLpRequestActionV3) -> Vec<u8> {
+        // Coordinate 4 is the linked-basis record, the topology's one
+        // `AdapterAuthenticatedVariableData` prestate, and that prestate
+        // refuses a zero declared width (`v2.rs`, `InvalidVariableDataPrestate`)
+        // because the declared length is a checked MINIMUM over a record whose
+        // real width is runtime. This fixture wrote zero there and the encoder
+        // refused before any of the assertions below could run.
         let lengths = match action {
-            MultiLpRequestActionV3::Open => vec![0, 0, 0, 0, 0, 208, 256, 0, 128, 0],
-            MultiLpRequestActionV3::Close => vec![0, 0, 0, 0, 0, 208, 256, 128, 0],
+            MultiLpRequestActionV3::Open => vec![0, 0, 0, 0, 1, 208, 256, 0, 128, 0],
+            MultiLpRequestActionV3::Close => vec![0, 0, 0, 0, 1, 208, 256, 128, 0],
         };
+        assert_eq!(
+            usize::from(super::super::v3_lp_artifacts::DEALER_LP_LINKED_BASIS_ACCOUNT_V3),
+            4,
+            "the nonzero minimum above belongs to the linked-basis coordinate",
+        );
         encode_dealer_lp_account_profile_v3(DealerLpAccountProfileInputV3 {
             action,
             logical_data_lengths: &lengths,

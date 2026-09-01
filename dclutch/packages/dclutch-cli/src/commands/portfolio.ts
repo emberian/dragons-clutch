@@ -1,5 +1,5 @@
 /**
- * `dclutch portfolio [owner]` — the indexer-free position rollup: enumerate
+ * `dclutch-terminal portfolio [owner]` — the indexer-free position rollup: enumerate
  * markets, derive each Claims Position address locally, and report exact
  * balances and redeemability at one finalized floor. The owner defaults to
  * the named keypair's public key; an explicit address argument needs no key

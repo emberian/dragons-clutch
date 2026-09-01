@@ -62,7 +62,7 @@ either account exists. Joining is what creates them.
 Today you join from the public command line. Set each path to an absolute path:
 
 ```sh
-dclutch --rpc "$DEVNET_RPC" \
+dclutch-terminal --rpc "$DEVNET_RPC" \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
   --bootstrap-bin "$SUCCESSOR" join \
   --plan "$PLAN" \
@@ -87,7 +87,7 @@ market by address alone, and that is deliberate: what you sign should be
 checkable against something the market published, not assembled from a
 name.
 
-The key file is also the identity: `dclutch` derives the Position owner from
+The key file is also the identity: `dclutch-terminal` derives the Position owner from
 `$POSITION_KEYPAIR`; you do not type a separate address. When you started from
 the web app, verify that the derived public key is the connected address whose
 Position the page displayed.

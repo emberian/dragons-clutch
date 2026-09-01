@@ -422,6 +422,10 @@ pub struct ScenarioTradeChainProjectionV3<'a> {
     pub product_record_digest: [u8; 32],
     /// Exact finalized linked LiabilityBasis-record digest consumed by Claims.
     pub linked_basis_record_digest: [u8; 32],
+    /// Collateral atoms per native claim unit, from that same basis record.
+    ///
+    /// The authenticated `ProductBasisV3::payout_scale`. Zero is refused.
+    pub basis_scale: u64,
     /// Exact counterparty external collateral account.
     pub counterparty_account: [u8; 32],
     /// Present TradingPrincipal balance; fees and Hoard principal are excluded.
@@ -600,6 +604,7 @@ pub(super) fn encode_scenario_trade_request_v3(
             acquired: intent.acquired,
             delivered: intent.delivered,
             obligations_after: &obligations_after,
+            basis_scale: chain.basis_scale,
         },
         &mut dealer_after,
         &mut post_equity,
@@ -1267,6 +1272,7 @@ mod tests {
             now: 20,
             expires_at: 25,
             terminal: false,
+            basis_scale: 1,
         };
         let intent = ScenarioTradeIntentV3 {
             direction: ScenarioTradeDirectionV3::CounterpartyPaysDealer,

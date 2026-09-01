@@ -1,5 +1,5 @@
 /**
- * `dclutch redeem` projects one completed campaign through the read-only Rust
+ * `dclutch-terminal redeem` projects one completed campaign through the read-only Rust
  * payout planners, admits its replay and ordered lookup table as separate
  * finalized prerequisites, then journals, signs, submits, and hostile-verifies
  * one exact wallet payout. Submitted ambiguity is preserved for read-only

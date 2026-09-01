@@ -2398,3 +2398,46 @@ Two halves. Protocol defects: eight lanes. Operator console and UX: the ninth,
 below, on a named backlog of ten with `file:line` on each.
 
 | `a2f3695f1c033fb62` | OPERATOR-UX | the wizard cannot call the real gate; the Studio evaluator is a mirror; the abort path shows `ProgramFailedToComplete` with no remedy; `basis_scale == 1` hardcoded in portfolio + PositionBars; `claims.conserve`'s missing second wall; runbook replay tier; the two-binaries doc page; 31 type errors; 223 CSS rules; redemption stage one |
+
+## The sentinel vacancy rule is built (`c60b25e8`); cohort-10 is two host changes away
+
+**Soundness rests on who may write the bytes: only Core writes a V2.** Genesis
+initialization writes the two sentinels and only into a vacant System-owned PDA;
+the ceremony writes real predecessor ids read from the live V1 and **can never write
+a sentinel back.** A succeeded profile can never present as unspent, and the rule
+cannot be forged from outside. Conjunct 6 is now **one succession per domain**, read
+by a `profile_succession_state_v2` classifier. `process_initialize` commits both
+profiles in one instruction (frame 14 → 15 — an ABI change reaching chain only by
+redeploy; nothing deployed depends on the old shape).
+
+**Contained, not hidden:** conjunct 6 used to be enforced *physically* by the System
+program refusing a second `allocate`+`assign`; a born-at-V2 profile is already
+Core-owned at exact width, so the succession now overwrites in place on that arm.
+The conjunct-7 read-back belt is unchanged, and anything at the PDA that is not a
+decodable Core-owned V2 of exact width classifies as `Succeeded` — **an account the
+ceremony cannot read is never treated as space.**
+
+**The proof the shape is right: `found.rs` and every on-chain reader are untouched.**
+A genesis profile is simply a V2. That is what §6's no-fallback buys.
+
+Hostiles named before they were run: half a forgery is still a forgery, so
+`born_at_v2` requires **both** sentinels — proved red by weakening the conjunction
+to a disjunction, which fails exactly that test and nothing else. 25 + 33 green.
+The lane also repaired a comment its own change made stale — third recorded-wall
+decay it found today, first that was its own.
+
+**The seam, at file and line** (the lane declined to start a schema migration on
+remaining budget, which was right — a half-done migration in a shared tree is worse
+than a clean named seam):
+1. `tools/local-validator/bootstrap/successor/src/plan.rs:1123` builds only the V1 —
+   needs the genesis V2 body, the V2 PDA, and the fifteenth account; the profile
+   pin's schema ripples into the campaign's initialize stage, the evidence emitters,
+   the plan schema version, and the genesis manifest in
+   `checked-release-candidate.sh`.
+2. `market.rs:4290` maps `(no succession plan, V2 observed)` to a **refusal** — exactly
+   what a born-at-V2 cohort presents. Needs a genesis arm, **and the `Predecessor`
+   arm goes in the same change**: after `2951b226` it can never produce a foundable
+   projection, and AGENTS.md forbids a superseded authority path beside its successor.
+
+Then the full redeploy carrying `c60b25e8` → founding → load simulator. Deployer
+unchanged at 42.945709919; that lane submitted zero transactions.

@@ -85,6 +85,7 @@ fn context_and_frame() -> (ScenarioComposerContextV3, ScenarioCollateralFrameV3)
         generation: 2,
         custody_replay_revision: 7,
         locked_capital_floor: 0,
+        basis_scale: 1,
     };
     let vault = |vault_context, compartment| {
         Pubkey::find_program_address(

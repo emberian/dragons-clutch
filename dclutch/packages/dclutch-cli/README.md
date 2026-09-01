@@ -1,29 +1,34 @@
 # @dclutch/cli
 
-`dclutch` is the fail-closed dClutch terminal client. It proves that
+`dclutch-terminal` is the fail-closed dClutch terminal client. It proves that
 `@dclutch/sdk` is a real client surface: every chain fact this tool states
 flows through the SDK's generated, byte-gated modules; nothing is restated.
 
+The executable is `dclutch-terminal`, not `dclutch`. The bare name belongs to
+the Rust reader/authoring binary in `tools/dclutch-cli`, which is the
+distributed artifact; this package is `private: true`, is on no registry, and
+is installed only from this checkout.
+
 ```sh
-npm install && npm run build       # bundles to dist/dclutch.mjs
-node bin/dclutch.mjs --help
+npm install && npm run build       # bundles to dist/dclutch-terminal.mjs
+node bin/dclutch-terminal.mjs --help
 ```
 
 ## The loop
 
 ```sh
 # Run a complete private-validator lifecycle from one run spec.
-dclutch found --spec run-spec.json --session-out session.json
+dclutch-terminal found --spec run-spec.json --session-out session.json
 
-dclutch --session session.json markets ls
-dclutch --session session.json markets show <market>
+dclutch-terminal --session session.json markets ls
+dclutch-terminal --session session.json markets show <market>
 
 # which walls stand between this market and a Direct trade, by name
-dclutch --session session.json spine --market <market> --keypair me.json
+dclutch-terminal --session session.json spine --market <market> --keypair me.json
 
 # Produce the chain-authenticated route in two key-free, read-only steps. Every
 # local input is an absolute path pinned by the digest in its release report.
-dclutch --rpc https://api.devnet.solana.com \
+dclutch-terminal --rpc https://api.devnet.solana.com \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
   --bootstrap-bin /work/dclutch-local-successor-bootstrap \
   route release-set --plan /work/plan.json --expected-plan-sha256 PLAN_SHA256 \
@@ -34,7 +39,7 @@ dclutch --rpc https://api.devnet.solana.com \
   --custody-checked /work/custody.checked --expected-custody-checked-sha256 CUSTODY_SHA256 \
   --output /work/checked-execution-release.bin
 
-dclutch --rpc https://api.devnet.solana.com \
+dclutch-terminal --rpc https://api.devnet.solana.com \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
   --bootstrap-bin /work/dclutch-local-successor-bootstrap \
   route direct --session /work/direct-session.json \
@@ -48,7 +53,7 @@ dclutch --rpc https://api.devnet.solana.com \
 # start slot, and next nonce from authenticated chain observations. Price is an
 # exact scaled integer; duration and fill behavior are explicit. This signs
 # only the portable ticket and neither builds nor submits a transaction.
-dclutch --session session.json offer sell --route /work/route.json \
+dclutch-terminal --session session.json offer sell --route /work/route.json \
   --maker <maker-address> --outcome 1 --fill 5 --price 400000 \
   --duration-slots 150 --lifecycle ioc \
   --keypair /keys/maker.json --out /work/sell-ticket.json
@@ -60,8 +65,8 @@ dclutch --session session.json offer sell --route /work/route.json \
 # buy and sell intentionally refuse before reading a session, route, or key.
 # Keep the signed intent as an off-chain handoff; no public submitter exists yet.
 
-dclutch --session session.json portfolio
-dclutch --session session.json redeem --market <market> --keypair owner.json \
+dclutch-terminal --session session.json portfolio
+dclutch-terminal --session session.json redeem --market <market> --keypair owner.json \
   --payer <owner-address> --recipient <collateral-token-account> \
   --payout-input payout-input.json --payout-journal payout-operation.json \
   --payout-alt-plan payout-alt-plan.json \
@@ -69,12 +74,12 @@ dclutch --session session.json redeem --market <market> --keypair owner.json \
 
 # inspect the funded failure-walk packet. Submission is disabled until this
 # command has its own durable packet/signature/Submitted/poststate journal.
-dclutch --session session.json walk --book walk-book.json \
+dclutch-terminal --session session.json walk --book walk-book.json \
     --generation 1 --terminal-sequence 1 --keypair anyone.json \
     --dry-run \
     --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG
 
-dclutch refusal 0x5000            # any custom code, named via the band registry
+dclutch-terminal refusal 0x5000            # any custom code, named via the band registry
 ```
 
 ## Compile and inspect a spline Product
@@ -94,11 +99,11 @@ SUCCESSOR=/absolute/path/to/dclutch-local-successor-bootstrap
 INPUT=/absolute/path/to/docs/operator/examples/spline-product-degree2.json
 PRODUCT_GRAPH=/absolute/new/path/spline-product
 
-dclutch --bootstrap-bin "$SUCCESSOR" \
+dclutch-terminal --bootstrap-bin "$SUCCESSOR" \
   --input "$INPUT" --output-dir "$PRODUCT_GRAPH" \
   product spline
 
-dclutch --report "$PRODUCT_GRAPH/report.json" product inspect
+dclutch-terminal --report "$PRODUCT_GRAPH/report.json" product inspect
 ```
 
 The inspection command rereads the report and its five canonical sibling
@@ -115,7 +120,7 @@ both machine documents plus a hash-bound handoff report in one new directory:
 ```sh
 tools/release/spline-product-handoff-smoke.sh \
   --node /absolute/path/to/node-22.13-or-newer \
-  --cli /absolute/path/to/packages/dclutch-cli/dist/dclutch.mjs \
+  --cli /absolute/path/to/packages/dclutch-cli/dist/dclutch-terminal.mjs \
   --successor /absolute/path/to/dclutch-local-successor-bootstrap \
   --work /absolute/new/path/spline-product-smoke
 ```
@@ -173,7 +178,7 @@ First prepare the exact market input. This path performs no mutation and does
 not read any key file:
 
 ```sh
-dclutch --rpc https://api.devnet.solana.com \
+dclutch-terminal --rpc https://api.devnet.solana.com \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
   --bootstrap-bin /work/dclutch-local-successor-bootstrap \
   found --found-operation /work/flagship-operation.json \
@@ -203,7 +208,7 @@ This command names that child's exact inputs and hands them over.
 
 ```sh
 # Preflight: finalized read-only planning. No --execute is passed to the child.
-dclutch --rpc https://api.devnet.solana.com \
+dclutch-terminal --rpc https://api.devnet.solana.com \
   --i-mean-devnet EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG \
   --bootstrap-bin /work/dclutch-local-successor-bootstrap \
   join --plan /work/plan.json --campaign-evidence /work/campaign.json \
@@ -252,7 +257,7 @@ Review `/work/admission.json`, then rerun the exact same command with
   privileges, roles, evidence encodings and digests, then reacquires the whole
   route from finalized chain state. The authoring commands receive no route until the
   existing Direct authenticator recognizes the checked outer deployment
-  evidence and exact frozen lookup table. `dclutch route direct` is the public
+  evidence and exact frozen lookup table. `dclutch-terminal route direct` is the public
   producer; a copied, stale, or substituted output still has no authority.
 - `offer sell` is the participant-facing authoring path. It authenticates the
   route, seller Claims Position, canonical Direct collateral destination, and

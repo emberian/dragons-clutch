@@ -87,7 +87,7 @@ if [ "$TOKEN_ATOMS" -gt 0 ]; then
   done
 fi
 
-[ -z "$TRADES" ] || die "--trades is retired: dclutch buy/sell is intentionally disabled. Use a finalized devnet-user-position-admission-v1 report to produce an exact private session, then advance devnet-direct-trade-v1 one durable action at a time."
+[ -z "$TRADES" ] || die "--trades is retired: dclutch-terminal buy/sell is intentionally disabled. Use a finalized devnet-user-position-admission-v1 report to produce an exact private session, then advance devnet-direct-trade-v1 one durable action at a time."
 if [ "$REPLAY" = true ]; then
   [ -n "$SESSION" ] && [ -n "$MARKET" ] || die "--replay requires --session and --market"
   if [ -n "$PAYOUT_INPUT_DIR" ]; then

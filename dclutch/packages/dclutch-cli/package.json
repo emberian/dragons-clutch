@@ -2,20 +2,20 @@
   "name": "@dclutch/cli",
   "version": "0.1.0",
   "private": true,
-  "description": "dclutch: a fail-closed dClutch terminal client for market inspection, off-chain Direct intents, redemption, portfolio, founding, and the funded failure walk.",
+  "description": "dclutch-terminal: a fail-closed dClutch terminal client for market inspection, off-chain Direct intents, redemption, portfolio, founding, and the funded failure walk.",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
   },
   "bin": {
-    "dclutch": "./bin/dclutch.mjs"
+    "dclutch-terminal": "./bin/dclutch-terminal.mjs"
   },
   "exports": {
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/dclutch.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/dclutch-terminal.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src test",
     "test": "vitest run --config vitest.config.ts"

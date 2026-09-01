@@ -23,9 +23,9 @@ function installExternalCli(): Readonly<{ temporary: string; packageRoot: string
 }
 
 describe('CLI package boundary', () => {
-  it('exports only package metadata while preserving the dclutch binary', () => {
+  it('exports only package metadata while preserving the dclutch-terminal binary', () => {
     const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as PackageManifest;
-    expect(manifest.bin).toEqual({ dclutch: './bin/dclutch.mjs' });
+    expect(manifest.bin).toEqual({ 'dclutch-terminal': './bin/dclutch-terminal.mjs' });
     expect(manifest.exports).toEqual({ './package.json': './package.json' });
   });
 

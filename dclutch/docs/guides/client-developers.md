@@ -26,7 +26,7 @@ directly: `@dclutch/sdk/rpc`, `@dclutch/sdk/marketDiscovery`, and so on.
 
 Everything starts with a `SolanaRpcClient` and a set of program ids. Program
 ids come from whatever run you are targeting — a local run spec, or the
-session file `dclutch found` writes.
+session file `dclutch-terminal found` writes.
 
 ```ts
 import { SolanaRpcClient } from '@dclutch/sdk/rpc';
@@ -229,7 +229,7 @@ and the five changed accounts. It starts its account read at a finalized
 floor at or above the transaction slot; the response may be at a later
 slot. The SDK finalizer performs those checks and refuses altered wire
 bytes, signatures, fees, return data, account order, or payout poststate.
-The `dclutch redeem` command adds a durable filesystem journal and is the
+The `dclutch-terminal redeem` command adds a durable filesystem journal and is the
 reference for local/custom-deployment crash recovery. Its presence does not
 mean a devnet payout is currently available.
 
@@ -237,7 +237,7 @@ mean a devnet payout is currently available.
 
 Founding is driven by a run spec — a JSON file naming the programs, the
 market recipe, and where the evidence goes. The producer binary does the
-work; wrap it the way `dclutch found` does
+work; wrap it the way `dclutch-terminal found` does
 (`packages/dclutch-cli/src/commands/found.ts`). Do not start from
 `tools/gauntlet/run.sh --mode full`: at HEAD it is intentionally unavailable
 and refuses before work or a build because no supported top-level planner is

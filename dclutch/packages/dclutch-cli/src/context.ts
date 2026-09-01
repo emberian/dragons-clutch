@@ -6,7 +6,7 @@
  *   1. command-line flags (`--rpc`, `--core-program`, ...)
  *   2. a session file (`--session`), which is whatever JSON carries the run:
  *      a successor run spec (`dclutch-local-successor-run-spec-v2`), a run
- *      evidence document, or the compact session `dclutch found` writes
+ *      evidence document, or the compact session `dclutch-terminal found` writes
  *   3. environment (`DCLUTCH_RPC`, `DCLUTCH_KEYPAIR`, `DCLUTCH_SESSION`)
  *
  * Nothing here dials anything: constructing a context performs no I/O beyond
@@ -64,7 +64,7 @@ function plain(value: unknown): value is Record<string, unknown> {
  *   each `{ program_id: ... }`, plus `rpc_url`;
  * - run evidence (`dclutch-local-successor-run-evidence-v2`): an `accounts`
  *   map whose `market` / `founding_market` rows name the founded markets;
- * - the compact `{ schema: 'dclutch-cli-session-v1' }` file `dclutch found`
+ * - the compact `{ schema: 'dclutch-cli-session-v1' }` file `dclutch-terminal found`
  *   writes, which is just this type serialized.
  */
 export function decodeSession(value: unknown): SessionV1 {
