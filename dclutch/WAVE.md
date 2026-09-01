@@ -4678,3 +4678,62 @@ because there was none.**
 commits and the accelerator **refuses the action**, returning a `Refused` ack
 rather than a program error. That is a General transition refusal, not a
 transport fault, and a fresh investigation rather than a continuation.
+
+## 2026-09-01 — both halves agree with each other, and neither agrees with the consumer
+
+`Content` on the admitted common-Hot issue is localized **four layers down**, and
+the last layer needed no build.
+
+1. **Phase**, from the tree's own 33 `hot-cu-profile` checkpoints rather than a
+   new instrument: `p7-effect-projection → p7-local-effect-discipline →
+   heap:downgraded-effects → 0x4003`.
+2. **Callee** — that interval has zero inline `Content` sites, so it is inside a
+   call. Markers between three candidates resolved it in **one** build: enters
+   `decode_claims_composition_boxed_v3`, never returns.
+3. **The discarded reason, surfaced** — the only remaining site is
+   `decode_selected_with_external(…).map_err(|_| TradingSbfError::Content)?`.
+   Naming the inner variant gave **`ClaimsCompositionErrorV3::Route`**: *"an
+   active Claims route used unsupported geometry or packet bytes."*
+4. **Which conjunct** — and this needed **no instrument at all**.
+
+`validate_rational_representation_route` splits on `selected_outcome()`.
+`IssueStructured` is not selected-outcome, so it takes the `else` arm, which
+requires:
+
+| composition requires | operator declares |
+|---|---|
+| `kind == RouteKindV3::AffineOnce` | **`RouteKindV3::Once`** |
+| `item_account_count == RATIONAL_ASSET_ACCOUNT_COUNT_V2` | **`0`** |
+| `repeated_item_count == header.asset_count` (K=3) | **absent (0)** |
+| — | `fixed_account_count: CLAIMS_FIXED + K * ITEM` |
+
+**The operator flattens the K coordinate rows into one fixed span; the Claims
+composition requires them as an affine repeated item span.** Two authors of one
+geometry, structurally disagreeing.
+
+> **Both halves of the operator agree with each other, and neither agrees with
+> the composition.**
+
+Its own validator also checks for `Once`, so the operator is **internally
+consistent with its own wrong answer** — guards-whose-two-sides-move-together at
+the scale of two subsystems rather than two registers. The only instrument that
+could catch it is one that crosses the boundary.
+
+### `map_err(|_| …)` has destroyed the reason at three walls tonight
+
+The transition fold, this composition decode, and the heap admission's
+request-versus-grant. Three lanes, three subsystems, one idiom — and **the
+recovery was identical every time**: surface the inner error, then compare
+declared against observed.
+
+> **A `map_err` that discards its cause converts a located defect into a
+> search.** This session spent hours on each of the three.
+
+And the localization's own lesson:
+
+> **The cheapest instrument is the one you stop needing.**
+
+**The Structured chain, four walls, all now known and independent:** transition
+(convicted, satisfying set provably empty); heap (closed); **Content/Route — the
+live frontier, and upstream of the coefficient question**; and whatever stands
+behind it, unknown because nothing has ever executed past it.
