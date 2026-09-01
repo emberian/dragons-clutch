@@ -1890,3 +1890,45 @@ drives the *fractional* compaction and redemption, not the *native* ones.
 
 `general-hot` was deliberately left unwired once tracing showed it reaches
 nothing in the 57 — *"wiring it would have been motion."*
+
+### Ruling 8, updated — the discrepancy resolved, and the alarm withdrawn
+
+**The unresolved fact is resolved, and it was ours.**
+`test.set_compute_max_units(1_400_000)` installs a **fixed**
+`RuntimeConfig.compute_budget` for every transaction — **`heap_size` included at
+the 32,768 default** — after which the per-transaction `RequestHeapFrame` is
+**never consulted**. The Direct route leaves it `None`, so its bank derives the
+budget per transaction and its 65,536 request **is** applied.
+
+> Same harness, honoured one and not the other, **because one campaign forces
+> the budget and the other refuses to.**
+
+Proven end to end: with the forced budget removed, access violations **3 → 0**,
+Trading CU **203,408 (fault) → 357,648**, and the hostile refusing **`0x4003`,
+the code its assertion names.**
+
+**The alarming consequence is withdrawn.** *"Every ProgramTest measurement ran on
+a smaller heap"* was wrong — **in exactly the direction the lane had flagged as
+unresolved.** The real validator was measured directly: a raw write at heap
+offset 33,016 faults with no request and **succeeds** with a 33,792 request.
+**No general sweep is owed.** The narrow one is enumerated: six campaigns call
+`set_compute_max_units`, **one** drives an extended-heap route; the other five
+have zero Trading/Hot references and their numbers stand.
+
+**And a probe caution worth keeping:** the first validator probe allocated via
+`vec!` and showed the frame not applied — but `entrypoint!` hardcodes the default
+`BumpAllocator` at `HEAP_LENGTH = 32 * 1024`, so **it was measuring the
+allocator, not the runtime.** *A probe that allocates cannot measure a granted
+heap.*
+
+**Ruling 8 still stands, and is now better evidenced.** A program cannot observe
+its granted heap, so the check reading the request cannot establish the grant —
+and there is a **concrete configuration in this tree** where a well-formed
+request is accepted and not applied. The two repairs and their trade are
+unchanged.
+
+**Newly owed, and being done:** move the Rational campaign off the forced budget
+onto wire-level CU limits, which is what a real caller does. ~10 sibling rows
+lean on it and every CU and packet number that campaign publishes will move —
+**numbers that move because the harness stopped lying to the program are the
+correct numbers.**

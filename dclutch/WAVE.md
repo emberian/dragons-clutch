@@ -4116,3 +4116,51 @@ dead run alive.
 
 All three were caught that way: a positive control, a process-table cross-check,
 and the filesystem against the log.
+
+## 2026-09-01 — the heap exposure is the build flag, not the route list
+
+The census that bounds the heap finding. **The exclusions are the useful half:**
+
+1. **Only `dclutch-trading-sbf` carries the `custom-heap` feature.** Claims,
+   Core, Custody, Registry, Resolution and Rent use the stock allocator and
+   **cannot exceed the default, whatever a transaction asks for.**
+2. **Only two files** touch the scratch region that bumps down from the admitted
+   ceiling — `hot_v3.rs` (35 sites) and `entrypoint_adapter.rs` (17, the
+   implementation). Nothing else in the tree can produce the fault.
+3. The Registry **continuation** route was structurally closed on 2026-08-27: it
+   fits the default, carries no grant, and its packet has **four spare bytes**,
+   so it could not carry one anyway.
+
+**The route list is adapter-owned and exhaustive** — `entrypoint_adapter.rs:1294`
+returns true for exactly four things: `DCLTHOT3`, `DCLTSEL1`, generic market
+founding v3, and **every route when built `--features hot-cu-profile`**. Grant is
+65,536.
+
+`DCLTSEL1` was added on 2026-08-31 **because the Hot arm had left it dead —
+every seal write refusing `HeapFrame` unconditionally** — which independently
+corroborates an earlier session's finding that the seal outer had been dead since
+08-30.
+
+### The sharpest exposure
+
+> **`--features hot-cu-profile` lifts *every* route onto the extended heap**, so
+> any phase subtotal from a diagnostic build was measured with a grant in play.
+
+Two figures from this session are explicitly diagnostic-build: the DIRECT
+campaign's **323,523 CU**, and the **311,068 CU** Buy. Being re-measured both
+ways — if the number moves, the diagnostic build is measuring a different
+program than the one that ships.
+
+**The CU budgets file is not contaminated and says so itself**: no green number
+to pin for the canonical Hot bundle because *"the tail is over the 32,768-byte
+heap at phase 7"*, and the phase subtotals *"recorded from ADR 0005's own
+measured table rather than re-measured."*
+
+**Not verifiable from inside a program**, and stated as such: whether any
+specific recorded number was taken on a run where the grant was actually
+*applied*. The adapter reads the ceiling the request **asked for**, never what
+the runtime **gave**.
+
+**And the positive control, fourth instance from this lane:** the filter must
+not lose `hot_v3.rs`, the route the whole question is about. It survived with 35
+scratch sites. *Had it vanished, the census would have been wrong.*
