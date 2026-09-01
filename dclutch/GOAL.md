@@ -2441,3 +2441,4 @@ than a clean named seam):
 
 Then the full redeploy carrying `c60b25e8` → founding → load simulator. Deployer
 unchanged at 42.945709919; that lane submitted zero transactions.
+| `a88faeac520a279ee` | COHORT-10 | the two host changes as one schema migration (`plan.rs:1123` genesis V2 pin + fifteenth account; `market.rs:4290` genesis arm, `Predecessor` arm deleted) → full redeploy carrying `c60b25e8` → ladder → found the SOL/USD market with the proven founder key → load simulator; closes condition (b) |
