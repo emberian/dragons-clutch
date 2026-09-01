@@ -72,8 +72,8 @@ use dclutch_product_runtime_v2::{
 };
 use dclutch_product_runtime_v2_admission::PRODUCT_RECORD_BYTES_V2;
 use dclutch_product_runtime_v2_operator::{
-    AccountObservationV2, CompiledProductRecordsV2, FinalizedRecordObservationV2,
-    ProductCompilationInputV2, compile_product_records_v2,
+    AccountObservationV2, CompiledProductRecordsV2, FinalizedRecordObservationV2, FoundingBandV1,
+    PartitionQualityModelV1, ProductCompilationInputV2, compile_interesting_product_records_v2,
     found::{
         FinalizedReferenceObservationV2, FoundProjectionStateV2, FoundStateV2,
         build_found_instruction_v2, project_found_v2,
@@ -3101,6 +3101,40 @@ fn authenticate_market_basis_v1(
     })
 }
 
+/// Turn one authored band into the compiler's, on the partition's denominator.
+///
+/// The band is kept on the partition's own denominator rather than rescaled:
+/// rescaling would silently measure a different market than the one being
+/// compiled, which is the whole failure mode this gate exists to catch.
+fn founding_band_for(
+    band: &crate::model::FoundingBandInputV1,
+    cut_denominator: u64,
+    label: &str,
+) -> Result<(FoundingBandV1, PartitionQualityModelV1, u32)> {
+    if band.plausible_half_widths == 0 {
+        return Err(Error::new(format!(
+            "{label} founding_band/plausible_half_widths: expected at least one"
+        )));
+    }
+    if band.max_cell_share_bps == 0 || u64::from(band.max_cell_share_bps) > 10_000 {
+        return Err(Error::new(format!(
+            "{label} founding_band/max_cell_share_bps: expected 1..=10000"
+        )));
+    }
+    Ok((
+        FoundingBandV1 {
+            anchor: band.anchor,
+            denominator: cut_denominator,
+            volatility_bps: band.volatility_bps,
+            window_slots: band.window_slots,
+        },
+        PartitionQualityModelV1::TriangularPlausibleBand {
+            plausible_half_widths: band.plausible_half_widths,
+        },
+        band.max_cell_share_bps,
+    ))
+}
+
 /// Compile one market input's record bodies, with no RPC and no side effects.
 fn compile_market_bodies(
     registry: Pubkey,
@@ -3135,8 +3169,22 @@ fn compile_market_bodies(
             format!("portfolio width: {error:?}")
         ))?
     ];
-    let compiled = compile_product_records_v2(
+    let declared_band = input.founding_band.as_ref().ok_or_else(|| {
+        Error::new(
+            "founding_band is required to compile this market's partition: state \
+             anchor, volatility_bps, window_slots, plausible_half_widths and \
+             max_cell_share_bps. There is no default -- volatility is an authoring \
+             input, and a partition cannot be measured for degeneracy without the \
+             belief it is meant to describe",
+        )
+    })?;
+    let (band, model, ceiling) =
+        founding_band_for(declared_band, input.cut_denominator, "market input")?;
+    let (compiled, _quality) = compile_interesting_product_records_v2(
         registry,
+        band,
+        model,
+        ceiling,
         ProductCompilationInputV2 {
             product_id: semantic_product_id,
             coordinate_domain_id: product_id(&input.coordinate_domain_id)?,
@@ -12111,6 +12159,9 @@ pub(crate) struct PythMarketParamsV1<'a> {
     /// stake -- and a load simulator's markets differ in both.
     pub(crate) initial_collateral_atoms: u64,
     pub(crate) local_participant_fixture_liquidity_atoms: u64,
+    /// The author's founding band. `None` refuses at compile by name rather
+    /// than defaulting to a belief nobody stated.
+    pub(crate) founding_band: Option<crate::model::FoundingBandInputV1>,
 }
 
 /// Construct the canonical local demo Market: SOL/USD range protection.
@@ -12170,19 +12221,57 @@ pub(crate) struct LocalMarketShapeV1 {
     /// Product generation. Two markets drawn from one seed with the same band
     /// would otherwise collide on every derived identity.
     pub(crate) generation: u64,
+    /// The author's founding band, or `None`.
+    ///
+    /// `Option` rather than a plain field so `Default` stays constructible
+    /// WITHOUT inventing a belief. `None` is not "use a sensible band"; it is
+    /// an absent declaration, and every path that compiles a partition refuses
+    /// by name when it finds one. That is the ruling: volatility is authored,
+    /// so a caller that has not authored it has not finished describing its
+    /// market.
+    pub(crate) founding_band: Option<crate::model::FoundingBandInputV1>,
 }
 
 impl Default for LocalMarketShapeV1 {
-    /// EXACTLY the values `demo_market_input_base` emitted before it took a
-    /// shape, so every existing caller compiles the same market it always did.
+    /// A market that asks a question, and a band that says which question.
+    ///
+    /// This used to be EXACTLY what `demo_market_input_base` emitted before it
+    /// took a shape -- cuts `[12_000, 18_000]` over denominator 100, which is
+    /// $120 and $180 against a SOL/USD spot near $150. Read aloud that is
+    /// "will SOL be under $120, between, or over $180 within the hour", and at
+    /// any plausible hourly volatility the middle cell takes essentially all
+    /// of the ex-ante mass. It was a market nobody could lose, and every
+    /// fixture and campaign that took the default founded one.
+    ///
+    /// Ember's steer is that one-bucket dominance is a bug. So the default is
+    /// now a centred partition around the same spot, with the band it is
+    /// measured against stated rather than assumed. Measured shares:
+    /// `[3024, 3950, 3024]` bps -- roughly 30/40/30, dominant cell 1 at 3,950
+    /// against a 9,000 ceiling. The width is unchanged at `cuts + 2 = 4`
+    /// outcomes, so every coefficient vector that fitted the old default still
+    /// fits this one.
     fn default() -> Self {
         Self {
             cut_denominator: 100,
-            cuts: vec![12_000, 18_000],
+            cuts: vec![14_800, 15_200],
             coefficients: vec![1, 0, 1, 0],
             initial_collateral_atoms: 1_000_000_000,
             terminal_window_width_seconds: TERMINAL_WINDOW_WIDTH_SECONDS,
             generation: 1,
+            // The lab's stated belief about its own fixture: 200 bp of a
+            // $150 spot over a ten-thousand-slot window, three characteristic
+            // displacements each way, no cell above 90%. This is a DECLARATION
+            // and not a derivation -- it is what the fixture's author believes,
+            // written down where the compiler can hold them to it, which is
+            // exactly what makes the refusal legible when cuts stop describing
+            // it. A caller that means something else states something else.
+            founding_band: Some(crate::model::FoundingBandInputV1 {
+                anchor: 15_000,
+                volatility_bps: 200,
+                window_slots: 10_000,
+                plausible_half_widths: 3,
+                max_cell_share_bps: 9_000,
+            }),
         }
     }
 }
@@ -12298,6 +12387,7 @@ pub(crate) fn demo_market_input_base_shaped(
     // shelf life, not a market parameter — see the shared core for both.
     pyth_market_input_base(
         PythMarketParamsV1 {
+            founding_band: shape.founding_band.clone(),
             registry,
             release: PythMarketProviderV1::Pull(fixture.release()),
             label: fixture.local_label(),
@@ -12351,6 +12441,10 @@ pub(crate) struct DevnetPythMarketSpecV1<'a> {
     pub(crate) cuts: Vec<i128>,
     pub(crate) coefficients: Vec<u64>,
     pub(crate) generation: u64,
+    /// The author's founding band. `None` refuses at compile by name: a
+    /// devnet market whose author has not stated how uncertain they think
+    /// the outcome is has not finished describing itself.
+    pub(crate) founding_band: Option<crate::model::FoundingBandInputV1>,
 }
 
 /// Four measured 313-second cadences, the §12.3 guidance floor.
@@ -12365,6 +12459,7 @@ pub(crate) fn devnet_market_input(
         .map_err(|error| Error::new(format!("devnet Pyth release row: {error:?}")))?;
     pyth_market_input(
         PythMarketParamsV1 {
+            founding_band: spec.founding_band.clone(),
             registry: spec.registry,
             release: PythMarketProviderV1::Pull(&release),
             // The cluster identity is the devnet label: a devnet market's ids can
@@ -12408,6 +12503,7 @@ pub(crate) fn devnet_sponsored_market_input(
         .map_err(|error| Error::new(format!("devnet sponsored Pyth release row: {error:?}")))?;
     pyth_market_input(
         PythMarketParamsV1 {
+            founding_band: spec.founding_band.clone(),
             registry: spec.registry,
             release: PythMarketProviderV1::Sponsored(release),
             label: release.cluster_id(),
@@ -12688,8 +12784,24 @@ fn pyth_market_input_base(
             format!("demo portfolio width: {error:?}")
         ))?
     ];
-    compile_product_records_v2(
+    // The authored band, or a refusal BY NAME. A Pyth market whose author has
+    // not said how uncertain they think the outcome is is not yet described.
+    let declared = params.founding_band.as_ref().ok_or_else(|| {
+        Error::new(
+            "founding_band is required to compile a Pyth market: state anchor, \
+             volatility_bps, window_slots, plausible_half_widths and \
+             max_cell_share_bps. There is no default -- volatility is an \
+             authoring input, and a partition cannot be measured for \
+             degeneracy without the belief it is supposed to describe",
+        )
+    })?;
+    let (band, model, ceiling) =
+        founding_band_for(declared, params.cut_denominator, "pyth market")?;
+    compile_interesting_product_records_v2(
         params.registry,
+        band,
+        model,
+        ceiling,
         product,
         &mut product_bytes,
         &mut domain,
@@ -12822,6 +12934,10 @@ fn pyth_market_input_base(
         .map_err(|error| Error::new(format!("demo capability manifest: {error:?}")))?;
 
     let input = MarketRunInput {
+        // The band this market was actually measured against, carried into
+        // the run spec so the compiled market records the belief it was
+        // judged by rather than leaving it in the producer's arguments.
+        founding_band: Some(declared.clone()),
         generation: params.generation,
         collateral_display_decimals: 6,
         local_participant_fixture_liquidity_atoms: params.local_participant_fixture_liquidity_atoms,
@@ -12864,6 +12980,83 @@ fn pyth_market_input_base(
 
 #[cfg(test)]
 mod tests {
+
+    /// The historical fixture partition is DEGENERATE, and now something says so.
+    ///
+    /// `LocalMarketShapeV1::default()` carries cuts `[12_000, 18_000]` over
+    /// denominator 100 -- that is $120 and $180 against a SOL/USD spot near
+    /// $150. Read as a question it is "will SOL be under $120, between, or over
+    /// $180 in an hour", and at any plausible hourly volatility the middle cell
+    /// takes essentially all of the ex-ante mass. It is a market nobody can
+    /// lose, and it was foundable for as long as this path called the ungated
+    /// compiler.
+    ///
+    /// The control is the SAME band with a centred partition: if that were
+    /// refused too, this test would only prove the gate refuses everything.
+    #[test]
+    fn the_default_shape_is_refused_and_a_centred_partition_is_not() {
+        use dclutch_product_runtime_v2_operator::{
+            FoundingBandV1, PartitionQualityModelV1, require_interesting_partition_v1,
+        };
+
+        // 200 bp of $150 over a ten-thousand-slot window, three displacements
+        // each way. A stated belief, not a derived one.
+        let band = FoundingBandV1 {
+            anchor: 15_000,
+            denominator: 100,
+            volatility_bps: 200,
+            window_slots: 10_000,
+        };
+        let model = PartitionQualityModelV1::TriangularPlausibleBand {
+            plausible_half_widths: 3,
+        };
+
+        // The HISTORICAL partition, kept as a literal so this stays a test
+        // about that market rather than about whatever the default is today.
+        let historical = vec![12_000, 18_000];
+        let degenerate = require_interesting_partition_v1(&historical, &band, model, 9_000);
+        assert!(
+            degenerate.is_err(),
+            "the historical fixture partition must be refused: {degenerate:?}"
+        );
+
+        // And the default must now be a market that is actually foundable.
+        let shape = LocalMarketShapeV1::default();
+        assert_ne!(
+            shape.cuts, historical,
+            "the degenerate default must be gone"
+        );
+        let declared = shape.founding_band.expect("the default states its band");
+        require_interesting_partition_v1(
+            &shape.cuts,
+            &FoundingBandV1 {
+                anchor: declared.anchor,
+                denominator: shape.cut_denominator,
+                volatility_bps: declared.volatility_bps,
+                window_slots: declared.window_slots,
+            },
+            PartitionQualityModelV1::TriangularPlausibleBand {
+                plausible_half_widths: declared.plausible_half_widths,
+            },
+            declared.max_cell_share_bps,
+        )
+        .expect("the default shape must compile against its own stated band");
+
+        // Cuts a displacement or so either side of spot: a real question.
+        let centred = vec![14_800, 15_200];
+        let report = require_interesting_partition_v1(&centred, &band, model, 9_000)
+            .expect("a centred partition around spot must be admitted");
+        assert!(
+            report.dominant_share_bps <= 9_000,
+            "no cell may take more than the ceiling; shares were {:?}",
+            report.cell_share_bps
+        );
+        println!(
+            "centred shares bps = {:?}, dominant cell {} at {} bps",
+            report.cell_share_bps, report.dominant_cell, report.dominant_share_bps
+        );
+    }
+
     use super::*;
 
     fn cubic_price_gate_v1()
@@ -13442,6 +13635,7 @@ mod tests {
         let update = dclutch_pyth_svm::FullPriceUpdateV2::parse(&price).expect("price update");
         devnet_sponsored_market_input(
             DevnetPythMarketSpecV1 {
+                founding_band: LocalMarketShapeV1::default().founding_band,
                 registry,
                 price_update: &price,
                 product_name: "product/sol-usd-sponsored-range-protection",
@@ -13451,7 +13645,10 @@ mod tests {
                 window_width_seconds: 1_800,
                 max_age_seconds: 7_200,
                 cut_denominator: 100,
-                cuts: vec![12_000, 18_000],
+                // Centred on the same $150 spot the band declares, for the
+                // same reason the shared default moved: $120/$180 is one
+                // cell taking the whole question.
+                cuts: vec![14_800, 15_200],
                 coefficients: vec![1, 0, 1, 0],
                 generation: 1,
             },

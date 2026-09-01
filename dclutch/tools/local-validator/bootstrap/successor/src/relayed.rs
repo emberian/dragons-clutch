@@ -525,6 +525,11 @@ pub(crate) fn relayed_market_input(
         .map_err(|error| Error::new(format!("capability manifest: {error:?}")))?;
 
     let mut input = MarketRunInput {
+        // This market has NO CUTS -- one ordinary cell over the whole domain
+        // plus the failure outcome. It exists to drive relay transport, not to
+        // ask a question about an outcome, so it declares no belief rather
+        // than fabricating one it would never be measured against.
+        founding_band: None,
         generation: 1,
         collateral_display_decimals: 6,
         local_participant_fixture_liquidity_atoms: 0,

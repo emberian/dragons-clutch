@@ -58,9 +58,61 @@ pub(crate) struct SuccessorRunSpec {
     pub(crate) record_publication: Option<String>,
 }
 
+/// The founding observation and belief a market's partition is measured
+/// against, as the AUTHOR states it.
+///
+/// Volatility is an authoring input, not a derived one: how uncertain the
+/// author believes the outcome is is part of the description being compiled,
+/// and the compiler holds them to it. That makes the refusal legible -- *you
+/// said 200 bp over this window and these cuts do not describe that belief* --
+/// rather than something to blame a derivation for.
+///
+/// EVERY FIELD IS REQUIRED AND NOTHING HERE CARRIES A SERDE DEFAULT. An input
+/// that declines to declare refuses at parse naming `founding_band`; a partial
+/// band refuses naming the field it left out. A default would be this file
+/// inventing the author's belief for them, silently, which is the one outcome
+/// the whole gate exists to prevent.
+///
+/// `anchor` is stated rather than read off the authenticated Pyth update
+/// because `FullPriceUpdateV2` exposes no accessor for its price and lives in
+/// a crate this lane does not own. When it grows one, this field can be
+/// derived on the Pyth path and should be.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FoundingBandInputV1 {
+    /// Spot coordinate numerator at founding, over the partition's own
+    /// `cut_denominator`. A band on another denominator would measure a
+    /// different market than the one being compiled.
+    pub(crate) anchor: i128,
+    /// Stated volatility in basis points of `anchor` over the window.
+    pub(crate) volatility_bps: u32,
+    /// This market's own window from founding to deadline, in slots.
+    pub(crate) window_slots: u64,
+    /// How many characteristic displacements the plausible band reaches.
+    pub(crate) plausible_half_widths: u32,
+    /// Ceiling on any one cell's share of ex-ante outcome mass, in bps.
+    pub(crate) max_cell_share_bps: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MarketRunInput {
+    /// The author's founding band.
+    ///
+    /// Absent refuses BY NAME at the point a partition is compiled, which is
+    /// where the thing being measured actually exists -- not at parse. The
+    /// distinction earns its keep: `relayed_market_input` compiles a market
+    /// with NO CUTS, which the compiler's own documentation calls legal and
+    /// which is degenerate by construction under any quality model, since its
+    /// single ordinary cell takes the whole band. Requiring a band at parse
+    /// would force that fixture to fabricate a belief it never uses.
+    ///
+    /// So: a run spec that compiles a partition must declare one, and one that
+    /// does not compile a partition may honestly say nothing. There is still
+    /// no DEFAULT anywhere -- `None` is an absent declaration, never a
+    /// sensible band.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) founding_band: Option<FoundingBandInputV1>,
     pub(crate) generation: u64,
     pub(crate) collateral_display_decimals: u8,
     /// Local-validator-only collateral kept outside every Hoard principal so

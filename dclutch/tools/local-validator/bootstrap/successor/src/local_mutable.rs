@@ -1467,6 +1467,11 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
     let mut initial_collateral_raw = None;
     let mut window_width_raw = None;
     let mut generation_raw = None;
+    let mut band_anchor_raw = None;
+    let mut band_volatility_raw = None;
+    let mut band_window_slots_raw = None;
+    let mut band_half_widths_raw = None;
+    let mut band_max_cell_share_raw = None;
     let mut iterator = arguments.into_iter();
     while let Some(argument) = iterator.next() {
         let value = iterator
@@ -1483,6 +1488,11 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
             "--initial-collateral-atoms" => &mut initial_collateral_raw,
             "--terminal-window-width-seconds" => &mut window_width_raw,
             "--generation" => &mut generation_raw,
+            "--band-anchor" => &mut band_anchor_raw,
+            "--band-volatility-bps" => &mut band_volatility_raw,
+            "--band-window-slots" => &mut band_window_slots_raw,
+            "--band-plausible-half-widths" => &mut band_half_widths_raw,
+            "--band-max-cell-share-bps" => &mut band_max_cell_share_raw,
             _ => {
                 return Err(Error::new(format!(
                     "unknown local-private-validator-market-v1 argument: {argument}"
@@ -1511,6 +1521,16 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
         crate::campaign::read_keypair_file(&recipient_path, "retirement-beneficiary")?;
     let recipient = Keypair::new_from_array(recipient_secret).pubkey();
     let rpc_url = required(rpc_url, "--rpc-url")?;
+    // ALL FIVE OR NONE. A partial band is refused by the name of the field
+    // left out rather than completed from a default, because the missing
+    // number is exactly the author's belief and nobody else can supply it.
+    let band = founding_band_from_arguments_v1(
+        band_anchor_raw,
+        band_volatility_raw,
+        band_window_slots_raw,
+        band_half_widths_raw,
+        band_max_cell_share_raw,
+    )?;
     let shape = market_shape_from_arguments_v1(
         cuts_raw,
         cut_denominator_raw,
@@ -1518,6 +1538,7 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
         initial_collateral_raw,
         window_width_raw,
         generation_raw,
+        band,
     )?;
     // Capability selection follows the split-founding precedent: an
     // environment toggle rather than a new required flag, so every existing
@@ -1607,6 +1628,73 @@ pub(crate) fn run_market(arguments: Vec<String>) -> Result<()> {
 /// market's WIDTH and `--coefficients` must then have `cuts + 2` entries, so
 /// passing one without the other is refused rather than silently padded --
 /// a padded payout vector is a market whose caption and payoff disagree.
+/// Assemble the author's founding band from its five flags, or nothing.
+///
+/// All five or none. A partial band refuses by the name of the field left out:
+/// the missing number is the author's own belief about the outcome, and a
+/// default for it would be this function inventing that belief silently, which
+/// is the single failure the partition-quality gate exists to prevent.
+fn founding_band_from_arguments_v1(
+    anchor: Option<String>,
+    volatility_bps: Option<String>,
+    window_slots: Option<String>,
+    plausible_half_widths: Option<String>,
+    max_cell_share_bps: Option<String>,
+) -> Result<Option<crate::model::FoundingBandInputV1>> {
+    let named = [
+        ("--band-anchor", anchor.is_some()),
+        ("--band-volatility-bps", volatility_bps.is_some()),
+        ("--band-window-slots", window_slots.is_some()),
+        (
+            "--band-plausible-half-widths",
+            plausible_half_widths.is_some(),
+        ),
+        ("--band-max-cell-share-bps", max_cell_share_bps.is_some()),
+    ];
+    let present = named.iter().filter(|(_, given)| *given).count();
+    if present == 0 {
+        return Ok(None);
+    }
+    if present != named.len() {
+        let missing: Vec<&str> = named
+            .iter()
+            .filter(|(_, given)| !*given)
+            .map(|(flag, _)| *flag)
+            .collect();
+        return Err(Error::new(format!(
+            "an incomplete founding band was stated; missing {}. All five are \
+             required together: the band is the author's belief about the \
+             outcome and no part of it has a default",
+            missing.join(", ")
+        )));
+    }
+    let number = |raw: Option<String>, flag: &str| -> Result<String> {
+        raw.ok_or_else(|| Error::new(format!("{flag} is required")))
+    };
+    let anchor = number(anchor, "--band-anchor")?
+        .parse::<i128>()
+        .map_err(|_| Error::new("--band-anchor must be a decimal i128"))?;
+    let volatility_bps = number(volatility_bps, "--band-volatility-bps")?
+        .parse::<u32>()
+        .map_err(|_| Error::new("--band-volatility-bps must be a decimal u32"))?;
+    let window_slots = number(window_slots, "--band-window-slots")?
+        .parse::<u64>()
+        .map_err(|_| Error::new("--band-window-slots must be a decimal u64"))?;
+    let plausible_half_widths = number(plausible_half_widths, "--band-plausible-half-widths")?
+        .parse::<u32>()
+        .map_err(|_| Error::new("--band-plausible-half-widths must be a decimal u32"))?;
+    let max_cell_share_bps = number(max_cell_share_bps, "--band-max-cell-share-bps")?
+        .parse::<u32>()
+        .map_err(|_| Error::new("--band-max-cell-share-bps must be a decimal u32"))?;
+    Ok(Some(crate::model::FoundingBandInputV1 {
+        anchor,
+        volatility_bps,
+        window_slots,
+        plausible_half_widths,
+        max_cell_share_bps,
+    }))
+}
+
 fn market_shape_from_arguments_v1(
     cuts: Option<String>,
     cut_denominator: Option<String>,
@@ -1614,6 +1702,7 @@ fn market_shape_from_arguments_v1(
     initial_collateral_atoms: Option<String>,
     terminal_window_width_seconds: Option<String>,
     generation: Option<String>,
+    band: Option<crate::model::FoundingBandInputV1>,
 ) -> Result<crate::market::LocalMarketShapeV1> {
     let default = crate::market::LocalMarketShapeV1::default();
     let parse_list = |raw: &str| -> Vec<String> {
@@ -1655,6 +1744,7 @@ fn market_shape_from_arguments_v1(
         }
     };
     let shape = crate::market::LocalMarketShapeV1 {
+        founding_band: band,
         cut_denominator: scalar(
             cut_denominator,
             "--cut-denominator",

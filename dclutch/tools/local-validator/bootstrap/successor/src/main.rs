@@ -725,6 +725,11 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
     let mut max_age = None;
     let mut cut_denominator = None;
     let mut cuts = None;
+    let mut band_anchor = None;
+    let mut band_volatility = None;
+    let mut band_window_slots = None;
+    let mut band_half_widths = None;
+    let mut band_max_cell_share = None;
     let mut coefficients = None;
     let mut product_name = None;
     let mut coordinate_domain_name = None;
@@ -744,6 +749,11 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
             "--max-age-seconds" => Some(&mut max_age),
             "--cut-denominator" => Some(&mut cut_denominator),
             "--cuts" => Some(&mut cuts),
+            "--band-anchor" => Some(&mut band_anchor),
+            "--band-volatility-bps" => Some(&mut band_volatility),
+            "--band-window-slots" => Some(&mut band_window_slots),
+            "--band-plausible-half-widths" => Some(&mut band_half_widths),
+            "--band-max-cell-share-bps" => Some(&mut band_max_cell_share),
             "--coefficients" => Some(&mut coefficients),
             "--product" => Some(&mut product_name),
             "--coordinate-domain" => Some(&mut coordinate_domain_name),
@@ -780,7 +790,37 @@ fn run_devnet_pyth_market(arguments: Vec<String>, sponsored: bool) -> Result<()>
     }
     let registry = parse_pubkey(registry, "--registry-program-id")?;
     let price_update = std::fs::read(absolute(price_update, "--price-update")?)?;
+    // All five or none: a partial band refuses naming what was left out. The
+    // devnet flagship's cuts default to 12000,18000, which is exactly the
+    // partition that resolves into one cell every time -- so this market is
+    // foundable only once its author says what they believe.
+    let founding_band = match (
+        &band_anchor,
+        &band_volatility,
+        &band_window_slots,
+        &band_half_widths,
+        &band_max_cell_share,
+    ) {
+        (None, None, None, None, None) => None,
+        (Some(a), Some(v), Some(w), Some(h), Some(c)) => Some(crate::model::FoundingBandInputV1 {
+            anchor: decimal::<i128>(Some(a.clone()), "--band-anchor")?,
+            volatility_bps: decimal::<u32>(Some(v.clone()), "--band-volatility-bps")?,
+            window_slots: decimal::<u64>(Some(w.clone()), "--band-window-slots")?,
+            plausible_half_widths: decimal::<u32>(Some(h.clone()), "--band-plausible-half-widths")?,
+            max_cell_share_bps: decimal::<u32>(Some(c.clone()), "--band-max-cell-share-bps")?,
+        }),
+        _ => {
+            return Err(Error::new(
+                "an incomplete founding band was stated. --band-anchor, \
+                 --band-volatility-bps, --band-window-slots, \
+                 --band-plausible-half-widths and --band-max-cell-share-bps are \
+                 required together: the band is the author's belief about the \
+                 outcome and no part of it has a default",
+            ));
+        }
+    };
     let spec = market::DevnetPythMarketSpecV1 {
+        founding_band,
         registry,
         price_update: &price_update,
         product_name: product_name

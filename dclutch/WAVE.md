@@ -3053,3 +3053,48 @@ wrote down.
 descriptor and thence into every derived identity, which was the reason this
 looked like ember's call — and a standing full-redeploy grant with cohort-9
 already deployed from a named commit absorbs re-derived identities for free.
+
+## 2026-09-01 — owned is not the same as deliverable
+
+The lamport census forked where the atom census did not, and the fork is the
+finding. An atom's compartment tag is a **PDA seed**, so ownership is *derivable
+from an address*. A lamport destination is a **field** — `rent_refund`,
+`beneficiary`, `rent_beneficiary`, `refund_wallet`, `refund_recipient` — so
+ownership is **claimed, and must be authenticated rather than read.**
+
+Four classes, of which one is the defect: **(4) caller-supplied and only
+self-consistent** — the destination is whatever the caller says, checked only
+against another thing the same caller supplied. **That is THE SECOND CLASS
+applied to lamports.**
+
+**391 real set-sites** across the five fields. Seven wire-decoded
+`refund_recipient` sites carried to a verdict, and it is a **verified negative**:
+on chain the check *looks* like class 4 — `frame.account(4).key ==
+request.refund_recipient` proves only that the caller agreed with themselves —
+but two further refusals bind it to a lifecycle value written at creation under
+a `validate()` that refuses `provider_submitter == refund_recipient`. **Frame ==
+request == persisted-at-creation: class 3, owned.**
+
+> Stopping at the consistency check would have produced a false positive.
+
+### The correction to C-16 §6 itself
+
+Of the three lamport defects this session found by accident, **two were not
+unowned — they were unreachable.** The Rational replay cursor had a named owner
+and **no route home**. The loser-reclaim hole had a named owner and **6,389,280
+lamports per loss that no instruction could deliver.** Only the crank reward was
+an ownership question, and it was answered by *bounding* — out of rent that was
+leaving anyway.
+
+**So §6 as written names one failure mode and the defects actually found were
+mostly the other.** The census has to ask two questions per flow:
+
+1. **is the destination owned?**
+2. **is there an executable route that delivers it?**
+
+A category that only ever asks the first will keep reporting clean while the
+defects that actually strand money go unnamed.
+
+**Stated not-done, exactly:** 384 of 391 set-sites are **enumerated, not
+classified**; the lamport half is **not swept**. What exists is the scheme, the
+method, the population, and one cluster carried to a verdict.
