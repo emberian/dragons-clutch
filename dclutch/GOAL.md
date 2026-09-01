@@ -2027,3 +2027,39 @@ the **measured** count with the reason 30 skip named — the slice rounds to
 nothing, or its complete sets cannot be split; both physical, neither able to
 distinguish a dilution. *Lowering it without finding out would have been
 weakening a guard to make a test pass.*
+
+### Correction: the register reads 57, not 58 — and that is the interesting part
+
+I reported **58** never-executed routes after the regeneration. Wrong: one grep
+hit is the **legend** at `docs/reference/routes.md:27` that defines the term.
+Counting table rows gives **57 of 161**.
+
+**And 57 of 161 is exactly the C-16 document's measured figure.** The claim
+register and the measured count have **converged** — which is the actual result
+of the regeneration, and it is invisible to anyone reporting 58. A number off by
+one is worse than an obviously wrong one, because it still reconciles against
+nothing.
+
+**What moved is not seven**: diffing the old register against the new, **ten
+routes left and two entered**, net −8. The two entrants are two of the owed rows
+the regeneration published — `DCRRCL01` and `DCLTPAB3`.
+
+Both were carried through the third step rather than counted: `DCRRCL01`
+**excluded** (sets none of the five destination fields anywhere in 2,120 lines);
+`DCLTPAB3` a genuine candidate whose set-sites are **production, above the
+`cfg(test)` line** — so the line-position filter correction **earned its keep on
+the first new case it was applied to** — and then resolved **class 3, owned**:
+the route binds `frame.account(4).key` against `request.refund_recipient` rather
+than setting a destination at all.
+
+**The candidate set survived intact**, and the positive control is why that can
+be believed: all nine destination-setting modules were required to still appear
+in the new 57 *before the join was run*, because a regeneration that silently
+dropped the strongest candidate would make the join report clean **for the wrong
+reason**. All nine present, same 18 routes.
+
+So the architectural statement — *the code chose it, it was read from a record
+that already existed, or the caller named it and the chain refused unless it
+matched something written down earlier* — **gains a third instance from a route
+that did not exist when the statement was written.** That is what separates an
+architectural property from an artifact of one parse.
