@@ -2126,3 +2126,54 @@ entrance → the load simulator, which closes condition (b) of the deploy grant.
 **Ember's ruling queue is now four**, not ten: the LP consent floor (being worked
 through), the recovery ontology, provider-family scope, and Claims split/merge if
 they do not want it built.
+
+## SESSION STATE FOR THE TAIL — written 2026-09-01 before a ~300k context trim
+
+The durable record is already in this file, `WAVE.md`, `AGENTS.md`, the cut, and
+`docs/evidence/ARCHITECT_SCHOLAR_2026_09_01.md`. What lives ONLY in context is the
+lane map and the in-flight state. Written here so the tail can resume the head.
+
+### Lane map (subagent id → role → state)
+
+| id | lane | state |
+|---|---|---|
+| `adf64919848af8ebf` | S1+S10 release/devnet | **STOPPED mid-ladder** — was driving cohort-9 publication with the Helius key; 2 of 9 records had landed at last report; balance 44.968159503. **Re-observe chain before assuming anything.** |
+| `a77a3bf076532a732` | S3 Direct | live — registered Sell executes (365,011 CU); Buy dies at `MINT_ACCOUNT` require-key (frame mint ≠ Realm collateral mint); wall A is a missing crosscheck, not a gate; then Sell/Buy life |
+| `aabbb73d0de8a830c` | S7 Structured | live — four-wall chain: transition (empty satisfying set, convicted, unremoved), heap (closed), **Content/Route (operator flattens K span, composition wants AffineOnce; repair specified, unlanded)**, unknown behind it |
+| `a80e9d86fecb37921` | S4 General | live — retracted the 258 wall (interleaved log); real wall is width-1 accelerator returns `Refused` ack — semantic, fresh |
+| `a73a4576b1ff6ca7d` | S5 Dealer | live — two-LP life + consent in numbers; selector 9 blocked on register-116 (convicted, unlanded); equity-Add 591,781 CU unlocalized; `468f66b3` red on purpose |
+| `a0cc1c74ccaa2fa3d` | S9 Web | stopped at clean line — trade + redemption stranger-operable; next is extracting stage one |
+| `a01e0386d5c8e3c57` | S11 census | closed — 73/33/55 register, 55 owned per row, six C-16 instruments |
+| `ad8ef8bc299739296` | S8 conservation | closed — 120/120 lamport, 51 atom, class 4 zero |
+| `aad96e0729c3f62c6` | S2 resolution | closed — C-09 on evidence; doc-citations tool |
+| `abd12366a7144cab0` | C-02 product | closed — band required, gate live, partition proven by sweep |
+| `a177fc8443d8e8d4b` | S9 SDK/CLI | closed |
+| `ae4f77d8550a57cda` | S6 Series | closed — recurrence landed, five-account geometry wall named |
+| `a508ca5d2897899c6` | architect-scholar | closed — **overturned 6 of 8 coordinator calls**; its report is the verified execution list |
+
+### Standing authority (all in AGENTS.md)
+Devnet deploy: standing, full redeploy, from a commit. Cuts: `tools/cut.sh`, standing.
+Helius key at `~/.helius-key` — use via file read, never echo/commit. NOT authorized:
+mainnet, tags, releases, force-push. 1Password signing fails → `-c commit.gpgsign=false`.
+
+### Ember's rulings today
+- **C-15 ruled OUT** (dated; "not yet", later Clutch, needs minidregg). `O-019` keeps the door.
+- **Ruling 9 WITHDRAWN** — ceremony; genesis path built (`61817d7a` `6b2257b6` `9d66c498` `35a94fba`).
+- Remaining genuinely ember's: recovery ontology (scholar: silent source is already survivable;
+  recovery buys *quality* not liveness); provider breadth (Switchboard structurally unlike our
+  profile); Claims split/merge veto (default: build).
+
+### Ember's last words before the trim
+"Am I even gonna regret anything if I just say 'go for it boss'?" — answered: probably not;
+execute the scholar-verified list, route new judgment through a reading pass. Then provided the
+Helius key, which was de facto go on the ladder. **The scholar-verified list is the queue.**
+
+### The scholar's corrections to take as fact
+LP floor DISSOLVED (config digest is a PDA seed → raised floor = different pool; write down
+"a position's address commits its terms"). Two binaries: rename the **TypeScript** one (Rust
+is the published artifact). 9000 ceiling: has NO production reader and caps nothing. Scale's
+owner is `ProductBasisV3::payout_scale`. Materialize: cut the *route*, not the codec, one
+act. Heap: the one extended-heap route's justification cites CPIs deleted the same day.
+K=2 fits by 3 bytes, which the packet builder spends on priority fee → not a harbour; K=3
+needs an ABI change (drop three re-derived PDAs → K=5). Two gauntlet witnesses red at HEAD,
+unread. Repair order for Structured: Content/Route first, coefficient guard LAST with a control.

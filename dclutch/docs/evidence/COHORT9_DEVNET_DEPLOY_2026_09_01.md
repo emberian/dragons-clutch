@@ -184,3 +184,99 @@ lane-local fix, and not something to improvise underneath a live cohort.
 
 `bf5499da` closed the profile-derivation half of this gap. This is the manifest
 half, and it is named rather than worked around.
+
+## The submission driver: it exists, and it is `campaign`
+
+Traced, not guessed. `tools/release/stage-devnet-sponsored-market-open.sh`
+prepares a market and then WRITES OUT the invocation it deliberately never
+runs, into `<work>/open-market.execute.sh`:
+
+```
+dclutch-local-successor-bootstrap campaign --founding-only \
+  --rpc-url <devnet> --i-mean-devnet <genesis> \
+  --plan <plan> --market <market.json> --evidence <campaign-open.json> \
+  --keypair-campaign-payer … --keypair-collateral-mint … \
+  --keypair-collateral-wallet … --keypair-founding-beneficiary … \
+  --keypair-founding-projection-witness … --keypair-founding-source-funder … \
+  --founding-founder <derived> --substituted-founder <distinct> --execute
+```
+
+It is gated behind `DCLUTCH_AUTHORIZE_MARKET_OPEN=YES` and six keypair paths,
+and it proves founder-key CUSTODY before it will run — because on 2026-08-30
+all three live devnet markets were found sharing a founder nobody holds, and
+none of them can ever be retired (decision 0015 §8).
+
+So the answer is **"the driver is elsewhere", not "the driver is missing"**.
+
+`campaign` owns the whole ladder as ordered stages: Substrate, Publication (the
+nine records), Initialize (the profile), Succession, Activation, Founding.
+`--founding-only` refuses unless the five before it are Complete, which is
+exactly the ordering the chain requires.
+
+### Cohort-9's observed ladder
+
+```
+substrate    complete
+publication  absent
+initialize   absent
+succession   complete
+activation   absent
+```
+
+`substrate complete` is independent confirmation that the seven deployed roles
+match what the plan pinned, verified against chain state rather than against
+the deploy tool's own report.
+
+`succession complete` is NOT a claim that the ceremony ran. `succession_state`
+returns Complete when `plan.infrastructure_succession` is None: it reports that
+this plan HAS no ceremony. The ceremony has still never executed.
+
+### Correction: publication is PARTIAL, not absent
+
+The ladder above is the state BEFORE the write attempts. Re-observed
+afterwards, two of the nine records had finalized on chain despite every
+attempt returning 429:
+
+```
+substrate    complete
+publication  partial    2 of 9 finalized; still missing or in flight:
+                        execution_release_set, pyth_release,
+                        registry_artifact_release, rent_artifact_release,
+                        resolution_artifact_release, trading_artifact_release,
+                        custody_artifact_release (in flight)
+initialize   absent
+succession   complete
+activation   absent
+```
+
+The deployer balance moved 44.980665543 -> 44.968159503 SOL, and that 0.0125
+SOL is those two records' rent. So the campaign is not merely refusing, it is
+RESUMING: each attempt lands what it can before the endpoint cuts it off, and
+the next one skips what finalized.
+
+Worth stating plainly because the earlier reading would have been wrong. A
+driver that reports a stage `absent`, fails, and is then assumed to have
+written nothing is exactly how a partial external mutation goes unnoticed --
+the state has to be re-observed after the attempt, not inferred from the
+attempt's exit code.
+
+### Where it stops, and it is not code
+
+Publication cannot proceed on `https://api.devnet.solana.com`, which is
+rate-limiting `getSignatureStatuses`:
+
+- six consecutive campaign attempts, spaced 90 s apart, each failing at the
+  FIRST signature poll of the write path with `HTTP 429 Too Many Requests`;
+- reproduced independently of this tree with plain `curl` — five calls, five
+  429s — while `getHealth`, `getSlot` and `getLatestBlockhash` all returned
+  200 in the same seconds, and the same method returned 200 minutes later.
+
+So it is bursty, per-method throttling on the free public endpoint, not a
+defect in the driver and not something a retry fixes: the read-only observation
+pass above completed on the same endpoint, and only the write path's polling
+rate exceeds the limit. The driver's own 250 ms pacing is a measured-profile
+constant (SMOKE-0) and was NOT weakened to get past this.
+
+What it needs is a devnet endpoint that is not the free public one. That is an
+operator input this lane does not hold, and hunting for credentials would be
+the wrong way to obtain it.

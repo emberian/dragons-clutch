@@ -63,6 +63,19 @@ pub(crate) struct PrepareArgs {
     pub(crate) core_sha256: String,
     pub(crate) core_semantic_release_id: String,
     pub(crate) core_bootstrap_upgrade_authority: Pubkey,
+    /// The upgrade authority every OBSERVED role's ProgramData is declared to
+    /// carry, for a cohort that was deployed mutable and succeeds nothing.
+    ///
+    /// Until this existed, `role_deployment` was handed `None` for all six
+    /// non-Core roles and no public flag could say otherwise -- so an observed
+    /// ProgramData was admissible only when its authority had been REVOKED,
+    /// which is the succession world. A freshly deployed cohort under decision
+    /// 0012's mutable substrate could be observed by neither shape: not the
+    /// fabricated genesis install (slot 0, no authority), not the checked
+    /// deployment set (Upgrade receipts it has none of). This is the third
+    /// admission, and it is a DECLARATION the observation must then match:
+    /// `role_deployment` still refuses when the account disagrees.
+    pub(crate) observed_upgrade_authority: Option<Pubkey>,
     pub(crate) claims_program: Pubkey,
     pub(crate) claims_elf: PathBuf,
     pub(crate) claims_sha256: String,
@@ -897,27 +910,48 @@ fn prepare_inner(
     // PDA and the infrastructure profile are all downstream of that slot.
     // §3.0 of the deploy runbook states the same ordering as a protocol fact:
     // deploy -> revoke -> observe -> mint bodies -> publish.
-    let registry_deployment =
-        role_deployment("Registry", &registry_elf, None, &args.deployments.registry)?;
+    let registry_deployment = role_deployment(
+        "Registry",
+        &registry_elf,
+        args.observed_upgrade_authority,
+        &args.deployments.registry,
+    )?;
     let core_deployment = role_deployment(
         "Core",
         &core_elf,
         Some(args.core_bootstrap_upgrade_authority),
         &args.deployments.core,
     )?;
-    let claims_deployment = role_deployment("Claims", &claims_elf, None, &args.deployments.claims)?;
-    let trading_deployment =
-        role_deployment("Trading", &trading_elf, None, &args.deployments.trading)?;
+    let claims_deployment = role_deployment(
+        "Claims",
+        &claims_elf,
+        args.observed_upgrade_authority,
+        &args.deployments.claims,
+    )?;
+    let trading_deployment = role_deployment(
+        "Trading",
+        &trading_elf,
+        args.observed_upgrade_authority,
+        &args.deployments.trading,
+    )?;
     let resolution_deployment = role_deployment(
         "Resolution",
         &resolution_elf,
-        None,
+        args.observed_upgrade_authority,
         &args.deployments.resolution,
     )?;
-    let custody_deployment =
-        role_deployment("Custody", &custody_elf, None, &args.deployments.custody)?;
-    let rent_deployment =
-        role_deployment("RentCredit", &rent_elf, None, &args.deployments.rent_credit)?;
+    let custody_deployment = role_deployment(
+        "Custody",
+        &custody_elf,
+        args.observed_upgrade_authority,
+        &args.deployments.custody,
+    )?;
+    let rent_deployment = role_deployment(
+        "RentCredit",
+        &rent_elf,
+        args.observed_upgrade_authority,
+        &args.deployments.rent_credit,
+    )?;
 
     if let Some(set) = &args.checked_upgrade_set {
         validate_checked_upgrade_set(
@@ -2091,6 +2125,7 @@ mod tests {
         let (rent_credit_elf, rent_credit_sha256) = write_test_elf(&root, "dclutch_rent_sbf.so", 7);
         let program = |tag| Pubkey::new_from_array([tag; 32]);
         let plan = prepare(PrepareArgs {
+            observed_upgrade_authority: None,
             account_dir: root.join("accounts"),
             plan_path: root.join("plan.json"),
             registry_program: program(1),

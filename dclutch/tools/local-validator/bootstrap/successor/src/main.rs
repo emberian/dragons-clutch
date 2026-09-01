@@ -1166,6 +1166,7 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
     let mut core_sha256 = None;
     let mut core_semantic_release = None;
     let mut core_bootstrap_upgrade_authority = None;
+    let mut observed_upgrade_authority_raw = None;
     let mut claims_program = None;
     let mut claims_elf = None;
     let mut claims_sha256 = None;
@@ -1267,6 +1268,7 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
             "--core-sha256" => &mut core_sha256,
             "--core-semantic-release-id" => &mut core_semantic_release,
             "--core-bootstrap-upgrade-authority" => &mut core_bootstrap_upgrade_authority,
+            "--observed-upgrade-authority" => &mut observed_upgrade_authority_raw,
             "--claims-program-id" => &mut claims_program,
             "--claims-elf" => &mut claims_elf,
             "--claims-sha256" => &mut claims_sha256,
@@ -1590,7 +1592,16 @@ fn run_prepare(arguments: Vec<String>) -> Result<()> {
         rent_credit_sha256 = Some(rent.checked_candidate_elf_sha256.clone());
         rent_credit_semantic_release = Some(rent.semantic_release_id.clone());
     }
+    // A cohort deployed MUTABLE and succeeding nothing declares the authority
+    // its observed ProgramData carries. It is a declaration the observation
+    // must match, not a way around the check: `role_deployment` still refuses
+    // when the account disagrees with what was stated.
+    let observed_upgrade_authority = match observed_upgrade_authority_raw {
+        None => None,
+        Some(raw) => Some(parse_pubkey(Some(raw), "--observed-upgrade-authority")?),
+    };
     let args = plan::PrepareArgs {
+        observed_upgrade_authority,
         account_dir: absolute(account_dir, "--account-dir")?,
         plan_path: absolute(output, "--output")?,
         registry_program: parse_pubkey(registry_program, "--registry-program-id")?,

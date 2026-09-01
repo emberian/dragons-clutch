@@ -270,9 +270,21 @@ fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
             "Direct devnet planning refuses a plan that also carries owned-loopback deployment evidence",
         ));
     }
-    let checked = plan.checked_upgrade_set.as_ref().ok_or_else(|| {
-        Error::new("Direct devnet planning requires a checked mixed deployment-set plan")
-    })?;
+    let Some(checked) = plan.checked_upgrade_set.as_ref() else {
+        // A FOUNDED cohort has no deployment set, and that is not a missing
+        // input. The checked set is a SECOND COPY of facts, and every
+        // `evidence.* != pin.*` comparison below is a cross-copy consistency
+        // check: it proves the set did not lie about the plan. A cohort that
+        // succeeds nothing was never upgraded, so there are no Upgrade
+        // receipts to form that second copy, and the pins are the only source
+        // -- read directly off the ProgramData accounts.
+        //
+        // So this arm keeps every check that HAS one source and drops only the
+        // ones that compare a copy against itself. The two arms are disjoint
+        // by construction: this one requires the checked set to be absent and
+        // every role to be observed, so a succession can never fall into it.
+        return authenticate_devnet_genesis_plan_v1(plan, evidence_authenticator);
+    };
     if checked.schema != crate::upgrade::CHECKED_SET_PREPARE_SCHEMA
         || checked.semantic_derivation != crate::upgrade::SEMANTIC_DERIVATION_V1
         || checked.roles.len() != 7
@@ -327,6 +339,69 @@ fn authenticate_devnet_plan_v1<E: DirectPlanEvidenceV1>(
                 "checked deployment-set role {role} differs from the exact Direct plan pin"
             )));
         }
+    }
+    if loader_coordinates.len() != 14 {
+        return Err(Error::new(
+            "Direct deployment plan must contain 14 pairwise-distinct Loader coordinates",
+        ));
+    }
+    evidence_authenticator.authenticate_activation(plan)?;
+    Ok(())
+}
+
+/// Authenticate a devnet plan for a cohort that succeeds nothing.
+///
+/// Every role must be an OBSERVED ProgramData account carrying one shared
+/// upgrade authority, the two ELF projections must agree, and the fourteen
+/// Loader coordinates must be pairwise distinct -- the same closure the
+/// deployment-set arm requires, proven from the observations themselves rather
+/// than from a second copy that a founding never produces.
+fn authenticate_devnet_genesis_plan_v1<E: DirectPlanEvidenceV1>(
+    plan: &SuccessorPlan,
+    evidence_authenticator: &E,
+) -> Result<()> {
+    let mut loader_coordinates = BTreeSet::new();
+    let mut declared_authority: Option<String> = None;
+    let mut roles = 0_usize;
+    for (role, pin, _disposition) in checked_plan_roles_v1(plan) {
+        roles += 1;
+        let program = crate::plan::pubkey(&pin.program_id)?;
+        let programdata = crate::plan::pubkey(&pin.programdata_id)?;
+        let authority = pin.upgrade_authority.as_deref().ok_or_else(|| {
+            Error::new(format!(
+                "founded devnet role {role} has no observed upgrade authority; a founded cohort \
+                 is admitted only as observed mutable accounts, never as a fabricated install"
+            ))
+        })?;
+        // ONE authority across all seven. Seven roles under seven authorities
+        // is not one cohort, and nothing downstream would notice.
+        match &declared_authority {
+            None => declared_authority = Some(authority.to_owned()),
+            Some(first) if first != authority => {
+                return Err(Error::new(format!(
+                    "founded devnet role {role} carries a different upgrade authority than its \
+                     cohort"
+                )));
+            }
+            Some(_) => {}
+        }
+        if pin.elf_path != pin.checked_candidate_elf_path
+            || pin.elf_sha256 != pin.checked_candidate_elf_sha256
+            || pin.deployment_source != "observed-programdata-account"
+            || pin.live_elf_sha256.is_empty()
+            || pin.deployment_slot == 0
+            || !loader_coordinates.insert(program)
+            || !loader_coordinates.insert(programdata)
+        {
+            return Err(Error::new(format!(
+                "founded devnet role {role} is not an exact observed deployment"
+            )));
+        }
+    }
+    if roles != 7 {
+        return Err(Error::new(
+            "a founded devnet plan must pin exactly seven roles",
+        ));
     }
     if loader_coordinates.len() != 14 {
         return Err(Error::new(
@@ -512,18 +587,28 @@ fn observe_devnet_policy_v1<R: DirectFinalizedSnapshotV1>(
     rpc: &mut R,
     plan: &SuccessorPlan,
 ) -> Result<DirectDevnetPolicyObservationV1> {
-    let checked = plan.checked_upgrade_set.as_ref().ok_or_else(|| {
-        Error::new("Direct devnet observation omitted its checked deployment set")
-    })?;
-    let floor = checked
-        .roles
-        .iter()
-        .map(|role| role.deployment_slot)
-        .chain(std::iter::once(
-            checked.infrastructure_carry_forward.context_slot,
-        ))
-        .max()
-        .ok_or_else(|| Error::new("checked deployment set omitted every observation slot"))?;
+    // The set is used here for ONE thing: the slot floor that forces the
+    // finalized read to be at least as recent as every observation the plan
+    // rests on. A founded cohort carries the same slots in its own role pins,
+    // read off the ProgramData accounts, so the floor is the max of those --
+    // the identical guarantee from the identical facts, minus a second copy a
+    // founding never produces.
+    let floor = match plan.checked_upgrade_set.as_ref() {
+        Some(checked) => checked
+            .roles
+            .iter()
+            .map(|role| role.deployment_slot)
+            .chain(std::iter::once(
+                checked.infrastructure_carry_forward.context_slot,
+            ))
+            .max()
+            .ok_or_else(|| Error::new("checked deployment set omitted every observation slot"))?,
+        None => checked_plan_roles_v1(plan)
+            .into_iter()
+            .map(|(_, pin, _)| pin.deployment_slot)
+            .max()
+            .ok_or_else(|| Error::new("founded devnet plan omitted every observation slot"))?,
+    };
     observe_policy_v1(rpc, plan, floor)
 }
 
@@ -1647,6 +1732,7 @@ mod tests {
         let rent_role = fixture_role_v1(&root, "rent", 7, 102, retained_authority);
         let plan_path = root.join("plan.json");
         let mut plan = crate::plan::prepare(crate::plan::PrepareArgs {
+            observed_upgrade_authority: None,
             account_dir: root.join("accounts"),
             plan_path: plan_path.clone(),
             registry_program: registry,

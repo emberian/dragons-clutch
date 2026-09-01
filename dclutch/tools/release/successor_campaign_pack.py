@@ -352,6 +352,34 @@ def resolution_semantic_id(root: Path) -> str:
     return sha256_bytes(matches[0].encode())
 
 
+
+def _lineage_release_fields(root: pathlib.Path, summary: Mapping[str, str]) -> dict:
+    """The release fields the candidate's STATED lineage requires.
+
+    A genesis cohort succeeds nothing, so it has no predecessor account to pin
+    and no `infrastructure/predecessor-profile.bin` on disk. It says so by
+    carrying `infrastructure_lineage`, rather than by quietly lacking a field
+    -- which is the same rule the candidate summary itself follows.
+    """
+    lineage = summary_required(summary, "infrastructure_lineage")
+    if lineage == "genesis":
+        return {"infrastructure_lineage": "genesis"}
+    if lineage != "succession":
+        refuse(f"checked candidate summary states an unknown lineage: {lineage}")
+    return {
+        "predecessor_infrastructure_profile_sha256": require_hex(
+            summary_required(summary, "predecessor_infrastructure_profile_sha256"),
+            64,
+            "predecessor infrastructure profile digest",
+        ),
+        "predecessor_infrastructure_profile": evidence(
+            root,
+            "infrastructure/predecessor-profile.bin",
+            "predecessor infrastructure profile",
+        ),
+    }
+
+
 def summary_required(summary: Mapping[str, str], key: str) -> str:
     value = summary.get(key)
     if value is None or value == "":
@@ -565,10 +593,12 @@ def spline_product_handoff_value(
     # document field by field and stops at `verified_price_gate`. Routed to the
     # SDK/CLI lane; until it lands, requiring the key here would refuse a
     # correct inspection for a field its producer never had.
-    inspection_fields = (
-        compiler_report_fields - {"command", "partition_quality"}
-        | {"report", "found_records"}
-    )
+    # BOTH surfaces carry `partition_quality`; an earlier sweep subtracted it
+    # here, which asserted the SDK does not emit it and made the pack refuse
+    # every genesis candidate. Measured on the real artifacts: the only
+    # asymmetries are `command` (compiler only) and `report`/`found_records`
+    # (SDK only).
+    inspection_fields = compiler_report_fields - {"command"} | {"report", "found_records"}
     found = smoke.get("found_records")
     if not isinstance(found, dict) or set(found) != {
         "productRecord",
@@ -594,10 +624,36 @@ def spline_product_handoff_value(
         or any(
             inspection.get(key) != compiler_report.get(key)
             for key in compiler_report_fields
-            - {"schema", "command", "verified_price_gate"}
+            - {"schema", "command", "verified_price_gate", "partition_quality"}
         )
     ):
         refuse("spline SDK inspection differs from the smoke report")
+    # `partition_quality` is the same fact in two spellings -- the TypeScript
+    # SDK emits camelCase, the Rust compiler snake_case -- so raw equality can
+    # never hold and EXCLUDING it would let the two diverge unnoticed. Compare
+    # it normalised instead, which is the only form that actually checks the
+    # SDK reports the partition the compiler measured.
+    sdk_quality = _normalise_keys(inspection.get("partition_quality"))
+    compiler_quality = _normalise_keys(compiler_report.get("partition_quality"))
+    if not isinstance(sdk_quality, dict) or not isinstance(compiler_quality, dict):
+        refuse("spline partition quality is missing from a surface that must carry it")
+    # The SDK adds one DERIVED field the compiler does not: `degenerate`. Every
+    # measured fact must agree exactly, and the derived one must follow from
+    # those facts -- ignoring it would let the SDK tell a client a partition is
+    # fine while the numbers beside it say otherwise.
+    shared = set(sdk_quality) & set(compiler_quality)
+    if set(compiler_quality) - shared or any(
+        sdk_quality[key] != compiler_quality[key] for key in shared
+    ):
+        refuse("spline SDK partition quality differs from the compiler's")
+    if set(sdk_quality) - shared != {"degenerate"}:
+        refuse("spline SDK partition quality carries an unexpected field")
+    dominant = compiler_quality.get("dominant_share_bps")
+    ceiling = compiler_quality.get("max_cell_share_bps")
+    if not isinstance(dominant, int) or not isinstance(ceiling, int):
+        refuse("spline partition quality shares are not exact integers")
+    if sdk_quality.get("degenerate") is not (dominant >= ceiling):
+        refuse("spline SDK degeneracy disagrees with the compiler's own shares")
     compiler_gate = compiler_report.get("verified_price_gate")
     inspected_gate = inspection.get("verified_price_gate")
     if (
@@ -741,6 +797,26 @@ def spline_product_handoff_value(
         "semantic_basis_id": semantic,
         "found_records": found,
     }
+
+
+
+def _normalise_keys(value: object) -> object:
+    """Lower-case and de-camel one mapping's keys, recursively.
+
+    `dominantShareBps` and `dominant_share_bps` are one fact spelled by two
+    languages. Normalising is what lets the pack compare the SDK's report to
+    the compiler's rather than giving up and excluding the field.
+    """
+    import re
+
+    if isinstance(value, dict):
+        return {
+            re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower(): _normalise_keys(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalise_keys(item) for item in value]
+    return value
 
 
 def emit(arguments: argparse.Namespace) -> None:
@@ -950,16 +1026,7 @@ def emit(arguments: argparse.Namespace) -> None:
             "checked_execution_release_set": evidence(
                 root, "set/multiprogram.checked", "checked execution release set"
             ),
-            "predecessor_infrastructure_profile_sha256": require_hex(
-                summary_required(summary, "predecessor_infrastructure_profile_sha256"),
-                64,
-                "predecessor infrastructure profile digest",
-            ),
-            "predecessor_infrastructure_profile": evidence(
-                root,
-                "infrastructure/predecessor-profile.bin",
-                "predecessor infrastructure profile",
-            ),
+            **_lineage_release_fields(root, summary),
             "infrastructure_profile_sha256": require_hex(
                 summary_required(summary, "infrastructure.profile_sha256"),
                 64,
@@ -1163,27 +1230,45 @@ def verify_pack(pack_path: Path) -> tuple[Path, dict[str, Any]]:
         artifact_by_role[role] = item
 
     release = pack["release"]
-    if not isinstance(release, dict) or set(release) != {
+    base_fields = {
         "execution_release_set_id",
         "checked_execution_release_set_id",
         "execution_release_set",
         "checked_execution_release_set",
-        "predecessor_infrastructure_profile_sha256",
-        "predecessor_infrastructure_profile",
         "infrastructure_profile_sha256",
         "infrastructure_profile_pda_hex",
         "infrastructure_profile",
         "checked_infrastructure_id",
         "checked_infrastructure",
-    }:
+    }
+    # The lineage decides which fields MUST be present, in both directions. A
+    # succession without its predecessor digest and a genesis carrying one are
+    # both refused, so neither shape can be reached by omission.
+    if not isinstance(release, dict):
         refuse("pack release section fields differ")
-    for key, label in (
-        ("execution_release_set", "execution release-set preimage"),
-        ("checked_execution_release_set", "checked execution release set"),
-        ("predecessor_infrastructure_profile", "predecessor infrastructure profile"),
-        ("infrastructure_profile", "infrastructure profile"),
-        ("checked_infrastructure", "checked infrastructure"),
-    ):
+    if release.get("infrastructure_lineage") == "genesis":
+        expected_fields = base_fields | {"infrastructure_lineage"}
+        evidence_keys = (
+            ("execution_release_set", "execution release-set preimage"),
+            ("checked_execution_release_set", "checked execution release set"),
+            ("infrastructure_profile", "infrastructure profile"),
+            ("checked_infrastructure", "checked infrastructure"),
+        )
+    else:
+        expected_fields = base_fields | {
+            "predecessor_infrastructure_profile_sha256",
+            "predecessor_infrastructure_profile",
+        }
+        evidence_keys = (
+            ("execution_release_set", "execution release-set preimage"),
+            ("checked_execution_release_set", "checked execution release set"),
+            ("predecessor_infrastructure_profile", "predecessor infrastructure profile"),
+            ("infrastructure_profile", "infrastructure profile"),
+            ("checked_infrastructure", "checked infrastructure"),
+        )
+    if set(release) != expected_fields:
+        refuse("pack release section fields differ")
+    for key, label in evidence_keys:
         verify_evidence(root, release.get(key), label)
     for release_key, summary_key in (
         ("execution_release_set_id", "multiprogram.execution_release_set_id"),

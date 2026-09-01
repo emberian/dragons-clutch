@@ -1346,6 +1346,9 @@ fn prepare_local_mutable_parsed_v1(
 
     let prepared = crate::plan::prepare_checked_local_mutable(
         PrepareArgs {
+            // The local-mutable plan fabricates its own genesis install, so
+            // there is no observed account whose authority could be declared.
+            observed_upgrade_authority: None,
             account_dir: account_dir.clone(),
             plan_path: output.clone(),
             registry_program,

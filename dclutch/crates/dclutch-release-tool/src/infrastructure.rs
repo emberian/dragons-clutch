@@ -19,7 +19,8 @@ use dclutch_registry_contract::{
     ARTIFACT_RELEASE_BYTES_V1, ArtifactReleaseV1, ArtifactUpgradePolicyV1,
 };
 use dclutch_release_set_contract::{
-    ArtifactReleaseIdV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2,
+    ArtifactReleaseIdV1, PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+    PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V2, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1,
     PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProtocolInfrastructureProfileV1,
     ProtocolInfrastructureProfileV2,
 };
@@ -1025,4 +1026,389 @@ mod tests {
     fn program_identity_helper_rejects_zero() {
         assert!(ProgramIdentityV1::new([0; 32]).is_err());
     }
+}
+
+// ---------------------------------------------------------------- genesis
+//
+// A REAL COHORT WITH NO PREDECESSOR, which this manifest family could not
+// express until now.
+//
+// `CheckedInfrastructureV1` embeds a `ProtocolInfrastructureProfileV2` by
+// type, and V2 exists precisely to pin the two predecessor artifact-release
+// ids a succession copies forward. That is correct for a succession and
+// unsatisfiable for a founding: a cohort that succeeds nothing commits the
+// write-once V1 profile `InitializeProtocolInfrastructureV1` writes at
+// `dclutch:infrastructure:v1`, and feeding those 144 bytes to the succession
+// manifest earns `InvalidLength` -- which is where the genesis checked-release
+// candidate stopped.
+//
+// This is the same mechanism the family already uses rather than a new one.
+// The header's schema field is what says which layout the bytes are in:
+// schema 1 embedded a 144-byte profile, schema 2 embeds the 224-byte
+// succession profile, and schema 3 here embeds the 144-byte GENESIS profile.
+// A reader built for one refuses the others by name instead of misreading
+// them, and no succession manifest changes by a single byte.
+//
+// The PDA is the other half of the difference and it is not cosmetic: a
+// genesis profile lives under `PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1`,
+// not the V2 domain, because it is a different account. Deriving it from the
+// succession domain would produce a manifest that pins an address the chain
+// will never write.
+
+/// Schema discriminant for the genesis (no-predecessor) layout.
+pub const CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V3: u16 = 3;
+
+/// Exact checked genesis-infrastructure evidence width.
+pub const CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1: usize = CHECKED_INFRASTRUCTURE_HEADER_BYTES_V1
+    + CHECKED_MULTIPROGRAM_BYTES_V1
+    + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1
+    + 32
+    + 2 * CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1;
+
+const GENESIS_PROFILE_OFFSET: usize = EXECUTION_OFFSET + CHECKED_MULTIPROGRAM_BYTES_V1;
+const GENESIS_PROFILE_PDA_OFFSET: usize =
+    GENESIS_PROFILE_OFFSET + PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1;
+const GENESIS_REGISTRY_OFFSET: usize = GENESIS_PROFILE_PDA_OFFSET + 32;
+const GENESIS_RENT_OFFSET: usize = GENESIS_REGISTRY_OFFSET + CHECKED_INFRASTRUCTURE_LEAF_BYTES_V1;
+
+/// Checked evidence for one founded Core/Registry/Rent chain that succeeds
+/// nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CheckedGenesisInfrastructureV1 {
+    execution: CheckedExecutionReleaseSetV1,
+    profile: ProtocolInfrastructureProfileV1,
+    profile_pda: [u8; 32],
+    registry_artifact: ArtifactReleaseV1,
+    registry_checked_release_id: ContentId,
+    rent_artifact: ArtifactReleaseV1,
+    rent_checked_release_id: ContentId,
+}
+
+impl CheckedGenesisInfrastructureV1 {
+    /// Decode and revalidate one exact fixed-width genesis manifest.
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1 {
+            return Err(Error::InvalidLength);
+        }
+        if bytes.get(..8) != Some(CHECKED_INFRASTRUCTURE_MAGIC_V1.as_slice()) {
+            return Err(Error::InvalidMagic);
+        }
+        if read_u16(bytes, SCHEMA_OFFSET)? != CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V3 {
+            return Err(Error::UnsupportedSchema);
+        }
+        if read_u16(bytes, COMPONENT_COUNT_OFFSET)? != CHECKED_INFRASTRUCTURE_COMPONENTS_V1 {
+            return Err(Error::InvalidInfrastructureManifest);
+        }
+        if bytes.get(RESERVED_OFFSET..EXECUTION_OFFSET) != Some([0_u8; 4].as_slice()) {
+            return Err(Error::NonCanonicalReservedBytes);
+        }
+        let execution = CheckedExecutionReleaseSetV1::decode(subslice(
+            bytes,
+            EXECUTION_OFFSET,
+            CHECKED_MULTIPROGRAM_BYTES_V1,
+        )?)?;
+        let profile = ProtocolInfrastructureProfileV1::decode(subslice(
+            bytes,
+            GENESIS_PROFILE_OFFSET,
+            PROTOCOL_INFRASTRUCTURE_PROFILE_BYTES_V1,
+        )?)
+        .map_err(|_| Error::InvalidInfrastructureManifest)?;
+        let profile_pda = read_array(bytes, GENESIS_PROFILE_PDA_OFFSET)?;
+        let registry_artifact = ArtifactReleaseV1::decode(subslice(
+            bytes,
+            GENESIS_REGISTRY_OFFSET,
+            ARTIFACT_RELEASE_BYTES_V1,
+        )?)
+        .map_err(|_| Error::InvalidArtifactRelease)?;
+        let registry_checked_release_id = ContentId::new(read_array(
+            bytes,
+            GENESIS_REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+        )?)
+        .map_err(|_| Error::ZeroIdentifier)?;
+        let rent_artifact = ArtifactReleaseV1::decode(subslice(
+            bytes,
+            GENESIS_RENT_OFFSET,
+            ARTIFACT_RELEASE_BYTES_V1,
+        )?)
+        .map_err(|_| Error::InvalidArtifactRelease)?;
+        let rent_checked_release_id = ContentId::new(read_array(
+            bytes,
+            GENESIS_RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+        )?)
+        .map_err(|_| Error::ZeroIdentifier)?;
+        let result = Self {
+            execution,
+            profile,
+            profile_pda,
+            registry_artifact,
+            registry_checked_release_id,
+            rent_artifact,
+            rent_checked_release_id,
+        };
+        result.validate()?;
+        if result.encode().as_slice() != bytes {
+            return Err(Error::InvalidInfrastructureManifest);
+        }
+        Ok(result)
+    }
+
+    /// Encode one exact fixed-width genesis infrastructure manifest.
+    pub fn encode(self) -> [u8; CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1] {
+        let mut output = [0_u8; CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1];
+        copy(&mut output, 0, &CHECKED_INFRASTRUCTURE_MAGIC_V1);
+        copy(
+            &mut output,
+            SCHEMA_OFFSET,
+            &CHECKED_INFRASTRUCTURE_SCHEMA_GENESIS_V3.to_le_bytes(),
+        );
+        copy(
+            &mut output,
+            COMPONENT_COUNT_OFFSET,
+            &CHECKED_INFRASTRUCTURE_COMPONENTS_V1.to_le_bytes(),
+        );
+        copy(&mut output, EXECUTION_OFFSET, &self.execution.encode());
+        copy(
+            &mut output,
+            GENESIS_PROFILE_OFFSET,
+            &self.profile.to_bytes(),
+        );
+        copy(&mut output, GENESIS_PROFILE_PDA_OFFSET, &self.profile_pda);
+        copy(
+            &mut output,
+            GENESIS_REGISTRY_OFFSET,
+            &self.registry_artifact.to_bytes(),
+        );
+        copy(
+            &mut output,
+            GENESIS_REGISTRY_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            self.registry_checked_release_id.as_bytes(),
+        );
+        copy(
+            &mut output,
+            GENESIS_RENT_OFFSET,
+            &self.rent_artifact.to_bytes(),
+        );
+        copy(
+            &mut output,
+            GENESIS_RENT_OFFSET + ARTIFACT_RELEASE_BYTES_V1,
+            self.rent_checked_release_id.as_bytes(),
+        );
+        output
+    }
+
+    /// SHA-256 identity of this exact manifest.
+    pub fn checked_infrastructure_id(self) -> Result<ContentId> {
+        ContentId::new(sha256(&self.encode())).map_err(|_| Error::ZeroIdentifier)
+    }
+
+    /// The founded profile this manifest pins.
+    pub fn profile(self) -> ProtocolInfrastructureProfileV1 {
+        self.profile
+    }
+
+    /// The V1-domain profile PDA this manifest pins.
+    pub fn profile_pda(self) -> [u8; 32] {
+        self.profile_pda
+    }
+
+    /// Which substrate the components describe, derived rather than supplied.
+    pub fn evidence_class(self) -> &'static str {
+        let mut upgradeable = false;
+        for artifact in self.execution.artifacts() {
+            if artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable {
+                upgradeable = true;
+            }
+        }
+        if self.registry_artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
+            || self.rent_artifact.upgrade_policy() != ArtifactUpgradePolicyV1::Immutable
+        {
+            upgradeable = true;
+        }
+        if upgradeable {
+            "genesis-exact-authority"
+        } else {
+            "genesis-immutable"
+        }
+    }
+
+    /// Render the manifest for an operator, naming its lineage first.
+    pub fn render_text(self) -> Result<String> {
+        let mut output = String::new();
+        push_line(
+            &mut output,
+            "format",
+            "dclutch-checked-genesis-infrastructure-v1",
+        );
+        // Stated first and unconditionally: a reader must never have to infer
+        // from an absent predecessor field that this founds rather than
+        // succeeds.
+        push_line(&mut output, "infrastructure_lineage", "genesis");
+        push_line(&mut output, "predecessor_infrastructure_profile", "none");
+        push_line(&mut output, "evidence_class", self.evidence_class());
+        push_line(
+            &mut output,
+            "checked_infrastructure_id",
+            &encode_hex(self.checked_infrastructure_id()?.as_bytes()),
+        );
+        push_line(
+            &mut output,
+            "checked_execution_release_set_id",
+            &encode_hex(
+                self.execution
+                    .checked_execution_release_set_id()?
+                    .as_bytes(),
+            ),
+        );
+        push_line(
+            &mut output,
+            "profile_sha256",
+            &encode_hex(&sha256(&self.profile.to_bytes())),
+        );
+        // `profile_pda`, the same key the succession manifest uses: the
+        // candidate summary namespaces these under `infrastructure.`, so a
+        // different spelling here would silently omit a required summary field.
+        push_line(&mut output, "profile_pda", &encode_hex(&self.profile_pda));
+        // The same component keys, in the same order, as the succession
+        // manifest. Every scraper that reads `infrastructure.*` out of a
+        // candidate summary reads BOTH, so a genesis that spelled these
+        // differently would silently omit required summary fields rather than
+        // fail loudly.
+        push_line(
+            &mut output,
+            "registry_program_id",
+            &encode_hex(self.profile.registry().program().as_bytes()),
+        );
+        push_line(
+            &mut output,
+            "registry_artifact_release_id",
+            &encode_hex(self.profile.registry().artifact_release().as_bytes()),
+        );
+        push_line(
+            &mut output,
+            "registry_checked_release_id",
+            &encode_hex(self.registry_checked_release_id.as_bytes()),
+        );
+        push_line(
+            &mut output,
+            "rent_program_id",
+            &encode_hex(self.profile.rent().program().as_bytes()),
+        );
+        push_line(
+            &mut output,
+            "rent_artifact_release_id",
+            &encode_hex(self.profile.rent().artifact_release().as_bytes()),
+        );
+        push_line(
+            &mut output,
+            "rent_checked_release_id",
+            &encode_hex(self.rent_checked_release_id.as_bytes()),
+        );
+        push_line(
+            &mut output,
+            "recognition_class",
+            "user-supplied-checked-manifest",
+        );
+        Ok(output)
+    }
+
+    fn validate(self) -> Result<()> {
+        let artifacts = self.execution.artifacts();
+        let core = artifacts
+            .first()
+            .copied()
+            .ok_or(Error::InvalidInfrastructureManifest)?;
+        require_pinned_component(core)?;
+        require_pinned_component(self.registry_artifact)?;
+        require_pinned_component(self.rent_artifact)?;
+        let core_program = core.program().to_bytes();
+        let registry_program = self.profile.registry().program().to_bytes();
+        let rent_program = self.profile.rent().program().to_bytes();
+        if core_program == registry_program
+            || core_program == rent_program
+            || registry_program == rent_program
+        {
+            return Err(Error::InvalidInfrastructureManifest);
+        }
+        validate_binding(self.profile.registry(), self.registry_artifact)?;
+        validate_binding(self.profile.rent(), self.rent_artifact)?;
+        // The V1 domain, because a founded profile is a different account from
+        // a succeeded one. Using the V2 domain here would pin an address the
+        // chain will never write.
+        let expected_profile = Pubkey::find_program_address(
+            &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+            &Pubkey::new_from_array(core_program),
+        )
+        .0;
+        if self.profile_pda != expected_profile.to_bytes() {
+            return Err(Error::InvalidInfrastructureManifest);
+        }
+        Ok(())
+    }
+}
+
+/// Build the checked manifest for a cohort that succeeds nothing.
+pub fn build_checked_genesis_infrastructure_v1(
+    execution: CheckedExecutionReleaseSetV1,
+    profile: ProtocolInfrastructureProfileV1,
+    core_checked: &CheckedReleaseV1,
+    registry_checked: &CheckedReleaseV1,
+    rent_checked: &CheckedReleaseV1,
+) -> Result<CheckedGenesisInfrastructureV1> {
+    let execution_artifacts = execution.artifacts();
+    let execution_checked = execution.checked_release_ids();
+    let core_artifact = artifact_release_from_checked(core_checked)?;
+    if execution_artifacts.first() != Some(&core_artifact)
+        || execution_checked.first().copied() != Some(core_checked.checked_release_id()?)
+    {
+        return Err(Error::CheckedInfrastructureManifestMismatch);
+    }
+    let registry_artifact = artifact_release_from_checked(registry_checked)?;
+    let rent_artifact = artifact_release_from_checked(rent_checked)?;
+    let core_program = Pubkey::new_from_array(core_artifact.program().to_bytes());
+    let profile_pda = Pubkey::find_program_address(
+        &[PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V1],
+        &core_program,
+    )
+    .0
+    .to_bytes();
+    let result = CheckedGenesisInfrastructureV1 {
+        execution,
+        profile,
+        profile_pda,
+        registry_artifact,
+        registry_checked_release_id: registry_checked.checked_release_id()?,
+        rent_artifact,
+        rent_checked_release_id: rent_checked.checked_release_id()?,
+    };
+    result.validate()?;
+    Ok(result)
+}
+
+/// Reproduce a genesis manifest from its own inputs and require equality.
+pub fn verify_checked_genesis_infrastructure_v1(
+    manifest: &[u8],
+    execution_manifest: &[u8],
+    execution_checked_manifests: [&[u8]; 5],
+    registry_checked_manifest: &[u8],
+    rent_checked_manifest: &[u8],
+) -> Result<CheckedGenesisInfrastructureV1> {
+    let expected = CheckedGenesisInfrastructureV1::decode(manifest)?;
+    let execution = crate::verify_checked_execution_release_set(
+        execution_manifest,
+        execution_checked_manifests,
+    )?;
+    let core_checked = CheckedReleaseV1::decode(execution_checked_manifests[0])?;
+    let registry_checked = CheckedReleaseV1::decode(registry_checked_manifest)?;
+    let rent_checked = CheckedReleaseV1::decode(rent_checked_manifest)?;
+    let rebuilt = build_checked_genesis_infrastructure_v1(
+        execution,
+        expected.profile,
+        &core_checked,
+        &registry_checked,
+        &rent_checked,
+    )?;
+    if rebuilt != expected {
+        return Err(Error::CheckedInfrastructureManifestMismatch);
+    }
+    Ok(expected)
 }

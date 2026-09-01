@@ -620,6 +620,7 @@ fn observe_deployment_slots(rpc: &mut Rpc, plan: &SuccessorPlan) -> Result<Strin
 
 fn prepare_args(spec: &SuccessorRunSpec, authority: Pubkey) -> Result<PrepareArgs> {
     Ok(PrepareArgs {
+        observed_upgrade_authority: None,
         account_dir: PathBuf::from(&spec.account_dir),
         plan_path: PathBuf::from(&spec.plan),
         registry_program: pubkey(&spec.registry.program_id)?,
@@ -2784,6 +2785,7 @@ mod tests {
         let rent_sha = digest(&rent_elf);
         let program = |tag| Pubkey::new_from_array([tag; 32]);
         let plan = crate::plan::prepare(PrepareArgs {
+            observed_upgrade_authority: None,
             account_dir: root.join("accounts"),
             plan_path: root.join("plan.json"),
             registry_program: program(0x31),

@@ -19,21 +19,22 @@ use dclutch_release_set_contract::{
 use dclutch_release_tool::{
     BuildMetadataV1, CHECKED_TRANSLATION_VALIDATION_INPUT_COUNT_V1,
     CHECKED_TRANSLATION_VALIDATION_LABELS_V1, CheckedCapabilityExecutionV1,
-    CheckedExecutionReleaseSetV1, CheckedInfrastructureV1, CheckedReleaseV1,
-    CheckedTranslationValidationV1, LoaderV3AuthorityStateV1, ReleaseEvidenceV1, SealAccountDumpV1,
-    TranslationValidationEvidenceV1, build_checked_capability_execution_from_bytes_v1,
-    build_checked_execution_release_set, build_checked_infrastructure_v1, build_checked_release,
-    build_checked_translation_validation, derive_execution_release_set,
+    CheckedExecutionReleaseSetV1, CheckedGenesisInfrastructureV1, CheckedInfrastructureV1,
+    CheckedReleaseV1, CheckedTranslationValidationV1, LoaderV3AuthorityStateV1, ReleaseEvidenceV1,
+    SealAccountDumpV1, TranslationValidationEvidenceV1,
+    build_checked_capability_execution_from_bytes_v1, build_checked_execution_release_set,
+    build_checked_genesis_infrastructure_v1, build_checked_infrastructure_v1,
+    build_checked_release, build_checked_translation_validation, derive_execution_release_set,
     derive_protocol_infrastructure_profile_v1, derive_protocol_infrastructure_profile_v2,
     loader_v3_program_account_data_v1, loader_v3_programdata_account_data_v1,
     loader_v3_programdata_address_v1, probe_defunct_seal_v1,
     verify_checked_capability_execution_v1, verify_checked_execution_release_set,
-    verify_checked_infrastructure_v1, verify_checked_release,
-    verify_checked_translation_validation,
+    verify_checked_genesis_infrastructure_v1, verify_checked_infrastructure_v1,
+    verify_checked_release, verify_checked_translation_validation,
 };
 use solana_program::pubkey::Pubkey;
 
-const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --predecessor-profile PATH --out PATH\n  dclutch-release-tool derive-genesis-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
+const USAGE: &str = "usage:\n  dclutch-release-tool create --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify --manifest PATH --elf PATH --semantic-preimage PATH --metadata PATH --program-account-data PATH --programdata-account-data PATH [--text-out PATH]\n  dclutch-release-tool inspect --manifest PATH [--text-out PATH]\n  dclutch-release-tool loader-accounts --program-id HEX32 --loader-program-id HEX32 --elf PATH --deployment-slot U64 [--upgrade-authority HEX32 | --revoked-authority HEX32] --program-out PATH --programdata-out PATH [--text-out PATH]\n  dclutch-release-tool derive-set --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH\n  dclutch-release-tool derive-infrastructure-profile --registry PATH --rent PATH --predecessor-profile PATH --out PATH\n  dclutch-release-tool derive-genesis-infrastructure-profile --registry PATH --rent PATH --out PATH\n  dclutch-release-tool create-set --release-set PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-set --manifest PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH [--text-out PATH]\n  dclutch-release-tool inspect-set --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-infrastructure [--genesis] --execution PATH --profile PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-infrastructure --manifest PATH --execution PATH --core PATH --claims PATH --trading PATH --resolution PATH --custody PATH --registry PATH --rent PATH [--text-out PATH]\n  dclutch-release-tool inspect-infrastructure --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-capability-execution --descriptor PATH --strategy PATH --certificate PATH [--admission PATH] --accelerator PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-capability-execution --manifest PATH --accelerator PATH [--text-out PATH]\n  dclutch-release-tool inspect-capability-execution --manifest PATH [--text-out PATH]\n  dclutch-release-tool create-translation --evidence-dir PATH --out PATH [--text-out PATH]\n  dclutch-release-tool verify-translation --manifest PATH --evidence-dir PATH [--text-out PATH]\n  dclutch-release-tool inspect-translation --manifest PATH [--text-out PATH]\n  dclutch-release-tool seal-probe --account PATH --live-release ID32 [--address ID32] [--program-id ID32] [--text-out PATH]\n\nID32 is 64 hexadecimal digits or a base58 32-byte identity.";
 
 fn main() -> ExitCode {
     match run() {
@@ -135,6 +136,12 @@ fn create_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), St
     let text_output = flags.remove("--text-out");
     let execution_manifest = read_bytes(required(flags, "--execution")?)?;
     let profile_bytes = read_bytes(required(flags, "--profile")?)?;
+    // Which act this manifest describes is a STATED choice, exactly as it is
+    // for the profile derivation, and for the same reason: the two commit
+    // different profile versions to different chain acts. The flag and the
+    // profile width must agree, and disagreeing either way refuses by name --
+    // so a mistyped pipeline cannot quietly emit the wrong manifest kind.
+    let genesis = flags.remove("--genesis").is_some();
     let manifests = CheckedManifestFiles::load(flags)?;
     let registry = load_checked_release(required(flags, "--registry")?)?;
     let rent = load_checked_release(required(flags, "--rent")?)?;
@@ -142,14 +149,55 @@ fn create_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), St
 
     let execution = verify_checked_execution_release_set(&execution_manifest, manifests.refs())
         .map_err(format_release_error)?;
-    let profile = ProtocolInfrastructureProfileV2::decode(&profile_bytes)
-        .map_err(|error| format!("infrastructure profile refused: {error:?}"))?;
     let checked = manifests.decode()?;
+    if genesis {
+        let profile = ProtocolInfrastructureProfileV1::decode(&profile_bytes).map_err(|error| {
+            format!(
+                "genesis infrastructure profile refused: {error:?}. --genesis expects the \
+                 write-once V1 profile a cohort that succeeds nothing commits; a succession \
+                 profile belongs to this command without --genesis"
+            )
+        })?;
+        let result = build_checked_genesis_infrastructure_v1(
+            execution,
+            profile,
+            &checked[0],
+            &registry,
+            &rent,
+        )
+        .map_err(format_release_error)?;
+        fs::write(&output, result.encode())
+            .map_err(|error| format!("failed writing {}: {error}", output.display()))?;
+        return emit_genesis_infrastructure_text(result, text_output);
+    }
+    let profile = ProtocolInfrastructureProfileV2::decode(&profile_bytes).map_err(|error| {
+        format!(
+            "infrastructure profile refused: {error:?}. This command builds a SUCCESSION \
+             manifest and expects the 224-byte V2 profile; for a cohort that succeeds nothing, \
+             pass --genesis and the 144-byte V1 profile"
+        )
+    })?;
     let result = build_checked_infrastructure_v1(execution, profile, &checked[0], &registry, &rent)
         .map_err(format_release_error)?;
     fs::write(&output, result.encode())
         .map_err(|error| format!("failed writing {}: {error}", output.display()))?;
     emit_infrastructure_text(result, text_output)
+}
+
+fn emit_genesis_infrastructure_text(
+    infrastructure: CheckedGenesisInfrastructureV1,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let text = infrastructure.render_text().map_err(format_release_error)?;
+    if let Some(path) = output {
+        fs::write(&path, text)
+            .map_err(|error| format!("failed writing {}: {error}", path.display()))
+    } else {
+        io::stdout()
+            .lock()
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed writing stdout: {error}"))
+    }
 }
 
 fn verify_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), String> {
@@ -161,6 +209,21 @@ fn verify_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), St
     let rent = read_bytes(required(flags, "--rent")?)?;
     require_no_flags(flags)?;
 
+    // A manifest declares its own shape: the header's schema field and the
+    // exact width distinguish a genesis from a succession, and each decoder
+    // refuses the other by name rather than misreading it. So this reads the
+    // bytes instead of asking the caller to restate what they already say.
+    if manifest.len() == dclutch_release_tool::CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1 {
+        let result = verify_checked_genesis_infrastructure_v1(
+            &manifest,
+            &execution,
+            manifests.refs(),
+            &registry,
+            &rent,
+        )
+        .map_err(format_release_error)?;
+        return emit_genesis_infrastructure_text(result, text_output);
+    }
     let result =
         verify_checked_infrastructure_v1(&manifest, &execution, manifests.refs(), &registry, &rent)
             .map_err(format_release_error)?;
@@ -171,6 +234,11 @@ fn inspect_infrastructure(flags: &mut BTreeMap<String, PathBuf>) -> Result<(), S
     let manifest = read_bytes(required(flags, "--manifest")?)?;
     let text_output = flags.remove("--text-out");
     require_no_flags(flags)?;
+    if manifest.len() == dclutch_release_tool::CHECKED_GENESIS_INFRASTRUCTURE_BYTES_V1 {
+        let result =
+            CheckedGenesisInfrastructureV1::decode(&manifest).map_err(format_release_error)?;
+        return emit_genesis_infrastructure_text(result, text_output);
+    }
     let result = CheckedInfrastructureV1::decode(&manifest).map_err(format_release_error)?;
     emit_infrastructure_text(result, text_output)
 }
@@ -770,6 +838,9 @@ fn emit_set_text(
     }
 }
 
+/// Flags that are switches rather than name/value pairs.
+const VALUELESS_FLAGS_V1: &[&str] = &["--genesis"];
+
 fn parse_flags(
     mut arguments: impl Iterator<Item = OsString>,
 ) -> Result<BTreeMap<String, PathBuf>, String> {
@@ -781,9 +852,17 @@ fn parse_flags(
         if !flag.starts_with("--") {
             return Err(format!("expected flag, found: {flag}"));
         }
-        let value = arguments
-            .next()
-            .ok_or_else(|| format!("missing value for {flag}"))?;
+        // Switches, named one by one and never inferred. Every other flag
+        // takes a value, and a switch that consumed one would silently eat the
+        // NEXT flag's name -- which is exactly how `--genesis` first swallowed
+        // `--execution` and reported the error one argument too late.
+        let value = if VALUELESS_FLAGS_V1.contains(&flag.as_str()) {
+            OsString::from("")
+        } else {
+            arguments
+                .next()
+                .ok_or_else(|| format!("missing value for {flag}"))?
+        };
         if flags.insert(flag.clone(), PathBuf::from(value)).is_some() {
             return Err(format!("duplicate flag: {flag}"));
         }

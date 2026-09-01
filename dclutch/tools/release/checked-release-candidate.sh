@@ -926,8 +926,15 @@ else
         --predecessor-profile "$PINNED_PREDECESSOR_PROFILE" \
         --out "$INFRA_DIR/profile.bin"
 fi
+# The manifest carries the same stated lineage as the profile. `--genesis` and
+# the profile width must agree; the tool refuses either mismatch by name, so
+# the two halves cannot drift into describing different acts.
+GENESIS_MANIFEST_FLAG=""
+if [ "$GENESIS_COHORT" = "true" ]; then
+    GENESIS_MANIFEST_FLAG="--genesis"
+fi
 # shellcheck disable=SC2086
-run_tool create-infrastructure \
+run_tool create-infrastructure $GENESIS_MANIFEST_FLAG \
     --execution "$SET_DIR/multiprogram.checked" \
     --profile "$INFRA_DIR/profile.bin" \
     $FIVE_ROLES \
@@ -949,7 +956,11 @@ run_tool inspect-infrastructure --manifest "$INFRA_DIR/infrastructure.checked" \
     --text-out "$INFRA_DIR/inspect-infrastructure.txt"
 cmp -s "$INFRA_DIR/infrastructure.txt" "$INFRA_DIR/inspect-infrastructure.txt" \
     || { echo "inspect-infrastructure projection differs" >&2; exit 1; }
-echo "checked: immutable Core/Registry/Rent infrastructure"
+if [ "$GENESIS_COHORT" = "true" ]; then
+    echo "checked: founded Core/Registry/Rent infrastructure (genesis, no predecessor)"
+else
+    echo "checked: immutable Core/Registry/Rent infrastructure"
+fi
 
 # Do this after every source-tree Cargo invocation, including the host release
 # tool. `--locked` should make mutation impossible; byte-compare the complete

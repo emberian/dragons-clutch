@@ -3119,10 +3119,14 @@ pub(crate) fn authenticate_checked_campaign_plan(
     let mutable = runtime::role_pins(plan)
         .into_iter()
         .any(|(_, pin)| pin.upgrade_authority.is_some());
+    let every_role_observed = runtime::role_pins(plan)
+        .into_iter()
+        .all(|(_, pin)| pin.deployment_source == "observed-programdata-account");
     require_checked_mutable_binding(
         mutable,
         plan.checked_upgrade_set.is_some(),
         plan.checked_local_mutable_set.is_some(),
+        every_role_observed,
     )?;
     if plan.checked_local_mutable_set.is_some() {
         crate::cluster::ExpectedClusterV1::OwnedLoopback.authenticate(origin)?;
@@ -3190,13 +3194,23 @@ fn require_checked_mutable_binding(
     mutable: bool,
     has_checked_upgrade_set: bool,
     has_checked_local_set: bool,
+    every_role_observed: bool,
 ) -> Result<()> {
     if has_checked_upgrade_set && has_checked_local_set {
         return Err(Error::new(
             "saved plan mixed permanent-devnet and owned-loopback checked deployment evidence",
         ));
     }
-    if mutable && !has_checked_upgrade_set && !has_checked_local_set {
+    // A mutable plan must be BOUND to checked evidence, and a founded cohort
+    // binds to the third kind: the observed ProgramData accounts themselves.
+    // The two deployment sets are second copies of facts an upgrade produced;
+    // a cohort that succeeds nothing produced no such copy, and its binding is
+    // the observation `prepare` already authenticated against the declared
+    // authority and that `substrate_state` re-verifies on chain before any key
+    // is read. The requirement is unchanged -- evidence must be bound -- only
+    // the admissible source is widened, and only for a plan in which EVERY
+    // role is observed, so a half-observed plan still refuses.
+    if mutable && !has_checked_upgrade_set && !has_checked_local_set && !every_role_observed {
         return Err(Error::new(
             "mutable saved plan is not bound to checked deployment-set evidence",
         ));
@@ -4857,13 +4871,23 @@ mod tests {
 
     #[test]
     fn mutable_saved_plan_requires_checked_set_before_key_loading() {
-        require_checked_mutable_binding(false, false, false).expect("legacy immutable plan");
-        require_checked_mutable_binding(true, true, false).expect("checked devnet mutable plan");
-        require_checked_mutable_binding(true, false, true).expect("checked local mutable plan");
-        let refusal = require_checked_mutable_binding(true, false, false)
+        require_checked_mutable_binding(false, false, false, false).expect("legacy immutable plan");
+        require_checked_mutable_binding(true, true, false, false)
+            .expect("checked devnet mutable plan");
+        require_checked_mutable_binding(true, false, true, false)
+            .expect("checked local mutable plan");
+        // A founded cohort binds to its own observations, and only when EVERY
+        // role is one: a half-observed mutable plan is still unbound.
+        require_checked_mutable_binding(true, false, false, true)
+            .expect("founded devnet plan bound by observation");
+        require_checked_mutable_binding(true, false, false, false)
+            .expect_err("a mutable plan bound by nothing must still refuse");
+        let refusal = require_checked_mutable_binding(true, false, false, false)
             .expect_err("unbound mutable plan must refuse");
         assert!(refusal.0.contains("not bound"), "{}", refusal.0);
-        assert!(require_checked_mutable_binding(true, true, true).is_err());
+        assert!(require_checked_mutable_binding(true, true, true, false).is_err());
+        // Observation never rescues a plan that mixed both deployment sets.
+        assert!(require_checked_mutable_binding(true, true, true, true).is_err());
     }
 
     #[test]
