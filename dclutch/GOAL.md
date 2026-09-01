@@ -2388,3 +2388,13 @@ own control (authority retained on one role must still prepare; it caught two
 wrong-reason refusals while being written) and a real-world control (cohort-9's own
 plan would not have been blocked). This lane submitted **zero transactions**.
 | `a84c8bf71f714d16c` | CLEANUPS | five verified-and-decided defects from the scholar: false npm comments + rename the TS binary; cut the Materialize route as the N-11 reject; make 9000 a real ceiling; rename the heap check + measure `DCLTHOT3`'s true peak; the settlement exposure check that compares the instruction to itself |
+
+## STANDING GOAL — ember, 2026-09-01
+
+> *"Make dclutch the best version it can be, eliminating all protocol defects and
+> making the operator console & UX excellent."*
+
+Two halves. Protocol defects: eight lanes. Operator console and UX: the ninth,
+below, on a named backlog of ten with `file:line` on each.
+
+| `a2f3695f1c033fb62` | OPERATOR-UX | the wizard cannot call the real gate; the Studio evaluator is a mirror; the abort path shows `ProgramFailedToComplete` with no remedy; `basis_scale == 1` hardcoded in portfolio + PositionBars; `claims.conserve`'s missing second wall; runbook replay tier; the two-binaries doc page; 31 type errors; 223 CSS rules; redemption stage one |

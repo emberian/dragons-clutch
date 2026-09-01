@@ -49,7 +49,8 @@ use crate::{
         DIRECT_REGISTERED_CREATION_ITEM_IDENTITY_STRIDE_V4,
         DIRECT_REGISTERED_CREATION_ITEM_SCALAR_STRIDE_V4, REGISTERED_IDENTITY_COLLATERAL_SOURCE_V4,
         REGISTERED_IDENTITY_CUSTODY_AUTHORITY_V4, REGISTERED_IDENTITY_CUSTODY_VAULT_V4,
-        REGISTERED_IDENTITY_MAKER_BENEFICIARY_V4, REGISTERED_IDENTITY_MARKET_V4,
+        REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4, REGISTERED_IDENTITY_MAKER_BENEFICIARY_V4,
+        REGISTERED_IDENTITY_MARKET_V4,
         REGISTERED_IDENTITY_MINT_V4, REGISTERED_IDENTITY_PARENT_REQUEST_V4,
         REGISTERED_IDENTITY_PAYER_V4, REGISTERED_IDENTITY_REALM_V4,
         REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4, REGISTERED_IDENTITY_RECORD_STATE_V4,
@@ -527,11 +528,20 @@ fn push_initialize_request(
     next: &mut usize,
 ) -> Result<(), DirectRegisteredEffectArtifactErrorV4> {
     push_common_request(output, next, 0)?;
+    // `RENT_REFUND` is the lifecycle RentCredit, never the record beneficiary.
+    // Custody's `initialize_replay` requires the frame's `RentRefund` account to
+    // equal `request.rent_refund` AND to differ from the payer, and this
+    // family's record beneficiary IS the payer -- so naming it here refused
+    // `AccountFrame` 0x6001 inside the first Custody CPI a registered Buy ever
+    // made, at 776,043 CU. The profile's own `ROUTE_ALIASES` had already said
+    // which account that coordinate holds: the InitializeReplay frame's
+    // `RentRefund` is an alias of `DIRECT_REGISTERED_LIFECYCLE_RENT_CREDIT_
+    // ACCOUNT_V4`, and register 7 is that account's projected key.
     for (field, value) in [
         (CustodyRequestLayoutV1::PAYER, REGISTERED_IDENTITY_PAYER_V4),
         (
             CustodyRequestLayoutV1::RENT_REFUND,
-            REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4,
+            REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4,
         ),
     ] {
         push_request_identity(output, next, 0, field, value)?;
@@ -565,9 +575,13 @@ fn push_open_request(
             REGISTERED_IDENTITY_TOKEN_PROGRAM_V4,
         ),
         (CustodyRequestLayoutV1::PAYER, REGISTERED_IDENTITY_PAYER_V4),
+        // The vault's refund beneficiary is the same lifecycle credit the
+        // replay's is; `CloseVault` reads it back off ITS own request, and a
+        // vault whose two ends named different accounts would be a rent leak
+        // this family cannot close.
         (
             CustodyRequestLayoutV1::RENT_REFUND,
-            REGISTERED_IDENTITY_RECORD_BENEFICIARY_V4,
+            REGISTERED_IDENTITY_LIFECYCLE_RENT_CREDIT_V4,
         ),
     ] {
         push_request_identity(output, next, 1, field, value)?;

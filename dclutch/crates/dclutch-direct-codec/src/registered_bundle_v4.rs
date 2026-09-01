@@ -1068,7 +1068,7 @@ mod tests {
         // would report no reads at all and pass a floor. The Buy reads its whole
         // Custody chain's operands; the Sell's Effect is the local-state block
         // alone, and reads correspondingly fewer.
-        for (artifacts, expected) in [(buy_artifacts(&buy), 42), (sell_artifacts(&sell), 30)] {
+        for (artifacts, expected) in [(buy_artifacts(&buy), 43), (sell_artifacts(&sell), 30)] {
             let action = artifacts.action;
             let (scalars, identities) = artifacts.effect_reads();
             let unwritten = artifacts.unwritten((&scalars, &identities), false);
