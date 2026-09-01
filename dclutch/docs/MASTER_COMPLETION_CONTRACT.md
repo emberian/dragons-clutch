@@ -70,6 +70,16 @@ Every row remains **open** until its evidence column is filled with current,
 reproducible artifacts and its adversarial closure has been reviewed. Existing
 work is adopted into the row; it is not discarded or presumed sufficient.
 
+**Which of YOUR row's routes have no campaign:**
+`docs/evidence/UNWITNESSED_ROUTES_BY_ROW_2026_09_01.md` breaks the register's 55
+`NEVER-EXECUTED` routes down per row and names every one — C-01 4, C-02 5,
+C-04 4, C-06 8, C-07 2, C-08 5, C-09 14, C-10 13. An unwitnessed route is one no
+campaign drives; it is a statement about coverage, not about correctness. A
+route that turns out to be structurally undrivable belongs in
+`tools/gauntlet/blocked.json` with a reason and an owner, not left in that list
+looking like unstarted work. The entry list for C-00/C-16 is
+`docs/evidence/C16_ENTRY_LIST_2026_09_01.md`.
+
 | ID | Capability that must be finished | Terminal evidence |
 | --- | --- | --- |
 | C-00 | Scope closure | Every recoverable ambition is mapped here or explicitly ruled out by Ember; no orphan `unfinished`, material TODO, never-executed intended route, or contradictory current guide remains. |

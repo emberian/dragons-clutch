@@ -108,6 +108,21 @@ are documented in decision 0007. → **(c)**, §10 row R-2.
 
 ### 1.3 `FractionalClaimCheckCompactionSbfErrorV1::Phase = 0x5644` — CLOSED
 
+**Status: DECLARED, CONVICTED, BUILT, OBSERVED — closed across three lanes in
+one session.** It was declared and unraisable when this ledger opened; convicted
+here as a guard declared and never written; built by the Structured lane at
+`fractional_claim_check_v1.rs:1196-1209`; and then *observed firing on a real
+ELF* by this lane's own fold (`939d0806`), through a hostile that rewrites the
+Core Market to `Open` with its terminal receipt dropped, at its own derived
+address, so the phase is the sole discriminator. `Custom(0x5644)`, in the
+runtime's own log.
+
+That is the whole method in one refusal code, and it is worth naming as a
+sequence rather than as an outcome: a census found an absence, a second method
+convicted it as a defect rather than an artefact, an owner built the guard, and
+a third instrument watched it fire. **No single step of that is evidence; the
+sequence is.**
+
 **Status: fixed by S7 while this lane was running.** `fractional_claim_check_v1.rs`
 now decodes `CoreState` (`:1196`) and raises `Phase` on both halves —
 `CorePhaseGateV3::TerminalOrRetiring.admits(core.phase)` (`:1202-1203`) and

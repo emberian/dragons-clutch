@@ -4314,3 +4314,46 @@ Core Market to `Open` with its terminal receipt dropped, at its own derived
 address, so the phase is the sole discriminator.
 
 > **Declared, convicted, built, observed.**
+
+## 2026-09-01 — a stale caveat outlives a stale total
+
+**Correction to entries above.** This ledger recorded *"384 of 391 lamport
+set-sites enumerated, not classified"* more than once. **Both numbers are dead.**
+The population went **391** (raw grep, test code included) → **152** (production
+only) → **120** (after 32 turned out not to be destinations), and closed at
+**120 of 120 classified, class 4 zero.** 384 was 391 minus seven wire decodes —
+arithmetic that only ever made sense against the pre-filter count.
+
+The lane traced how it survived: written once *before* the census completed, then
+**carried forward verbatim into three later posts without re-deriving it.** A
+snapshot from upstream of two successive filters, quoted as though live.
+
+### The lesson, and it is the sharper of the two
+
+The legend line inflated 57 to 58 — a number that still reconciled against
+nothing. This line kept a **superseded population alive by being copied rather
+than recomputed.** Both are off-by-a-filter errors, and both survived because
+the sentence around them read as settled.
+
+> **A lane that corrects its own totals but copy-pastes its own caveats has only
+> half the habit.**
+>
+> **A stale caveat is more durable than a stale total, because nobody audits the
+> thing that says work remains.**
+
+A carried-forward *not-done* line needs re-deriving every time it is repeated,
+exactly like a total does. Everyone checks the number that claims progress;
+nobody checks the number that claims debt — so the debt figure is where a dead
+count lives longest.
+
+**What actually remains from that row**, re-derived rather than copied:
+
+1. **The heap delta is unattributed** — 15,682 CU between the shipping and
+   `hot-cu-profile` builds, split unknown between checkpoint logging and
+   `hot_cu_profile_lifts_every_route_v1()` lifting every route onto the extended
+   heap. Separating them needs a build that keeps the checkpoints and drops the
+   lift.
+2. **The recorded 323,523 CU no longer reproduces at HEAD** — the ordinary run
+   reads **331,274**, +7,751.
+
+The lamport half **is** swept.
