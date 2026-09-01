@@ -3862,3 +3862,93 @@ Routes never exceeding 32 KiB are unaffected. The settling experiment is a
 `solana-test-validator` submission of the same instruction at 33,792: fault means
 the runtime class does not apply it; success means a sweep of affected routes and
 recorded numbers is owed.
+
+## 2026-09-01 — the wall spoke
+
+Eight causes behind eleven refusal sites became eight codes
+(`0xC005`–`0xC00C`, `e92d759f`), allocated contiguously from the registered
+base, **welded to the enum by the exhaustive `ordinal` match the band assertions
+walk — so a fourteenth variant will not compile until its author answers for
+it.** `0xC002` keeps its numeric value and **narrows** to the cause nearest its
+old name, so a code already seen in a log still means a *subset* of what it
+meant, never something else. The only safe way to split a published
+discriminant.
+
+The program-test sweep stops asserting one code six times: each row now names
+the single cause it exercises — *which is what makes them six tests rather than
+one test written six ways.*
+
+**Then the wall spoke.** OpenBatch through real Trading ELFs at N=2 refuses
+**`0xC00A InstructionsSysvarAccount`**: the account at
+`ADMITTED_INSTRUCTIONS_ACCOUNT_V3` is not the readonly instructions sysvar. The
+lane then measured the same bundle host-side — **the sysvar is present in the
+transaction, readonly and unsigned, at instruction index 29.** So the account is
+right and its **position in the admitted-AOT transport frame** is wrong.
+
+> **That is a claim nobody could have made an hour ago, because the program
+> could only say "top level."**
+
+The refusal narrowed it to a coordinate; the host measurement proved the account
+exists and is correctly shaped. Neither alone would have located it. That is the
+argument for refusal granularity, demonstrated rather than asserted.
+
+### The two framings, kept
+
+**Stricter, not looser** — because the diff reads as a relaxation without it:
+*the pinned index constrained one instruction by position; the new rule
+constrains all of them by capability.* Every shape the old rule admitted still
+is; every newly admitted shape differs only by additional ComputeBudget
+instructions.
+
+**And the author's own mistake**, which is the more valuable of the two: an
+M-38 nearly shipped into the audit *for* M-38 — a hostile that sent no heap
+grant, so deleting the conjunct under test left it still refusing on the missing
+heap.
+
+> **Every convention enforced by attention rather than by a gate should be
+> assumed already broken somewhere, including by the person who wrote it** — the
+> mutation test caught it, not review.
+
+**C-05 moved from *cannot execute at all* to *executes and refuses somewhere
+specific enough to fix*, in six commits.**
+
+## 2026-09-01 — the fifth check is real but NOT uniform
+
+**Correction to the entry above.** The register equality at
+`lifecycle_v3.rs:3181` was credited with closing the rent-credit hole. It does —
+**for four of the five live families. For Series the same check cannot fail.**
+
+| family | register projected from | verdict |
+|---|---|---|
+| Direct registered | the maker replay's and record's own `RENT_OWNER` | **good**, traced |
+| Dealer LP (v3+v4) | LP record offset 152 = that record's own `rent_refund` | **good**, traced |
+| General (8 sites) | same `OBSERVATION` convention | **good by naming** — not all eight projection sources read, and said so |
+| Direct inline | same shape as its registered sibling | not separately traced |
+| **Series** | **the rent credit account itself**, at `LIFECYCLE_RENT_CREDIT_REFUND_WALLET_OFFSET_V2` | **vacuous** |
+
+`funding_artifacts_v5.rs:314-318` projects that register **out of the credit's
+own `refund_wallet` field**, so `:3181` compares `credit.beneficiary` against a
+value read from the same account's same field. **x == x.** A guard whose two
+sides move together — **sitting inside the very mechanism that had just been
+credited with closing the root hole.**
+
+**Series is still bound, just not by that.** `core-sbf/series_consume.rs:844`
+refuses unless `request.beneficiary == ticket.refund_owner()`, and `:884`
+refuses unless `credit.refund_wallet() == request.beneficiary()`. Transitively
+the credit's wallet equals the ticket's own refund owner — the party who
+prepaid. **No hole.**
+
+### The correction a reviewer needs
+
+> **Do not tell anyone the account profile gates this uniformly.** It gates
+> Direct, Dealer and General; for Series the account-profile gate is
+> **decoration** and Core carries the weight alone.
+
+Anyone hardening Series who deleted those two Core conjuncts believing the
+profile still covered them would open the hole — **and every downstream
+comparison would keep agreeing**, which is the exact failure mode this census
+exists to find.
+
+And it is why the residual was worth doing rather than trusting the previous
+turn's answer: **the mechanism was real, but it was not uniform, and "four
+families agree" was never the thing that made it safe.**
