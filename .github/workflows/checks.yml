@@ -334,6 +334,32 @@ jobs:
       #
       # Everything else in both suites runs, unfiltered. The live-devnet tests
       # are already env-gated off by default and reach no network.
+      #
+      # ONE TEST IN THIS SUITE NEEDS RUST, AND IS NOT EXCLUDED FOR IT.
+      # lib/sourceReadinessWasmParity.test.ts shells out to
+      # `cargo run -p dclutch-source-readiness-operator --bin
+      # source-readiness-parity` and asserts the generated WASM blob and the
+      # native operator derive byte-identical coordinates. That is the gate
+      # that stops the browser becoming its own authority for those wires, so
+      # an unproven parity is not a parity and excluding it would be the
+      # silent narrowing the block above exists to forbid.
+      #
+      # The toolchain is installed EXPLICITLY rather than left to
+      # rust-toolchain.toml's implicit auto-install on first `cargo`. On
+      # 2026-09-01 the implicit path failed on the runner with
+      #   error: failed to install component: 'cargo-x86_64-unknown-linux-gnu',
+      #   detected conflict: 'bin/cargo'
+      # which reds the entire web suite for a reason that has nothing to do
+      # with any code under test. Measured the same day: all four parity cases
+      # pass in the live tree in about two seconds, so that red was
+      # provisioning and never a parity break. This step is a CI-environment
+      # repair and could not be reproduced off-runner; if it still conflicts,
+      # the honest next move is to pin the runner's own toolchain via
+      # RUSTUP_TOOLCHAIN for this step, NOT to exclude the test.
+      - name: Rust toolchain (for the Source readiness parity test)
+        if: matrix.name == 'web'
+        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
+
       - name: Test
         working-directory: ${{ matrix.directory }}
         run: |
