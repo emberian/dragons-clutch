@@ -117,6 +117,18 @@ band 0 is never allocated, so a code below `0x1000` is not ours.
   refused somewhere other than where their author believed. Name the exact
   discriminant, derived from the enum, and prove the test red before trusting
   it green.
+- **A bare `is_err()` has two causes, and only one of them is the test's
+  fault.** The first is the hostile that never reaches its subject, above. The
+  second is a hostile that reaches its subject and has no word for what it
+  found, because the refusal it wants to name is one undifferentiated code over
+  many conjuncts — and that one is fixed by SPLITTING THE DISCRIMINANT, not by
+  rewriting the test. Measured on 2026-09-01: `4c90cdf5` split
+  `InvalidScratchBank`'s six causes, and
+  `corrupted_scratch_page_refuses_without_mutating_selection` — a bare
+  `is_err()` that had survived every audit — became an exact
+  `ScratchBankDigest` assertion in the same commit, predicted from the
+  fixture's behaviour before it was run and confirmed by the run. Before
+  reaching for the test, ask whether the code it needs exists.
 - Bands are append-only. A new program takes the next free base; a deleted
   program's band is withdrawn, never reused.
 - `dclutch-route-census inventory --check-unique` is the gate, and it runs in

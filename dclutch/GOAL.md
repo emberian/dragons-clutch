@@ -1989,3 +1989,41 @@ grant.**
 - **The CLI parity gate landed** (`06edd66e`) at a crate-wide true figure of
   **zero**, after a per-file first cut reported 24 of 34 disagreeing — **every
   one a false positive**, in three named shapes, all the lane's own.
+
+### Ruling 10 — a policy floor raised after I joined can strand my exit
+
+**Measured, not argued.** `locked_capital_floor` comes from the **selected
+immutable descriptor**, and the planner applies it to the **poststate** of a
+redemption. So an LP whose value has not moved can be **refused its exit by an
+evolution it never agreed to.**
+
+Pool residual `[40,100,160]`, redeeming 100 of 200: floor 0 pays, floor 60
+refuses, and **the boundary is exact — 20 pays, 21 refuses** — so the floor is
+demonstrably the thing doing the refusing.
+
+The lane deliberately did **not** rule: *refusing to drain a pool below its floor
+is a real purpose, and a stranded LP is a real cost.* The test states the fact so
+it can be decided on evidence rather than on preference. **Yours.**
+
+### And the rest of consent, in numbers (`c3de0f42`)
+
+**An arriving LP cannot move my position.** Over 80 awkward pools: A withdraws a
+slice, B doubles the pool proportionally **without asking A**, A withdraws the
+same slice — **identical in every scenario, exactly**, because
+`floor(2R·b / 2S) = floor(R·b / S)`.
+
+**And the teeth check gave the strongest result of the session.** Minting
+`total_shares + 1` for the same basket — **a one-share dilution** — makes the
+corpus read **zero executions**: the planner refuses all 80.
+
+> **Dilution by mis-minting is structurally impossible, not merely detected.**
+
+**The anti-vacuity guard is what surfaced it** — without the guard that mutation
+passes on no executions and teaches nothing. Second time this session a guard
+has converted a silent vacuous pass into a positive structural finding.
+
+The guard threshold was a guess (60); the measurement said 50, so it was set to
+the **measured** count with the reason 30 skip named — the slice rounds to
+nothing, or its complete sets cannot be split; both physical, neither able to
+distinguish a dilution. *Lowering it without finding out would have been
+weakening a guard to make a test pass.*
