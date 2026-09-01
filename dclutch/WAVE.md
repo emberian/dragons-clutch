@@ -4935,3 +4935,56 @@ credited by the lane that had instead printed the mismatch from inside
 
 trading-sbf lib **446/6 → 449/4**; the same four remain, none the validator,
 none newly broken.
+
+## 2026-09-01 — one of the two stages left the browser's path
+
+The redemption acquisition landed (`eed52c57`). `RedeemFlow` no longer says
+*"This browser never creates or completes a payout plan."*
+
+**Every address comes from the derivation's own list** — the boundary is asked
+which accounts it authenticates and exactly those are read, in exactly that
+order. **Not one is computed in TypeScript.** The mirror hazard prevented at the
+point it would otherwise be introduced rather than corrected afterwards. One
+finalized floor, taken once. A vacant account is carried as vacant rather than
+refused, because **the derivation decides which of the 36 may be empty, with its
+own reason** — and each observation carries the address it is *of*, so the
+boundary's cross-check has something to check.
+
+### What it refuses to claim
+
+**The reader still imports JSON.** Stage one — `wallet-terminal-payout-input` —
+reads two operator artifacts and its own RPC, was **not** extracted, and stays a
+CLI command. **A test pins that the page still says so.**
+
+> The browser now performs the **authenticated derivation** itself — the
+> 36-account frame, the lookup-table geometry and the report come from compiled
+> Rust reading finalized chain state *here*, instead of arriving as a manifest
+> computed elsewhere. **One of the two stages left the browser's path. Saying
+> both did would be a claim this lane did not earn.**
+
+An already-complete manifest is still accepted — **not a parallel authority, but
+two artifacts at different stages of one**: whichever arrives, what reaches the
+checks is the same derivation proved against finalized devnet by the same code.
+The stage-one format name is emitted **from the operator crate**, so the browser
+recognises the artifact without writing its name down.
+
+### The derivation recorded the change; nobody typed a status
+
+The regenerated capability surface moved **223 → 226 modules** and **21 → 22
+generated authorities**, and `/portfolio` and `/redeem` gained the payout facts
+in their reach.
+
+And a test flipped from asserting a wall to asserting **its absence** — the
+second time this session. The gate also caught the lane's own ratchet fix
+diverging a twin; synced, `twinIdentity` 157/157.
+
+**C-12: trade and redemption are both stranger-operable in the browser now**, to
+the limit each earned — admission end to end, redemption from the payout input
+onward. Creation's remaining debt is a transport question plus one blocked
+constant.
+
+**The named next line**, for whoever takes it: **extract stage one the same way
+stage two went.** Its impurity is two file reads, an RPC and a cluster policy;
+its inputs are the six coordinates the browser already holds. *The last CLI
+command standing between a stranger and a redemption — and its shape is now
+known rather than guessed.*
