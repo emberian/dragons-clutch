@@ -947,3 +947,28 @@ refuse the unset pubkey somewhere in it. The entry exists so **the gate fires if
 the last such guard in this file is ever deleted** — which, for a route whose
 whole safety case is "these identities are provably zero", is the entry most
 worth having.
+
+## 2026-09-01 — two `validate_frame` entries removed because the function is gone
+
+`programs/dclutch-resolution-proof-sbf/src/lib.rs` no longer contains
+`validate_frame`. It lived inside the 775 lines of `#[cfg(any())]` dead code
+deleted in `2eebff33`'s neighbourhood — a superseded V1 path kept beside its
+successor, opening with a 248-line block named
+`removed_legacy_v1_direct_instruction` that had never been removed.
+
+So both baseline rows — `hazard-privilege-pin` and `hazard-signer-census` — were
+reported **GONE** by the gate, which is the correct verdict and the correct
+instruction: *if it was fixed, the register should shrink.*
+
+**Removed by hand rather than by `--write`.** The standing rule against
+`--write` exists because that flag would also silently absorb any **NEW**
+finding in the same pass, converting a seam disagreement into a baseline entry
+nobody argued for. Deleting the two stale rows by line, verifying the file still
+parses, and confirming the only surviving `validate_frame` row belongs to a
+different file (`core-sbf/src/begin_retiring.rs`, which does still contain one)
+gets the same shrink with none of that risk.
+
+Worth noting what the pair actually were, since the register no longer will:
+both were findings **about code that never compiled.** A `cfg(any())` block
+cannot execute, so a privilege pin or signer census inside one describes a
+hazard no transaction could ever reach. They were true statements about text.
