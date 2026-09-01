@@ -3259,13 +3259,25 @@ async fn real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_run
                 // rows are what the pinned-index rule made impossible; the four
                 // refusing rows are why dropping it is not a relaxation. Each
                 // refusal names the exact discriminant, derived from the enum.
-                for (prelude, accepts) in [
-                    (TopLevelPreludeV3::HeapOnly, true),
-                    (TopLevelPreludeV3::HeapThenLimit, true),
-                    (TopLevelPreludeV3::Nothing, false),
-                    (TopLevelPreludeV3::LimitOnly, false),
-                    (TopLevelPreludeV3::WrongHeap, false),
-                    (TopLevelPreludeV3::ForeignBefore, false),
+                for (prelude, refusal) in [
+                    (TopLevelPreludeV3::HeapOnly, None),
+                    (TopLevelPreludeV3::HeapThenLimit, None),
+                    (
+                        TopLevelPreludeV3::Nothing,
+                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted),
+                    ),
+                    (
+                        TopLevelPreludeV3::LimitOnly,
+                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted),
+                    ),
+                    (
+                        TopLevelPreludeV3::WrongHeap,
+                        Some(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted),
+                    ),
+                    (
+                        TopLevelPreludeV3::ForeignBefore,
+                        Some(GeneralAcceleratorSbfErrorV3::ForeignInstructionBeforeTrading),
+                    ),
                 ] {
                     let case =
                         real_sbf_fixture_v3(width, controller, bank.clone(), runtime.clone());
@@ -3274,22 +3286,24 @@ async fn real_sbf_verify_candidate_executes_every_row_and_terminal_result_at_run
                         submit(&mut context, case.instruction, &case.label, false, prelude)
                             .await
                             .expect("top-level prelude hostile processes");
-                    if accepts {
-                        assert!(
+                    match refusal {
+                        None => assert!(
                             processed.result.is_ok(),
                             "{prelude:?} must execute: {:?}",
                             processed.result,
-                        );
-                    } else {
-                        assert_eq!(
+                        ),
+                        // Each row names the ONE cause it exists to exercise.
+                        // While these eight conjuncts shared a code, every row
+                        // here passed on any of the other seven.
+                        Some(expected) => assert_eq!(
                             format!("{:?}", processed.result),
                             format!(
                                 "Err(InstructionError({}, Custom({})))",
                                 prelude.trading_index(),
-                                GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction as u32
+                                expected as u32
                             ),
                             "{prelude:?}",
-                        );
+                        ),
                     }
                 }
             }

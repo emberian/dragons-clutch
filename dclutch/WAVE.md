@@ -3768,3 +3768,97 @@ under test actually carried the repair** (`derivation_policy() !=
 descriptor.lifecycle().program()` at zero occurrences; per-root constant in 3/3
 builders). *Check that the thing you are measuring is the thing you think you
 are measuring.*
+
+## 2026-09-01 — the check that answers it lives outside the four families
+
+**No foreign-money path into `LifecycleRentCreditV2`.** The Rent program's
+instruction surface is exactly three — `Create`, `Sweep`, `Close` — and every
+lamport movement was read: `Create` moves payer → credit; `Sweep` and `Close`
+move credit → wallet plus the crank reward. **Not one ingests lamports from a
+third party.**
+
+**The cross-program route is where the defect should have been.** Other programs
+credit a lifecycle credit on account close — the registered Direct profile
+requires the credit writable *"so a Close may credit it"* — and in registered
+Direct creation the **maker** pays for both records it creates while the credit
+is the **market's**. That is exactly the shape that puts one party's prepaid rent
+into another party's directed account.
+
+**It is gated by a fifth, independent check nobody had counted.**
+`account-profile-contract/lifecycle_v3.rs:3174-3183` refuses `InvalidRent`
+unless `credit.beneficiary` equals a beneficiary identity register **the
+AccountProfile projects** — and the registered profile projects each created
+record's own `RENT_OWNER`.
+
+> **Rent ownership is tracked per record, not pooled.** A record whose rent one
+> party paid cannot be closed against a credit whose refund wallet is another's.
+
+And it answers the question **precisely because it lives outside the four
+agreeing families.** Four families agreeing with each other proves nothing; a
+fifth thing that would refuse them all proves something.
+
+So `rent_beneficiary` stays **class 4 in form, class 3 in substance** — but the
+substance is now enforced by a register equality, not by the founder happening
+to own both sides of a comparison.
+
+**Verified and not-verified kept apart.** Verified: the three-instruction
+surface and its moves; the full credit-identity derivation; the register-equality
+gate; the registered profile's `RENT_OWNER` projection. **Not verified:** that
+*every* family's lifecycle policy points its `selected.beneficiary` register at
+the record's own `rent_owner`. **A family that pointed it elsewhere would reopen
+exactly this hole** — one read per policy, and the only place left for it to
+hide.
+
+The arc, complete: *audit 120 sites for weak checks* → *find a path with no
+check at all* → *find foreign money in the account everything trusts* → **and
+the check that stops it turns out to live in the account profile, not in any of
+the four families.**
+
+## 2026-09-01 — convicted by 248 bytes
+
+The experiment that decides the heap ruling ran, and returned **outcome 3** — by
+the smallest possible margin.
+
+| requested frame | form | runtime | program |
+|---|---|---|---|
+| 32,768 (= default) | legal | accepted | refuses `HeapFrame 0x4008` — equal to default is not an *extension* |
+| **33,792 (default + 1 KiB)** | legal | **accepted, runs, grants the default** | write at 33,016 = 33,792 − 776 → **violation 248 bytes past the default heap** |
+| 65,536 | legal | accepted, grants the default | violation at 65,536 − 776 |
+| 262,144 (= max) | legal | accepted, grants the default | violation at 262,144 − 776 |
+| 524,288 (> max) | malformed | **rejected before execution, zero logs** | never runs |
+| 65,000 (not a 1,024 multiple) | malformed | **rejected before execution, zero logs** | never runs |
+
+**The runtime does not refuse a transaction whose `RequestHeapFrame` was not
+honoured.** It validates the **form** — bounds and granularity — rejecting
+malformed requests before execution with no logs at all. It then **accepts a
+well-formed, in-bounds, above-default request and does not apply it**, running
+on the default 32,768 while the instructions sysvar still reports what was asked.
+
+The 33,792 row is the whole proof: a legal request one kilobyte above default,
+the ceiling tracking it exactly at `request − 776`, and the write landing **248
+bytes past** where the default heap ends. The two malformed rows are the control
+that makes it airtight — the runtime *is* rejecting things, just not this.
+
+> **What the check may soundly conclude is "the request was well-formed and
+> above the default."** What it claims is that the frame was **granted**, and the
+> program has no way to observe the difference.
+
+### The caveat that may be bigger than the finding
+
+Measured in `solana-program-test 4.3.0-beta.2`. *"I cannot distinguish from
+these runs whether **no** runtime applies the frame or whether **this harness**
+does not."* The repair is warranted either way — the program still cannot
+observe the grant, and **there exists a runtime inside this project's own
+evidence base where request ≠ grant.**
+
+But if the gap is ProgramTest's:
+
+> **Every ProgramTest measurement of a route that actually allocates past 32 KiB
+> has been running on a smaller heap than the route asked for** — so any capacity
+> number from such a run describes a program that believed it had more heap than
+> it had.
+
+Routes never exceeding 32 KiB are unaffected. The settling experiment is a
+`solana-test-validator` submission of the same instruction at 33,792: fault means
+the runtime class does not apply it; success means a sweep of affected routes and
+recorded numbers is owed.

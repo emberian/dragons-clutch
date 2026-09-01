@@ -93,12 +93,35 @@ pub enum GeneralAcceleratorSbfErrorV3 {
     InvalidRequest = 0xC000,
     /// The fixed admitted frame or readonly runtime frame differed.
     InvalidFrame = 0xC001,
-    /// The current top-level Trading instruction could not be authenticated.
+    /// The current top-level instruction could not be read from the sysvar.
+    ///
+    /// This variant used to carry every one of `authenticate_top_level`'s
+    /// causes -- eight conjuncts behind one code, so a validator log could say
+    /// only that the top level was wrong and never which part of it. It is
+    /// narrowed here to the sysvar access itself and the five distinct causes
+    /// below are split out; its numeric value is unchanged, so a code already
+    /// seen in a log still means a subset of what it meant.
     InvalidTopLevelInstruction = 0xC002,
     /// A Trading-owned scratch page or whole-bank digest differed.
     InvalidScratchBank = 0xC003,
     /// The exact acknowledgement could not be encoded.
     InvalidAcknowledgement = 0xC004,
+    /// An instruction ahead of this one did not belong to ComputeBudget.
+    ForeignInstructionBeforeTrading = 0xC005,
+    /// No exact heap-frame grant preceded the current instruction.
+    HeapFrameNotGranted = 0xC006,
+    /// The current top-level instruction was not the admitted Trading program's.
+    TopLevelProgramNotTrading = 0xC007,
+    /// The top-level data was not a canonical Hot execution envelope.
+    InvalidHotEnvelope = 0xC008,
+    /// The carried family request was not the exact width, or did not decode.
+    InvalidFamilyRequest = 0xC009,
+    /// The supplied account was not the readonly instructions sysvar.
+    InstructionsSysvarAccount = 0xC00A,
+    /// The runtime could not report which top-level instruction is executing.
+    CurrentInstructionIndexUnreadable = 0xC00B,
+    /// An instruction ahead of the current one could not be read.
+    PrecedingInstructionUnreadable = 0xC00C,
 }
 
 impl GeneralAcceleratorSbfErrorV3 {
@@ -108,12 +131,20 @@ impl GeneralAcceleratorSbfErrorV3 {
     /// [`GeneralAcceleratorSbfErrorV3::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only
     /// arm that satisfies the assertions is its own index in this array.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 13] = [
         Self::InvalidRequest,
         Self::InvalidFrame,
         Self::InvalidTopLevelInstruction,
         Self::InvalidScratchBank,
         Self::InvalidAcknowledgement,
+        Self::ForeignInstructionBeforeTrading,
+        Self::HeapFrameNotGranted,
+        Self::TopLevelProgramNotTrading,
+        Self::InvalidHotEnvelope,
+        Self::InvalidFamilyRequest,
+        Self::InstructionsSysvarAccount,
+        Self::CurrentInstructionIndexUnreadable,
+        Self::PrecedingInstructionUnreadable,
     ];
 
     /// This refusal's position in [`GeneralAcceleratorSbfErrorV3::ALL`].
@@ -128,6 +159,14 @@ impl GeneralAcceleratorSbfErrorV3 {
             Self::InvalidTopLevelInstruction => 2,
             Self::InvalidScratchBank => 3,
             Self::InvalidAcknowledgement => 4,
+            Self::ForeignInstructionBeforeTrading => 5,
+            Self::HeapFrameNotGranted => 6,
+            Self::TopLevelProgramNotTrading => 7,
+            Self::InvalidHotEnvelope => 8,
+            Self::InvalidFamilyRequest => 9,
+            Self::InstructionsSysvarAccount => 10,
+            Self::CurrentInstructionIndexUnreadable => 11,
+            Self::PrecedingInstructionUnreadable => 12,
         }
     }
 }
@@ -337,10 +376,10 @@ fn authenticate_top_level(
         || instructions.is_writable
         || instructions.is_signer
     {
-        return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+        return Err(GeneralAcceleratorSbfErrorV3::InstructionsSysvarAccount.into());
     }
     let index = load_current_index_checked(instructions)
-        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+        .map_err(|_| GeneralAcceleratorSbfErrorV3::CurrentInstructionIndexUnreadable)?;
     // Two laws live here: the heap was granted, and the caller is Trading. The
     // POSITION was never one of them. Pinning Trading to index 1 also forbade
     // every instruction ahead of it except the heap grant -- and a General
@@ -363,40 +402,40 @@ fn authenticate_top_level(
     let mut earlier_index = 0_u16;
     while earlier_index < index {
         let earlier = load_instruction_at_checked(usize::from(earlier_index), instructions)
-            .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+            .map_err(|_| GeneralAcceleratorSbfErrorV3::PrecedingInstructionUnreadable)?;
         if earlier.program_id != compute_budget::ID {
-            return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+            return Err(GeneralAcceleratorSbfErrorV3::ForeignInstructionBeforeTrading.into());
         }
         if earlier == ComputeBudgetInstruction::request_heap_frame(DIRECT_HOT_HEAP_FRAME_BYTES_V1) {
             heap_granted = true;
         }
         earlier_index = earlier_index
             .checked_add(1)
-            .ok_or(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+            .ok_or(GeneralAcceleratorSbfErrorV3::PrecedingInstructionUnreadable)?;
     }
-    // A caller that never granted the heap is refused here, by name, with the
-    // same `InvalidTopLevelInstruction` the pinned-index rule gave it -- which
-    // is what the `declare_general_heap: false` hostile in the program-test
-    // asserts, and it keeps asserting it.
+    // A caller that never granted the heap is refused here by its own name.
+    // It used to share `InvalidTopLevelInstruction` with seven other causes,
+    // so the `declare_general_heap: false` hostile could not tell the heap it
+    // was testing from the seven things it was not.
     if !heap_granted {
-        return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+        return Err(GeneralAcceleratorSbfErrorV3::HeapFrameNotGranted.into());
     }
     let instruction = load_instruction_at_checked(usize::from(index), instructions)
         .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
     let trading = account(accounts, ADMITTED_TRADING_PROGRAM_ACCOUNT_V3)?;
     if instruction.program_id != *trading.key {
-        return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+        return Err(GeneralAcceleratorSbfErrorV3::TopLevelProgramNotTrading.into());
     }
     let (_, family) = HotExecutionEnvelopeV3::split_instruction(&instruction.data)
-        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidHotEnvelope)?;
     if family.len() != CONTROLLER_REQUEST_BYTES_V2 {
-        return Err(GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction.into());
+        return Err(GeneralAcceleratorSbfErrorV3::InvalidFamilyRequest.into());
     }
     let request = decode_general_request_v3(family)
-        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFamilyRequest)?;
     let family_copy = family
         .try_into()
-        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidTopLevelInstruction)?;
+        .map_err(|_| GeneralAcceleratorSbfErrorV3::InvalidFamilyRequest)?;
     Ok((family_copy, request))
 }
 

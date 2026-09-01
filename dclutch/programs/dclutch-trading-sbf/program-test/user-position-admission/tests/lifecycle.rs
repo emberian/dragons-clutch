@@ -1,5 +1,6 @@
 //! Real-SBF two-party admission, signer refusal, replay, and atomic-rent evidence.
 
+use dclutch_program_test_evidence::TransactionEvidence;
 use std::{env, fs, path::PathBuf, vec::Vec};
 
 use dclutch_claims_affine_batch_program_test::fixture::{
@@ -541,6 +542,7 @@ struct Submission {
 
 async fn submit(
     context: &mut ProgramTestContext,
+    label: &str,
     instructions: &[Instruction],
     table: Pubkey,
     addresses: &[Pubkey],
@@ -578,11 +580,22 @@ async fn submit(
         wire_extent <= PACKET_DATA_BYTES,
         "wire extent {wire_extent}"
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .map(ToString::to_string)
+        .expect("a submitted transaction carries its own signature");
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
         .await?;
     let accepted = processed.result.is_ok();
+    let failure = processed.result.clone().err().map(|e| format!("{e:?}"));
     let (logs, returned, compute_units) = processed
         .metadata
         .map(|metadata| {
@@ -595,6 +608,19 @@ async fn submit(
             )
         })
         .unwrap_or_default();
+    // Unconditional on purpose: `record` is a no-op unless the gauntlet asked
+    // for evidence, so this stays an ordinary test and stops being invisible to
+    // the census the moment a runner sets the directory.
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(compute_units),
+        wire_bytes: Some(wire_extent),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
     Ok(Submission {
         accepted,
         logs,
@@ -684,7 +710,14 @@ async fn real_trading_admits_twenty_users_and_rolls_back_every_hostile_prefund()
     let addresses = lookup_addresses(payer, &all_sets);
     let table = create_live_lookup_table(&mut context, &addresses).await;
 
-    let missing = submit(&mut context, &missing_signature, table, &addresses, None)
+    let missing = submit(
+        &mut context,
+        "user admission: an owner signature is missing",
+        &missing_signature,
+        table,
+        &addresses,
+        None,
+    )
         .await
         .expect("missing signature submission");
     assert!(!missing.accepted);
@@ -692,6 +725,7 @@ async fn real_trading_admits_twenty_users_and_rolls_back_every_hostile_prefund()
 
     let substituted = submit(
         &mut context,
+        "user admission: a substituted owner signs for another user",
         &substituted_owner,
         table,
         &addresses,
@@ -704,6 +738,7 @@ async fn real_trading_admits_twenty_users_and_rolls_back_every_hostile_prefund()
 
     let stale = submit(
         &mut context,
+        "user admission: a stale caller authority",
         &stale_authority,
         table,
         &addresses,
@@ -716,6 +751,7 @@ async fn real_trading_admits_twenty_users_and_rolls_back_every_hostile_prefund()
 
     let child_refusal = submit(
         &mut context,
+        "user admission: Claims refuses the rent and the whole frame rolls back",
         &wrong_rent,
         table,
         &addresses,
@@ -738,6 +774,7 @@ async fn real_trading_admits_twenty_users_and_rolls_back_every_hostile_prefund()
     {
         let result = submit(
             &mut context,
+            &format!("user admission: admit user {seed}"),
             instructions,
             table,
             &addresses,
@@ -788,6 +825,7 @@ async fn real_trading_admits_twenty_users_and_rolls_back_every_hostile_prefund()
         .clone();
     let replay = submit(
         &mut context,
+        "user admission: a replayed outer refuses and the Position is unchanged",
         &[replay_outer],
         table,
         &addresses,

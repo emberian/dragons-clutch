@@ -1640,6 +1640,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dclutch-program-test-evidence"
+version = "0.1.0"
+
+[[package]]
 name = "dclutch-rational-representation-v2-kernel"
 version = "0.1.0"
 dependencies = [
@@ -1731,6 +1735,7 @@ dependencies = [
  "dclutch-claims-affine-batch-program-test",
  "dclutch-claims-svm",
  "dclutch-core-contract",
+ "dclutch-program-test-evidence",
  "dclutch-registry-contract",
  "dclutch-release-set-contract",
  "dclutch-rent-contract",

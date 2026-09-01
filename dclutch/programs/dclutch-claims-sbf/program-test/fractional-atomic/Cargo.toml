@@ -45,6 +45,10 @@ solana-program-test = { version = "=4.3.0-beta.2", features = ["agave-unstable-a
 
 [dev-dependencies]
 base64 = "0.22"
+# The census half. `record` is a no-op unless DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR
+# is set, so this campaign stays an ordinary `cargo test` and additionally emits
+# the evidence `dclutch-route-census observe` corroborates a binding against.
+dclutch-program-test-evidence = { path = "../../../../tools/gauntlet/program-test-evidence" }
 dclutch-fractional-cubic-life-evidence = { path = "../../../../crates/dclutch-fractional-cubic-life-evidence" }
 solana-system-interface = { version = "=2.0.0", features = ["bincode"] }
 spl-token-2022-interface = { version = "=3.1.1", default-features = false }

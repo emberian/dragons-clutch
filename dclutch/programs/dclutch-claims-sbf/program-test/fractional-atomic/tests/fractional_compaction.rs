@@ -134,7 +134,9 @@ use dclutch_token_svm::{
     TokenBehaviorSelectionV2,
 };
 use solana_account::Account;
+use dclutch_program_test_evidence::TransactionEvidence;
 use solana_program::{
+    clock::Clock,
     hash::hash,
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
@@ -1337,6 +1339,7 @@ fn custom_refusal(result: &Result<(), solana_sdk::transaction::TransactionError>
 /// sleeping holder having authorised it, because the holder never signs.
 async fn submit_as(
     context: &mut ProgramTestContext,
+    label: &str,
     instruction: Instruction,
     signer: &Keypair,
 ) -> Outcome {
@@ -1352,6 +1355,19 @@ async fn submit_as(
         &[&payer, signer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .map(ToString::to_string)
+        .expect("a submitted transaction carries its own signature");
+    let wire_bytes = 1_usize
+        + transaction.signatures.len() * 64
+        + transaction.message_data().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -1359,8 +1375,28 @@ async fn submit_as(
         .expect("transaction processing");
     let units = processed
         .metadata
+        .clone()
         .map(|metadata| metadata.compute_units_consumed)
         .unwrap_or_default();
+    let logs = processed
+        .metadata
+        .clone()
+        .map(|metadata| metadata.log_messages)
+        .unwrap_or_default();
+    let failure = processed.result.clone().err().map(|e| format!("{e:?}"));
+    // A no-op unless the gauntlet asked for evidence, so this stays an ordinary
+    // test and stops being invisible to the census the moment a runner sets
+    // DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR.
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
     Outcome {
         accepted: processed.result.is_ok(),
         units,
@@ -1372,6 +1408,7 @@ async fn submit_as(
 /// compaction call site continues to make the sleeping-holder absence obvious.
 async fn submit_holder_act(
     context: &mut ProgramTestContext,
+    label: &str,
     instruction: Instruction,
     signer: &Keypair,
 ) -> Outcome {
@@ -1387,6 +1424,19 @@ async fn submit_holder_act(
         &[&payer, signer],
         blockhash,
     );
+    let signature = transaction
+        .signatures
+        .first()
+        .map(ToString::to_string)
+        .expect("a submitted transaction carries its own signature");
+    let wire_bytes = 1_usize
+        + transaction.signatures.len() * 64
+        + transaction.message_data().len();
+    let slot = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .map_or(0, |clock| clock.slot);
     let processed = context
         .banks_client
         .process_transaction_with_metadata(transaction)
@@ -1394,8 +1444,28 @@ async fn submit_holder_act(
         .expect("transaction processing");
     let units = processed
         .metadata
+        .clone()
         .map(|metadata| metadata.compute_units_consumed)
         .unwrap_or_default();
+    let logs = processed
+        .metadata
+        .clone()
+        .map(|metadata| metadata.log_messages)
+        .unwrap_or_default();
+    let failure = processed.result.clone().err().map(|e| format!("{e:?}"));
+    // A no-op unless the gauntlet asked for evidence, so this stays an ordinary
+    // test and stops being invisible to the census the moment a runner sets
+    // DCLUTCH_PROGRAM_TEST_EVIDENCE_DIR.
+    dclutch_program_test_evidence::record(&TransactionEvidence {
+        label,
+        signature: &signature,
+        slot,
+        error: failure.as_deref(),
+        logs: &logs,
+        compute_units_consumed: Some(units),
+        wire_bytes: Some(wire_bytes),
+    })
+    .expect("campaign evidence must be writable when the gauntlet asked for it");
     Outcome {
         accepted: processed.result.is_ok(),
         units,
@@ -1544,7 +1614,8 @@ async fn a_stranger_opens_the_escrow_and_pays_for_it() {
     );
     let before = lamports_at(&mut context, fixture.opener).await;
 
-    let outcome = submit_as(&mut context, open_instruction(&fixture), &opener_keypair()).await;
+    let outcome = submit_as(&mut context,
+        "fractional claim-check: a stranger opens the escrow and pays for it", open_instruction(&fixture), &opener_keypair()).await;
     assert!(
         outcome.accepted,
         "the permissionless open must land: {:?} (code {:?})",
@@ -2069,7 +2140,8 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
     let mut context = test.start_with_context().await;
 
     // --- the stranger opens the escrow, and the 180-day clock starts ---------
-    let opened = submit_as(&mut context, open_instruction(&fixture), &opener_keypair()).await;
+    let opened = submit_as(&mut context,
+        "fractional claim-check: a stranger compacts a sleeping holders reserve and nothing leaks", open_instruction(&fixture), &opener_keypair()).await;
     assert!(opened.accepted, "the open must land: {:?}", opened.result);
     create_custody_replay(&mut context, &fixture).await;
     let escrow = ClaimCheckEscrowV1::decode(
@@ -2142,6 +2214,7 @@ async fn a_stranger_compacts_a_sleeping_holders_reserve_and_nothing_leaks() {
     // --- THE CRANK -----------------------------------------------------------
     let outcome = submit_as(
         &mut context,
+        "fractional claim-check: a stranger compacts a sleeping holders reserve and nothing leaks [2]",
         compaction_instruction(
             &fixture,
             &request,
@@ -2384,7 +2457,8 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     assert_eq!(fixture.shared.payout_scale, basis_profile.payout_scale());
 
     let mut context = test.start_with_context().await;
-    let opened = submit_as(&mut context, open_instruction(&fixture), &opener_keypair()).await;
+    let opened = submit_as(&mut context,
+        "fractional claim-check: drive curve holder life", open_instruction(&fixture), &opener_keypair()).await;
     assert!(
         opened.accepted,
         "the escrow open must land: {:?}",
@@ -2453,6 +2527,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
 
     let outcome = submit_as(
         &mut context,
+        "fractional claim-check: drive curve holder life [2]",
         compaction_instruction(
             &fixture,
             &request,
@@ -2613,7 +2688,8 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
         ),
     ] {
         let before = fractional_redemption_state(&mut context, &fixture).await;
-        let refused = submit_holder_act(&mut context, instruction, &signer).await;
+        let refused = submit_holder_act(&mut context,
+        "fractional claim-check: drive curve holder life [3]", instruction, &signer).await;
         assert!(!refused.accepted, "{label} must refuse");
         assert_eq!(custom_refusal(&refused.result), Some(expected_code), "{label}");
         assert_eq!(
@@ -2626,6 +2702,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let before_premature_close = fractional_redemption_state(&mut context, &fixture).await;
     let premature_close = submit_holder_act(
         &mut context,
+        "fractional claim-check: drive curve holder life [4]",
         close_settled_escrow_instruction(&fixture),
         &cranker_keypair(),
     )
@@ -2648,6 +2725,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let holder_lamports_before_partial = lamports_at(&mut context, fixture.holder).await;
     let partial = submit_holder_act(
         &mut context,
+        "fractional claim-check: drive curve holder life [5]",
         fractional_redemption_instruction(
             &fixture,
             request(2 * DENOMINATOR),
@@ -2737,6 +2815,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let holder_lamports_before_settle = lamports_at(&mut context, fixture.holder).await;
     let settling = submit_holder_act(
         &mut context,
+        "fractional claim-check: drive curve holder life [6]",
         fractional_redemption_instruction(
             &fixture,
             request(OUTSTANDING_SHARDS - 2 * DENOMINATOR),
@@ -2811,6 +2890,7 @@ async fn drive_curve_holder_life(basis_profile: CampaignBasisV1, expected_partit
     let cranker_before_close = lamports_at(&mut context, fixture.cranker).await;
     let close = submit_holder_act(
         &mut context,
+        "fractional claim-check: drive curve holder life [7]",
         close_settled_escrow_instruction(&fixture),
         &cranker_keypair(),
     )
@@ -2926,7 +3006,8 @@ async fn create_custody_replay(context: &mut ProgramTestContext, fixture: &Campa
             .to_bytes()
             .to_vec(),
     };
-    let outcome = submit_as(context, instruction, &cranker_keypair()).await;
+    let outcome = submit_as(context,
+        "fractional claim-check: create custody replay", instruction, &cranker_keypair()).await;
     assert!(
         outcome.accepted,
         "the Claims-role Custody replay must be creatable: {:?}",
@@ -2979,7 +3060,8 @@ async fn run_to_the_crank_substituting(
     };
     let (test, fixture) = campaign_fixture_planting(plant);
     let mut context = test.start_with_context().await;
-    let opened = submit_as(&mut context, open_instruction(&fixture), &opener_keypair()).await;
+    let opened = submit_as(&mut context,
+        "fractional claim-check: run to the crank substituting", open_instruction(&fixture), &opener_keypair()).await;
     assert!(opened.accepted, "the open must land: {:?}", opened.result);
     create_custody_replay(&mut context, &fixture).await;
     let escrow = ClaimCheckEscrowV1::decode(
@@ -3025,6 +3107,7 @@ async fn run_to_the_crank_substituting(
     }
     submit_as(
         &mut context,
+        "fractional claim-check: run to the crank substituting [2]",
         compaction_instruction(&fixture, &request, custody_caller, action),
         &cranker_keypair(),
     )
@@ -3286,7 +3369,8 @@ async fn a_worthless_coordinate_mints_no_record_and_never_moves_the_burn_authori
     let (test, fixture) = campaign_fixture_full(CampaignPlantV1::Faithful, ELSEWHERE);
     let mut context = test.start_with_context().await;
 
-    let opened = submit_as(&mut context, open_instruction(&fixture), &opener_keypair()).await;
+    let opened = submit_as(&mut context,
+        "fractional claim-check: a worthless coordinate mints no record and never moves the burn authority", open_instruction(&fixture), &opener_keypair()).await;
     assert!(opened.accepted, "the open must land: {:?}", opened.result);
     create_custody_replay(&mut context, &fixture).await;
     let escrow = ClaimCheckEscrowV1::decode(
@@ -3346,6 +3430,7 @@ async fn a_worthless_coordinate_mints_no_record_and_never_moves_the_burn_authori
 
     let outcome = submit_as(
         &mut context,
+        "fractional claim-check: a worthless coordinate mints no record and never moves the burn authority [2]",
         compaction_instruction(
             &fixture,
             &request,
