@@ -3098,3 +3098,42 @@ defects that actually strand money go unnamed.
 **Stated not-done, exactly:** 384 of 391 set-sites are **enumerated, not
 classified**; the lamport half is **not swept**. What exists is the scheme, the
 method, the population, and one cluster carried to a verdict.
+
+## 2026-09-01 — a negative reached by enumeration, and a false positive that proved its own caveat
+
+**The join ran**: 159 routes / 65 never-executed (the *claim* register, stale
+against the measured 57 of 161, and said so) × the five lamport-destination
+fields. **28 distinct never-executed modules; 9 set a destination, covering 18
+never-executed routes.** Then the third step on each, because a candidate is not
+a defect.
+
+- **Seven have an in-tree campaign** — the register's own already-named gap:
+  campaigns that pass against real ELFs and emit no census evidence. Binding
+  work, not money holes.
+- **`sponsored_push_v1`** was the strongest possible candidate — never-executed
+  **and** no test file — and cleared on the third step: `refund_recipient` is set
+  to `payer.key` and bound against the persisted values. **Class 3, owned.**
+  *Never-executed means the delivery is undemonstrated, not that the owner is
+  missing.*
+- **`dealer_reservation_v1` was a false positive, and instructive**: both
+  set-sites sit **below** the `cfg(test)` module declaration — test fixtures
+  inside a production file, exactly the limitation the lane had stated in
+  advance, now producing a concrete hit. Correction: exclude by **line position**
+  relative to the tests module, not by path.
+
+**No "named owner, no route home" defect at the never-executed frontier.** Worth
+as much as a finding, because it came from **enumeration rather than from
+failing to find a counterexample** — all three known instances of that class were
+found by accident, and this says the population does not obviously hold more.
+
+### The provenance rule, generalised
+
+Four tooling details in one unit each nearly produced a false finding: `-r ln`
+silently rewriting grep output; a zsh glob-no-match aborting a compound `ls`; a
+content matcher missing what a **filename** said; and **backticks in a board post
+being command-substituted** — the hazard `AGENTS.md` documents for commit
+messages, which nobody had noticed applies to board posts too. The last was
+caught only by reading back what actually landed.
+
+> **Verify the instrument reported what you think it reported, not just that it
+> reported something.** Check the artifact, not the command you believe you ran.

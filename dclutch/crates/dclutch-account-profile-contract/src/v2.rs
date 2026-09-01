@@ -964,6 +964,30 @@ impl<'a> AccountProfileV2<'a> {
         self.item_account_stride
     }
 
+    /// Whether an effect program's item account stride agrees with this profile.
+    ///
+    /// THE ONE AUTHOR of that law, because it is not the equality it looks like
+    /// and every place that restated it got it wrong. This type forces the two
+    /// cases apart itself: with no dynamic spans `item_account_stride` MUST be
+    /// zero, and with them it MUST be nonzero (see `require_dynamic_spans`). Under
+    /// spans the field is not a per-item account count at all -- `dynamic_account_width`
+    /// computes `fixed + sum(span_counts)` and never multiplies by it -- so it is
+    /// physical span-template geometry, and an effect that declares no per-item
+    /// accounts correctly carries zero. Requiring the two EQUAL therefore makes
+    /// every dynamic-span family unrunnable.
+    ///
+    /// Callers must not open-code this. `hot_v3::require_geometry` once did and
+    /// refused every Profile13 family; a bundle-builder test then hand-copied the
+    /// same equality and reported fifteen mismatches against a law the runtime no
+    /// longer had. Both now ask here.
+    pub const fn admits_effect_item_account_stride(self, effect_stride: u16) -> bool {
+        if self.uses_dynamic_fixed_spans() {
+            effect_stride == 0
+        } else {
+            self.item_account_stride == effect_stride
+        }
+    }
+
     /// Common scalar-bank width.
     pub const fn common_scalar_count(self) -> u16 {
         self.common_scalars

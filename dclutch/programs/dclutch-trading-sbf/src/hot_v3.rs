@@ -12304,11 +12304,12 @@ fn require_geometry(
     // effect with no per-item accounts declares. In the no-span branch the
     // account stride is already 0, so the equality below is exactly today's
     // behaviour.
-    let item_account_stride_agrees = if account.uses_dynamic_fixed_spans() {
-        effect.item_account_stride() == 0
-    } else {
-        account.item_account_stride() == effect.item_account_stride()
-    };
+    // Asked, not restated. `AccountProfileV2` owns both sides of this and is the
+    // single author; open-coding it here is what refused every Profile13 family,
+    // and a bundle-builder test that hand-copied the same predicate went red
+    // against a law this function no longer had.
+    let item_account_stride_agrees =
+        account.admits_effect_item_account_stride(effect.item_account_stride());
     if expected_accounts != runtime_accounts
         || !item_account_stride_agrees
         || effect_accounts > expected_accounts

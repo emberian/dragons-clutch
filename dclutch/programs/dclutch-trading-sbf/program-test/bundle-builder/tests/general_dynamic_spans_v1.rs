@@ -566,11 +566,6 @@ fn every_general_action_declares_one_register_geometry_across_its_four_artifacts
                 u64::from(effect.fixed_account_count()),
             ),
             (
-                "item_account_stride account/effect",
-                u64::from(profile.item_account_stride()),
-                u64::from(effect.item_account_stride()),
-            ),
-            (
                 "common_scalar_count account/request",
                 u64::from(profile.common_scalar_count()),
                 u64::from(request_profile.common_scalar_count()),
@@ -635,6 +630,26 @@ fn every_general_action_declares_one_register_geometry_across_its_four_artifacts
                 eprintln!("MISMATCH {action:?}: {label}: profile={left} artifact={right}");
                 mismatches += 1;
             }
+        }
+        // ASKED, NOT RESTATED -- and this row is why the rest of this list is a
+        // hazard. The item account stride is the one pair here that is NOT an
+        // equality: under a dynamic-fixed-span profile `AccountProfileV2` forces
+        // its own stride nonzero (span-template geometry it never multiplies by)
+        // while an effect with no per-item accounts declares zero, so General's
+        // artifacts are REQUIRED to differ. This test used to hand-copy the
+        // equality `hot_v3::require_geometry` had, and when `861032b8` corrected
+        // the runtime the copy went on reporting fifteen mismatches against a law
+        // Trading no longer enforced. Both sides now ask the contract that owns
+        // the field, so there is one author and no copy to drift.
+        if !profile.admits_effect_item_account_stride(effect.item_account_stride()) {
+            eprintln!(
+                "MISMATCH {action:?}: item_account_stride account/effect: \
+                 profile={} artifact={} (dynamic spans: {})",
+                profile.item_account_stride(),
+                effect.item_account_stride(),
+                profile.uses_dynamic_fixed_spans(),
+            );
+            mismatches += 1;
         }
     }
     assert_eq!(
