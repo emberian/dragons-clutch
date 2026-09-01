@@ -2177,3 +2177,56 @@ act. Heap: the one extended-heap route's justification cites CPIs deleted the sa
 K=2 fits by 3 bytes, which the packet builder spends on priority fee → not a harbour; K=3
 needs an ABI change (drop three re-derived PDAs → K=5). Two gauntlet witnesses red at HEAD,
 unread. Repair order for Structured: Content/Route first, coefficient guard LAST with a control.
+
+## The scholar, reassessed — Fable, 2026-09-01
+
+Ember asked whether we actually agree with the scholar rather than accepting its
+table. Read in full; four load-bearing claims verified directly at HEAD `2dbba552`:
+
+- **A1**: `config` is in `CapabilityRootSeedsV1::as_slices` and LP positions pin
+  `child_root`. **Holds.** A raised floor is a different pool at a different address.
+- **B2**: `packages/dclutch-cli/package.json:4` is `"private": true`;
+  `tools/dclutch-cli/Cargo.toml` says *"still the distributed artifact"* with
+  `[package.metadata.dist]`. **Holds — I was backwards.**
+- **B5**: `FoundingBandV1` is `{anchor, denominator, volatility_bps, window_slots}`.
+  No ceiling field. **Holds — I looked at the wrong type.**
+- **B3**: `hot_v3.rs:4880-4884` says the Registry reauth CPI *"stopped"* after
+  decision 0017. **Holds** — the extended-heap justification cites deleted code.
+
+**Verdict: agree on substance, every item.** The reading is better than mine was on
+every one it overturned, and on the ones it upheld (A4, C2) it added the composition
+check and the repair order I had not done.
+
+**Three things the scholar did not say, and one it got wrong:**
+
+1. **Its own headline is miscounted.** *"Six of the thirteen dissolved"* — the table
+   shows three (A1, B3, B4). The same arithmetic-slip class this session found in
+   four other lanes. The scholar is an instrument, and instruments are not exempt.
+2. **B4 + B6 combine into a new architectural tension that is not on any list.**
+   K = 2 is the only executable Structured width (B4), and a width-2 market — *"the
+   protocol floor, legal and the narrowest market this compiler can emit"* — has one
+   ordinary cell that always scores 10,000 bps, so it **refuses the partition gate**
+   (B6). The packet limit and the partition gate contradict each other at exactly the
+   width that fits. That is a design question: does "degenerate" need a width term,
+   or does a width-2 market need an exemption? **Added as ember's #4.**
+3. **A2's cost estimate is undercut by its own foundation analysis.** "~5,000 lines"
+   is the precedent figure, but the scholar also established that the state account
+   already admits the `Recovery` phase, `active_attempt` has its ABI offset, `Resolved`
+   accepts the terminal route, and the escrow is pinned — *"only the transition
+   function is missing — no account format change, no ABI change, no migration."* The
+   honest number is probably lower, and ember should hear both.
+4. **C1's aside is a new finding in its own right**: on the generic settlement route
+   the exposure identity check *compares the instruction to itself*
+   (`exposure.rs:274` assigns `bundle_id` from `admission.selected_id`, which
+   `terminal_settlement_v3.rs:393-401` sets to `input.exposure_id`). Guards whose two
+   sides move together, again, and the scholar filed it as "named so the two are not
+   confused" rather than as a finding. It is a finding.
+
+**Ember's queue after reassessment — four, and the fourth is new:**
+- Recovery as a capability child: sell backup feeds to markets that want them, at a
+  cost between "one transition function" and ~5,000 lines?
+- Provider breadth: **not** "which oracle" — Switchboard wraps Pyth on the assets a
+  prediction market cares about. The real question is whether C-09 wants
+  **non-price resolution sources** at all.
+- Claims split/merge: build unless vetoed.
+- **Width-2 markets versus the partition gate** (new, from B4 + B6).
