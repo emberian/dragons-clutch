@@ -4401,3 +4401,61 @@ its scratch-page window from — a second author for a frame offset **in the one
 file whose pages sit at the far end of exactly that offset**, where a drift
 surfaces as a bank-content refusal rather than as a missing account. 24/1 before
 and after.
+
+## 2026-09-01 — no single step is evidence; the sequence is
+
+The `0x5644` arc, stated as the ledger now records it:
+
+> A census found an **absence**; a second method **convicted** it as a defect
+> rather than an artefact; an owner **built** the guard; and a third instrument
+> **watched it fire**.
+>
+> **No single step of that is evidence. The sequence is.**
+
+Which is also the honest reading of the double catch that produced it: the first
+instrument said *absent*; only the second said *why*; and only `census observe`,
+**refusing its own author's bindings**, said whether what was then written down
+was true.
+
+> **Three different things had to disagree with me in turn before the record was
+> right.**
+
+### The 55, owned per row
+
+`docs/evidence/UNWITNESSED_ROUTES_BY_ROW_2026_09_01.md` names every route with
+its declaring `file:line`:
+
+| row | unwitnessed |
+|---|---|
+| C-09 Objective resolution | **14** |
+| C-10 Claims, Custody, terminal lifecycle | **13** |
+| C-06 Dealer | **8** |
+| C-02 Product entrance | **5** |
+| C-08 Structured/Fractional | **5** |
+| C-01 Infrastructure/Registry/Rent | **4** |
+| C-04 Direct | **4** |
+| C-07 Series | **2** |
+
+C-09 and C-10 carry **half the residue between them**. Dealer's eight are **one
+family** — every `dealer_scenario_checkpoint_v1` stage, create through cleanup.
+
+**A route sits in the row whose *capability* it serves, not the program that
+hosts it**, because the lane that would drive it is the capability's lane. The
+mapping is hand-authored and says so: *if a row lists a route its lane does not
+own, say so and it moves.*
+
+**The pointer lives in the contract's own matrix preamble**, with the counts
+inline — so a lane reading its row finds it **without having to know the
+document exists.** That is what makes it a work queue rather than another
+artifact.
+
+Two things the list states explicitly, because a bare list of 55 invites both
+errors: **an unwitnessed route is a statement about coverage, not correctness**;
+and **a route that proves structurally undrivable belongs in `blocked.json` with
+a reason and an owner**, not left in the queue looking like unstarted work — so
+the number stays honest as it moves instead of decaying into a backlog nobody
+trusts.
+
+**Register: 73 witnessed / 33 blocked-with-a-reason / 55 unwitnessed, of 161,
+zero dangling binding refs. C-16: six categories, six instruments, none
+finished.**
