@@ -61,6 +61,7 @@ use dclutch_registry_contract::{
     ArtifactReleaseV1, ArtifactUpgradePolicyV1, DeploymentObservationV1,
     activate_execution_role_into_v1, initialize_activation_cache_v1,
 };
+use dclutch_relay_contract::instruction::CommitDeadlineFailureInstructionV1;
 use dclutch_release_set_contract::{
     ArtifactReleaseIdV1, CallerAuthoritySeedsV1, ExecutionReleaseSetV1, ExecutionRoleBindingV1,
     ExecutionRoleV1, PROTOCOL_INFRASTRUCTURE_PROFILE_PDA_DOMAIN_V2, ProgramIdentityV1,
@@ -127,6 +128,11 @@ const TERMINAL_TIME: i64 = 1_787_431_680;
 /// (`window.end + max_age`), which is the only time a deadline walk exists at.
 /// `exhaust_after_primary_deadline` refuses at or before it.
 const FAILURE_TIME: i64 = TERMINAL_TIME + 20;
+/// The window's liveness grace, and therefore the distance from the window's
+/// closed upper bound to this market's primary deadline. Named once so the
+/// walk campaign derives the deadline it stands on from the same number the
+/// window record carries, instead of restating it.
+const WINDOW_MAX_AGE_SECONDS: u32 = 10;
 const BOUNTY: u64 = 7;
 
 struct Elves {
@@ -165,6 +171,7 @@ struct Fixture {
     source_spec: RecordPair,
     provider_release: RecordPair,
     adapter_config: RecordPair,
+    source_material_id: [u8; 32],
     window: RecordPair,
     /// A second, perfectly well-formed, finalized `WindowSpecV1` record whose
     /// only difference is a later closing bound. Record publication is
@@ -596,6 +603,19 @@ enum MarketPrestateV1 {
     /// refuses a market that still has recovery attempts owed to it, so a
     /// deadline walk only exists on this shape.
     TerminalFailure,
+    /// The prestate `TerminalFailure` is the POSTSTATE of.
+    ///
+    /// `Open + Consumed`, one exact Pending subset ledger, no Source state and
+    /// no certificate — the same shape as `AtomicallyFounded`, and the only
+    /// difference is that the certificate address this fixture derives carries
+    /// the `ResolutionFailure` kind tag, because that is the seat the walk will
+    /// mint into.
+    ///
+    /// A seeded terminal proves the shape of an ending and nothing about how it
+    /// is reached. This one is reached: the market is founded, funded and
+    /// activated, then nobody answers, and the deadline walk carries it to the
+    /// Product's own pre-disclosed failure region and pays whoever walked it.
+    WalkableFailure,
 }
 
 impl MarketPrestateV1 {
@@ -604,7 +624,10 @@ impl MarketPrestateV1 {
     const fn open(self) -> bool {
         matches!(
             self,
-            Self::AtomicallyFounded | Self::Terminal | Self::TerminalFailure
+            Self::AtomicallyFounded
+                | Self::Terminal
+                | Self::TerminalFailure
+                | Self::WalkableFailure
         )
     }
 
@@ -614,12 +637,16 @@ impl MarketPrestateV1 {
         matches!(self, Self::Terminal | Self::TerminalFailure)
     }
 
-    /// Whether that terminal was reached by a deadline walk rather than by a
-    /// provider. This flips the material's recovery policy, the Source
-    /// transition, the certificate kind and the certificate PDA's kind tag
-    /// together, because they are one fact about one market.
+    /// Whether this market's terminal is a deadline walk rather than a
+    /// provider. It selects the certificate PDA's kind tag for every prestate,
+    /// and where the terminal is preloaded it also selects the Source
+    /// transition and the certificate kind, because they are one fact about one
+    /// market. `WalkableFailure` preloads nothing and takes only the tag: the
+    /// address the walk will mint into has to exist before the walk runs, and
+    /// success and failure are different addresses for one Source at one
+    /// sequence.
     const fn failure_terms(self) -> bool {
-        matches!(self, Self::TerminalFailure)
+        matches!(self, Self::TerminalFailure | Self::WalkableFailure)
     }
 }
 
@@ -847,7 +874,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         WindowKind::Terminal,
         update_view.publish_time() - 300,
         update_view.publish_time(),
-        10,
+        WINDOW_MAX_AGE_SECONDS,
         1,
         source_id([0x98; 32]),
     )
@@ -1303,6 +1330,7 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         vault,
         custody_authority,
         source_material,
+        source_material_id: material_id,
         source_spec,
         provider_release,
         adapter_config,
@@ -1608,6 +1636,54 @@ async fn admit_snapshot(
         result_domain_staging: vacant_observed(fixture.domain.staging),
         portfolio_raw: required_observed(context, fixture.portfolio.raw).await,
         portfolio_staging: vacant_observed(fixture.portfolio.staging),
+    }
+}
+
+/// The 22-account funded deadline walk, aimed at this fixture's market.
+///
+/// This frame carries NO relay-family account — no relayed record, no relayer
+/// key set, no adapter config. It is the Resolution program's own route and it
+/// lives under the relay instruction magic only because that is where the
+/// dispatcher put it, which is why a market resolved through the Pyth transport
+/// can walk exactly the same way when its provider goes silent.
+///
+/// A caller supplies which market, when, and nothing else. The Source material
+/// is read out of the Resolution-owned Source state and checked against the
+/// Market's own resolution policy; the funding entry to debit is found by
+/// matching each selected manifest entry's `config_id` against that same
+/// material, never by an account position or an index the caller names.
+fn deadline_failure_instruction(fixture: &Fixture, worker: Pubkey) -> Instruction {
+    Instruction {
+        program_id: RESOLUTION_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(worker, true),
+            AccountMeta::new_readonly(fixture.market, false),
+            AccountMeta::new_readonly(CORE_PROGRAM_ID, false),
+            AccountMeta::new_readonly(fixture.activation, false),
+            AccountMeta::new(fixture.source, false),
+            AccountMeta::new(fixture.certificate, false),
+            AccountMeta::new_readonly(fixture.source_material.raw, false),
+            AccountMeta::new_readonly(fixture.source_material.staging, false),
+            AccountMeta::new_readonly(fixture.window.raw, false),
+            AccountMeta::new_readonly(fixture.window.staging, false),
+            AccountMeta::new_readonly(fixture.product.raw, false),
+            AccountMeta::new_readonly(fixture.product.staging, false),
+            AccountMeta::new_readonly(fixture.domain.raw, false),
+            AccountMeta::new_readonly(fixture.domain.staging, false),
+            AccountMeta::new_readonly(fixture.portfolio.raw, false),
+            AccountMeta::new_readonly(fixture.portfolio.staging, false),
+            AccountMeta::new_readonly(fixture.capability_manifest.raw, false),
+            AccountMeta::new_readonly(fixture.capability_manifest.staging, false),
+            AccountMeta::new(fixture.funding, false),
+            AccountMeta::new_readonly(sysvar::clock::ID, false),
+            AccountMeta::new_readonly(sysvar::rent::ID, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+        ],
+        data: CommitDeadlineFailureInstructionV1::new(GENERATION, TERMINAL_SEQUENCE)
+            .expect("deadline failure request")
+            .to_bytes()
+            .expect("deadline failure bytes")
+            .to_vec(),
     }
 }
 
@@ -3057,6 +3133,342 @@ async fn a_market_walked_to_failure_ends_terminal_on_its_pre_disclosed_terms() {
             .data,
     )
     .expect("failure-route Source closure receipt");
+    assert_exhaustive_closure_receipt(closure, &close);
+}
+
+/// The fallback life, WALKED rather than seeded, from founding through fund
+/// close.
+///
+/// Its sibling above starts from `MarketPrestateV1::TerminalFailure` — a Source
+/// already `FailureCommitted` and a certificate already minted — and proves what
+/// a market does with that ending. It proves nothing about how a market GETS
+/// there, and until this test the only real-ELF execution of the walk itself was
+/// through the relay transport (`relayed_mainnet_state.rs`), against a market
+/// whose evidence family is not Pyth.
+///
+/// So this drives it on the Pyth market, and the point is that no part of the
+/// walk is Pyth-specific or relay-specific: the 22-account frame carries no
+/// provider account and no relay account. A market founded to be answered by a
+/// price feed, whose price feed then says nothing, must still terminate on the
+/// terms it published before it opened. That is `MAINNET_STATE_RELAY.md` §4.8's
+/// property — a silent provider cannot make a market unresolvable, only drive it
+/// to a pre-disclosed outcome along a bounded, prepaid, permissionless path that
+/// pays whoever walks it — and every clause of it is measured below.
+#[tokio::test]
+async fn a_silent_provider_cannot_strand_a_market_and_the_walker_is_paid() {
+    let mut fixture = fixture(MarketPrestateV1::WalkableFailure);
+    let mut context = fixture
+        .test
+        .take()
+        .expect("unstarted ProgramTest")
+        .start_with_context()
+        .await;
+    let mut clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    clock.slot = clock.slot.max(1);
+    clock.unix_timestamp = TERMINAL_TIME;
+    context.set_sysvar(&clock);
+    let payer = context.payer.pubkey();
+
+    // Found the Resolution fund exactly as the provider arc does. Nothing about
+    // this prestate anticipates failure: it is an ordinary open market with an
+    // ordinary prepaid ledger, and the only thing that will differ is that
+    // nobody submits.
+    let create = build_resolution_create_fund_v3(&create_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived CreateFund against an Open Market");
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &fixture.source, create.source_top_up_lamports),
+            create.instruction,
+        ],
+    )
+    .await
+    .expect("an Open Market creates its Source against the pre-Market ledger");
+    let activation = build_resolution_activate_fund_v1(&ResolutionActivateFundSnapshotV1 {
+        pending: verify_snapshot(&mut context, &fixture).await,
+        system_program: required_observed(&mut context, system_program::ID).await,
+    })
+    .expect("chain-derived activation");
+    let mut activation_instructions = Vec::with_capacity(2);
+    if activation.receipt_top_up_lamports != 0 {
+        activation_instructions.push(transfer(
+            &payer,
+            &fixture.activation_receipt,
+            activation.receipt_top_up_lamports,
+        ));
+    }
+    activation_instructions.push(activation.instruction);
+    submit(&mut context, &activation_instructions)
+        .await
+        .expect("activate the three-row Resolution funding ledger");
+    assert_funding_ledger_status(&mut context, &fixture, FundingLedgerStatusV2::Active).await;
+    let verify =
+        build_resolution_verify_fund_ready_v3(&verify_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived VerifyFundReady");
+    submit(&mut context, &[verify.instruction])
+        .await
+        .expect("VerifyFundReady rechecks the Active ledger");
+    assert_eq!(
+        SourceResolutionStateV2::decode(
+            &observed(&mut context, fixture.source)
+                .await
+                .expect("created Source")
+                .data,
+        )
+        .expect("Source state")
+        .phase(),
+        SourceResolutionPhaseV1::Primary,
+        "the walk starts from a live market that could still have been answered"
+    );
+
+    // The walker is a stranger. It holds no role in this market, no capability,
+    // no relationship to the manifest that will pay it, and it did not exist
+    // when the market was founded.
+    let walker = Keypair::new();
+    let walker_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(0);
+    submit(
+        &mut context,
+        &[
+            transfer(&payer, &walker.pubkey(), walker_rent),
+            transfer(
+                &payer,
+                &fixture.certificate,
+                Rent::default().minimum_balance(RESOLUTION_CERTIFICATE_BYTES_V2),
+            ),
+        ],
+    )
+    .await
+    .expect("establish the stranger and prepay the failure certificate seat");
+
+    // HOSTILE — the walk is not available while the market can still be
+    // answered honestly. The deadline is the window's own closed upper bound
+    // plus its liveness grace, and the comparison is strict, so the last second
+    // an honest resolution may land and the first second a walk may run are
+    // different seconds. Standing on the deadline itself must refuse.
+    let deadline = TERMINAL_TIME + i64::from(WINDOW_MAX_AGE_SECONDS);
+    let mut on_deadline = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    on_deadline.unix_timestamp = deadline;
+    context.set_sysvar(&on_deadline);
+    let before_early_walk = retirement_snapshot(&mut context, &fixture).await;
+    let early = pyth_provider::submit(
+        &mut context,
+        &[deadline_failure_instruction(&fixture, walker.pubkey())],
+        &[&walker],
+    )
+    .await
+    .expect_err("a walk standing exactly on the deadline must refuse");
+    assert!(
+        matches!(
+            early,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Transition as u32
+        ),
+        "an early walk must refuse as Resolution Transition, got {early:?}"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_early_walk,
+        "the early refusal leaves Source, ledger, certificate seat and RentCredit untouched"
+    );
+
+    // THE WALK. One second past the deadline, and one transition:
+    // `Primary -> Exhausted -> FailureCommitted` with one debit from the
+    // explicit-failure compartment and one `ResolutionFailure` certificate.
+    let mut walk_clock = context
+        .banks_client
+        .get_sysvar::<Clock>()
+        .await
+        .expect("ProgramTest Clock");
+    walk_clock.unix_timestamp = deadline + 1;
+    context.set_sysvar(&walk_clock);
+    let walker_before = observed(&mut context, walker.pubkey())
+        .await
+        .expect("walker")
+        .lamports;
+    let funding_before = observed(&mut context, fixture.funding)
+        .await
+        .expect("Active subset ledger")
+        .lamports;
+    pyth_provider::submit(
+        &mut context,
+        &[deadline_failure_instruction(&fixture, walker.pubkey())],
+        &[&walker],
+    )
+    .await
+    .expect("a stranger walks the silent market to its pre-disclosed terms");
+
+    let walked = SourceResolutionStateV2::decode(
+        &observed(&mut context, fixture.source)
+            .await
+            .expect("walked Source")
+            .data,
+    )
+    .expect("walked Source state");
+    assert_eq!(walked.phase(), SourceResolutionPhaseV1::FailureCommitted);
+    let projection = walked
+        .terminal_projection()
+        .expect("a FailureCommitted Source projects its terminal");
+    assert_eq!(projection.route(), SourceResolutionRouteV1::Failure);
+
+    let certificate = ResolutionCertificateV2::decode(
+        &observed(&mut context, fixture.certificate)
+            .await
+            .expect("minted failure certificate")
+            .data,
+    )
+    .expect("failure certificate");
+    assert_eq!(
+        certificate.kind,
+        ResolutionCertificateKindV2::ResolutionFailure
+    );
+    assert_eq!(certificate.market, fixture.market.to_bytes());
+    assert_eq!(certificate.work_paid, BOUNTY);
+    assert_eq!(
+        certificate.provider_evidence, [0; 32],
+        "nothing a provider said stands behind this terminal, and the certificate says so"
+    );
+    assert_eq!(
+        certificate.route, [0; 32],
+        "a walked terminal is attributable to no provider release"
+    );
+    assert_eq!(
+        certificate.funding_allocation, fixture.source_material_id,
+        "the compartment debited is the one whose manifest entry names this market's own material"
+    );
+
+    // The walker is paid exactly the bounty the market quoted before it opened,
+    // and it comes out of the escrow, not out of thin air. `work_paid` and the
+    // two lamport deltas are three independent statements of one number.
+    assert_eq!(
+        observed(&mut context, walker.pubkey())
+            .await
+            .expect("paid walker")
+            .lamports,
+        walker_before + BOUNTY,
+        "the walker is paid the capability's own quoted bounty"
+    );
+    assert_eq!(
+        observed(&mut context, fixture.funding)
+            .await
+            .expect("debited subset ledger")
+            .lamports,
+        funding_before - BOUNTY,
+        "and every lamport of it comes out of the escrow that promised it"
+    );
+
+    // HOSTILE — the walk is paid once, and the ESCROW is what says so.
+    //
+    // I expected `Transition` here: the Source has left `Primary`, so
+    // `exhaust_after_primary_deadline` must refuse. It does — but it never
+    // runs. `plan_deadline_failure_v1` debits before it transitions, on purpose
+    // ("a walk that cannot be paid for cannot move the market either"), so the
+    // second walk dies one step earlier, in `release_in_place`, against a
+    // Bounty compartment that is already empty. `Funding`, not `Transition`.
+    //
+    // That is a stronger fact than the one I assumed, and it is only visible
+    // because the discriminant is named: the bound on how many times this walk
+    // pays is not the state machine's monotonicity, it is that the market
+    // escrowed exactly one bounty and it has been spent. A bare `is_err()`
+    // would have shown me the refusal I predicted rather than the one there is.
+    let before_replay = retirement_snapshot(&mut context, &fixture).await;
+    let replay = pyth_provider::submit(
+        &mut context,
+        &[deadline_failure_instruction(&fixture, walker.pubkey())],
+        &[&walker],
+    )
+    .await
+    .expect_err("the walk cannot be run twice for two bounties");
+    assert!(
+        matches!(
+            replay,
+            BanksClientError::TransactionError(TransactionError::InstructionError(
+                0,
+                InstructionError::Custom(code)
+            )) if code == ResolutionError::Funding as u32
+        ),
+        "a replayed walk must refuse as Resolution Funding against a spent bounty, got {replay:?}"
+    );
+    assert_eq!(
+        retirement_snapshot(&mut context, &fixture).await,
+        before_replay,
+        "the replay pays no second bounty and moves nothing"
+    );
+
+    // Core admits the walked terminal on its own no-CPI route, and the winner
+    // it commits is the Product's own failure region -- which is what a
+    // holder's exit at failure terms waits on.
+    let admit = build_resolution_admit_terminal_v3(&admit_snapshot(&mut context, &fixture).await)
+        .expect("chain-derived AdmitTerminal from a walked Source");
+    submit(&mut context, &[admit.instruction])
+        .await
+        .expect("Core accepts the walked market's failure certificate");
+    let terminal = CoreState::decode(
+        &observed(&mut context, fixture.market)
+            .await
+            .expect("terminal Market")
+            .data,
+    )
+    .expect("terminal Core state");
+    assert_eq!(terminal.phase, Phase::Terminal);
+    assert_eq!(
+        terminal.terminal_receipt.map(|value| value.to_bytes()),
+        Some(fixture.certificate.to_bytes())
+    );
+    assert_eq!(
+        terminal.terminal_winner,
+        projection.selector(),
+        "the winner Core commits is the selector the walk's own decision carried"
+    );
+
+    // And the fund closes. A market nobody answered is not a market whose money
+    // is stuck: the same permissionless retirement and DCLRFCQ1 close the
+    // provider-resolved arc runs, ending in the same exhaustive classification
+    // of every remaining lamport.
+    submit(&mut context, &[begin_retiring_instruction(&fixture)])
+        .await
+        .expect("a walked market begins authenticated retirement");
+    let closure_rent = context
+        .banks_client
+        .get_rent()
+        .await
+        .expect("chain Rent")
+        .minimum_balance(SOURCE_CLOSURE_RECEIPT_BYTES_V3);
+    submit(
+        &mut context,
+        &[transfer(&payer, &fixture.closure, closure_rent)],
+    )
+    .await
+    .expect("prepay the walked route's closure receipt");
+    let close =
+        build_resolution_direct_close_fund_v1(&close_snapshot(&mut context, &fixture).await)
+            .expect("chain-derived walked-route CloseFund");
+    submit(&mut context, &[close.instruction.clone()])
+        .await
+        .expect("the walked route closes every Resolution funding row");
+    assert!(observed(&mut context, fixture.source).await.is_none());
+    assert!(observed(&mut context, fixture.funding).await.is_none());
+    let closure = SourceClosureReceiptV3::decode(
+        &observed(&mut context, fixture.closure)
+            .await
+            .expect("walked-route Source closure receipt")
+            .data,
+    )
+    .expect("walked-route closure receipt");
     assert_exhaustive_closure_receipt(closure, &close);
 }
 

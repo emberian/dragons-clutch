@@ -458,26 +458,64 @@ function validateProductRootHeaderV2(product: Uint8Array): void {
   requireZero(product, 10, 6, 'Product Runtime V2 root');
 }
 
+/** One ResultDomainV2 record: the outcome partition, as the operator wrote it. */
+export type ResultDomainV2 = Readonly<{
+  /** Ordinary cells: always `cuts.length + 1`. */
+  regionCount: number;
+  /** Ticks per whole unit of the coordinate. */
+  denominator: bigint;
+  /** The interior boundaries, strictly increasing, in ticks. */
+  cuts: ReadonlyArray<bigint>;
+}>;
+
+/**
+ * Decode the operator's own outcome partition.
+ *
+ * THE DEFECT THIS CLOSES. These exact bytes were already being decoded here,
+ * validated for ABI, width, identity and strict increase -- and then thrown
+ * away, because the graph decoder only needed to know they were well formed.
+ * So the one artifact that says what a market's outcomes ARE reached the
+ * browser and left no trace, while `/product-v2` rendered a parallel list of
+ * "interpolation segment N" derived in TypeScript from the payoff KNOTS and
+ * presented it in the place a reader looks for the partition. Knots are where
+ * the payoff bends. Cuts are where the outcome changes. They are not the same
+ * list, they are not the same length, and only one of them is on chain.
+ *
+ * C-02's closing clause asks that the same artifacts found by the operator be
+ * explained and inspectable in the client. A client that re-derives its own
+ * parallel description is what that clause forbids, so the cuts are returned
+ * now instead of discarded.
+ */
+export function decodeResultDomainV2(domain: Uint8Array): ResultDomainV2 {
+  if (domain.length < DOMAIN_HEADER_BYTES || ascii(domain, 0, 8) !== 'DCLTPRD2' || u16(domain, 8) !== 2 || u16(domain, 10) !== DOMAIN_HEADER_BYTES || u32(domain, 12) !== domain.length) throw new Error('Product result domain has the wrong exact ABI');
+  requireZero(domain, 24, 8, 'Product result-domain header');
+  requireZero(domain, 232, 8, 'Product result-domain tail');
+  const regionCount = u32(domain, 16);
+  const cutCount = u32(domain, 20);
+  if (regionCount === 0 || regionCount !== cutCount + 1 || domain.length !== DOMAIN_HEADER_BYTES + cutCount * 16) throw new Error('Product result-domain width is inconsistent');
+  [32, 64, 96, 128, 160, 192].forEach((offset) => requireNonzero(slice(domain, offset, 32), 'Product result-domain identity'));
+  const denominator = u64(domain, 224);
+  if (denominator === 0n) throw new Error('Product result-domain identity or denominator differs');
+  const cuts: bigint[] = [];
+  let prior: bigint | null = null;
+  for (let index = 0; index < cutCount; index += 1) {
+    const cut = i128(domain, DOMAIN_HEADER_BYTES + index * 16);
+    if (prior !== null && cut <= prior) throw new Error('Product result-domain cuts are not strictly increasing');
+    prior = cut;
+    cuts.push(cut);
+  }
+  return Object.freeze({ regionCount, denominator, cuts: Object.freeze(cuts) });
+}
+
 export function decodeCoreFoundProductGraphV2(product: Uint8Array, domain: Uint8Array, portfolio: Uint8Array, domainDigest: Uint8Array, portfolioDigest: Uint8Array): ProductGraph {
   validateProductRootHeaderV2(product);
   const productId = slice(product, 16, 32);
   requireNonzero(productId, 'Product identity');
   if (!same(slice(product, 48, 32), domainDigest) || !same(slice(product, 80, 32), portfolioDigest)) throw new Error('Product root does not select the supplied domain and portfolio');
 
-  if (domain.length < DOMAIN_HEADER_BYTES || ascii(domain, 0, 8) !== 'DCLTPRD2' || u16(domain, 8) !== 2 || u16(domain, 10) !== DOMAIN_HEADER_BYTES || u32(domain, 12) !== domain.length) throw new Error('Product result domain has the wrong exact ABI');
-  requireZero(domain, 24, 8, 'Product result-domain header');
-  requireZero(domain, 232, 8, 'Product result-domain tail');
-  const regions = u32(domain, 16);
-  const cuts = u32(domain, 20);
-  if (regions === 0 || regions !== cuts + 1 || domain.length !== DOMAIN_HEADER_BYTES + cuts * 16) throw new Error('Product result-domain width is inconsistent');
-  [32, 64, 96, 128, 160, 192].forEach((offset) => requireNonzero(slice(domain, offset, 32), 'Product result-domain identity'));
-  if (!same(slice(domain, 32, 32), productId) || u64(domain, 224) === 0n) throw new Error('Product result-domain identity or denominator differs');
-  let prior: bigint | null = null;
-  for (let index = 0; index < cuts; index += 1) {
-    const cut = i128(domain, DOMAIN_HEADER_BYTES + index * 16);
-    if (prior !== null && cut <= prior) throw new Error('Product result-domain cuts are not strictly increasing');
-    prior = cut;
-  }
+  const partition = decodeResultDomainV2(domain);
+  if (!same(slice(domain, 32, 32), productId)) throw new Error('Product result-domain identity or denominator differs');
+  const regions = partition.regionCount;
 
   if (portfolio.length < PORTFOLIO_HEADER_BYTES || ascii(portfolio, 0, 8) !== 'DCLTPRF2' || u16(portfolio, 8) !== 2 || u16(portfolio, 10) !== PORTFOLIO_HEADER_BYTES || u32(portfolio, 12) !== portfolio.length) throw new Error('Product portfolio has the wrong exact ABI');
   const coefficientCount = u32(portfolio, 16);

@@ -7,6 +7,7 @@ import {
   compileLifecycleRentCreateTransactionV2,
   compileCoreFoundTransactionV2,
   decodeCoreFoundProductGraphV2,
+  decodeResultDomainV2,
   deriveCoreFoundRecordsV2,
   prepareCoreFoundV2,
   validateCoreFoundCapabilityManifestV1,
@@ -269,6 +270,38 @@ describe('Core Found37 browser kernel', () => {
     await expect(deriveCoreFoundRecordsV2(client, {
       registryProgram: registry, productRecord, sourceMaterialRecord,
     })).rejects.toThrow(/different Product record digest/);
+  });
+
+  it('returns the operator\u2019s own cuts instead of discarding them', async () => {
+    /**
+     * THE DEFECT THIS CLOSES. These bytes were already decoded here and
+     * already validated for ABI, width, identity and strict increase — and
+     * then dropped, because the graph decoder only needed them well formed.
+     * So the one artifact that says what a market\u2019s outcomes ARE reached
+     * the browser and left no trace, while `/product-v2` rendered a parallel
+     * list of "interpolation segment N" derived in TypeScript from the payoff
+     * KNOTS, in the place a reader looks for the partition. Knots are where
+     * the payoff bends; cuts are where the outcome changes. Different lists,
+     * different lengths, and only one of them is on chain.
+     */
+    const graph = await graph258();
+    const domain = decodeResultDomainV2(graph.domain);
+    expect(domain.regionCount).toBe(257);
+    expect(domain.cuts.length).toBe(256);
+    expect(domain.denominator).toBe(1n);
+    // Exactly the values the fixture wrote, in canonical order.
+    expect(domain.cuts[0]).toBe(-128n);
+    expect(domain.cuts[255]).toBe(127n);
+    for (let index = 1; index < domain.cuts.length; index += 1) {
+      expect(domain.cuts[index] > domain.cuts[index - 1]).toBe(true);
+    }
+  });
+
+  it('refuses a result domain whose cuts are not strictly increasing', async () => {
+    const graph = await graph258();
+    const broken = new Uint8Array(graph.domain);
+    putI128(broken, 240 + 16, -200n);
+    expect(() => decodeResultDomainV2(broken)).toThrow(/not strictly increasing/);
   });
 
   it('accepts the canonical empty manifest and preflights u64 generation before RPC', async () => {

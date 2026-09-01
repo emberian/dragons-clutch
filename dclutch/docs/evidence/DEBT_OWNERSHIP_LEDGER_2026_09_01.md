@@ -858,18 +858,84 @@ One line each. These are the rows this lane cannot close by engineering.
 | id | ruling needed | owner if ruled "build it" |
 | --- | --- | --- |
 | ~~**R-1**~~ | **CLOSED by S7.** The guard landed at `fractional_claim_check_v1.rs:1196-1209` behind a shared `CorePhaseGateV3` both routes now read; `0x5644` left the dead list between this file's two measurements. | done |
-| **R-2** | `LiabilityBasisSbfErrorV2` keeps ten unraisable discriminants after the `DCLLBX02` banishment. Shrinking the enum is a decision-0007 sub-band renumbering and a change to every generated mirror. Shrink, or annotate in place? | Claims + decision 0007 |
+| ~~**R-2**~~ | **CLOSED (`32fc79d5`) — it was never a ruling, it was a fact nobody had established.** The question "gone or reserved?" is answerable from the tree: `docs/ASPIRATION_LEDGER.md` D-6 records `DCLLBX02` as *"ANSWERED AND EXECUTED: deleted"*, dead on both ends, `WAVE.md:569` struck, and `docs/design/BASIS_ABI_UNIFICATION_V1.md:185` finds *"Producers of `DCLLBX02`: **none.**"* Gone. So the ten codes go with it, and the append-only objection does not apply: the route had no producer in the tree and no `DCLTLNK2` record was ever finalized on chain, so **not one of the ten was ever raised anywhere** and no historical log can resolve against them. `0x5101..=0x510A` withdrawn, never reused; `ClaimsState` renumbered to the sub-band base. | done |
 | **R-3** | Claims split/merge as user acts (`claims.conserve`, `DCLCNS01`, `0x5006`) — a designed, tested, semantically-owned capability with no route, no dispatcher, no client. **Build the outer route, or rule it out with a date.** | Claims |
 | **R-4** | **PARTLY DISCHARGED, `96ddf38f`.** Register repaired 65 → **55** and 12 stale binding refs → 0 (§2.2). What remains is not a ruling: (i) three passing campaigns must emit `record()` evidence before they can be bound — S7 for `fractional-atomic`, the Trading lane for `user-position-admission`, plus `general-hot`; (ii) `routes.md` must consult the evidence ledger, or cross-check its own two tables, so *bound* stops reading identically to *corroborated* (§2.3). | S11/gauntlet holds (ii); S7 and Trading hold (i) |
 | **R-5** | **Withdrawn as a ruling — it is engineering with a working precedent.** Claims already solved this class inside this repo: 1,489 raise sites over 141 codes, 15.2% maximum, via the decision-0007 sub-band convention, against Trading's 2,086 on one code at 25.0%. A policy whose template is already in the tree and already load-bearing does not need Ember to choose it; it needs a lane to apply it and a census predicate to hold it. Re-routed. | protocol-wide lane + decision 0007 |
 | **R-6** | U-001's "explicit deletion/non-authoritative-AOT ruling for standalone family artifacts" — Ember owns whether standalone family AOT artifacts are authoritative. Separately, V3 AOT has never compiled for `target_os = "solana"` and needs an owner. | Direct / AOT |
 | **R-7** | `TicketAuthorship`'s payer and RentCredit arms are unreachable defense-in-depth after `73ffb010`. Document in place, or fold? *(small; listed so it is not re-discovered)* | Series |
 | **R-8** | **C-15, the actual question:** does the accepted final public project include the original FHE/MPC/specialized-batch/energy objective? The 2026-08-27 horizon ruling is explicitly not this answer. If retained → a from-zero capability charter (no foundation exists). If ruled out → a dated ruling plus removal of contradictory claims. | Ember |
-| **R-9** | Whichever way R-8 goes: record "the batch relation is small and specialized on purpose" as a named `O-*` invariant with its reason, so the option is not closed silently by a future simplification. | Ember / OMISSION_INDEX |
+| ~~**R-9**~~ | **DONE (`eaa4a1fa`) — it was transcription, not a ruling.** `docs/OMISSION_INDEX.md` **O-019**: widening the batch relation toward a general encrypted-exchange computer is now a named `hard invariant, narrowly stated`, carrying Ember's own reason verbatim and `INTENT.md:118-120`'s consequence — a door that closes permanently. Explicitly independent of C-15: if the ambition is retained it is a prerequisite, and if it is ruled out the row is what stops the option being lost on the way. | done |
 | **R-11** | **Eight magic collisions remain, gate red (`7bf75057`).** Ten found; `DCLTDRS1` fixed at `b64ecbb5`, `DCLTRIX1` promoted to R-13. The other eight are cross-ELF or non-dispatch — real wire-reading ambiguity, no mis-dispatch path. Adjudicate each: fixtures import the canonical constant; genuine sharers renumber under a decision record while the deploy window makes it free. **Do not re-letter to make the gate green.** | Claims fixtures, Dealer/Direct codecs, Registry/Record/Relay |
-| **R-13** | **`DCLTRIX1`: the Registry/Record action-space partition is documented, and Record already violates it.** The doc says Record owns actions `2` upward; `RecordActionV1::Begin = 1` sits in Registry's half, and a Record `Begin` is separated from a Registry `Reauthenticate` — same magic, same action byte — by nothing but `BEGIN_RECORD_BYTES_V1 == 176 != 16`, tied by no assertion. Add the compile-time binding, or move `Begin` to `5` and make the stated rule true. **This is the last live same-ELF ambiguity; it should close before the cohort deploys.** | Registry + Record |
+| ~~**R-13**~~ | **CLOSED (`a19d93b1`), both halves, before the cohort deploys.** `RecordActionV1::Begin` moved `1` → `5`, so the documented partition is true by construction; `RECORD_FIRST_ACTION_V1` and `REGISTRY_ACTION_CEILING_V1` are published and bound disjoint by `const _: () = assert!` in `programs/dclutch-registry-sbf/src/lib.rs`, alongside a second assertion pinning the two widths distinct so the length clause cannot quietly become load-bearing again. The dispatcher's bare literal `2` now derives from the constant, and `record_v1.rs`'s `Some(1)` arm is `Some(5)`. `crates/dclutch-registry-svm/src/tests.rs` proves the ceiling is what `decode` actually admits, over all 256 action bytes. **Proved red first:** setting the ceiling to `2` fails the build with *"the Registry and record action ranges overlap"*. | done |
 | **R-12** | **19 of ≈57 top-level selectors are reachable from neither CLI nor SDK — C-16 forbids exactly this.** Two are sharp enough to name: `DCLTDFS1`, C-04's permissionless third-party fee completion, *designed for a stranger* and callable only from our own campaign harness; and `DCLTPCA1`, the sole way out of collateral stranded by an expired projection, with no client at all. Build the client surfaces, or rule the capabilities out with a date. | Direct (C-04), Trading (recovery), SDK/CLI |
 | **R-10** | **Re-routed — answerable, not rulable.** Six guides disagree on whether the first market is open on devnet and `deployments.ts` pins no market address. S1/S10 is standing up a fresh cohort under Ember's disposability ruling, so a measurement settles it and no ruling is owed. | S1/S10 |
+
+---
+
+## 10.2 How the gate goes green without laundering
+
+The magic gate's red blocked `tools/genref/generate.sh`, `tools/gauntlet/run.sh`
+and `npm run abi:route-census` across four lanes — including a resolution lane
+that could not publish two provably-unique new magics for a reason that had
+nothing to do with them. Narrowing the gate to the subset already fixed would
+have been laundering. Recording each adjudicated fact where the gate reads it is
+not, and the tree already had the pattern: a register entry with a written
+verdict, so the instrument stays live and fires on anything new.
+
+`tools/gauntlet/magic-collisions.json` (`273eba16`) holds nine adjudicated
+collisions. Three rules make it a register of facts rather than a mute switch,
+and each is pinned by a test that fails if the rule is removed:
+
+1. **The verdict is required and must be argued** — 80 characters minimum, and
+   an entry that fails it is itself a gate problem *and* leaves its collision
+   reported. `an_exemption_with_no_argued_verdict_is_refused_not_honoured`
+   checks `""`, whitespace, `"safe"` and `"n/a -- checked, it is fine"`.
+   An exemption that records nothing can be added by anyone in a hurry; one that
+   must be argued cannot.
+2. **An exemption pins a set, not a value.** It lists the exact constant names
+   observed; a third claimant makes the set stop matching and the collision
+   fires again on its own terms rather than inheriting the old verdict
+   (`a_new_claimant_breaks_the_exemption_rather_than_inheriting_it`).
+3. **A stale entry is a problem.** An exemption whose collision no longer exists
+   must be deleted, exactly as `blocked.json` requires
+   (`an_exemption_whose_collision_is_gone_is_reported_stale`). This is what
+   would have caught a `DCLTDRS1` entry surviving its own re-lettering.
+
+`DCLTDRS1` is not in the file — it was re-lettered. `DCLTRIX1` is, and only
+because R-13 replaced its prose partition with compile-time assertions; its
+verdict says so and says to delete the entry if those assertions ever go. The
+same-name mirror split is untouched, still pinned by its named test.
+
+## 10.3 A dead refusal code has at least three causes
+
+This session produced one of each, which is the argument for never treating the
+census's output as a verdict on its own:
+
+| cause | instance | disposition |
+| --- | --- | --- |
+| the route was never built | `0x5006` `CustodyRequired` — `claims.conserve` has semantics, a tested contract and no outer route | still dead, and now the **only** dead code in the protocol; R-3, being answered by implementation at `1d1c2453` |
+| the guard was removed | the ten `LiabilityBasisSbfErrorV2` codes — route deleted, taxonomy left behind | withdrawn with the route (R-2, `32fc79d5`) |
+| the guard was present under another name | `0x5644` `Phase` — I convicted it as missing; it was reachable and S7 landed the real guard | my accusation was wrong, and the census could not have told me |
+
+**Denominator now: 297 protocol-visible codes, 1 with zero raise sites** — down
+from 12 at this file's first measurement. The survivor's alias-blind control
+still agrees: `CustodyRequired` occurs only at its declaration, its `ALL` entry
+and its `ordinal()` arm, and Claims has no renamed imports of the enum.
+
+## 10.4 The class at its worst, recorded
+
+`crates/dclutch-svm-harness`'s `resolution_successor` campaign is the sharpest
+instance of §1's class anyone has found: `primary_instruction` and
+`funded_caller_instruction` were replaced by `panic!` stubs at 2026-08-26 00:19
+(`d1325c7f`), and the `#[ignore]` landed **47 minutes later** (`583e5bfa`).
+The campaign body was unreachable for six days **while the README quoted its
+ten-row compute table as evidence** — two attributes and six unset environment
+variables standing exactly where the execution used to be. Found and remediated
+by the resolution lane; the README now states it at `:97-109`, and `WAVE.md:2329-2342`
+carries the accounting. Recorded here because it is the purest form of the
+defect this lane exists to find: **not a missing test, but a present one that
+had been hollowed out while its own documentation went on citing it.**
 
 ---
 

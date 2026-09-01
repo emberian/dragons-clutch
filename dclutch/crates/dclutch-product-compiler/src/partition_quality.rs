@@ -40,11 +40,16 @@ pub const BASIS_POINTS_PER_UNIT_V1: u64 = 10_000;
 /// The window a stated volatility is quoted against, in slots.
 ///
 /// Chain-derived shape, provisional value: ten thousand slots is roughly a
-/// wall-clock hour at current Solana slot times, and it is the reference the
-/// load simulator already states its own per-market volatility against
-/// (`tools/load-simulator/simlife.py`, `BAND_WINDOW_REFERENCE_SLOTS_V1`).
-/// Lifting plan: one measured slot-time profile shared by the simulator and
-/// this compiler, replacing two constants that agree by hand.
+/// wall-clock hour at current Solana slot times.
+///
+/// This declaration is the SINGLE AUTHOR. The load simulator states its
+/// per-market volatility against the same window and now READS this constant
+/// out of this file (`tools/load-simulator/simlife.py`,
+/// `_rust_u64_const`) rather than restating it; it refuses loudly if this
+/// `pub const` is renamed or duplicated, so point that reader at the new owner
+/// instead of copying the value back. The two-constants-agreeing-by-hand half
+/// of the old lifting plan is done. What remains: one measured slot-time
+/// profile to replace the provisional ten thousand.
 pub const BAND_WINDOW_REFERENCE_SLOTS_V1: u64 = 10_000;
 
 /// Largest stated volatility this release will scale a band from.

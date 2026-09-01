@@ -198,3 +198,35 @@ fn loader_programdata_uses_fixed_offset_and_tag_owned_authority_semantics() {
         );
     }
 }
+
+/// `REGISTRY_ACTION_CEILING_V1` must describe what `decode` actually admits.
+///
+/// It is half of a two-sided guard: this magic is shared with the record
+/// family, and only the action byte separates them. A ceiling constant that
+/// drifted above what `decode` accepts would let `dclutch-registry-sbf`'s
+/// compile-time overlap assertion pass while the real boundary had moved --
+/// which is exactly the shape of failure the assertion exists to catch, one
+/// level up. So the constant is checked against the decoder, not trusted.
+#[test]
+fn the_action_ceiling_is_what_decode_actually_admits() {
+    use crate::REGISTRY_ACTION_CEILING_V1;
+
+    let mut probe = RegistryInstructionV1::ActivateRole(ExecutionRoleV1::Core).to_bytes();
+    for action in 0..=REGISTRY_ACTION_CEILING_V1 {
+        probe[10] = action;
+        assert!(
+            RegistryInstructionV1::decode(&probe).is_ok(),
+            "action {action} is at or below the ceiling and must decode"
+        );
+    }
+    // Every byte above the ceiling belongs to the record family and must be
+    // refused here rather than silently interpreted as a Registry action.
+    for action in REGISTRY_ACTION_CEILING_V1.saturating_add(1)..=u8::MAX {
+        probe[10] = action;
+        assert_eq!(
+            RegistryInstructionV1::decode(&probe),
+            Err(Error::UnknownAction),
+            "action {action} is above the Registry ceiling and must not decode here"
+        );
+    }
+}

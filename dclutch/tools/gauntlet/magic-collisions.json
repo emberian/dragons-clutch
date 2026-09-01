@@ -1,0 +1,89 @@
+{
+  "note": "Adjudicated 8-byte magic collisions: one wire value claimed by two or more distinct constant names, where the sharing has been examined and found safe. The gate (`dclutch-route-census inventory --check-unique`, see tools/gauntlet/census/src/magics.rs) fails on every collision that is NOT listed here, so a genuinely new one still stops the build. This file is a register of positive facts, not a mute switch. Three rules make it one. (1) Every entry MUST carry a `verdict` that names the specific reason THIS sharing cannot mis-dispatch; an entry without an argued verdict is refused by the gate, because an exemption that records nothing is a hidden failure -- which is the whole defect class this instrument exists to find. (2) `constants` must list the EXACT set of names observed at the magic. If a third constant later claims a listed value, the set no longer matches and the collision fires again -- so an exemption pins a fact, it does not silence a value. (3) An entry whose magic no longer collides is reported as stale and must be deleted, exactly as tools/gauntlet/blocked.json entries are. The safety question is always the same: can ONE dispatcher see both constants? Different ELFs never meet a single dispatcher. A request paired with a receipt never meets one either -- instruction data and account data are different channels. Same-ELF sharing is a hazard and does not belong in this file; DCLTDRS1 was re-lettered (b64ecbb5) rather than exempted, and DCLTRIX1 is here only because its partition is now enforced by compile-time assertions rather than by prose. Adjudicated 2026-09-01 by lane S11; see docs/evidence/DEBT_OWNERSHIP_LEDGER_2026_09_01.md section 2.4.1.",
+  "exempt": [
+    {
+      "magic": "DCLTRIX1",
+      "constants": [
+        "RECORD_INSTRUCTION_MAGIC_V1",
+        "REGISTRY_INSTRUCTION_MAGIC_V1",
+        "RELAY_INSTRUCTION_MAGIC"
+      ],
+      "verdict": "SAME-ELF, and safe only because the split is now MECHANICAL. The Registry ELF dispatches both RECORD_INSTRUCTION_MAGIC_V1 and REGISTRY_INSTRUCTION_MAGIC_V1; they are partitioned by the action byte at offset 10, Registry owning 0..=REGISTRY_ACTION_CEILING_V1 and the record family owning RECORD_FIRST_ACTION_V1 upward. That rule was documented but FALSE until 2026-09-01 -- RecordActionV1::Begin was action 1, inside Registry's half beside Reauthenticate = 1, and the only thing keeping a Record Begin from executing as a Registry Reauthenticate was the dispatcher's length clause plus the arithmetic accident that BEGIN_RECORD_BYTES_V1 is 176 and REGISTRY_INSTRUCTION_BYTES_V1 is 16. Both sides were valid traffic of their own family, which is what made it worse than a decode collision. Begin is now 5, and two `const _: () = assert!` in programs/dclutch-registry-sbf/src/lib.rs bind the ranges disjoint and the widths distinct; crates/dclutch-registry-svm/src/tests.rs proves the ceiling is what decode actually admits, and crates/dclutch-record-contract/src/lib.rs asserts every record action sits at or above the boundary. RELAY_INSTRUCTION_MAGIC is dispatched by dclutch-resolution-proof-sbf, a different ELF, so it never meets either. Delete this entry if those assertions ever go.",
+      "owner": "Registry + Record (R-13, closed)"
+    },
+    {
+      "magic": "DCLLBM02",
+      "constants": [
+        "CLAIMS_MARKET_MAGIC_V2",
+        "LIABILITY_BASIS_MARKET_MAGIC_V2",
+        "MARKET_MAGIC_V2"
+      ],
+      "verdict": "NOT A DISPATCH SELECTOR. This is the LiabilityBasisV2 aggregate ACCOUNT header, read when decoding account data, never compared against instruction data -- no dispatcher of any ELF sees it. The three names are one canonical constant (crates/dclutch-claims-svm/src/liability_basis_state_v2.rs) plus two program-test fixtures that re-declare the same value locally instead of importing it. Harmless to dispatch, still worth fixing: the fixtures should import the canonical constant so the record has one author. Tracked as a convergence item, not a safety one.",
+      "owner": "Claims (fixture convergence)"
+    },
+    {
+      "magic": "DCLLBP02",
+      "constants": [
+        "CLAIMS_POSITION_MAGIC_V2",
+        "LIABILITY_BASIS_POSITION_MAGIC_V2",
+        "POSITION_MAGIC_V2"
+      ],
+      "verdict": "NOT A DISPATCH SELECTOR, and the exact sibling of DCLLBM02: the LiabilityBasisV2 Position ACCOUNT header, read from account data only. One canonical declaration plus two program-test fixtures re-declaring the same value under local names. No dispatcher compares it against instruction data, so no mis-routing is possible; the fixtures should import the canonical constant.",
+      "owner": "Claims (fixture convergence)"
+    },
+    {
+      "magic": "DCLTARF1",
+      "constants": [
+        "AGGREGATE_RETIREMENT_FINISH_MAGIC_V1",
+        "ARTIFACT_RELEASE_MAGIC_V1"
+      ],
+      "verdict": "DIFFERENT ELFS AND DIFFERENT CHANNELS. AGGREGATE_RETIREMENT_FINISH_MAGIC_V1 belongs to the Core retirement checkpoint (crates/dclutch-market-core-codec), ARTIFACT_RELEASE_MAGIC_V1 to the Registry artifact record (crates/dclutch-registry-contract). No single program dispatches on both, and neither is an instruction selector reached from the other's entrypoint. A reader of a raw wire dump can still confuse them, which is why this is recorded rather than dismissed.",
+      "owner": "Core + Registry (naming)"
+    },
+    {
+      "magic": "DCLTDAC1",
+      "constants": [
+        "DEALER_SCENARIO_ACTIVATION_RECEIPT_MAGIC_V1",
+        "DIRECT_ACTIVATION_REQUEST_MAGIC_V1"
+      ],
+      "verdict": "REQUEST PAIRED WITH RECEIPT, different channels. DIRECT_ACTIVATION_REQUEST_MAGIC_V1 heads an instruction; DEALER_SCENARIO_ACTIVATION_RECEIPT_MAGIC_V1 heads a receipt read back from account data. A receipt magic is never tested against instruction_data by any dispatcher, so the two cannot select each other's handler.",
+      "owner": "Dealer + Direct (naming)"
+    },
+    {
+      "magic": "DCLTDCM1",
+      "constants": [
+        "DEALER_SCENARIO_CHECKPOINT_COMMIT_MAGIC_V1",
+        "DEALER_SCENARIO_CUSTODY_EFFECT_MANIFEST_MAGIC_V1"
+      ],
+      "verdict": "ONE DISPATCH SELECTOR, ONE RECORD, inside the same family. The commit magic is a top-level Trading selector (is_dealer_scenario_checkpoint_commit_v1); the custody-effect manifest magic heads persisted account data and is never compared against instruction_data. Only one of the two is ever reachable from a dispatcher, so there is no arm for the other to be mistaken for. Note this is the closest of the eight to a real hazard: if the manifest ever became instruction-carried inside the Trading ELF, this entry must be deleted and the magic re-lettered.",
+      "owner": "Dealer"
+    },
+    {
+      "magic": "DCLTDRR1",
+      "constants": [
+        "DEALER_SCENARIO_RESERVATION_RECEIPT_MAGIC_V1",
+        "DIRECT_BEGIN_RETIRING_RECEIPT_MAGIC_V1"
+      ],
+      "verdict": "TWO RECEIPTS, neither a dispatch selector. Both head data read back and authenticated against an expected magic the reader already knows from context -- the reader is looking for one specific receipt, not choosing between families. No dispatcher compares either against instruction_data, so no wrong-handler path exists.",
+      "owner": "Dealer + Direct (naming)"
+    },
+    {
+      "magic": "DCLTPRQ2",
+      "constants": [
+        "ADMISSION_REQUEST_MAGIC_V2",
+        "PAYOFF_REQUEST_MAGIC_V2"
+      ],
+      "verdict": "DIFFERENT ELFS. ADMISSION_REQUEST_MAGIC_V2 is the Product Runtime V2 admission request (crates/dclutch-product-runtime-v2-admission, dispatched by dclutch-product-runtime-v2-sbf); PAYOFF_REQUEST_MAGIC_V2 is the payoff request of crates/dclutch-product-payoff-v2-svm. Neither program's entrypoint sees the other's constant, so one dispatcher never has to choose. Both are genuine request magics, which makes this the one to re-letter first if the deploy window reopens.",
+      "owner": "Product Runtime + Payoff"
+    },
+    {
+      "magic": "DCLTSA03",
+      "constants": [
+        "SHADOW_ACK_MAGIC_V3",
+        "TERMINAL_SETTLEMENT_RECEIPT_MAGIC_V3"
+      ],
+      "verdict": "AN ACK AND A RECEIPT, neither a dispatch selector. SHADOW_ACK_MAGIC_V3 heads return data from the shadow accelerator; TERMINAL_SETTLEMENT_RECEIPT_MAGIC_V3 heads a Claims settlement receipt. Both are verified by a caller that already knows which one it asked for, and neither is compared against instruction_data at any entrypoint.",
+      "owner": "Execution strategy + Claims (naming)"
+    }
+  ]
+}

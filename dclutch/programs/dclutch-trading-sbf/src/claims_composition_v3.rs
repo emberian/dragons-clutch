@@ -1156,18 +1156,34 @@ fn fractional_root_signer(
     // root carries its own terms digest, so `historical_terms == terms` is a
     // real refusal a caller can provoke.
     //
-    // V2 CANNOT FAIL, and it is unsatisfiable-in-principle rather than merely
-    // unreached. Both sides descend from one value in one instruction:
-    // `outer.rs` seeds `ACTIVATION_CONFIG_IDENTITY_V2` from
-    // `request.selection().config()` (`outer.rs:2233`), the Fractional family
-    // projects THAT register into the root tail at the selection-config offset
-    // (`FRACTIONAL_ACTIVATION_TAIL_FIELDS_V1`, a `SeamIdentity`), and the header
-    // this reads persists the same `request.selection().config()`. So
-    // `current_config` is a copy of `selected_config`. The `find_program_address`
-    // re-derivation above -- from this header's OWN seeds, under this program's
-    // ownership -- is what makes that exhaustive: an account reaching this line
-    // was created by that seam or it was refused three predicates ago. Same
-    // shape as `ff8ca269`.
+    // V2 CANNOT BE PROVOKED BY THE CALLER, and that is a weaker and more useful
+    // statement than "cannot fail" -- which is what I first wrote here and had
+    // to withdraw. No REQUEST field reaches either side. Both descend from one
+    // value in one instruction: `outer.rs:2233` seeds
+    // `ACTIVATION_CONFIG_IDENTITY_V2` from `request.selection().config()`, the
+    // Fractional family projects THAT register into the root tail at the
+    // selection-config offset (`FRACTIONAL_ACTIVATION_TAIL_FIELDS_V1`, a
+    // `SeamIdentity`), and the header this reads persists the same
+    // `request.selection().config()`. The `find_program_address` re-derivation
+    // above -- from this header's OWN seeds, under this program's ownership --
+    // makes that exhaustive over accounts: one reaching this line was created by
+    // that seam or was refused three predicates ago.
+    //
+    // BUT IT IS NOT UNSATISFIABLE, and the difference is the whole reason the
+    // conjunct earns its place. The register-to-offset binding is declared by
+    // the family's own published effect program, and ON CHAIN nothing checks it:
+    // `require_activation_local_effects` (`outer.rs:2087`) restricts effect KINDS
+    // and never asks which register feeds which tail offset. The only thing that
+    // checks it is `validate_fractional_activation_bundle_v1`
+    // (`fractional-claim-operator/src/selected_release_v4.rs:517`), which is
+    // operator-side and never runs on chain. So a descriptor whose effect wrote a
+    // constant, or a different register, at the selection-config offset would
+    // produce a root that decodes cleanly as V2 with these two divergent -- and
+    // the seam would create it.
+    //
+    // This is therefore a live guard against a malformed or hostile DESCRIPTOR,
+    // not a tautology and not the `ff8ca269` shape I first took it for. Deleting
+    // it would be a weakening. It stays.
     //
     // WHAT IT LOOKS LIKE IT LOST, AND WHY THAT IS NOT A HOLE. V2 does not pin
     // the caller's `terms` -- on this arm `terms` is decoded and never read.
@@ -1188,10 +1204,10 @@ fn fractional_root_signer(
     // the cost of two frame accounts the Claims side explicitly declined
     // (`fractional_atomic_v3.rs:150-154`).
     //
-    // The conjunct stays because it is free and it is the tripwire for the one
-    // thing that could still break: a future seam that stops writing these two
-    // from a single source. It is not a caller-facing refusal and no hostile
-    // test should expect to provoke it.
+    // The conjunct stays. It is not caller-facing, so a hostile test that feeds
+    // this route bad REQUEST bytes will never provoke it and should not try; the
+    // test that would is one that activates a root under a descriptor whose
+    // effect program mis-declares the selection-config offset, and none exists.
     let state_binding_matches = match (state.terms_v1(), state.selection_config_v2()) {
         (Some(historical_terms), None) => historical_terms == terms && selected_config == terms,
         (None, Some(current_config)) => current_config == selected_config,

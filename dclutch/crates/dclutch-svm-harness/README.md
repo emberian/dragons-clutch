@@ -116,15 +116,34 @@ porting the current Core-effect and funded ABIs into a second fixture, and
 Custody, Registry and Resolution ELFs. The funded walk belongs there. This
 file's remaining value is its captured provider projection.
 
-The consequence is specific and belongs to C-09: the Pyth **funded fallback
-walk** — `FundedTransitionActionV3::{FailNext, Exhaust, CommitFailure}`, the
-route a market takes when the provider goes silent — executes on a real ELF
-*only here*. `resolution_core_v3_lifecycle.rs` reaches a failure-terminal
-Market and closes its fund, but from a seeded `TerminalFailure` prestate; the
-walk that produces that prestate is not driven. The remaining coverage is
-`programs/dclutch-resolution-proof-sbf/src/tests.rs`, which calls
-`process_instruction` in-process against hand-forged `AccountInfo`s and whose
-funded cases exist to prove *removed* V1 dispatch stays removed.
+**A CORRECTION TO AN EARLIER VERSION OF THIS PARAGRAPH.** It said the funded
+fallback walk — `FundedTransitionActionV3::{FailNext, Exhaust, CommitFailure}`
+— executed on a real ELF only in the dead file. That was wrong twice over, and
+the mistake was reading a dead file's vocabulary as the live one's.
+
+Those three actions are the **V1** walk and the program does not have them:
+`funded.rs` says so in its own module doc, and deleted them rather than keep
+them beside the successor. Six funded transitions in the worst case belonged to
+a market that bought named alternative sources, and
+`exhaust_after_primary_deadline` refuses any material carrying a recovery
+policy, so no prestate in this tree can reach them. They survive only in the
+codec enum, in that dead file, and in the receipt-caller test program. There is
+nothing there to execute.
+
+The **live** walk is one transition — `Primary → Exhausted → FailureCommitted`,
+one debit, one `ResolutionFailure` certificate — planned by
+`funded::plan_deadline_failure_v1` and reached through
+`RelayInstructionV1::CommitDeadlineFailure`. It has always executed on a real
+ELF in `relayed_mainnet_state.rs`, which the gauntlet runs.
+
+What was genuinely missing is narrower and is now closed: that walk had never
+been driven against a market whose evidence family is **Pyth**, and this crate's
+Pyth campaign reached its failure terminal only from a *seeded* `TerminalFailure`
+prestate, which proves the shape of an ending and nothing about how it is
+reached. `resolution_core_v3_lifecycle.rs` now walks it —
+`a_silent_provider_cannot_strand_a_market_and_the_walker_is_paid`, founding
+through fund close. The walk's 22-account frame carries no provider account and
+no relay account, which is why one route serves both families.
 
 The experimental Direct successor's four-ELF physical campaign is GONE, with the
 three first-party ELFs it drove. `physical_direct_composition.rs`,

@@ -159,3 +159,23 @@ describe('Product V2 admission: what it asks for, and what it computes', () => {
     expect(overrideBlock).not.toContain('required=""');
   });
 });
+
+describe('the studio does not present its own description as the partition', () => {
+  const html = renderToStaticMarkup(<ProductV2Studio />);
+
+  it('says the compiled regions are payoff segments, not the outcome partition', () => {
+    // C-02's closing clause asks that the same artifacts the operator found be
+    // explained and inspectable here. `compileProductV2` derives its regions in
+    // TypeScript from the payoff KNOTS and labels them "interpolation segment
+    // N"; the outcome partition is the operator's ResultDomainV2 CUTS, a
+    // different list of a different length that only the chain holds. Rendering
+    // the first where a reader looks for the second is the mirror this whole
+    // page was supposed to stop being.
+    expect(html).toContain('Where the payoff bends, not where the outcome changes');
+    expect(html).toContain('result-domain.bin');
+  });
+
+  it('points at the record that does carry the partition', () => {
+    expect(html).toContain('ResultDomainV2');
+  });
+});

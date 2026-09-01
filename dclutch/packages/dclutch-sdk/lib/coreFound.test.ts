@@ -7,10 +7,21 @@ import {
   compileLifecycleRentCreateTransactionV2,
   compileCoreFoundTransactionV2,
   decodeCoreFoundProductGraphV2,
+  decodeResultDomainV2,
+  deriveCoreFoundRecordsV2,
   prepareCoreFoundV2,
   validateCoreFoundCapabilityManifestV1,
   validateCoreFoundSourceMaterialV3,
 } from './coreFound';
+import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
+import {
+  MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1,
+  PORTFOLIO_SCHEMA_ID_V2,
+  PRODUCT_RECORD_SCHEMA_ID_V2,
+  RESULT_DOMAIN_SCHEMA_ID_V2,
+  SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
+  SOURCE_SPEC_SCHEMA_ID_V1,
+} from './generated/coreFound';
 import {
   CORE_FOUND_ACCOUNT_COUNT_V3,
   CORE_FOUND_ACCOUNT_ROLES_V3,
@@ -123,6 +134,174 @@ describe('Core Found37 browser kernel', () => {
     put(source, 16, id(8)); put(source, 48, id(2)); put(source, 80, id(3)); put(source, 112, id(4)); put(source, 176, id(6));
     const productDigest = await sha256(graph.product);
     expect(() => validateCoreFoundSourceMaterialV3(source, productDigest)).toThrow(/different Product/);
+  });
+
+  it('derives the four dependent record addresses the parents already name', async () => {
+    /**
+     * THE DEFECT THIS CLOSES. `/found` asks a stranger to paste fourteen
+     * base58 addresses, and its own field comments say five of them are
+     * values another record on the same list already contains: "Derivable
+     * from that record once this console reads it; today it is typed and
+     * then checked." Checked is not the same as derived. A typed address
+     * that survives every check is still an address somebody had to go and
+     * find, and the one place a person can be silently wrong is the one the
+     * console asked them to fill in by hand.
+     *
+     * Four of the five are derivable through the Registry's own constructor
+     * from a digest the parent record carries at a named coordinate. The
+     * fifth is not, and is a routed finding rather than a fifth derivation:
+     * `SourceSpecV1::decode` writes its capacity-profile coordinate as a
+     * bare `144` (crates/dclutch-source-contract/src/lib.rs:917), so there
+     * is no named constant for the generator to emit and nothing this
+     * browser could import instead of restating it.
+     */
+    const graph = await graph258();
+    const registry = new PublicKey(new Uint8Array(32).fill(9)).toBase58();
+    const productDigest = await sha256(graph.product);
+
+    const sourceSpecDigest = id(21);
+    const manipulationFloorDigest = id(22);
+    const source = new Uint8Array(240);
+    put(source, 0, new TextEncoder().encode('DCLTSMV3')); putU16(source, 8, 3); source[11] = 2;
+    put(source, 16, productDigest);
+    put(source, 48, sourceSpecDigest);
+    put(source, 80, id(3)); put(source, 112, id(4)); put(source, 176, id(6));
+    put(source, 208, manipulationFloorDigest);
+    const sourceDigest = await sha256(source);
+
+    const productRecord = deriveFinalizedRecordAddressesV1(registry, PRODUCT_RECORD_SCHEMA_ID_V2, productDigest).record;
+    const sourceMaterialRecord = deriveFinalizedRecordAddressesV1(registry, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, sourceDigest).record;
+
+    const served = new Map<string, Uint8Array>([[productRecord, graph.product], [sourceMaterialRecord, source]]);
+    const asked: string[] = [];
+    const client = {
+      finalizedSlot: async () => '600',
+      multipleAccounts: async (addresses: ReadonlyArray<string>) => {
+        asked.push(...addresses);
+        return {
+          slot: '600',
+          accounts: addresses.map((address) => ({
+            address,
+            account: served.has(address)
+              ? { owner: registry, executable: false, lamports: '1000000', space: served.get(address)!.length, data: served.get(address)! }
+              : null,
+          })),
+        };
+      },
+    } as unknown as SolanaRpcClient;
+
+    const derived = await deriveCoreFoundRecordsV2(client, { registryProgram: registry, productRecord, sourceMaterialRecord });
+
+    // Each address, recomputed here through the same Registry constructor the
+    // contract uses, from the digest its parent carries.
+    expect(derived.resultDomainRecord)
+      .toBe(deriveFinalizedRecordAddressesV1(registry, RESULT_DOMAIN_SCHEMA_ID_V2, graph.domainDigest).record);
+    expect(derived.portfolioRecord)
+      .toBe(deriveFinalizedRecordAddressesV1(registry, PORTFOLIO_SCHEMA_ID_V2, graph.portfolioDigest).record);
+    expect(derived.sourceSpecRecord)
+      .toBe(deriveFinalizedRecordAddressesV1(registry, SOURCE_SPEC_SCHEMA_ID_V1, sourceSpecDigest).record);
+    expect(derived.manipulationFloorRecord)
+      .toBe(deriveFinalizedRecordAddressesV1(registry, MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, manipulationFloorDigest).record);
+
+    // It asks the chain for the two parents a reader supplied and nothing
+    // else: a derivation that quietly reads a third address is a third
+    // address the reader is trusting without being told.
+    expect([...new Set(asked)].sort()).toEqual([productRecord, sourceMaterialRecord].sort());
+  });
+
+  it('refuses a parent record that is not its own content-derived Registry PDA', async () => {
+    // The check that survives derivation, and the only one that matters here:
+    // the two PARENTS are still typed, so a reader can still paste an address
+    // that is not the schema/content PDA of what lives there. The children
+    // inherit their correctness from this refusal.
+    const graph = await graph258();
+    const registry = new PublicKey(new Uint8Array(32).fill(9)).toBase58();
+    const wrongAddress = new PublicKey(new Uint8Array(32).fill(11)).toBase58();
+    const source = new Uint8Array(240);
+    put(source, 0, new TextEncoder().encode('DCLTSMV3')); putU16(source, 8, 3); source[11] = 2;
+    put(source, 16, await sha256(graph.product));
+    put(source, 48, id(21)); put(source, 80, id(3)); put(source, 112, id(4)); put(source, 176, id(6));
+    put(source, 208, id(22));
+    const sourceMaterialRecord = deriveFinalizedRecordAddressesV1(registry, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, await sha256(source)).record;
+    const served = new Map<string, Uint8Array>([[wrongAddress, graph.product], [sourceMaterialRecord, source]]);
+    const client = {
+      finalizedSlot: async () => '600',
+      multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
+        slot: '600',
+        accounts: addresses.map((address) => ({
+          address,
+          account: served.has(address)
+            ? { owner: registry, executable: false, lamports: '1000000', space: served.get(address)!.length, data: served.get(address)! }
+            : null,
+        })),
+      }),
+    } as unknown as SolanaRpcClient;
+
+    await expect(deriveCoreFoundRecordsV2(client, {
+      registryProgram: registry, productRecord: wrongAddress, sourceMaterialRecord,
+    })).rejects.toThrow(/Product is not the schema\/content-derived Registry raw PDA/);
+  });
+
+  it('refuses a SourceMaterialV3 that names another Product than the one supplied', async () => {
+    const graph = await graph258();
+    const registry = new PublicKey(new Uint8Array(32).fill(9)).toBase58();
+    const source = new Uint8Array(240);
+    put(source, 0, new TextEncoder().encode('DCLTSMV3')); putU16(source, 8, 3); source[11] = 2;
+    // A Product digest that is not this Product's.
+    put(source, 16, id(99));
+    put(source, 48, id(21)); put(source, 80, id(3)); put(source, 112, id(4)); put(source, 176, id(6));
+    put(source, 208, id(22));
+    const productRecord = deriveFinalizedRecordAddressesV1(registry, PRODUCT_RECORD_SCHEMA_ID_V2, await sha256(graph.product)).record;
+    const sourceMaterialRecord = deriveFinalizedRecordAddressesV1(registry, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, await sha256(source)).record;
+    const served = new Map<string, Uint8Array>([[productRecord, graph.product], [sourceMaterialRecord, source]]);
+    const client = {
+      finalizedSlot: async () => '600',
+      multipleAccounts: async (addresses: ReadonlyArray<string>) => ({
+        slot: '600',
+        accounts: addresses.map((address) => ({
+          address,
+          account: served.has(address)
+            ? { owner: registry, executable: false, lamports: '1000000', space: served.get(address)!.length, data: served.get(address)! }
+            : null,
+        })),
+      }),
+    } as unknown as SolanaRpcClient;
+
+    await expect(deriveCoreFoundRecordsV2(client, {
+      registryProgram: registry, productRecord, sourceMaterialRecord,
+    })).rejects.toThrow(/different Product record digest/);
+  });
+
+  it('returns the operator\u2019s own cuts instead of discarding them', async () => {
+    /**
+     * THE DEFECT THIS CLOSES. These bytes were already decoded here and
+     * already validated for ABI, width, identity and strict increase — and
+     * then dropped, because the graph decoder only needed them well formed.
+     * So the one artifact that says what a market\u2019s outcomes ARE reached
+     * the browser and left no trace, while `/product-v2` rendered a parallel
+     * list of "interpolation segment N" derived in TypeScript from the payoff
+     * KNOTS, in the place a reader looks for the partition. Knots are where
+     * the payoff bends; cuts are where the outcome changes. Different lists,
+     * different lengths, and only one of them is on chain.
+     */
+    const graph = await graph258();
+    const domain = decodeResultDomainV2(graph.domain);
+    expect(domain.regionCount).toBe(257);
+    expect(domain.cuts.length).toBe(256);
+    expect(domain.denominator).toBe(1n);
+    // Exactly the values the fixture wrote, in canonical order.
+    expect(domain.cuts[0]).toBe(-128n);
+    expect(domain.cuts[255]).toBe(127n);
+    for (let index = 1; index < domain.cuts.length; index += 1) {
+      expect(domain.cuts[index] > domain.cuts[index - 1]).toBe(true);
+    }
+  });
+
+  it('refuses a result domain whose cuts are not strictly increasing', async () => {
+    const graph = await graph258();
+    const broken = new Uint8Array(graph.domain);
+    putI128(broken, 240 + 16, -200n);
+    expect(() => decodeResultDomainV2(broken)).toThrow(/not strictly increasing/);
   });
 
   it('accepts the canonical empty manifest and preflights u64 generation before RPC', async () => {

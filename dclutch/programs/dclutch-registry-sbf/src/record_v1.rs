@@ -54,7 +54,9 @@ pub(crate) fn dispatch(
     instruction_data: &[u8],
 ) -> Result<(), ProgramError> {
     match instruction_data.get(10).copied() {
-        Some(1) => BeginRecordV1::decode(instruction_data)
+        // `5`, not `1`: `Begin` moved out of the Registry half of this shared
+        // discriminant on 2026-09-01. See the partition assertions in `lib.rs`.
+        Some(5) => BeginRecordV1::decode(instruction_data)
             .map_err(map_record_error)
             .and_then(|request| process_begin(program_id, accounts, request)),
         Some(2) => AppendPageV1::decode(instruction_data)

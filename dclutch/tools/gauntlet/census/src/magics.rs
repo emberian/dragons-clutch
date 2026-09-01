@@ -43,11 +43,63 @@
 //! which is an adjudication, and the gate's job is to force it rather than to
 //! guess it.
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
+use serde::Deserialize;
 use syn::{Expr, Item, UnOp};
 
 use crate::enumerate::rust_sources;
+
+/// Repo-relative path of the adjudicated-collision register.
+pub const EXEMPTIONS_PATH: &str = "tools/gauntlet/magic-collisions.json";
+
+/// Shortest verdict the gate will accept.
+///
+/// Not a style rule. An exemption that records nothing can be added by anyone
+/// in a hurry; one that has to be argued cannot, and that difference is the
+/// entire reason this register is a fact rather than a mute switch. The
+/// threshold is deliberately low enough that a real verdict clears it without
+/// thought and high enough that "n/a", "safe" or "" does not.
+const MINIMUM_VERDICT: usize = 80;
+
+#[derive(Debug, Deserialize)]
+pub struct Exemptions {
+    #[serde(default)]
+    #[allow(dead_code, reason = "documentation for a human reading the file")]
+    pub note: String,
+    pub exempt: Vec<Exemption>,
+}
+
+/// One adjudicated collision: this exact set of names may share this value,
+/// for this written reason.
+#[derive(Debug, Deserialize)]
+pub struct Exemption {
+    pub magic: String,
+    /// The EXACT set of constant names observed at the magic. A third claimant
+    /// makes the set stop matching, so the collision fires again: an exemption
+    /// pins a fact, it does not silence a value.
+    pub constants: Vec<String>,
+    /// Why THIS sharing cannot mis-dispatch. Required; see [`MINIMUM_VERDICT`].
+    pub verdict: String,
+    pub owner: String,
+}
+
+/// Read the register. A missing file is an empty register, not an error: the
+/// gate's default posture is to fail on every collision.
+pub fn read_exemptions(root: &Path) -> Result<Vec<Exemption>, String> {
+    let path = root.join(EXEMPTIONS_PATH);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    let parsed: Exemptions = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("parse {}: {error}", path.display()))?;
+    Ok(parsed.exempt)
+}
 
 /// One `const NAME: [u8; 8] = *b"........";` as the tree declares it.
 #[derive(Clone, Debug)]
@@ -204,11 +256,14 @@ pub struct MagicSummary {
     /// Magic values re-declared under the same constant name in another
     /// package. Not a gate failure; see the module documentation.
     pub mirrored: Vec<String>,
+    /// Collisions excused by an argued verdict in the register.
+    pub exempted: usize,
 }
 
 /// One magic value claimed by two or more distinct constant names is a
-/// collision. Returns the problems; an empty list is the only passing outcome.
-pub fn check(declared: &[DeclaredMagic]) -> (Vec<String>, MagicSummary) {
+/// collision, unless `exemptions` carries an argued verdict for that exact set
+/// of names. Returns the problems; an empty list is the only passing outcome.
+pub fn check(declared: &[DeclaredMagic], exemptions: &[Exemption]) -> (Vec<String>, MagicSummary) {
     let mut by_value: BTreeMap<&str, Vec<&DeclaredMagic>> = BTreeMap::new();
     for magic in declared {
         by_value.entry(&magic.value).or_default().push(magic);
@@ -216,11 +271,72 @@ pub fn check(declared: &[DeclaredMagic]) -> (Vec<String>, MagicSummary) {
 
     let mut problems = Vec::new();
     let mut mirrored = Vec::new();
+    let mut exempted = 0_usize;
+    let mut used: BTreeSet<&str> = BTreeSet::new();
+
+    // A verdict is checked BEFORE it is allowed to excuse anything, so a
+    // register entry cannot buy silence by existing.
+    for exemption in exemptions {
+        if exemption.verdict.trim().len() < MINIMUM_VERDICT {
+            problems.push(format!(
+                "magic exemption for `{}` in {EXEMPTIONS_PATH} carries no argued verdict \
+                 ({} characters, {MINIMUM_VERDICT} required). An exemption that records nothing \
+                 is a hidden failure; say which dispatcher can and cannot see both constants.",
+                exemption.magic,
+                exemption.verdict.trim().len()
+            ));
+        }
+        if exemption.owner.trim().is_empty() {
+            problems.push(format!(
+                "magic exemption for `{}` in {EXEMPTIONS_PATH} names no owner",
+                exemption.magic
+            ));
+        }
+    }
+
     for (value, entries) in &by_value {
         let mut names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
         names.sort_unstable();
         names.dedup();
         if names.len() > 1 {
+            // An exemption applies only to the EXACT set adjudicated. A new
+            // claimant changes the set, and the collision fires again.
+            let adjudicated = exemptions.iter().find(|exemption| {
+                exemption.magic == *value && {
+                    let mut listed: Vec<&str> =
+                        exemption.constants.iter().map(String::as_str).collect();
+                    listed.sort_unstable();
+                    listed.dedup();
+                    listed == names
+                }
+            });
+            if let Some(exemption) = adjudicated
+                && exemption.verdict.trim().len() >= MINIMUM_VERDICT
+            {
+                exempted += 1;
+                used.insert(exemption.magic.as_str());
+                continue;
+            }
+            if let Some(exemption) = exemptions
+                .iter()
+                .find(|exemption| exemption.magic == *value)
+            {
+                used.insert(exemption.magic.as_str());
+                let mut listed: Vec<&str> =
+                    exemption.constants.iter().map(String::as_str).collect();
+                listed.sort_unstable();
+                listed.dedup();
+                if listed != names {
+                    problems.push(format!(
+                        "magic `{value}` is adjudicated in {EXEMPTIONS_PATH} for [{}], but the \
+                         tree now declares it as [{}]. A new claimant is a NEW collision and has \
+                         to be argued on its own terms, not inherited from the old verdict.",
+                        listed.join(", "),
+                        names.join(", ")
+                    ));
+                    continue;
+                }
+            }
             let sites = entries
                 .iter()
                 .map(|entry| format!("{} ({})", entry.name, entry.provenance))
@@ -250,10 +366,25 @@ pub fn check(declared: &[DeclaredMagic]) -> (Vec<String>, MagicSummary) {
         }
     }
 
+    // A register entry for a collision that no longer exists is a false record.
+    // Same rule as `tools/gauntlet/blocked.json`: keep an entry only while it is
+    // true, and delete it the moment it stops being. This is what would have
+    // caught `DCLTDRS1`'s entry surviving its own re-lettering.
+    for exemption in exemptions {
+        if !used.contains(exemption.magic.as_str()) {
+            problems.push(format!(
+                "magic `{}` is adjudicated in {EXEMPTIONS_PATH} but no longer collides in the \
+                 tree. Delete the entry: a register of facts may not carry a stale one.",
+                exemption.magic
+            ));
+        }
+    }
+
     let summary = MagicSummary {
         declared: declared.len(),
         distinct: by_value.len(),
         mirrored,
+        exempted,
     };
     (problems, summary)
 }
@@ -289,7 +420,7 @@ mod tests {
                 "crates/dclutch-direct-codec/src/replay_setup_v1.rs:13",
             ),
         ];
-        let (problems, summary) = check(&declared);
+        let (problems, summary) = check(&declared, &[]);
         assert_eq!(problems.len(), 1, "one collision, reported once");
         assert!(problems[0].contains("DCLTDRS1"));
         assert!(problems[0].contains("DEALER_SCENARIO_CHECKPOINT_RESERVE_MAGIC_V1"));
@@ -320,17 +451,109 @@ mod tests {
                 "crates/dclutch-svm-harness/tests/controller_funding_split_abort.rs:1",
             ),
         ];
-        let (problems, summary) = check(&declared);
+        let (problems, summary) = check(&declared, &[]);
         assert!(problems.is_empty(), "a mirror is not a gate failure");
         assert_eq!(summary.mirrored.len(), 1);
         assert!(summary.mirrored[0].contains("DCLTPCA1"));
+    }
+
+    fn exemption(magic: &str, constants: &[&str], verdict: &str) -> Exemption {
+        Exemption {
+            magic: magic.into(),
+            constants: constants.iter().map(|c| (*c).to_string()).collect(),
+            verdict: verdict.into(),
+            owner: "a named owner".into(),
+        }
+    }
+
+    const GOOD_VERDICT: &str = "DIFFERENT ELFS. Neither program's entrypoint ever sees the \
+         other's constant, so no single dispatcher has to choose between them and no \
+         wrong-handler path exists.";
+
+    fn colliding() -> [DeclaredMagic; 2] {
+        [
+            magic("a", "A_REQUEST_MAGIC_V1", "DCLTXXX1", "a.rs:1"),
+            magic("b", "B_REQUEST_MAGIC_V1", "DCLTXXX1", "b.rs:1"),
+        ]
+    }
+
+    /// The register excuses a collision only when the verdict is argued.
+    #[test]
+    fn an_argued_exemption_for_the_exact_set_excuses_the_collision() {
+        let ex = [exemption(
+            "DCLTXXX1",
+            &["A_REQUEST_MAGIC_V1", "B_REQUEST_MAGIC_V1"],
+            GOOD_VERDICT,
+        )];
+        let (problems, summary) = check(&colliding(), &ex);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(summary.exempted, 1);
+    }
+
+    /// The whole point of the register: silence has to be bought with an
+    /// argument. An entry that records nothing is itself a gate failure.
+    #[test]
+    fn an_exemption_with_no_argued_verdict_is_refused_not_honoured() {
+        for empty in ["", "   ", "safe", "n/a -- checked, it is fine"] {
+            let ex = [exemption(
+                "DCLTXXX1",
+                &["A_REQUEST_MAGIC_V1", "B_REQUEST_MAGIC_V1"],
+                empty,
+            )];
+            let (problems, summary) = check(&colliding(), &ex);
+            assert_eq!(summary.exempted, 0, "an unargued entry may not excuse");
+            assert!(
+                problems.iter().any(|p| p.contains("no argued verdict")),
+                "verdict {empty:?} must be refused, got {problems:?}"
+            );
+            assert!(
+                problems.iter().any(|p| p.contains("claimed by")),
+                "and the collision itself must still be reported"
+            );
+        }
+    }
+
+    /// An exemption pins a fact, it does not silence a value. A third claimant
+    /// is a NEW collision and may not inherit the old verdict.
+    #[test]
+    fn a_new_claimant_breaks_the_exemption_rather_than_inheriting_it() {
+        let mut declared = colliding().to_vec();
+        declared.push(magic("c", "C_REQUEST_MAGIC_V1", "DCLTXXX1", "c.rs:1"));
+        let ex = [exemption(
+            "DCLTXXX1",
+            &["A_REQUEST_MAGIC_V1", "B_REQUEST_MAGIC_V1"],
+            GOOD_VERDICT,
+        )];
+        let (problems, summary) = check(&declared, &ex);
+        assert_eq!(summary.exempted, 0);
+        assert!(
+            problems.iter().any(|p| p.contains("A new claimant")),
+            "{problems:?}"
+        );
+    }
+
+    /// A register of facts may not carry a stale one. This is what would have
+    /// caught a `DCLTDRS1` entry surviving its own re-lettering.
+    #[test]
+    fn an_exemption_whose_collision_is_gone_is_reported_stale() {
+        let declared = [magic("a", "A_REQUEST_MAGIC_V1", "DCLTXXX1", "a.rs:1")];
+        let ex = [exemption(
+            "DCLTXXX1",
+            &["A_REQUEST_MAGIC_V1", "B_REQUEST_MAGIC_V1"],
+            GOOD_VERDICT,
+        )];
+        let (problems, _) = check(&declared, &ex);
+        assert!(
+            problems.iter().any(|p| p.contains("no longer collides")),
+            "{problems:?}"
+        );
     }
 
     /// One constant declared once is the ordinary case and must stay silent.
     #[test]
     fn a_unique_magic_raises_nothing() {
         let declared = [magic("p", "A_MAGIC_V1", "DCLTAAA1", "a.rs:1")];
-        let (problems, summary) = check(&declared);
+        let (problems, summary) = check(&declared, &[]);
         assert!(problems.is_empty());
         assert!(summary.mirrored.is_empty());
         assert_eq!(summary.distinct, 1);

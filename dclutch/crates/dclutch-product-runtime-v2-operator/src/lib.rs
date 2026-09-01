@@ -31,6 +31,8 @@ use solana_program::{
 };
 use solana_sdk_ids::{system_program, sysvar};
 
+/// Named market questions compiled into live V2 cuts, payoffs and identities.
+pub mod authoring;
 /// Chain-derived unsigned Core Found construction for Runtime V2 Products.
 pub mod found;
 /// Chain-derived Registry records for Product V3 graded-basis admission.
@@ -233,13 +235,8 @@ pub fn compile_interesting_product_records_v2(
     if band.denominator != input.cut_denominator {
         return Err(Error::FoundingBand);
     }
-    let report = require_interesting_partition_v1(input.cuts, &band, model, ceiling_bps).map_err(
-        |error| match error {
-            CompileError::DegenerateOutcomePartition => Error::DegenerateOutcomePartition,
-            CompileError::NonCanonicalPartition => Error::RuntimeProduct,
-            _ => Error::FoundingBand,
-        },
-    )?;
+    let report = require_interesting_partition_v1(input.cuts, &band, model, ceiling_bps)
+        .map_err(quality_error)?;
     let compiled = compile_product_records_v2(
         registry_program,
         input,
@@ -248,6 +245,19 @@ pub fn compile_interesting_product_records_v2(
         portfolio_output,
     )?;
     Ok((compiled, report))
+}
+
+/// Carry a partition-quality refusal across the operator boundary by name.
+///
+/// The degenerate-partition refusal must stay distinguishable from every other
+/// way a band can be wrong; collapsing them would make a test asserting "some
+/// error" pass on a mismatched denominator and prove nothing about placement.
+pub(crate) const fn quality_error(error: CompileError) -> Error {
+    match error {
+        CompileError::DegenerateOutcomePartition => Error::DegenerateOutcomePartition,
+        CompileError::NonCanonicalPartition => Error::RuntimeProduct,
+        _ => Error::FoundingBand,
+    }
 }
 
 /// One finalized account observation supplied by a bounded RPC reader.

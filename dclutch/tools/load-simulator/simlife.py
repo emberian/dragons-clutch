@@ -446,7 +446,48 @@ DEGENERATE_OUTCOME_SHARE_PERCENT_V1 = 70
 # so the width scales with the SQUARE ROOT of the window -- the random walk's
 # own scaling, and the only one that does not make a long market's band either
 # absurdly narrow or absurdly wide.
-BAND_WINDOW_REFERENCE_SLOTS_V1 = 10_000
+#
+# READ FROM THE RUST OWNER, never restated. `partition_quality.rs` is the
+# semantic owner of this constant and its own doc comment already named this
+# file as the second copy, with the lifting plan "replacing two constants that
+# agree by hand". Two constants that agree by hand agree right up until they do
+# not, and the failure is silent: the simulator would draw bands against one
+# reference window while the compiler measured degeneracy against another, and
+# every share it reported would be subtly the wrong question.
+#
+# Parsing one `pub const` is a small ugliness that buys a single author. It
+# REFUSES rather than falling back to a literal -- a default here would restore
+# exactly the hand-agreement it exists to remove, and would do it invisibly.
+_PARTITION_QUALITY_RS = (
+    HERE.parents[1] / "crates" / "dclutch-product-compiler" / "src" / "partition_quality.rs"
+)
+
+
+def _rust_u64_const(path: Path, name: str) -> int:
+    """The one value `name` is assigned in `path`, or a loud refusal."""
+    import re
+
+    try:
+        source = path.read_text()
+    except OSError as error:
+        raise RuntimeError(
+            f"cannot read the semantic owner of {name} at {path}: {error}"
+        ) from error
+    found = re.findall(
+        rf"pub const {re.escape(name)}\s*:\s*u64\s*=\s*([0-9_]+)\s*;", source
+    )
+    if len(found) != 1:
+        raise RuntimeError(
+            f"{path} must declare exactly one `pub const {name}: u64`, found {len(found)}. "
+            "The simulator reads this constant rather than restating it; if it moved, "
+            "point this reader at its new owner instead of copying the value back here."
+        )
+    return int(found[0].replace("_", ""))
+
+
+BAND_WINDOW_REFERENCE_SLOTS_V1 = _rust_u64_const(
+    _PARTITION_QUALITY_RS, "BAND_WINDOW_REFERENCE_SLOTS_V1"
+)
 
 # How far the coordinate is assumed to be able to travel over the reference
 # window, in basis points of the anchor. Drawn per market: two markets on one

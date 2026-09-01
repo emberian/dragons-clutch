@@ -1,6 +1,8 @@
 'use client';
 
 import { useMemo, useState, type ChangeEvent } from 'react';
+import { decodeResultDomainV2, type ResultDomainV2 } from '@/lib/coreFound';
+import { formatTicksV1 } from '@/lib/founding/rangeProtection';
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -76,6 +78,7 @@ export default function SplineProductArtifactInspector() {
   const [report, setReport] = useState<Readonly<{ name: string; value: unknown }> | null>(null);
   const [artifacts, setArtifacts] = useState<LoadedArtifactsV1>({});
   const [result, setResult] = useState<InspectedSplineProductArtifactsV1 | null>(null);
+  const [partition, setPartition] = useState<ResultDomainV2 | null>(null);
   const [status, setStatus] = useState('Load report.json and all five compiler files. Nothing is read from a chain.');
   const [copyStatus, setCopyStatus] = useState('Founding handoff not copied.');
 
@@ -150,8 +153,13 @@ export default function SplineProductArtifactInspector() {
       });
       const inspected = await inspectSplineProductAuthoringArtifactsV1(report.value, files);
       setResult(inspected);
+      // The one artifact that says what this market's OUTCOMES are. It was
+      // already being decoded and discarded elsewhere; here it is read for
+      // what it says rather than only for whether it is well formed.
+      setPartition(decodeResultDomainV2(files.resultDomain));
       setStatus('Verified all five files against the Rust compiler report and generated Registry authorities. Nothing was signed or submitted.');
     } catch (error) {
+      setPartition(null);
       setStatus(`Handoff refused: ${refusal(error)}`);
     }
   }
@@ -223,6 +231,22 @@ export default function SplineProductArtifactInspector() {
           <article><span>Price gate</span><strong>{result.verifiedPriceGate.atomCount} admitted atoms</strong><p>Mass {result.verifiedPriceGate.mass} · prices {result.verifiedPriceGate.prices.join(', ')}</p></article>
           <article><span>Rounding</span><strong>cumulative-floor-v3</strong><p>Semantic basis <code>{result.semanticBasisId}</code></p></article>
         </div>
+
+        {partition !== null && <div className="spline-artifact-partition">
+          <h4 className="detail-subhead">The outcome partition this market actually sells</h4>
+          <p className="direct-status">{partition.regionCount} ordinary cells over {partition.cuts.length} cut{partition.cuts.length === 1 ? '' : 's'}, at {partition.denominator.toString()} ticks per whole unit — read out of the operator&rsquo;s own <code>result-domain.bin</code>, not derived here. These are where the outcome changes; the payoff knots in step 01 are where the payoff bends.</p>
+          <div className="spline-artifact-table" tabIndex={0} role="region" aria-label="The result domain's cuts, in order">
+            <Table>
+              <TableHeader><TableRow><TableHead>Cell</TableHead><TableHead>From</TableHead><TableHead>To</TableHead></TableRow></TableHeader>
+              <TableBody>{Array.from({ length: partition.regionCount }, (_, cell) => <TableRow key={cell}>
+                <TableCell><strong>{cell}</strong></TableCell>
+                <TableCell><code>{cell === 0 ? '−∞' : formatTicksV1(partition.cuts[cell - 1], partition.denominator)}</code></TableCell>
+                <TableCell><code>{cell === partition.regionCount - 1 ? '+∞' : formatTicksV1(partition.cuts[cell], partition.denominator)}</code></TableCell>
+              </TableRow>)}</TableBody>
+            </Table>
+          </div>
+          <p className="direct-status">What share of the ex-ante outcome mass each cell holds is not shown, because this bundle does not carry it: <code>dclutch-product-compiler</code> computes a <code>PartitionQualityReportV1</code> with <code>cell_share_bps</code>, and the authoring report schema <code>dclutch/product-spline-authoring-report/v1</code> does not yet emit it. Until the producer does, this page can say where the cells are and not how much of the question each one takes.</p>
+        </div>}
 
         <div className="spline-artifact-table" tabIndex={0} role="region" aria-label="Compiler files, bytes and Registry coordinates">
           <Table>

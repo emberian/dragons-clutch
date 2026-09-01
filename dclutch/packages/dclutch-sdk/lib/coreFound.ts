@@ -102,9 +102,13 @@ import {
   MARKET_CORE_STATE_PDA_DOMAIN_V2,
   PORTFOLIO_SCHEMA_ID_V2,
   PRICE_GATE_RECORD_SCHEMA_ID_V1,
+  PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2,
+  PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2,
   PRODUCT_RECORD_SCHEMA_ID_V2,
   REALM_SCHEMA_RELEASE_ID_V1,
   RESULT_DOMAIN_SCHEMA_ID_V2,
+  SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3,
+  SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3,
   SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3,
 } from './generated/coreFound';
 import { inspectProtocolInfrastructureV1, type ProtocolInfrastructureInspectionV1 } from './infrastructure';
@@ -440,27 +444,78 @@ export function validateCoreFoundCapabilityManifestV1(bytes: Uint8Array): void {
   }
 }
 
-export function decodeCoreFoundProductGraphV2(product: Uint8Array, domain: Uint8Array, portfolio: Uint8Array, domainDigest: Uint8Array, portfolioDigest: Uint8Array): ProductGraph {
+/**
+ * The Product Runtime V2 root's own header, checked in exactly one place.
+ *
+ * Two callers need it — the graph decoder, which also has the domain and
+ * portfolio bytes, and the dependent-record derivation, which has only this
+ * record. Writing the check twice would put the magic and version coordinates
+ * in the browser's own words a second time, which `abi-coverage.mjs` counts
+ * and refuses; it caught exactly that when the derivation was first written.
+ */
+function validateProductRootHeaderV2(product: Uint8Array): void {
   if (product.length !== PRODUCT_RECORD_BYTES || ascii(product, 0, 8) !== 'DCLTPRM2' || u16(product, 8) !== 2) throw new Error('Product Runtime V2 root has the wrong exact ABI');
   requireZero(product, 10, 6, 'Product Runtime V2 root');
+}
+
+/** One ResultDomainV2 record: the outcome partition, as the operator wrote it. */
+export type ResultDomainV2 = Readonly<{
+  /** Ordinary cells: always `cuts.length + 1`. */
+  regionCount: number;
+  /** Ticks per whole unit of the coordinate. */
+  denominator: bigint;
+  /** The interior boundaries, strictly increasing, in ticks. */
+  cuts: ReadonlyArray<bigint>;
+}>;
+
+/**
+ * Decode the operator's own outcome partition.
+ *
+ * THE DEFECT THIS CLOSES. These exact bytes were already being decoded here,
+ * validated for ABI, width, identity and strict increase -- and then thrown
+ * away, because the graph decoder only needed to know they were well formed.
+ * So the one artifact that says what a market's outcomes ARE reached the
+ * browser and left no trace, while `/product-v2` rendered a parallel list of
+ * "interpolation segment N" derived in TypeScript from the payoff KNOTS and
+ * presented it in the place a reader looks for the partition. Knots are where
+ * the payoff bends. Cuts are where the outcome changes. They are not the same
+ * list, they are not the same length, and only one of them is on chain.
+ *
+ * C-02's closing clause asks that the same artifacts found by the operator be
+ * explained and inspectable in the client. A client that re-derives its own
+ * parallel description is what that clause forbids, so the cuts are returned
+ * now instead of discarded.
+ */
+export function decodeResultDomainV2(domain: Uint8Array): ResultDomainV2 {
+  if (domain.length < DOMAIN_HEADER_BYTES || ascii(domain, 0, 8) !== 'DCLTPRD2' || u16(domain, 8) !== 2 || u16(domain, 10) !== DOMAIN_HEADER_BYTES || u32(domain, 12) !== domain.length) throw new Error('Product result domain has the wrong exact ABI');
+  requireZero(domain, 24, 8, 'Product result-domain header');
+  requireZero(domain, 232, 8, 'Product result-domain tail');
+  const regionCount = u32(domain, 16);
+  const cutCount = u32(domain, 20);
+  if (regionCount === 0 || regionCount !== cutCount + 1 || domain.length !== DOMAIN_HEADER_BYTES + cutCount * 16) throw new Error('Product result-domain width is inconsistent');
+  [32, 64, 96, 128, 160, 192].forEach((offset) => requireNonzero(slice(domain, offset, 32), 'Product result-domain identity'));
+  const denominator = u64(domain, 224);
+  if (denominator === 0n) throw new Error('Product result-domain identity or denominator differs');
+  const cuts: bigint[] = [];
+  let prior: bigint | null = null;
+  for (let index = 0; index < cutCount; index += 1) {
+    const cut = i128(domain, DOMAIN_HEADER_BYTES + index * 16);
+    if (prior !== null && cut <= prior) throw new Error('Product result-domain cuts are not strictly increasing');
+    prior = cut;
+    cuts.push(cut);
+  }
+  return Object.freeze({ regionCount, denominator, cuts: Object.freeze(cuts) });
+}
+
+export function decodeCoreFoundProductGraphV2(product: Uint8Array, domain: Uint8Array, portfolio: Uint8Array, domainDigest: Uint8Array, portfolioDigest: Uint8Array): ProductGraph {
+  validateProductRootHeaderV2(product);
   const productId = slice(product, 16, 32);
   requireNonzero(productId, 'Product identity');
   if (!same(slice(product, 48, 32), domainDigest) || !same(slice(product, 80, 32), portfolioDigest)) throw new Error('Product root does not select the supplied domain and portfolio');
 
-  if (domain.length < DOMAIN_HEADER_BYTES || ascii(domain, 0, 8) !== 'DCLTPRD2' || u16(domain, 8) !== 2 || u16(domain, 10) !== DOMAIN_HEADER_BYTES || u32(domain, 12) !== domain.length) throw new Error('Product result domain has the wrong exact ABI');
-  requireZero(domain, 24, 8, 'Product result-domain header');
-  requireZero(domain, 232, 8, 'Product result-domain tail');
-  const regions = u32(domain, 16);
-  const cuts = u32(domain, 20);
-  if (regions === 0 || regions !== cuts + 1 || domain.length !== DOMAIN_HEADER_BYTES + cuts * 16) throw new Error('Product result-domain width is inconsistent');
-  [32, 64, 96, 128, 160, 192].forEach((offset) => requireNonzero(slice(domain, offset, 32), 'Product result-domain identity'));
-  if (!same(slice(domain, 32, 32), productId) || u64(domain, 224) === 0n) throw new Error('Product result-domain identity or denominator differs');
-  let prior: bigint | null = null;
-  for (let index = 0; index < cuts; index += 1) {
-    const cut = i128(domain, DOMAIN_HEADER_BYTES + index * 16);
-    if (prior !== null && cut <= prior) throw new Error('Product result-domain cuts are not strictly increasing');
-    prior = cut;
-  }
+  const partition = decodeResultDomainV2(domain);
+  if (!same(slice(domain, 32, 32), productId)) throw new Error('Product result-domain identity or denominator differs');
+  const regions = partition.regionCount;
 
   if (portfolio.length < PORTFOLIO_HEADER_BYTES || ascii(portfolio, 0, 8) !== 'DCLTPRF2' || u16(portfolio, 8) !== 2 || u16(portfolio, 10) !== PORTFOLIO_HEADER_BYTES || u32(portfolio, 12) !== portfolio.length) throw new Error('Product portfolio has the wrong exact ABI');
   const coefficientCount = u32(portfolio, 16);
@@ -653,6 +708,113 @@ function infrastructureEqual(left: ProtocolInfrastructureInspectionV1, right: Pr
     && JSON.stringify(left.core) === JSON.stringify(right.core)
     && JSON.stringify(left.registry) === JSON.stringify(right.registry)
     && JSON.stringify(left.rent) === JSON.stringify(right.rent);
+}
+
+/** The four dependent record addresses, and the parent each came out of. */
+export type CoreFoundDerivedRecordsV2 = Readonly<{
+  resultDomainRecord: string;
+  portfolioRecord: string;
+  sourceSpecRecord: string;
+  manipulationFloorRecord: string;
+  /** The finalized floor both parents were read at. */
+  observedSlot: string;
+  /** One sentence per derived address, naming the record and coordinate it came from. */
+  provenance: Readonly<Record<'resultDomainRecord' | 'portfolioRecord' | 'sourceSpecRecord' | 'manipulationFloorRecord', string>>;
+}>;
+
+/**
+ * Turn four of `/found`'s fourteen pasted addresses into read values.
+ *
+ * THE DEFECT THIS CLOSES. The console asks a stranger for fourteen base58
+ * addresses, and five of its own field comments admit the value is one another
+ * record on the same list already contains: "Derivable from that record once
+ * this console reads it; today it is typed and then checked." Checked is not
+ * derived. Every check in `prepareCoreFoundV2` passes for a correctly pasted
+ * address and for nothing else, which means the console's remaining failure
+ * mode is entirely the reader's transcription -- and a console that asks for a
+ * value it could compute is asking the reader to be an oracle for its own
+ * chain reads.
+ *
+ * A Product record carries, at named coordinates, the digests of the result
+ * domain and portfolio it selects; a SourceMaterialV3 carries the digests of
+ * its source spec and its manipulation floor. Digest plus schema id is the
+ * whole input to the Registry's raw-record PDA, so each of those four is a
+ * derivation, not a question. It runs through `deriveFinalizedRecordAddressesV1`
+ * -- the Registry's own constructor, the same one `recordAuthority` checks
+ * against -- and the coordinates arrive from `lib/generated/coreFound.ts`,
+ * emitted from the Rust that writes them.
+ *
+ * WHAT DERIVING COSTS, said plainly. For a derived address the PDA equality in
+ * `recordAuthority` can no longer fail: it would be comparing a value with
+ * itself, and a guard whose two sides move together is not a guard. What
+ * survives, and is the whole of the correctness here, is that the two PARENTS
+ * are still typed and still checked against their own content PDAs, and that
+ * the account found at each derived address must still be Registry-owned,
+ * non-executable, rent-sufficient, and hash to the digest its parent named.
+ * The children inherit their correctness from the parents' refusal; that is
+ * why this function re-derives and re-checks both parents rather than trusting
+ * that `prepareCoreFoundV2` will get to it later.
+ *
+ * The FIFTH derivable address is not here. The capacity profile a source spec
+ * selects sits at a coordinate `SourceSpecV1::decode` and `to_bytes` write as
+ * a bare `144` (crates/dclutch-source-contract/src/lib.rs:911,927), with no
+ * named constant for the ABI generator to emit. Deriving it would mean this
+ * browser restating a wire coordinate in its own words, which is the drift
+ * `abi-coverage.mjs` exists to refuse. It stays typed, and the missing Rust
+ * constant is a routed finding rather than a fifth quiet mirror.
+ */
+export async function deriveCoreFoundRecordsV2(
+  client: Pick<SolanaRpcClient, 'finalizedSlot' | 'multipleAccounts'>,
+  input: Readonly<{ registryProgram: string; productRecord: string; sourceMaterialRecord: string }>,
+): Promise<CoreFoundDerivedRecordsV2> {
+  const registry = key(input.registryProgram, 'Registry program').toBase58();
+  const productRecord = key(input.productRecord, 'Product record').toBase58();
+  const sourceMaterialRecord = key(input.sourceMaterialRecord, 'SourceMaterialV3 record').toBase58();
+  if (productRecord === sourceMaterialRecord) throw new Error('Product and SourceMaterialV3 cannot be the same record');
+
+  const observedSlot = await client.finalizedSlot();
+  const observation = await client.multipleAccounts([productRecord, sourceMaterialRecord], observedSlot);
+  const accounts = accountMap(observation);
+
+  // Both parents are authenticated exactly as `prepareCoreFoundV2` does: owner,
+  // executable bit, and the schema/content PDA. This is the refusal the four
+  // derived addresses stand on, so it happens here and not later.
+  const parent = async (address: string, schema: Uint8Array, field: string) => {
+    const account = required(accounts, address, field);
+    if (account.owner !== registry || account.executable) throw new Error(`${field} is not a nonexecutable Registry-owned raw record`);
+    const digest = await sha256(account.data);
+    if (deriveFinalizedRecordAddressesV1(registry, schema, digest).record !== address) {
+      throw new Error(`${field} is not the schema/content-derived Registry raw PDA`);
+    }
+    return Object.freeze({ bytes: account.data, digest });
+  };
+
+  const product = await parent(productRecord, PRODUCT_RECORD_SCHEMA_ID_V2, 'Product');
+  const source = await parent(sourceMaterialRecord, SOURCE_MATERIAL_SCHEMA_RELEASE_ID_V3, 'Source material');
+  // The two parents must be about each other before either can name a child.
+  validateCoreFoundSourceMaterialV3(source.bytes, product.digest);
+  validateProductRootHeaderV2(product.bytes);
+
+  const at = (bytes: Uint8Array, offset: number, field: string) => {
+    const digest = slice(bytes, offset, 32);
+    if (isZero(digest)) throw new Error(`${field} is the all-zero identity`);
+    return digest;
+  };
+  const derive = (schema: Uint8Array, digest: Uint8Array) => deriveFinalizedRecordAddressesV1(registry, schema, digest).record;
+
+  return Object.freeze({
+    resultDomainRecord: derive(RESULT_DOMAIN_SCHEMA_ID_V2, at(product.bytes, PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2, 'result domain digest')),
+    portfolioRecord: derive(PORTFOLIO_SCHEMA_ID_V2, at(product.bytes, PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2, 'portfolio digest')),
+    sourceSpecRecord: derive(SOURCE_SPEC_SCHEMA_ID_V1, at(source.bytes, SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3, 'source spec digest')),
+    manipulationFloorRecord: derive(MANIPULATION_FLOOR_SCHEMA_RELEASE_ID_V1, at(source.bytes, SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3, 'manipulation floor digest')),
+    observedSlot: observation.slot,
+    provenance: Object.freeze({
+      resultDomainRecord: `Read from the Product record at byte ${PRODUCT_RECORD_DOMAIN_DIGEST_OFFSET_V2}, at finalized slot ${observation.slot}.`,
+      portfolioRecord: `Read from the Product record at byte ${PRODUCT_RECORD_PORTFOLIO_DIGEST_OFFSET_V2}, at finalized slot ${observation.slot}.`,
+      sourceSpecRecord: `Read from the SourceMaterialV3 record at byte ${SOURCE_MATERIAL_PRIMARY_SOURCE_SPEC_OFFSET_V3}, at finalized slot ${observation.slot}.`,
+      manipulationFloorRecord: `Read from the SourceMaterialV3 record at byte ${SOURCE_MATERIAL_MANIPULATION_FLOOR_OFFSET_V3}, at finalized slot ${observation.slot}.`,
+    }),
+  });
 }
 
 export async function prepareCoreFoundV2(client: SolanaRpcClient, input: CoreFoundInputV2): Promise<CoreFoundPlanV2> {

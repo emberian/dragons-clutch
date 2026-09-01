@@ -267,6 +267,37 @@ struct RoleFrame<'accounts, 'info> {
 #[cfg(not(feature = "no-entrypoint"))]
 solana_program::entrypoint!(process_instruction);
 
+// ------- the shared `DCLTRIX1` discriminant, bound at compile time
+//
+// `dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1` and
+// `dclutch_registry_svm::REGISTRY_INSTRUCTION_MAGIC_V1` are the SAME eight
+// bytes, and this program is the only place both are dispatched. What separates
+// them is the action byte at offset 10, split by range. This is the file where
+// the two halves meet, so this is where the split stops being prose.
+//
+// Until 2026-09-01 nothing checked it and the documented rule was already
+// false: the record family's `Begin` was action `1`, inside the Registry half
+// beside `Reauthenticate = 1`. The two were kept apart only by the second
+// clause of the guard below and by the accident that a Begin request is 176
+// bytes while a Registry instruction is 16. Both are VALID traffic of their own
+// family, so the failure mode was one family's good instruction executing as
+// the other's -- not a decode error anybody would see.
+const _: () = assert!(
+    dclutch_registry_svm::REGISTRY_ACTION_CEILING_V1
+        < dclutch_record_contract::RECORD_FIRST_ACTION_V1,
+    "the Registry and record action ranges overlap: one instruction magic cannot select two \
+     families whose action bytes collide"
+);
+// Belt and braces for the guard's length clause. With the ranges disjoint the
+// clause is no longer load-bearing, but it still fires, and it would become
+// load-bearing again the moment these widths converged.
+const _: () = assert!(
+    dclutch_record_contract::BEGIN_RECORD_BYTES_V1
+        != dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1,
+    "a Begin request the width of a Registry instruction would defeat the length half of the \
+     dispatch guard; the action-range split above must then carry it alone"
+);
+
 /// Dispatch one exact activation or reauthentication request.
 #[inline(never)]
 pub fn process_instruction(
@@ -284,7 +315,7 @@ pub fn process_instruction(
         && (instruction_data
             .get(10)
             .copied()
-            .is_some_and(|action| action >= 2)
+            .is_some_and(|action| action >= dclutch_record_contract::RECORD_FIRST_ACTION_V1)
             || instruction_data.len() != dclutch_registry_svm::REGISTRY_INSTRUCTION_BYTES_V1)
     {
         return record_v1::dispatch(program_id, accounts, instruction_data);

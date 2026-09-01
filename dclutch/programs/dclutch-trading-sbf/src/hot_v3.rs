@@ -32,6 +32,7 @@ use dclutch_account_profile_contract::{
 use dclutch_capability_contract::{CAPABILITY_MANIFEST_SCHEMA_RELEASE_ID_V1, CapabilityManifestV1};
 use dclutch_capability_program_contract::{
     CAPABILITY_ROOT_HEADER_BYTES_V1, CapabilityRootHeaderV1,
+    Error as CapabilityProgramError,
     hot_v3::{
         HOT_ACCOUNT_PROFILE_RAW_ACCOUNT_V3, HOT_ACCOUNT_PROFILE_STAGING_ACCOUNT_V3,
         HOT_ACTIVATION_CACHE_ACCOUNT_V3, HOT_CAPABILITY_SEAL_ACCOUNT_V3, HOT_CONFIG_RAW_ACCOUNT_V3,
@@ -13243,18 +13244,33 @@ fn authenticate_descriptor_root_selection(
     context: &TradingFamilyContextV1,
     entry: &dclutch_capability_contract::CapabilityEntryV1,
 ) -> Result<(), ProgramError> {
-    if descriptor
-        .validate_selection(context.selection(), *entry)
-        .is_err()
-        || descriptor
-            .root_account_bytes()
-            .map_err(|_| TradingSbfError::Root)?
-            != context.root_account_bytes()
-    {
-        Err(TradingSbfError::Content.into())
-    } else {
-        Ok(())
+    // The reason is PROPAGATED, not discarded. This was
+    // `validate_selection(..).is_err() || width != ..` folded into one bare
+    // `Content`, and folding three distinguishable accusations into the most
+    // crowded code on the route is what made one defect look like two and cost a
+    // lane a full bisect. `validate_selection` already knows which of the two it
+    // is; there is nothing to derive, only something to stop throwing away.
+    match descriptor.validate_selection(context.selection(), *entry) {
+        Ok(()) => {}
+        Err(CapabilityProgramError::SelectionMismatch) => {
+            return Err(TradingSbfError::DescriptorKind.into());
+        }
+        // Every other variant this call can return is an entry-profile
+        // disagreement; naming them individually would publish codes for states
+        // `validate_selection` cannot reach.
+        Err(_) => return Err(TradingSbfError::DescriptorManifestEntry.into()),
     }
+    // `Root` when the width cannot be decoded, `DescriptorRootWidth` when it
+    // decoded and disagreed -- two different things about the same field, and
+    // the first was already distinct before this change.
+    if descriptor
+        .root_account_bytes()
+        .map_err(|_| TradingSbfError::Root)?
+        != context.root_account_bytes()
+    {
+        return Err(TradingSbfError::DescriptorRootWidth.into());
+    }
+    Ok(())
 }
 
 fn authenticate_market(

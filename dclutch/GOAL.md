@@ -1693,3 +1693,75 @@ looks like scope.
     all are geometry: no spot, no window, no volatility. Reading it from the
     source's own founding observation is the obvious candidate, but which
     observation is authoritative is yours.
+
+## I TOOK THE ONES THAT WERE MINE — 2026-09-01
+
+You said not to defer. The queue had grown to fourteen; several were engineering
+wearing a ruling's clothes. Decided below, each reversible, each with the reason
+so you can overturn it in one line. **Six remain genuinely yours** and are
+listed at the end.
+
+**Settled — not actually decisions**
+
+- **The legacy eight-scalar bank (was #1).** Not a choice: in an 8-wide bank
+  *every* scalar is common, so a funded activation must destroy a seeded
+  register. It is impossible **by construction**, not disallowed by policy. So
+  there is nothing to rule — the property gets documented, and the one fixture
+  that still exercises the legacy bank **stays**, because it is the tree's only
+  executed instance of that ABI and it is what caught `d969d8f7`. Widening it
+  would buy nothing and cost the coverage.
+- **R-9, the batch-relation invariant.** Recording *"small and specialized on
+  purpose"* (`INTENT.md:118-120`) as a named `O-*` invariant is transcription,
+  not judgment. It gets written down whichever way R-8 goes — that was the whole
+  point of raising it.
+- **The volatility anchor at founding (was #14).** The only non-invented option
+  is the source's own founding observation; anything else is a constant someone
+  made up, which is the failure the partition gate exists to catch. Engineering,
+  and routed as such.
+
+**Decided, with reasons**
+
+- **The four vacuous Resolution guards: KEEP, with the reason in the file.**
+  None is exploitable, the real binds are identified, and deleting them changes
+  the released ELF and invalidates in-flight digest and compute measurements for
+  **zero** security gain. A known-vacuous guard kept *with its reason written
+  down* is honest; kept silently is not. Reversible at any future release event.
+- **Wall B, Direct: BUILD IT.** Same logic that unblocked `derivation_policy` —
+  under your standing full-redeploy grant an ABI change costs nothing, since
+  there is no state to migrate and the mirrors are generated. The action tag on
+  `LifecycleCurrentRentQuoteV5` changes `CURRENT_RENT_QUOTE_BYTES_V5` and every
+  pinned V5 digest, and it is strictly better than a per-action root entry,
+  which would change the persisted root header. The union alternative is
+  *refuted*, not merely worse: `current_rent_quote` is a flat ordinal array, so
+  a Sell would project the Buy's quotes.
+- **R-2, the ten unraisable `LiabilityBasisSbfErrorV2` discriminants.** Not
+  yours either way — the answer follows from a fact nobody has established:
+  whether the `DCLLBX02` route is gone or reserved. Routed to the lane to find
+  out, then annotate-with-reason if reserved, delete if gone.
+- **R-6 / AOT v3.** The measurable half is done: it can no longer report health
+  it does not have, now that CI builds contract crates for the SBF target. What
+  remains — delete the host-side measurement twin or keep it — is cheap either
+  way and does not block anything, so it waits behind work that does.
+
+**STILL YOURS — six, and they are all genuinely product or scope**
+
+1. **R-8, C-15.** Does the accepted project include the FHE/MPC/specialized-batch/
+   energy objective? Nothing exists in code; the old ruling was a *horizon*
+   ruling and the contract says at `:175` not to infer permanence from it.
+2. **R-3, Claims split/merge as user acts** — being answered by implementation,
+   but if you do **not** want user-facing split/merge, say so now and the route
+   stops rather than lands.
+3. **Materialize / Dematerialize: delete or drive.** My recommendation is
+   *drive or explicitly refuse* rather than leave it — unexercised
+   supply-moving code with a 1,444-line codec and zero dependents is a risk
+   surface, and C-08's clause is already carried by Reconstitute/UnwrapStructured
+   so nothing is lost by cutting it.
+4. **Is a K = 2 structured product useful?** Executable full width is K = 2;
+   every campaign in the tree is K = 3 and does not fit a packet.
+5. **`MAX_CELL_EX_ANTE_SHARE_BPS_V1 = 9000`.** 90% refuses the convicted
+   degenerate partition without refusing a legitimately lopsided binary market.
+   The number is a product decision; the constant is only the default.
+6. **The two binaries named `dclutch`.** Renaming a released binary is
+   user-facing. They overlap only on `help`, and the near-misses are lethal
+   (`market show` vs `markets show`; `--keypair` normal in one and refused by
+   name in the other; env vars differing by one character).

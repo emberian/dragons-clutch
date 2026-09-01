@@ -160,3 +160,85 @@ export function rangeProtectionBackingV1(product: RangeProtectionProductV1, prin
     payingOutcomes: Object.freeze(product.outcomes.filter((outcome) => outcome.coefficient > 0n).map((outcome) => outcome.index)),
   });
 }
+
+/**
+ * Where the coordinate actually is, which is the property shape never had.
+ *
+ * THE DEFECT THIS CLOSES is ember's standing complaint — "SOL/USD always
+ * resolves into the same bucket" — and the composer above passed it with full
+ * marks. Cuts strictly increasing, regions exactly `cuts + 1`, portfolio
+ * gcd-normalized and not identically zero: every invariant this file was
+ * written to keep, kept, on a market that resolves into its top cell one
+ * hundred percent of the time. Exhaustive, disjoint, ordered and canonical are
+ * properties of a partition's SHAPE. None of them says the question is one
+ * anybody has to think about.
+ *
+ * The shipped wizard sent `cutDenominator=100` with edges `12000/18000` — a
+ * band at 120.00 to 180.00 — for a coordinate whose Source returns raw
+ * provider price atoms unrescaled (`crates/dclutch-source-contract/src/lib.rs`
+ * line 612). A Pyth SOL/USD observation is on the order of 10^10 there, so the
+ * whole band sits three orders of magnitude below anything the market can ever
+ * observe. `crates/dclutch-product-compiler/src/partition_quality.rs` now
+ * refuses exactly that as `DegenerateOutcomePartition`, measured at
+ * `0 / 0 / 0 / 0 / 10000` basis points.
+ *
+ * WHAT THIS IS NOT. It is not that gate, and it must not be read as one. The
+ * compiler's measure is a triangular ex-ante mass model over a characteristic
+ * displacement of `volatility_bps × sqrt(window / 10,000 slots)`, and
+ * reimplementing it here in TypeScript would be the same defect this lane
+ * spent its day convicting elsewhere: a browser restating semantics a Rust
+ * owner already holds. This is a strictly weaker, exactly decidable necessary
+ * condition — a UNIT-SANITY check — that catches the convicted case and admits
+ * the lopsided ones the compiler's own tests admit.
+ */
+export type RangeProtectionPlacementV1 = Readonly<{
+  /** The outcome a coordinate that never moved from here would win. */
+  outcomeIndex: number;
+  kind: RangeProtectionOutcomeV1['kind'];
+  /** Whether the band is unreachably far from the observation. */
+  certain: boolean;
+  /** The compiler refusal this partition would meet, or null. */
+  refusal: 'DegenerateOutcomePartition' | null;
+}>;
+
+/**
+ * How many band widths away from the band an observation may sit before this
+ * market is called unreachable rather than lopsided.
+ *
+ * PROVISIONAL. It is not derived from anything: it is a factor chosen to sit
+ * far above "off-centre by a displacement or so", which the compiler's gate
+ * deliberately admits, and far below the three orders of magnitude the
+ * convicted defect was out by. Lifting plan: delete it, and call
+ * `require_interesting_partition_v1` with the market's own founding band once
+ * `dclutch-product-compiler` reaches the browser. Until then this catches the
+ * unit error and makes no claim about outcome mass.
+ */
+const UNREACHABLE_BAND_WIDTHS_V1 = 32n;
+
+export const RANGE_PLACEMENT_PROVISIONAL_NOTE_V1 =
+  'This is a provisional unit-sanity bound, not an outcome-mass measure: it '
+  + 'refuses a band the observation cannot plausibly reach and admits every '
+  + 'merely lopsided one. The exact measure is '
+  + 'require_interesting_partition_v1 in dclutch-product-compiler, which this '
+  + 'browser cannot yet call.';
+
+/** Place one founding observation, in the product's own ticks, in its partition. */
+export function rangeProtectionPlacementV1(
+  product: RangeProtectionProductV1,
+  observationTicks: bigint,
+): RangeProtectionPlacementV1 {
+  if (typeof observationTicks !== 'bigint') throw new Error('the founding observation must be a whole number of ticks');
+  const [low, high] = [product.cuts[0], product.cuts[1]];
+  const outcomeIndex = observationTicks < low ? 0 : observationTicks < high ? 1 : 2;
+  const width = high - low;
+  const distance = observationTicks < low ? low - observationTicks
+    : observationTicks >= high ? observationTicks - high
+    : 0n;
+  const certain = distance > width * UNREACHABLE_BAND_WIDTHS_V1;
+  return Object.freeze({
+    outcomeIndex,
+    kind: product.outcomes[outcomeIndex].kind,
+    certain,
+    refusal: certain ? ('DegenerateOutcomePartition' as const) : null,
+  });
+}

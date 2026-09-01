@@ -2352,3 +2352,124 @@ slot, upgrade policy and config digest. Swept docs, web components and console
 strings for first-party verification claims: **none found** — a negative result
 with the search named. Also corrected "performs no provider CPI": the transport
 CPIs the Receiver in three places.
+
+## 2026-09-01 — C-09 closes on evidence, and a hostile corrects the lane
+
+All six C-09 clauses now carry real-ELF evidence, and **both halves of the S2
+gate — a provider life and a fallback life, each from founding through fund
+close — execute in one campaign.** 4/4 → 5/5. `e1a4191d`.
+
+### The hostile that corrected the lane
+
+The lane predicted the second failure-walk would refuse `Transition` on
+monotonicity grounds: the Source has left `Primary`, so the transition must
+refuse. It does — **but it never runs.** `plan_deadline_failure_v1` debits
+*before* it transitions, deliberately, so the replay dies a step earlier in
+`release_in_place` against an already-empty Bounty compartment: **`Funding`
+(`0x800E`), not `Transition`.**
+
+> The bound on how many times this walk pays is not the state machine's
+> monotonicity — it is that the market escrowed exactly one bounty and it has
+> been spent.
+
+And the sentence that settles the house rule better than any prose has:
+**"A bare `is_err()` would have shown me the refusal I predicted instead of the
+one that exists."** The two hostiles now carry different codes and are
+distinguishable.
+
+### A deleted route's nouns outlive it
+
+The lane had reported that the funded fallback walk — `FailNext` / `Exhaust` /
+`CommitFailure` — executes on no real ELF anywhere. **Wrong twice over.** Those
+three are the **V1** walk and the program *deleted* them: `funded.rs` says so in
+its own module doc, and `exhaust_after_primary_deadline` refuses any material
+carrying a recovery policy, so no prestate in this tree can reach them. They
+survive only in the codec enum, the dead successor file and the receipt-caller.
+There was nothing there to execute. The live walk is one transition —
+`Primary → Exhausted → FailureCommitted` — and it has always executed on a real
+ELF in `relayed_mainnet_state.rs`.
+
+**The lane had read a dead file's vocabulary as the live one's.** Corrected in
+the README in place rather than quietly dropped. Worth naming as a hazard: a
+deleted route's *nouns* outlive it, and a lane reasoning from them will hunt
+something that cannot exist.
+
+### What was genuinely missing, and is now closed
+
+The walk had never been driven against a market whose evidence family is Pyth,
+and the Pyth campaign reached its failure terminal only from a **seeded**
+`TerminalFailure`. Now walked end to end from an ordinary open market founded to
+be answered by a price feed, where the only thing that differs is that **nobody
+submits**: CreateFund → ActivateFund → VerifyFundReady → silence → the walk →
+AdmitTerminal → BeginRetiring → CloseFund.
+
+- The walker is a `Keypair::new()` holding no role and no relationship to the
+  manifest that pays it.
+- Standing **exactly on** the deadline refuses `Transition` (`0x800C`,
+  red-proven): *the last second an honest resolution may land and the first
+  second a walk may run are different seconds.*
+- The certificate carries `provider_evidence` and `route` **both zero** —
+  nothing a provider said stands behind this terminal, and the certificate says
+  so.
+- `funding_allocation` equals the market's own material, which the program
+  **found** by matching config ids rather than accepting as an index. That is
+  the difference between authenticating and trusting.
+- The walker is paid the capability's own quoted bounty, stated three
+  independent ways: `work_paid`, the walker delta, and the escrow delta.
+
+One route serves both evidence families, and that is not a coincidence needing a
+per-transport re-test: the 22-account frame carries **no provider account and no
+relay account**. It lives under the relay instruction magic only because that is
+where the dispatcher put it.
+
+## 2026-09-01 — an instrument that would have measured a different application
+
+The browser lane needed a rendered tree to gate landmark nesting. The obvious
+move — `@vitest-environment jsdom` — **flips resolve conditions to `browser`,
+after which `@solana/web3.js` fails to import**. The suite would have run
+against a different application than the one that ships, and passed.
+
+It used **jsdom as a library** instead, rendering every shell a source survey
+finds and parsing the output. Same family as the dead `sol_log_64` channel and
+the stale nested checkout: **verify the instrument, not just the reading.**
+
+What the working instrument then found: **`<header>` was inside `<main>` on 28
+of 28 page shells**, demoting the site header out of the `banner` landmark on
+every page of the site. Unfindable by any assertion that existed before, and
+obvious the moment one did. `9090ba0d`. Contrast followed — 29 ad-hoc greys
+below 4.5:1 collapsed to one token (`8d440ea3`).
+
+### Shape was never the missing property
+
+`composeRangeProtectionV1` **passed the degenerate market with full marks**:
+cuts strictly increasing, regions = cuts + 1, portfolio gcd-normalized. Every
+structural property held. *Where the coordinate sits* was the missing one — the
+cleanest statement of why the partition-quality gate had to exist at all.
+
+### Three refusals worth keeping
+
+- **Would not reimplement `require_interesting_partition_v1` in TypeScript** —
+  its triangular mass model in a second language is *the identical defect* to
+  the Studio mirror it was fixing. Refusing to fix a mirror by building another
+  mirror. Shipped a strictly weaker, **exactly decidable** unit-sanity condition
+  instead, labelled provisional in source *and* in the UI.
+- **Would not render `cell_share_bps`** when no loadable bundle carries it; the
+  page says so where the number would go. Routed the producer instead.
+- **Left `evaluateProductV2` "untouched, unexcused"** — naming a mirror you
+  cannot yet remove beats pretending it is not one.
+
+### The Studio was already decoding the truth and dropping it
+
+`decodeCoreFoundProductGraphV2` validated the operator's cuts for ABI, width,
+identity and strict increase — **and then discarded them**, while the page
+rendered TypeScript-derived "interpolation segment N" labels instead. Extracting
+them wrote down not one new byte coordinate.
+
+### A latent bundle bug, found by a test that failed for the right reason
+
+`operatorSurface.ts` is **load-order dependent**: past the eighteenth component
+import in one module graph its module-scope ProgramData derivation throws
+`Unable to find a viable program address nonce`; alone it evaluates fine.
+Bisected, count pinned in the file. **A page that happens to import one more
+component ships broken** — module-scope derivation that can throw is the
+hazard, not the test that surfaced it.

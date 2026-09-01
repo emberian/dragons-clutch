@@ -7,6 +7,14 @@
 //! types), and the three encode/read helpers that speak it. It owns no route
 //! and dispatches nothing.
 //!
+//! Its refusal enum outlived the route too, and for four months longer than it
+//! should have: eleven `#[repr(u32)]` discriminants, ten of which nothing in
+//! the tree could raise, all eleven published by every generated mirror. The
+//! banishment below was finished at the Rust boundary and at the browser, and
+//! missed the taxonomy in between. The ten are withdrawn as of 2026-09-01; see
+//! [`LiabilityBasisSbfErrorV2::ClaimsState`] for why removal, not annotation,
+//! is the honest disposition here.
+//!
 //! # What was here, and why it is not
 //!
 //! `DCLLBX02` was the last Claims path expecting a Core-owned
@@ -49,28 +57,30 @@ pub(crate) use dclutch_claims_svm::liability_basis_state_v2::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum LiabilityBasisSbfErrorV2 {
-    /// Instruction bytes were not the sole canonical V2 action.
-    Instruction = 0x5100,
-    /// Account count, order, privilege, owner, or alias checks refused.
-    Accounts = 0x5101,
     /// Claims aggregate or Position bytes/PDA/revision refused.
-    ClaimsState = 0x5102,
-    /// A finalized raw-record PDA, staging vacancy, rent, or digest refused.
-    FinalizedRecord = 0x5103,
-    /// Product instance, basis identity, runtime width, or Core join refused.
-    ProductLink = 0x5104,
-    /// Registry current-deployment authentication refused.
-    Release = 0x5105,
-    /// The pure exact liability transition refused.
-    Candidate = 0x5106,
-    /// Exact Custody request, authority, replay, or vault binding refused.
-    CustodyRequest = 0x5107,
-    /// Custody CPI failed.
-    CustodyCpi = 0x5108,
-    /// Custody return data or physical postconditions refused.
-    Postcondition = 0x5109,
-    /// Complete candidate state could not be committed atomically.
-    Commit = 0x510A,
+    ///
+    /// The only refusal left in this family, and the only one there was ever
+    /// anything to raise. Ten siblings occupied `0x5101..=0x510A` until
+    /// 2026-09-01 -- `Instruction`, `Accounts`, `FinalizedRecord`,
+    /// `ProductLink`, `Release`, `Candidate`, `CustodyRequest`, `CustodyCpi`,
+    /// `Postcondition`, `Commit` -- the refusal taxonomy of the `DCLLBX02`
+    /// route. That route was deleted (`docs/ASPIRATION_LEDGER.md` D-6,
+    /// "ANSWERED AND EXECUTED: deleted", dead on both ends), and the taxonomy
+    /// was left behind: still `#[repr(u32)]`, so the census still enumerated it
+    /// and every generated mirror still published ten codes the protocol could
+    /// not return, under a page that promises "every error code the protocol
+    /// can return".
+    ///
+    /// They are removed rather than annotated because the question that decides
+    /// it is answerable and was answered: the route is GONE, not reserved. Nor
+    /// can any historical log resolve against them -- `DCLLBX02` had no
+    /// producer in the tree and no `DCLTLNK2` record was ever finalized on
+    /// chain, so not one of the ten was ever raised anywhere. Withdrawn, never
+    /// reused: `0x5101..=0x510A` stay spent inside Claims' sub-band.
+    ///
+    /// This one survives because the module's three read/encode helpers still
+    /// raise it, and roughly twenty crates reach LBV2 state through them.
+    ClaimsState = 0x5100,
 }
 
 impl LiabilityBasisSbfErrorV2 {
@@ -80,37 +90,15 @@ impl LiabilityBasisSbfErrorV2 {
     /// [`LiabilityBasisSbfErrorV2::ordinal`], whose match is exhaustive: a variant added to the
     /// enum does not compile until its author writes an arm here, and the only arm that satisfies
     /// the assertions is its own index in this array.
-    pub const ALL: [Self; 11] = [
-        Self::Instruction,
-        Self::Accounts,
-        Self::ClaimsState,
-        Self::FinalizedRecord,
-        Self::ProductLink,
-        Self::Release,
-        Self::Candidate,
-        Self::CustodyRequest,
-        Self::CustodyCpi,
-        Self::Postcondition,
-        Self::Commit,
-    ];
+    pub const ALL: [Self; 1] = [Self::ClaimsState];
 
     /// This refusal's position in [`LiabilityBasisSbfErrorV2::ALL`].
     ///
-    /// The match is exhaustive on purpose, and that is the whole mechanism: a twelfth variant is a
+    /// The match is exhaustive on purpose, and that is the whole mechanism: a second variant is a
     /// COMPILE ERROR here rather than a discriminant no assertion ever looks at.
     const fn ordinal(self) -> usize {
         match self {
-            Self::Instruction => 0,
-            Self::Accounts => 1,
-            Self::ClaimsState => 2,
-            Self::FinalizedRecord => 3,
-            Self::ProductLink => 4,
-            Self::Release => 5,
-            Self::Candidate => 6,
-            Self::CustodyRequest => 7,
-            Self::CustodyCpi => 8,
-            Self::Postcondition => 9,
-            Self::Commit => 10,
+            Self::ClaimsState => 0,
         }
     }
 }

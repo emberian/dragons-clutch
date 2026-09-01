@@ -217,12 +217,16 @@ fn command_inventory(options: &Options) -> Result<(), String> {
         // uniqueness rule until now. See `magics.rs` for why a same-name
         // mirror is counted separately instead of failing here.
         let declared_magics = magics::sweep(&root_path)?;
-        let (magic_problems, magic_summary) = magics::check(&declared_magics);
+        let magic_exemptions = magics::read_exemptions(&root_path)?;
+        let (magic_problems, magic_summary) = magics::check(&declared_magics, &magic_exemptions);
         eprintln!(
-            "census: {} eight-byte magics declared, {} distinct values, {} mirrored under one name",
+            "census: {} eight-byte magics declared, {} distinct values, {} mirrored under one \
+             name, {} collisions adjudicated in {}",
             magic_summary.declared,
             magic_summary.distinct,
-            magic_summary.mirrored.len()
+            magic_summary.mirrored.len(),
+            magic_summary.exempted,
+            magics::EXEMPTIONS_PATH
         );
         for mirror in &magic_summary.mirrored {
             eprintln!("census: magic mirrored across packages: {mirror}");

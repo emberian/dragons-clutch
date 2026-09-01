@@ -37,6 +37,17 @@ pub const REGISTRY_ACTIVATE_ROLE_ACCOUNT_COUNT_V1: usize = 10;
 pub const AUTHENTICATED_ROLE_RECEIPT_BYTES_V1: usize = 144;
 /// Registry instruction magic.
 pub const REGISTRY_INSTRUCTION_MAGIC_V1: [u8; 8] = *b"DCLTRIX1";
+
+/// Highest action byte the Registry family may spend at [`ACTION_OFFSET`].
+///
+/// The other half of the split documented on [`RegistryInstructionV1`]: this
+/// magic is shared with the record family, and the action byte is the only
+/// thing that separates the two. Registry spends `0..=REGISTRY_ACTION_CEILING_V1`;
+/// `dclutch_record_contract::RECORD_FIRST_ACTION_V1` is where the record family
+/// begins. `dclutch-registry-sbf` asserts at compile time that the two do not
+/// overlap, so adding a third Registry action here is a build failure rather
+/// than a silent mis-dispatch of somebody else's valid instruction.
+pub const REGISTRY_ACTION_CEILING_V1: u8 = 1;
 /// Authenticated-role receipt magic.
 pub const AUTHENTICATED_ROLE_RECEIPT_MAGIC_V1: [u8; 8] = *b"DCLTRRR1";
 /// Implemented Registry wire schema.
@@ -103,7 +114,10 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// Action `0` is reused, because this magic is shared with the record family
 /// (`dclutch_record_contract::RECORD_INSTRUCTION_MAGIC_V1`), which owns every
 /// action from `2` upward; the Registry side of that split has exactly actions
-/// `0` and `1` to spend. The retired wire was action `0` with a role byte
+/// `0` and `1` to spend -- see [`REGISTRY_ACTION_CEILING_V1`], which makes that
+/// sentence checkable rather than merely written down. It was NOT true until
+/// 2026-09-01: the record family's `Begin` was action `1`, in this side's half.
+/// The retired wire was action `0` with a role byte
 /// required to be zero, so it now names `ActivateRole(Core)`: strictly *less*
 /// authority than it used to claim, never more, and its 26-account frame is
 /// refused by the ten-account route. The role byte at

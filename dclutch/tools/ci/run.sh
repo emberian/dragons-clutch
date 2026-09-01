@@ -1238,12 +1238,49 @@ tier_release() {
     record release $EXIT_PREREQ_MISSING "python3 not on PATH"
     return
   fi
+  # The PYTHON refusal suites, which until now ran NOWHERE. Measured
+  # 2026-09-01: `test_preflight.py` was 12 failures + 3 errors at HEAD and had
+  # been for some time, because this tier ran only the four shell scripts above
+  # -- red where nothing looks, the same shape as a tier that does not exist.
+  #
+  # Each is invoked with cwd = its OWN directory and the repo root on
+  # PYTHONPATH, because these suites do not share one import convention:
+  # `test_dryplan.py` does a sibling `import dryplan` and needs its directory,
+  # while `test_rehearsal.py` does `from tools.release...` and needs the repo
+  # root. Running them all one way reports a false red on the other half, which
+  # is a defect this runner has already paid for once today.
+  local py_suites=(
+    private-validator-lifecycle/test_preflight.py
+    private-validator-lifecycle/test_chaos.py
+    private_validator_upgrade/test_rehearsal.py
+    devnet-flight/test_devnet_flight.py
+    devnet_upgrade_dryplan/test_dryplan.py
+    lifecycle-chaos/test_lifecycle_chaos.py
+  )
+  local py_present=() py_missing=() suite
+  for suite in "${py_suites[@]}"; do
+    if [ -f "$dir/$suite" ]; then py_present+=("$suite"); else py_missing+=("$suite"); fi
+  done
+
   local failed=() code=0
   for name in "${present[@]}"; do
     code=0
     (cd "$repo_root" && bash "$dir/$name") || code=$?
     [ "$code" = 0 ] || failed+=("$name")
   done
+  # EVERY row runs and EVERY row is reported. A `set -e`-style early stop here
+  # would report one failure where the true figure is several -- measured in
+  # this tree on 2026-09-01, one reported against ten real.
+  for suite in "${py_present[@]}"; do
+    code=0
+    note "python: $suite"
+    (cd "$dir/$(dirname "$suite")" && PYTHONPATH="$repo_root" python3 "$(basename "$suite")") \
+      || code=$?
+    [ "$code" = 0 ] || failed+=("$suite")
+  done
+  if [ "${#py_missing[@]}" -gt 0 ]; then
+    for suite in "${py_missing[@]}"; do missing+=("$suite"); done
+  fi
   if [ "${#failed[@]}" -gt 0 ]; then
     note "a release-tooling refusal suite FAILED:"
     for name in "${failed[@]}"; do note "  $name"; done
@@ -1260,7 +1297,7 @@ tier_release() {
     # which is the correct behaviour for a release candidate.
     note "these release suites are not in this tree and did NOT run:"
     for name in "${missing[@]}"; do note "  $name"; done
-    record release $EXIT_PREREQ_MISSING "${#missing[@]} of ${#scripts[@]} release suites absent from this tree"
+    record release $EXIT_PREREQ_MISSING "${#missing[@]} of $(( ${#scripts[@]} + ${#py_suites[@]} )) release suites absent from this tree"
     return
   fi
   record release $EXIT_PASS

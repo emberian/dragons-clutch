@@ -26,6 +26,16 @@ pub const APPEND_PAGE_HEADER_BYTES_V1: usize = 40;
 /// Exact encoded width of a Finalize or Abort request.
 pub const UNIT_REQUEST_BYTES_V1: usize = 16;
 
+/// Lowest action byte the record family may spend at instruction offset 10.
+///
+/// `RECORD_INSTRUCTION_MAGIC_V1` is shared with
+/// `dclutch_registry_svm::REGISTRY_INSTRUCTION_MAGIC_V1` -- one discriminant,
+/// two request families in one ELF -- and this is the boundary that separates
+/// them. Registry spends everything below it; the record family spends
+/// everything from here up. Published so the dispatcher can bind both sides at
+/// compile time instead of relying on the two crates agreeing in prose.
+pub const RECORD_FIRST_ACTION_V1: u8 = 2;
+
 /// PDA seed domain for the one raw account keyed by schema/release and digest.
 pub const RAW_RECORD_PDA_SEED_V1: &[u8] = b"dclutch-raw-record-v1";
 /// PDA seed domain for the one temporary cursor paired with a raw account.
@@ -1732,7 +1742,8 @@ pub fn prepare_abort_v1(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 enum RecordActionV1 {
-    Begin = 1,
+    /// `5`, and NOT `1`. See [`RECORD_FIRST_ACTION_V1`].
+    Begin = 5,
     AppendPage = 2,
     Finalize = 3,
     Abort = 4,
@@ -1741,7 +1752,7 @@ enum RecordActionV1 {
 impl RecordActionV1 {
     fn decode(value: u8) -> Result<Self> {
         match value {
-            1 => Ok(Self::Begin),
+            5 => Ok(Self::Begin),
             2 => Ok(Self::AppendPage),
             3 => Ok(Self::Finalize),
             4 => Ok(Self::Abort),
@@ -1753,6 +1764,32 @@ impl RecordActionV1 {
         self as u8
     }
 }
+
+// The record family's half of a SHARED instruction discriminant, made checkable.
+//
+// `RECORD_INSTRUCTION_MAGIC_V1` is `DCLTRIX1`, and so is
+// `dclutch_registry_svm::REGISTRY_INSTRUCTION_MAGIC_V1`: one 8-byte value
+// selects two request families in the Registry ELF, partitioned by the action
+// byte at offset 10. Registry documents the split as "the record family owns
+// every action from 2 upward; the Registry side has exactly actions 0 and 1".
+//
+// That rule was FALSE in this file until 2026-09-01: `Begin` was `1`, sitting
+// in Registry's half beside its `Reauthenticate = 1`. Nothing caught it,
+// because what actually kept the two apart was the dispatcher's second clause
+// -- `len != REGISTRY_INSTRUCTION_BYTES_V1` -- and the arithmetic accident that
+// a Begin request is 176 bytes and a Registry instruction is 16. An invariant
+// held by coincidence is not held: narrowing Begin to 16 bytes, or giving
+// Registry an action `2`, would have made valid traffic of one family execute
+// as the other. Both sides are well-formed, which is what makes it worse than
+// an ordinary decode collision.
+//
+// `Begin` is now `5`, so every record action is `>= RECORD_FIRST_ACTION_V1` and
+// the documented rule is true by construction. These assertions are what stop
+// it drifting back, and `dclutch-registry-sbf` binds the other side.
+const _: () = assert!(RecordActionV1::Begin.byte() >= RECORD_FIRST_ACTION_V1);
+const _: () = assert!(RecordActionV1::AppendPage.byte() >= RECORD_FIRST_ACTION_V1);
+const _: () = assert!(RecordActionV1::Finalize.byte() >= RECORD_FIRST_ACTION_V1);
+const _: () = assert!(RecordActionV1::Abort.byte() >= RECORD_FIRST_ACTION_V1);
 
 fn require_adapter_addresses<A: RecordAdapterV1>(
     adapter: &A,

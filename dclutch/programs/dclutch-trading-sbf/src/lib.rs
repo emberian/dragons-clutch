@@ -326,6 +326,26 @@ pub enum TradingSbfError {
     /// which is a thing a test should be able to *say*, not a thing a lane has
     /// to re-measure to believe.
     ActivationEffect = 0x4013,
+    /// The descriptor does not bind the kind the persisted selection names.
+    ///
+    /// `CapabilityProgramV4::validate_selection`'s `Error::SelectionMismatch`,
+    /// propagated instead of discarded. The accusation is narrow: this
+    /// descriptor is for a different FAMILY than the root was activated under,
+    /// or the manifest entry is.
+    DescriptorKind = 0x4014,
+    /// The descriptor disagrees with its manifest entry's profile.
+    ///
+    /// `Error::ManifestEntryMismatch`: one of `release_id`, `config_id`,
+    /// `capacity_profile` or `root_schema` differs between the descriptor and
+    /// the entry. A different accusation from [`TradingSbfError::DescriptorKind`]
+    /// -- the family is right and the published profile is not.
+    DescriptorManifestEntry = 0x4015,
+    /// The descriptor's root width is not the width this root was created with.
+    ///
+    /// `descriptor.root_account_bytes() != context.root_account_bytes()`.
+    /// Distinct from [`TradingSbfError::Root`], which this route already raises
+    /// when the width cannot be DECODED at all: this one decoded and disagreed.
+    DescriptorRootWidth = 0x4016,
 }
 
 impl TradingSbfError {
@@ -335,7 +355,7 @@ impl TradingSbfError {
     /// [`TradingSbfError::ordinal`], whose match is exhaustive: a variant added
     /// to the enum does not compile until its author writes an arm there, and
     /// the only arm that satisfies the assertions is its own index here.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::UnsupportedContent,
         Self::Release,
         Self::Root,
@@ -356,6 +376,9 @@ impl TradingSbfError {
         Self::CloseMakerFeeOutstanding,
         Self::CloseMakerLiveIntents,
         Self::ActivationEffect,
+        Self::DescriptorKind,
+        Self::DescriptorManifestEntry,
+        Self::DescriptorRootWidth,
     ];
 
     /// This refusal's position in [`TradingSbfError::ALL`].
@@ -385,6 +408,9 @@ impl TradingSbfError {
             Self::CloseMakerFeeOutstanding => 17,
             Self::CloseMakerLiveIntents => 18,
             Self::ActivationEffect => 19,
+            Self::DescriptorKind => 20,
+            Self::DescriptorManifestEntry => 21,
+            Self::DescriptorRootWidth => 22,
         }
     }
 }

@@ -33,6 +33,8 @@ import {
 import { FUNDING_COMPARTMENTS_V1 } from '@/lib/generated/capabilityManifestV1';
 import {
   composeRangeProtectionV1,
+  rangeProtectionPlacementV1,
+  RANGE_PLACEMENT_PROVISIONAL_NOTE_V1,
   formatTicksV1,
   rangeProtectionBackingV1,
 } from '@/lib/founding/rangeProtection';
@@ -116,6 +118,9 @@ export default function CreateMarketWizard() {
   const [cutDenominator, setCutDenominator] = useState('100');
   const [lowerEdge, setLowerEdge] = useState('12000');
   const [upperEdge, setUpperEdge] = useState('18000');
+  // The coordinate at founding, in the band's own ticks. Not a display value:
+  // it is the one input that decides whether this partition is a question.
+  const [foundingObservation, setFoundingObservation] = useState('15000000000');
 
   // 02 — Window
   const [windowWidth, setWindowWidth] = useState('1250');
@@ -156,6 +161,19 @@ export default function CreateMarketWizard() {
       return { ok: true as const, value: composeRangeProtectionV1({ coordinateLabel, cutDenominator: denominator, lowerEdgeTicks: low, upperEdgeTicks: high }) };
     } catch (error) { return { ok: false as const, message: reason(error) }; }
   }, [coordinateLabel, cutDenominator, lowerEdge, upperEdge]);
+
+  /**
+   * Where the founding observation falls in the partition just composed.
+   *
+   * Null until both the product and the observation parse; a placement the
+   * wizard cannot compute is not rendered as a reassuring one.
+   */
+  const placement = useMemo(() => {
+    if (!product.ok) return null;
+    const observation = bigintOrNull(foundingObservation);
+    if (observation === null) return null;
+    try { return rangeProtectionPlacementV1(product.value, observation); } catch { return null; }
+  }, [product, foundingObservation]);
 
   const window = useMemo(() => {
     const width = digitsOrNull(windowWidth);
@@ -295,7 +313,14 @@ export default function CreateMarketWizard() {
         <label><span>Display precision · Mint decimals</span><input inputMode="numeric" value={decimals} onChange={(event) => setDecimals(event.target.value)} /></label>
         <label><span>Lower band edge · ticks</span><input inputMode="numeric" value={lowerEdge} onChange={(event) => setLowerEdge(event.target.value)} /></label>
         <label><span>Upper band edge · ticks</span><input inputMode="numeric" value={upperEdge} onChange={(event) => setUpperEdge(event.target.value)} /></label>
+        <label><span>Founding observation · ticks</span><input inputMode="numeric" value={foundingObservation} onChange={(event) => setFoundingObservation(event.target.value)} /><small className="feed-forward">What this market&rsquo;s Source reports for the coordinate today, in the same ticks as the band. The Source returns raw provider atoms and rescales nothing, so this is where a band in the wrong units becomes visible.</small></label>
       </div>
+      {product.ok && placement !== null && <div className={placement.refusal === null ? 'direct-status' : 'market-refusal'}>
+        {placement.refusal === null
+          ? <>A coordinate that never moved from here wins <strong>{product.value.outcomes[placement.outcomeIndex].label}</strong>. The band is reachable from it.</>
+          : <><strong>Refused · {placement.refusal}.</strong> This observation sits so far outside the band that no plausible move reaches it: every claim resolves into <strong>{product.value.outcomes[placement.outcomeIndex].label}</strong> and nobody can lose. That is the market the compiler now refuses, measured at 0 / 0 / 0 / 0 / 10000 basis points.</>}
+        <p className="wizard-rung-reason">{RANGE_PLACEMENT_PROVISIONAL_NOTE_V1}</p>
+      </div>}
       {product.ok ? <>
         <p className="direct-status">
           Band {formatTicksV1(product.value.cuts[0], product.value.cutDenominator)} to {formatTicksV1(product.value.cuts[1], product.value.cutDenominator)} ·

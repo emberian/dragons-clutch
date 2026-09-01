@@ -1117,7 +1117,16 @@ def validate_founding_geometry(repo: Path, constants: dict[str, Any]) -> dict[st
         market,
         (
             "require_devnet_complete_key_limit_v1(census)?;",
-            "instruction.accounts.len() != expected_frame",
+            # The single `expected_frame` equality became a TWO-frame admission
+            # when the price-gated founding arm landed: a bare DCLTGMF3 frame,
+            # or the price-gate frame built from
+            # GENERIC_MARKET_FOUNDING_PRICE_GATE_FIXED_ACCOUNTS_V4. Both halves
+            # are named here rather than one, so this fragment is now strictly
+            # more specific than the predicate it replaces -- deleting either
+            # arm re-reds the gate, and the old single-frame spelling could not
+            # have detected the gated arm going missing at all.
+            "let gated = instruction.accounts.len() == gated_frame;",
+            "instruction.accounts.len() != bare_frame && !gated",
             "census.complete_keys !=",
             "loaded_writable",
             "loaded_readonly",

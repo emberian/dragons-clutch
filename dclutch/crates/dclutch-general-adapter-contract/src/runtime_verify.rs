@@ -2167,4 +2167,114 @@ mod tests {
             Ok(true)
         );
     }
+
+    /// The two live authors of the selection comparison law agree exactly.
+    ///
+    /// C-05's whole vocabulary rests on one predicate: which of two verified
+    /// candidates is the better valid submitted one. That predicate has TWO
+    /// implementations in this crate, and both are live.
+    /// `runtime_candidate_key_better_v2` above is the persisted-key interpreter
+    /// the admitted accelerator and the operator both call through
+    /// `consider_verified_candidate_v2`. `crate::candidate_better` is the
+    /// V1-record copy, reached from `crate::consider_verified_input` and
+    /// therefore from `plan.rs`, which is the stateless differential oracle the
+    /// accelerator is checked against. Each carries its own private
+    /// `le_numeric_id`, and the tie-break is little-endian -- byte 31 is most
+    /// significant -- which is exactly the kind of detail one copy drifts on.
+    ///
+    /// Nothing joined them. An oracle that has quietly stopped agreeing with
+    /// the thing it is the oracle FOR does not fail; it certifies. This walks
+    /// every criterion prefix over a corpus that separates each criterion in
+    /// turn, ties on it, and ties on all three.
+    #[test]
+    fn the_oracle_and_the_runtime_agree_on_which_candidate_is_better() {
+        let keys = [
+            (7_u64, 5_u64, [3_u8; 32]),
+            (7, 5, [4; 32]),
+            (7, 9, [3; 32]),
+            (11, 5, [3; 32]),
+            (0, 0, [0; 32]),
+            (u64::MAX, u64::MAX, [0xff; 32]),
+            // A pair separated only in the MOST significant tie-break byte,
+            // and one separated only in the least, so a big-endian copy of
+            // `le_numeric_id` would disagree here rather than nowhere.
+            (7, 5, {
+                let mut id = [3_u8; 32];
+                id[31] = 9;
+                id
+            }),
+            (7, 5, {
+                let mut id = [3_u8; 32];
+                id[0] = 9;
+                id
+            }),
+        ];
+        let orders = [
+            [SelectionCriterion::MinimizeCandidateId; 3],
+            [
+                SelectionCriterion::MaximizeFilledLots,
+                SelectionCriterion::MinimizeQuoteSurplus,
+                SelectionCriterion::MinimizeCandidateId,
+            ],
+            [
+                SelectionCriterion::MinimizeQuoteSurplus,
+                SelectionCriterion::MaximizeFilledLots,
+                SelectionCriterion::MinimizeCandidateId,
+            ],
+        ];
+        let record = |key: (u64, u64, [u8; 32])| crate::VerifiedCandidateV1 {
+            candidate_id: key.2,
+            product_id: PRODUCT,
+            batch_id: BATCH,
+            outcome_count: 2,
+            page_count: 1,
+            filled_lots: key.0,
+            quote_surplus: key.1,
+            quote_inputs: 0,
+            quote_outputs: 0,
+            complete_set_move: crate::CompleteSetMoveV1::None,
+            complete_set_quantity: 0,
+            claim_inputs: [0; dclutch_general_codec::MAX_OUTCOMES],
+            claim_outputs: [0; dclutch_general_codec::MAX_OUTCOMES],
+        };
+        let mut compared = 0_usize;
+        for order in orders {
+            for count in 1..=order.len() {
+                let mut criteria = [SelectionCriterion::MaximizeFilledLots; MAX_SELECTION_CRITERIA];
+                criteria[..count].copy_from_slice(&order[..count]);
+                let policy = SelectionPolicyV1 {
+                    policy_id: [8; 32],
+                    criterion_count: u8::try_from(count).expect("criterion prefix"),
+                    criteria,
+                };
+                for left in keys {
+                    for right in keys {
+                        let runtime = runtime_candidate_key_better_v2(
+                            &policy,
+                            RuntimeCandidateComparisonKeyV2 {
+                                filled_lots: left.0,
+                                quote_surplus: left.1,
+                                candidate_id: left.2,
+                            },
+                            RuntimeCandidateComparisonKeyV2 {
+                                filled_lots: right.0,
+                                quote_surplus: right.1,
+                                candidate_id: right.2,
+                            },
+                        )
+                        .expect("runtime comparison");
+                        let oracle =
+                            crate::candidate_better(&policy, &record(left), &record(right));
+                        assert_eq!(
+                            runtime, oracle,
+                            "the runtime and the oracle disagree at {count} criteria on \
+                             {left:?} against {right:?}",
+                        );
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(compared, 3 * 3 * keys.len() * keys.len());
+    }
 }

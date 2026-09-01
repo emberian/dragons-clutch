@@ -7,9 +7,9 @@ use dclutch_product_runtime_v2_admission::{
 use dclutch_product_runtime_v2_operator::{
     AccountObservationV2, AdmissionStateV2, BandProfileV1, FinalizedRecordObservationV2,
     FoundingBandV1, MAX_CELL_EX_ANTE_SHARE_BPS_V1, PartitionQualityModelV1,
-    ProductCompilationInputV2, build_admission_instruction_v2, centred_cuts_v1,
-    compile_interesting_product_records_v2, compile_product_records_v2,
-    derive_admission_receipt_v2,
+    ProductCompilationInputV2,
+    authoring::{AuthoredIdentitiesV1, MarketQuestionV1, compile_authored_product_records_v2},
+    build_admission_instruction_v2, compile_product_records_v2, derive_admission_receipt_v2,
 };
 use dclutch_product_runtime_v2_sbf::{AdmissionSbfErrorV2, process_instruction};
 use solana_account::Account;
@@ -360,13 +360,16 @@ async fn run_runtime_width_campaign(fixture: Fixture) {
 /// One authored market, from a human sentence to an admitted record graph.
 ///
 /// > *"Where does SOL/USD sit an hour from now? Five bands around today's
-/// > price, the winning band pays."*
+/// > price, the middle band pays most."*
 ///
-/// Nothing here picks a cut by hand. The band comes from the founding spot the
-/// committed local Pyth fixture reports, the market's own hour-long window, and
-/// a stated volatility; the entrance refuses the partition if one cell would
-/// take the market. What the ELF then admits is the same record graph the
-/// ungated compiler builds — the gate adds a refusal, never a byte.
+/// Nothing here picks a cut or a payout by hand. The whole product comes from
+/// [`MarketQuestionV1::CentredBands`] over the founding spot the committed
+/// local Pyth fixture reports, the market's own hour-long window and a stated
+/// volatility. The entrance refuses the partition if one cell would take the
+/// market, and the payoff it emits distinguishes the cells the partition
+/// states — an earlier revision of this test paid one unit on every ordinary
+/// outcome, which is a beautifully centred partition the holder is paid to
+/// ignore.
 async fn run_authored_sol_usd_market(prefer_real_elf: bool) {
     const HOUR_OF_SLOTS: u64 = 10_000;
     let band = FoundingBandV1 {
@@ -375,24 +378,24 @@ async fn run_authored_sol_usd_market(prefer_real_elf: bool) {
         volatility_bps: 200,
         window_slots: HOUR_OF_SLOTS,
     };
-    let cuts = centred_cuts_v1(&band, 5, BandProfileV1::Uniform).expect("centred band");
-    assert_eq!(cuts, vec![99_400_000, 99_800_000, 100_200_000, 100_600_000]);
-    // Five ordinary bands plus the explicit failure outcome; only the band the
-    // coordinate lands in pays, and failure pays nothing.
-    let coefficients = vec![1_u64, 1, 1, 1, 1, 0];
-
+    let cuts = 4;
+    let outcomes = 6;
     let mut product = vec![0_u8; PRODUCT_RECORD_BYTES_V2];
-    let mut domain = vec![0_u8; result_domain_record_bytes(cuts.len()).expect("domain width")];
-    let mut portfolio =
-        vec![0_u8; portfolio_record_bytes(coefficients.len()).expect("portfolio width")];
-    let (compiled, report) = compile_interesting_product_records_v2(
+    let mut domain = vec![0_u8; result_domain_record_bytes(cuts).expect("domain width")];
+    let mut portfolio = vec![0_u8; portfolio_record_bytes(outcomes).expect("portfolio width")];
+    let (compiled, authored) = compile_authored_product_records_v2(
         REGISTRY_PROGRAM,
         band,
         PartitionQualityModelV1::TriangularPlausibleBand {
             plausible_half_widths: 2,
         },
         MAX_CELL_EX_ANTE_SHARE_BPS_V1,
-        ProductCompilationInputV2 {
+        MarketQuestionV1::CentredBands {
+            ordinary_cells: 5,
+            profile: BandProfileV1::Uniform,
+            peak_payout: 100,
+        },
+        AuthoredIdentitiesV1 {
             product_id: id(0x51),
             coordinate_domain_id: id(2),
             result_unit_id: id(3),
@@ -400,10 +403,7 @@ async fn run_authored_sol_usd_market(prefer_real_elf: bool) {
             liability_basis_id: id(5),
             representation_release_id: id(6),
             mapping_release_id: id(7),
-            cut_denominator: 1,
-            cuts: &cuts,
             portfolio_denominator: 1,
-            coefficients: &coefficients,
         },
         &mut product,
         &mut domain,
@@ -411,6 +411,13 @@ async fn run_authored_sol_usd_market(prefer_real_elf: bool) {
     )
     .expect("an authored, centred SOL/USD market compiles");
     assert_eq!(compiled.outcome_count, 6);
+    assert_eq!(
+        authored.cuts,
+        vec![99_400_000, 99_800_000, 100_200_000, 100_600_000]
+    );
+    assert_eq!(authored.coefficients, vec![0, 50, 100, 50, 0, 0]);
+    assert!(authored.payoff_distinguishes_cells);
+    let report = authored.report;
     assert_eq!(report.cell_share_bps, vec![3_612, 900, 975, 900, 3_612]);
 
     let mut test = if prefer_real_elf {
