@@ -12281,10 +12281,38 @@ fn require_geometry(
             .account_count(tail_count, preprojected_scalars)
             .map_err(|_| TradingSbfError::Content)?
     };
+    // The account and effect item strides are the SAME NUMBER only when the
+    // profile has no dynamic spans, and requiring it unconditionally made every
+    // Profile13 family unrunnable.
+    //
+    // `AccountProfileV2` forces the two cases apart itself (`v2.rs:1103` and
+    // `:1110`): with no dynamic spans `item_account_stride` MUST be zero, and
+    // with them it MUST be nonzero. Under spans the field is not a semantic
+    // per-item account count at all -- `dynamic_account_width` never multiplies
+    // by it, computing `fixed + sum(span_counts)` and ignoring `tail_count`
+    // entirely. The General adapter says the same thing in its own words at
+    // `general-adapter-contract/src/artifacts_v3.rs:619`: "the item-rule table is
+    // repurposed exclusively as the dynamic fixed-span template bank ... physical
+    // scratch-page geometry, not a Product-N semantic account stride."
+    //
+    // So General's own bundle validator REQUIRES the two to differ -- account
+    // stride `GENERAL_SCRATCH_PAGE_RULE_STRIDE_V3` = 1 at `:620`, effect stride
+    // 0 at `:634` -- while this function required them equal. Both could not
+    // hold, and the runtime side is the one that was wrong.
+    //
+    // Nothing is loosened: the effect is still pinned, to 0, which is what an
+    // effect with no per-item accounts declares. In the no-span branch the
+    // account stride is already 0, so the equality below is exactly today's
+    // behaviour.
+    let item_account_stride_agrees = if account.uses_dynamic_fixed_spans() {
+        effect.item_account_stride() == 0
+    } else {
+        account.item_account_stride() == effect.item_account_stride()
+    };
     if expected_accounts != runtime_accounts
+        || !item_account_stride_agrees
         || effect_accounts > expected_accounts
         || account.fixed_account_count() != effect.fixed_account_count()
-        || account.item_account_stride() != effect.item_account_stride()
         || account.common_scalar_count() != request_v1.common_scalar_count()
         || account.item_scalar_stride() != request_v1.item_scalar_stride()
         || account.common_identity_count() != request_v1.common_identity_count()

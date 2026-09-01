@@ -509,34 +509,6 @@ fn the_real_projection_carries_a_real_roots_lifecycle_into_the_conjuncts_registe
     }
 }
 
-/// The twelve actions whose account projection can accept at all.
-///
-/// The other three do not refuse because this fixture is thin. They refuse
-/// because their profiles carry a guard nothing can satisfy: `PlaceOrder`,
-/// `CancelOrder` and `SubmitCandidate` each `RequireKey` against
-/// `identity::OWNER`, and `OP_REQUIRE_KEY` reads the INPUT identity bank
-/// (`dclutch-account-profile-contract/src/v2.rs:3178`) while `OP_PROJECT_*`
-/// writes a separate output bank, so the register the same pass projects
-/// `OWNER` into is 32 zero bytes at every guard, whatever the account data
-/// says. Filling the evidence records with real bytes would not change it.
-/// `account_rules_v3::every_account_guard_names_a_register_the_input_bank_carries`
-/// is the census; the root-register law for those three is carried by the
-/// operation-level test beside it, which is total over all fifteen.
-const PROJECTS_WITHOUT_AN_UNSATISFIABLE_GUARD: [u8; 12] = [
-    Action::Consider as u8,
-    Action::Freeze as u8,
-    Action::InitializeSettlement as u8,
-    Action::Collect as u8,
-    Action::Materialize as u8,
-    Action::Distribute as u8,
-    Action::Close as u8,
-    Action::OpenBatch as u8,
-    Action::CloseBatch as u8,
-    Action::VerifyCandidateRow as u8,
-    Action::ReleaseOrder as u8,
-    Action::CloseCandidate as u8,
-];
-
 /// The register every General state address is keyed by, carrying a real key.
 ///
 /// Each of the eight seed orders in `state_seeds_v3` opens with
@@ -560,14 +532,12 @@ const PROJECTS_WITHOUT_AN_UNSATISFIABLE_GUARD: [u8; 12] = [
 fn the_real_projection_carries_the_root_key_into_every_state_addresss_first_seed() {
     let (root, _) = composite_root(GeneralLifecycleV2::Active);
     for action in GENERAL_ACTIONS_V5 {
-        if PROJECTS_WITHOUT_AN_UNSATISFIABLE_GUARD.contains(&(action as u8)) {
-            let (_, identities) = project_banks(action, &root);
-            assert_eq!(
-                identities.get(register(identity::GENERAL_ROOT)).copied(),
-                Some(coordinate_key(0)),
-                "{action:?} left the root identity register its state recipes seed on unwritten",
-            );
-        }
+        let (_, identities) = project_banks(action, &root);
+        assert_eq!(
+            identities.get(register(identity::GENERAL_ROOT)).copied(),
+            Some(coordinate_key(0)),
+            "{action:?} left the root identity register its state recipes seed on unwritten",
+        );
     }
 }
 

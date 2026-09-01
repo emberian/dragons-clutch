@@ -99,12 +99,12 @@ pub const GENERAL_TRANSITION_INSTRUCTION_PLACEHOLDER_V3: InstructionV3 =
 #[must_use]
 pub const fn general_transition_instruction_count_v3(action: Action) -> (usize, usize, usize) {
     match action {
-        Action::SubmitCandidate => (45, 1, 0),
+        Action::SubmitCandidate => (46, 1, 0),
         Action::VerifyCandidateRow => (23, 1, 0),
         Action::OpenBatch => (26, 1, 0),
         Action::CloseBatch => (27, 1, 0),
-        Action::PlaceOrder => (45, 4, 0),
-        Action::CancelOrder => (49, 4, 0),
+        Action::PlaceOrder => (46, 4, 0),
+        Action::CancelOrder => (50, 4, 0),
         Action::ReleaseOrder => (42, 4, 0),
         Action::CloseCandidate => (34, 1, 0),
         Action::Consider => (15, 1, 0),
@@ -244,6 +244,7 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 InstructionV3::load_const(s(scalar::ONE)?, 1),
                 InstructionV3::nonzero(s(scalar::PRIMARY_CREATED)?),
                 InstructionV3::identity_eq(i(identity::PRIMARY_BENEFICIARY)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::PAYER)?, i(identity::OWNER)?),
                 InstructionV3::identity_eq(
                     i(identity::CANDIDATE)?,
                     i(identity::BEST_VERIFIED_DIGEST)?,
@@ -900,6 +901,7 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                     i(identity::ORDER)?,
                 ),
                 InstructionV3::identity_eq(i(identity::RENT_CREDIT)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::PAYER)?, i(identity::OWNER)?),
                 InstructionV3::load_const(
                     s(scalar::CUSTODY_OPERATION)?,
                     OperationV1::Transfer as u64,
@@ -1046,6 +1048,7 @@ fn append_action(action: Action, output: &mut [InstructionV3], cursor: &mut usiz
                 ),
                 InstructionV3::identity_eq(i(identity::RENT_CREDIT)?, i(identity::OWNER)?),
                 InstructionV3::identity_eq(i(identity::RENT_REFUND)?, i(identity::OWNER)?),
+                InstructionV3::identity_eq(i(identity::PAYER)?, i(identity::OWNER)?),
             ] {
                 push(output, cursor, instruction)?;
             }
@@ -1789,6 +1792,10 @@ mod tests {
         put_id(identity::TRADING_PROGRAM, trading);
         put_id(identity::PRIMARY_BENEFICIARY, solver);
         put_id(identity::OWNER, solver);
+        // The solver who pays is the solver the candidate names: the
+        // AccountProfile projects the creation payer's key here, and the
+        // transition is where the two are joined.
+        put_id(identity::PAYER, solver);
         put_id(identity::CANDIDATE, candidate);
         put_id(identity::BEST_VERIFIED_DIGEST, candidate);
         put_id(identity::RESULT_BENEFICIARY_OBSERVATION, candidate);

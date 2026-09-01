@@ -25,12 +25,16 @@ pub mod claim_check_v1;
 /// Conservative complete-set split and merge planning.
 pub mod claims_conservation_v1;
 /// Chain-derived unsigned Dealer junior-equity Hot execution construction.
+#[cfg(feature = "dealer-series")]
 pub mod dealer_equity_hot_v3;
 /// Chain-derived unsigned Dealer LP Open/Close Hot construction.
+#[cfg(feature = "dealer-series")]
 pub mod dealer_lp_hot_v4;
 /// Lock-bounded Dealer checkpoint callers and crash-safe journal.
+#[cfg(feature = "dealer-series")]
 pub mod dealer_scenario_checkpoint_v1;
 /// Chain-derived Dealer scenario exact-fill physical-account projection.
+#[cfg(feature = "dealer-series")]
 pub mod dealer_scenario_hot_v4;
 /// Exact delegated-allowance Custody successor CPI construction.
 pub mod delegated_custody;
@@ -86,12 +90,16 @@ pub mod resolution_core_v3 {
     pub use dclutch_resolution_core_v3_operator::*;
 }
 /// Production acquisition of current Series V5 physical account banks.
+#[cfg(feature = "dealer-series")]
 pub mod series_current_acquisition_v5;
 /// Chain-derived Series V3 Hot lifecycle and packet construction.
+#[cfg(feature = "dealer-series")]
 pub mod series_hot_v3;
 /// Chain-derived selection of the next recurring-Series lifecycle act.
+#[cfg(feature = "dealer-series")]
 pub mod series_lifecycle_v3;
 /// Compact projected-Market Series Consume instruction-data construction.
+#[cfg(feature = "dealer-series")]
 pub mod series_projected_v2;
 /// Chain-derived Direct close and retirement replay-handoff construction.
 pub mod terminal_retirement_v1;

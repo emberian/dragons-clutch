@@ -615,9 +615,16 @@ pub fn general_account_profile_operation_v3(
             destination: common_scalar(scalar::CANDIDATE_CLEANUP_REMAINING_OBSERVATION)?,
             data_offset: width(GeneralCandidateLayoutV1::CLEANUP_REMAINING_OFFSET)?,
         }),
-        31 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::RequireKey {
+        // The solver who pays is the solver the candidate names. This was a
+        // `RequireKey` against `identity::OWNER`, which the SAME profile pass
+        // projects out of the candidate record -- and a guard reads the INPUT
+        // identity bank while a projection writes a separate output bank, so
+        // it compared against 32 zero bytes and could never hold. The law is
+        // re-proven where both values exist: the emitted transition carries
+        // `identity_eq(PAYER, OWNER)`.
+        31 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
-            expected: common_identity(identity::OWNER)?,
+            destination: common_identity(identity::PAYER)?,
         }),
         32 if action == Action::SubmitCandidate => Ok(AccountOperationInputV2::RequireOwner {
             account: AccountCoordinateV2::fixed(GENERAL_PRIMARY_PAYER_ACCOUNT_V3),
@@ -847,9 +854,11 @@ pub fn general_account_profile_operation_v3(
             destination: common_identity(identity::SELECTION_PRODUCT)?,
             data_offset: width(PRODUCT_RECORD_PRODUCT_ID_OFFSET_V2)?,
         }),
-        26 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::RequireKey {
+        // The maker who pays is the maker the signed terms name; see
+        // SubmitCandidate above for why this cannot be a guard here.
+        26 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
-            expected: common_identity(identity::OWNER)?,
+            destination: common_identity(identity::PAYER)?,
         }),
         27 if action == Action::PlaceOrder => Ok(AccountOperationInputV2::ProjectDataU64 {
             account: AccountCoordinateV2::fixed(narrow(HOT_RUNTIME_CONFIG_COORDINATE_V3)?),
@@ -994,9 +1003,11 @@ pub fn general_account_profile_operation_v3(
             destination: common_scalar(scalar::GENERATION)?,
             data_offset: width(GeneralConfigV3Layout::GENERATION)?,
         }),
-        27 if action == Action::CancelOrder => Ok(AccountOperationInputV2::RequireKey {
+        // The maker who pays is the maker the order record names; see
+        // SubmitCandidate above for why this cannot be a guard here.
+        27 if action == Action::CancelOrder => Ok(AccountOperationInputV2::ProjectKey {
             account: AccountCoordinateV2::fixed(GENERAL_CLOSE_PAYER_ACCOUNT_V3),
-            expected: common_identity(identity::OWNER)?,
+            destination: common_identity(identity::PAYER)?,
         }),
         // ReleaseOrder's projections. Every conjunct input with an
         // authoritative frame source is pinned here: the order record's own
@@ -2356,17 +2367,15 @@ mod tests {
         }
     }
 
-    /// The three guards that cannot hold, named so a fourth cannot appear quietly.
+    /// Guards that cannot hold. The list is EMPTY, and must stay empty.
     ///
-    /// `(action tag, operation index)`. Every entry is a `RequireKey` against
-    /// `identity::OWNER`, which the SAME profile pass projects out of an
-    /// evidence record -- SubmitCandidate operation 25, PlaceOrder operation 20,
-    /// CancelOrder operation 20.
-    const UNSATISFIABLE_GUARDS_V3: [(u8, u16); 3] = [
-        (Action::SubmitCandidate as u8, 31),
-        (Action::PlaceOrder as u8, 26),
-        (Action::CancelOrder as u8, 27),
-    ];
+    /// It held three entries when this census was written -- SubmitCandidate
+    /// operation 31, PlaceOrder operation 26 and CancelOrder operation 27, each
+    /// a `RequireKey` against `identity::OWNER`. All three are now
+    /// `ProjectKey` into `identity::PAYER`, and the law they stated is carried
+    /// by `identity_eq(PAYER, OWNER)` in each of those three emitted
+    /// transitions, which run over the projected bank where both values exist.
+    const UNSATISFIABLE_GUARDS_V3: [(u8, u16); 0] = [];
 
     /// Every account guard names a register the INPUT identity bank carries.
     ///
@@ -2382,24 +2391,24 @@ mod tests {
     /// `RESULT_OWNER`, from `TrustedBuiltinIdentityV2::SystemProgram`, which
     /// `CloseCandidate` alone does not declare.
     ///
-    /// Five of General's eight guards name one of those and hold. The other
-    /// three name `identity::OWNER`, a register the same pass projects, and are
-    /// therefore unsatisfiable and fail-closed: SubmitCandidate, PlaceOrder and
-    /// CancelOrder cannot execute at all. This is a convicted defect class in
-    /// this tree -- guards whose two sides move together -- with a Direct
-    /// instance and a live Dealer instance at
-    /// `programs/dclutch-trading-sbf/src/dealer/v3_trade_profile.rs:269`.
+    /// All nineteen of General's remaining guards name one of those and hold.
+    /// Three more used to name `identity::OWNER`, a register the same pass
+    /// projects, and were therefore unsatisfiable and fail-closed:
+    /// SubmitCandidate, PlaceOrder and CancelOrder could not execute at all.
+    /// This is a convicted defect class in this tree -- guards whose two sides
+    /// move together.
     ///
-    /// The repair is not to delete the guard. The law it states -- the payer
-    /// must BE the maker or solver the record names -- is real, and General
-    /// already re-proves exactly this shape on the other side: the emitted
-    /// transition runs over the PROJECTED bank and carries
+    /// The repair was not to delete them. The law they stated -- the payer must
+    /// BE the maker or solver the record names -- is real, and General already
+    /// re-proved exactly this shape on the other side: the emitted transition
+    /// runs over the PROJECTED bank and carries
     /// `identity_eq(PRIMARY_BENEFICIARY, OWNER)` at
-    /// `transition_artifacts_v3.rs:246`. Projecting the payer's key into
-    /// `identity::PAYER` and adding `identity_eq(PAYER, OWNER)` to those three
-    /// transitions moves the same law to the only bank that can hold both
-    /// values. That edit lands in `formal/dclutch-semantics/GeneralTransitionV3`
-    /// and its regenerated arrays, not here.
+    /// `transition_artifacts_v3.rs:246`. So each guard became
+    /// `ProjectKey` into `identity::PAYER` -- the construction CloseCandidate
+    /// already used -- and each of those three transitions gained
+    /// `identity_eq(PAYER, OWNER)`, authored in
+    /// `formal/dclutch-semantics/DClutchSemantics/GeneralTransitionV3.lean` and
+    /// regenerated into `generated_transition_programs_v3.rs`.
     ///
     /// Do not make this test pass by adding a row to `UNSATISFIABLE_GUARDS_V3`.
     #[test]
@@ -2445,8 +2454,8 @@ mod tests {
             }
         }
         assert_eq!(
-            guards, 22,
-            "General declares twenty-two account guards across its fifteen actions",
+            guards, 19,
+            "General declares nineteen account guards across its fifteen actions",
         );
         assert_eq!(
             unsatisfiable,

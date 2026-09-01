@@ -20,6 +20,19 @@
 //! is gone rather than kept beside this, per `AGENTS.md` — a superseded
 //! authority path is deleted in the same convergence cycle as its successor.
 //!
+//! **That `#[cfg(any())]` call site is gone too**, along with the other
+//! thirteen in `lib.rs`, so neither half of the sentence above can be looked up
+//! any more; it is history, not a pointer. Four comments in `dclutch-core-sbf`
+//! and the local-validator bootstrap still cite
+//! `funded::process_funded_transition` in the present tense as the ladder that
+//! "has one call site, under `#[cfg(any())]`". That function has no definition
+//! anywhere in the tree and neither does the block. What those comments are
+//! actually justifying — `CoreSbfError::RecoveryWalkUnavailable` — remains
+//! correct for a live and checkable reason:
+//! `SourceResolutionStateV2::exhaust_after_primary_deadline` refuses
+//! `recovery_policy().is_some()` outright, so a recovery-bearing material has
+//! no terminal regardless of what any ladder does.
+//!
 //! # Why the walk is one transition rather than three
 //!
 //! The V1 walk was `FailNext` per recovery leg, then `Exhaust`, then

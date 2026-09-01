@@ -15,6 +15,15 @@ import { deriveFinalizedRecordAddressesV1 } from './releaseRegistry';
 
 const PRICE_GATE_BYTES_V1 = 320;
 
+/**
+ * `crates/dclutch-product-compiler/src/partition_quality.rs`'s
+ * `BASIS_POINTS_PER_UNIT_V1`. A definitional unit, not a policy threshold: the
+ * two policy constants next to it there — the volatility ceiling and the
+ * degeneracy ceiling — are deliberately NOT copied here. The ceiling this file
+ * checks against is the one the author declared in their own report.
+ */
+const BASIS_POINTS_PER_UNIT_V1 = 10_000;
+
 const RECORD_NAMES = ['product', 'result_domain', 'portfolio', 'product_basis', 'price_gate'] as const;
 type RecordNameV1 = typeof RECORD_NAMES[number];
 
@@ -58,6 +67,39 @@ export type InspectedSplineProductArtifactsV1 = Readonly<{
     width: number;
     atomCount: number;
     prices: ReadonlyArray<string>;
+  }>;
+  /**
+   * How much of the ex-ante question each cell takes — the number that says
+   * whether this market is degenerate before it is founded.
+   *
+   * Carried, checked for internal consistency, and NOT recomputed. The
+   * triangular displacement model has one owner, in
+   * `crates/dclutch-product-compiler/src/partition_quality.rs`; restating it
+   * in TypeScript would be the browser-as-last-authority defect this SDK
+   * exists to avoid. What is checked here is arithmetic on the report's own
+   * numbers, which is exactly the part a caller can verify without the model:
+   * every share is a basis-point quantity, the shares sum to one unit up to
+   * one floor per cell, the dominant cell is the cell it says it is, and the
+   * dominant share is under the ceiling the author declared. A compiler that
+   * passed its own gate and then reported otherwise is caught here.
+   */
+  partitionQuality: Readonly<{
+    /** The named model the shares were measured under. */
+    model: string;
+    /** Founding coordinate, in coordinate numerator units. */
+    anchor: string;
+    volatilityBps: number;
+    windowSlots: string;
+    characteristicDisplacement: string;
+    plausibleHalfWidth: string;
+    dominantCell: number;
+    dominantShareBps: number;
+    /** The author's declared degeneracy ceiling, in basis points. */
+    maxCellShareBps: number;
+    /** Every ordinary cell's share, in canonical partition order. */
+    cellShareBps: ReadonlyArray<number>;
+    /** Whether the dominant share is at or above the declared ceiling. */
+    degenerate: boolean;
   }>;
   /** Exact Registry raw-record coordinates to pass into `prepareCoreFoundV2`. */
   foundRecords: Readonly<{
@@ -140,6 +182,7 @@ export async function inspectSplineProductAuthoringArtifactsV1(
     'schema', 'command', 'key_free', 'signs', 'submits', 'input_sha256', 'registry_program',
     'product_outcome_count', 'basis_width', 'degree', 'interior_multiplicity', 'payout_scale',
     'rounding_boundary', 'semantic_basis_id', 'records', 'verified_price_gate',
+    'partition_quality',
   ], 'spline compiler report');
   if (report.schema !== SPLINE_PRODUCT_AUTHORING_REPORT_SCHEMA_V1 || report.command !== SPLINE_PRODUCT_AUTHORING_COMMAND_V1) throw new Error('spline compiler report has the wrong schema or command');
   if (boolean(report.key_free, 'report.key_free') !== true
@@ -208,6 +251,51 @@ export async function inspectSplineProductAuthoringArtifactsV1(
     throw new Error('verified price-gate summary differs from the ProductBasis summary');
   }
 
+  const quality = object(report.partition_quality, 'report.partition_quality');
+  exactKeys(quality, [
+    'model', 'anchor', 'volatility_bps', 'window_slots', 'characteristic_displacement',
+    'plausible_half_width', 'dominant_cell', 'dominant_share_bps', 'max_cell_share_bps',
+    'cell_share_bps',
+  ], 'report.partition_quality');
+  // Exhaustive by name, like the Rust producer's own `let ... = report.model`:
+  // a second model must announce itself here rather than be rendered under
+  // this one's name and read as measured the same way.
+  const qualityModel = string(quality.model, 'report.partition_quality.model');
+  if (qualityModel !== 'triangular-plausible-band-v1') {
+    throw new Error('report.partition_quality names a displacement model this client cannot describe');
+  }
+  const anchor = decimal(quality.anchor, 'report.partition_quality.anchor');
+  const volatilityBps = integer(quality.volatility_bps, 'report.partition_quality.volatility_bps', 1, 0xffff_ffff);
+  const windowSlots = decimal(quality.window_slots, 'report.partition_quality.window_slots');
+  const characteristicDisplacement = decimal(quality.characteristic_displacement, 'report.partition_quality.characteristic_displacement');
+  const plausibleHalfWidth = decimal(quality.plausible_half_width, 'report.partition_quality.plausible_half_width');
+  const maxCellShareBps = integer(quality.max_cell_share_bps, 'report.partition_quality.max_cell_share_bps', 1, BASIS_POINTS_PER_UNIT_V1);
+  if (!Array.isArray(quality.cell_share_bps) || quality.cell_share_bps.length === 0) {
+    throw new Error('report.partition_quality.cell_share_bps must name at least one ordinary cell');
+  }
+  const cellShareBps = Object.freeze(quality.cell_share_bps.map((value, index) => integer(
+    value, `report.partition_quality.cell_share_bps[${index}]`, 0, BASIS_POINTS_PER_UNIT_V1,
+  )));
+  // One unit of mass, less at most one floored basis point per cell. This is
+  // the producer's own property (`partition_quality.rs`: `total <= 10_000 &&
+  // total + cells >= 10_000`), restated as a check rather than assumed.
+  const shareTotal = cellShareBps.reduce((sum, value) => sum + value, 0);
+  if (shareTotal > BASIS_POINTS_PER_UNIT_V1 || shareTotal + cellShareBps.length < BASIS_POINTS_PER_UNIT_V1) {
+    throw new Error('report.partition_quality.cell_share_bps does not sum to one unit within its flooring slack');
+  }
+  const dominantCell = integer(quality.dominant_cell, 'report.partition_quality.dominant_cell', 0, cellShareBps.length - 1);
+  const dominantShareBps = integer(quality.dominant_share_bps, 'report.partition_quality.dominant_share_bps', 0, BASIS_POINTS_PER_UNIT_V1);
+  if (cellShareBps[dominantCell] !== dominantShareBps || cellShareBps.some((value) => value > dominantShareBps)) {
+    throw new Error('report.partition_quality.dominant_cell is not the cell holding the most ex-ante mass');
+  }
+  // The compiler refuses `dominant >= ceiling` before it writes a report, so a
+  // report that says otherwise is describing a market that should not exist.
+  // Reported rather than recomputed, and refused rather than rendered.
+  const degenerate = dominantShareBps >= maxCellShareBps;
+  if (degenerate) {
+    throw new Error(`report.partition_quality states a degenerate partition (cell ${dominantCell} takes ${dominantShareBps} of ${maxCellShareBps} permitted basis points) that its own compiler must have refused`);
+  }
+
   const records = Object.freeze(inspected);
   return Object.freeze({
     schema: SPLINE_PRODUCT_AUTHORING_REPORT_SCHEMA_V1,
@@ -226,6 +314,19 @@ export async function inspectSplineProductAuthoringArtifactsV1(
     semanticBasisId,
     records,
     verifiedPriceGate: Object.freeze({ scale: gateScale, mass: gateMass, degree: gateDegree, width: gateWidth, atomCount, prices }),
+    partitionQuality: Object.freeze({
+      model: qualityModel,
+      anchor,
+      volatilityBps,
+      windowSlots,
+      characteristicDisplacement,
+      plausibleHalfWidth,
+      dominantCell,
+      dominantShareBps,
+      maxCellShareBps,
+      cellShareBps,
+      degenerate,
+    }),
     foundRecords: Object.freeze({
       productRecord: records.product.rawAccount,
       resultDomainRecord: records.result_domain.rawAccount,

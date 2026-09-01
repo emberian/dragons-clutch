@@ -2794,3 +2794,153 @@ and executes and has a target and an abort route — that target is a subset
 ledger's lamport rent shortfall, not market principal. What is genuinely absent
 is `FundingPlanV1`, now written down with its signature and its semantic owner
 named.
+
+## 2026-09-01 — the gate proves itself, and a dependency that was not there
+
+`tools/ci/run.sh journey --commit 5e206c89`, clean-archive mode rather than the
+shared working tree:
+
+```
+test result: ok. 282 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+=== verdict ===  PASS      journey
+```
+
+The strengthened tier running the tests it previously only type-checked, **on
+the commit that fixes both defects it was blind to.** Behaviour and the
+workflow's name landed as a pair, and the workflow was diffed in full before
+committing because it had been dirty at session start from something not the
+lane's — all five hunks confirmed as its own, nothing foreign riding along.
+
+### A dependency that was asserted and turned out not to exist
+
+I relayed a warning that a market founded today "resolves into one bucket", and
+the lane **checked it instead of inheriting it**. `LocalMarketShapeV1::default`
+is a **four-outcome** market — so the defect is **placement, not width**: the
+cuts are cent-scale while the source returns raw price atoms unrescaled, so
+every outcome exists and one takes all the mass (measured elsewhere as
+`0 / 0 / 0 / 0 / 10000 bp`). My relay had compressed those into one phrase and
+lost the distinction, and the lane held it as *relayed and unverified* rather
+than acting on it.
+
+Then the correction that actually mattered: **L8 is bounded by how many Custody
+compartments a market opens, not by how its outcomes resolve.** The journey
+opens `HoardPrincipal` and nothing else whatever shape it is founded with, so
+even a perfectly centred market yields a two-class ledger.
+
+> A market nobody could lose would make the campaign economically
+> uninteresting; it would not make the table wrong.
+
+So the conservation work never depended on the volatility input at all, and the
+release lane was carrying a blocker it did not have. **Confirmed against a
+second candidate explanation rather than merely asserted** — which is the only
+way a dependency claim is worth anything.
+
+## 2026-09-01 — the dead-code class was one file's, and the backlog is empty
+
+Swept tree-wide after the 775-line deletion. **`#[cfg(any())]` real attribute
+blocks across the whole repository: zero.** All fourteen had lived in one
+program's `lib.rs`; no other crate ever used the idiom. `cfg(FALSE)`,
+`cfg(not(all()))`, `if false`: zero. And the insidious relative — a
+`#[cfg(feature = "X")]` where no manifest declares X, which compiles never and
+looks live — **zero undeclared across 14 features and every crate**, counting
+optional dependencies as implicit features.
+
+That one program accumulated sixty percent dead lines while every neighbour
+stayed clean makes the finding **sharper, not weaker**. And it settles what the
+instrument is for:
+
+> **The instrument's value is as a tripwire, not a backlog — the backlog is
+> empty.** One grep plus the ELF-identity control is the whole thing.
+
+**Dead blocks that contradicted live code: 1 of 14** — the one already
+convicted, stating a third meaning for a field the live route defines
+differently. Both gone.
+
+### A new category, and it is the one that misleads
+
+**Live prose citing deleted symbols.** Five comments across four files cite
+`funded::process_funded_transition` **in the present tense**. That function has
+**no definition anywhere in the tree** — deleted before this session — and now
+the `cfg(any())` block that referenced it is gone too, so both nouns are
+unfindable.
+
+One is worse than stale: `core-sbf/src/resolution.rs:880` is a **lifting plan
+instructing someone to resurrect a symbol nobody can locate.** These are not
+decorative — they are the stated justification for a live on-chain refusal,
+`CoreSbfError::RecoveryWalkUnavailable = 0x3011`, which welds `CreateFund` shut
+against recovery-bearing material.
+
+**This is what turns dead code from untidy into misleading**, and it is what
+caused this lane's own misreport earlier today.
+
+**The gate still holds, checked rather than assumed**: `exhaust_after_primary_
+deadline` still refuses `recovery_policy().is_some()` outright, so the live half
+of the premise stands even though the dead half lost its names. `cfg(any())`
+never compiled, so removing it removed no route.
+
+The correction went into `funded.rs` — **the module all four foreign comments
+point at**, so anyone chasing the symbol lands on the note. Routing by
+construction rather than by a document nobody opens, and it survives whoever
+adds a fifth citation.
+
+Attached as evidence to the open **"recovery ontology: keep or cut"** ruling
+rather than opening a new one: *the plan to revive it names a symbol that does
+not exist* is the sharpest argument yet that it needs deciding.
+
+**Control:** one ELF digest, `ee33f9e9…`, across the 775-line deletion, the seam
+refactor, a rustfmt, and the doc edits.
+
+## 2026-09-01 — ownership and correctness are different questions
+
+C-16 §6 read *"unowned economic flow — no instrument."* The **atom half** now
+has one (`5858ad0c`), and it is careful about what it proves.
+
+**What it measures:** all 81 ordered compartment pairs through
+`CustodyRequestV1::validate`, stated as one equivalence — **a side being `None`
+is the only thing that wire refuses about a pair.** 64 pairs are
+shape-admissible, and **`HoardPrincipal → FeeVault` is among them** — principal
+paying a fee, the movement C-10 forbids.
+
+**The contract does not enforce that and was never the place it lived.** Every
+compartment rule in the protocol lives in a *calling* program. Deliberate — but
+**undocumented and unmeasured**, which is exactly the state in which an
+invariant quietly stops being true. It is a test rather than a comment so that a
+reviewer asking *"what stops the Hoard funding the fee vault"* is sent to the
+callers immediately instead of discovering by reading that the answer was never
+here; and so that if a compartment rule is ever added *there*, the census goes
+red and whoever adds it says so on purpose.
+
+Three details keep it from being decoration: the `External` conjuncts are
+satisfied per side so it measures the **pair** rule and nothing else; the `None`
+refusal is asserted by **exact discriminant**, not a count; and the
+principal-to-fee pair is named explicitly, because *"64"* does not say which 64.
+
+**The caller census:** every site that *sets* a compartment — 54 source-side, 49
+destination-side — **is owned.** Pinned literal, two-literal conditional on a
+closed flag, closed match with catch-all `Err`, direction accessor whose arms
+are literals, in-contract pass-through, or the wire decoder, where the
+compartment *is* caller-supplied and the owner is the **authenticated calling
+program**. The projected-founding decode additionally refuses
+`{None, External, HoardPrincipal}`: a founding can never be funded out of a
+Hoard.
+
+**Nothing pins `HoardPrincipal → FeeVault`** — both FeeVault-funding sites take
+`TradingPrincipal`. Reached by enumeration rather than by failing to find a
+counterexample, which is the stronger form.
+
+### The qualifier that must travel with the number
+
+> **Ownership and correctness are different questions; this instrument answers
+> the first.**
+
+A site pinning a wrong-but-literal pair reads as *owned* here and still violates
+C-10. So §6's atom half moves from *honest blank* to **swept clean at the
+construction sites, correctness not asserted** — never to "C-10 verified". The
+other stated limit: `#[cfg(test)] mod tests` blocks inside production files were
+not excluded, so the totals are an **upper bound** on production sites.
+
+**The lamport half is a separate unit** — rent beneficiaries, funding-compartment
+releases, account closes, crank rewards — and it forks where the atom census did
+not: an atom's compartment tag is a PDA seed, so ownership is *derivable*, while
+a lamport's owner is often a caller-supplied `refund_recipient` and must be
+**authenticated rather than read**.

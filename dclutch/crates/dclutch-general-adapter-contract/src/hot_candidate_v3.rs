@@ -4550,6 +4550,9 @@ mod tests {
             ),
             (identity::BENEFICIARY, submitted_opening.batch_id),
             (identity::OWNER, submitted_opening.solver_id),
+            // The creation payer the AccountProfile projects, which the
+            // authored transition now joins to the solver the candidate names.
+            (identity::PAYER, submitted_opening.solver_id),
             (identity::PRIMARY_BENEFICIARY_OBSERVATION, [0; 32]),
             (identity::PRIMARY_BENEFICIARY, submitted_opening.solver_id),
             (identity::PRIMARY_OWNER, environment.trading_program),

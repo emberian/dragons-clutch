@@ -9,7 +9,17 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["dealer-series"]
+# The Dealer and Series planners, and the only reason this crate links the
+# Trading PROGRAM. `dclutch-trading-sbf` is built for a 64-bit target and pins
+# its layouts with `const _: [(); N] = [(); size_of::<T>()]`, so on a 32-bit
+# target every pointer-bearing assertion fails: `ExecutedReceiptV3` is 72 bytes
+# on SBF and 60 on wasm32, `ChildExecutionStateV3` 216 and 140. Those
+# assertions are right for the program's real target and must not be relaxed.
+# Turning this feature off is how a wasm32 consumer takes the planners that do
+# not need a program -- the User Position admission planner among them -- and
+# it is default-on, so every existing consumer is unaffected.
+dealer-series = ["dep:dclutch-trading-sbf"]
 
 [dependencies]
 dclutch-account-profile-contract = { path = "../dclutch-account-profile-contract" }
@@ -62,7 +72,7 @@ dclutch-token-svm = { path = "../dclutch-token-svm" }
 dclutch-transition-vm = { path = "../dclutch-transition-vm" }
 dclutch-user-position-admission-contract = { path = "../dclutch-user-position-admission-contract" }
 dclutch-versioned-message-operator = { path = "../dclutch-versioned-message-operator" }
-dclutch-trading-sbf = { path = "../../programs/dclutch-trading-sbf", default-features = false, features = ["dealer-family", "no-entrypoint", "series-family"] }
+dclutch-trading-sbf = { path = "../../programs/dclutch-trading-sbf", default-features = false, features = ["dealer-family", "no-entrypoint", "series-family"], optional = true }
 solana-program = { version = "=3.0.0", default-features = false }
 solana-address-lookup-table-interface = { version = "=3.2.0", features = ["bincode", "bytemuck"] }
 solana-compute-budget-interface = "=3.1.0"

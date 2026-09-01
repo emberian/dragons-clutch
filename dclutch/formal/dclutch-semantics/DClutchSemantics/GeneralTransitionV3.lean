@@ -668,6 +668,12 @@ def actionOps (action : Action) : List Op :=
       .loadConst (s .one) 1,
       .nonzero (s .primaryCreated),
       .identityEq (d .primaryBeneficiary) (d .owner),
+      -- The solver who PAYS is the solver the candidate NAMES. The
+      -- AccountProfile projects the creation payer's key into `payer`; this
+      -- is where the two are joined, because an account-profile guard reads
+      -- the INPUT identity bank and could never see `owner`, which the same
+      -- profile pass projects out of the record.
+      .identityEq (d .payer) (d .owner),
       .identityEq (d .candidate) (d .bestVerifiedDigest),
       .identityEq (d .selectionPolicy) (d .selectionBatch),
       .identityEq (d .order) (d .selectionProduct),
@@ -826,6 +832,10 @@ def actionOps (action : Action) : List Op :=
       .identityEq (d .positionOneOwner) (d .order),
       .identityEq (d .settlementPositionOwner) (d .order),
       .identityEq (d .rentCredit) (d .owner),
+      -- The maker who PAYS is the maker the signed terms NAME. See
+      -- `submitCandidate` above for why this join cannot live in the
+      -- AccountProfile as a `RequireKey`.
+      .identityEq (d .payer) (d .owner),
       .loadConst (s .custodyOperation) custodyOperationTransfer
     ]
   | .cancelOrder => [
@@ -890,7 +900,11 @@ def actionOps (action : Action) : List Op :=
       .identityEq (d .positionOneOwner) (d .owner),
       .identityEq (d .settlementPositionOwner) (d .order),
       .identityEq (d .rentCredit) (d .owner),
-      .identityEq (d .rentRefund) (d .owner)
+      .identityEq (d .rentRefund) (d .owner),
+      -- The maker who PAYS is the maker the order record NAMES. See
+      -- `submitCandidate` above for why this join cannot live in the
+      -- AccountProfile as a `RequireKey`.
+      .identityEq (d .payer) (d .owner)
     ]
   | .releaseOrder => [
       -- Only a placed order releases, and it releases to Released. A vacant
@@ -1035,7 +1049,7 @@ theorem authored_section_counts :
           ((program action).prelude.length, (program action).itemBody.length,
             (program action).epilogue.length)) =
       [(15, 1, 0), (17, 1, 0), (21, 2, 0), (21, 4, 0), (16, 1, 0), (21, 4, 0), (27, 6, 0),
-        (26, 1, 0), (45, 4, 0), (49, 4, 0), (27, 1, 0), (45, 1, 0), (23, 1, 0),
+        (26, 1, 0), (46, 4, 0), (50, 4, 0), (27, 1, 0), (46, 1, 0), (23, 1, 0),
         (42, 4, 0), (34, 1, 0)] := by
   native_decide
 
@@ -1070,7 +1084,7 @@ def encodedWidth (action : Action) : Nat := (Codec.encodeProgram (program action
 
 theorem authored_encoded_widths :
     authoredActions.map encodedWidth =
-      [416, 464, 584, 632, 440, 632, 824, 680, 1208, 1304, 704, 1136, 608, 1136,
+      [416, 464, 584, 632, 440, 632, 824, 680, 1232, 1328, 704, 1160, 608, 1136,
         872] := by
   native_decide
 
@@ -1272,7 +1286,7 @@ private def placeOrderBank
       (IdentitySlot.index .custodySourceOwner, 4),
       (IdentitySlot.index .positionZeroOwner, 4), (IdentitySlot.index .positionOneOwner, 3),
       (IdentitySlot.index .settlementPositionOwner, 3),
-      (IdentitySlot.index .rentCredit, 4)
+      (IdentitySlot.index .rentCredit, 4), (IdentitySlot.index .payer, 4)
     ])
 
 /-- Inside the window, under the bound, with the expiry pinned to the batch's
@@ -1349,7 +1363,8 @@ private def cancelOrderBank
       (IdentitySlot.index .custodyDestinationOwner, 4),
       (IdentitySlot.index .positionZeroOwner, 3), (IdentitySlot.index .positionOneOwner, 4),
       (IdentitySlot.index .settlementPositionOwner, 3),
-      (IdentitySlot.index .rentCredit, 4), (IdentitySlot.index .rentRefund, 4)
+      (IdentitySlot.index .rentCredit, 4), (IdentitySlot.index .rentRefund, 4),
+      (IdentitySlot.index .payer, 4)
     ])
 
 /-- While the batch collects, a placed order cancels: the phase flips to

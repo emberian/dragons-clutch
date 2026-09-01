@@ -1919,4 +1919,110 @@ mod tests {
             CompartmentV1::RecoveryReserve as u8
         );
     }
+
+    /// Every compartment this contract knows, in tag order.
+    const CENSUS_COMPARTMENTS: [CompartmentV1; 9] = [
+        CompartmentV1::None,
+        CompartmentV1::External,
+        CompartmentV1::Settlement,
+        CompartmentV1::HoardPrincipal,
+        CompartmentV1::TradingPrincipal,
+        CompartmentV1::FeeVault,
+        CompartmentV1::LivenessVault,
+        CompartmentV1::SeriesEscrow,
+        CompartmentV1::RecoveryReserve,
+    ];
+
+    /// One transfer request whose accompanying fields suit the pair under test.
+    ///
+    /// The `External` conjuncts in the Transfer arm are about a side's vault
+    /// context and semantic owner, not about which pair it forms, so they are
+    /// satisfied per side here. The census then measures the PAIR rule and
+    /// nothing else; leaving them unsatisfied would have refused pairs for a
+    /// reason that has nothing to do with compartments and reported a far
+    /// narrower surface than the contract actually has.
+    fn transfer_between(source: CompartmentV1, destination: CompartmentV1) -> CustodyRequestV1 {
+        let mut request = transfer();
+        request.source_compartment = source;
+        request.destination_compartment = destination;
+        let external = |c: CompartmentV1| c == CompartmentV1::External;
+        request.source_vault_context = if external(source) { [0; 32] } else { id(14) };
+        request.destination_vault_context = if external(destination) {
+            [0; 32]
+        } else {
+            id(15)
+        };
+        request.semantic.source_owner = if external(source) { id(20) } else { [0; 32] };
+        request.semantic.destination_owner = if external(destination) {
+            id(21)
+        } else {
+            [0; 32]
+        };
+        request
+    }
+
+    /// THE ATOM-FLOW CENSUS: which compartment pairs this contract will carry.
+    ///
+    /// C-16 asks whether every economic flow has a named owner, and records that
+    /// nothing in the tree enumerates the flows to ask
+    /// (`docs/evidence/C16_ENTRY_LIST_2026_09_01.md` section 6, "no
+    /// instrument"). This is the atom half of that enumeration at its narrowest
+    /// honest scope: not what the protocol DOES, but what this contract PERMITS,
+    /// which is the surface every caller-side rule is measured against.
+    ///
+    /// The answer is that it permits everything except a `None` side. Sixty-four
+    /// ordered pairs are shape-admissible, `HoardPrincipal -> FeeVault` among
+    /// them -- principal paying a fee, which is the movement C-10 forbids and
+    /// `AGENTS.md` states as an invariant. **This contract does not enforce that
+    /// invariant and was never the place it lived**; the Transfer arm asks only
+    /// that neither side be `None`, plus the `External` conjuncts about
+    /// accompanying fields. Every compartment rule in this protocol lives in a
+    /// calling program.
+    ///
+    /// That is deliberate and it is not a defect, but it was undocumented and
+    /// unmeasured, which is what made it worth a test rather than a comment. A
+    /// reviewer asking "what stops the Hoard funding the fee vault" needs to be
+    /// sent to the callers immediately, not to discover by reading that the
+    /// answer was never here. If a compartment rule is ever added HERE, this
+    /// census goes red and whoever adds it says so on purpose.
+    #[test]
+    fn the_transfer_wire_permits_every_pair_but_none_and_owns_no_compartment_rule() {
+        let mut admitted = 0_usize;
+        let mut principal_to_fee = false;
+        for source in CENSUS_COMPARTMENTS {
+            for destination in CENSUS_COMPARTMENTS {
+                let admissible = transfer_between(source, destination).validate().is_ok();
+                // The whole pair rule, stated as one equivalence: a side being
+                // `None` is the only thing this wire refuses about a pair.
+                let expected = source != CompartmentV1::None && destination != CompartmentV1::None;
+                assert_eq!(
+                    admissible, expected,
+                    "pair {source:?} -> {destination:?} was {admissible}, expected {expected}",
+                );
+                if admissible {
+                    admitted += 1;
+                    if source == CompartmentV1::HoardPrincipal
+                        && destination == CompartmentV1::FeeVault
+                    {
+                        principal_to_fee = true;
+                    }
+                }
+            }
+        }
+        // Eight non-`None` compartments each way.
+        assert_eq!(admitted, 64);
+        // The exact discriminant a `None` side carries, named rather than
+        // counted, so this cannot pass on some other refusal.
+        assert_eq!(
+            transfer_between(CompartmentV1::None, CompartmentV1::FeeVault).validate(),
+            Err(Error::InvalidOperationShape),
+        );
+        // Named because it is the pair a reviewer will look for, and because a
+        // count of sixty-four does not say which sixty-four.
+        assert!(
+            principal_to_fee,
+            "the census must state that principal-to-fee is shape-admissible here, \
+             so that its refusal is looked for in the callers where it lives",
+        );
+    }
 }

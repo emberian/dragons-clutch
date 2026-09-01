@@ -907,12 +907,18 @@ fn fixture(prestate: MarketPrestateV1) -> Fixture {
         //
         // No prestate carries one any more. `SourceResolutionStateV2` has no
         // transition that advances a recovery attempt -- `funded.rs` plans the
-        // whole walk as `Primary -> Exhausted -> FailureCommitted`, and the
-        // per-leg `FailNext` route it replaced sits under `cfg(any())` in the
-        // Resolution program's dispatch -- so `12d0deb5` welded
-        // `build_resolution_create_fund_v3` shut against recovery-bearing
-        // material. A recovery-bearing prestate would therefore assert a
-        // poststate no founding can reach.
+        // whole walk as `Primary -> Exhausted -> FailureCommitted` -- so
+        // `12d0deb5` welded `build_resolution_create_fund_v3` shut against
+        // recovery-bearing material. A recovery-bearing prestate would
+        // therefore assert a poststate no founding can reach.
+        //
+        // This comment used to add that the per-leg `FailNext` route "sits
+        // under `cfg(any())` in the Resolution program's dispatch". It does
+        // not: that block and the other thirteen were deleted, and the V1
+        // ladder they gated has no definition anywhere. The weld's real and
+        // checkable premise is the first clause -- there is no transition that
+        // advances a recovery attempt -- which is why the sentence survives
+        // without it.
         None,
         source_id(SOURCE_FAILURE_POLICY_RELEASE_ID_V2),
     );

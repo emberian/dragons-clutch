@@ -73,6 +73,13 @@ const PRODUCT_INSPECTION_DEPENDENCIES_V1: ProductInspectionDependenciesV1 = Obje
   inspect: inspectSplineProductAuthoringArtifactsV1,
 });
 
+/** Basis points as a percentage, exactly: 10,000 bps is one whole unit. */
+export function basisPointsV1(value: number): string {
+  const whole = Math.trunc(value / 100);
+  const hundredths = value % 100;
+  return `${whole}.${String(hundredths).padStart(2, '0')}%`;
+}
+
 function absoluteFlagV1(context: CliContext, name: string): string {
   const value = context.flags[name];
   if (typeof value !== 'string' || value === '') throw new Error(`pass --${name} <absolute path>`);
@@ -109,34 +116,61 @@ function localArtifactV1(path: string, noun: string, dependencies: ProductInspec
   return value;
 }
 
-function inspectionDocumentV1(report: string, inspected: InspectedSplineProductArtifactsV1) {
-  const records = Object.fromEntries(Object.entries(inspected.records).map(([name, record]) => [name, Object.freeze({
+/**
+ * The two inspected keys this document does NOT project, because the document
+ * owns them itself: it carries its own `schema`, and the compiler `command` is
+ * a property of the compilation, not of an inspection of its output. Named
+ * rather than implied, so that dropping a third one is a visible decision.
+ */
+const UNPROJECTED_INSPECTION_KEYS_V1: ReadonlyArray<string> = Object.freeze(['schema', 'command']);
+
+/** camelCase to snake_case — the only naming rule between the two spellings. */
+export function snakeCaseV1(name: string): string {
+  return name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+/** One record's report row. Explicit because `bytes` is a length, not bytes. */
+function recordDocumentV1(record: InspectedSplineProductArtifactsV1['records'][keyof InspectedSplineProductArtifactsV1['records']]) {
+  return Object.freeze({
     file: record.file,
     bytes: record.bytes.length,
     schema_id: record.schemaId,
     content_sha256: record.contentSha256,
     raw_account: record.rawAccount,
     staging_account: record.stagingAccount,
-  })]));
+  });
+}
+
+/**
+ * Project the verified artifacts into the report's own snake_case naming,
+ * DERIVED FROM THE INSPECTED OBJECT'S OWN KEYS rather than restated.
+ *
+ * WHY IT IS A LOOP AND NOT A LIST. This function used to name its seventeen
+ * fields one at a time and stop at `verified_price_gate`. A document assembled
+ * by enumeration does not fail when the object grows a section: it does not
+ * warn either, it just quietly describes an older version of the thing. When
+ * the compiler grew `partition_quality` — the measurement that says whether an
+ * author is about to found a degenerate market — this list would have dropped
+ * it, and the one surface where an author can check that number before
+ * founding would have been the surface that does not show it.
+ *
+ * The one thing the loop cannot derive is `records`, whose `bytes` field is a
+ * LENGTH in the document and a byte array in the inspection; that row keeps an
+ * explicit projection, and `product.test.ts` canaries its key set too.
+ */
+function inspectionDocumentV1(report: string, inspected: InspectedSplineProductArtifactsV1) {
+  const projected: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(inspected)) {
+    if (UNPROJECTED_INSPECTION_KEYS_V1.includes(name)) continue;
+    projected[snakeCaseV1(name)] = name === 'records'
+      ? Object.freeze(Object.fromEntries(Object.entries(inspected.records).map(([key, record]) => [key, recordDocumentV1(record)])))
+      : value;
+  }
   return Object.freeze({
+    ...projected,
     schema: SPLINE_PRODUCT_INSPECTION_SCHEMA_V1,
     report,
-    key_free: inspected.keyFree,
-    signs: inspected.signs,
-    submits: inspected.submits,
-    input_sha256: inspected.inputSha256,
-    registry_program: inspected.registryProgram,
-    product_outcome_count: inspected.productOutcomeCount,
-    basis_width: inspected.basisWidth,
-    degree: inspected.degree,
-    interior_multiplicity: inspected.interiorMultiplicity,
-    payout_scale: inspected.payoutScale,
-    rounding_boundary: inspected.roundingBoundary,
-    semantic_basis_id: inspected.semanticBasisId,
-    records: Object.freeze(records),
-    verified_price_gate: inspected.verifiedPriceGate,
-    found_records: inspected.foundRecords,
-  });
+  }) as Readonly<{ schema: string; report: string } & Record<string, unknown>>;
 }
 
 async function inspectProductV1(
@@ -163,9 +197,16 @@ async function inspectProductV1(
     return 0;
   }
   io.out(`verified spline Product compiler handoff at ${reportPath}`);
-  io.out(`  degree ${document.degree} · basis width ${document.basis_width} · ${document.product_outcome_count} Product outcomes · ${document.rounding_boundary}`);
-  io.out(`  Registry ${document.registry_program} · semantic basis ${document.semantic_basis_id}`);
-  for (const [field, address] of Object.entries(document.found_records)) io.out(`  ${field} ${address}`);
+  io.out(`  degree ${inspected.degree} · basis width ${inspected.basisWidth} · ${inspected.productOutcomeCount} Product outcomes · ${inspected.roundingBoundary}`);
+  io.out(`  Registry ${inspected.registryProgram} · semantic basis ${inspected.semanticBasisId}`);
+  // Partition quality goes above the record coordinates on purpose: it is the
+  // one number here that can tell an author not to found this market at all,
+  // and a reader who stops after the first screen must have seen it.
+  const quality = inspected.partitionQuality;
+  io.out(`  partition quality (${quality.model}): cell ${quality.dominantCell} holds ${basisPointsV1(quality.dominantShareBps)} of the plausible band, ceiling ${basisPointsV1(quality.maxCellShareBps)}`);
+  io.out(`    shares by cell: ${quality.cellShareBps.map(basisPointsV1).join(' / ')}`);
+  io.out(`    band: anchor ${quality.anchor} ± ${quality.plausibleHalfWidth}, from ${quality.volatilityBps} bps over ${quality.windowSlots} slots (characteristic displacement ${quality.characteristicDisplacement})`);
+  for (const [field, address] of Object.entries(inspected.foundRecords)) io.out(`  ${field} ${address}`);
   io.out('  local inspection only; no chain read, wallet, signature, transaction, publication, or submission');
   io.out('  Found must still authenticate these five records live against the Registry');
   return 0;

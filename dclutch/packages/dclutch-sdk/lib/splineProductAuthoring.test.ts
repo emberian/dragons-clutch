@@ -62,8 +62,32 @@ async function fixture(): Promise<Readonly<{ report: Record<string, unknown>; fi
       semantic_basis_id: '22'.repeat(32),
       records,
       verified_price_gate: { scale: 7, mass: '1', degree: 2, width: 3, atom_count: 1, prices: ['1', '4', '2'] },
+      // The seventeenth key. `spline_product.rs`'s `ReportV1` has emitted it
+      // since the partition-quality gate landed; this fixture described a
+      // compiler that no longer exists, and `exactKeys` was refusing every
+      // real report with "missing or unknown fields".
+      partition_quality: {
+        model: 'triangular-plausible-band-v1',
+        anchor: '15000000000',
+        volatility_bps: 2_000,
+        window_slots: '10000',
+        characteristic_displacement: '3000000000',
+        plausible_half_width: '6000000000',
+        dominant_cell: 1,
+        dominant_share_bps: 5_000,
+        max_cell_share_bps: 9_000,
+        cell_share_bps: [2_500, 5_000, 2_500],
+      },
     },
   });
+}
+
+/** The fixture's partition-quality section, with one field replaced. */
+function withQuality(
+  report: Record<string, unknown>,
+  overrides: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...report, partition_quality: { ...(report.partition_quality as Record<string, unknown>), ...overrides } };
 }
 
 describe('spline Product authoring artifact handoff', () => {
@@ -90,5 +114,83 @@ describe('spline Product authoring artifact handoff', () => {
     const records = value.report.records as Record<string, Record<string, unknown>>;
     const forged = { ...value.report, records: { ...records, price_gate: { ...records.price_gate, raw_account: new PublicKey(id(99)).toBase58() } } };
     await expect(inspectSplineProductAuthoringArtifactsV1(forged, value.files)).rejects.toThrow(/noncanonical Registry coordinates/);
+  });
+});
+
+/**
+ * Partition quality: the number that says whether a market is degenerate
+ * before it is founded.
+ *
+ * Measured 2026-09-01, before this section existed: a report carrying the
+ * `partition_quality` key the Rust compiler has been emitting was refused
+ * outright by `exactKeys` with "spline compiler report has missing or unknown
+ * fields", so `dclutch product inspect` could not read ANY current compiler
+ * output. The inspector was fail-closed and therefore honest; it was also
+ * broken, which is the shape this lane keeps finding — a document assembled by
+ * enumeration describing an older version of the object.
+ *
+ * These tests check consistency, never the model. The triangular displacement
+ * measure has one owner in Rust and is not reimplemented here.
+ */
+describe('partition quality', () => {
+  it('carries every measured field through to the caller', async () => {
+    const value = await fixture();
+    const inspected = await inspectSplineProductAuthoringArtifactsV1(value.report, value.files);
+    expect(inspected.partitionQuality).toEqual({
+      model: 'triangular-plausible-band-v1',
+      anchor: '15000000000',
+      volatilityBps: 2_000,
+      windowSlots: '10000',
+      characteristicDisplacement: '3000000000',
+      plausibleHalfWidth: '6000000000',
+      dominantCell: 1,
+      dominantShareBps: 5_000,
+      maxCellShareBps: 9_000,
+      cellShareBps: [2_500, 5_000, 2_500],
+      degenerate: false,
+    });
+  });
+
+  it('refuses a section that is missing, extended, or renamed', async () => {
+    const value = await fixture();
+    const without: Record<string, unknown> = { ...value.report };
+    delete without.partition_quality;
+    await expect(inspectSplineProductAuthoringArtifactsV1(without, value.files)).rejects.toThrow(/missing or unknown fields/);
+    await expect(inspectSplineProductAuthoringArtifactsV1(withQuality(value.report, { extra: 1 }), value.files))
+      .rejects.toThrow(/report\.partition_quality has missing or unknown fields/);
+  });
+
+  it('refuses a displacement model it cannot describe rather than rendering it as this one', async () => {
+    const value = await fixture();
+    await expect(inspectSplineProductAuthoringArtifactsV1(withQuality(value.report, { model: 'uniform-band-v2' }), value.files))
+      .rejects.toThrow(/names a displacement model this client cannot describe/);
+  });
+
+  it('refuses shares that do not sum to one unit within their flooring slack', async () => {
+    const value = await fixture();
+    await expect(inspectSplineProductAuthoringArtifactsV1(withQuality(value.report, { cell_share_bps: [2_500, 5_000, 2_501], dominant_share_bps: 5_000 }), value.files))
+      .rejects.toThrow(/does not sum to one unit within its flooring slack/);
+    await expect(inspectSplineProductAuthoringArtifactsV1(withQuality(value.report, { cell_share_bps: [10, 20, 30], dominant_cell: 2, dominant_share_bps: 30 }), value.files))
+      .rejects.toThrow(/does not sum to one unit within its flooring slack/);
+    // Three cells may floor away at most three basis points, and exactly three
+    // is admitted: the producer's own bound, not one basis point tighter.
+    await expect(inspectSplineProductAuthoringArtifactsV1(withQuality(value.report, { cell_share_bps: [2_499, 4_999, 2_499], dominant_cell: 1, dominant_share_bps: 4_999 }), value.files))
+      .resolves.toBeDefined();
+  });
+
+  it('refuses a dominant cell that is not the cell holding the most mass', async () => {
+    const value = await fixture();
+    await expect(inspectSplineProductAuthoringArtifactsV1(withQuality(value.report, { dominant_cell: 0, dominant_share_bps: 2_500 }), value.files))
+      .rejects.toThrow(/is not the cell holding the most ex-ante mass/);
+    await expect(inspectSplineProductAuthoringArtifactsV1(withQuality(value.report, { dominant_share_bps: 4_000 }), value.files))
+      .rejects.toThrow(/is not the cell holding the most ex-ante mass/);
+  });
+
+  it('refuses a degenerate partition its own compiler must already have refused', async () => {
+    const value = await fixture();
+    await expect(inspectSplineProductAuthoringArtifactsV1(
+      withQuality(value.report, { cell_share_bps: [0, 0, 10_000], dominant_cell: 2, dominant_share_bps: 10_000 }),
+      value.files,
+    )).rejects.toThrow(/states a degenerate partition \(cell 2 takes 10000 of 9000 permitted basis points\)/);
   });
 });
