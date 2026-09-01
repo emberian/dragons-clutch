@@ -149,6 +149,30 @@ def write_workspace_inventory(path: pathlib.Path, workspaces: list[Workspace]) -
             output.write(f"{index}\t{workspace.manifest}\t{workspace.lock}\n")
 
 
+# Workspaces whose members REFUSE to compile without an explicit feature
+# selection, and the selections that satisfy them.
+#
+# This is not a skip list and it must never become one. A bare `cargo check`
+# on `tools/gauntlet/aot-cu` fails with `select exactly one evaluator:
+# --features aot | interpreted | null` -- a deliberate `compile_error!` in
+# `dclutch-direct-relation-twin`, which exists so that nobody links an
+# evaluator by accident. Refusing a default is the RIGHT behaviour for a crate
+# whose whole point is three mutually exclusive evaluators, so the checker
+# makes the choice the crate demands rather than the crate acquiring a default
+# to keep a gate quiet.
+#
+# Every listed selection is checked, not just the first: for this workspace the
+# three evaluators are the thing under test, and checking one of them would
+# leave the other two uncompiled while the row read PASS. Measured 2026-09-01,
+# all three compile clean.
+#
+# A workspace that lands here without a stated reason is a workspace someone
+# quieted. Keep the reason with the entry.
+FEATURE_SELECTIONS: dict[str, tuple[str, ...]] = {
+    "tools/gauntlet/aot-cu/Cargo.toml": ("null", "interpreted", "aot"),
+}
+
+
 def run_checks(
     source: pathlib.Path,
     work: pathlib.Path,
@@ -162,33 +186,43 @@ def run_checks(
     for index, workspace in enumerate(workspaces, start=1):
         log = logs / f"{index:03d}.log"
         target = targets / f"{index:03d}"
-        command = [
-            "cargo",
-            "check",
-            "--workspace",
-            "--all-targets",
-            "--locked",
-            "--offline",
-            "--manifest-path",
-            workspace.manifest,
-        ]
+        selections = FEATURE_SELECTIONS.get(workspace.manifest, (None,))
         environment = os.environ.copy()
         environment["CARGO_TARGET_DIR"] = str(target)
         environment["CARGO_TERM_COLOR"] = "never"
+        returncode = 0
         with log.open("wb") as output:
-            output.write(("command=" + " ".join(command) + "\n").encode())
-            output.flush()
-            process = subprocess.run(
-                command,
-                cwd=source,
-                env=environment,
-                check=False,
-                stdout=output,
-                stderr=subprocess.STDOUT,
-            )
-        results.append((workspace, process.returncode))
-        state = "PASS" if process.returncode == 0 else "FAIL"
-        print(f"{state} {index}/{len(workspaces)} {workspace.manifest}", flush=True)
+            for selection in selections:
+                command = [
+                    "cargo",
+                    "check",
+                    "--workspace",
+                    "--all-targets",
+                    "--locked",
+                    "--offline",
+                    "--manifest-path",
+                    workspace.manifest,
+                ]
+                if selection is not None:
+                    command += ["--features", selection]
+                output.write(("command=" + " ".join(command) + "\n").encode())
+                output.flush()
+                process = subprocess.run(
+                    command,
+                    cwd=source,
+                    env=environment,
+                    check=False,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                )
+                # Every listed selection runs and the FIRST failure is the
+                # verdict; a later pass never overwrites an earlier failure.
+                if process.returncode != 0 and returncode == 0:
+                    returncode = process.returncode
+        results.append((workspace, returncode))
+        state = "PASS" if returncode == 0 else "FAIL"
+        detail = "" if selections == (None,) else f" [{', '.join(selections)}]"
+        print(f"{state} {index}/{len(workspaces)} {workspace.manifest}{detail}", flush=True)
     return results
 
 

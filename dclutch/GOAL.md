@@ -2093,3 +2093,36 @@ a later version, on a substrate that can carry it, using minidregg.
 **Nothing may report the privacy horizon as deferred, future work, or
 in-progress.** It is ruled out, dated, with a stated prerequisite — which is a
 terminal state, and the difference matters.
+
+## RULING 9 WITHDRAWN — ember, 2026-09-01. It was ceremony I added.
+
+Ember: *"Blocked? Checked release plan? Predecessor? Release-identity change?
+Sounds like fake bullshit ceremony you added around a completely greenfield
+devnet that we can throw away at any time."*
+
+**Correct, and I should have seen it.** I dissolved the `derivation_policy`
+reservation and the magic re-lettering with **exactly this argument** — devnet is
+disposable, there is no installed base, a release event costs nothing — and then
+hit a third instance and called it ember's. *"Release-identity change"* is a
+phrase from a world where deployments are durable. **There has never been a
+predecessor.**
+
+**And it is one defect, not two.** `create-infrastructure` refuses because
+`CheckedInfrastructureV1` embeds a `ProfileV2` **by type**, and V2 exists to pin
+predecessor ids. `prepare` refuses because its two admissible shapes are a
+fabricated **genesis install** (slot 0, no authority — not a real cohort) and a
+**checked deployment set** requiring Upgrade receipts a genesis has none of.
+
+> **The release tooling cannot express "a real cohort with no predecessor."**
+> The endorsed mutability is not the problem — it is what made the gap visible.
+
+**Authorized as engineering**: a genesis manifest variant or a
+version-polymorphic profile field, plus whatever `prepare` needs to admit a
+freshly deployed cohort with an upgrade authority and no Upgrade receipts. The
+derivation half already landed (`bf5499da`). Behind it the chain opens: records →
+profile init → activation → representative markets through the **gated**
+entrance → the load simulator, which closes condition (b) of the deploy grant.
+
+**Ember's ruling queue is now four**, not ten: the LP consent floor (being worked
+through), the recovery ontology, provider-family scope, and Claims split/merge if
+they do not want it built.
