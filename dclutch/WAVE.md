@@ -4052,3 +4052,67 @@ end-to-end on-chain evidence. Selector 9's account admission is separately
 unsatisfiable (register 116 is written only by the later request pass), so the
 physical venue cannot run today, and the two inventory moves are applied to the
 pool directly because a trade is exogenous to the equity kernel.
+
+## 2026-09-01 — a hostile that reached its subject and had no word for it
+
+`InvalidScratchBank` carried every cause in `assemble_input_bank` — mis-privileged
+page, undecodable page, page belonging to another request, page out of streamed
+order, and a bank that reassembled wrong — all one code. Split into six
+(`0xC00D`–`0xC012`, `4c90cdf5`), with `0xC003` keeping its numeric value and
+narrowing, same migration discipline as `0xC002` before it.
+
+**Length is split from digest deliberately, and that split *is* the diagnosis:**
+a length mismatch means the pages do not add up to the declared bank — transport
+arithmetic. A digest mismatch means they add up **exactly** and carry different
+bytes — content. **Nothing else distinguishes them.**
+
+`freeze.rs` at width 258 now refuses **`0xC011 ScratchBankDigest`**: the pages
+sum to exactly the declared length and the bytes differ. Width 1 still commits.
+The lane **stopped there rather than guessing** — unlike OpenBatch, where a host
+measurement located it, here there is no equivalent measurement yet, so *"the
+refusal narrowed it from scratch bank to content-not-arithmetic at one width;
+that is real but not yet located, and I would rather say so."*
+
+### The refinement to M-38, and it is a real one
+
+`AGENTS.md` says a bare `is_err()` is a test of nothing. True — and it has been
+read as an accusation of laziness. There is a second cause:
+
+> **A bare `is_err()` is sometimes a symptom of an undifferentiated refusal
+> upstream, not of a lazy test.** Splitting the code is what makes the assertion
+> writable.
+
+`corrupted_scratch_page_refuses_without_mutating_selection` had survived because
+**there was no code to name instead** — *a hostile that reached its subject and
+had no word for what it found*, as against the ones this campaign keeps finding
+that never reach their subject at all. **Different defects, different repairs**,
+and the ledger had only described one.
+
+**And the assertion was predicted before it was run.** The fixture flips one byte
+of the **last** page's payload, so the page still decodes and still binds to its
+request, and what fails is the bank those pages reassemble to — therefore
+`ScratchBankDigest`. The run returned `Custom(49169)` = `0xC011`. **Prediction
+then confirmation** is the strongest form a refusal assertion takes, and it is
+only available once the vocabulary exists.
+
+**C-05, in seven commits: from *cannot execute at all* to *executes, and every
+refusal on the path says which conjunct it is*.**
+
+### The log was the dead channel; the filesystem was the live one
+
+Third instance of one shape from a single lane in a single session. A run was
+reported stalled on a file lock. `lsof` showed **its own** cargo holding the lock
+— 40 target files touched in 120 seconds, one rustc live — and the
+`Blocking waiting for file lock` line was **stale text**, because cargo's
+progress output is block-buffered to a redirected file.
+
+Preceded by the dead `sol_log_64` channel (no output, and no `Program log` line
+anywhere in the run, including the successful path) and by
+`pgrep -f "cargo test"` matching **another lane's waiter shell** and reporting a
+dead run alive.
+
+> **Any single signal can be the disconnected one, and you only find out by
+> checking a second.**
+
+All three were caught that way: a positive control, a process-table cross-check,
+and the filesystem against the log.
